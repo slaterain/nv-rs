@@ -648,6 +648,7 @@ pub fn fn_007cb5b0(e: &mut Engine, this: Ptr<StartMenu>) {
         e.call(FADE_MUSIC, &args![0x7d0u32, 0u32]);
     }
     let owner = e.global::<u32>(CALLBACK_OWNER);
+    e.site(0x007c_b65d, &[]);
     e.call(SAVE_MANAGER_RELEASE, &args![owner]);
     e.set_global(START_MENU, 0u32);
     e.call(LIST_REMOVE_ALL, &args![SCRIPT_LIST]);
@@ -731,6 +732,7 @@ fn start_menu_create_body(e: &mut Engine, frame: u32, flag_a: u8, flag_b: u8) ->
     if e.call(ELEMENTS_MISSING, &args![ELEMENTS_OBJECT]).bool() {
         start_menu_create_menu_elements(e);
     }
+    e.site(0x007c_b88b, &[]);
     let manager = e.call(INTERFACE_MANAGER_GETTER, &args![]).u32();
     let root = e.call(MENUS_ROOT_GETTER, &args![manager]).u32();
     let list = root + 4;
@@ -1038,8 +1040,11 @@ fn start_menu_create_inner_body(
         let choose = e.mem.u32(option + 8);
         let owner = e.global::<u32>(CALLBACK_OWNER);
         let help_class = fn_007cc6d0(e);
-        let grayed = (choose == CHOOSE_007D06C0
-            && !e.call(SAVE_MANAGER_CAN_SAVE, &args![owner, 0u32]).bool())
+        let save_option = e
+            .site(0x007c_bdaf, &args![option])
+            .unwrap_or(u32::from(choose == CHOOSE_007D06C0))
+            != 0;
+        let grayed = (save_option && !e.call(SAVE_MANAGER_CAN_SAVE, &args![owner, 0u32]).bool())
             || (choose == CHOOSE_007D0440
                 && ((flag_a != 0 && flag_b != 0) || (flag_a == 0 && !found)))
             || (choose == CHOOSE_007D0680 && !found)
@@ -1497,7 +1502,7 @@ pub fn start_menu_create_menu_elements(e: &mut Engine) {
         e.call(STRING_UPDATE, &args![STRING_B]);
     }
     fn_007ce6b0(e);
-    for (text_setting, choose, modes) in OPTION_ROWS {
+    for (index, (text_setting, choose, modes)) in OPTION_ROWS.into_iter().enumerate() {
         let block = e.call(OPERATOR_NEW, &args![0x10u32]).u32();
         let option = if block == 0 {
             0
@@ -1505,7 +1510,9 @@ pub fn start_menu_create_menu_elements(e: &mut Engine) {
             let text = e.call(OPTION_TEXT, &args![text_setting]).u32();
             fn_007ce620(e, Ptr::new(block), text, choose, modes).addr()
         };
-        push_array(e, OPTIONS_ARRAY, option);
+        if index != 0 || e.site(0x007c_c7c2, &args![OPTIONS_ARRAY, option]).is_none() {
+            push_array(e, OPTIONS_ARRAY, option);
+        }
     }
     for (text_setting, choose, words, strings) in USER_OPTION_ROWS {
         let block = e.call(OPERATOR_NEW, &args![0x30u32]).u32();
@@ -2644,7 +2651,12 @@ pub fn start_menu_update_can_load_status(e: &mut Engine, this: Ptr<StartMenu>) {
     let enabled_trait = e.get(this, StartMenu::ENABLED_TRAIT);
     for offset in [0x1c4u32, 0x1c0] {
         let tile = e.mem.u32(this.addr() + offset);
-        e.call(TILE_SET_INT, &args![tile, enabled_trait, 1u32]);
+        if offset != 0x1c4
+            || e.site(0x007c_fd3c, &args![tile, enabled_trait, 1u32])
+                .is_none()
+        {
+            e.call(TILE_SET_INT, &args![tile, enabled_trait, 1u32]);
+        }
     }
 }
 
@@ -7037,6 +7049,40 @@ mod tests {
         r.with(USER_OPTION_NEW, |_, a| eax(a[0]));
         r.stub(FIRST_WORD, 0);
         added
+    }
+
+    #[test]
+    fn save_manager_option_insertion_replaces_only_first_native_array_add() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut r = rig();
+        let added = elements_scene(&mut r);
+        r.e.on_site(SiteSlot::new(Owner::Stewie, 0x007cc7c2), |e, w| {
+            assert_eq!(w[0], OPTIONS_ARRAY);
+            assert_eq!(e.mem.u32(w[1] + 8), 0x007d0440);
+            assert_eq!(e.mem.u32(w[1] + 0xc), 3);
+            *e.ext::<usize>() += 1;
+            Some(1)
+        });
+        r.e.call(0x007cc6e0, &args![]);
+        assert_eq!(*r.e.ext::<usize>(), 1);
+        assert_eq!(added.borrow().len(), 56);
+        assert_eq!(r.calls_to(USER_OPTION_NEW).len(), 34);
+    }
+
+    #[test]
+    fn save_manager_null_continue_tile_does_not_skip_load_tile_enable() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut r = rig();
+        let menu = r.e.new_object::<StartMenu>();
+        r.e.set(menu, StartMenu::ENABLED_TRAIT, 0x5a5a);
+        r.e.mem.set_u32(menu.addr() + 0x1c4, 0);
+        r.e.mem.set_u32(menu.addr() + 0x1c0, 0x6000);
+        r.e.on_site(SiteSlot::new(Owner::Stewie, 0x007cfd3c), |_, w| {
+            assert_eq!(w, &[0, 0x5a5a, 1]);
+            Some(1)
+        });
+        start_menu_update_can_load_status(&mut r.e, menu);
+        assert_eq!(r.calls_to(TILE_SET_INT), vec![vec![0x6000, 0x5a5a, 1]]);
     }
 
     #[test]

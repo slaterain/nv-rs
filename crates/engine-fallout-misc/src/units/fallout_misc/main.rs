@@ -2823,7 +2823,9 @@ pub fn fn_0086e650(e: &mut Engine, this: Ptr) {
         e.call(0x0096_e9b0, &args![PROCESS_LISTS]);
     }
     e.call(0x0040_fba0, &args![0x011f_11a0u32]);
-    let object = e.call(0x0044_6ef0, &args![]).u32();
+    let object = e
+        .site(0x0086_eac2, &args![])
+        .unwrap_or_else(|| e.call(0x0044_6ef0, &args![]).u32());
     e.call(0x0087_8080, &args![object, 1u32]);
     if fn_0086ef60(e) != 0 {
         e.call(0x00a6_1cd0, &args![]);
@@ -9362,6 +9364,25 @@ mod tests {
             assert_eq!(e.global::<u32>(0x011f_9138), 3);
             assert_eq!(e.global::<u8>(0x0126_77a2), 0);
             assert_eq!(e.global::<u8>(IN_MENU_FLAG), 0);
+        }
+
+        #[test]
+        fn save_manager_deferred_load_replaces_only_getter_before_object_update() {
+            use engine_core::extend::{Owner, SiteSlot};
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.on_site(SiteSlot::new(Owner::Stewie, 0x0086_eac2), |e, words| {
+                assert!(words.is_empty());
+                assert_eq!(e.call_log.as_ref().unwrap().last().unwrap().0, 0x0040_fba0);
+                e.call_log.as_mut().unwrap().push((0x0086_eac2, vec![]));
+                Some(0x011d_effc)
+            });
+            e.call_log = Some(vec![]);
+            e.call(0x0086_e650, &args![main]);
+            let log = take_log(&mut e);
+            assert!(calls_to(&log, 0x0044_6ef0).is_empty());
+            assert_eq!(calls_to(&log, 0x0087_8080), vec![vec![0x011d_effc, 1]]);
+            assert!(position(&log, 0x0086_eac2) < position(&log, 0x0087_8080));
         }
 
         #[test]

@@ -5515,6 +5515,7 @@ pub fn hud_main_menu_update_compass(
                     Some(name) => name,
                     None => e.call(0x0043_8eb0, &args![map_data]).u32(),
                 };
+                let _ = e.site(0x0077_9529, &args![]);
                 let title = e.call(0x0040_3df0, &args![0x011d_2208_u32]).u32();
                 e.call(
                     0x0076_b960,
@@ -7254,6 +7255,7 @@ pub fn hud_main_menu_update_xp_meter(e: &mut Engine, this: Ptr<HUDMainMenu>) {
                 };
             if can_start {
                 e.with_stack(12, |e, temporary| {
+                    let _ = e.site(0x0077_d6de, &args![]);
                     let audio = e.call(0x0045_3a70, &args![]).u32();
                     let handle = e
                         .call(
@@ -14397,8 +14399,21 @@ mod tests {
         for address in [0x00a0_1350, 0x00a0_12d0, 0x0070_0320] {
             e.register_double(address, |_, _| Ret::default());
         }
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::Stewie, 0x0077_9529),
+            |e, w| {
+                assert!(w.is_empty());
+                *e.ext::<usize>() += 1;
+                None
+            },
+        );
         e.call_log = Some(vec![]);
         run_compass(&mut e, pools);
+        assert_eq!(
+            *e.ext::<usize>(),
+            1,
+            "SaveManager sees the one discovered location with or without JIP's name"
+        );
         let calls = e.call_log.take().unwrap();
         // The fade calls still run (007799f3 / 00779a2e).
         assert!(calls.iter().any(|(address, _)| *address == 0x0040_ebd0));
@@ -16118,7 +16133,20 @@ mod tests {
             assert_eq!(words, &[popup, 0x100e]);
             Ret::default()
         });
-        e.register_double(0x0045_3a70, |_, words| {
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::Stewie, 0x0077_d6de),
+            |e, w| {
+                assert!(w.is_empty());
+                *e.ext::<usize>() += 1;
+                None
+            },
+        );
+        e.register_double(0x0045_3a70, |e, words| {
+            assert_eq!(
+                *e.ext::<usize>(),
+                1,
+                "pre-level save precedes original sound getter"
+            );
             assert!(words.is_empty());
             Ret {
                 eax: 0x4444,

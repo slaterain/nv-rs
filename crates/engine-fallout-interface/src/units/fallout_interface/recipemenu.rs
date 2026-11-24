@@ -1643,7 +1643,9 @@ pub fn fn_00726f10(_e: &mut Engine) -> u32 {
 /// `RecipeMenu::_scalar_deleting_destructor_` (Xbox PDB; `RET 4`): the destructor, then the
 /// object freed when bit 0 of `flags` is set. Returns `this`.
 pub fn recipe_menu_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    let _ = e.site(0x0072_6f2a, &args![0u32]);
     fn_00726f50(e, this);
+    let _ = e.site(0x0072_6f2a, &args![1u32]);
     if flags & 1 != 0 {
         e.call(FREE, &args![this]);
     }
@@ -1773,7 +1775,10 @@ fn finish_create(e: &mut Engine, root: u32, crafter: u32, category: u32) -> u32 
     let menu = me(e);
     e.mem.set_u32(menu + CATEGORY, category);
     e.call(INTERFACE_MANAGER_PLAY_MENU_SOUND, &args![0x24u32]);
-    let manager = e.call(INTERFACE_MANAGER, &args![]).u32() + TUTORIAL_MANAGER_OFFSET;
+    let _ = e.site(0x0072_72f2, &args![0u32]);
+    let manager = e.call(INTERFACE_MANAGER, &args![]).u32();
+    let _ = e.site(0x0072_72f2, &args![1u32]);
+    let manager = manager + TUTORIAL_MANAGER_OFFSET;
     if !e
         .call(TUTORIAL_SHOWN_00718840, &args![manager, 0x26u32])
         .bool()
@@ -4297,6 +4302,17 @@ mod n057_tests {
     #[test]
     fn create_needs_a_crafter_and_sets_the_menu_up() {
         let mut e = engine();
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::Stewie, 0x007272f2),
+            |e, w| {
+                assert!(matches!(w, [0] | [1]));
+                assert!(calls_to(e, TUTORIAL_SHOWN_00718840).is_empty());
+                if w == [1] {
+                    *e.ext::<usize>() += 1;
+                }
+                None
+            },
+        );
         e.call_log = Some(vec![]);
         assert_eq!(e.call(0x0072_6ff0, &args![0u32, 0u32]).u32(), 0);
         assert_eq!(

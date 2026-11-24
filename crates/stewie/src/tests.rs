@@ -726,7 +726,8 @@ fn the_key_rules_name_keys_of_the_table() {
 
 // ---- The install's overlay path, through a stand-in of the mods' files seam ----
 
-type ModFiles = (Vec<(Vec<u8>, Vec<u8>)>, Vec<engine_core::mod_files::Listed>);
+type WrittenModFiles = Vec<(Vec<u8>, Vec<u8>)>;
+type ModFiles = (WrittenModFiles, Vec<engine_core::mod_files::Listed>);
 
 thread_local! {
     /// This test thread's mod files (path, bytes) and the overlay folder's listing; `None`: the
@@ -734,6 +735,8 @@ thread_local! {
     static MOD_FILES: std::cell::RefCell<Option<ModFiles>> = const { std::cell::RefCell::new(None) };
     /// The folders the seam was asked to list.
     static LISTED: std::cell::RefCell<Vec<Vec<u8>>> = const { std::cell::RefCell::new(Vec::new()) };
+    static WRITABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static WRITTEN: std::cell::RefCell<WrittenModFiles> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 fn seam_read(_: &Engine, name: &[u8]) -> Result<Vec<u8>, u32> {
@@ -760,8 +763,45 @@ fn seam_no_create(_: &mut Engine, _: &[u8]) -> Result<(), u32> {
     Err(engine_core::mod_files::ERROR_NOT_SUPPORTED)
 }
 
-fn seam_no_write(_: &mut Engine, _: &[u8], _: &[u8]) -> Result<(), u32> {
-    Err(engine_core::mod_files::ERROR_NOT_SUPPORTED)
+fn seam_no_write(_: &mut Engine, name: &[u8], bytes: &[u8]) -> Result<(), u32> {
+    if !WRITABLE.with(std::cell::Cell::get) {
+        return Err(engine_core::mod_files::ERROR_NOT_SUPPORTED);
+    }
+    MOD_FILES.with(|m| {
+        let mut m = m.borrow_mut();
+        let (files, _) = m.as_mut().expect("writable fixture has files");
+        if let Some((_, old)) = files.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case(name)) {
+            *old = bytes.to_vec();
+        } else {
+            files.push((name.to_vec(), bytes.to_vec()));
+        }
+    });
+    WRITTEN.with(|w| w.borrow_mut().push((name.to_vec(), bytes.to_vec())));
+    Ok(())
+}
+
+pub(super) fn with_writable_mod_file(f: impl FnOnce()) {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            WRITABLE.with(|w| w.set(false));
+            MOD_FILES.with(|m| *m.borrow_mut() = None);
+            WRITTEN.with(|w| w.borrow_mut().clear());
+        }
+    }
+    mod_files(&[(MAIN_INI, "[Unrelated]\nkept=1\n")], &[]);
+    WRITTEN.with(|w| w.borrow_mut().clear());
+    WRITABLE.with(|w| w.set(true));
+    let _reset = Reset;
+    f();
+}
+
+pub(super) fn mod_file_writes() -> WrittenModFiles {
+    WRITTEN.with(|w| w.borrow().clone())
+}
+
+pub(super) fn allow_mod_file_writes(allow: bool) {
+    WRITABLE.with(|w| w.set(allow));
 }
 
 fn seam_read_head(e: &Engine, name: &[u8], max: usize) -> Result<Vec<u8>, u32> {

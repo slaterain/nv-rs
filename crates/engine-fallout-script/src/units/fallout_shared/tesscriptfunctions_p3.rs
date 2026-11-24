@@ -1565,10 +1565,12 @@ pub fn script_save_game(e: &mut Engine, a: ScriptArgs) -> bool {
     e.mem.free(flag);
     if ok {
         let manager = e.global::<u32>(SAVE_LOAD_MANAGER);
-        e.call(
-            SAVE_GAME,
-            &args![manager, name, 0xffff_ffffu32, flag_value != 0],
-        );
+        if e.site(0x005c_54b7, &args![]).unwrap_or(1) != 0 {
+            e.call(
+                SAVE_GAME,
+                &args![manager, name, 0xffff_ffffu32, flag_value != 0],
+            );
+        }
     }
     e.mem.free(name);
     ok
@@ -4489,6 +4491,23 @@ mod tests {
 
     /// The argument words and the name string of each save call.
     type SavedCalls = std::rc::Rc<std::cell::RefCell<Vec<(Vec<u32>, Vec<u8>)>>>;
+
+    #[test]
+    fn save_manager_suppressed_script_save_keeps_parse_result_without_native_save() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = engine();
+        e.set_global(SAVE_LOAD_MANAGER, 0x3a9eu32);
+        parse_save_name(&mut e, 1);
+        e.on_site(SiteSlot::new(Owner::Stewie, 0x005c54b7), |_, w| {
+            assert!(w.is_empty());
+            Some(0)
+        });
+        e.register_double(SAVE_GAME, |_, _| panic!("suppressed native save"));
+        let a = script(&mut e, 0);
+        assert!(e.call(0x005c5440, &args![a]).bool());
+        e.register(PARSE_PARAMETERS, |_, _| false.into_ret());
+        assert!(!e.call(0x005c5440, &args![a]).bool());
+    }
 
     #[test]
     fn save_game_saves_under_the_given_name() {

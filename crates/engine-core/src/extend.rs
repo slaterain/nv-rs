@@ -1173,8 +1173,10 @@ const fn check_areas(main: &[Entry], areas: &[&[Entry]]) {
             let row = area[i];
             assert!(
                 row.owners.len() == 1
-                    && (row.owners[0].same(Owner::Jip) || row.owners[0].same(Owner::JohnnyGuitar)),
-                "an area row has one owner (JIP or JohnnyGuitar); a seam shared with another owner is a main row"
+                    && (row.owners[0].same(Owner::Jip)
+                        || row.owners[0].same(Owner::JohnnyGuitar)
+                        || row.owners[0].same(Owner::Stewie)),
+                "an area row has one owner (JIP, JohnnyGuitar or Stewie); a seam shared with another owner is a main row"
             );
             let mut j = 0;
             while j < main.len() {

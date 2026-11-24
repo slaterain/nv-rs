@@ -594,8 +594,12 @@ pub fn bgssaveloadmanager_save_game(
     let is_autosave = fn_00851a20(e, this, name);
     let is_quicksave = fn_00851a60(e, this, name);
     let is_system_save = fn_00851b00(e, this, name);
-    let quiet =
-        is_autosave || e.get(this, BGSSaveLoadManager::cQueuedForceSave) != 0 || is_system_save;
+    let quiet = e
+        .site(0x0085_0415, &args![is_autosave])
+        .unwrap_or(u32::from(is_autosave))
+        != 0
+        || e.get(this, BGSSaveLoadManager::cQueuedForceSave) != 0
+        || is_system_save;
 
     if !fn_00850fe0(e, this, is_autosave) {
         if !quiet {
@@ -1109,7 +1113,10 @@ pub fn fn_00850fe0(
     if e.call(VATS_ACTIVE, &args![VATS]).bool() {
         return false;
     }
-    if !is_autosave {
+    if e.site(0x0085_1050, &args![is_autosave])
+        .unwrap_or(u32::from(is_autosave))
+        == 0
+    {
         let count = e.call(MENU_COUNT, &args![]).u32();
         for index in 0..count {
             let menu = e.call(MENU_ID_AT, &args![index]).i32();
@@ -1674,7 +1681,7 @@ pub fn fn_00851d70(e: &mut Engine, this: Ptr<BGSSaveLoadManager>) {
 
 /// True while the fader (kinds 1 and 2) or the in-game loading menu stops a
 /// queued save from running.
-fn queued_save_blocked(e: &mut Engine) -> bool {
+fn queued_save_blocked(e: &mut Engine, autosave: Option<u32>) -> bool {
     let faders = e.global::<u32>(FADER_MANAGER);
     if e.call(FADER_ACTIVE, &args![faders, 1u32]).bool() {
         return true;
@@ -1683,7 +1690,12 @@ fn queued_save_blocked(e: &mut Engine) -> bool {
     if e.call(FADER_ACTIVE, &args![faders, 2u32]).bool() {
         return true;
     }
-    e.call(LOADING_MENU_OPEN, &args![]).bool()
+    let loading = e.call(LOADING_MENU_OPEN, &args![]).bool();
+    if let Some(manager) = autosave {
+        // Tweaks 10.05: only the loading-menu result, after both faders passed.
+        e.site(0x0085_1dec, &args![manager, loading]);
+    }
+    loading
 }
 
 // Translated from 00851d90 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1697,10 +1709,13 @@ pub fn bgssaveloadmanager_update_queued_saves(e: &mut Engine, this: Ptr<BGSSaveL
     let autosave = e.get(this, BGSSaveLoadManager::cQueuedAutosave);
     if autosave != 0 {
         if autosave > 1 {
-            e.set(this, BGSSaveLoadManager::cQueuedAutosave, autosave - 1);
-        } else if !queued_save_blocked(e) {
-            let manager = Ptr::new(e.global::<u32>(MANAGER_INSTANCE));
-            fn_00850a40(e, manager);
+            if e.site(0x0085_1dae, &args![this]).is_none() {
+                e.set(this, BGSSaveLoadManager::cQueuedAutosave, autosave - 1);
+            }
+        } else if !queued_save_blocked(e, Some(this.addr())) {
+            let manager = e.global::<u32>(MANAGER_INSTANCE);
+            // Address boundary: Tweaks replaces this function's entry.
+            e.call(0x0085_0a40, &args![manager]);
         }
         return;
     }
@@ -1708,7 +1723,7 @@ pub fn bgssaveloadmanager_update_queued_saves(e: &mut Engine, this: Ptr<BGSSaveL
     if forced != 0 {
         if forced > 1 {
             e.set(this, BGSSaveLoadManager::cQueuedForceSave, forced - 1);
-        } else if !queued_save_blocked(e) {
+        } else if !queued_save_blocked(e, None) {
             let manager = Ptr::new(e.global::<u32>(MANAGER_INSTANCE));
             bgssaveloadmanager_save_game(e, manager, Ptr::new(0), u32::MAX, false);
             e.set(this, BGSSaveLoadManager::cQueuedForceSave, 0);
@@ -1719,7 +1734,7 @@ pub fn bgssaveloadmanager_update_queued_saves(e: &mut Engine, this: Ptr<BGSSaveL
     if system != 0 {
         if system > 1 {
             e.set(this, BGSSaveLoadManager::cQueuedSystemSave, system - 1);
-        } else if !queued_save_blocked(e) {
+        } else if !queued_save_blocked(e, None) {
             let manager = Ptr::new(e.global::<u32>(MANAGER_INSTANCE));
             fn_00850a90(e, manager);
         }
@@ -3340,6 +3355,27 @@ mod tests {
     }
 
     #[test]
+    fn save_manager_exit_mode_forces_menu_checks_without_bypassing_vats() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = engine();
+        let manager = manager(&mut e);
+        e.set_global(PLAYER, 0u32);
+        e.register(VATS_ACTIVE, |_, _| rv(0));
+        e.register(MENU_COUNT, |_, _| rv(1));
+        e.register(MENU_ID_AT, |_, _| rv(0x3eb));
+        assert!(fn_00850fe0(&mut e, manager, true));
+        e.on_site(SiteSlot::new(Owner::Stewie, 0x00851050), |_, w| {
+            assert_eq!(w, &[1]);
+            Some(0)
+        });
+        assert!(!fn_00850fe0(&mut e, manager, true));
+        e.register(MENU_ID_AT, |_, _| rv(3));
+        assert!(fn_00850fe0(&mut e, manager, true));
+        e.register(VATS_ACTIVE, |_, _| rv(1));
+        assert!(!fn_00850fe0(&mut e, manager, true));
+    }
+
+    #[test]
     fn saving_is_refused_for_player_states_vats_and_menus() {
         assert!(may_save(0, false, false, &[], 0, false));
         assert!(!may_save(1, false, false, &[], 0, false));
@@ -3797,6 +3833,29 @@ mod tests {
             e.get(rig.manager, BGSSaveLoadManager::iMostRecentSaveGameDeviceID),
             3
         );
+    }
+
+    #[test]
+    fn save_manager_hide_autosave_notice_keeps_autosave_eligibility_and_forced_notice() {
+        use engine_core::extend::{Owner, SiteSlot};
+        for force in [0u8, 1] {
+            let mut e = engine();
+            let rig = rig(&mut e);
+            e.on_site(SiteSlot::new(Owner::Stewie, 0x00850415), |_, w| {
+                assert_eq!(w, &[1]);
+                Some(0)
+            });
+            e.set(rig.manager, BGSSaveLoadManager::cQueuedForceSave, force);
+            e.register(MENU_COUNT, |_, _| {
+                panic!("autosave eligibility still skips menu enumeration")
+            });
+            assert!(save(&mut e, &rig, "autosave", u32::MAX, false));
+            assert_eq!(rig.notices.borrow().len(), usize::from(force));
+            assert_eq!(
+                e.get(rig.manager, BGSSaveLoadManager::iCurrentSaveGameNumber),
+                5
+            );
+        }
     }
 
     #[test]
@@ -4405,6 +4464,77 @@ mod tests {
             rig.opens.borrow()[0],
             ("autosave".to_string(), 1, 2, u32::MAX)
         );
+    }
+
+    #[derive(Default)]
+    struct AutosaveSeams {
+        loading: Vec<Vec<u32>>,
+        ran: usize,
+    }
+
+    #[test]
+    fn autosave_seams_observe_only_their_native_branches_and_entry_boundary() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = engine();
+        let rig = rig(&mut e);
+        let manager = rig.manager;
+        let (fader, menu) = blockers(&mut e);
+        e.on_site(SiteSlot::new(Owner::Stewie, 0x0085_1dae), |e, w| {
+            assert_eq!(e.mem.u8(w[0] + 0xf), 2, "before vanilla decrement");
+            e.mem.set_u8(w[0] + 0xf, 255);
+            Some(0)
+        });
+        e.on_site(SiteSlot::new(Owner::Stewie, 0x0085_1dec), |e, w| {
+            assert_eq!(e.mem.u8(w[0] + 0xf), 1);
+            e.ext::<AutosaveSeams>().loading.push(w.to_vec());
+            if w[1] != 0 {
+                e.mem.set_u8(w[0] + 0xf, 120);
+            }
+            None
+        });
+        e.register(0x0085_0a40, |e, w| {
+            assert_eq!(w.len(), 1);
+            assert_eq!(e.mem.u8(w[0] + 0xf), 1);
+            e.mem.set_u8(w[0] + 0xf, 0);
+            e.ext::<AutosaveSeams>().ran += 1;
+            Ret::default()
+        });
+        e.set(manager, BGSSaveLoadManager::cQueuedAutosave, 2);
+        e.call(0x0085_1d90, &args![manager]);
+        assert_eq!(e.get(manager, BGSSaveLoadManager::cQueuedAutosave), 255);
+        assert!(e.ext::<AutosaveSeams>().loading.is_empty());
+        for kind in [1, 2] {
+            e.set(manager, BGSSaveLoadManager::cQueuedAutosave, 1);
+            fader.set(kind);
+            menu.set(true);
+            e.call(0x0085_1d90, &args![manager]);
+            assert_eq!(e.get(manager, BGSSaveLoadManager::cQueuedAutosave), 1);
+            assert!(e.ext::<AutosaveSeams>().loading.is_empty());
+        }
+        fader.set(0);
+        e.call(0x0085_1d90, &args![manager]);
+        assert_eq!(e.get(manager, BGSSaveLoadManager::cQueuedAutosave), 120);
+        e.set(manager, BGSSaveLoadManager::cQueuedAutosave, 1);
+        menu.set(false);
+        e.call(0x0085_1d90, &args![manager]);
+        assert_eq!(
+            e.ext::<AutosaveSeams>().ran,
+            1,
+            "dynamic entry replacement reached"
+        );
+        assert_eq!(
+            e.ext::<AutosaveSeams>().loading,
+            [vec![manager.addr(), 1], vec![manager.addr(), 0]]
+        );
+        // Force/system menu blocking must not invoke either autosave-only seam.
+        menu.set(true);
+        e.set(manager, BGSSaveLoadManager::cQueuedForceSave, 1);
+        e.call(0x0085_1d90, &args![manager]);
+        e.set(manager, BGSSaveLoadManager::cQueuedForceSave, 0);
+        e.set(manager, BGSSaveLoadManager::cQueuedSystemSave, 1);
+        e.call(0x0085_1d90, &args![manager]);
+        assert_eq!(e.ext::<AutosaveSeams>().loading.len(), 2);
+        assert_eq!(e.get(manager, BGSSaveLoadManager::cQueuedSystemSave), 1);
     }
 
     #[test]

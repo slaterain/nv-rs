@@ -2875,7 +2875,11 @@ pub fn start_menu_initialize_save_load_list_item(e: &mut Engine, tile: Ptr, entr
     };
     set_string(e, tile, TRAIT_1005, location, true);
     let initialized = user_trait(e, TRAIT_NAME_INITIALIZED);
-    set_int(e, tile, initialized, 1);
+    if e.site(0x007d_6931, &args![tile, entry, initialized, 1u32])
+        .is_none()
+    {
+        set_int(e, tile, initialized, 1);
+    }
 }
 
 // Translated from 007d6950 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -7191,6 +7195,27 @@ mod tests {
         set_flags(&mut e, menu, FLAG_DONT_FORCE_BACK);
         fn_007d6730(&mut e, menu);
         assert!(calls(&e, START_MENU_CHOOSE_BACK).is_empty());
+    }
+
+    #[test]
+    fn save_manager_highlight_observer_replaces_only_final_initialized_write() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = engine();
+        let entry = save_entry(&mut e);
+        stub(&mut e, TILE_ADD_USER_TRAIT, 0xabc);
+        stub(&mut e, FIRST_WORD, 0x9100);
+        stub(&mut e, FILE_ENTRY_IS_AUTOSAVE, 1);
+        e.on_site(SiteSlot::new(Owner::Stewie, 0x007d6931), |e, w| {
+            assert_eq!(w[0], 0x5000);
+            assert_ne!(w[1], 0);
+            assert_eq!(w[2..], [0xabc, 1]);
+            assert_eq!(calls(e, TILE_SET_STRING).len(), 2);
+            *e.ext::<usize>() += 1;
+            Some(1)
+        });
+        start_menu_initialize_save_load_list_item(&mut e, Ptr::new(0x5000), Ptr::new(entry));
+        assert_eq!(*e.ext::<usize>(), 1);
+        assert!(calls(&e, TILE_SET_INT).is_empty());
     }
 
     #[test]

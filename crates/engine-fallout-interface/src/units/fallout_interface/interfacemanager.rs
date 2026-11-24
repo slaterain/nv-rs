@@ -4139,10 +4139,23 @@ pub fn interface_manager_do_gamepad_event(e: &mut Engine, this: Ptr<InterfaceMan
         let mut flag_a = 0u8;
         let mut flag_b = 0u8;
         let over = e.call(GET_MOUSE_OVER_TARGET, &args![this]).u32();
-        if over != 0 && e.call(TILE_GET_MENU, &args![over]).u32() != 0 {
-            let menu = e.call(TILE_GET_MENU, &args![over]).u32();
-            if !menu_is_active(e, menu) {
-                return;
+        if over != 0 {
+            let first_menu = e.call(TILE_GET_MENU, &args![over]).u32();
+            if first_menu != 0 {
+                match e.site(0x0070_f7e2, &args![first_menu]) {
+                    Some(1) => {}
+                    Some(_) => {
+                        if !menu_is_active(e, first_menu) {
+                            return;
+                        }
+                    }
+                    None => {
+                        let menu = e.call(TILE_GET_MENU, &args![over]).u32();
+                        if !menu_is_active(e, menu) {
+                            return;
+                        }
+                    }
+                }
             }
         }
         if over != 0 {
@@ -10883,6 +10896,38 @@ mod tests {
         returns(&mut e, MENU_MANAGER_INSTANCE, 0x2000_2000);
         returns(&mut e, GET_FRONTMOST_MENU, frontmost);
         (e, m, frontmost)
+    }
+
+    #[test]
+    fn save_manager_pause_menu_bypasses_active_check_without_repeating_menu_lookup() {
+        use engine_core::extend::{Owner, SiteSlot};
+        for mode in [0, 1, 2] {
+            let (mut e, m, _) = menu_world();
+            returns(&mut e, HAS_360_CONTROLLER_GETTER, 1);
+            returns(&mut e, GET_MOUSE_OVER_TARGET, 0x9400);
+            returns(&mut e, TILE_GET_MENU, 0x7c00);
+            returns(&mut e, MENU_STATE, 1);
+            returns(&mut e, DO_GAMEPAD, 1);
+            if mode == 1 {
+                e.on_site(SiteSlot::new(Owner::Stewie, 0x0070f7e2), |_, w| {
+                    assert_eq!(w, &[0x7c00]);
+                    Some(1)
+                });
+            }
+            if mode == 2 {
+                e.on_site(SiteSlot::new(Owner::Stewie, 0x0070f7e2), |_, w| {
+                    assert_eq!(w, &[0x7c00]);
+                    Some(0)
+                });
+            }
+            interface_manager_do_gamepad_event(&mut e, m, 5);
+            assert_eq!(
+                calls(&e, TILE_GET_MENU).len(),
+                if mode == 0 { 2 } else { 1 }
+            );
+            assert_eq!(calls(&e, MENU_STATE).len(), usize::from(mode != 1));
+            assert_eq!(calls(&e, DO_GAMEPAD).len(), 1);
+        }
     }
 
     #[test]

@@ -30,6 +30,7 @@ pub mod cosave;
 pub mod ini;
 pub mod rows;
 pub mod run_and_gun;
+mod save_manager;
 pub mod settings;
 
 // The unit tests' own program: no other crate's functions are linked in.
@@ -193,6 +194,7 @@ pub fn install(e: &mut Engine) {
         Vec::new()
     };
     let (settings, on) = settings_and_rows(ini.as_deref(), &overlays, &keys);
+    save_manager::install(e, &settings);
     e.clear_stewie();
     for row in &on {
         e.set_stewie(row.bit, true);

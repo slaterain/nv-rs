@@ -2418,6 +2418,7 @@ pub fn fn_005b6c90(e: &mut Engine) -> bool {
 // Translated from 005b6cb0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Sets the byte at `this + 1` to 1.
 pub fn fn_005b6cb0(e: &mut Engine, this: Ptr) {
+    let _ = e.site(0x005b_6cb0, &args![this.addr()]);
     e.mem.set_u8(this.addr() + 1, 1);
 }
 
@@ -8065,6 +8066,21 @@ mod tests {
             calls(&e, FN_005E01B0),
             vec![vec![0x1000, 0x1004], vec![0x2000, 0x2004]]
         );
+    }
+
+    #[test]
+    fn save_manager_exit_observer_runs_before_quit_flag_store() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = engine();
+        let main = e.mem.alloc(8);
+        e.on_site(SiteSlot::new(Owner::Stewie, 0x005b6cb0), |e, words| {
+            assert_eq!(e.mem.u8(words[0] + 1), 0);
+            e.mem.set_u8(words[0], 7);
+            None
+        });
+        e.call(0x005b6cb0, &args![main]);
+        assert_eq!(e.mem.u8(main), 7);
+        assert_eq!(e.mem.u8(main + 1), 1);
     }
 
     #[test]

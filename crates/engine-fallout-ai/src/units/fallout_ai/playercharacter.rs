@@ -4304,7 +4304,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                     }
                 }
             }
-            if e.call(0x00a2_4660, &args![main_state, 0x1au32, 1u32]).u32() != 0 {
+            if save_manager_quickload_query(e, 0x0094_039b, main_state) {
                 let reactor = e.global::<u32>(FAST_TRAVEL_REACTOR);
                 if e.call(0x0085_09f0, &args![reactor]).bool() {
                     e.set_global(TIMER_011A3B34, e.global::<f32>(TIMER_RESET));
@@ -4555,6 +4555,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             e.set_global::<u8>(HELD_FLAG_011E0BC1, 0);
         }
         e.call(0x0096_73d0, &args![this, delta]);
+        let _ = e.site(0x0094_0c78, &args![]);
         if e.call(0x00a2_4660, &args![main_state, 0x0au32, 1u32]).u32() != 0 {
             let toggled = !e.get(this, PlayerCharacter::bAlwaysRun);
             e.set(this, PlayerCharacter::bAlwaysRun, toggled);
@@ -5260,7 +5261,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             let reactor = e.global::<u32>(FAST_TRAVEL_REACTOR);
             e.call(0x0085_09a0, &args![reactor]);
         }
-        if e.call(0x00a2_4660, &args![main_state, 0x1au32, 1u32]).u32() != 0 {
+        if save_manager_quickload_query(e, 0x0094_2869, main_state) {
             let reactor = e.global::<u32>(FAST_TRAVEL_REACTOR);
             e.call(0x0085_09f0, &args![reactor]);
         }
@@ -9304,7 +9305,7 @@ fn input_in_frame(
         e.call(0x0085_09a0, &args![manager]);
         e.mem.set_u8(0x011e_0be5, 0);
     }
-    if button_state(e, input, 0x1a, 1) && e.mem.u8(0x011e_0be4) == 0 {
+    if save_manager_quickload_query(e, 0x0094_7ab8, input) && e.mem.u8(0x011e_0be4) == 0 {
         e.mem.set_u8(0x011e_0be4, 1);
         let manager = e.global::<u32>(SAVE_LOAD_MANAGER);
         e.call(0x0085_09f0, &args![manager]);
@@ -17287,6 +17288,22 @@ mod tests {
     }
 
     #[test]
+    fn save_manager_manual_keys_follow_original_menu_button_update() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = engine();
+        let this = update_world(&mut e);
+        e.on_site(SiteSlot::new(Owner::Stewie, 0x0094_0c78), |e, words| {
+            assert!(words.is_empty());
+            assert_eq!(e.call_log.as_ref().unwrap().last().unwrap().0, 0x0096_73d0);
+            e.call_log.as_mut().unwrap().push((0x0094_0c78, vec![]));
+            None
+        });
+        player_character_update(&mut e, this, 0.5);
+        assert_eq!(called(&e, 0x0094_0c78), vec![vec![]]);
+        assert_eq!(called(&e, 0x0096_73d0).len(), 1);
+    }
+
+    #[test]
     fn update_counts_the_warning_timers_down_and_resets_them_when_out() {
         let mut e = engine();
         let this = update_world(&mut e);
@@ -19644,6 +19661,26 @@ mod tests {
         buttons(&mut e, &[(1, 0)]);
         e.call(0x0094_66d0, &args![this, 0.5f32, false]);
         assert!(!e.get(this, PlayerCharacter::bAutoMove));
+    }
+
+    #[test]
+    fn save_manager_ufo_quickload_replacement_keeps_other_hotkeys_and_scope() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let (mut e, this) = input_world();
+        buttons(&mut e, &[(0x19, 1), (0x1a, 1)]);
+        e.on_site(SiteSlot::new(Owner::Stewie, 0x0094_7ab8), |e, words| {
+            assert_eq!(words[1..], [0x1a, 1]);
+            e.call_log
+                .as_mut()
+                .unwrap()
+                .push((0x0094_7ab8, words.to_vec()));
+            Some(0)
+        });
+        e.call(0x0094_66d0, &args![this, 0.5f32, true]);
+        assert_eq!(called(&e, 0x0094_7ab8).len(), 1);
+        assert!(called(&e, 0x0085_09f0).is_empty());
+        assert_eq!(called(&e, 0x0085_09a0), vec![vec![0x4500]]);
+        assert_eq!(called(&e, 0x0040_4ee0).len(), 1);
     }
 
     #[test]
@@ -22010,4 +22047,11 @@ mod draw_thread_joins {
             );
         }
     }
+}
+
+/// Three exact SaveManager input call sites; all other control reads stay native.
+fn save_manager_quickload_query(e: &mut Engine, site: u32, input: u32) -> bool {
+    e.site(site, &args![input, 0x1au32, 1u32])
+        .unwrap_or_else(|| e.call(0x00a2_4660, &args![input, 0x1au32, 1u32]).u32())
+        != 0
 }

@@ -72,6 +72,7 @@ pub fn save(e: &mut Engine, records: &mut Records) {
 /// Tweaks' listener: before a save is read there is no saved count until the player's load keeps
 /// one (S0089.01); the records kept are the coming co-save's.
 pub fn listen(e: &mut Engine, m: &nvse::plugins::Message) {
+    crate::save_manager::listen(e, m);
     if m.kind == nvse::plugins::msg::PRE_LOAD_GAME {
         let kept = e.stewie_kept(engine_core::extend::stewie::kept::SAVED_AMMO_COUNT, 4);
         e.mem.set_u32(kept, 0);

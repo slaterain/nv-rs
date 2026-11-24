@@ -526,7 +526,10 @@ pub fn fn_0060ca30(e: &mut Engine, this: Ptr, on: u8) {
         let flags = e.mem.u8(at) | 2;
         e.mem.set_u8(at, flags);
         e.vcall(this.addr(), ADD_CHANGE_SLOT, &args![CHANGE_QUEST_FLAGS]);
+        let _ = e.site(0x0060_ca6c, &args![]);
         e.call(MISC_STAT_INCREMENT, &args![0u32]);
+        // JohnnyGuitar JohnnyEvents.cpp: before the original quest-name call.
+        e.site(0x0060_ca78, &[this.addr()]);
         e.call(SHOW_QUEST_NAME, &args![this]);
     } else if on == 0 && e.mem.u8(at) & 2 != 0 {
         let flags = e.mem.u8(at) & 0xfd;
@@ -1318,6 +1321,31 @@ mod b008_tests {
             calls(&mut e),
             vec![(CHANGE, vec![quest, 2]), (QUEST_DONE_0060CAD0, vec![0])]
         );
+    }
+
+    #[test]
+    fn save_manager_quest_trigger_follows_change_mark_before_stat_only_on_transition() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = Engine::new();
+        let table = e.mem.alloc(0x50);
+        let quest = e.mem.alloc(0x6c);
+        e.mem.set_u32(quest, table);
+        e.mem.set_u32(table + ADD_CHANGE_SLOT, 0x01372000);
+        e.register(0x01372000, |_, _| Ret::default());
+        e.register(MISC_STAT_INCREMENT, |_, _| Ret::default());
+        e.register(SHOW_QUEST_NAME, |_, _| Ret::default());
+        e.register(QUEST_DONE_0060CAD0, |_, _| Ret::default());
+        e.on_site(SiteSlot::new(Owner::Stewie, 0x0060ca6c), |e, w| {
+            assert!(w.is_empty());
+            assert_eq!(e.call_log.as_ref().unwrap().last().unwrap().0, 0x01372000);
+            *e.ext::<usize>() += 1;
+            None
+        });
+        e.call_log = Some(vec![]);
+        fn_0060ca30(&mut e, Ptr::new(quest), 1);
+        fn_0060ca30(&mut e, Ptr::new(quest), 1);
+        fn_0060ca30(&mut e, Ptr::new(quest), 0);
+        assert_eq!(*e.ext::<usize>(), 1);
     }
 
     #[test]

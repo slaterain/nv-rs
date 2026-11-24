@@ -6,7 +6,7 @@
 //! (A player's modded game stopped that way in xNVSE's lambdas, whose two list copies passed two
 //! words of three, when this test read the jip crate only.)
 //!
-//! The test reads each crate's source (not its tests: `_tests.rs` files and `#[cfg(test)]` items
+//! The test reads each crate's source (not its tests: `tests.rs`, `_tests.rs` files and `#[cfg(test)]` items
 //! are left out): each `.call(NAME, &args![..])` or `.call(NAME, &[..])` whose callee is a
 //! `const NAME: u32` of the crate, an address written in place (`0x005a_b930`) or one of two such
 //! in an `if`, and each call of a helper that hands its `u32` parameter on as the callee
@@ -350,6 +350,13 @@ const UNREAD: &[Row] = &[
         N(3),
         "the tile map's compare routine, on insert",
     ),
+    (
+        "stewie",
+        "save_manager.rs",
+        "0x00a2_4660",
+        N(3),
+        "Controls query: controls this, control index and input-state word",
+    ),
     // JohnnyGuitar NVSE.
     (
         "johnnyguitar",
@@ -374,6 +381,11 @@ fn crate_src(name: &str) -> PathBuf {
         })
 }
 
+/// Conventional unit-test modules and their fixture helper, excluded like `#[cfg(test)]` items.
+fn is_test_source_name(name: &str) -> bool {
+    name == "tests.rs" || name.ends_with("_tests.rs") || name == "test_support.rs"
+}
+
 /// A crate's source files, without its test files.
 fn sources(root: &Path) -> Vec<PathBuf> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -383,7 +395,7 @@ fn sources(root: &Path) -> Vec<PathBuf> {
                 walk(&path, out);
             } else if path.extension().is_some_and(|x| x == "rs") {
                 let name = path.file_name().unwrap().to_string_lossy().into_owned();
-                if !name.ends_with("_tests.rs") && name != "test_support.rs" {
+                if !is_test_source_name(&name) {
                     out.push(path);
                 }
             }
@@ -1843,6 +1855,11 @@ fn extenders_virtual_calls_with_a_fixed_target_pass_its_words() {
 /// The reader's own rules, on made-up source.
 #[test]
 fn the_reader_counts_words_by_type_and_lists_what_it_cannot_read() {
+    assert!(is_test_source_name("tests.rs"));
+    assert!(is_test_source_name("ui_hooks_tests.rs"));
+    assert!(is_test_source_name("test_support.rs"));
+    assert!(!is_test_source_name("process_events.rs"));
+    assert!(!is_test_source_name("latest_tests_support.rs"));
     let types = Types::of(&[(
         "a.rs".to_string(),
         code_of(

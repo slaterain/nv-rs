@@ -499,6 +499,7 @@ pub fn fn_0071d620(e: &mut Engine, this: Ptr<MenuConsole>, state: i8) {
     }
     if state > 0 {
         typed_call!(leaf::FAMILY, 0x0040_fbe0, leaf::nothing(e));
+        e.site(0x0071_d665, &[]);
         let interface = e.call(INTERFACE_GETTER, &args![]).u32();
         let (x, y) = console_position(e, this);
         if e.call(0x0070_23a0, &args![interface]).bool() {
@@ -518,6 +519,7 @@ pub fn fn_0071d620(e: &mut Engine, this: Ptr<MenuConsole>, state: i8) {
         menu_console_refresh_lines(e, this);
     } else {
         typed_call!(leaf::FAMILY, 0x0040_fbe0, leaf::nothing(e));
+        e.site(0x0071_d720, &[]);
         let instance = e.call(DEBUG_TEXT_INSTANCE, &args![1u32]).u32();
         e.call(DEBUG_TEXT_DELETE_ALL, &args![instance]);
         let interface = e.call(INTERFACE_GETTER, &args![]).u32();

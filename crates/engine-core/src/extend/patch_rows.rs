@@ -38,6 +38,8 @@ mod gt;
 mod gw;
 mod gx;
 mod jg;
+mod stewie_save;
+mod stewie_save_extra;
 
 /// Every file's seams: step 3.9a's, then the groups', then the commands'.
 pub(super) const SITES: &[&[Entry]] = &[
@@ -59,6 +61,8 @@ pub(super) const SITES: &[&[Entry]] = &[
     gx::SITES,
     cmds::SITES,
     jg::SITES,
+    stewie_save::SITES,
+    stewie_save_extra::SITES,
 ];
 
 /// Every file's wraps.
@@ -81,6 +85,7 @@ pub(super) const WRAPS: &[&[Entry]] = &[
     gx::WRAPS,
     cmds::WRAPS,
     jg::WRAPS,
+    stewie_save::WRAPS,
 ];
 
 /// The owner list of a row here.

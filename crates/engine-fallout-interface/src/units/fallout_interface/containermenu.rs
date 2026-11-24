@@ -558,6 +558,7 @@ pub fn container_menu_scalar_deleting_destructor(
     this: Ptr<ContainerMenu>,
     flags: u32,
 ) -> Ptr<ContainerMenu> {
+    let _ = e.site(0x0075_b24a, &args![this.addr()]);
     fn_0075b270(e, this);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
@@ -3180,8 +3181,17 @@ mod tests {
                 OPERATOR_DELETE,
             ],
         );
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::Stewie, 0x0075_b24a),
+            |e, w| {
+                assert_ne!(w[0], 0);
+                *e.ext::<usize>() += 1;
+                None
+            },
+        );
         e.call_log = Some(vec![]);
         e.call(0x0075_b240, &args![this, 1u32]);
+        assert_eq!(*e.ext::<usize>(), 1);
         let order: Vec<u32> = e.call_log.as_ref().unwrap().iter().map(|c| c.0).collect();
         assert_eq!(
             order,

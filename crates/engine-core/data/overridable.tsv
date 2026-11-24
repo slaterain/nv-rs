@@ -85,6 +85,7 @@
 008300c0	0	nv-rs radio song lengths
 00830b30	0	nv-rs radio song lengths
 008492b0	1	nv-rs half-loaded actor's level change
+00850a40	0	Stewie Save Manager
 00866770	0	HeapReplacer
 00866d10	1	HeapReplacer
 00866e00	0	HeapReplacer
