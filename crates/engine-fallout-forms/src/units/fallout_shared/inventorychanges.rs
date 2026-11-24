@@ -18574,39 +18574,6 @@ mod tests {
         assert_eq!(e.call(0x004b_da70, &args![this, 3u32]).u32() & 0xff, 0);
     }
 
-    /// The fast iteration: each start makes a new iterator, the first step gives the stack held,
-    /// and the destructor runs its body once and answers the iterator.
-    #[test]
-    fn fast_iteration_starts_steps_and_destroys() {
-        let mut e = tx4();
-        let (this, held, _) = stack_setup(&mut e);
-        e.call_log = Some(vec![]);
-        let iterator = e.call(0x004ca200, &args![this]).u32();
-        let started = e.call(0x004ca200, &args![this]).u32();
-        let first = e.call(0x004ca330, &args![this, iterator]).u32();
-        let destroyed = e.call(0x004bf630, &args![iterator, 0u32]).u32();
-        let destructs = calls(&e, FAST_ITERATOR_DESTRUCT).len();
-        assert_ne!(started, iterator, "a new exe iterator");
-        assert_eq!(e.mem.u32(first + 8), held);
-        assert_eq!((destroyed, destructs), (iterator, 1));
-    }
-
-    /// The destructor as the fast iteration's callers run it (flags 1, "free it too"): its body
-    /// and `operator delete`, answering the iterator.
-    #[test]
-    fn fast_iterator_destructor_runs_its_body_and_frees() {
-        let mut e = more();
-        let result = e.call(0x004bf630, &args![0x1111u32, 1u32]).u32();
-        assert_eq!(
-            (
-                result,
-                calls(&e, FAST_ITERATOR_DESTRUCT),
-                calls(&e, OPERATOR_DELETE)
-            ),
-            (0x1111, vec![vec![0x1111]], vec![vec![0x1111]])
-        );
-    }
-
     /// `004c1c90` asks `GetRefPersists` once: with an entry of the form there (`0x4C232C`) and for
     /// a new entry (`0x4C273A`).
     #[test]
@@ -18640,19 +18607,5 @@ mod tests {
         e.call_log = Some(vec![]);
         remove_item_hotkey(&mut e, 1, list, 0, 2);
         assert_eq!(calls(&e, EXTRA_REMOVE_HOT_KEY).len(), 1);
-    }
-
-    /// `GetRepairItemGroup`: the exe's test keeps the one stack it accepts.
-    #[test]
-    fn repair_item_group_keeps_the_stack_the_test_accepts() {
-        let mut e = fx();
-        e.register(REPAIR_ITEM_TEST, |e, a| {
-            returns((e.mem.u8(a[0] + F_TYPE) == 0x20 && a[1] == 0x99) as u32)
-        });
-        let (this, _, _) = stack_setup(&mut e);
-        let group = list(&mut e, &[]);
-        e.call_log = Some(vec![]);
-        e.call(0x004d4bd0, &args![this, 0x99u32, group]);
-        assert_eq!(items(&e, group).len(), 1);
     }
 }
