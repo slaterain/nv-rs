@@ -143,8 +143,6 @@ const LIST_ITEM: u32 = 0x0055_8dd0;
 /// The pools' iterators: the landmark and tick pools' (`0057cbe0`), the targets' (`00683520`).
 const POOL_NEXT: u32 = 0x0057_cbe0;
 const OBJECTIVE_POOL_NEXT: u32 = 0x0068_3520;
-/// JIP LN's seam at the location name (`0077951e`).
-const JIP_DISCOVER_LOCATION: u32 = 0x0077_951e;
 const JIP_LOCATION_DISCOVERED: u32 = 0x0077_955d;
 
 /// The player's virtual slots: heading (+0x2bc), position (+0x1f4), sneaking (+0x22c), the
@@ -635,16 +633,7 @@ pub fn update_compass(
         if !sneaking {
             if changed {
                 let data = e.mem.u32(record);
-                let jip_name = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
-                {
-                    e.site(JIP_DISCOVER_LOCATION, &[data, record])
-                } else {
-                    None
-                };
-                let location = match jip_name {
-                    Some(name) => name,
-                    None => e.call(MARKER_NAME, &args![data]).u32(),
-                };
+                let location = e.call(MARKER_NAME, &args![data]).u32();
                 let title = e.call(SETTING_STRING, &args![DISCOVERED_TITLE]).u32();
                 e.call(
                     SHOW_MESSAGE,

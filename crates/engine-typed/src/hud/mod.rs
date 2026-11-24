@@ -8,15 +8,14 @@
 //! - [`compass`]: `UpdateCompass` (`00779070`), `BlinkTile` (`00778c20`), `GetCompassAngle`
 //!   (`00778b80`), the player's own marker (`0077a400`) and the heading strip's two floats
 //!   (`0077a450`).
-//! - [`idle`]: `HUDMainMenu::DoIdle` (`00770430`) itself, its sub-updates by address (JIP's H21, O14
-//!   and G10 places kept).
+//! - [`idle`]: `HUDMainMenu::DoIdle` (`00770430`) itself, its sub-updates by address.
 //!
 //! What stays by address: the player's and the markers' virtual slots, the map marker data's getters
 //! and setters, the location's discovery (its message, the event, the stat, the experience), the
 //! quest target list and its records, the tile pools' iterators, the VATS target list and its sort,
 //! the trait name table (`Tile::AddUserTrait`), the menu's render test, `fabs`. The extenders' places
-//! in the compass stay where they are: JIP's location name (`0077951e`) and location-discovered event
-//! (`0077955d`) are asked at the same points, under the same conditions.
+//! in the compass stay where they are: JIP's location-discovered event (`0077955d`) is asked at the
+//! same point, under the same conditions.
 //!
 //! **Floats.** The compass runs on the main thread only ([`Threads::Main`]), so its maths is plain
 //! `f32` (ADR-0014), each operation rounded where the main thread's 24-bit precision rounds it; a

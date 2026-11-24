@@ -344,9 +344,9 @@ fn fixed() -> Engine {
     e
 }
 
-/// G10's layout (group GA): with JIP installed and the row off, the queue's text buffer is the
-/// exe's 0x104; with the row on, JIP's 0x204, also for an engine made for a thread after the
-/// fixes went in (it copies the handlers and shares the word), and every G10 seam answers there.
+/// G10's layout (group GA): the queue's text buffer is the exe's 0x104 with the row off and on
+/// (the queue no longer asks G10's seams), also for an engine made for a thread after the fixes
+/// went in (it copies the handlers and shares the word), where every G10 seam still answers.
 /// `FIXES` is set only after the handlers are in.
 #[test]
 fn corner_message_layout_after_the_fixes_and_on_a_thread() {
@@ -356,11 +356,11 @@ fn corner_message_layout_after_the_fixes_and_on_a_thread() {
     assert_eq!(super::ga::corner_message_text_size(&mut e), 0x104);
     set_row(&mut e, true);
     assert_ne!(e.jip_patches() & jip_patches::FIXES, 0);
-    assert_eq!(super::ga::corner_message_text_size(&mut e), 0x204);
+    assert_eq!(super::ga::corner_message_text_size(&mut e), 0x104);
     let mut thread = Engine::new();
     e.share_slots_for_test(&mut thread);
     assert_ne!(thread.jip_patches() & jip_patches::FIXES, 0);
-    assert_eq!(super::ga::corner_message_text_size(&mut thread), 0x204);
+    assert_eq!(super::ga::corner_message_text_size(&mut thread), 0x104);
     for site in super::ga::CORNER_MESSAGE {
         assert_eq!(thread.site(site.addr(), &[0x104]), Some(0x204));
     }
