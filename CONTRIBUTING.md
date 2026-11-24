@@ -1,203 +1,196 @@
 # Contributing to nv-rs
 
-nv-rs is maintained by **slaterain**. Many people now work on it at once,
-most of them with AI agents. This page says how to do that so that your
-work can actually be merged. Read it, then give it and
-[AGENTS.md](AGENTS.md) to your agent.
+nv-rs is Fallout: New Vegas rebuilt in Rust, played from your own copy of the game. The game's
+program, `FalloutNV.exe` 1.4.0.525, is translated into Rust function by function, and the
+translated systems are being rewritten as fast native 64-bit code. The aim is a game that looks,
+sounds and plays exactly like the original, without its crashes, stutters and memory limit.
 
-The short version:
+This page is for people and for their AI agents. **If you use an agent, point it at this file.**
+Everything it needs to follow is here; the section [For AI agents](#for-ai-agents) is the short
+list of rules it must not break.
 
-1. Work from the latest `main`, in a fork, on a topic branch.
-2. Open an issue saying what you want to do, and wait for the maintainer's
-   go-ahead before you start.
-3. Trace every behaviour in the original game. No invented behaviour.
-4. Open a small pull request against `main` that passes the checks.
+## The short version
 
-## Where help is needed now
+1. Fork the repository and work on a topic branch made from the latest `main`.
+2. For anything bigger than a small fix, open an issue first and say what you plan to do.
+3. Every behaviour comes from the original game. Nothing is invented or "tuned by feel".
+4. Keep each pull request small and about one thing. Run the checks and say how you verified it.
 
-The whole game runs on its own translated code: every function of `FalloutNV.exe`
-([docs/LEDGER.md](docs/LEDGER.md)) is translated into Rust in the engine crates
-(`crates/engine*`), marked with its address, and `nv-viewer` runs it. The open world,
-quests, DLCs and mods play, but translation errors still cause bugs and crashes
-everywhere. The plan ([ADR-0012](docs/adr/0012-modern-64-bit-engine.md),
-[docs/MILESTONES.md](docs/MILESTONES.md)): the game looks and plays exactly like the
-original, while everything players don't see is rebuilt as a modern 64-bit engine.
-First an audit of the translation against
-[fnv_decomp](https://github.com/momusdigital/fnv_decomp), then the move of the game's
-systems to typed, native 64-bit Rust, then the modern systems.
+## What helps most
 
-Where help is useful, in order:
+1. **Play and report bugs.** A crash, a freeze, or anything that differs from the original game.
+   Open an issue saying where you were, what you did, what the original game does there, and
+   attach the log (the newest `game-*.log`) and an F12 report if you made one. When the game's
+   code stops, the log's last line names the place:
+   `Game's main stopped in frame N: <why> (in <exe addresses>)`. Those addresses are what we need.
+2. **Fix translation errors.** Compare a function's Rust translation with the executable (in a
+   disassembler such as Ghidra) and fix what differs, with a regression test.
+3. **Speed and stutters.** Rewriting hot code as native Rust, proven to give the same results as
+   the translation it replaces (see [Native code](#native-code)).
+4. **Linux and macOS.** Builds exist but have barely been played. Reports and fixes are welcome.
+5. **Mod and script-extender compatibility.** xNVSE, JIP LN NVSE, JohnnyGuitar NVSE and UI
+   Organizer are built in. Fixes to them, and ports of other open-source plugins whose licence
+   allows it, are welcome (see [What can and can't be accepted](#what-can-and-cant-be-accepted)).
 
-1. **Play and report bugs.** This is the most useful help right now. Play the build
-   ([docs/PLAYTESTING.md](docs/PLAYTESTING.md)) anywhere in the game and open an issue
-   for each crash or difference from the original: where you were, what you did,
-   what the original does, and the log's last lines. When the game's code stops, the
-   log names the place (`Game's main stopped in frame N: ... (in <addresses>)`); those
-   addresses are what we need.
-2. **Compare translations with fnv_decomp or the executable.** Pick a function from a
-   crash report or the ledger, compare its Rust translation with fnv_decomp's C++ for
-   the same address (or run it on the real CPU with `nv-call`,
-   [`research/nv-oracle`](research/nv-oracle/)), and report a mismatch as an issue with
-   the address and what differs. Fix pull requests for a single function are welcome
-   after the issue (see Provenance below); never commit fnv_decomp's C++.
-3. **Compare with the original game.** Recording the original and comparing it with
-   nv-rs automatically is the most valuable check the port can have. Propose a plan in
-   an issue before building tools for it.
-4. **Platforms.** Other platforms come through wgpu (the only planned renderer
-   backend) once the platform layer is in its own crate. Discuss in an issue first.
+## Build and run
 
-Not open for contributions, because the maintainer's sessions are doing them and
-parallel versions would conflict: the audit's system-wide passes, the move of systems to
-typed 64-bit Rust, the platform layer and the play build. The hand-written
-reimplementation that came before the port (the `world` crate and the Bevy viewer) was
-removed on 2026-11-03 ([ADR-0011](docs/adr/0011-old-layer-removed.md)).
+You need Rust (the version is pinned in `rust-toolchain.toml`; `rustup` picks it up) and your own
+installed copy of Fallout: New Vegas 1.4.0.525. The repository contains no game files and never
+will.
 
-## Updating an older fork
+```sh
+cargo build --profile play -p nv-viewer      # quick play build: target/play/nv-viewer(.exe)
+cargo build --release -p nv-viewer           # the build the packages use
+```
 
-`main` moves quickly. If your fork is more than a few days old, do this
-before anything else:
+Run it with the game's `Data` folder (or the installation folder above it):
 
-1. **Update your fork.** On GitHub press **Sync fork** on your fork's
-   `main`, or:
+```powershell
+.\target\play\nv-viewer.exe 'C:\Games\Steam\steamapps\common\Fallout New Vegas\Data'
+```
 
-   ```sh
-   git remote add upstream https://github.com/slaterain/nv-rs.git   # once
-   git fetch upstream
-   git switch main
-   git reset --hard upstream/main      # your fork's main = upstream main
-   git push --force-with-lease origin main
-   ```
+nv-rs never changes the game's folder, your saves or your settings. On Linux and macOS,
+`distribution/unix/play.sh` finds the game and starts it (`./play.sh --check` checks your game's
+version first).
 
-   Keep your own work on topic branches, never on your fork's `main`.
-2. **Don't build on copied `claude/*` or `codex/*` branches.** They are
-   the maintainer's working branches; pull requests built on them will be
-   closed.
-3. **Check that your work isn't already in `main`**: search the code,
-   including the engine crates (`crates/engine*`) for the exe address you
-   traced.
-4. **Claim it.** Find the matching issue, or open one, and
-   comment `Claiming this` with your branch name, even if you started
-   before claiming. If someone else already claimed it, say what you have
-   on the issue and agree who continues; don't open a competing PR.
-5. **Rebase your branch on the new `main`**
-   (`git rebase upstream/main`), resolve conflicts in favour of traced
-   behaviour, and run the checks below.
-6. **Open a pull request against `slaterain/nv-rs` `main`**, one system
-   per pull request (a draft is fine while it's unfinished). Big work goes
-   in as a stack of smaller pull requests, each reviewable on its own.
+## Checks
 
-Work that changes how the game behaves without tracing it (tuned
-constants, "feels better" camera or AI changes, procedural effects the
-game doesn't have) can't be merged, however good it looks. Leave it out, and say in
-the pull request which parts are traced.
+Run these before you push. GitHub runs them too, and they must pass before a merge.
 
-## Claiming a task
+```sh
+cargo fmt --all -- --check
+cargo clippy -p <each crate you changed> --all-targets -- -D warnings
+cargo test -p <each crate you changed>
+cargo test -p nvinspect --test repo_hygiene
+```
 
-There is no open task list right now. To work on something, open an
-issue describing what you want to do and wait for the maintainer's go-ahead
-before starting; ongoing claims are tracked on their issues.
+- `cargo test --workspace` runs everything, but the engine's integration tests (`crates/engine/tests`)
+  are large: each needs several GB of memory to build. Run the ones that cover what you changed and
+  leave the rest to CI.
+- The hygiene test rejects game files and other binaries, absolute paths with user names, and
+  Ghidra's automatic names (`FUN_…`, `DAT_…`): write the address instead.
+- Code must build on Windows, Linux and macOS. Check a crate for another system with
+  `cargo check --target x86_64-unknown-linux-gnu --tests -p <crate>` (or `aarch64-apple-darwin`).
+  A pull request that touches files, windows, input, sound, drawing, the launcher or packaging gets
+  the `other-systems` label so the macOS job runs too (ask in the pull request if you can't set it).
+- If you change `Cargo.lock`, update `distribution/DEPENDENCY-LOCK.sha256`: the SHA-256 of the
+  committed `Cargo.lock` with LF line endings (`git show HEAD:Cargo.lock | sha256sum`). New external
+  crates need the maintainer's agreement first.
+- If you change `crates/host/data/game_ini.tsv`, regenerate `distribution/nv-rs-sections.ini` with
+  `scripts/game-ini-sections.sh`.
 
-1. Once the maintainer agrees, comment `Claiming this` on the issue with
-   the branch name you'll use. First claim wins; don't start on work
-   someone else has claimed.
-2. Post a short progress comment at least once a day. A claim with no
-   comment or pull request for 48 hours can be released.
-3. Link the pull request to the issue (`Closes #N`). If you give up, say
-   so on the issue so someone else can take it.
+## How the code is organised
 
-Found a new bug? Open an issue for it; don't fix it inside an unrelated
-pull request.
+| Where | What |
+| --- | --- |
+| `crates/engine-fallout-*`, `engine-bs`, `engine-gamebryo`, `engine-havok`, ... | The game's own code, translated function by function, each function marked with its address |
+| `crates/engine-core` | The model the translation runs on: the game's memory, calls by address, threads, the extenders' hook points |
+| `crates/engine-typed` | Native rewrites of the game's functions ("typed families"), registered at the functions' addresses |
+| `crates/engine-platform` | What the game asks of Windows, DirectX and the C runtime, answered on every system |
+| `crates/host` | Starts the game, holds the optional fixes ("rows"), runs the frames |
+| `viewer/` | `nv-viewer`, the program around the host |
+| `crates/nv-launcher` | `Play.exe`, the launcher players start |
+| `crates/d3d9-wgpu` | The renderer: the game's Direct3D 9 drawing on wgpu (Vulkan, Direct3D 12, Metal) |
+| `crates/nvse`, `jip`, `johnnyguitar`, `uio` | The built-in script extenders and plugins |
+| `research/engine-map` | The map of every function in `FalloutNV.exe` that the build and tests read |
+| `distribution/`, `scripts/` | What goes into the packages, and the scripts that build and check them |
+| `vendor/` | Third-party crates kept with small patches |
 
-## Areas
+## Rules for game code
 
-| Area | Owner | Notes |
-| --- | --- | --- |
-| Engine port: the audit's system-wide passes, the typed 64-bit migration, the platform layer, the play build | maintainer | ADR-0012, ENGINE_PORT_PLAN, ENGINE_CRATE, FRAME_SKELETON. Not open for contributions. |
-| Bug reports from play | open | One issue per bug, with the log's last lines. |
-| Single-function fixes found by comparing with fnv_decomp or the executable | open | Issue first, then a small pull request with a regression test. |
-| Other platforms (wgpu) | later | Discuss in an issue first. |
+**Provenance.** Every behaviour comes from the original game: translated from `FalloutNV.exe`
+1.4.0.525, read from the game's data, or measured in the original game.
 
-For anything else, open an issue first.
+- Mark each translated function with its address:
+  `// Translated from 007b5400 (decompiled, FalloutNV.exe 1.4.0.525)`.
+- Names, types and layouts from the Xbox 360 prototype's symbols may be used, marked `(Xbox PDB)`.
+- The community decompilation [fnv_decomp](https://github.com/momusdigital/fnv_decomp) may be read
+  alongside the executable for names, types and logic. The executable stays the reference: settle
+  every difference there, add `, read against fnv_decomp` to the marker, and never commit its C++.
+- Nothing invented: no stand-in values, "close enough" constants, or behaviour the game doesn't have.
+  If you couldn't trace something, leave it out and say so in the pull request.
+- Never commit game files, extracted assets, executable bytes, decompiler databases or exports,
+  saves, recordings or logs.
 
-## What every pull request must show
+**Tests.** Every behaviour fix comes with a regression test. Tests build their inputs from scratch:
+they never need the game's files.
 
-1. **Checks.** From the root (Rust as pinned in `rust-toolchain.toml`): `cargo test --workspace`,
-   `cargo clippy --workspace --all-targets -- -D warnings`,
-   `cargo fmt --all -- --check`. GitHub runs the same checks (`check`) and they must
-   pass. `cargo test` includes a repository hygiene check
-   (`crates/nvinspect/tests/repo_hygiene.rs`) that rejects game or binary files, absolute
-   user-profile paths and Ghidra's automatic names (`FUN_…`, `DAT_…`): write the address
-   instead.
-2. **A play-build run** for a change to the game's behaviour: the play build
-   ([docs/PLAYTESTING.md](docs/PLAYTESTING.md)) from the save or start you name, what you
-   did, and the log's last lines. Say whether it ran the same on `main`.
-3. **Provenance.** Every behaviour comes from the original game:
-   translated from `FalloutNV.exe` 1.4.0.525 with the address in a
-   comment ([ADR-0003](docs/adr/0003-decompiled-code-in-the-project.md)),
-   named from the Xbox prototype symbols where they help
-   ([ADR-0002](docs/adr/0002-xbox-prototype-symbols.md)), read from the
-   game's data, or recorded from the original game. No stand-ins, no
-   "close enough" constants. Anything you couldn't trace is listed in the
-   pull request and must not change the base-game routes. The
-   executable's own built-in default strings (for example the reputation
-   titles' descriptions) may be committed, each marked with its address
-   (the maintainer's decision of 2026-10-07).
-   The community's matching decompilation
-   [fnv_decomp](https://github.com/momusdigital/fnv_decomp) may be read
-   alongside the exe and used for names, types, layouts and logic
-   ([ADR-0009](docs/adr/0009-fnv-decomp.md)). Settle
-   any difference in the exe, mark what came from it as the ADR says, and
-   never commit its C++.
-4. **Evidence of play.** Say what you checked by playing (keys, mouse or
-   pad) and what you only checked by script (`NV_MOVE_KEYS`, `NV_MOVE_MOUSE`) or unit
-   test. Keep logs and screenshots private, or check
-   them for usernames and local paths before attaching.
-5. **Tests.** A regression test for each behaviour fix, with inputs built
-   from scratch in the test (or the oracle's cases). Tests never need game files.
-6. **Docs.** The system's topic page in `docs/` says what is done, what is
-   traced and what is missing. The maintainer updates
-   [docs/MILESTONES.md](docs/MILESTONES.md) when a milestone moves.
-7. **AI assistance.** Say which tools helped and with what. You remain
-   responsible for the change: review the code and the claims, and run
-   the checks yourself.
+**Changes beyond the original.** A bug fix the original game doesn't have, or anything else a
+player could notice, is a fix row: an entry in `crates/host/src/fixes.rs` with its variable
+(`NV_...`) and its `Fallout.ini` key in `crates/host/data/game_ini.tsv`. Rows are on in the default
+"fixes" preset and off in "vanilla", which stays exactly the original game.
 
-Never commit game files, extracted assets, executable bytes, decompiler
-databases or exports, recordings or logs.
+**Speed.** The game may do its work differently (in another order, cached, on another thread,
+skipping what no one can see) as long as a player can't tell: the same gameplay, results, look and
+feel. A change that alters order or timing goes behind a switch, off by default, until it has been
+checked.
 
-## How the code is laid out
+### Native code
 
-The executable is translated function by function into the engine crates
-(`crates/engine*`, [docs/ENGINE_CRATE.md](docs/ENGINE_CRATE.md)); `crates/host` starts it
-on the player's FalloutNV.exe and runs its frames, and `viewer/` (`nv-viewer`) is the program
-that does that. `crates/frame-model` models the frame's calls (Phase 1),
-`crates/esm` reads plugins (for the host), `bsa` archives (for the measurement tools),
-`bink`, `mp3` and `vorbis` are decoders the engine uses, and `fos` reads the original saves
-(Phase 2's comparator, [docs/FOS_SAVES.md](docs/FOS_SAVES.md)). Keep the player/camera, aim/head, action-input and per-view boundaries
-in [docs/VR.md](docs/VR.md). The method is in
-[docs/METHODOLOGY.md](docs/METHODOLOGY.md), the research tools in
-[`research/`](research/) and the day-to-day steps in
-[docs/RESEARCH_WORKFLOW.md](docs/RESEARCH_WORKFLOW.md).
+Native rewrites in `crates/engine-typed` replace a translated function at the same address. Each
+one needs a differential test that runs it against the translation it replaces and gets the same
+results. Logic, integers and pointers must match exactly. For floating-point maths: plain `f32` in
+code only the main thread runs; in code other threads run, `f64` rounded to `f32` wherever the
+original stores a float.
 
-## How pull requests are merged
+## What can and can't be accepted
 
-`main` only changes through pull requests. Each needs the CI checks
-and a review from the maintainer (CODEOWNERS), and is squash-merged.
+Welcome:
 
-Every pull request, from a person, an agent or the project's own lead, is
-also checked independently before it is merged: reviewers compare its
-translations with the original game's code and against these rules, try to
-prove each finding wrong, and only what holds up is sent back to be fixed.
-Changes to CI, build scripts or tooling get the same check: they must not
-weaken what the checks catch. Keep
-your branch rebased on `main` (at least daily while it's open, and right
-before asking for review). When two traced versions of the same thing
-disagree, say so in the pull request; the maintainer decides.
+- Work traced from the executable, the game's data or recordings of the original game.
+- Ports of open-source mods, plugins and script extenders whose licence allows it, with their
+  licence notice kept (a `NOTICE` in the crate, `LEGAL.md`, `distribution/THIRD-PARTY-NOTICES.txt`
+  and `distribution/notices.txt`).
+- Fixes taken from data mods, credited.
 
-The maintainer has the final say on priorities, design and what is
-merged ([docs/GOVERNANCE.md](docs/GOVERNANCE.md)).
+Not accepted:
 
-## Handoffs
+- lStewieAl's Tweaks, or code written from it.
+- Code written from a closed-source plugin (its DLL's disassembly) or from source published without
+  an open-source licence.
+- Behaviour that wasn't traced, however good it looks.
+- Game files or anything taken from the game's executable as bytes.
 
-If you stop partway, leave the next person (or agent) a short note in the
-system's topic page: what works, what's traced, what's left, and one next
-action, with evidence rather than claims.
+## Pull requests
+
+- Work on a topic branch of your fork, made from the latest `main`. Keep it rebased on `main`
+  (`git fetch upstream && git rebase upstream/main`), at least daily while it's open and right
+  before you ask for review.
+- Don't build on the maintainer's `claude/*` or `codex/*` branches: they move and are deleted.
+- One system per pull request. Big work goes in as a series of small pull requests, each
+  reviewable on its own. A draft is fine while it's unfinished.
+- Fill in the pull request template: what changed and why, the evidence (addresses, records,
+  recordings), the checks you ran and their results, what you checked by playing, and which AI tools
+  helped.
+- Before starting on an issue someone else might take, comment `Claiming this` with your branch
+  name. First claim wins; a claim with no update for 48 hours can be released.
+- Every pull request is reviewed independently before merge: reviewers check its translations
+  against the executable and these rules, and only findings that hold up are sent back. Pull
+  requests are squash-merged into `main`. The maintainer decides priorities, design and what is
+  merged.
+
+## For AI agents
+
+Follow everything above. These rules matter most:
+
+1. Work only on what the task asks. Don't reformat, rename or "tidy" unrelated code.
+2. Never invent game behaviour. Translate from the executable at a named address, or leave the
+   part out and say so.
+3. Mark every translated function with its address and `FalloutNV.exe 1.4.0.525`. Never write
+   Ghidra's automatic names (`FUN_…`, `DAT_…`, `LAB_…`).
+4. Never commit game files, executable bytes, decompiler output, fnv_decomp's C++, saves, logs,
+   local paths or user names.
+5. Every fix gets a regression test whose inputs are built in the test.
+6. Run the checks above on what you changed and report the real results. Never say a test passed
+   unless you ran it and saw it pass; say what you could not run.
+7. Keep code working on Windows, Linux and macOS. No Windows-only code without the other systems'
+   path in the same change.
+8. Don't add external crates. Don't port lStewieAl's Tweaks, closed-source plugins or unlicensed
+   code.
+9. Say in the pull request that an AI agent helped and with what. A person reviews it and owns it.
+
+## Licence
+
+nv-rs is licensed under the GNU General Public License v3.0 ([LICENSE](LICENSE)); by contributing
+you agree that your contribution is licensed the same way. [LEGAL.md](LEGAL.md) explains what the
+project contains and what it doesn't.
