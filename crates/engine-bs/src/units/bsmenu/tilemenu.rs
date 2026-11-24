@@ -124,10 +124,19 @@ pub fn tile_menu_init(
 pub fn fn_00a1eff0(e: &mut Engine, this: Ptr<TileMenu>) {
     e.mem.set_u32(this.addr(), TILE_MENU_VTABLE);
     if !e.get(this, TileMenu::pMenu).is_null() {
-        let menu = e.get(this, TileMenu::pMenu);
-        let id = menu_id(e, menu);
-        if (FIRST_MENU_ID..=LAST_MENU_ID).contains(&id) {
-            e.mem.set_u8(MENU_ID_BYTES.wrapping_add(id as u32), 0);
+        // JIP LN NVSE's G17 at `0x00A1F035` (group GA's row and handler, a fix row:
+        // `SafeWrite16(0xA1F035, 0x30EB)`, a jump to 0xA1F067): an answer skips the menu id
+        // read and the clear of its open byte. One load while JIP's fixes are not in.
+        let keep_open = e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 && {
+            let menu = e.get(this, TileMenu::pMenu);
+            e.site(0x00a1_f035, &[this.addr(), menu.addr()]).is_some()
+        };
+        if !keep_open {
+            let menu = e.get(this, TileMenu::pMenu);
+            let id = menu_id(e, menu);
+            if (FIRST_MENU_ID..=LAST_MENU_ID).contains(&id) {
+                e.mem.set_u8(MENU_ID_BYTES.wrapping_add(id as u32), 0);
+            }
         }
         let menu = e.get(this, TileMenu::pMenu);
         let id = menu_id(e, menu);
@@ -384,6 +393,72 @@ mod tests {
         assert_eq!(calls_to(&e, TILE_RELEASE).len(), 2);
         assert_eq!(calls_to(&e, TILE_DESTRUCTOR), vec![vec![this.addr()]]);
         assert_eq!(e.mem.u32(this.addr()), TILE_RECT_VTABLE);
+    }
+
+    thread_local! {
+        static G17_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn g17_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("G17's seam asked without FIXES");
+    }
+
+    fn g17_jump(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G17_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0)
+    }
+
+    /// JIP LN NVSE's G17 seam (`0x00A1F035`, group GA's row, a fix row): with the word 0 or
+    /// `INSTALLED` alone it is not asked and the menu's open byte is cleared; with `FIXES` and
+    /// no handler, cleared; with a handler (any answer, 0 too) it is asked once with exactly the
+    /// tile and its menu, the byte stays set, and the rest of the destructor runs (the id's tile
+    /// forgotten, the menu's tile cleared, the menu deleted, both releases, `Tile::~Tile`).
+    #[test]
+    fn fn_00a1eff0_jip_keeps_the_open_byte_seam() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, handler: Option<engine_core::extend::SiteFn>| {
+            let mut e = Engine::new();
+            quiet(
+                &mut e,
+                &[
+                    MENU_SET_TILE_FOR_ID,
+                    MENU_SET_MENU_TILE,
+                    TILE_RELEASE,
+                    TILE_DESTRUCTOR,
+                ],
+            );
+            let menu = menu(&mut e, 0x3ea);
+            e.mem.set_u8(0x011f_3479, 1);
+            let this = e.new_object::<TileMenu>();
+            e.set(this, TileMenu::pMenu, menu);
+            if let Some(handler) = handler {
+                e.on_site_for_test(0x00a1_f035, handler);
+            }
+            e.set_jip_patches(word);
+            G17_SEEN.with(|s| s.borrow_mut().clear());
+            e.call_log = Some(vec![]);
+            e.call(0x00a1_eff0, &args![this]);
+            assert_eq!(calls_to(&e, MENU_SET_TILE_FOR_ID), vec![vec![0x3ea, 0]]);
+            assert_eq!(
+                calls_to(&e, MENU_SET_MENU_TILE),
+                vec![vec![menu.addr(), 0, 0]]
+            );
+            assert_eq!(calls_to(&e, MENU_DELETE), vec![vec![menu.addr(), 1]]);
+            assert_eq!(calls_to(&e, TILE_RELEASE).len(), 2);
+            assert_eq!(calls_to(&e, TILE_DESTRUCTOR), vec![vec![this.addr()]]);
+            let seen = G17_SEEN.with(|s| s.take());
+            (e.mem.u8(0x011f_3479), seen, this.addr(), menu.addr())
+        };
+        for word in [0, jip_patches::INSTALLED] {
+            let (byte, seen, _, _) = run(word, Some(g17_never));
+            assert_eq!((byte, seen.len()), (0, 0));
+        }
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        assert_eq!(run(fixes, None).0, 0, "no handler: cleared");
+        let (byte, seen, this, menu) = run(fixes, Some(g17_jump));
+        assert_eq!(byte, 1, "kept open");
+        assert_eq!(seen, vec![vec![this, menu]]);
+        assert_ne!(this, menu);
     }
 
     #[test]

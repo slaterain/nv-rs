@@ -120,6 +120,12 @@ const NEXT_SUBTITLE: u32 = 0x0077_5230;
 const LIST_COUNT: u32 = 0x005a_e380;
 const HIDE_MESSAGE: u32 = 0x0077_56e0;
 
+/// JIP LN NVSE's places in the update: H21 at the HUD tiles' update (`0x7704AE`, a fix row), O14
+/// at the sneak test (`0x770B0E`, `bSneakBoundingBoxFix`) and G10 at the corner message's display
+/// time (`0x7714DA`, the longer message text).
+const JIP_ORPHANED_TILES: u32 = 0x0077_04ae;
+const JIP_SNEAK_TEST: u32 = 0x0077_0b0e;
+const JIP_MESSAGE_TIME: u32 = 0x0077_14da;
 /// The exe's corner message text buffer (0x104 bytes); its display time is 0x208 bytes after the
 /// buffer's end (the icon and sound buffers between).
 const MESSAGE_TEXT: u32 = 0x104;
@@ -212,8 +218,12 @@ fn truncate_low(value: f64) -> u32 {
     u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
 }
 
-/// The HUD tiles' update (`0x7704AE`): the exe's call.
+/// The HUD tiles' update (`0x7704AE`): JIP's H21 seam first while JIP's fixes are in (its answer
+/// not read), then the exe's call.
 fn hud_tiles_update(e: &mut Engine, this: u32) {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(JIP_ORPHANED_TILES, &[this]);
+    }
     e.call(HUD_TILES_UPDATE, &args![this]);
 }
 
@@ -366,7 +376,17 @@ fn fades(e: &mut Engine) {
         }
     }
     let me = player(e);
-    let sneaking = e.call(SNEAKING, &args![me]).u8() != 0;
+    // JIP LN NVSE's O14 at `0x770B0E` (`bSneakBoundingBoxFix`): the seam with the player answers in
+    // its low byte in place of the exe's call, while that switch is on.
+    let jip = if e.jip_patches() & engine_core::extend::jip_patches::SNEAK_BOUNDING_BOX_FIX != 0 {
+        e.site(JIP_SNEAK_TEST, &[me])
+    } else {
+        None
+    };
+    let sneaking = match jip {
+        Some(answer) => answer & 0xff != 0,
+        None => e.call(SNEAKING, &args![me]).u8() != 0,
+    };
     if sneaking {
         let menu = hud(e);
         e.call(UPDATE_SNEAK, &args![menu]);
@@ -642,7 +662,15 @@ fn messages(e: &mut Engine, this: u32) {
         }
         let now = ticks(e, this + 0x224);
         let elapsed = now.wrapping_sub(e.mem.u32(this + 0x194));
-        let duration = seconds_to_ms(e, e.mem.f32(message + MESSAGE_TEXT + 0x208));
+        // JIP LN NVSE's G10 at `0x7714DA` (a fix row): the text buffer's size, so the display
+        // time's place. One load while JIP's fixes are not in.
+        let text = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+            e.site(JIP_MESSAGE_TIME, &[MESSAGE_TEXT])
+                .unwrap_or(MESSAGE_TEXT)
+        } else {
+            MESSAGE_TEXT
+        };
+        let duration = seconds_to_ms(e, e.mem.f32(message + text + 0x208));
         if duration <= f64::from(elapsed) {
             e.call(HIDE_MESSAGE, &args![this]);
         }

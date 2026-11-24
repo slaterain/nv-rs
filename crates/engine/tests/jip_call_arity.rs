@@ -1,5 +1,5 @@
-//! Every call a built-in extender (xNVSE `crates/nvse`, JIP LN `crates/jip`)
-//! makes to one of the game's
+//! Every call a built-in extender (xNVSE `crates/nvse`, JIP LN `crates/jip`, UI Organizer
+//! `crates/uio`) makes to one of the game's
 //! functions by a constant address passes as many argument words as that function's translation
 //! takes: a call with too few stops the game ("call has N argument words, needs more"), one with
 //! too many hands a later argument to nobody. Here because this crate registers every translation.
@@ -36,7 +36,7 @@
 //! Not checked at all: `.vcall(this, SLOT, ..)` and `.call_next(ADDR, ..)` sites. A vtable slot's
 //! target depends on the object's class and a wrapped address's next function on what else wraps
 //! it, neither known from the text. For those, the ignored test below probes listed translations
-//! (`NV_PROBE`), and `NV_JIP_SRC` (`NV_NVSE_SRC`) points a crate's test at
+//! (`NV_PROBE`), and `NV_JIP_SRC` (`NV_NVSE_SRC`, `NV_JOHNNYGUITAR_SRC`, ...) points a crate's test at
 //! another copy of its source (an open pull request's branch, exported).
 
 use engine as _;
@@ -47,7 +47,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 /// The extender crates the test reads.
-const CRATES: [&str; 2] = ["jip", "nvse"];
+const CRATES: [&str; 4] = ["jip", "nvse", "uio", "johnnyguitar"];
 
 /// One direct call in a crate's source.
 #[derive(Debug)]
@@ -320,6 +320,43 @@ const UNREAD: &[Row] = &[
         "execute",
         N(8),
         "a command's routine from its record: a command's words",
+    ),
+    // UI Organizer.
+    (
+        "uio",
+        "build.rs",
+        "hash",
+        N(2),
+        "the tile map's hash routine from its vtable: the map and the key",
+    ),
+    (
+        "uio",
+        "build.rs",
+        "equal",
+        N(3),
+        "the tile map's compare routine from its vtable: the map and two keys",
+    ),
+    (
+        "uio",
+        "build.rs",
+        "hash",
+        N(2),
+        "the tile map's hash routine, on insert",
+    ),
+    (
+        "uio",
+        "build.rs",
+        "equal",
+        N(3),
+        "the tile map's compare routine, on insert",
+    ),
+    // JohnnyGuitar NVSE.
+    (
+        "johnnyguitar",
+        "lib.rs",
+        "own",
+        N(2),
+        "a storing class's own SetEditorID (vtable +0x134, thiscall: the form and the text)",
     ),
 ];
 
@@ -1696,6 +1733,17 @@ fn jip_passes_each_game_function_the_words_it_takes() {
 #[test]
 fn nvse_passes_each_game_function_the_words_it_takes() {
     check("nvse");
+}
+
+#[test]
+fn uio_passes_each_game_function_the_words_it_takes() {
+    check("uio");
+}
+
+/// JohnnyGuitar NVSE (its editor ids): each game function it calls by address gets the words it takes.
+#[test]
+fn johnnyguitar_passes_each_game_function_the_words_it_takes() {
+    check("johnnyguitar");
 }
 
 /// The rule for callees nobody translated: G94's old `0x0040A320` (inside `0040a300`) fails, every

@@ -35,6 +35,8 @@ engine-platform = { path = "../engine-platform" }
 engine-typed = { path = "../engine-typed" }
 
 [dev-dependencies]
+# UI Organizer's operator in the menu values' Diff tests (`tests/menu_tiles.rs`).
+uio = { path = "../uio" }
 # The differential tests of the typed leaves (`tests/typed_leaves.rs`).
 engine-core = { path = "../engine-core", features = ["test-support"] }
 # The opt-in real-script run (`tests/real_scda.rs`) reads the player's
@@ -42,3 +44,5 @@ engine-core = { path = "../engine-core", features = ["test-support"] }
 esm = { path = "../esm" }
 # xNVSE's run-time line reader against the game's (`tests/xnvse_line_reader.rs`).
 nvse = { path = "../nvse" }
+# JohnnyGuitar's editor ids through the game's compile (`tests/jg_editor_ids_compile.rs`).
+johnnyguitar = { path = "../johnnyguitar" }

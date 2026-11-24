@@ -35,6 +35,13 @@
 //! not read, the NPC perks without its NPC perks patch, `JPGF`'s bytes past its 8) is carried byte
 //! for byte to the next save, so a co-save from a real JIP installation loses nothing in nv-rs.
 //! While JIP answers "not installed" and holds nothing it writes no section, as without the DLL.
+//!
+//! JohnnyGuitar NVSE corrects JIP's extra data record (`JIPFixes.cpp`, `SerializationFixes`):
+//! JIP counts 5 bytes for each mod entry's header where it writes 9, so its version 1 records hold
+//! wrong sizes that a skip follows into the next entry; JohnnyGuitar writes version 2 with the
+//! right sizes, reads no version 1 record, and skips an unloaded owner's script variables by 10
+//! bytes each where JIP skips 9. That is a fixes row ([`set_johnny_guitar_fixes`], on in the fixes
+//! preset): VNV installs JohnnyGuitar, so its players' co-saves are version 2.
 
 use crate::containers::{align_bucket_count, Name, Uint, UnorderedMap};
 use crate::game::{
@@ -62,8 +69,9 @@ pub mod kind {
 
 /// `JIP_VARS_VERSION`: the aux variables' and ref maps' records, written and the least read.
 pub const VARS_VERSION: u32 = 10;
-/// `ExtraJIP::kExtraJIP_Verion`.
+/// `ExtraJIP::kExtraJIP_Verion`, and JohnnyGuitar's (`uiJIPExtraDataVersion`).
 pub const EXTRA_DATA_VERSION: u32 = 1;
+pub const EXTRA_DATA_VERSION_JG: u32 = 2;
 /// The versions the other records are written with (`WriteRecord(..., 9, ...)` and so on).
 const SCRIPT_VARS_VERSION: u32 = 9;
 const LINKED_REFS_VERSION: u32 = 9;
@@ -466,6 +474,8 @@ pub struct Saved {
     pub last_path: Vec<u8>,
     /// `s_dataChangedFlags`.
     changed: u8,
+    /// JohnnyGuitar's corrections of the extra data record and the variable skip (the row).
+    pub jg_fixes: bool,
     /// JIP's NPC perks patch is installed (`s_patchInstallState.NPCPerks`, the `uNPCPerks`
     /// switch): until it is built in, `JPNP` is neither read nor written.
     npc_perks_patch: bool,
@@ -498,6 +508,7 @@ impl Default for Saved {
         Saved {
             last_path: Vec::new(),
             changed: 0,
+            jg_fixes: false,
             npc_perks_patch: false,
             script_vars: UnorderedMap::new(8),
             ref_maps: UnorderedMap::new(8),
@@ -605,6 +616,11 @@ pub fn npc_perks_patch(e: &mut Engine) -> bool {
     e.ext_free::<NpcPerksPatch>()
         .0
         .load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The fixes preset's row: JohnnyGuitar NVSE's corrections of JIP's co-save (above).
+pub fn set_johnny_guitar_fixes(e: &mut Engine, on: bool) {
+    saved(e).jg_fixes = on;
 }
 
 // ---- the game's tables JIP reads (internal/jip_core.cpp) ----
@@ -892,10 +908,21 @@ pub fn load(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
 fn read_records(e: &mut Engine, r: &mut Reader, flags: u8) -> Result<(), OutOfRange> {
     while let Some((kind, version, length)) = r.next_record()? {
         saved(e).had_section = true;
-        let perks_patch = saved(e).npc_perks_patch;
+        let (jg, perks_patch) = {
+            let s = saved(e);
+            (s.jg_fixes, s.npc_perks_patch)
+        };
         let unread = match kind {
             kind::AUX_VARS | kind::REF_MAPS => version < VARS_VERSION,
-            kind::EXTRA_DATA => version > EXTRA_DATA_VERSION,
+            kind::EXTRA_DATA => {
+                let newest = if jg {
+                    EXTRA_DATA_VERSION_JG
+                } else {
+                    EXTRA_DATA_VERSION
+                };
+                // JohnnyGuitar gives up on JIP's own version: its sizes are wrong.
+                version > newest || (jg && version == 1)
+            }
             kind::NPC_PERKS => !perks_patch,
             k => !KINDS.contains(&k),
         };
@@ -939,7 +966,7 @@ fn read_records(e: &mut Engine, r: &mut Reader, flags: u8) -> Result<(), OutOfRa
         let mut b = Bytes { b: &data, at: 0 };
         // A record that runs out before its counts say ends there (damaged data only).
         let _ = match kind {
-            kind::SCRIPT_VARS => load_script_vars(e, &mut b),
+            kind::SCRIPT_VARS => load_script_vars(e, &mut b, jg),
             kind::AUX_VARS => load_aux_vars(e, &mut b),
             kind::REF_MAPS => load_ref_maps(e, &mut b),
             kind::EXTRA_DATA => load_extra_data(e, &mut b),
@@ -954,7 +981,7 @@ fn read_records(e: &mut Engine, r: &mut Reader, flags: u8) -> Result<(), OutOfRa
 
 /// `JPSV`: each owner's variables, kept for an owner that is loaded with a script and an event
 /// list (the variables made in them with step 3.3), a value that holds a form's id resolved.
-fn load_script_vars(e: &mut Engine, b: &mut Bytes) -> Option<()> {
+fn load_script_vars(e: &mut Engine, b: &mut Bytes, jg: bool) -> Option<()> {
     let mut owners = b.u16()?;
     while owners != 0 {
         owners -= 1;
@@ -1004,10 +1031,10 @@ fn load_script_vars(e: &mut Engine, b: &mut Bytes) -> Option<()> {
         } else {
             while vars != 0 {
                 vars -= 1;
-                // JIP skips one byte short of a variable (9 past its name).
+                // JIP skips one byte short of a variable (9 past its name); JohnnyGuitar 10.
                 let _mod_index = b.u8()?;
                 let len = usize::from(b.u8()?);
-                b.skip(len + 7)?;
+                b.skip(len + if jg { 8 } else { 7 })?;
             }
         }
     }
@@ -1538,6 +1565,7 @@ fn holds_nothing(e: &mut Engine) -> bool {
 /// JIP's own records, each written when it holds anything, walking its maps.
 fn save_own(e: &mut Engine, r: &mut Records) {
     let player = player_base(e);
+    let jg = saved(e).jg_fixes;
     // `WriteRecord64(&svVarIt().value->data)`: each added variable's value as it is now.
     crate::commands::jip_fn_script_vars::refresh_saved_values(e);
     let aux_vars = crate::commands::jip_fn_aux_variable::aux_maps(e, false).clone();
@@ -1604,17 +1632,18 @@ fn save_own(e: &mut Engine, r: &mut Records) {
         }
     }
     if !extra.is_empty() {
-        r.record(
-            kind::EXTRA_DATA,
-            EXTRA_DATA_VERSION,
-            &extra.len().to_le_bytes(),
-        );
+        let (version, per_mod) = if jg {
+            (EXTRA_DATA_VERSION_JG, 9)
+        } else {
+            (EXTRA_DATA_VERSION, 5)
+        };
+        r.record(kind::EXTRA_DATA, version, &extra.len().to_le_bytes());
         for (key, entry) in extra.iter() {
             r.u32(key.0);
             r.u32(entry.ref_id);
             r.u8(entry.data.len() as u8);
             // `ExtraJIPEntry::GetSaveSize`: JIP counts 5 bytes of each mod's header, which is 9.
-            let size: u32 = entry.data.len() as u32 * 5
+            let size: u32 = entry.data.len() as u32 * per_mod
                 + entry
                     .data
                     .values()

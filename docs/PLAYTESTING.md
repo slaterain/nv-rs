@@ -173,9 +173,12 @@ Each also has a `[nv-rs Fixes]` key in `Fallout.ini` (`bUncap` ... `bNVSEListGua
 | `NV_STRIP_LOD_WATER` | No distant water under the Strip (patch data) | `host/patch_data.rs` |
 | `NV_DIRECT_FILES` | Direct file access | `host/direct_files.rs` |
 | `NV_COSAVE_KEEP` | Co-save keeps other plugins | `host/fixes.rs` (flag read by `nvse`) |
-| `NV_JIP_INSTALLED` | JIP LN NVSE built in (on in the fixes preset; in play, Fallout.ini `[nv-rs Fixes] bJIPInstalled=0` turns it off; the variable makes a test run) | `host/fixes.rs` (flag read by `jip`) |
+| `NV_JIP_INSTALLED` | JIP LN NVSE built in (on in the fixes preset with UIO; in play, Fallout.ini `[nv-rs Fixes] bJIPInstalled=0` turns it off; the variable makes a test run) | `host/fixes.rs` (flag read by `jip`) |
+| `NV_JIP_COSAVE_FIX` | JIP co-save fixes | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_VANILLA_CMDS` | JIP vanilla commands | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_GAME_PATCHES` | JIP game patches | `host/fixes.rs` (flag read by `jip`) |
+| `NV_JG_EDITOR_IDS` | JohnnyGuitar's editor ids | `host/fixes.rs` (flag read by `johnnyguitar`) |
+| `NV_UIO` | UI Organizer built in (on in the fixes preset) | `host/fixes.rs` (flag read by `uio`) |
 | `NV_NVSE_ERROR_GUARD` | Script error loop guard | `host/fixes.rs` |
 | `NV_NVSE_IMOD_CHECK` | Image-space event form check | `host/fixes.rs` |
 | `NV_NVSE_INVREF_CHECK` | Script reference checks | `host/fixes.rs` |

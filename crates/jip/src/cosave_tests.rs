@@ -254,16 +254,17 @@ fn ids_resolve_through_the_saves_file_table() {
 
 /// `JPSV`: an owner with a script keeps its variables but a temporary one; a variable of a file
 /// gone goes; a value that holds a form's id is resolved; an owner not loaded is skipped by 9
-/// bytes past each name (JIP), which reads the next owner wrong. Saved in the map's order.
+/// bytes past each name (JIP), which reads the next owner wrong, or by 10 (JohnnyGuitar). Saved
+/// in the map's order.
 #[test]
 fn script_variables() {
-    let record = |w: &mut World, skipped: bool| {
+    let record = |w: &mut World| {
         w.scripted(0x0100_0abc);
         w.scripted(0x0100_0def);
         w.file(2, 3);
         w.file(4, 0xff);
-        let o = Out::default()
-            .u16(if skipped { 3 } else { 2 })
+        Out::default()
+            .u16(3)
             .u32(0x0100_0abc)
             .u16(4)
             .u8(1)
@@ -277,24 +278,26 @@ fn script_variables() {
             .u64(0x0200_0123)
             .u8(4)
             .name(b"Gone")
-            .u64(3);
-        // Not loaded: its two variables skipped.
-        let o = if skipped {
-            o.u32(0x0100_0999)
-                .u16(2)
-                .u8(1)
-                .name(b"A")
-                .u64(0)
-                .u8(1)
-                .name(b"B")
-                .u64(0)
-        } else {
-            o
-        };
-        o.u32(0x0100_0def).u16(1).u8(1).name(b"Cee").u64(7).0
+            .u64(3)
+            // Not loaded: its two variables skipped.
+            .u32(0x0100_0999)
+            .u16(2)
+            .u8(1)
+            .name(b"A")
+            .u64(0)
+            .u8(1)
+            .name(b"B")
+            .u64(0)
+            .u32(0x0100_0def)
+            .u16(1)
+            .u8(1)
+            .name(b"Cee")
+            .u64(7)
+            .0
     };
     let mut w = World::new();
-    let data = record(&mut w, false);
+    let data = record(&mut w);
+    set_johnny_guitar_fixes(&mut w.e, true);
     load_file(
         &mut w.e,
         &cosave(&[chunk(kind::SCRIPT_VARS, 9, data.clone())]),
@@ -323,7 +326,7 @@ fn script_variables() {
     assert_eq!(script_items(&w.e), (vec![], vec![]));
     // JIP's own skip, one byte short: the third owner is read from the wrong place.
     let mut w = World::new();
-    let data = record(&mut w, true);
+    let data = record(&mut w);
     load_file(&mut w.e, &cosave(&[chunk(kind::SCRIPT_VARS, 9, data)]));
     assert!(s(&mut w.e).script_vars.get(&0x0100_0def).is_none());
     assert!(s(&mut w.e).script_vars.get(&0x0100_0abc).is_some());
@@ -624,10 +627,10 @@ fn extra_mod(index: u8, used: u32, forms: u32, values: &[u32], texts: [&[u8]; 2]
 }
 
 /// `JPED`: a key's reference must have changes in the save; each loaded mod's data kept, a form
-/// id of a file gone unused. JIP writes version 1 with 5 bytes counted for each mod's header and
-/// reads no other version.
+/// id of a file gone unused. JIP writes version 1 with 5 bytes counted for each mod's header,
+/// JohnnyGuitar version 2 with 9; each reads only its own (JohnnyGuitar gives up on version 1).
 #[test]
-fn extra_data_in_jips_format() {
+fn extra_data_in_both_formats() {
     let body = |per_mod: u32| {
         let m1 = extra_mod(
             6,
@@ -648,20 +651,34 @@ fn extra_data_in_jips_format() {
             .bytes(&m2)
             .0
     };
-    let mut w = World::new();
-    w.changed(0x0700_0010);
-    crate::cosave::set_changed(&mut w.e, changed::ALL);
-    load_file(&mut w.e, &cosave(&[chunk(kind::EXTRA_DATA, 1, body(5))]));
-    assert_eq!(written(&mut w.e), [chunk(kind::EXTRA_DATA, 1, body(5))]);
-    // Another version is not read, and is carried as it was.
-    crate::cosave::set_changed(&mut w.e, changed::ALL);
-    load_file(&mut w.e, &cosave(&[chunk(kind::EXTRA_DATA, 2, body(9))]));
-    assert!(crate::cosave::extra_data(&mut w.e).is_empty());
-    assert_eq!(
-        written(&mut w.e),
-        [chunk(kind::EXTRA_DATA, 2, body(9))],
-        "reads no version 2, carries it"
-    );
+    for (jg, version, per_mod) in [(false, 1, 5), (true, 2, 9)] {
+        let mut w = World::new();
+        w.changed(0x0700_0010);
+        set_johnny_guitar_fixes(&mut w.e, jg);
+        crate::cosave::set_changed(&mut w.e, changed::ALL);
+        load_file(
+            &mut w.e,
+            &cosave(&[chunk(kind::EXTRA_DATA, version, body(per_mod))]),
+        );
+        assert_eq!(
+            written(&mut w.e),
+            [chunk(kind::EXTRA_DATA, version, body(per_mod))],
+            "jg {jg}"
+        );
+        // The other format is not read, and is carried as it was.
+        crate::cosave::set_changed(&mut w.e, changed::ALL);
+        let other = 3 - version;
+        load_file(
+            &mut w.e,
+            &cosave(&[chunk(kind::EXTRA_DATA, other, body(per_mod))]),
+        );
+        assert!(crate::cosave::extra_data(&mut w.e).is_empty(), "jg {jg}");
+        assert_eq!(
+            written(&mut w.e),
+            [chunk(kind::EXTRA_DATA, other, body(per_mod))],
+            "jg {jg} reads no version {other}, carries it"
+        );
+    }
     // A form id of a file no longer loaded: its index goes unused, its form bit with it.
     let mut w = World::new();
     w.changed(0x0700_0010);
@@ -684,17 +701,24 @@ fn a_skipped_extra_data_key() {
     let m = extra_mod(6, 1, 0, &[1], [b"", b""]);
     let key =
         |key: u32, id: u32, size: u32| Out::default().u32(key).u32(id).u8(1).u32(size).bytes(&m).0;
-    let mut w = World::new();
-    w.changed(0x0700_0020);
-    crate::cosave::set_changed(&mut w.e, changed::ALL);
-    let size = 5 + 12;
-    let data = Out::default()
-        .u32(2)
-        .bytes(&key(1, 0x0700_0010, size))
-        .bytes(&key(2, 0x0700_0020, size))
-        .0;
-    load_file(&mut w.e, &cosave(&[chunk(kind::EXTRA_DATA, 1, data)]));
-    assert!(crate::cosave::extra_data(&mut w.e).get(&Uint(2)).is_none());
+    for (jg, version, per_mod, second_read) in [(false, 1, 5, false), (true, 2, 9, true)] {
+        let mut w = World::new();
+        w.changed(0x0700_0020);
+        set_johnny_guitar_fixes(&mut w.e, jg);
+        crate::cosave::set_changed(&mut w.e, changed::ALL);
+        let size = per_mod + 12;
+        let data = Out::default()
+            .u32(2)
+            .bytes(&key(1, 0x0700_0010, size))
+            .bytes(&key(2, 0x0700_0020, size))
+            .0;
+        load_file(&mut w.e, &cosave(&[chunk(kind::EXTRA_DATA, version, data)]));
+        assert_eq!(
+            crate::cosave::extra_data(&mut w.e).get(&Uint(2)).is_some(),
+            second_read,
+            "jg {jg}"
+        );
+    }
 }
 
 /// `JPED` round trip with texts as `SetRefExtraData` keeps them (JIP's `XString`: up to the first
@@ -1105,58 +1129,61 @@ fn what_a_load_reads_again() {
 /// The real co-saves round trip byte for byte: JIP's section read by JIP's load callback and
 /// written again by its save callback (after the `PreLoadGame` and `PostLoadGame` messages, as
 /// a load from the menu sends them), xNVSE's own section passed through as it was read, the whole
-/// file written again equal to the real one.
+/// file written again equal to the real one; with JohnnyGuitar's row on and off.
 #[test]
 fn real_co_saves_round_trip() {
     for (name, lines) in REAL_COSAVES {
         let file = unhex(lines);
-        let mut w = World::new();
-        listen(
-            &mut w.e,
-            &Message {
-                kind: msg::PRE_LOAD_GAME,
-                data: 0,
-                len: 0,
-            },
-        );
-        let mut r = Reader::open(&file).unwrap();
-        let mut sections = Vec::new();
-        let mut jip_bytes = Vec::new();
-        while let Some(p) = r.next_plugin().unwrap() {
-            let start = r.offset();
-            let chunks = if p.opcode_base == 0x2200 {
-                jip_bytes = file[start..start + p.length as usize].to_vec();
-                load(&mut w.e, &mut r).unwrap();
-                saved_chunks(&mut w.e)
-            } else {
-                let mut chunks = Vec::new();
-                while let Some((kind, version, len)) = r.next_record().unwrap() {
-                    let data = r.read_data(len).unwrap();
-                    chunks.push(chunk(kind, version, data));
-                }
-                chunks
-            };
-            r.end_plugin();
-            sections.push(nvse::cosave::Plugin {
-                opcode_base: p.opcode_base,
-                chunks,
-            });
+        for jg in [false, true] {
+            let mut w = World::new();
+            set_johnny_guitar_fixes(&mut w.e, jg);
+            listen(
+                &mut w.e,
+                &Message {
+                    kind: msg::PRE_LOAD_GAME,
+                    data: 0,
+                    len: 0,
+                },
+            );
+            let mut r = Reader::open(&file).unwrap();
+            let mut sections = Vec::new();
+            let mut jip_bytes = Vec::new();
+            while let Some(p) = r.next_plugin().unwrap() {
+                let start = r.offset();
+                let chunks = if p.opcode_base == 0x2200 {
+                    jip_bytes = file[start..start + p.length as usize].to_vec();
+                    load(&mut w.e, &mut r).unwrap();
+                    saved_chunks(&mut w.e)
+                } else {
+                    let mut chunks = Vec::new();
+                    while let Some((kind, version, len)) = r.next_record().unwrap() {
+                        let data = r.read_data(len).unwrap();
+                        chunks.push(chunk(kind, version, data));
+                    }
+                    chunks
+                };
+                r.end_plugin();
+                sections.push(nvse::cosave::Plugin {
+                    opcode_base: p.opcode_base,
+                    chunks,
+                });
+            }
+            listen(
+                &mut w.e,
+                &Message {
+                    kind: msg::POST_LOAD_GAME,
+                    data: 1,
+                    len: 1,
+                },
+            );
+            let jip = &sections.last().unwrap().chunks;
+            assert_eq!(section(jip), jip_bytes, "{name} jg {jg}: JIP's section");
+            assert_eq!(
+                nvse::cosave::write(&sections),
+                file,
+                "{name} jg {jg}: the whole co-save"
+            );
         }
-        listen(
-            &mut w.e,
-            &Message {
-                kind: msg::POST_LOAD_GAME,
-                data: 1,
-                len: 1,
-            },
-        );
-        let jip = &sections.last().unwrap().chunks;
-        assert_eq!(section(jip), jip_bytes, "{name}: JIP's section");
-        assert_eq!(
-            nvse::cosave::write(&sections),
-            file,
-            "{name}: the whole co-save"
-        );
     }
 }
 

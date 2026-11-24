@@ -285,7 +285,15 @@ fn print_line_entry(e: &mut Engine, words: &[u32]) -> Ret {
 /// It does nothing while the console singleton check `00705ea0` holds and
 /// the `0070edf0` check fails.
 pub fn fn_0071d0a0(e: &mut Engine, this: Ptr<MenuConsole>, format: u32, arguments: u32) {
-    if e.call(0x0070_5ea0, &args![]).bool() && !e.call(0x0070_edf0, &args![]).bool() {
+    // JIP LN NVSE's G35 at `0x0071D0D2` (group GA's row and handler, a fix row:
+    // `SafeWrite16(0x71D0D2, 0x1BEB)`, a jump to 0x71D0EF): an answer skips both tests, so the
+    // line is printed while the loading menu is up too. One load while JIP's fixes are not in.
+    let print_while_loading = e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x0071_d0d2, &[this.addr()]).is_some();
+    if !print_while_loading
+        && e.call(0x0070_5ea0, &args![]).bool()
+        && !e.call(0x0070_edf0, &args![]).bool()
+    {
         return;
     }
     // The exe's frame (`SUB ESP,0x840` under the exception record, then `ESI` and the record
@@ -1492,7 +1500,12 @@ fn idle_tag(e: &mut Engine, ebp: u32, interface: u32) {
     let text = at(ebp, frame::TAG_TEXT);
     e.call(STRING_CONSTRUCT, &args![text]);
     let form_id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, object));
-    let name = e.call(0x0055_d520, &args![object]).u32();
+    // JohnnyGuitar NVSE's seam at the call `0x71B748` (the editor id for a reference with no
+    // name, while its row is on).
+    let name = match e.site(0x0071_b748, &[object]) {
+        Some(name) => name,
+        None => e.call(0x0055_d520, &args![object]).u32(),
+    };
     e.call(STRING_FORMAT, &args![text, TAG_FORMAT, name, form_id]);
     let key = e.vcall(object, 0x1d0, &args![]).u32();
     let mut found = e.call(0x0065_3270, &args![TAG_LOOKUP_TABLE, key]).u32();
@@ -1905,37 +1918,48 @@ mod tests {
         out
     }
 
-    /// `tag` (`Idle`'s object under the cursor): the name it prints is the reference's full name
-    /// (`0055d520`).
+    /// `tag` (`Idle`'s object under the cursor): JohnnyGuitar NVSE's seam at the call `0x71B748`
+    /// gives the name it prints (its full name or editor id), the object given; with no handler,
+    /// the reference's full name (`0055d520`).
     #[test]
-    fn the_tag_line_names_the_object_by_its_full_name() {
-        let (mut e, _) = console_engine();
-        let vtable = e.mem.alloc(0x200);
-        e.mem.set_u32(vtable + 0x1d0, 0x0350_01d0);
-        e.register(0x0350_01d0, |_, _| ret(0x55));
-        let object = e.mem.alloc(0x40);
-        e.mem.set_u32(object, vtable);
-        e.mem.set_u32(object + 0xc, 0x1234);
-        e.register_double(0x0070_31c0, move |_, _| ret(object));
-        e.register(0x0055_d520, |_, _| ret(0x5555));
-        e.register(0x0065_3270, |_, _| ret(0x0777));
-        e.register(STRING_FORMAT, |_, _| Ret::default());
-        e.register(0x00a1_0c00, |_, _| Ret::default());
-        let stack = e.mem.alloc(0x3000);
-        let ebp = stack + 0x2000;
-        e.call_log = Some(vec![]);
-        idle_tag(&mut e, ebp, 0x9000);
-        let log = e.call_log.take().unwrap();
-        let formats: Vec<&Vec<u32>> = log
-            .iter()
-            .filter(|(at, _)| *at == STRING_FORMAT)
-            .map(|(_, a)| a)
-            .collect();
-        assert_eq!(formats.len(), 1);
-        assert_eq!(
-            formats[0][..4],
-            [at(ebp, frame::TAG_TEXT), TAG_FORMAT, 0x5555, 0x1234]
-        );
+    fn the_tag_line_names_the_object_through_the_jg_seam() {
+        use engine_core::extend::{Owner, SiteSlot};
+        for with_seam in [true, false] {
+            let (mut e, _) = console_engine();
+            let vtable = e.mem.alloc(0x200);
+            e.mem.set_u32(vtable + 0x1d0, 0x0350_01d0);
+            e.register(0x0350_01d0, |_, _| ret(0x55));
+            let object = e.mem.alloc(0x40);
+            e.mem.set_u32(object, vtable);
+            e.mem.set_u32(object + 0xc, 0x1234);
+            e.register_double(0x0070_31c0, move |_, _| ret(object));
+            e.register(0x0055_d520, |_, _| ret(0x5555));
+            e.register(0x0065_3270, |_, _| ret(0x0777));
+            e.register(STRING_FORMAT, |_, _| Ret::default());
+            e.register(0x00a1_0c00, |_, _| Ret::default());
+            if with_seam {
+                e.on_site(SiteSlot::new(Owner::JohnnyGuitar, 0x0071_b748), |e, a| {
+                    (e.mem.u32(a[0] + 0xc) == 0x1234).then_some(0x6666)
+                });
+            }
+            let stack = e.mem.alloc(0x3000);
+            let ebp = stack + 0x2000;
+            e.call_log = Some(vec![]);
+            idle_tag(&mut e, ebp, 0x9000);
+            let log = e.call_log.take().unwrap();
+            let formats: Vec<&Vec<u32>> = log
+                .iter()
+                .filter(|(at, _)| *at == STRING_FORMAT)
+                .map(|(_, a)| a)
+                .collect();
+            assert_eq!(formats.len(), 1);
+            let want = if with_seam { 0x6666 } else { 0x5555 };
+            assert_eq!(
+                formats[0][..4],
+                [at(ebp, frame::TAG_TEXT), TAG_FORMAT, want, 0x1234],
+                "{with_seam}"
+            );
+        }
     }
 
     #[test]
@@ -2049,6 +2073,73 @@ mod tests {
         let log = e.call_log.take().unwrap();
         assert_eq!(log.len(), 3); // the call itself, 705ea0 and 70edf0
         assert!(lines_of(&e, console).is_empty());
+    }
+
+    thread_local! {
+        static G35_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn g35_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("G35's seam asked without FIXES");
+    }
+
+    fn g35_jump(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G35_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0)
+    }
+
+    /// JIP LN NVSE's G35 seam (`0x0071D0D2`, group GA's row, a fix row) while the loading menu
+    /// is up (`0x705EA0` 1, `0x70EDF0` 0): with the word 0 or `INSTALLED` alone it is not asked
+    /// and the line is dropped; with `FIXES` and no handler, dropped; with a handler (any answer,
+    /// 0 too) it is asked once with exactly the console, neither test is called and the line is
+    /// printed (the code after the jump runs).
+    #[test]
+    fn format_line_jip_prints_while_loading_seam() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, handler: Option<engine_core::extend::SiteFn>| {
+            let (mut e, _) = console_engine();
+            put_string(&mut e, 0x0106_fcb4, "ab");
+            e.register(0x0070_5ea0, |_, _| ret(1));
+            e.register(0x0070_edf0, |_, _| ret(0));
+            if let Some(handler) = handler {
+                e.on_site_for_test(0x0071_d0d2, handler);
+            }
+            e.set_jip_patches(word);
+            let console = new_console(&mut e);
+            G35_SEEN.with(|s| s.borrow_mut().clear());
+            e.call_log = Some(vec![]);
+            e.call(0x0071_d0a0, &args![console, 0x0106_fcb4u32, 0u32]);
+            let log = e.call_log.take().unwrap();
+            // The tests at the function's head: before the text is formatted (`0x406150`'s
+            // string, then `0x71DD90`), or all of them when it returns early.
+            let head = log
+                .iter()
+                .position(|(at, _)| *at == 0x0071_dd90)
+                .unwrap_or(log.len());
+            let tests = log[..head]
+                .iter()
+                .filter(|(at, _)| *at == 0x0070_5ea0 || *at == 0x0070_edf0)
+                .count();
+            (
+                lines_of(&e, console),
+                tests,
+                G35_SEEN.with(|s| s.take()),
+                console.addr(),
+            )
+        };
+        for word in [0, jip_patches::INSTALLED] {
+            let (lines, tests, seen, _) = run(word, Some(g35_never));
+            assert!(lines.is_empty());
+            assert_eq!((tests, seen.len()), (2, 0));
+        }
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        let (lines, tests, _, _) = run(fixes, None);
+        assert!(lines.is_empty(), "no handler: dropped");
+        assert_eq!(tests, 2);
+        let (lines, tests, seen, console) = run(fixes, Some(g35_jump));
+        assert_eq!(lines, ["ab"]);
+        assert_eq!(tests, 0, "both tests jumped over");
+        assert_eq!(seen, vec![vec![console]]);
     }
 
     #[test]

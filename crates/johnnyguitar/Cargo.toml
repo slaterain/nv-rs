@@ -1,0 +1,16 @@
+[package]
+name = "johnnyguitar"
+version = "0.1.0"
+description = "JohnnyGuitar NVSE (the NVSE plugin of script commands and engine fixes) built in, piece by piece: first its editor-id restoration"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+engine-core = { path = "../engine-core" }
+# xNVSE built in: JohnnyGuitar's place in xNVSE's plugins (its listener for the deferred start).
+nvse = { path = "../nvse" }
+
+[dev-dependencies]
+# A second engine sharing one's slots, as a real thread's engine does (`share_slots_for_test`).
+engine-core = { path = "../engine-core", features = ["test-support"] }
