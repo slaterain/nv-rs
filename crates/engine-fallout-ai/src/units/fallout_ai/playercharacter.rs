@@ -19345,7 +19345,7 @@ mod tests {
             let (mut e, this) = ufo_world();
             assert_eq!(e.global::<f64>(DEAD_ZONE_DOUBLE), 7849.0);
             e.register(0x004b_71d0, |_, _| int(1));
-            e.register(0x00a2_3390, move |_, _| int(stick));
+            e.register_double(0x00a2_3390, move |_, _| int(stick));
             e.register(0x0040_8820, |_, a| float(f32::from_bits(a[0]).abs() as f64));
             e.set_global(0x011e_0a6c, 0.1f32); // look speed
             e.set_global(0x011e_090c, 2.0f32); // move speed
