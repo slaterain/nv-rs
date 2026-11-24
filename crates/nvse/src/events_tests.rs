@@ -6,6 +6,158 @@ use crate::commands::test_support::*;
 use crate::functions::{CREATE_EVENT_LIST, EVENT_LIST_DESTROY, SCRIPT_EXECUTE};
 use std::cell::RefCell;
 
+#[test]
+fn native_result_callbacks_receive_real_udf_values_reread_int_pointers_and_can_stop() {
+    let mut e = setup();
+    scripts(&mut e, &[(1, 4), (2, 1)]);
+    for (script, value) in [(FN_A, 0), (FN_B, 1)] {
+        e.mem.write(script + 0x140, &[1, 4, 0, b'B', value]);
+    }
+    e.register(SCRIPT_EXECUTE, |e, a| {
+        execute(e, a);
+        if a[0] != FN_C {
+            let rec = crate::table::record_of(e, functions::OP_SET_FUNCTION_VALUE);
+            e.with_stack(12, |e, f| {
+                e.mem.set_u32(f.addr() + 8, 0x40);
+                e.call(
+                    e.mem.u32(rec + 0x18),
+                    &[
+                        e.mem.u32(rec + 0x14),
+                        e.mem.u32(a[0] + 0x30),
+                        a[1],
+                        0,
+                        a[0],
+                        a[2],
+                        f.addr(),
+                        f.addr() + 8,
+                    ],
+                );
+            });
+        }
+        Ret::default()
+    });
+    assert!(register_native(
+        &mut e,
+        "test:Result",
+        &[REFERENCE, INT_PTR],
+        0
+    ));
+    for script in [FN_A, FN_B, FN_C] {
+        assert!(set_handler(
+            &mut e,
+            b"test:Result",
+            Callback::new(script),
+            1,
+            None
+        ));
+    }
+    const SHOULD: u32 = AREA + 0x7f00;
+    e.mem.set_u32(SHOULD, 1);
+    let mut results = Vec::new();
+    assert_eq!(
+        dispatch_with_result(
+            &mut e,
+            b"test:Result",
+            REF_2,
+            &[REF_1, SHOULD],
+            &mut |e, result| {
+                results.push(result.cloned());
+                if let Some(result) = result {
+                    if e.mem.u32(SHOULD) != 0 {
+                        e.mem.set_u32(SHOULD, u32::from(result.boolean()));
+                    }
+                }
+                true
+            }
+        ),
+        Dispatch::Normal
+    );
+    assert_eq!(
+        results,
+        [
+            Some(NativeResult::Number(0.0)),
+            Some(NativeResult::Number(1.0)),
+            None
+        ]
+    );
+    let runs = log();
+    assert_eq!(
+        runs.iter().map(|r| r.script).collect::<Vec<_>>(),
+        [FN_A, FN_B, FN_C]
+    );
+    assert_eq!(
+        runs.iter().map(|r| r.b).collect::<Vec<_>>(),
+        [1.0, 0.0, 0.0]
+    );
+    assert_eq!(e.mem.u32(SHOULD), 0, "later true cannot undo a veto");
+    assert_eq!(current_event_name(&mut e), b"");
+    assert_eq!(
+        dispatch_with_result(
+            &mut e,
+            b"test:Result",
+            REF_2,
+            &[REF_1, SHOULD],
+            &mut |_, _| false
+        ),
+        Dispatch::EarlyBreak
+    );
+    assert_eq!(scripts_run(), [FN_A]);
+    assert_eq!(current_event_name(&mut e), b"");
+    assert_eq!(
+        dispatch_with_result(&mut e, b"test:unknown", 0, &[], &mut |_, _| panic!()),
+        Dispatch::UnknownEvent
+    );
+}
+
+#[test]
+fn native_result_element_conversion_resolves_forms_arrays_and_embedded_nul_truth() {
+    let mut e = setup();
+    assert_eq!(
+        native_result(&mut e, Some(Tok::Form(0x0001_0001))),
+        Some(NativeResult::Form(REF_1))
+    );
+    assert_eq!(
+        native_result(&mut e, Some(Tok::Form(0xdead_beef))),
+        Some(NativeResult::Form(0))
+    );
+    assert_eq!(
+        native_result(&mut e, Some(Tok::Array(u32::MAX))),
+        Some(NativeResult::Array(0))
+    );
+    assert_eq!(native_result(&mut e, None), None);
+    assert!(!NativeResult::String(vec![0, b'x']).boolean());
+    assert!(NativeResult::String(vec![b'x', 0]).boolean());
+    assert!(NativeResult::Number(f64::NAN).boolean());
+    assert!(!NativeResult::Number(-0.0).boolean());
+}
+
+#[test]
+fn native_result_required_missing_value_reports_error_without_calling_result_callback() {
+    let mut e = setup();
+    scripts(&mut e, &[]);
+    register_native(
+        &mut e,
+        "test:RequiredResult",
+        &[],
+        FLAG_REPORT_ERROR_IF_NO_RESULT,
+    );
+    assert!(set_handler(
+        &mut e,
+        b"test:RequiredResult",
+        Callback::new(FN_C),
+        1,
+        None
+    ));
+    assert_eq!(
+        dispatch_with_result(&mut e, b"test:RequiredResult", 0, &[], &mut |_, _| panic!(
+            "missing result must not reach callback"
+        )),
+        Dispatch::GenericError
+    );
+    assert_eq!(scripts_run(), [FN_C]);
+    assert!(current_event_name(&mut e).is_empty());
+}
+
 const AREA: u32 = 0x0400_0000;
 /// Three function scripts (data `+0x100` after each).
 const FN_A: u32 = AREA;
