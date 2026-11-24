@@ -1059,10 +1059,6 @@ pub fn hit_data_determine_outcome(e: &mut Engine, this: Ptr<HitData>) {
         let count = e.mem.u8(command.wrapping_add(8));
         shots = x87_store32(f64::from(count));
     }
-    // lStewieAl's Tweaks' row S0149 (`VATSFatalCheckDifficulty`, its `OnVATSCheckFatalDamageHook`
-    // called at `0x9B754A`): the multiplier is also scaled by the player's difficulty's
-    // `fDiffMultHPByPC` (the setting pointers at `0119b324` indexed by the player's difficulty at
-    // +0x7B8, the value at +4), so the kill test sees the damage the hit will really do.
     let mut chance = 0u32;
     let mut sure = false;
     let mut explodes = 0u8;

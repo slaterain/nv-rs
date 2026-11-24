@@ -344,10 +344,7 @@ const STATIC_FLOAT: u32 = 0x011f_2018;
 const STATIC_GUARD: u32 = 0x011f_201c;
 
 /// The impale depth `fn_009b90b0` reads at `0x9B9624` and `0x9B9AE1`: the copy cached once in
-/// [`STATIC_FLOAT`]. lStewieAl's Tweaks' row S0074 (`patchFixCombatMissileDepthGamesettings`,
-/// `SafeWrite32` at `0x9B9626` and `0x9B9AE3`): those two reads take
-/// `fCombatMissileImpaleDepth`'s own value (the setting at `011ce1e8`, value at +4) instead, so a
-/// change of the setting after the first projectile counts.
+/// [`STATIC_FLOAT`].
 fn impale_depth_word(e: &mut Engine) -> u32 {
     e.mem.u32(STATIC_FLOAT)
 }
@@ -921,9 +918,6 @@ fn fn_009b90b0_cut(e: &mut Engine, this: Ptr, in_vats: bool) -> CutEnd {
         if name_constructed {
             e.call(FIXED_STRING_DESTRUCT, &args![at(0x50)]);
         }
-        // 009b9387: lStewieAl's Tweaks' row S0106 (`patchFixNullHitLocationNodeExplosionCrash`):
-        // with no limb node the scale is not asked (the exe asks the null node's scale first, then
-        // takes this branch).
         let scale = x87_store32(e.call(NODE_SCALE, &args![limb]).f64());
         if limb == 0 {
             e.mem.set_u8(p + 0x90, 0);

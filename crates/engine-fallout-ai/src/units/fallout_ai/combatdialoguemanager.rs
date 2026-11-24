@@ -190,10 +190,6 @@ pub fn combat_dialogue_manager_start_dialogue(
 /// callback `00967aa0`, `RunResult(0)`) and deletes the item, returning
 /// false; anyone else says it through slot 0x280 with the speaker (its
 /// result), or directly through the process object's slot 0x2A4 (true).
-///
-/// lStewieAl's Tweaks' row S0926 (`CombatSoundCooldownFix`): the time of the last line is not
-/// taken at the start (`0x983A37`, see [`combat_sound_allowed`]) but when a line was said
-/// (`0x9841CC`, see [`combat_sound_said`]).
 #[allow(clippy::too_many_arguments)]
 pub fn fn_009839b0(
     e: &mut Engine,

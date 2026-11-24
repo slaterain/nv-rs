@@ -889,10 +889,7 @@ fn sun_update_body(e: &mut Engine, base: u32, sky: u32, time: f32) {
         // instead; without it (the default) this is the exe's vector, untouched.
         let (x, y, z) = match light_from_sky(e, sky, &direction, brightness) {
             Some(way) => (way[0].to_bits(), way[1].to_bits(), way[2].to_bits()),
-            // lStewieAl's Tweaks' S0145 (its bytes at `0x642298`, `FLD [ECX+4]; FCHS` in place of
-            // the setting's read): the light's north-south part is `fSunYExtreme` negated, so the
-            // light comes from the disc's side. Only on the exe's vector: the turned light above
-            // already comes from the disc.
+            // Only on the exe's vector: the turned light above already comes from the disc.
             None => (x, y, z),
         };
         typed_call!(

@@ -379,9 +379,6 @@ fn update_moving(e: &mut Engine, this: Ptr, time_bits: u32, zero: f64) {
             e.call(SET_LOCATION_ON_REFERENCE, &args![this, hit.wrapping_add(4)]);
         }
     }
-    // lStewieAl's Tweaks' row S0211 (`ThrowableRotationFix`, the call at `0x9B8552`): Tweaks'
-    // `Projectile__Sync3DWithReference` drops the arc reorientation for a projectile whose base
-    // (`baseForm`, +0x20) has the rotation flag (`BGSProjectile` flags +0x60, 0x800).
     let mut reorient = !stopped;
     e.call(
         SYNC_3D_WITH_REFERENCE,

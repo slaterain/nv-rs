@@ -745,11 +745,6 @@ pub fn teleport_door_search_get_node_connections(
             );
             let door = word(e, slot);
             index = index.wrapping_add(1);
-            // 006f37ad: lStewieAl's Tweaks' row S0169 (`patchFixRareNullTeleportDoorCrash`): a null
-            // door in the list is passed over, where the exe reads its flags. (Tweaks writes its
-            // test over the exe's disabled test, which it judges never true here; the port keeps
-            // that test after the null check. The list builder already removes disabled doors, so
-            // the kept test matters only if another thread disables a door in between.)
             if typed_call!(leaf::FAMILY, 0x0044_0da0, leaf::form_flag_800(e, door)) {
                 continue;
             }

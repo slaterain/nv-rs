@@ -1112,10 +1112,9 @@ fn set_info_tile_alpha(e: &mut Engine, offset: u32) {
     hud_set_float(e, target_tile, 0xfa9, alpha);
 }
 
-/// The action label of a creature target (`0x7775C3`..`0x777602`): its base data (`004181e0`
-/// +0x30) asked whether it allows dialogue (slot +0x18); yes, the setting at `011d3708`
-/// (Pickpocket), no, `011d4f48` (Steal). With lStewieAl's Tweaks' S0022.51 (a NOP over the `JZ`
-/// at `0x7775DB`) the question is still asked and the answer is always Pickpocket.
+/// The action label of a creature target (`0x7775C3`..`0x777602`): its base data (`004181e0` +0x30)
+/// asked whether it allows dialogue (slot +0x18); yes, the setting at `011d3708` (Pickpocket), no,
+/// `011d4f48` (Steal).
 fn creature_action_setting(e: &mut Engine, reference: u32) -> u32 {
     let process = e.call(0x0041_81e0, &args![reference]).u32();
     let dialogue = e.vcall(process + 0x30, 0x18, &args![]).bool();
@@ -6849,10 +6848,6 @@ pub fn fn_0077c440(e: &mut Engine, value: u32) {
 /// The level-up's two level texts (`0077d24b` to `0077d2b1`): the level (`011d9e7c`) into tile
 /// +0xe8 and the next level (`011d9e78`) into tile +0xec, each printed with `"%d"` into a buffer
 /// and set as the tile's string.
-///
-/// `0077d258`, `0077d28d`: lStewieAl's Tweaks' row S0057 (`patchFixLevelGreaterThan99Crash`): the
-/// levels are printed into a 16-byte buffer (the function's other one), where the exe's 3 bytes
-/// cannot hold a level of 100 or more and the C runtime's check ends the game.
 fn xp_print_levels(e: &mut Engine, this: Ptr<HUDMainMenu>) {
     let size = 3;
     e.with_stack(size.max(4), |e, buffer| {
@@ -8550,9 +8545,6 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     ]
 }
 
-/// The low-condition label's alpha step a frame (`0x77268F`, `0x7726AC`): the exe's `alpha / 255 x
-/// 10` (`FMUL [0x1020758]`); with lStewieAl's Tweaks' S0022.22 (`OnScaleHUDConditionLabelDeltaHook`)
-/// x 600 x the frame's seconds (`011f63a0`) over the time scale (`011ac3a0`), the 10 as at 60 fps.
 fn condition_flash_step(e: &Engine, alpha: f32) -> f64 {
     let maximum: f64 = e.global(0x0101_e568);
     {
@@ -8561,10 +8553,7 @@ fn condition_flash_step(e: &Engine, alpha: f32) -> f64 {
     }
 }
 
-/// The compass's largest alpha at `0x7792F9`: the exe's `opacity x 255` (`FMUL [0x101E568]`); with
-/// lStewieAl's Tweaks' S0022.35 (`PreCompassUpdateStoreHUDOpacityHook`) the HUD opacity
-/// (`011d979c`) is kept, becomes the compass window's `alpha` (0xFA9) for the update, and that
-/// alpha multiplies the opacity. Answers the alpha and the opacity kept (row on only).
+/// Answers the alpha and the opacity kept (row on only).
 fn compass_max_alpha(e: &mut Engine, compass: u32, opacity: f32) -> (f32, Option<f32>) {
     (
         (f64::from(opacity) * e.global::<f64>(0x0101_e568)) as f32,
@@ -8572,9 +8561,6 @@ fn compass_max_alpha(e: &mut Engine, compass: u32, opacity: f32) -> (f32, Option
     )
 }
 
-/// The player's cell at `0x779F1F`: the exe's `008d6f30`; with S0022.35
-/// (`PostCompassUpdateRestoreHUDOpacity`) the kept HUD opacity is put back first and the cell
-/// (+0x40) read raw.
 fn compass_player_cell(e: &mut Engine, kept: Option<f32>, player: u32) -> u32 {
     match kept {
         Some(opacity) => {
@@ -8587,9 +8573,7 @@ fn compass_player_cell(e: &mut Engine, kept: Option<f32>, player: u32) -> u32 {
 
 /// `HUDMainMenu::SetTargetType`'s settings test from `0x772D36` (with a target and the HUD): the
 /// exe blocks on the setting `011d8a0c`'s byte (`00408d60`) or `enabled` false, then on iron sights
-/// (`011d898c`) while the player aims. lStewieAl's Tweaks' S0072 (`patchFixHideHealthbarSetting`)
-/// writes `CMP [0x11D8A10],0; JNZ; CMP [0x11E098C],0; JNZ` over the first test: either value word
-/// set blocks (both jumps land on the exe's `JNZ` to the blocked exit at `0x772D78`).
+/// (`011d898c`) while the player aims.
 fn target_blocked_by_settings(e: &mut Engine, enabled: bool) -> bool {
     let first = {
         let blocked_ptr = e.call(0x0040_8d60, &args![0x011d_8a0c_u32]).u32();
@@ -8607,32 +8591,18 @@ fn target_blocked_by_settings(e: &mut Engine, enabled: bool) -> bool {
     }
 }
 
-/// The condition arrows (+0x180) on a weapon change (`0x7725D0`): the exe shows them
-/// (`visible` 1); lStewieAl's Tweaks' S0120 (`OnChangeWeaponUpdateCndArrowsVisibility`) sets
-/// `visible` with `Tile::SetFloat` to the HUD's (`011d96c0`) visibility flags (+0x1BC) & 1
-/// (`kActionPoints`).
 fn condition_arrows_on_weapon_change(e: &mut Engine, arrows: u32) {
     hud_trait(e, arrows, 0xfa3, 1);
 }
 
-/// The projectile's weapon at `0x776EE2` (`SetInfoForRef`'s name of a projectile): the exe's
-/// `00476c90` (`sourceWeap`, +0xF8); lStewieAl's Tweaks' S0197 (`CrosshairProjectileNameFix`,
-/// `ProjectileGetSourceWeaponIfThrown`): that weapon only when it is a thrown one
-/// (`eWeaponType`, +0xF4, from 10, `kWeapType_OneHandGrenade`), else none.
 fn crosshair_projectile_weapon(e: &mut Engine, reference: u32) -> u32 {
     e.call(0x0047_6c90, &args![reference]).u32()
 }
 
-/// The dropped projectile's item at `0x777D55`: the exe's `009d9f00` (+0x144); lStewieAl's Tweaks'
-/// S0038 (`RockItProjectileHUDHook`): the display mask (`[ebp-0x58]`) gets 0xFE (the Take prompt
-/// shown) and +0x144 is read raw.
 fn rock_it_projectile_item(e: &mut Engine, dropped: u32, display_mask: &mut u32) -> u32 {
     e.call(0x009d_9f00, &args![dropped]).u32()
 }
 
-/// The enemy health bar's test of the action prompt (`0x770E62`..`0x770E78`): the prompt tile's
-/// (+0x9C) visibility is asked; the exe hides the bar while it shows, lStewieAl's Tweaks'
-/// S0022.42 writes a NOP over the `JNZ` (the answer not used).
 fn prompt_hides_health_bar(e: &mut Engine) -> bool {
     let shown = hud_visible(e, 0x9c);
     shown
@@ -17991,7 +17961,6 @@ mod tests {
         );
     }
 
-    // ---- lStewieAl's Tweaks' rows (share 3, group 4): HUD ----
 
     fn g4_pages(e: &mut Engine, addresses: &[u32]) {
         for &address in addresses {

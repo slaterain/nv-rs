@@ -9687,16 +9687,10 @@ fn heavy_weapon_adjusted(e: &mut Engine, weight: f32) -> f32 {
     weight
 }
 
-/// Whether unequipping armor with the biped model `biped` refreshes what the actor is shown
-/// wearing (`0x4C0FF1`: power armor `00480d10` or heavy armor `004c0bd0`); with lStewieAl's Tweaks'
-/// S0152 the biped flags' backpack, heavy and power armor bits (`test byte [ecx+8], 0xA4`).
 fn unequip_refreshes_worn(e: &mut Engine, biped: u32) -> bool {
     e.call(BIPED_IS_POWER_ARMOR, &args![biped]).bool() || fn_004c0bd0(e, Ptr::new(biped))
 }
 
-/// The weight `004d0900` caches (`FLD`/`FSTP` at `0x4D0EDA`); with lStewieAl's Tweaks' S0156
-/// (`OnUpdateInventoryWeightHook`) a total of exactly -1.0 (the "recompute" mark) is cached as 0
-/// (its bits compared, `0xBF800000`).
 fn stored_weight(e: &mut Engine, total: f32) -> f32 {
     total
 }

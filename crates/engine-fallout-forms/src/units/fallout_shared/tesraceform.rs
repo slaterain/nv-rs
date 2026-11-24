@@ -76,8 +76,6 @@ pub fn tes_race_form_init_item(e: &mut Engine, this: Ptr, owner: Ptr) {
         let owner_id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, owner));
         e.call(0x005b_5e40, &args![MISSING_ON_OWNER_ID, id, owner_id]);
     }
-    // lStewieAl's Tweaks' row S0049 (`patchFixUnresolvedRaceCrash`, `0x48B9D9`, `0x48B9E8`,
-    // `0x48B9F1`): after the warning the race is CaucasianVanilla (`0x19`, looked up, not cast).
 }
 
 // Translated from 0048b8c0 (decompiled, FalloutNV.exe 1.4.0.525)

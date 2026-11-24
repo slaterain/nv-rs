@@ -3933,8 +3933,6 @@ pub fn fn_00609220(e: &mut Engine, this: Ptr<TESNPC>, buffer: Ptr) {
         follows_race = true;
     }
     if change_flag_set(e, 0x0042_8110, buffer, 0x200_0000) {
-        // lStewieAl's Tweaks' row S0049 (`patchFixUnresolvedRaceCrash`, the lookup at `0x60936F`): a
-        // race the save names that is not found is CaucasianVanilla (`0x19`), then cast as before.
         let id = e.call(0x0086_48a0, &args![buffer]).u32();
         let mut form = e.call(LOOKUP_FORM, &args![id]).u32();
         let race = e

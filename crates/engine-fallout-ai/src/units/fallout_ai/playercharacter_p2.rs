@@ -7681,8 +7681,6 @@ pub fn fn_0095a3b0(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
         }
     }
     e.call(0x0094_62c0, &args![this, 0u32, 1u32]);
-    // lStewieAl's Tweaks' row S0089.07 (`RememberAmmoCountOnLoad`, the call at `0x95C064`): after
-    // `SelectDefaultAmmo(false, true)` (`009462c0`), Tweaks' `PlayerCharacterLoad_SetupAmmoHook`.
     if buffer_version(e, buffer) >= 0x1b {
         e.call(0x005a_aaf0, &args![buffer]);
     }
@@ -13009,8 +13007,6 @@ mod tests {
         assert_eq!(calls_to(&e, 0x009c_8950), vec![vec![OBJECT_011F2250, 0, 0]]);
     }
 
-    /// lStewieAl's Tweaks' row S0089.05 with ordinary input: run with the row off, then on; the row
-    /// changes nothing (the same calls and answers).
     #[test]
     fn dropping_the_current_ammunition_empties_it_and_places_the_reference() {
         for on in [false, true] {

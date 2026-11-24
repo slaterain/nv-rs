@@ -443,9 +443,6 @@ fn equip_hot_key_replacement(e: &mut Engine, inventory: u32, item: Ptr, current:
     current
 }
 
-/// `g_menuVisibility` (`0x11F308F`, a byte by menu id), the inventory menu's id (1002), its
-/// singleton (`0x11D9EA4`), its filter (`+0x84`) and the filter's ammunition tab (4), as Tweaks
-/// (its xNVSE headers) reads them.
 const MENU_VISIBILITY: u32 = 0x011f_308f;
 const INVENTORY_MENU_ID: u32 = 1002;
 const INVENTORY_MENU: u32 = 0x011d_9ea4;
@@ -9290,12 +9287,8 @@ mod tests {
         (player, held)
     }
 
-    /// Row S0089.08's world on `equip_item_replaces_the_object_by_its_hot_key`'s: the hotkeyed
-    /// ammunition `0x5000_2000` (slot 4) with `rounds` carried, optionally an ammunition
-    /// `0x5000_3000` remembered on the weapon's entry (its first extra list's `ExtraAmmo`) with
-    /// `remembered_rounds` carried, the inventory's ammunition tab open or not. Answers the forms
-    /// the reload counted in the inventory (`004c8f30` on the inventory changes): the current one
-    /// first, then the one chosen.
+    /// Answers the forms the reload counted in the inventory (`004c8f30` on the inventory changes):
+    /// the current one first, then the one chosen.
     fn s0089_08_choice(
         on: bool,
         rounds: u32,
@@ -9366,11 +9359,9 @@ mod tests {
             .collect()
     }
 
-    /// lStewieAl's Tweaks' row S0089.08 (`GetAmmoForHotkeySlotHook`, `0x95D539` and `0x95D94F`): a
-    /// reload of the weapon whose hotkey slot holds another ammunition. Off, the exe switches to the
-    /// hotkeyed ammunition (`004bfb30`) whatever is carried; on, only with rounds of it carried
-    /// (4, not 0), never while the inventory's ammunition tab is open, and the ammunition remembered
-    /// on the weapon first when rounds of it are carried.
+    /// Off, the exe switches to the hotkeyed ammunition (`004bfb30`) whatever is carried; on, only
+    /// with rounds of it carried (4, not 0), never while the inventory's ammunition tab is open,
+    /// and the ammunition remembered on the weapon first when rounds of it are carried.
     #[test]
     fn s0089_08_a_hotkeyed_ammunition_is_taken_only_with_rounds() {
         let (held, hotkeyed, remembered) = (0x5000_1000, 0x5000_2000, 0x5000_3000);

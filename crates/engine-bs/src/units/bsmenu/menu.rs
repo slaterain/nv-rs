@@ -944,7 +944,6 @@ pub fn menu_start_fade_out(e: &mut Engine, this: Ptr<Menu>) {
     e.call(INTERFACE_UPDATE_ALL_TIMERS, &args![]);
 }
 
-/// `InventoryMenu *` (lStewieAl's Tweaks' S0021).
 const INVENTORY_MENU: u32 = 0x011d_9ea4;
 /// `InventoryMenu::SaveCurrentTabScrollPosition` (no arguments).
 const SAVE_INVENTORY_SCROLL: u32 = 0x0077_ffd0;

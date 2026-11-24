@@ -1009,7 +1009,6 @@ pub fn message_menu_load_next_message(e: &mut Engine, this: Ptr<MessageMenu>) {
                 measured
             };
             let font = e.call(FONT_MANAGER, &args![]).u32();
-            // `0x7A95D2` (lStewieAl's Tweaks' S0160): the title tile's font.
             let title_tile = e.mem.u32(e.global::<u32>(MESSAGE_MENU) + 0x2c);
             let font_id = 6;
             e.call(
@@ -1091,7 +1090,6 @@ pub fn message_menu_load_next_message(e: &mut Engine, this: Ptr<MessageMenu>) {
                             .call(GET_STRING_TRAIT, &args![text_tile, TRAIT_STRING])
                             .u32();
                         let font = e.call(FONT_MANAGER, &args![]).u32();
-                        // `0x7A9850` (lStewieAl's Tweaks' S0160): the button text tile's font.
                         let font_id = 2;
                         e.call(
                             CALCULATE_STRING_DIMENSIONS,
@@ -1181,7 +1179,6 @@ pub fn message_menu_load_next_message(e: &mut Engine, this: Ptr<MessageMenu>) {
         let room_now = get_float(e, message_tile, TRAIT_WIDTH);
         let text = c_str(e, cur.at(MessageMenuEntry::strMessageText));
         let font = e.call(FONT_MANAGER, &args![]).u32();
-        // `0x7A9B74` (lStewieAl's Tweaks' S0160): the message text tile's font.
         let message_text = e.mem.u32(e.global::<u32>(MESSAGE_MENU) + 0x34);
         let font_id = 2;
         e.call(

@@ -1517,9 +1517,6 @@ pub fn fn_005be2a0(e: &mut Engine, a: ScriptArgs) -> bool {
     }
     let queued = e.call(KILLS_ARE_QUEUED, &args![]).u8();
     if killer == e.global::<u32>(PLAYER) {
-        // lStewieAl's Tweaks' row S0204 (`KillCommandDuplicateRewardXpFix`, its
-        // `OnKillCommandPlayerKiller` called at `0x5BE37C` in place of the level's): the actor is
-        // remembered, so `Actor::Kill`'s experience step (`0x89E5BC`) skips it once.
         let level = e.call(ACTOR_LEVEL, &args![actor]).u16() as u32;
         let creature = e.vcall(actor, 0x21c, &args![]).bool();
         let points = e

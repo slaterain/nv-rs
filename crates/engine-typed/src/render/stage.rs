@@ -68,21 +68,12 @@ fn low8(word: u32) -> u8 {
     word as u8
 }
 
-/// The two sampler states lStewieAl's Tweaks' S0225 compares (`0126f918`: `D3DSAMP_ADDRESSU`,
-/// `ADDRESSV`), the map from a sampler state to its slot (`0126f92c`, a halfword each) and the
-/// render state cache whose sampler values it reads (`0126f99c`; its getter `00e910f0`, the word
-/// at `010f095c`, reads the cache's table at +0xE20, eight bytes a stage and slot, five slots a
-/// stage).
 const VALID_SAMPLER_STATES: u32 = 0x0126_f918;
 const SAMPLER_STATE_SLOTS: u32 = 0x0126_f92c;
 const SAMPLER_RENDER_STATE: u32 = 0x0126_f99c;
 
-/// S0225, Tweaks' `CheckSamplerStateChanged` (the translation's is
-/// `engine_core::extend::stewie::sampler_state_changed`): for ADDRESSU and ADDRESSV the stage
-/// group's value (+0x10; its current value at +0x90 when +0xA4's byte is set, else its saved one
-/// at +0x6C when +0x80's is, else that state is passed over) against the render state cache's
-/// value for the stage; true at the first that differs. Every read goes through the draw's own
-/// state ([`capture::own_at`]), and the getter's table read is done here, as `00e910f0` does it.
+/// Every read goes through the draw's own state ([`capture::own_at`]), and the getter's table read
+/// is done here, as `00e910f0` does it.
 fn sampler_state_changed(e: &Engine, this: Ptr<TextureStage>) -> bool {
     let group = capture::own_at::<u32>(e, this.addr().wrapping_add(0x10));
     let stage = capture::own_at::<u32>(e, this.addr().wrapping_add(4));

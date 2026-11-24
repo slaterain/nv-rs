@@ -11689,9 +11689,6 @@ mod n052_tests {
         )
     }
 
-    /// An inventory form of type `kind` named `name` for Tweaks' message: vtable +0xF0
-    /// (`GetIsReference`) answers 0; the dynamic cast to `TESFullName` answers a name struct
-    /// (text at +4, length at +8) registered in `names`.
     fn named_form(e: &mut Engine, kind: u8, name: &str, names: &mut Vec<(u32, u32)>) -> u32 {
         let table = e.mem.alloc(0x100);
         e.mem.set_u32(table + 0xf0, 0x00d0_10f0);
@@ -11806,8 +11803,6 @@ mod n052_tests {
         (e, messages, [handler, player, challenger, caps, entry])
     }
 
-    /// Row S0092 off: the exe's won payout, the money moved to the player (`004821a0`) and given
-    /// again from the barter container, the caps paid the exe's way, no message of Tweaks'.
     #[test]
     fn s0092_off_the_exe_pays_twice() {
         let (e, messages, [handler, player, _, _, entry]) = won_payout(false, 5, 3);
@@ -11822,8 +11817,6 @@ mod n052_tests {
         assert!(calls_to(&e, HEAP_ALLOCATE_00AA3E40).is_empty());
     }
 
-    /// Row S0092 on: the challenger holding enough gives the rest (5) to the player, nothing is
-    /// added; a barter container holding all 10 pays them alone.
     #[test]
     fn s0092_on_takes_the_rest_from_whoever_has_it() {
         let (e, _, [handler, player, challenger, caps, _]) = won_payout(true, 5, 9);

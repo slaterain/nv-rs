@@ -59,9 +59,6 @@ const STICK_VALUE_GUARD: u32 = 0x011f_2024;
 const STICK_VALUE_SOURCE: u32 = 0x011c_fc8c;
 
 /// The stick depth `fn_009ba660` reads at `0x9BA8AA`: the copy cached once in [`STICK_VALUE`].
-/// lStewieAl's Tweaks' row S0074 (`patchFixCombatMissileDepthGamesettings`, `SafeWrite32` at
-/// `0x9BA8AC`): the read takes `fCombatMissileStickDepth`'s own value (the setting at `011cfc8c`,
-/// value at +4) instead, so a change of the setting after the first projectile counts.
 fn stick_depth(e: &mut Engine) -> f32 {
     e.global::<f32>(STICK_VALUE)
 }

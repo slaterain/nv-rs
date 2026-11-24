@@ -1538,12 +1538,8 @@ pub fn nav_mesh_obstacle_manager_remove_obstacle_for_reference(
     });
 }
 
-/// The test `006c0dc0`, `006c0f10` and `006c1060` open with: true for a
-/// reference whose base form is a door that is not a sliding door (the form
-/// type is `0x1c` and `IsSlidingDoor` is false). `None` when the handler
-/// stops there: lStewieAl's Tweaks' S0242 (its jumps at `0x6C0DFE`,
-/// `0x6C0F4E` and `0x6C107F`) sends a reference whose base form is not a
-/// door to the handler's end, where the exe goes on to the door queues.
+/// The test `006c0dc0`, `006c0f10` and `006c1060` open with: true for a reference whose base form
+/// is a door that is not a sliding door (the form type is `0x1c` and `IsSlidingDoor` is false).
 fn is_ordinary_door(e: &mut Engine, reference: u32) -> Option<bool> {
     let form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
     if e.call(FORM_TYPE, &args![form]).u32() == DOOR_FORM_TYPE {

@@ -1368,9 +1368,6 @@ mod tests {
         assert_eq!(calls_to(&e, SET_LOCATION), vec![vec![actor, point]]);
     }
 
-    /// The actor 20 units from the next node (as in `use_door_warns_when_the_actor_is_far_from_the_next_node`)
-    /// with no door at the node, row S0199.10 `on`, the door's cell read as the exe reads it (+0x40):
-    /// whether the call ran to its end, its answer and the prints.
     fn far_from_a_node_with_no_door(on: bool) -> (bool, i32, usize) {
         let (mut e, this, _) = engine(3);
         e.register(DOORS_TELEPORT, |_, _| word(0));
@@ -1393,9 +1390,6 @@ mod tests {
         (run.is_ok(), run.unwrap_or(0), printed)
     }
 
-    /// lStewieAl's Tweaks' row S0199.10 (`MiscCrashFixes`, `0x9EAF04`): the actor far from a node that
-    /// has no door: off, the exe asks the missing door for its cell (for the warning) and stops; on, no
-    /// warning and the walk goes on as for any far node (-2).
     #[test]
     fn s0199_10_far_from_a_node_with_no_door() {
         assert!(!far_from_a_node_with_no_door(false).0);

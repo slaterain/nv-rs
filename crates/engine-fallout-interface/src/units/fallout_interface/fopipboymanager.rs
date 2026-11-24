@@ -1432,8 +1432,6 @@ mod la1_tests {
 /// `007fa8d0` (`thiscall`, one word) runs first on menu open (with 0) and
 /// close (with the player's `Actor::IsRefractive`, `008c51c0`).
 const MENU_STATE_007FA8D0: u32 = 0x007f_a8d0;
-/// The Pip-Boy manager's reset (`007fa990`, `thiscall`; it clears the "reset me" byte itself), and
-/// that byte (one definition, beside row S0027).
 const PIPBOY_RESET: u32 = 0x007f_a990;
 const ACTOR_IS_REFRACTIVE: u32 = 0x008c_51c0;
 /// The bytes menu open sets (`011d890a`, `011db378`; the second is
@@ -2359,8 +2357,6 @@ mod n086_tests {
         });
     }
 
-    /// lStewieAl's Tweaks' row S0027 with ordinary input: run with the row off, then on; the row
-    /// changes nothing (the same calls and answers).
     #[test]
     fn on_menu_open_starts_the_hum_and_the_burst() {
         for on in [false, true] {

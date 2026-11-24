@@ -1103,16 +1103,11 @@ fn condition_value_as_int(e: &mut Engine, item: u32) -> i32 {
 /// The location branch appends the 0x80-byte work buffer even when the
 /// condition has no location, so its previous contents are appended again,
 /// as in the exe.
-///
-/// lStewieAl's Tweaks' `PerkMenuDescriptionTypoFix` changes the text, each part a row of its own
-/// (`engine_core::extend::stewie`'s `PERK_TEXT_*`, S0093.01 to .06), and cuts a description too
-/// long for the buffer (S0093.07).
 pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr, size: u32) {
     let base = this.addr();
     let buffer = buffer.addr();
     e.with_stack(0x84 + TWEAKS_TEXT, |e, work| {
         let work = work.addr();
-        // The row S0093.06's formats (Tweaks' own strings), after the exe's 0x80-byte work buffer.
         let tweaks_text = work + 0x84;
         let mut short_heading = false;
         let mut item = e.call(GET_CONDITION_ITEM, &args![base + 0x40, 0u32]).u32();
@@ -1133,15 +1128,11 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
             );
             short_heading = true;
         }
-        // S0093.05 (`0x5EBCCE`, `0x5EBE61`, `0x5EBF4D`): the first separator only where the text does
-        // not end with ", " already (Tweaks' `AddCommaIfMissing`).
         let first_separator = |e: &mut Engine, index: u32| {
             if index == 0 && !short_heading {
                 e.call(STRING_APPEND, &args![buffer, size, 0x0101_2630u32]);
             }
         };
-        // The item after `index` (`index + 1`) as the actor-value branch asks for it; with S0093.05
-        // (`0x5EBCFB`, `0x5EBD6E`) only when a shown condition is left from there on.
         let next_item = |e: &mut Engine, index: u32| {
             e.call(
                 GET_CONDITION_ITEM,
@@ -1149,8 +1140,6 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
             )
             .u32()
         };
-        // The step to the next item (`0x5EBC77`, `0x5EBF55`, then `0x5EBB77`): the exe's index goes
-        // up twice a step (it reads the item at the first); with S0093.03 once.
         let step = |e: &mut Engine, index: &mut u32| {
             let item = e
                 .call(
@@ -1235,8 +1224,6 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
                 }
                 e.call(STRING_APPEND, &args![buffer, size, work]);
             } else {
-                // S0093.04 (`0x5EBE35`): with the row such a condition goes straight to the step
-                // (`0x5EBF55`), neither listed nor separated.
                 listed = true;
                 first_separator(e, index);
             }
@@ -1245,8 +1232,6 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
         if !listed {
             e.call(STRING_APPEND, &args![buffer, size, 0x0104_7008u32]);
         }
-        // S0093.05 (`0x5EBFB1`): a ", " or "," left at the end goes before the "\n\n" (Tweaks'
-        // `StripTrailingCommasHook`).
         e.call(STRING_APPEND, &args![buffer, size, 0x0101_2648u32]);
         let level_label = e.call(SETTING_STRING, &args![0x011d_40e4u32]).u32();
         let level = u32::from(e.mem.u8(base + 0x3a));
@@ -1262,8 +1247,6 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
     });
 }
 
-/// Room on the stack for row S0093.06's texts: one format (0x10 bytes) and the format
-/// `OnFormatPerkHandleConditions` makes (Tweaks' 0x20 bytes, with room for its unbounded appends).
 const TWEAKS_TEXT: u32 = 0x60;
 
 /// `text` and its end at `at`; returns `at`.
@@ -1273,8 +1256,6 @@ fn put_text(e: &mut Engine, at: u32, text: &[u8]) -> u32 {
     at
 }
 
-/// The actor values' infos (`ActorValueInfo *` by code; `avName` a `String` at `+0x3C`, its length
-/// a `u16` at `+0x40`) and the karma's code, as Tweaks reads them.
 const ACTOR_VALUE_INFOS: u32 = 0x011d_61c8;
 const ACTOR_VALUE_KARMA: u32 = 0x17;
 
@@ -3205,9 +3186,6 @@ mod b028_description_tests {
         (run.is_ok(), e.mem.cstr(buffer))
     }
 
-    /// lStewieAl's Tweaks' row S0093.07 (`PerkMenuDescriptionTypoFix`, the call at `0x5EC026`): a
-    /// description longer than the buffer: the exe's `strcat_s` stops; with the row it is cut to fit
-    /// (`size - 1` bytes and the end).
     #[test]
     fn s0093_07_a_description_too_long_for_the_buffer() {
         let text = [b'x'; 0x40];
@@ -3215,8 +3193,6 @@ mod b028_description_tests {
         assert_eq!(description_of(&text, 0x20, true), (true, vec![b'x'; 0x1f]));
     }
 
-    /// Row S0093.07 with a description that fits (ordinary input): the same text with the row off and
-    /// on.
     #[test]
     fn s0093_07_row_on_with_a_description_that_fits_changes_nothing() {
         let text = b"Ammunition weighs nothing.";

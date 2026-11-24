@@ -842,14 +842,12 @@ pub fn fn_00644cc0(e: &mut Engine, this: Ptr) -> i8 {
 }
 
 // Translated from 00644ce0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `CombatFormulas::CalcWeaponDamage` (Xbox PDB, `cdecl`, 8 words): the damage of one
-/// attack. `owner` is the attacker's `ActorValueOwner` (or null), `weapon` the weapon form
-/// (null for fists), `health_ratio` the weapon's condition (0 to 1), `scale` a multiplier,
-/// `item_change` the inventory entry (its mod effects add to the damage), `owner_is_actor`
-/// makes the ammunition lookup use the attacker. The word at `+0x18` is unused by the exe (row
-/// S0189.02 reads it as the ammunition, which S0189.01 passes from the display). The
-/// weapon-type switch is a jump table in `.text` (not mapped here): types -1 and 0 add the
-/// owner's value 0x38, 1, 2 and 13 its value 0x11, every other type nothing.
+/// `CombatFormulas::CalcWeaponDamage` (Xbox PDB, `cdecl`, 8 words): the damage of one attack.
+/// `owner` is the attacker's `ActorValueOwner` (or null), `weapon` the weapon form (null for
+/// fists), `health_ratio` the weapon's condition (0 to 1), `scale` a multiplier, `item_change` the
+/// inventory entry (its mod effects add to the damage), `owner_is_actor` makes the ammunition
+/// lookup use the attacker. The weapon-type switch is a jump table in `.text` (not mapped here):
+/// types -1 and 0 add the owner's value 0x38, 1, 2 and 13 its value 0x11, every other type nothing.
 #[allow(clippy::too_many_arguments)]
 pub fn combat_formulas_calc_weapon_damage(
     e: &mut Engine,
@@ -3028,9 +3026,8 @@ mod tests {
 
     /// The damage a menu shows (`006450f0`) for a gun whose equipped ammunition's projectile is
     /// 0x5000 (explosion value 3) while the menu entry's ammunition (type 0x29) has the projectile
-    /// 0x6000 (explosion value 7); the factor `006479e0` answers the value. Rows S0189.01 (`one`)
-    /// and S0189.02 (`two`) as given; `weapon_projectile` is the weapon's own (+0x118). Answers the
-    /// shown damage, the projectiles whose explosion was asked, and how often `00525a90` was asked.
+    /// 0x6000 (explosion value 7); the factor `006479e0` answers the value. Answers the shown
+    /// damage, the projectiles whose explosion was asked, and how often `00525a90` was asked.
     fn s0189_shown(one: bool, two: bool, weapon_projectile: u32) -> (f32, Vec<u32>, usize) {
         s0189_shown_with(one, two, weapon_projectile, 0x29, false)
     }
@@ -3098,10 +3095,8 @@ mod tests {
         (shown, asked, lookups)
     }
 
-    /// S0189.02's ammunition-type test: a throwing weapon's "ammunition" is the weapon itself (form
-    /// type 0x28), whose word at +0xB4 (here 0x6000) is no projectile. With both rows the explosion
-    /// is asked of the weapon's own projectile (0x7000) or, without one, of `00525a90`'s answer
-    /// (0x5000, asked once and reused), never of that word.
+    /// With both rows the explosion is asked of the weapon's own projectile (0x7000) or, without
+    /// one, of `00525a90`'s answer (0x5000, asked once and reused), never of that word.
     #[test]
     fn s0189_a_throwing_weapons_own_form_is_not_read_as_ammunition() {
         let (_, asked, lookups) = s0189_shown_with(true, true, 0, 0x28, false);
@@ -3121,11 +3116,6 @@ mod tests {
         assert_eq!(asked, vec![0x6000, 0x6000]);
     }
 
-    /// S0189.01 and S0189.02 (`InventoryCalcWeaponDamageUseAmmoFix`): off, the shown damage takes
-    /// the explosion of the equipped ammunition's projectile (asked three times through
-    /// `00525a90`); with both rows, that of the entry's own ammunition, asked once and reused, so
-    /// a bigger explosion (7 against 3) shows a bigger figure. S0189.02 alone has no ammunition to
-    /// read and falls back to the weapon's own projectile, then to `00525a90` (twice: the reuse).
     #[test]
     fn s0189_the_shown_damage_uses_the_entrys_ammunition() {
         let (off, asked, lookups) = s0189_shown(false, false, 0);
@@ -3143,9 +3133,6 @@ mod tests {
         assert_eq!(two_only, off);
     }
 
-    /// The damage a menu shows (`006450f0`) for the gun of `calc_weapon_damage_for_a_gun_with_ammunition`
-    /// whose equipped "ammunition" is a form of type `ammo_type`, with row S0067 `on`: the ammunition's
-    /// address and the words of every perk-entry call (`APPLY_PERK_ENTRY_FLOAT`) the function made.
     fn shown_damage_perk_calls(ammo_type: u8, on: bool) -> (u32, Vec<Vec<u32>>) {
         let (mut e, _) = damage_world();
         let player = object(&mut e, 0x400);
@@ -3182,10 +3169,6 @@ mod tests {
         (ammo.addr(), calls)
     }
 
-    /// lStewieAl's Tweaks' row S0067 (`fixGetWeaponDamageCrashOnThrowingWeapons`, the call at
-    /// `0x64529D`): a throwing weapon's "ammunition" is a weapon (type 0x28): the exe asks the perk
-    /// entry about the effect list it reads in it (a weapon's word, which crashes in the game); with the
-    /// row the list is none.
     #[test]
     fn s0067_a_throwing_weapons_ammunition_has_no_effect_list() {
         let (ammo, off) = shown_damage_perk_calls(0x28, false);
@@ -3195,8 +3178,6 @@ mod tests {
         assert!(on.iter().any(|a| a[0] == 0 && a[1] == 0));
     }
 
-    /// Row S0067 with real ammunition (type 0x29, ordinary input): the same perk-entry calls with the
-    /// row off and on.
     #[test]
     fn s0067_row_on_with_ammunition_changes_nothing() {
         let (ammo, off) = shown_damage_perk_calls(0x29, false);

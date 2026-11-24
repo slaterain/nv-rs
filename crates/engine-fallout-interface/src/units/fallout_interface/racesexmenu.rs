@@ -1125,8 +1125,6 @@ pub fn race_sex_menu_scalar_deleting_destructor(
     flags: u32,
 ) -> Ptr<RaceSexMenu> {
     race_sex_menu_destructor(e, this);
-    // `0x7AC53A` (lStewieAl's Tweaks' S0218 detours that call: after it, the player's last
-    // exterior door is set when it has none).
     if flags & 1 != 0 {
         e.call(FREE, &args![this]);
     }

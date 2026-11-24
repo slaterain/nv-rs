@@ -216,11 +216,6 @@ pub fn fn_007308e0(e: &mut Engine, this: Ptr<ListBox>) {
 /// Deletes the `ListBoxItem` (`pTile` +0, `data` +4) that `item` reads each time: the
 /// tile through its deleting destructor (vtable slot 0, flag 1) unless `KEEP_ITEM_TILES`
 /// is set, the data (`004459e0` with 1) when flag bit 1 is set, then the item freed.
-///
-/// `in_loop`: the loop's delete (the data's delete at `0x730A00`), where lStewieAl's Tweaks'
-/// S0022.48 (`MenuFixes`, `OnClearItemListPreventIfRepairTarget`) leaves the repair menu's
-/// target entry (`RepairMenu::GetSelection`, the word at `011da760`) undeleted: Tweaks' own
-/// trade, that entry leaks instead of being used after it is freed.
 fn delete_item(
     e: &mut Engine,
     this: Ptr<ListBox>,

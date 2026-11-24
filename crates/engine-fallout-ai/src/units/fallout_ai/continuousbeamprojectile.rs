@@ -720,9 +720,6 @@ mod tests {
         log
     }
 
-    /// lStewieAl's Tweaks' row S0130.03 (`ContinuousBeamProjectileCrashFix`, `0x9AB55F`): off, the exe
-    /// reads the rotation of the missing node (`00a59400` with 0x68: a crash in the game); on, it is
-    /// not read.
     #[test]
     fn s0130_03_an_npc_beam_with_no_node_yet() {
         let off = update_without_a_node(false);

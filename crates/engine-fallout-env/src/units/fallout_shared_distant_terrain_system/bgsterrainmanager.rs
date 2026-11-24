@@ -392,8 +392,6 @@ pub fn bgs_terrain_manager_hide_tree(
     tree: u32,
     queue_if_missing: u8,
 ) {
-    // lStewieAl's Tweaks' S0050 (its jump at the entry, `0x6FCFA0`): no manager (the reference's LOD
-    // disabled by a plugin) prints Tweaks' line and does nothing.
     let tree_key = e.call(REFERENCE_FORM_KEY, &args![tree]).u32();
     let block_key = e.vcall(tree, 0x1f4, &[]).u32();
     let block = fn_006fcef0(e, this, block_key);

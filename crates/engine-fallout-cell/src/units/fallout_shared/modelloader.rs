@@ -4886,12 +4886,6 @@ const BIPED_SLOT_NAMES: u32 = 0x0118_8b98;
 const REFERENCE_GET_THE_NAME: u32 = 0x0055_d520;
 const FORM_REF_ID: u32 = 0x0c;
 
-/// lStewieAl's Tweaks' row S0186 (`BipedAnimNullItemError::OnQueuedHelmetLoad`, the call at
-/// `0x43FBE4`): with a face model and a cloned node for a slot whose item is gone, the helmet is
-/// not attached (the exe's `AttachHelmet` reads the missing item) and the console says `Failed to
-/// resolve item for body part '<slot>' on actor <name> (<id>)`, or `... on null actor` when
-/// neither the biped's character nor the helmet's reference is set. Tweaks' header has the
-/// character 4 bytes early (+0x2AC); the port reads it where the exe keeps it (+0x2B0).
 fn helmet_slot_has_no_item(
     e: &mut Engine,
     this: Ptr<QueuedHelmet>,
@@ -11654,8 +11648,6 @@ mod tests {
             const { std::cell::RefCell::new(Vec::new()) };
     }
 
-    /// The biped's character in [`helmet_with_slot_item`]: its id (the helmet's reference is
-    /// 0x1234, "Doc Mitchell") and the decoy's at +0x2AC, where Tweaks' header puts the character.
     const CHARACTER_ID: u32 = 0x5678;
     const DECOY_ID: u32 = 0x9abc;
 
@@ -11729,7 +11721,6 @@ mod tests {
         (this, biped)
     }
 
-    /// The line row S0186 prints for an actor.
     fn actor_line(name: &[u8], id: u32) -> (Vec<u8>, Vec<u8>, Vec<u8>, u32) {
         (
             b"Failed to resolve item for body part '%s' on actor %s (%08X)".to_vec(),

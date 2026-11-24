@@ -1345,9 +1345,6 @@ fn effect_duration(e: &mut Engine, effect: u32) -> u32 {
             return duration;
         }
     }
-    // lStewieAl's Tweaks' S0066 writes the same call only while the exe's bytes are still there
-    // (`*(UInt32*)0x7E0C20 == 0xFFC238AC`): JIP LN NVSE loads first, so with G107 answering above
-    // Tweaks' patch is not made.
     e.call(EFFECT_GET_DURATION, &args![effect]).u32()
 }
 

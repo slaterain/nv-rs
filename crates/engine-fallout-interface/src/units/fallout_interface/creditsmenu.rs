@@ -2110,8 +2110,6 @@ mod n053_tests {
         assert_eq!(calls(&e, RENDER_UNLOCK), vec![vec![0x4500]]);
     }
 
-    /// lStewieAl's Tweaks' row S0139 with ordinary input: run with the row off, then on; the row
-    /// changes nothing (the same calls and answers).
     #[test]
     fn close_offers_a_matching_save_or_closes() {
         for on in [false, true] {

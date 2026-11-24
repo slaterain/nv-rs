@@ -2275,10 +2275,8 @@ pub fn container_menu_do_idle(e: &mut Engine, this: Ptr<ContainerMenu>) {
     {
         return;
     }
-    // 0075eb5c: lStewieAl's Tweaks' row S0022.17 (`MenuFixes`, "add a null check when mousing over
-    // keys in the Container menu"): an entry with no form ends the call (at `0075ec4e`), where the
-    // exe reads the null form's type. With the row on an entry's form is read once more, for this test
-    // (`0044ddc0`, a getter; the type test below reads it again, as the exe does).
+    // With the row on an entry's form is read once more, for this test (`0044ddc0`, a getter; the
+    // type test below reads it again, as the exe does).
     if current_item(e) != 0 && item_type(e, current_item(e)) == 0x28 {
         let first = tile_at(e, me_addr, 0x60);
         let second = tile_at(e, me_addr, 0x64);
@@ -4179,8 +4177,6 @@ mod tests {
         assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![buffer]]);
     }
 
-    /// lStewieAl's Tweaks' row S0022.17 with ordinary input: run with the row off, then on; the row
-    /// changes nothing (the same calls and answers).
     #[test]
     fn do_idle_clears_the_subtitle_and_fills_the_card() {
         ORDINARY_LOG.with(|l| *l.borrow_mut() = None);

@@ -1897,9 +1897,7 @@ pub fn fn_009b0e00(e: &mut Engine, this: Ptr, reference: Ptr, first: u8, second:
 }
 
 /// The owner's skill for an explosion's bonus (`009b0f80`, `0x9B1033`: the actor value owner +0xA4,
-/// slot 0xC with the weapon's skill). lStewieAl's Tweaks' row S0166
-/// (`patchThresholdExplosivesWeaponDamage`, the call written there): through
-/// `ActorValueOwner::GetClampedActorFloatValue` (`0066ef50`), held within the actor value's limits.
+/// slot 0xC with the weapon's skill).
 fn explosion_skill(e: &mut Engine, owner: u32, value: u32) -> f32 {
     e.vcall(owner + 0xa4, 0xc, &args![value]).f32()
 }

@@ -3730,8 +3730,6 @@ fn update_position(e: &mut Engine, f: &UpdateFrame) {
         let process = e.get(this, Actor::pCurrentProcess);
         e.vcall(process.addr(), PROCESS_VSLOT_0X428, &args![this]);
     }
-    // lStewieAl's Tweaks' row S0130.02 (`ContinuousBeamProjectileCrashFix`, its
-    // `OnActorUpdate_UpdateBeam` before the call at `0x889869`).
     let link = e.call(GET_LINKED_OBJECT, &args![this]).u32();
     if link != 0 && typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, link)) != 0 {
         let word = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, link));
@@ -4748,7 +4746,6 @@ pub fn actor_restore_fatigue(e: &mut Engine, this: Ptr<Actor>, amount: f32) {
 /// (with the item the process virtual `+0x148` yields, if any) and
 /// multiplied by the owner's value for actor value `0x0c`.
 pub fn actor_restore_action_points(e: &mut Engine, this: Ptr<Actor>, amount: f32) {
-    /// The game's fists weapon (`TESObjectWEAP*` at `011ca278`, Tweaks' `g_fistsWeapon`).
     const FISTS_WEAPON: u32 = 0x011c_a278;
     if !e
         .vcall(this.addr(), VSLOT_ACTOR_FLAG_0X360, &args![])
@@ -5675,7 +5672,6 @@ const PLAYER_POISON_CHOICE: u32 = 0x0095_e6f0;
 const GET_PIPBOY: u32 = 0x0070_5990;
 /// `ECX` = pipboy: refreshes it.
 const PIPBOY_REFRESH: u32 = 0x007f_a990;
-/// The Pip-Boy manager's "reset me" byte (one definition, beside row S0027).
 /// `ECX` = save/load object: tests bit 2 of the word at +0x244.
 const SAVE_LOAD_BIT_2_TEST: u32 = 0x0042_ce10;
 /// `ECX` = sound handle storage: construct (`SOUND_HANDLE_INIT`), release
@@ -6022,8 +6018,6 @@ pub fn actor_equip_object(
         FORM_TYPE_0X1A => equip_step = true,
         FORM_TYPE_AMMO => 'ammo: {
             let process = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, this));
-            // lStewieAl's Tweaks' row S0202 (`patchEquipAmmoOnNullBaseProcessCrashFix` at
-            // `0x88CDE7`): an actor with no process equips no ammunition (the switch's end).
             let held = e.vcall(process, PROCESS_VSLOT_ITEM, &args![]).u32();
             let held_form = if held == 0 {
                 0
@@ -6188,10 +6182,8 @@ pub fn actor_equip_object(
     }
 }
 
-/// The player's power armour training test in `Actor::EquipObject` (`0x88C8DA`, `0088d2d0`: the byte
-/// +0x7C7). lStewieAl's Tweaks' row S0179 (`GodmodeSkipsPowerArmorTraining`, its
-/// `PlayerHasPowerArmorTrainingOrGodmode`): also true in god mode (`011e07ba`) or demigod mode
-/// (`011e0898`).
+/// The player's power armour training test in `Actor::EquipObject` (`0x88C8DA`, `0088d2d0`: the
+/// byte +0x7C7).
 fn power_armor_training(e: &mut Engine, player: u32) -> bool {
     fn_0088d2d0(e, Ptr::new(player)) != 0
 }
@@ -7564,10 +7556,6 @@ fn drop_destroyed_weapon(e: &mut Engine, this: Ptr<Actor>, entry: Ptr, weapon: u
                 words.push(e.mem.u32(matrix + 4 * word));
             }
             let launched = e.call(LAUNCH_PROJECTILE, &words).u32();
-            // lStewieAl's Tweaks' row S0188 (`ShotProjectileResistanceFix`, its
-            // `OnCreateDamagedWeaponExplosionHook` jumped to at `0x891951`): the projectile made
-            // names the destroyed weapon as its source (+0xE0), so the damage it does is resisted
-            // as that weapon's.
         } else if e.call(ACTOR_IS_WEAPON_DRAWN, &args![this]).bool() {
             typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, euler));
             e.call(
@@ -13594,8 +13582,6 @@ mod tests {
         assert_eq!(flags.borrow().len(), 2);
     }
 
-    /// lStewieAl's Tweaks' row S0202 with ordinary input: run with the row off, then on; the row
-    /// changes nothing (the same calls and answers).
     #[test]
     fn ammo_is_swapped_through_an_item_change() {
         for on in [false, true] {

@@ -1166,14 +1166,10 @@ pub fn projectile_load_game(e: &mut Engine, this: Ptr<Projectile>, buffer: Ptr) 
         }
     }
     if i32::from(e.vcall(buffer.addr(), 0, &args![]).u8()) >= 0x10 {
-        // lStewieAl's Tweaks' row S0180 (`MineDisarmedLightLoadingFix`, the call at `0x9C5723`):
-        // Tweaks' `OnProjectileLoadGame` first runs `009b46c0` on the projectile (its
-        // `##LightOn` block shown again), then the exe's load of the byte.
         e.call(LOAD_BYTES, &args![buffer, base + 0x90, 1u32]);
     }
 }
 
-/// `009b46c0` (`thiscall`, the projectile): what row S0180 runs before the impact byte is loaded.
 const MINE_LIGHT_UPDATE: u32 = 0x009b_46c0;
 
 /// The form of a loaded form id word, cast to a reference: `__RTDynamicCast(
@@ -1971,7 +1967,6 @@ pub fn projectile_ctor(e: &mut Engine, this: Ptr<Projectile>, _unused_1: u32) ->
 }
 
 // Translation incomplete: 009bbef0 - C++ exception unwinding (FS:[0] frame) is not modelled.
-// Translated from lStewieAl's Tweaks 10.05 (Internal/tweaks_core.cpp): GetWeaponModFlags.
 /// The weapon mod flags of an inventory entry (`ContChangesEntry`): the flags (+0xC) of the
 /// `ExtraWeaponModFlags` (type 0x8D, `BaseExtraList::GetByType` `00410220`) of the first extra
 /// data list in the entry's list (+0); 0 without one.
@@ -2045,9 +2040,6 @@ pub fn fn_009bbef0(
     e.set(this, Projectile::pSecondaryItemChange, 0);
     e.set(this, Projectile::fWeaponCondition, 1.0);
     e.set(this, Projectile::bSoundFired, false);
-    // lStewieAl's Tweaks' row S0192 (`StoreWeaponModFlagsOnProjectiles`, the words written at
-    // `0x9BC0D2` and `0x9BC0DA`): the store is a word, clearing +0x149 to +0x14B with it (Tweaks
-    // keeps the weapon's mod flags at +0x14B).
     let distance = float_global(e, INITIAL_SOUND_DISTANCE);
     e.set(this, Projectile::fSoundDist, distance);
     e.call(0x0057_5690, &args![this, base_object]);
@@ -2071,8 +2063,6 @@ pub fn fn_009bbef0(
                     if item != 0 {
                         let health = e.call(0x004b_cdb0, &args![item, 0u32]).f64();
                         let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, item));
-                        // lStewieAl's Tweaks' row S0192 (its `OnCreateProjectileSetModFlags` called at
-                        // `0x9BC1D2`): the item's mod flags are kept on the projectile.
                         let form_health = e.call(0x0048_73d0, &args![form]).u32();
                         e.set(
                             this,
@@ -2629,8 +2619,6 @@ pub fn fn_009bf370(e: &mut Engine, this: Ptr<Projectile>, delta: f32, x: u32, y:
         copy_point(e, new, position);
         let result = e.call(0x0043_9ef0, &args![new, difference, old]).u32();
         let [dx, dy, dz] = point_words(e, result);
-        // lStewieAl's Tweaks' row S0207 (`NonHitscanProjectileSplashFix`, the call at
-        // `0x9BF461`): Tweaks' `Projectile__SetVector` in place of `009c4e60`.
         e.call(0x009c_4e60, &args![this, dx, dy, dz, 1u32]);
     });
 }
@@ -2959,12 +2947,7 @@ fn count_beam_hit(e: &mut Engine, this: Ptr<Projectile>, data: Ptr<ImpactData>) 
     }
 }
 
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/ContinuousBeamProjectileCrashFix.cpp):
-// GetAmmoCount.
 /// The shooter's loaded count after a beam's shot (`0x9BFD6B`, `Actor::GetAmmoCount` `008a88b0`).
-/// lStewieAl's Tweaks' row S0130.04: the player (`011dea3c`) in god mode (`011e07ba`) or demigod
-/// mode (`011e0898`) has 1, so the beam does not stop; any other count as the exe's (its process'
-/// ammunition entry, slot `0x14c`, +4; none: -1).
 fn beam_ammo_count(e: &mut Engine, shooter: u32) -> i32 {
     e.call(0x008a_88b0, &args![shooter]).i32()
 }
@@ -3084,9 +3067,7 @@ fn set_speed(e: &mut Engine, projectile: u32, value: f64) {
 
 // Translation incomplete: 009bca60 - C++ exception unwinding (FS:[0] frame) is not modelled.
 /// The player's Strength for a thrown weapon's speed (`009bca60`, `0x9BCEA7`: the actor value owner
-/// +0xA4, slot 8 with 5). lStewieAl's Tweaks' row S0165 (`patchThresholdThrowingVelocityStrength`,
-/// the bytes written there): through `ActorValueOwner::GetClampedActorValue` (`0066ef20`), held
-/// within the actor value's limits.
+/// +0xA4, slot 8 with 5).
 fn thrower_strength(e: &mut Engine, player: u32) -> i32 {
     e.vcall(player + 0xA4, 8, &args![5u32]).i32()
 }
@@ -6143,9 +6124,6 @@ const DETECTION_ON: u32 = 0x011f_1221;
 pub fn fn_009c39e0(e: &mut Engine, this: Ptr<Projectile>) -> bool {
     let base = e.call(GET_BASE_OBJECT, &args![this]).u32();
     let mut radius = e.call(0x0045_cd80, &args![base]).f64() as f32;
-    // lStewieAl's Tweaks' row S0223 (`ToggleDetectCommandAffectsMines`, its
-    // `OnCheckExplosionProximityHook` called at `0x9C39FF`): with detection turned off by the
-    // console (`ToggleDetection`, the byte `011f1221` 0) the function ends here, answering false.
     if e.call(0x008d_6f30, &args![this]).u32() != 0 {
         let cell = e.call(0x008d_6f30, &args![this]).u32();
         if !e.call(0x0042_5fd0, &args![cell]).bool() {
@@ -7341,13 +7319,9 @@ mod tests {
         (this, Ptr::new(e.mem.alloc(0x30)))
     }
 
-    /// Both halves of the beam's ammunition move (S0130.05 and S0130.06) on or off.
     fn set_beam_ammo_rows(e: &mut Engine, on: bool) {
     }
 
-    /// S0130.06 (the bytes at `0x9BFD0E`): a due hit (1 shot, rate 10, age 0.5) of the player's
-    /// beam takes a round (slot `0x3F0` with 1) and counts a shot off; with the rows it does
-    /// neither for the player's beam and both for an NPC's.
     #[test]
     fn s0130_06_the_players_beam_takes_no_round_where_it_hits() {
         // (rows, the player's beam, the rounds taken, the shots after)
@@ -7373,8 +7347,6 @@ mod tests {
         }
     }
 
-    /// S0192 (`GetWeaponModFlags`): the flags (+0xC) of the `ExtraWeaponModFlags` (0x8D,
-    /// `00410220`) of the item's first extra data list; 0 without a list or a first list.
     #[test]
     fn s0192_an_items_weapon_mod_flags() {
         let mut e = engine();
@@ -7426,10 +7398,7 @@ mod tests {
         );
     }
 
-    /// The step of `moves_and_reports_the_step` (a difference of (1, 2, 3)) with row S0207 `on`;
-    /// the projectile has a process with a character controller, a 3D, a collision object and a
-    /// world object with a rigid body when `physics`. Answers the projectile, the controller and
-    /// the world object.
+    /// Answers the projectile, the controller and the world object.
     fn step_with_row(e: &mut Engine, on: bool, physics: bool) -> (Ptr<Projectile>, u32, u32) {
         point_subtract(e);
         let this = projectile(e);
@@ -7460,11 +7429,7 @@ mod tests {
         (this, controller, world)
     }
 
-    /// lStewieAl's Tweaks' row S0207 (`0x9BF461`): on, Tweaks' `Projectile__SetVector` in place of
-    /// `009c4e60`: the direction is (1, 2, 3) unitized, its length (sqrt 14) added to the distance
-    /// travelled (10), and the world object's linear velocity set to the controller's
-    /// `OutVelocity` (+0x4F0). Off, the exe's call (as `moves_and_reports_the_step`) and no
-    /// velocity.
+    /// Off, the exe's call (as `moves_and_reports_the_step`) and no velocity.
     #[test]
     fn s0207_a_projectile_moves_its_rigid_body() {
         let mut e = engine();
@@ -7474,7 +7439,6 @@ mod tests {
         let direction: Vec<f32> = (0..3)
             .map(|i| e.mem.f32(this.addr() + MOVEMENT_DIRECTION + 4 * i))
             .collect();
-        // Tweaks multiplies by the reciprocal.
         let recip = 1.0 / length;
         assert_eq!(direction, [recip, 2.0 * recip, 3.0 * recip]);
         assert_eq!(e.mem.f32(this.addr() + 0x110), length + 10.0);

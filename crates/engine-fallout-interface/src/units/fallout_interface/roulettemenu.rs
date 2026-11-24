@@ -144,8 +144,6 @@ const NODE_00572160: u32 = 0x0057_2160;
 const LIST_IS_EMPTY: u32 = 0x0082_56d0;
 const LIST_FREE_NODES: u32 = 0x0047_0470;
 const LIST_DELETE: u32 = 0x0047_02f0;
-/// The list's delete-all (`0076b2a0`, `thiscall`: each item freed and the head removed), which row
-/// S0196.02 calls in place of `00470470`.
 const LIST_DELETE_ALL_0076B2A0: u32 = 0x0076_b2a0;
 const LIST_APPEND: u32 = 0x005a_e3d0;
 /// The list constructor (`0096a2d0`) and `006815c0` (`thiscall`, returns `this`).
@@ -1479,7 +1477,6 @@ const KEY_0084E3A0: u32 = 0x0084_e3a0;
 #[cfg(test)]
 const WORD_AT_4_00726070: u32 = 0x0072_6070;
 const LIST_REMOVE_FIRST_0063F7B0: u32 = 0x0063_f7b0;
-/// The memory manager's free (`00aa4060` on `011f6238`): Tweaks' `GameHeapFree`.
 const MEMORY_MANAGER_011F6238: u32 = 0x011f_6238;
 const MEMORY_FREE_00AA4060: u32 = 0x00aa_4060;
 
@@ -1813,7 +1810,6 @@ pub fn roulette_menu_create(
     e.set_global(CASINO_011DA880, casino);
     let player = e.global::<u32>(PLAYER_011DEA3C);
     let mut node = e.call(CASINO_DATA_LIST_005A6260, &args![player]).u32();
-    // lStewieAl's Tweaks' row S0036 (its hook on this call, `0x7BBE72`).
     while node != 0 && node_item(e, node) != 0 {
         let casino = e.global::<u32>(CASINO_011DA880);
         let key = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, casino));
@@ -2631,10 +2627,6 @@ fn idle_payout(e: &mut Engine, this: Ptr<RouletteMenu>, other: i32) {
         let index = e.mem.u32(bet.wrapping_add(4));
         let record = bet_tile(base, index);
         if (index as i32) < 0x93 {
-            // 0x7BDCE4: lStewieAl's Tweaks' row S0196.04 (`RouletteMenuFixes`, "fix zero not
-            // counting on the bet tiles that include it"): with the ball on 0, a bet on a tile
-            // that holds 0 among others (the bet's index's low byte 0, 24, 48, 72, 145 or 146)
-            // wins before the numbers are walked; the walk then runs as in the exe.
             let mut node = record;
             while node != 0 {
                 let slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
@@ -4328,7 +4320,6 @@ mod n058_tests {
         assert!(calls_to(&e, SHOW_MESSAGE_007052F0).is_empty());
     }
 
-    // lStewieAl's Tweaks' rows of this file (share 3's first group, `stewie_menus`).
 
     /// The payout (state 3) of one bet of 10 on bet tile `index`, whose number list holds only 1
     /// and whose odds are 17:1, with the ball on `result` and 100 chips (10 on the table):

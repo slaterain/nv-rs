@@ -487,8 +487,6 @@ fn finish_create(
 
     if item_type == 0 {
         e.call(INIT_ATTRIBUTE_LIST, &args![me(e)]);
-        // `0x7535FD` (lStewieAl's Tweaks' S0110 calls `CharGenMenu_SetupSPECIALHook` there: the
-        // call, then the points capped).
     } else {
         char_gen_menu_init_skill_list(e, Ptr::new(me(e)));
     }
@@ -1177,7 +1175,6 @@ pub fn char_gen_menu_do_gamepad(
             }
             let id = 0xa + u32::from(button != 4);
             let highlighted = e.vcall(list, 4, &args![]).u32();
-            // `0x7541C8` (lStewieAl's Tweaks' S0022.11).
             let child = e.call(TILE_GET_CHILD_BY_ID, &args![highlighted, id]).u32();
             if child != 0 && e.call(TILE_IS_TRUE, &args![child, TRAIT_VISIBLE]).bool() {
                 e.call(TILE_PLAY_TILE_SOUND, &args![child, 0xfcbu32]);

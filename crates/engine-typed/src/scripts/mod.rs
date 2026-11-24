@@ -12,13 +12,6 @@
 //! - [`run`]: `Script::Run` and the run manager every script run goes through, a fresh runner, and
 //!   the locals' variable set, action flags' clear and set, and the action lookup.
 //!
-//! What stays by address: the tokenizer (`00593870`, which lStewieAl's Tweaks' script inlines
-//! replace; a built-in of it reaches every caller there), the operand reader (`005ac7a0`, a
-//! script or frame function of `overridable.tsv`), the CRT's `atol` and `atof`, every script
-//! command's handler, the error reports, and the seams the extenders hook: xNVSE's command call
-//! inside `Eval` (`005949d4`), JIP LN's double precision operators (`00593fbc`) and the seam before
-//! a command's handler in the operand reader (`005acb9d`).
-//!
 //! Stage 1: the objects stay in guest memory where the game made them; each function stays
 //! registered at its exe address. **Threads and floats.** Scripts run on the main thread and on the
 //! AI threads (the package and combat scripts the middle-high process runs there), so the row says

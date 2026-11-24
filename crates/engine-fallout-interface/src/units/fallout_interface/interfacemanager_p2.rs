@@ -543,15 +543,12 @@ pub fn interface_manager_check_menu_button(e: &mut Engine, button: i32, analog: 
         }
     }
     if old_pushed || new_pushed {
-        // The code returns 0 for both, 2 for only the second, 1 for only
-        // the first.
-        // `0x717C6B` and `0x717C85`: lStewieAl's Tweaks' S0022.47 (below).
+        // The code returns 0 for both, 2 for only the second, 1 for only the first.
         return button_state(new_pushed, old_pushed);
     }
 
     let down_now = u32::from(e.mem.u16(PAD_BUTTONS_NEW)) & mask != 0;
     let down_before = u32::from(e.mem.u16(PAD_BUTTONS_OLD)) & mask != 0;
-    // `0x717CB0` and `0x717CC8`: lStewieAl's Tweaks' S0022.47 (below).
     button_state(down_now, down_before)
 }
 
@@ -739,8 +736,6 @@ pub fn interface_manager_do_wheel_move(
         }
         node = list_next(e, node);
     }
-    // `0x10704B4`, `RecipeMenu`'s vtable slot +0x28 (lStewieAl's Tweaks' S0022.08 writes
-    // `MenuFixes::RecipeMenuHandleMousewheel` there; the exe's is the do-nothing `008d0600`).
     e.vcall(target, 0x28, &args![arg_1, arg_2]).u32()
 }
 
@@ -1811,9 +1806,6 @@ pub fn fn_00719790(
     let inverse = (e.global::<f64>(COLOR_CHANNEL_SCALE) - level as f64) as f32;
     let inverse = clamp_float(e, inverse, 0.0, maximum);
 
-    // `0x7197FB` (lStewieAl's Tweaks' S0105 jumps to `OnInventoryTileMultiAlpha` there, main.h's
-    // `HandleInventoryMultiAlphas`): when only one of the two tiles is given, it is shown at full
-    // alpha (`Tile::SetFloat` 0xFA9, 255), so a lone DAM or DR line does not keep a faded alpha.
 
     if !tile_a.is_null() && !tile_b.is_null() {
         e.call(TILE_SET_FLOAT, &args![tile_a, TRAIT_FADE, inverse, 1u32]);
@@ -4079,8 +4071,6 @@ mod tests {
         assert_eq!(words, vec![0x11, 0x22, 0x33, 0x44]);
     }
 
-    /// lStewieAl's Tweaks' row S0022.56 with ordinary input: run with the row off, then on; the row
-    /// changes nothing (the same calls and answers).
     #[test]
     fn fn_00719580_refreshes_children_before_the_matching_tile() {
         for on in [false, true] {

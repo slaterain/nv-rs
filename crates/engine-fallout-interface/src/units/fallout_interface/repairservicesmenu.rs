@@ -660,7 +660,6 @@ pub fn repair_services_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u
                 let vendor = e.global::<u32>(REPAIR_VENDOR);
                 e.call(PAY_GOLD_TO_ACTOR, &args![player, vendor, cost]);
                 services_play_sound(e, REPAIR_SOUND_TEXT);
-                // `0x7B7E86` (lStewieAl's Tweaks' S0033).
                 update_keeping_scroll(e, this);
             } else {
                 services_play_sound(e, FAIL_SOUND_01073A94);
@@ -681,7 +680,6 @@ pub fn repair_services_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u
             let vendor = e.global::<u32>(REPAIR_VENDOR);
             e.call(PAY_GOLD_TO_ACTOR, &args![player, vendor, cost]);
             services_play_sound(e, REPAIR_SOUND_TEXT);
-            // `0x7B7F4E` (lStewieAl's Tweaks' S0033).
             update_keeping_scroll(e, this);
         }
         0xf => repair_services_menu_close(e),
@@ -694,10 +692,6 @@ pub fn repair_services_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u
 const LIST_BOX_SAVE_POSITION: u32 = 0x0073_12e0;
 const LIST_BOX_RESTORE_POSITION: u32 = 0x0073_1360;
 
-/// `DoClick`'s `RepairServicesMenu::Update` after Repair (`0x7B7E86`) and Repair All
-/// (`0x7B7F4E`); with lStewieAl's Tweaks' S0033 on (`patchRepairServicesMenuRemembersScrollPosition`,
-/// `RepairServicesInitSaveRestorePosition`) the item list's scroll position is saved before and
-/// restored after (`RestorePosition(false)`).
 fn update_keeping_scroll(e: &mut Engine, this: Ptr) {
     repair_services_menu_update(e, this);
 }
@@ -759,8 +753,6 @@ pub fn repair_services_menu_repair_item(e: &mut Engine, this: Ptr, item: u32) {
     }
     let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, item));
     let player = e.global::<u32>(PLAYER);
-    // `0x7B8083` (lStewieAl's Tweaks' S0051, `patchUpdateDRDTWhenUsingVendorRepair`, calls
-    // `VendorRepairItemResetDRDT` there): the player's `ResetActorDTDR` (vtable +0x3C4) first.
     let changes = e.call(GET_INVENTORY_CHANGES, &args![player]).u32();
     let entry = e
         .call(GET_OBJECT_IN_LIST, &args![changes, form, 1u32, 0u32])

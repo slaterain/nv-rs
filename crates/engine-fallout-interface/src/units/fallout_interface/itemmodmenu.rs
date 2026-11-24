@@ -583,8 +583,6 @@ pub fn item_mod_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
     let highlighted = e.vcall(base + MOD_LIST, 4, &args![]).u32();
     e.call(LIST_REMOVE_ITEM, &args![base + MOD_LIST, highlighted]);
     item_mod_menu_init_item_mod_menu(e, mod_item(e), 0);
-    // `0x783A35` (lStewieAl's Tweaks' S0088 calls `ItemModMenuHook` there: the refresh, then the
-    // re-equip of a worn item).
     if e.call(ITEM_GET_WORN, &args![item, 0u32]).bool() {
         let player = e.global::<u32>(PLAYER);
         e.vcall(player, 0x3c4, &args![]);

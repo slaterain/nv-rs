@@ -43,9 +43,6 @@ const SHAPE_BUFFER_SIZE: u32 = 0x200;
 /// function's result for it, compared as a byte. The result is the largest of those bytes
 /// (unsigned) plus one, as the whole register (so up to 256).
 pub fn fn_00d21960(e: &mut Engine, object: Ptr) -> u32 {
-    // lStewieAl's Tweaks' S0031 (`patchAddNifShapeNullChecks`, `hkpShapeNullCheck` at the entry): no
-    // object (a rigid body's missing shape) answers 0, with Tweaks' console line for the model
-    // being read (`ShowNullHkpShapeWarning`; the callers read only `AL`).
     let iterator = e.vcall(object.addr(), 0x10, &args![]).u32();
     if iterator == 0 {
         return 0;

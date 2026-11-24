@@ -399,8 +399,6 @@ pub fn fn_00683900(
     e.set(this, BSTempEffectGeometryDecal::iNumVerts, 0);
     let texture_set = e.mem.u32(creation_data.wrapping_add(0x30));
     e.set(this, BSTempEffectGeometryDecal::pTextureSet, texture_set);
-    // lStewieAl's Tweaks' S0238 (its jump at `0x683A3D`): the creation data's subtexture index
-    // (`+0x70`) kept in the decal's spare byte `+0x29`.
     this
 }
 
@@ -1127,8 +1125,6 @@ pub fn fn_00687d90(
             } else {
                 0
             };
-            // lStewieAl's Tweaks' S0238 (its jump at `0x687E9B`): the decal's subtexture index to
-            // the new shader property.
             e.call(ATTACH_PROPERTY_00439410, &args![shape, property]);
             e.call(
                 PROPERTY_SET_FLOAT_004EE4B0,

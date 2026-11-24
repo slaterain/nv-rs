@@ -1000,11 +1000,9 @@ pub fn fn_0093aa10(e: &mut Engine, this: Ptr<PlayerCharacter>, actor_value: u32,
 }
 
 // Translated from 0093ab30 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Computes the action-point cost of `actor_value` (`0066dca0`, with the flag
-/// `00525430` reads from the object at `011f2250`) and passes it to the
-/// virtual at `+0x33C` (which spends the action points). lStewieAl's Tweaks' row S0097 does not
-/// change it: Tweaks points `PlayerCharacter`'s vtable slot `0108AD7C` (`+0x340`) at its own
-/// function instead (`crates/stewie`, `run_and_gun.rs`), so a direct call keeps this code.
+/// Computes the action-point cost of `actor_value` (`0066dca0`, with the flag `00525430` reads from
+/// the object at `011f2250`) and passes it to the virtual at `+0x33C` (which spends the action
+/// points).
 pub fn fn_0093ab30(e: &mut Engine, this: Ptr<PlayerCharacter>, actor_value: u32) {
     // 0093ab39 pushes 0 and 0.0 before the thiscall 00525430 (plain RET); they
     // are the last two of the four words the cdecl 0066dca0 is given (ADD
@@ -4909,9 +4907,6 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             e.call(0x0043_9180, &args![forward, step]);
             let step = (speed as f64 * move_speed as f64) as f32;
             e.call(0x0043_9180, &args![right, step]);
-            // lStewieAl's Tweaks' row S0329 (`patchLeftRightMovementCancelsOut`, the bytes at `0x941BBA`,
-            // `0x941C11`, `0x941C67` and `0x941CBD` with their jumps): a direction moves only while it
-            // is held and the opposite one (forward 0 and back 1, left 2 and right 3) is not.
             let key_pressed = |e: &mut Engine, key: u32| movement_key(e, main_state, key);
             if key_pressed(e, 0) {
                 e.call(0x0063_c8a0, &args![position_copy, right]);
@@ -7369,10 +7364,6 @@ pub fn player_character_ammo_swap_helper(
             .i32()
             > 0
     {
-        // lStewieAl's Tweaks' row S0089.09 (`RememberAmmoCountOnLoad`, the call at `0x94643E`):
-        // Tweaks' `OnSkipReloadDefaultAmmo` makes the current ammunition the type of the player's
-        // ammunition entry (its process's slot `+0x14C`, the entry's form at `+8`) before the
-        // stack's entry is freed, so the type kept is really the one equipped.
         e.call(0x0044_59e0, &args![item, 1u32]);
         return;
     }
@@ -9539,11 +9530,8 @@ fn alt_blocked(e: &Engine, flag: u32) -> bool {
     alt != 0 && alt & flag != 0
 }
 
-/// The jump test of `PlayerCharacter::Update` (`0x942148`, `005a03f0` with 1: the player's
-/// control flags at +0x680 forbid it). lStewieAl's Tweaks' row S0224
-/// (`PreventJumpingWhenFastTraveling`, its `OnPlayerUpdateShouldPreventJump`): also forbidden while
-/// the map menu (`011da368`) has a marker selected (+0x118). Tweaks reads the menu without a null
-/// test; a missing menu counts as no marker here (a guard against a crash only).
+/// The jump test of `PlayerCharacter::Update` (`0x942148`, `005a03f0` with 1: the player's control
+/// flags at +0x680 forbid it).
 fn jump_blocked(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
     e.call(0x005a_03f0, &args![this, 1u32]).bool()
 }
@@ -9551,10 +9539,7 @@ fn jump_blocked(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
 const MAP_MENU: u32 = 0x011d_a368;
 
 /// The auto vanity camera's test of `PlayerCharacter::Update` (`0x943593`, `004b9930` on the
-/// setting `bDisableAutoVanityMode`: its value at +4 is 0). lStewieAl's Tweaks' row S0209
-/// (`PreventAutoVanityModeIfSpecialIdlesArePlaying`, its `ShouldAllowAutoVanity`): with the
-/// setting clear, also only when the player (`011dea3c`) is in third person (+0x64B) or its
-/// animation data (slot `0x1e4`) plays no special idle (sequence 7, +0xFC).
+/// setting `bDisableAutoVanityMode`: its value at +4 is 0).
 fn auto_vanity_allowed(e: &mut Engine) -> bool {
     e.call(0x004b_9930, &args![IDLE_OBJECT_011E09E0]).bool()
 }
@@ -9578,9 +9563,7 @@ fn activate_or_workbench(
 }
 
 /// The level-up test of `PlayerCharacter::Update` (`0x9439D4`, `005c7870`: the player in character
-/// generation, +0x75C). lStewieAl's Tweaks' row S0164 (`patchPreventLevelupInTestAllCells`, its
-/// `PlayerInCharGenOrTestAllCells`): also while the console's `TestAllCells` runs (TES +0x51 or
-/// +0x52).
+/// generation, +0x75C).
 fn levelup_held(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
     e.call(0x005c_7870, &args![this]).bool()
 }
@@ -9609,10 +9592,7 @@ fn update_levelup(e: &mut Engine, this: Ptr<PlayerCharacter>, status_slot: u32) 
 
 /// The level-up's combat test in `PlayerCharacter::Update` (`0x943990`,
 /// `PlayerCharacter::IsPlayerCharacterInCombat` `00953c50`: the byte +0xDF0, and +0xDF1 into
-/// `out`). lStewieAl's Tweaks' row S0404 (`patchDelayLevelupAfterCombat`, its
-/// `PlayerWasRecentlyInCombat`): in combat the time (`011f6394` +0x14, milliseconds) is kept
-/// (`LAST_COMBAT_TIME`); out of combat, true until 3000 have passed since (unsigned); `out` is not
-/// written.
+/// `out`).
 fn levelup_combat_test(e: &mut Engine, this: Ptr<PlayerCharacter>, out: u32) -> bool {
     e.call(0x0095_3c50, &args![this, out]).bool()
 }
@@ -9625,21 +9605,16 @@ fn movement_key(e: &mut Engine, input: u32, key: u32) -> bool {
 }
 
 /// Whether the player's burst ends for want of ammunition (`00948310`, `0x94928F`: the magazine
-/// entry's count, +4 through `00726070`, is 0). lStewieAl's Tweaks' row S0082.01, written only
-/// without `[Tweaks] bVATSStopBurstIfTargetDead`: a missing entry also ends it.
+/// entry's count, +4 through `00726070`, is 0).
 fn burst_magazine_empty(e: &mut Engine, magazine: u32) -> bool {
     typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, magazine)) == 0
 }
 
 /// The weapon's current ammunition for the player's attack (`00948310`, `0x9492B5`, `00525980`).
-/// lStewieAl's Tweaks' row S0082.01 (its `WeaponHasAmmoOrGodmode`): none in god mode (not demigod).
 fn current_ammo_or_godmode(e: &mut Engine, weapon: u32, player: u32) -> u32 {
     e.call(0x0052_5980, &args![weapon, player]).u32()
 }
 
-/// Whether `PlayerCharacter::Update` lets the player's held attack go on (the tests around `0x941DD4`):
-/// the attack control held (`00a24660` with 4 and 0), the byte `011e07aa` set, the ammunition test
-/// ([`has_ammo_or_godmode_automatic`], lStewieAl's Tweaks' row S0082.01) and `008a6970`.
 fn held_attack_goes_on(e: &mut Engine, this: Ptr<PlayerCharacter>, main_state: u32) -> bool {
     let process = process_of(e, this);
     e.call(0x00a2_4660, &args![main_state, 4u32, 0u32]).u32() != 0
@@ -9649,10 +9624,7 @@ fn held_attack_goes_on(e: &mut Engine, this: Ptr<PlayerCharacter>, main_state: u
 }
 
 /// The ammunition test of `PlayerCharacter::Update`'s held attack (`0x941DD4`: the process' slot
-/// `0x14c`, the ammunition entry, is there). lStewieAl's Tweaks' row S0082.01 (`NoAmmoGodmode`, its
-/// `PlayerHasAmmoInfoOrAutoWeaponAndGodmode` and the bytes after it): without an entry, also true
-/// in god mode (not demigod) for an equipped (slot `0x148`, its form +8) automatic weapon (flag 0x2
-/// of +0x100) with an ammunition form (+0xA8).
+/// `0x14c`, the ammunition entry, is there).
 fn has_ammo_or_godmode_automatic(e: &mut Engine, this: Ptr<PlayerCharacter>, process: u32) -> bool {
     if e.vcall(process, 0x14c, &args![]).u32() != 0 {
         return true;
@@ -9660,13 +9632,10 @@ fn has_ammo_or_godmode_automatic(e: &mut Engine, this: Ptr<PlayerCharacter>, pro
     false
 }
 
-/// The free-flight push of `PlayerCharacter::Update` (around `0x942793`, collision off): the move is
-/// the view-relative point `position` less `second` (`00439ef0` into the local -0x2F0), scaled by
-/// `delta` (`00439180`); its height alone (a point of 0, 0 and the height at -0x2FC) is added to
+/// The free-flight push of `PlayerCharacter::Update` (around `0x942793`, collision off): the move
+/// is the view-relative point `position` less `second` (`00439ef0` into the local -0x2F0), scaled
+/// by `delta` (`00439180`); its height alone (a point of 0, 0 and the height at -0x2FC) is added to
 /// `second` (`00439e90` into -0x308) and the sum given to the player's slot `0x2a8`.
-/// lStewieAl's Tweaks' row S0096 (`patchTCLMovement`): the move comes from [`tcl_set_movement`]
-/// (holding jump rises), and with the keyboard (the move flags at `word_slot` have 0x40, Tweaks'
-/// `TCLMovementAddZHook` jumped to at `0x9427AA`) the whole move is added, not only its height.
 fn free_flight_push(
     e: &mut Engine,
     this: Ptr<PlayerCharacter>,
@@ -9694,8 +9663,6 @@ fn free_flight_push(
 }
 
 /// The actor the player bumped into, from `PlayerCharacter::Update` (`0x93EF1D`, `00967a00`).
-/// lStewieAl's Tweaks' row S0132 (`patchBumpingCompanionsDoesntAlertEnemies`, its
-/// `PlayerCharacter_GetNonTeammateBumpedActor`): none when that actor is a teammate (+0x18D).
 fn bumped_actor(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
     let actor = e.call(0x0096_7a00, &args![this]).u32();
     actor
@@ -9703,18 +9670,13 @@ fn bumped_actor(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
 
 /// The second character-controller state test of the wait menu's checks in
 /// `PlayerCharacter::Update` (`0x9424FD`, `005c0880`: the state at +0x3E0 +0x10; 2 is in the air).
-/// lStewieAl's Tweaks' row S0157 (`patchAllowWaitingOnMidairFurniture`, its
-/// `bhkCharacterController_GetContextHkState_ZeroIfSeated`): 0 (on the ground) while the player
-/// (`011dea3c`) is in a sit or sleep state (+0x1AC not 0); else the state, read directly.
 fn wait_controller_state(e: &mut Engine, controller: u32) -> u32 {
     e.call(0x005c_0880, &args![controller]).u32()
 }
 
 /// The clip test of the player's continuous beam in `PlayerCharacter::Update` (`0x9440BB` to
 /// `0x944115`, the byte at -0x425): false when the process has no ammunition entry (slot `0x14c`)
-/// or its count is below the weapon's (`00524b60`). lStewieAl's Tweaks' row S0130.04
-/// (`ContinuousBeamProjectileCrashFix`, its `OnFireAmmoCheckHook` jumped to at `0x9440C2`): in god
-/// mode (`011e07ba`) true without the test (on to `0x944120`).
+/// or its count is below the weapon's (`00524b60`).
 fn beam_clip_holds(e: &mut Engine, this: Ptr<PlayerCharacter>, weapon_form: u32) -> bool {
     let process = process_of(e, this);
     let list = e.vcall(process, 0x14c, &args![]).u32();
@@ -9729,20 +9691,12 @@ fn beam_clip_holds(e: &mut Engine, this: Ptr<PlayerCharacter>, weapon_form: u32)
 }
 
 /// The attack-released test of the player's continuous beam in `PlayerCharacter::Update`
-/// (`0x944127`: `00a24660` with the attack control 4 and state 2). lStewieAl's Tweaks' row
-/// S0130.06 (`ContinuousBeamProjectileCrashFix`, its `IsControlDepressedAndPlayerWeaponOut`): also
-/// released while the player (`011dea3c`) has no weapon out (`Actor::IsWeaponOut`: its process at
-/// +0x68, slot `0x454`; no process counts as no weapon out).
+/// (`0x944127`: `00a24660` with the attack control 4 and state 2).
 fn beam_attack_released(e: &mut Engine, main_state: u32) -> bool {
     let released = e.call(0x00a2_4660, &args![main_state, 4u32, 2u32]).u32() != 0;
     released
 }
 
-/// The player's continuous beam in `PlayerCharacter::Update` (`0x9440A3` to `0x944174`): with a
-/// beam (+0x1A0), a clip that no longer holds ([`beam_clip_holds`]), a released attack
-/// ([`beam_attack_released`]) or the attack control not held (`00a24660` with 4 and 0) stops it
-/// (`009ab9a0`); then (S0130.05 with S0130.06, [`player_beam_update_ammo`]) the update may take the
-/// beam's round; then the beam, read again, is fired on (slot `0x310` with 0.0).
 fn update_player_beam(
     e: &mut Engine,
     this: Ptr<PlayerCharacter>,
@@ -9762,8 +9716,6 @@ fn update_player_beam(
     {
         e.call(0x009a_b9a0, &args![beam, this]);
     }
-    // lStewieAl's Tweaks' row S0130.05 (`OnPlayerUpdateReduceAmmo`, the call written at
-    // `0x944152` with `push eax` at `0x944157`: the vcall's 0.0 is its answer 0).
     let beam = e
         .get(this.cast::<Actor>(), Actor::pContinuousBeamPersistant)
         .addr();
@@ -9771,11 +9723,6 @@ fn update_player_beam(
 }
 
 /// The vanity camera's gamepad test after its turn is added (`009445b0`, `0x945D53`: `004b71d0`).
-/// lStewieAl's Tweaks' row S0198 (`VanityCamRotationFix`, its
-/// `OnCalculateVanityCamRotationHook`): first the turn (`011e0b60`) is brought within a circle:
-/// past +-2 pi it is taken modulo 2 pi (`fmod`, sign kept), then past +-pi moved one turn back
-/// toward 0; then Tweaks' own `IsControllerConnected`: the controller is not disabled (the byte
-/// `011d8c50` is not 1) and is connected (`011d8a84`).
 fn vanity_turn_gamepad_test(e: &mut Engine) -> bool {
     e.call(0x004b_71d0, &args![]).u8() != 0
 }
@@ -9785,10 +9732,7 @@ const CONTROLLER_DISABLED: u32 = 0x011d_8c50;
 const CONTROLLER_CONNECTED: u32 = 0x011d_8a84;
 
 /// The vanity camera's pitch rotation in `PlayerCharacter::UpdateCamera` (`0x94B521`,
-/// `NiMatrix3::MakeXRotation` `00524ac0`). lStewieAl's Tweaks' row S0198 (`VanityCamRotationFix`,
-/// its `OnUpdatePlayerCameraX`): the angle is held within +-1.5533431 (89 degrees); when held, the
-/// vanity pitch (`011e0b58`) becomes the held angle less the player's pitch (`011e0764`, read
-/// before), so it does not wind on.
+/// `NiMatrix3::MakeXRotation` `00524ac0`).
 fn vanity_pitch_rotation(e: &mut Engine, matrix: u32, angle: f32) {
     const LIMIT: f64 = 1.553_343_1;
     let mut angle = angle;
@@ -10161,11 +10105,6 @@ fn ranged_attack_reaction(
     *group = weapon_attack_group(e, weapon).unwrap_or(0x20);
 }
 
-/// The held attack's burst end (`00948310`, the test at `0x94928F`): with a VATS action (`action`), a weapon
-/// and its ammunition (`00525980`), the action's counter (+8) is cleared when the magazine entry
-/// (the process' slot `0x14c`) holds no rounds ([`burst_magazine_empty`], lStewieAl's Tweaks' row
-/// S0082.01: the bytes at `0x94928F`, written only without `[Tweaks] bVATSStopBurstIfTargetDead`,
-/// where a missing entry also ends the burst, read directly where the exe read through it).
 fn end_burst_without_rounds(
     e: &mut Engine,
     this: Ptr<PlayerCharacter>,
@@ -10182,10 +10121,6 @@ fn end_burst_without_rounds(
     }
 }
 
-/// Whether the held weapon fires on (`00948310`, the "main" weapon cases after `0x9492B5`): with
-/// no ammunition (`00525980`, lStewieAl's Tweaks' row S0082.01's `WeaponHasAmmoOrGodmode`: none in
-/// god mode, not demigod) for an automatic weapon (`00524b40`); else, with ammunition, while the
-/// magazine entry (the process' slot `0x14c`) is there.
 fn held_weapon_fires_on(
     e: &mut Engine,
     this: Ptr<PlayerCharacter>,
@@ -17420,8 +17355,6 @@ mod tests {
         next
     }
 
-    /// [`add_regenerated_round`] with the weapon's equipped ammunition type `kind` and row S0199.11
-    /// `on`: the calls it made.
     fn regenerated_round(kind: u32, on: bool) -> Vec<(u32, Vec<u32>)> {
         let mut e = Engine::new();
         e.map(0x011d_e000, 0x1000);
@@ -17441,9 +17374,6 @@ mod tests {
         e.call_log.take().unwrap()
     }
 
-    /// lStewieAl's Tweaks' row S0199.11 (`MiscCrashFixes`, `0x943DE1`): a round regenerated with no
-    /// ammunition type equipped (`00525980` answers 0): off, the exe builds an item of the missing type
-    /// and equips it (a crash in the game); on, nothing is added and the local's destructor still runs.
     #[test]
     fn s0199_11_a_regenerated_round_with_no_ammunition_type() {
         let added = |log: &[(u32, Vec<u32>)]| {
@@ -17457,7 +17387,6 @@ mod tests {
         assert!(on.iter().any(|(a, _)| *a == 0x0048_1680));
     }
 
-    /// Row S0199.11 with an ammunition type (ordinary input): the same calls with the row off and on.
     #[test]
     fn s0199_11_row_on_with_an_ammunition_type_changes_nothing() {
         let off = regenerated_round(0x5000, false);
@@ -20414,12 +20343,6 @@ mod tests {
         assert_eq!(e.mem.u8(ATTACK_RELEASE_BYTE), 1);
     }
 
-    /// S0082.01 at its two sites in `00948310`'s held attack: the burst end
-    /// ([`end_burst_without_rounds`], `0x94928F`): a VATS action (+8 set) with a weapon and its
-    /// ammunition but no magazine entry ends the burst (+8 cleared) with the row, and a magazine of
-    /// 0 rounds ends it either way, 3 rounds never; whether the weapon fires on
-    /// ([`held_weapon_fires_on`], `0x9492B5`): an automatic weapon (`00524b40`) with ammunition but
-    /// no magazine entry fires on in god mode with the row, not without it.
     fn s0082_01_held_attack_ammunition_sites() {
         // (row, the magazine's rounds or none, the burst ended)
         for (on, rounds, ended) in [

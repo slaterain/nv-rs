@@ -2204,9 +2204,7 @@ struct IdleState {
     picked_tile: u32,
     picked_menu: u32,
     /// `EBP-0x89`: the frontmost menu took this call's key (its slot `0x30`), 0 when the key was
-    /// not offered to it. Only written when a key reaches the menus (`0x70E1B8`, `0x70E280`); read
-    /// by lStewieAl's Tweaks' S0022.18 (in the exe a call with no key leaves the stack byte as an
-    /// earlier call left it; here it is then 0).
+    /// not offered to it.
     keyboard_handled: bool,
 }
 
@@ -2575,12 +2573,8 @@ fn idle_read_mouse(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut Idle
     e.set(this, InterfaceManager::fMouseWheel, wheel as f32);
 }
 
-/// The clock's frame time as Tweaks' S0022.39 reads it (`timeGlobals + 0xC`, `0x11F63A0`).
 const FRAME_TIME_FLOAT: u32 = 0x011f_63a0;
 
-/// The mouse part of `idle_read_mouse` (`0x70CDC7`): the left button's pressed, released and held
-/// states (`00a23a50` with 0 and 1, 2, 0), stored, or with lStewieAl's Tweaks' S0022.39 ORed into
-/// what the pad left there, then the held time.
 fn read_mouse_buttons(
     e: &mut Engine,
     this: Ptr<InterfaceManager>,
@@ -2754,11 +2748,6 @@ fn idle_release(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut IdleSta
     }
 }
 
-/// Whether the menu under the pointer (`pOverTileMenu`) is active, at `0x70D44A` and `0x70D58D`:
-/// with lStewieAl's Tweaks' row S0022.30 (`GetMenuVisiblityStateIfActiveTile`, "fix crash when
-/// opening the console while the menus load") a menu counts as not active while there is no tile
-/// under the pointer (`pOverTileTarget`), where the exe reads the state of a menu that may already
-/// be gone.
 fn over_menu_active(e: &mut Engine, this: Ptr<InterfaceManager>, menu: u32) -> bool {
     menu_is_active(e, menu)
 }
@@ -3133,9 +3122,6 @@ fn idle_gamepad_events(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut 
             key = 1;
             fn_0070ec20(e, Ptr::new(state.controls), 0x1c, 0);
         }
-        // lStewieAl's Tweaks' S0062 (`CheckScancodePressed`, its JE at `0x70E1A3`): with no
-        // character, a scan code whose key was pressed this frame (`GetKeyState(code, isPressed)`)
-        // still goes to the menus.
         let code = e.mem.u32(slot.addr());
         if key != 0 && !consumed {
             idle_dispatch_key(e, this, state, key, code);
@@ -3240,10 +3226,6 @@ fn idle_dispatch_key(
     }
 }
 
-/// The pause test of the rendered-menu pointer (`004a4040` at `0x70D6DA`: the start menu is up);
-/// with lStewieAl's Tweaks' S0065 its `IsInPauseBarterContainerOrQuantityMenu`: that, or the top
-/// visible menu (xNVSE's `GetTopVisibleMenuID`) is the barter (`0x41D`), container (`0x3F0`) or
-/// quantity (`0x3F8`) menu, so a rendered menu (a terminal) behind them no longer takes the mouse.
 fn paused_or_trading(e: &mut Engine, this: Ptr<InterfaceManager>) -> bool {
     e.call(MENU_FLAG_QUERY_004A4040, &args![]).bool()
 }
@@ -3279,9 +3261,6 @@ fn top_visible_menu_id(e: &mut Engine, this: Ptr<InterfaceManager>) -> u32 {
         .unwrap_or(0)
 }
 
-/// The open Pip-Boy's close test reads the pad (`004b71d0` at `0x70E854`); with lStewieAl's
-/// Tweaks' S0022.10 (`IsControllerConnectedAndNotMenumodeOverride`) not while the input's
-/// menu-mode debounce is set (then the keyboard's menu-mode release is read).
 fn open_pipboy_reads_the_pad(e: &mut Engine) -> bool {
     e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool()
 }
@@ -3500,9 +3479,6 @@ fn idle_start_menu_key(e: &mut Engine, this: Ptr<InterfaceManager>) {
 /// two pipboy modes: in mode 0 they open the pipboy page, in mode 3 they
 /// switch to it (or leave the pipboy when it is already shown).
 fn idle_pipboy_hot_keys(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut IdleState) {
-    // lStewieAl's Tweaks' S0022.18 (`PipboyHotkeysCheckConsoleOpenOrKeyboardInputHandled`, its
-    // jump at `0x70E9B8`): no hot key while the frontmost menu took this call's key or the
-    // console is open (`0x11DEA2E`); it goes on at `0x70EAE3`, after the hot keys.
     let mut menu = 0u32;
     let mut pressed = false;
     for (key, id) in [(0x3bu32, 0x3ebu32), (0x3c, 0x3ea), (0x3d, 0x3ff)] {
@@ -3911,9 +3887,6 @@ pub fn fn_0070f690(e: &mut Engine, this: Ptr<InterfaceManager>, callback: u32) {
         e.set(this, InterfaceManager::field_4bc, 4);
         e.set(this, InterfaceManager::field_4c0, callback);
     }
-    // lStewieAl's Tweaks' S0021 (`OnPipboyClose` called at `0x70F6D3`, the common end): with the
-    // inventory menu shown (`g_menuVisibility[1002]`) its scroll place is saved. Tweaks' menu search
-    // and sort button parts there belong to features the port does not build.
 }
 
 /// `g_menuVisibility` (one byte per menu type, xNVSE's `0x11F308F`).
@@ -3995,8 +3968,6 @@ pub fn interface_manager_do_gamepad_event(e: &mut Engine, this: Ptr<InterfaceMan
         0
     };
     if frontmost != 0 && !released && {
-        // lStewieAl's Tweaks' S0022.05 (`InterfaceManager__HandleKeyPressHook` at `0x70F8BB`): the
-        // arrows and shift-left/right (codes 1 to 4, 0xD, 0xE) clear `bMouseInMotion` first.
         e.call(DO_GAMEPAD, &args![this, frontmost, event, 1.0f32])
             .bool()
     } {
@@ -4492,8 +4463,6 @@ const START_MENU_SINGLETON: u32 = 0x011d_aac0;
 /// `StartMenu::IsInActionMapping` (`thiscall`): the control mapping waits for a key.
 const START_MENU_IS_IN_ACTION_MAPPING: u32 = 0x007c_e8f0;
 
-/// `uGamepadRepeatStartTime` = twice the tick count (`0x710624`, `0x71085F`); with lStewieAl's
-/// Tweaks' S0022.32 (its `mov eax, -1` over the tick's call and the shift) -1.
 fn cleared_repeat_time(e: &mut Engine, this: Ptr<InterfaceManager>) {
     let time = e.call(FADE_CLOCK_READ, &args![FADE_CLOCK]).u32() << 1;
     e.set(this, InterfaceManager::uGamepadRepeatStartTime, time);
@@ -7315,9 +7284,6 @@ pub fn fn_00716010(e: &mut Engine, this: Ptr<InterfaceManager>, reference: u32) 
         }
     }
     e.call(HUD_FORGET_REFERENCE, &args![reference]);
-    // lStewieAl's Tweaks' S0022.49 (`MenuFixes`, `OnFreeRefRemoveFromSelectableList` at `0x7160A2`): the
-    // HUD forgets it as above, and the manager's list of the references the console can pick
-    // (`selectableRefs`, +0x70 of the manager `011d8a80`) loses it too (xNVSE's `tList::Remove`).
 }
 
 /// xNVSE's `tList::Remove(item)` (`GameTypes.h`) on the list whose first node (`[item, next]`) is at
@@ -14579,8 +14545,6 @@ mod tests {
             count("if controller && e.get(this, InterfaceManager::bShowMouse) == 0 {"),
             1
         );
-        // The mouse-button read's test (`0x70CDC5`): not (a pad and the pointer hidden); with lStewieAl's
-        // Tweaks' S0022.39 the pad branch is taken whatever the pointer shows.
         assert_eq!(
             count(
                 "controller && (activate_clicks || e.get(this, InterfaceManager::bShowMouse) == 0);"

@@ -13006,7 +13006,6 @@ mod tests {
         assert_eq!(e.mem.u32(package_store + 0x9c), 6);
     }
 
-    /// `search_package_setup`'s world run with row S0107.03 `on`: the calls made and the package.
     fn search_package_run(on: bool) -> (Vec<(u32, Vec<u32>)>, Engine, u32) {
         let mut e = engine();
         let (actor, _) = new_actor_with_process(&mut e);
@@ -13047,9 +13046,6 @@ mod tests {
         (log, e, package_store)
     }
 
-    /// lStewieAl's Tweaks' row S0107.03 (`MemoryLeakFixes`, `0x8ADAEC`): the search package's target
-    /// (the 16-byte block made for it): off, handed to `SetPackageTarget`, which copies it (the block
-    /// is lost); on, the package takes the block itself (+0x30) and nothing is copied.
     #[test]
     fn s0107_03_the_search_package_takes_its_target() {
         let (off, _, package) = search_package_run(false);

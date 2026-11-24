@@ -2850,8 +2850,6 @@ fn play_dry_fire_sound(e: &mut Engine, this: Ptr<Actor>, weapon_form: Ptr, playe
 }
 
 /// The player's Rock-It Launcher ammunition count in `Actor::StartAttack` (`0x893B44`, `00969040`).
-/// lStewieAl's Tweaks' row S0082.01 (`NoAmmoGodmode`, its `GetRockItAmmoOrGodmode`): 1 in god mode
-/// (not demigod).
 fn rock_it_ammo_or_godmode(e: &mut Engine, player: Ptr<Actor>) -> u32 {
     e.call(PLAYER_GET_NUM_ROCK_IT_AMMO, &args![player]).u32()
 }
@@ -2961,8 +2959,6 @@ pub fn actor_start_attack(e: &mut Engine, this: Ptr<Actor>, anim_group: u32) -> 
         {
             out_of_ammo = false;
         }
-        // lStewieAl's Tweaks' row S0082.01 (`NoAmmoGodmode`, its `ammoCheckGodMode` jumped to at
-        // `0x893C37`): the player in god mode (not demigod) attacks without ammunition.
 
         if out_of_ammo {
             let object = e.global::<u32>(OBJECT_POINTER_011DEA0C);
@@ -3068,9 +3064,6 @@ pub fn actor_start_attack(e: &mut Engine, this: Ptr<Actor>, anim_group: u32) -> 
                 e.call(ACTOR_SET_ANIM_ACTION, &args![this, 9u32, sequence]);
                 e.vcall(this.addr(), ACTOR_SLOT_4B0, &args![u32::from(group), 1u32]);
             }
-            // lStewieAl's Tweaks' row S0148 (`patchResetForceFireWeaponWhenReloadJamming`, the
-            // jump at `0x8940A5` sent to `0x893E07`): the process' forced firing is cleared
-            // (`HighProcess::SetForceFireWeapon`, slot `0x3f4` with 0) before the answer.
             return false;
         }
     }
@@ -3591,11 +3584,8 @@ fn process_of(e: &Engine, this: Ptr<Actor>) -> Ptr {
 /// `group_animation` is the animation `GetAnimGroup` gets (null for the
 /// actor's own).
 ///
-/// With no sequence in slot 4 the exe still asks about the looping group and,
-/// for a group of type `0x4a` or `0x4d` with no shot delay, reads the null
-/// sequence's state. lStewieAl's Tweaks' row S0150
-/// (`patchFixMissingAnimNullCheck`: the jumps at `0x89520A` and `0x895350`
-/// aimed past the block) skips the check for no sequence.
+/// With no sequence in slot 4 the exe still asks about the looping group and, for a group of type
+/// `0x4a` or `0x4d` with no shot delay, reads the null sequence's state.
 fn blend_out_mismatched_attack(
     e: &mut Engine,
     this: Ptr<Actor>,
@@ -10738,10 +10728,6 @@ pub fn fn_008a2ed0(e: &mut Engine, this: Ptr<Actor>) -> u32 {
                     )
                     .f64();
                 let limit = setting_float(e, SETTING_11CD938);
-                // lStewieAl's Tweaks' row S0241 (`ActorGetHeadingTargetFix`, the bytes at
-                // `0x8A2F83`): the comparison's result is used. Unless `fAIMaxHeadTrackDistance` is
-                // below the distance (so also for a distance that is not a number, as Tweaks'
-                // `JNP`), the package target is the answer.
             }
         }
     }
@@ -13731,9 +13717,7 @@ fn hit_me_reactions(e: &mut Engine, s: &mut HitMe) {
 }
 
 /// The start point of the knockback in `HitMe` (`0x89C8E0`): the aggressor's position (slot
-/// `0x1f4`). lStewieAl's Tweaks' row S0660 (`patchFixExplosionPushDirection`, the bytes at
-/// `0x89C8E3`): the hit's source reference (the explosion) when it has one, else the aggressor,
-/// their position at +0x30 read directly.
+/// `0x1f4`).
 fn knockback_start(e: &mut Engine, source: u32, aggressor: u32) -> u32 {
     e.vcall(aggressor, ACTOR_SLOT_POSITION, &args![]).u32()
 }
@@ -14140,8 +14124,7 @@ fn hit_me_finish(e: &mut Engine, s: &mut HitMe) {
 
 /// `HitMe`'s combat line (`0x89D4ED`): `CombatDialogueManager::StartDialogue` (`009839b0`) on the
 /// manager (`011f1708`) with the hit actor, the aggressor, type 2, subtype 2, flag 1 and the
-/// controller. lStewieAl's Tweaks' row S0926 (its `OnPlayCombatAttackSound` called there): when
-/// the line was said, the hit sound's deadline restarts ([`hit_sound_cooldown_after_line`]).
+/// controller.
 fn start_hit_line(e: &mut Engine, this: u32, aggressor: u32, controller: u32) {
     let manager = e.global::<u32>(COMBAT_DIALOGUE_MANAGER);
     let said = e
@@ -14153,8 +14136,7 @@ fn start_hit_line(e: &mut Engine, this: u32, aggressor: u32, controller: u32) {
 }
 
 /// `HitMe`'s cooldown test of the hit's combat line (`0x89D425`): the deadline (`011df684`) is
-/// after `now`. lStewieAl's Tweaks' row S0926 (`CombatSoundCooldownFix`, `JBE` to `JMP` at
-/// `0x89D42B`): never; the cooldown no longer stops the line here.
+/// after `now`.
 fn hit_bark_cooling_down(e: &mut Engine, now: u32) -> bool {
     e.global::<u32>(HIT_BARK_DEADLINE) > now
 }
@@ -16640,8 +16622,6 @@ mod tests {
         assert_eq!(call_count(&e, ANIMATION_GET_SEQUENCE), 0);
     }
 
-    /// lStewieAl's Tweaks' row S0150 with ordinary input: run with the row off, then on; the row
-    /// changes nothing (the same calls and answers).
     #[test]
     fn walking_forward_picks_the_walk_group_and_scales_its_speed() {
         for on in [false, true] {

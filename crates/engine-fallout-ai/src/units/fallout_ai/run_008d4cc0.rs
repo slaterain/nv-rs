@@ -12,8 +12,6 @@ const MINUS_ONE: u32 = 0x0101_2054;
 /// `fArmorThreshold` at +0x1bc, Xbox PDB names, same offsets on PC) to -1.0,
 /// the constant at `01012054`. The engine map has no name for it.
 pub fn fn_008d4e80(e: &mut Engine, this: Ptr) {
-    // lStewieAl's Tweaks' row S0229 (`ArmorUpdateFix`, `WriteRelJump(0x8D4E80,
-    // ResetArmorRating)`): Tweaks' function in place of the whole of this one.
     let minus_one: f32 = e.global(MINUS_ONE);
     e.mem.set_f32(this.addr() + 0x1b8, minus_one);
     e.mem.set_f32(this.addr() + 0x1bc, minus_one);
@@ -76,10 +74,6 @@ fn computed_armour_value(e: &mut Engine, this: u32, field: u32, index: u32, slot
 /// value of vtable slot +0x48C when it sets its flag, plus the values of slots +0x18,
 /// +0x10 and +0x14 of the object at +0xA4, stores it and answers it.
 pub fn fn_008d4cc0(e: &mut Engine, this: u32) -> f32 {
-    // lStewieAl's Tweaks' row S0206 (`CreatureDRFix`, `SafeWrite32(0x10874E8,
-    // Creature__GetTotalArmorDR)`): Tweaks puts its routine in `Creature`'s vtable slot at
-    // `010874E8`, the one reference the exe has to this function (Ghidra's references to
-    // `008d4cc0`: that data word only), so taking the routine here is the same change.
     let stored = e.mem.u32(this + 0x1b8);
     // FCOMP; TEST AH,0x1; JNZ: below or unordered recomputes.
     if x87_load32(stored) >= e.mem.f64(ZERO_DOUBLE) {

@@ -371,9 +371,6 @@ pub fn list_box_get_at(e: &mut Engine, this: Ptr<ListBox>, index: u32, by_positi
         while node != 0 {
             let slot = node_item(e, node);
             let item = e.mem.u32(slot.addr());
-            // 007a7025: lStewieAl's Tweaks' row S0022.36 (`MenuFixes`, "null check tile in
-            // ListBox::GetTileByIndex"): a node with no item is passed over, where the exe reads
-            // the null item's tile.
             let tile = e.mem.u32(item);
             let value = tile_value(e, Ptr::new(tile), TRAIT_LIST_INDEX);
             if f64::from(index) == f64::from(value) {
@@ -2074,7 +2071,6 @@ pub fn start_menu_do_gamepad(
             {
                 let id: u32 = if button != 4 { 101 } else { 100 };
                 let highlighted = e.vcall(options.addr(), 4, &args![]).u32();
-                // `0x7CF387` (lStewieAl's Tweaks' S0022.11).
                 let tile = e.call(TILE_GET_CHILD_BY_ID, &args![highlighted, id]).u32();
                 if tile != 0
                     && e.call(TILE_IS_VISIBLE, &args![tile]).bool()
@@ -3017,7 +3013,6 @@ pub fn start_menu_choose_help(e: &mut Engine) {
             }
         } else {
             let manager = e.call(INTERFACE_MANAGER_GETTER, &args![]).u32();
-            // `0x7D08C6` (lStewieAl's Tweaks' S0022.37 calls `GetHelpMessageIdForMenu` there).
             index = fn_007d09c0(e, Ptr::new(manager + HELP_TABLE_OFFSET), entry);
         }
         let looked_up = (index as i32) < 0x29;
@@ -5796,8 +5791,6 @@ mod tests {
         assert_eq!(r.e.call(0x007a_6fa0, &args![list, 3u32, 1u32]).u32(), 0);
     }
 
-    /// lStewieAl's Tweaks' row S0022.36 with ordinary input: run with the row off, then on; the row
-    /// changes nothing (the same calls and answers).
     #[test]
     fn get_at_by_list_index_compares_the_tiles_trait() {
         for on in [false, true] {

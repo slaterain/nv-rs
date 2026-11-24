@@ -1042,8 +1042,6 @@ pub fn fn_00761960(e: &mut Engine, this: Ptr<DialogMenu>) {
         e.set(this, DialogMenu::pDepthOfFieldInstance, 0);
     }
     e.call(TOPICS_RELEASE_0083E510, &args![]);
-    // `0x7619CB` (lStewieAl's Tweaks' S0035 calls `OnDialogMenuFree` there: the call, then the
-    // radio's "in dialogue or holotape" byte cleared).
     e.set_global(OPEN_MENU_011D9510, 0u32);
     e.call(SOUND_HANDLE_DESTROY, &args![this.addr() + 0x74]);
     fn_007643c0(e, Ptr::new(this.addr() + 0x40));
@@ -2438,7 +2436,6 @@ pub fn dialog_menu_service_end(e: &mut Engine, topic: u32) {
         }
     }
     let menu: u32 = e.global(OPEN_MENU_011D9510);
-    // `0x7641E5` (S0035's `OnDialogSubMenuClose`: the byte set, then the call).
     e.call(MENU_START_FADE_IN, &args![menu]);
 }
 
@@ -2520,7 +2517,6 @@ pub fn dialog_menu_service_start(e: &mut Engine) {
         e.mem.set_u8(speaker + 0x7c, 1);
     }
     let menu = open_menu(e);
-    // `0x764090` (S0035's `OnDialogSubMenuOpen`: the byte cleared, then the call).
     e.call(MENU_START_FADE_OUT, &args![menu]);
 }
 

@@ -643,9 +643,6 @@ pub fn actor_mobility_condition_modified_callback(
             &args![owner_of_actor(actor), index, 0u32],
         )
         .f32();
-    // lStewieAl's Tweaks' row S0147 (`patchFixCrippledLimbAnimsNotUpdatingIfLimbsFixed`, the call
-    // at `0x8B9950`): Tweaks' `OnLimbConditionChangeUpdateAnims` in place of
-    // `Actor::QueueReplacementLocomotion`.
     actor_queue_replacement_locomotion(e, Ptr::new(actor), flag, current, other);
 }
 
@@ -824,9 +821,6 @@ pub fn actor_endurance_modified_callback(
     }
     let actor = actor_of_owner(owner.addr());
     forward_cached_flags(e, actor, 0x80);
-    // lStewieAl's Tweaks' row S0205 (`EnduranceHealthRestoreFix`, `WriteRelJump(0x8B9EFC,
-    // 0x8B9FEA)`): the jump to the end at `0x8B9EFC`, after the cached values: an Endurance drop no
-    // longer restores health.
     if change >= 0.0 || change.is_nan() {
         return;
     }
@@ -1096,7 +1090,7 @@ const GET_ANIM_GROUP: u32 = 0x0089_7910;
 /// group number in the low word, then three more).
 const PLAY_GROUP: u32 = 0x0049_4740;
 /// `Animation::ClearGroup` (`00496080`): `ECX` = animation, a group word and a blend time
-/// (`float`), `RET 8`. Row S0221 calls it with 1 and 0.0.
+/// (`float`), `RET 8`.
 const ANIMATION_CLEAR_GROUP: u32 = 0x0049_6080;
 /// `Actor::StartAttack` (Xbox PDB): `ECX` = actor, the queued attack.
 const START_ATTACK: u32 = 0x0089_3a40;
@@ -1235,10 +1229,6 @@ pub fn fn_008ba600(e: &mut Engine, this: Ptr<Actor>) {
         let group = e
             .call(GET_ANIM_GROUP, &args![actor, 0xe0u32, 0u32, 0u32, 0u32])
             .u16();
-        // lStewieAl's Tweaks' row S0221 (`DeathAnimFix`, the call at `0x8BA6EA`): Tweaks'
-        // `PlayGroup_Fixed` clears the animation's movement group first (`Animation::ClearGroup`
-        // `00496080` with 1 and 0.0), so the death animation plays even while a movement sequence
-        // is easing out; then the exe's call.
         e.call(
             PLAY_GROUP,
             &args![
@@ -3250,9 +3240,6 @@ pub fn fn_008bcdf0(e: &mut Engine, this: Ptr<Actor>, update: u8, _unused_1: u32)
     let scene = e.vcall(actor, VSLOT_REFERENCE_3D, &args![]).u32();
     let player = player_pointer(e);
     let mut wanted = !(actor == player && !e.call(PLAYER_TEST_00524D10, &args![player]).bool());
-    // lStewieAl's Tweaks' row S0217 (`RagdollControllerUpdateFix`, `PatchMemoryNop(0x8BCED5, 3)`):
-    // the store of that answer is gone, so the flag keeps the 1 written at `0x8BCE95` (the test
-    // above still runs): the player's leg IK is no longer reset in first person.
     e.set(this, Actor::bFootIKInRange, false);
     if scene != 0 {
         let in_range = e.with_stack(0x60, |e, frame| {
@@ -5121,8 +5108,6 @@ mod tests {
         assert!(calls_to(&e, REFRESH_BEFORE_QUEUE).is_empty());
     }
 
-    /// Leg 0x1d's callback with the left leg at `current` and the right at `other`, row S0147
-    /// `on`: the locomotion requests made.
     fn leg_change(on: bool, previous: f32, current: f32, other: f32) -> Vec<Vec<u32>> {
         let (mut e, actor) = condition_setup(5.0, false, 0);
         slot(&mut e, OWNER_TABLE, 0x8, eax(0));
@@ -5142,10 +5127,7 @@ mod tests {
         calls_to(&e, REQUEST_LOCOMOTION_CHANGE)
     }
 
-    /// lStewieAl's Tweaks' row S0147 (`0x8B9950`): a crippled leg (condition 0) healed to 4 while
-    /// the other leg is at 4: off, the exe's `QueueReplacementLocomotion` asks nothing (the
-    /// crippled walk stays); on, the walk is chosen again, not crippled. A leg crippled now asks
-    /// for the crippled walk; no change of state asks nothing.
+    /// A leg crippled now asks for the crippled walk; no change of state asks nothing.
     #[test]
     fn s0147_a_healed_leg_brings_the_walk_back() {
         assert!(leg_change(false, 0.0, 4.0, 4.0).is_empty());
@@ -6006,8 +5988,6 @@ mod tests {
         assert!(calls_to(&e, PACK_ANIM_GROUP).is_empty());
     }
 
-    /// lStewieAl's Tweaks' row S0043 with ordinary input: run with the row off, then on; the row
-    /// changes nothing (the same calls and answers).
     #[test]
     fn picks_the_best_animation_when_there_is_nothing_to_reload() {
         for on in [false, true] {

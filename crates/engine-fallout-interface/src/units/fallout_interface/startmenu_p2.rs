@@ -2168,8 +2168,6 @@ pub fn fn_007d5830(e: &mut Engine, this: Ptr<StartMenu>) -> bool {
             }
         }
     }
-    // `0x7D59C7` (lStewieAl's Tweaks' S0154 writes `JMP 0x7D5A21` there): no message box and no
-    // wait for the DLC enumeration; the flag is cleared and the content loaded at once.
     let dlc_wait = get_flag(e, this, FLAG_DLC_WAIT_MESSAGE);
     if dlc_wait {
         let menu = e.call(TILE_GET_MENU_BY_CLASS, &args![0x3e9u32]).u32();
@@ -3103,9 +3101,6 @@ pub fn fn_007d6d70(e: &mut Engine) {
     }
 }
 
-/// `StartMenu::IsInActionMapping` (`007ce8f0`) at `0x7D5365`; with lStewieAl's Tweaks' S0022.07
-/// on, `MenuFixes::StartMenuIsActionMappingOptionSelected`: while the remap waits, false the
-/// first time (its `static bool debounce` set) and true after; not waiting clears the debounce.
 fn remap_waiting(e: &mut Engine, this: Ptr<StartMenu>) -> bool {
     e.call(WAITING_FOR_REMAP_PRESS, &args![this]).bool()
 }
@@ -9047,6 +9042,5 @@ mod tests {
         assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![array.addr()]]);
     }
 
-    // ---- lStewieAl's Tweaks' rows (share 3, group 3) ----
 
 }

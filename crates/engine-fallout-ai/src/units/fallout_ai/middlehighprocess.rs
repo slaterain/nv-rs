@@ -8954,9 +8954,6 @@ fn knock_state_idle_playing(e: &mut Engine, p: u32, actor: u32, animation: u32) 
         e.call(RAGDOLL_ENABLE_ANIM, &args![ragdoll]);
     }
     e.call(ACTOR_SET_HAVOK_WEAPON, &args![actor]);
-    // lStewieAl's Tweaks' row S0171 (`KnockDownHandGripFix`, the call at `0x920A91`): after it,
-    // Tweaks' `OnGetUpPlayHandGrip` queues the hand-grip idle (`kIdleFlag_HandGrip`, 0x100) on
-    // the actor's process (+0x68, `SetQueuedIdleFlags`, slot +0x614).
     release_weapon_nodes(e, p, actor);
 }
 

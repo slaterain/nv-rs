@@ -2651,8 +2651,7 @@ fn update_root_with_time(e: &mut Engine, this: Ptr<Animation>, time: f32, first_
 }
 
 /// The queued reload's question at `0x4913C4`: `004938c0(weapon)`, the weapon's reload-loop byte
-/// (+0x384). The exe asks it even with no weapon. lStewieAl's Tweaks' row S0172
-/// (`IsReloadLoopNullCheck`) answers false for no weapon.
+/// (+0x384). The exe asks it even with no weapon.
 fn reload_loop_flag(e: &mut Engine, weapon: u32) -> bool {
     e.call(PROCESS_FLAG_BYTE, &args![weapon]).bool()
 }
@@ -2663,11 +2662,7 @@ const SEQUENCE_ACCUM_ROOT_NAME: u32 = 0x5c;
 const SEQUENCE_NAME: u32 = 0x08;
 
 /// The movement sequence's first interpolator at `0x492EBD`: `004937a0(sequence, 0)`, which reads
-/// the first entry of the controlled blocks whether or not there is one. lStewieAl's Tweaks' row
-/// S0173 (`AnimDataUpdateGetNthControlledBlock`) answers null for a sequence with no controlled
-/// blocks, and the first time in a game prints `Failed to resolve movement sequence for: <the
-/// accumulation root's name> - <the sequence's name>` in the console (written into 0x80 bytes, as
-/// Tweaks' `snprintf` does, then printed as `%s`).
+/// the first entry of the controlled blocks whether or not there is one.
 fn movement_interpolator(e: &mut Engine, sequence: u32) -> u32 {
     e.call(SEQUENCE_INTERPOLATOR_AT, &args![sequence, 0u32])
         .u32()
@@ -12654,8 +12649,6 @@ mod tests {
         assert_eq!(e.mem.u16(this.addr() + 0x122), 0xff);
     }
 
-    /// The console's two calls Tweaks' `Console_Print` makes (`0071b160`, `0071d0a0`): each line
-    /// printed is kept, formatted as `%s` with its one word (the only form these rows print).
     fn console_lines(e: &mut Engine) {
         CONSOLE_LINES.with(|l| l.borrow_mut().clear());
         e.register(0x0071_b160, |_, _| ret(0x5000));
@@ -13862,8 +13855,6 @@ mod tests {
         (e, idle, object, parent)
     }
 
-    /// lStewieAl's Tweaks' row S0181 with ordinary input: run with the row off, then on; the row
-    /// changes nothing (the same calls and answers).
     #[test]
     fn detaching_an_idle_removes_its_add_on_through_the_scene() {
         for on in [false, true] {

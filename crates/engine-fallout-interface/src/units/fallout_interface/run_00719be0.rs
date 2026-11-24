@@ -62,9 +62,7 @@ const FORM_NAME_00408DA0: u32 = 0x0040_8da0;
 /// The exe's empty string (`01011584`).
 const EMPTY_STRING_01011584: u32 = 0x0101_1584;
 
-/// The name of an item's form (`00408da0` on its `TESFullName`). lStewieAl's Tweaks' row S0199.12
-/// (`MiscCrashFixes`, the calls at `0x71A019` and `0x71A02D`, Tweaks' `TESFullName_GetName`): an
-/// item whose form has no name part is named "" (the exe's empty string; Tweaks' is its own).
+/// The name of an item's form (`00408da0` on its `TESFullName`).
 fn form_name(e: &mut Engine, form: u32) -> u32 {
     e.call(FORM_NAME_00408DA0, &args![form]).u32()
 }

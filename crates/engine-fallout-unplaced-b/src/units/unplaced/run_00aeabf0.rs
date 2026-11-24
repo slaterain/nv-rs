@@ -1683,8 +1683,6 @@ fn prepare_stream(e: &mut Engine, this: Ptr, bytes_per_sample: u32) {
 /// The effect part of `Prepare` (`00aec530`).
 fn prepare_effect(e: &mut Engine, this: Ptr) {
     let base = this.addr();
-    // lStewieAl's Tweaks' S0155 (`patchNullAudioCrash`, its bytes at `0xAECF39` and `0xAED074`): with no
-    // buffer (+0x19C) the effect is passed over and `Prepare` goes on to `BSGameSound::Prepare`.
     e.with_stack(0x28, |e, locals| {
         let description = locals.addr();
         let results = description + 0x20;

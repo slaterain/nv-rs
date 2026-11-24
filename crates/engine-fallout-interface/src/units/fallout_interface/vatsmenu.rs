@@ -2020,12 +2020,9 @@ fn vats_out_of_ammo(e: &mut Engine, ammo_list: u32) -> bool {
 
 /// The queued shot's tests in `DoIdle` (`0x7EDC3D` to `0x7EDD04`), true when the shot fails: a
 /// throwable (kind 0xA or 0xD) without `enough`, a Rock-It Launcher whose queued ammunition is not
-/// above 0.0, the attack action 0x16, a cost above the menu's action points (+0xE0) or unordered,
-/// a weapon with ammunition (`GET_CURRENT_AMMO`) whose queued ammunition is not above 0.0, or one
-/// out of ammunition ([`vats_out_of_ammo`]). lStewieAl's Tweaks' row S0082.01 (`NoAmmoGodmode`):
-/// in god mode (`011e07ba`) the throwable, action point and queued ammunition tests no longer stop
-/// the shot (its hooks at `0x7EDC3D`, `0x7EDCA3` and `0x7EDCE5`), and the ammunition test at
-/// `0x7EDD04` is its own.
+/// above 0.0, the attack action 0x16, a cost above the menu's action points (+0xE0) or unordered, a
+/// weapon with ammunition (`GET_CURRENT_AMMO`) whose queued ammunition is not above 0.0, or one out
+/// of ammunition ([`vats_out_of_ammo`]).
 #[allow(clippy::too_many_arguments)]
 fn queued_shot_fails(
     e: &mut Engine,
@@ -2604,7 +2601,6 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
         && weapon != 0
         && {
             let player = e.global::<u32>(PLAYER);
-            // `0x7EDB33` (lStewieAl's Tweaks' S0144 calls `VATSReloadAPGetEquippedAmmo` there).
             e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0
         }
         && e.call(GET_FORM_CLIP_ROUNDS, &args![weapon, 0u32]).i32() > 1
@@ -6216,10 +6212,6 @@ pub fn vats_menu_get_shot_burst_count(e: &mut Engine, action: u32, long_burst: u
         .call(GET_ATTACK_SPEED, &args![weapon, modded as u32])
         .f64();
     let mut shots = fistp_truncate(speed * factor) as u8;
-    // `0x7F5177` (lStewieAl's Tweaks' S0047, `patchFixVATSAutoWeaponMultiAmmoUseBug`, writes
-    // `MOV ECX,[EBP-0x10]; MUL BYTE [ECX+0x102]; TEST AL,AL; JNZ; MOV AL,1` there): the shots'
-    // low byte times the weapon's ammo use (+0x102, read raw), its low byte, 1 when that is 0.
-    // No weapon: Tweaks would read through a null pointer; the exe's count stays (our guard).
     if shots == 0 {
         1
     } else {
@@ -10312,7 +10304,6 @@ mod tests {
         );
     }
 
-    // ---- lStewieAl's Tweaks' rows (share 3, group 5): VATS ----
 
     /// The shot_bursts weapon (ammo use `+0x102` = `use`) equipped, an attack action whose
     /// truncated product is 5 shots.

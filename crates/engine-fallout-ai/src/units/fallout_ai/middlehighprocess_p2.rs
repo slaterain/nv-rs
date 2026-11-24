@@ -1505,9 +1505,6 @@ pub fn middle_high_process_load_game_ov2(
                 if !skip {
                     equipped = true;
                     e.call(ACTOR_EQUIP_WORN, &args![actor, form]);
-                    // lStewieAl's Tweaks' row S0089.01 (the call at `0x9275EA`): Tweaks'
-                    // `InitActorAmmoCountFromSaveHook` keeps the player's saved count of loaded
-                    // rounds for S0089.07 (the count plus one; 0 is Tweaks' -1, none).
                     let process =
                         typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, actor));
                     e.vcall(process, 0x168, &args![0u32]);
@@ -3841,9 +3838,6 @@ pub fn middle_high_process_process_patrol_traveling_to_next_ref(
         return;
     }
     let reference = e.call(PATROL_GET_CURRENT_REFERENCE, &args![data]).u32();
-    // 0092b074: lStewieAl's Tweaks' row S0140 (`patchFixPatrolMissingNullCheck`): with no patrol
-    // reference the call ends (Tweaks moves the jump's target to the function's end, `0092b430`),
-    // where the exe goes on to measure the offset to the null reference.
     if reference != 0 {
         let mut mode = 0x101u32;
         let package = e.vcall(p, 0x27c, &[]).u32();

@@ -2027,7 +2027,6 @@ fn gamepad_arrow(e: &mut Engine, base: u32, id: u32) -> bool {
         return false;
     }
     let item = e.vcall(base + SKILLS_LIST, 4, &args![]).u32();
-    // `0x785F33` and `0x785FAB` (lStewieAl's Tweaks' S0022.11).
     let arrow = e.call(TILE_GET_CHILD_BY_ID, &args![item, id]).u32();
     if e.call(TILE_IS_TRUE, &args![arrow, 0xfa3u32]).bool() {
         e.call(TILE_PLAY_TILE_SOUND, &args![arrow, 0xfcbu32]);

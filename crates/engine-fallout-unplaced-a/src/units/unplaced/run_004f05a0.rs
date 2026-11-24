@@ -452,7 +452,6 @@ mod tests {
         );
     }
 
-    /// With lStewieAl's Tweaks' row S0181 off and on: ordinary objects, the same calls.
     #[test]
     fn node_visit_handles_found_objects_and_recurses_into_children() {
         for on in [false, true] {
@@ -539,7 +538,6 @@ mod n075_tests {
             .collect()
     }
 
-    /// With lStewieAl's Tweaks' row S0181 off and on: ordinary objects, the same calls.
     #[test]
     fn fn_004f06d0_visits_the_object_and_its_children() {
         for on in [false, true] {

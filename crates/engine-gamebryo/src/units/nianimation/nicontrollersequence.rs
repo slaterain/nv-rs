@@ -3894,9 +3894,7 @@ pub fn fn_00a34f20(
     true
 }
 
-/// The activation's two adds to the owner's active set (`0xA34FCB`, `0xA35003`). lStewieAl's Tweaks' row
-/// S0108 (`patchFixNullNifOwnerCrash`, its `SequenceActivateNullCheck`): a sequence with no owner (the
-/// set's address then 0x44) is not added; the exe adds it to a set at 0x44.
+/// The activation's two adds to the owner's active set (`0xA34FCB`, `0xA35003`).
 fn activation_add_to_active_set(e: &mut Engine, this: Ptr<NiControllerSequence>) {
     add_to_active_set(e, this);
 }

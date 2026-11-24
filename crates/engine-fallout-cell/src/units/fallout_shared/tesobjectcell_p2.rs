@@ -5911,10 +5911,6 @@ pub fn fn_0054f4c0(e: &mut Engine) -> u32 {
 
 const FORCE_FULL_LOD_SETTING: u32 = 0x011d_5d00;
 
-/// The local map picture's end (`0x54F413`): the trees' full-LOD flag back to 0 (`0054f4d0`);
-/// with lStewieAl's Tweaks' S0103 (`SetTreeFullLODToINISetting`) the tree manager's flag (`+0x1B`)
-/// gets `bForceFullLOD`'s value. Tweaks takes the manager without testing it; with the
-/// missing-data guard row a missing one is passed over.
 fn restore_tree_full_lod(e: &mut Engine) {
     fn_0054f4d0(e, 0);
 }

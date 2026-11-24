@@ -1835,16 +1835,11 @@ pub fn tes_object_refr_get_target_type(e: &mut Engine, this: Ptr) -> u32 {
             }
             let process = e.call(0x0041_81e0, &args![actor]).u32();
             if !e.vcall(process + 0x30, 0x18, &args![]).bool() {
-                // `0x57951C` (lStewieAl's Tweaks' S0022.51 calls `HUDGetTargetTypeHook` there): a
-                // creature without dialogue that can be pickpocketed answers Tweaks'
-                // `GetCreaturePickpocketPrompt` from the function's exit.
                 return 0;
             }
             if e.call(0x0087_f3d0, &args![actor]).bool() {
                 return 0xa;
             }
-            // `0x579546` (S0022.51's `HUDGetTargetTypeHook2`): sneaking shows Pickpocket only for
-            // a creature that can be pickpocketed (`GetAllowPickpocket`, slot +0x1C).
             if e.call(0x0049_97b0, &args![player]).bool() {
                 1
             } else {
@@ -2002,12 +1997,7 @@ pub fn fn_00579690(e: &mut Engine, this: Ptr) -> bool {
 
 /// The creature question of `00579690` (`0x579A4A`, the `MOV EAX,[EDX+0x18]; CALL EAX`): the exe
 /// asks the creature's base data (`TESActorBaseData`, +0x30) whether it allows dialogue (slot
-/// +0x18). With lStewieAl's Tweaks' S0022.50 (`MenuFixes::GetActivationIsCrimeHook`, installed by
-/// Tweaks together with S0022.51 and on with S0022.51's bit): whether it allows pickpocketing
-/// (slot +0x1C) instead, so sneaking up to a creature that talks but cannot be pickpocketed is no
-/// crime. The hook's `TEST AL,AL` reads `EAX` as the exe left it there, the creature's address
-/// (`[EBP-0x44]`): a creature at an address whose low byte is 0 answers no without the call, as
-/// in Tweaks.
+/// +0x18).
 fn creature_activation_question(e: &mut Engine, creature: u32) -> bool {
     e.vcall(creature + 0x30, 0x18, &args![]).bool()
 }
@@ -2562,12 +2552,6 @@ pub fn fn_0057ab70(e: &mut Engine) {
         if reference == 0 || value == 0 {
             continue;
         }
-        // 0057aba4: lStewieAl's Tweaks' row S0064 (`patchFixHandleMultiboundsCrashWithNullCell`): a
-        // reference with no parent cell (+0x40) is passed over, where the exe goes on to its cell.
-        // (Tweaks' bytes compare `[ebp+0xC]` where the exe compared the value at `[ebp-0xC]`: that
-        // is an uninitialised word of the caller's frame (this function takes no arguments), so in
-        // a frame where it happens to be 0 a game running Tweaks skips the whole queued multibound
-        // batch. The port does not copy that; the exe's value check is kept above.)
         let same_cell = model_of(e, reference) != 0 && {
             let cell = parent_cell_of(e, reference);
             let from_cell = e.call(0x0054_97a0, &args![cell]).u32();

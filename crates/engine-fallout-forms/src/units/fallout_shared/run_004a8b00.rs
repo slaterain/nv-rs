@@ -252,8 +252,6 @@ fn queue_cell(
     });
 }
 
-/// The report's call of `004a8fe0` at `0x4A8BE6`; lStewieAl's Tweaks' S0080
-/// (`patchTestAllCellsNeedlessINIChecks`, `SafeNopCall`) takes it out.
 fn report_reads_budgets(e: &mut Engine) {
     fn_004a8fe0(e);
 }

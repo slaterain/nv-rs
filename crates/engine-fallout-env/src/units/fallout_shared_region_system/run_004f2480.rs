@@ -144,8 +144,6 @@ pub fn fn_004f2640(e: &mut Engine, form: u32) -> bool {
             // `00547110` (RET 4).
             let location = e.call(GET_WORLD_LOCATION, &args![player, location]).u32();
             let cell = e.call(LOCATION_CELL, &args![location]).u32();
-            // 004f269f: lStewieAl's Tweaks' row S0078 (`patchNullPlayerCellImposterCheck`): no
-            // cell at the player's location gives no regions, where the exe reads the null cell's.
             e.call(CELL_REGION_LIST, &args![cell, 1u32]).u32()
         });
         node = if regions == 0 {

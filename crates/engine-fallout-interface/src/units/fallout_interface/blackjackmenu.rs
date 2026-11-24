@@ -364,8 +364,6 @@ pub fn fn_00739970(e: &mut Engine, this: Ptr, flag: u8) {
     e.call(SET_FLOATS_004BC1F0, &args![geometry, zero, zero, last]);
 }
 
-/// The shoe's count after a shuffle: 0x34 a deck, one less with lStewieAl's Tweaks' S0022.29
-/// (the count then names the last card's index).
 fn shoe_count(e: &Engine, decks: u32) -> u32 {
     let count = decks.wrapping_mul(0x34);
     count
@@ -376,7 +374,6 @@ fn shoe_count(e: &Engine, decks: u32) -> u32 {
 /// times 0x34.
 pub fn fn_007399d0(e: &mut Engine, this: Ptr) {
     let decks = e.mem.u32(this.addr() + 0xd9c);
-    // `0x7399E3` (lStewieAl's Tweaks' S0022.29 writes `DEC ECX; MOV EDX,EAX` there).
     e.mem.set_u32(this.addr() + 0xda0, shoe_count(e, decks));
 }
 
@@ -1362,7 +1359,6 @@ pub fn black_jack_menu_init_casino_data(e: &mut Engine, this: Ptr) -> bool {
             deck += 1;
         }
         let decks = e.mem.u32(base + 0xd9c);
-        // `0x732456` (S0022.29 writes `DEC EAX; MOV ECX,EDX` there).
         e.mem.set_u32(base + 0xda0, shoe_count(e, decks));
         for i in 0..3 {
             e.mem.set_u32(base + 0x84 + 4 * i, 1);
@@ -2086,7 +2082,6 @@ pub fn black_jack_menu_create(
         e.set_global(BET_DATA_011D9054, 0u32);
         let player = e.global::<u32>(PLAYER);
         let mut node = e.call(CASINO_RECORDS_005A6260, &args![player]).u32();
-        // lStewieAl's Tweaks' row S0036 (its hook on this call, `0x73369E`).
         while node != 0 {
             let slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
             if e.mem.u32(slot) == 0 {

@@ -1581,11 +1581,7 @@ fn do_click_marker(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32) {
             dragged = !still;
             still
         };
-        // 0x797FCF, 0x797FFE: lStewieAl's Tweaks' row S0022.19 (`MenuFixes`, "fix
-        // 'sNoFastTravelUndiscovered' message showing if you click and drag over an undiscovered
-        // location") points both drag tests' `JP` at DoClick's end (00798348) instead of the
-        // message's test (0079819e): a dragged map ends the click. With no map tile the exe's jump
-        // to the message stays.
+        // With no map tile the exe's jump to the message stays.
         if not_dragged {
             let tile_11 = map_tile(e, base, 11);
             if e.call(TILE_IS_TRUE, &args![tile_11, 0xfafu32]).bool() {
@@ -3018,8 +3014,6 @@ pub fn map_menu_do_controller_switch(e: &mut Engine, this: Ptr<MapMenu>, on: u8)
     e.call(TILE_SET_FLOAT, &args![tile, 0xfa2u32, y, 1u32]);
 }
 
-/// The trait ids Tweaks' centring uses: `width` (0xFB1), `height` (0xFB0), and the value actions
-/// `copy` (0x7D0), `sub` (0x7D2) and `mul` (0x7D3).
 const TRAIT_WIDTH: u32 = 0xfb1;
 const TRAIT_HEIGHT: u32 = 0xfb0;
 const ACTION_COPY: u32 = 0x7d0;
@@ -5088,10 +5082,6 @@ fn gamepad_sticks(e: &mut Engine, this: Ptr<MapMenu>) -> bool {
                     let tile = e.get(this, MapMenu::pMapTile);
                     e.call(TILE_POKE, &args![tile, 0xfefu32, pan_x]);
                     handled = true;
-                    // 0x799A14: lStewieAl's Tweaks' row S0022.25 (`MenuFixes`, "allow controller
-                    // placing map markers while moving around on the map") jumps to its
-                    // `OnMapMove` after the handled flag is set: the pad's X pressed this frame
-                    // clicks the X button (DoClick id 0xC) and plays its click sound.
                 } else {
                     for id in [0xfeau32, 0xfeb] {
                         let still = float_constant(e, MINUS_ONE_FLOAT);
@@ -5426,9 +5416,6 @@ fn show_note_subtitle(e: &mut Engine, this: Ptr<MapMenu>, flag: u32) {
             &args![text, h0, h1, h2, x, y, z, player, flag],
         );
     });
-    // 0079a868, 0079aaeb: lStewieAl's Tweaks' row S0182 (`SubtitleArrayPopIfNonEmpty`): with no
-    // subtitle left (a holotape with sound but no subtitles) nothing is removed, where the exe
-    // removes an element from the empty array.
     let subtitles = Ptr::<BSSimpleArray>::new(base + 0xa8);
     fn_007a1b10(e, subtitles, 0, 1);
 }
@@ -7961,10 +7948,6 @@ fn update_companion_label(
 /// player icon's) and a label tile (`Tile::BuildTile(0x387)` under the map
 /// tile, see [`set_label_traits`], following the marker).
 pub fn map_menu_add_companion_markers(e: &mut Engine, this: Ptr<MapMenu>) {
-    // 0x79EA73: lStewieAl's Tweaks' row S0022.41 (`MenuFixes`, "ensure the triangle companion
-    // tiles get reset when refreshing the map menu") calls its `OnResetCompanionTiles` in place of
-    // the first child lookup of the loop below: the companions' marker tiles go first, then the
-    // lookup is made as the exe makes it (the loop's later lookups, `0x79EAF3`, are the exe's).
     remove_map_children(e, this, 0x25);
     remove_map_children(e, this, 0x26);
     let player = e.mem.u32(PLAYER_011DEA3C);
@@ -14421,11 +14404,8 @@ mod n056_tests {
         });
     }
 
-    // lStewieAl's Tweaks' rows of this file (share 3's first group, `stewie_menus`).
 
 
-    /// The bytes Tweaks' controller tests read: `isControllerDisabled`, `isControllerConnected`,
-    /// the interface manager's `hasMouseMoved` and the console's open byte.
     fn controls(e: &mut Engine, disabled: u8, connected: u8, mouse_moved: u8, console: u8) {
         let manager = e.mem.alloc(0x100);
         e.mem.set_u32(rows::INTERFACE_MANAGER, manager);

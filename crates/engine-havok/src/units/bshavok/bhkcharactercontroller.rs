@@ -1357,7 +1357,6 @@ pub fn fn_00c6d7e0(e: &mut Engine, shape: u32, check: u8, fallback: u8, layer: i
     u8::from(blocked == 0)
 }
 
-/// Tweaks' `STAIR_FLAG`: the stair bit of a Havok material word.
 const STAIR_FLAG: u32 = 0x40;
 
 // Translated from 00c6d840 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -6467,8 +6466,6 @@ mod tests {
         assert_eq!(calls(&e, SHAPE_LAYER), vec![vec![hk, 7]]);
     }
 
-    /// A `bhkShape` for S0216's sub-shape test: its class (slot 8) a packed tri-strip shape, no
-    /// collection link (slot 0xcc), the sub-shape words from the stub at `00ca5540`.
     fn packed_stair_shape(e: &mut Engine) -> u32 {
         e.register(0x0900_1008, |_, _| ret(0x0126_82dc));
         e.register(0x0900_10cc, |_, _| ret(0));

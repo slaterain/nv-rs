@@ -1,12 +1,11 @@
 //! `BGSSaveLoadGame::CleanupExpiredData` (`0084ab20`), which every save runs first (autosaves at
-//! doors too): it drops the stored state of references in exterior cells left long ago. The exe keeps
-//! the expired cells in a temporary `NiTMap<__int64,int>` of 37 buckets whose hash is the key's low
-//! word, the worldspace's id, so every expired cell of one worldspace sits in one chain and each of
-//! the changes map's references walks the whole chain (two virtual calls a step). Expired cells keep
-//! their entry, so the walk grows over a playthrough: about 0.8 s at 200 expired cells and 40,000
-//! changed references, 5.6 s at 1,500 (debug build, `crates/engine/tests/save_maps.rs`). Engine
-//! Optimizations fixes the hash and gives it 4,999 buckets (lStewieAl's Tweaks, `InitSaveMapHook`,
-//! `NiTMap_int64_int__Insert`/`__Lookup`).
+//! doors too): it drops the stored state of references in exterior cells left long ago. The exe
+//! keeps the expired cells in a temporary `NiTMap<__int64,int>` of 37 buckets whose hash is the
+//! key's low word, the worldspace's id, so every expired cell of one worldspace sits in one chain
+//! and each of the changes map's references walks the whole chain (two virtual calls a step).
+//! Expired cells keep their entry, so the walk grows over a playthrough: about 0.8 s at 200 expired
+//! cells and 40,000 changed references, 5.6 s at 1,500 (debug build,
+//! `crates/engine/tests/save_maps.rs`).
 //!
 //! Here the queue is built, filled, flushed and freed as the exe does it (the same calls, heap blocks
 //! and memory), and a Rust hash map beside it, filled with the same keys and values, answers the

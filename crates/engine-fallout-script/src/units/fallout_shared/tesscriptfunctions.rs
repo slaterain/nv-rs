@@ -2619,8 +2619,6 @@ pub fn script_test_all_cells_function(e: &mut Engine, a: ScriptArgs) -> bool {
     let tes = e.global::<u32>(GLOBAL_0011DEA10);
     e.call(TES_TEST_ALL_CELLS, &args![tes, count]);
     let tes = e.global::<u32>(GLOBAL_0011DEA10);
-    // lStewieAl's Tweaks' row S0194 (`TestAllCellsEnablesGodmode`, its `OnTestAllCells` at
-    // `0x5B7212`): god mode on, then the test's state asked as the exe asks it.
     let state = if e.call(TES_IS_RUNNING_CELL_TESTS, &args![tes]).bool() {
         TEXT_RUNNING
     } else {
@@ -5380,10 +5378,6 @@ pub fn fn_005bb9e0(e: &mut Engine, a: ScriptArgs) -> bool {
                 } else {
                     0
                 };
-                // lStewieAl's Tweaks' row S0236 (`PlaceOcclusionPlaneFix`, the nops at
-                // `0x5BBBA6`, `0x5BBBB5`, `0x5BBBE4`): no `NiPointer`; the new plane (the word
-                // pushed for the pointer's constructor) goes into the list as it is, and nothing
-                // releases it.
                 e.with_stack(4, |e, held| {
                     e.call(NI_POINTER_INIT, &args![held, created]);
                     let object = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, held));
@@ -11932,7 +11926,6 @@ mod tests {
         assert!(calls(&e, HEAD_TRACK_TARGET_EXTRA).is_empty());
     }
 
-    // ---- lStewieAl's Tweaks' share 1b rows ----
 }
 
 #[cfg(test)]

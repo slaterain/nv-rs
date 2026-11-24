@@ -422,10 +422,6 @@ pub fn bhk_shape_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
 /// non-zero, compared as the value 0 or 1 with `mask` itself. Only `AL` is set (`MOV AL, DL`):
 /// the upper bytes of `EAX` stay those of `mask`. Ghidra made no function here; it is called from
 /// 005dbc1c.
-///
-/// lStewieAl's Tweaks' S0216 (`StairMaterialFix`, `WriteRelJump(0xC84F50, GetSubMaterialVarType)`)
-/// replaces it whole: with the row the answer is [`stair_sub_material_var_type`]'s, 0 or 1 (only
-/// `AL` is read by the exe's callers).
 pub fn fn_00c84f50(e: &mut Engine, this: u32, selector: u32, mask: u32) -> u32 {
     let mut object = this;
     if selector != 0xffff_ffff {
@@ -441,7 +437,6 @@ pub fn fn_00c84f50(e: &mut Engine, this: u32, selector: u32, mask: u32) -> u32 {
     (mask & 0xffff_ff00) | u32::from(masked_non_zero == mask)
 }
 
-/// `NiRTTI` of `bhkPackedNiTriStripsShape` (Tweaks' `StairMaterialFix.cpp`).
 const RTTI_PACKED_TRI_STRIPS_SHAPE: u32 = 0x0126_82dc;
 /// `NiRTTI` of `bhkNiTriStripsShape`.
 const RTTI_TRI_STRIPS_SHAPE: u32 = 0x0126_82e8;
@@ -466,7 +461,6 @@ const LIST_GET_CHILD_SHAPE: u32 = 0x004d_85a0;
 const MATERIAL_WORD: u32 = 0x10;
 /// `bhkRefObject`'s Havok object.
 const HAVOK_OBJECT: u32 = 0x8;
-/// `hkpConvexListShape::m_childShapes` (the array's data) and `m_size` (Tweaks' `havok.h`).
 const CONVEX_LIST_CHILDREN: u32 = 0x44;
 const CONVEX_LIST_SIZE: u32 = 0x48;
 /// `hkpShape::m_userData`: the shape's `bhkShape`.
@@ -1149,8 +1143,6 @@ mod tests_a01 {
     fn stairs_on(e: &mut Engine, on: bool) {
     }
 
-    /// S0216 off: the exe's `((word & 0x40) != 0) == 0x40` never holds, so a stair word answers 0;
-    /// on: Tweaks' test answers the bit, a key of -1 reading the shape's own word.
     #[test]
     fn s0216_the_stair_bit_both_ways() {
         let mut e = Engine::new();
@@ -1173,9 +1165,6 @@ mod tests_a01 {
         assert_eq!(e.call(0x00c8_4f50, &args![shape, 3u32, 0x40u32]).u32(), 0);
     }
 
-    /// S0216 on: the links are followed to their end before the class is asked; a packed
-    /// tri-strip shape answers its sub-shape word (`00ca5540`, not its own word), a tri-strip shape
-    /// its own test (`00ca6920` with the key and the flag).
     #[test]
     fn s0216_packed_and_strip_shapes_answer_their_sub_shape() {
         let mut e = Engine::new();

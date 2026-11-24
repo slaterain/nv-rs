@@ -1996,20 +1996,16 @@ pub fn fn_00727680(e: &mut Engine, this: Ptr, _unused_1: u32, category: u32) {
     let list = this.addr() + RECIPE_LIST;
     e.vcall(list, 0x20, &args![COMPARE_00728C10]);
     fn_00729970(e, Ptr::new(CATEGORY_ARRAY), COMPARE_007278C0);
-    // `0x7278A9` (S0200's `OnPostRefreshRecipeMenu`, after the exe's sort).
 }
 
 /// `DataHandler::recipeList`'s offset (`004077e0` answers the handler plus it).
 const DATA_HANDLER_RECIPES: u32 = 0xa0;
 /// `ListBox::RestoreListState` (`00731360`, `RET 4`: a byte, whether to play the sound).
 const LIST_BOX_RESTORE_POSITION: u32 = 0x0073_1360;
-/// The exe's `""` (`01011584`), for Tweaks' `String::CStr` of an empty name.
 const EMPTY_TEXT: u32 = 0x0101_1584;
 
 /// The call at `0x7275D0` (`DoClick`'s category title, `Tile::SetString` with `string` 0xFC4 and
-/// reactions). Tweaks' `bCapitalizeRecipeCategories` (on in VNV, a row of its own not built yet)
-/// replaces this call; S0200's `SetCategoryIndex` goes through it too (Tweaks calls the call's
-/// target), so that row's seam belongs here.
+/// reactions).
 fn set_category_title(e: &mut Engine, tile: u32, text: u32) {
     e.call(TILE_SET_STRING, &args![tile, 0xfc4u32, text, 1u32]);
 }
@@ -2206,7 +2202,6 @@ fn show_selected(e: &mut Engine, this: Ptr) {
     }
     let form = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, selected));
     let second = dynamic_cast(e, form, RTTI_01183A34);
-    // `0x728378` (lStewieAl's Tweaks' S0044 jumps to `RecipeMenuArmorIconHook` there).
     let player = e.global::<u32>(PLAYER);
     if second != 0 && e.call(FORM_00480F80, &args![second, player]).u32() != 0 {
         let player = e.global::<u32>(PLAYER);
@@ -2284,9 +2279,6 @@ fn show_recipe(e: &mut Engine, this: Ptr, crafter: u32, selected: &mut u32) {
                     let entry = e
                         .call(GET_INVENTORY_ITEM, &args![crafter, bound, 0u32])
                         .u32();
-                    // `0x727F92` (lStewieAl's Tweaks' S0071, `patchFixRecipeNegativeIngredientCount`,
-                    // writes `MOV EAX,[EAX+4]; CMP EAX,0; JL` to the 0 there): the count read
-                    // raw, 0 when below 0.
                     let have = if entry == 0 {
                         0
                     } else {
@@ -2482,10 +2474,8 @@ fn jip_disposable_weapon(e: &mut Engine, weapon: u32) -> bool {
     e.call(FORM_004C0BF0, &args![weapon]).bool()
 }
 
-/// After crafting ammunition (`0x728718`): the crafter's equipped ammunition entry (its
-/// process's slot 0x14c) gets its count cleared (`006ecd40` with 0). lStewieAl's Tweaks' row
-/// S0127 (`patchFixRecipeMenuMissingAmmoInfoNullCheck` at `0x72872D`): with no entry there is
-/// nothing to clear, where the exe writes into the missing one.
+/// After crafting ammunition (`0x728718`): the crafter's equipped ammunition entry (its process's
+/// slot 0x14c) gets its count cleared (`006ecd40` with 0).
 fn clear_crafter_ammo_count(e: &mut Engine, crafter: u32) {
     let process = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, crafter));
     let target = e.vcall(process, 0x14c, &args![]).u32();
@@ -3097,7 +3087,6 @@ pub fn fn_00728da0(e: &mut Engine, _this: Ptr, form: u32, holder: u32) {
     });
     for (tile, setting) in ITEM_TITLE_SETTINGS {
         let text = e.call(SETTING_STRING, &args![setting]).u32();
-        // `0x7296E0`, tile 4's title (lStewieAl's Tweaks' S0022.12 calls its own in place).
         e.call(
             TILE_SET_STRING,
             &args![tiles[tile], title_trait, text, 1u32],
@@ -5245,7 +5234,6 @@ mod n057_tests {
         assert_eq!(asked(), [(0x0072_880d, vec![0x7500])]);
     }
 
-    // ---- lStewieAl's Tweaks' rows (share 3, group 2) ----
 
 
     /// Tile 4 of `info_engine`'s twelve.

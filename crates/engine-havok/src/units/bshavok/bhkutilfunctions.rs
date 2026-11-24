@@ -703,8 +703,6 @@ pub fn fn_00c80090(e: &mut Engine, object: Ptr) -> bool {
         } else {
             e.mem.u32(e.mem.u32(me + 0xa0))
         };
-        // lStewieAl's Tweaks' S0023 (`patchPrintBSXCrash`, `BSFadeNodeNullCheckHook` at `0xC800D5`): no
-        // first child answers false, with Tweaks' console line for the node (`BSXCrashPrint`).
         let inner = e.mem.u32(first + 0x1c);
         if inner == 0 {
             return false;

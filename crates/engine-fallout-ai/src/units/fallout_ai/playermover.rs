@@ -300,9 +300,6 @@ pub fn player_mover_update(e: &mut Engine, this: Ptr<PlayerMover>, seconds: f32)
         }
 
         if e.call(0x0050_d4a0, &args![player]).bool() {
-            // lStewieAl's Tweaks' row S0096 (`patchTCLMovement`, its `TCLMovementAddXYHook` jumped
-            // to at `0x9EA1CE`): with the keyboard (the mover's flags +0x94 have 0x40) the move is
-            // not added here (on to the end, `0x9EA2E2`); the player's update moves it.
             let source = e.call(0x0043_6aa0, &args![player]).u32();
             e.call(0x0043_9e90, &args![source, transformed, vector]);
             e.vcall(player, 0x2a8, &args![transformed]);

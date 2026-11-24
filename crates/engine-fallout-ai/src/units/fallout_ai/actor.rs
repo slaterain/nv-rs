@@ -522,9 +522,6 @@ pub fn actor_destructor(e: &mut Engine, this: Ptr<Actor>) {
     if e.call(0x00ad_8ce0, &args![handle]).bool() {
         e.call(0x00ad_8d10, &args![handle]);
     }
-    // lStewieAl's Tweaks' row S0183 (`FollowerTopicUseAfterFreeFix`, the call at `0x87DDD0`): the
-    // follower barks queued for this actor are dropped before it goes; the exe keeps them, naming
-    // the freed actor.
     e.call(0x0083_5980, &args![this]);
     let target_array = e.get(this, Actor::pCurrentCombatTargetArray);
     if !target_array.is_null() {

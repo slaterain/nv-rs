@@ -16086,9 +16086,6 @@ fn update_weapon_state(
             }
         }
     } else if mobile != player
-        // lStewieAl's Tweaks' row S0137 (`patchPreventAgroRadiusBreachedNPCsHolsteringWeapons`,
-        // the call at `0x8F037C`): Tweaks' `ActorInCombatOrPatrolRadiusBreached` in place of
-        // `0049_3bb0` (the in-combat byte).
         && !(e.call(ACTOR_CREATURE_LIKE, &args![mobile]).bool())
         && e.vcall(process, SLOT_GET_WEAPON_DRAWN, &args![]).bool()
         && e.vcall(process, SLOT_GET_WANT_WEAPON_DRAWN, &args![])
@@ -16386,9 +16383,7 @@ fn update_dispatch(
 }
 
 /// Whether `HighProcess::Update` keeps the process' wish to speak to the player (`0x8EF5A1`): the
-/// running package is a get-up package (type 0x1A, `0041ca90`). lStewieAl's Tweaks' row S0122
-/// (`patchSpeakingToSleepingGenericNPCsSkipsDialogueMenu`, the bytes written there): also a
-/// dialogue package (0x1C), both read from the package's type byte (+0x20).
+/// running package is a get-up package (type 0x1A, `0041ca90`).
 fn keeps_need_talk_player(e: &mut Engine, package: u32) -> bool {
     if package == 0 {
         return false;

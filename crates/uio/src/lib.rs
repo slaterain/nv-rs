@@ -113,8 +113,6 @@ pub fn set_on(e: &mut Engine, on: bool) {
     e.ext::<Uio>().on = on;
 }
 
-/// Whether UIO is built in and on: what other built-ins ask in place of JIP's and Stewie's
-/// `GetModuleHandle("ui_organizer")`.
 pub fn on(e: &Engine) -> bool {
     e.uio()
 }

@@ -518,7 +518,6 @@ fn gamepad_wheel_shown(e: &mut Engine, this: Ptr<InventoryMenu>) {
     } else {
         let keyring_trait = e.global::<u32>(TRAIT_FROM_NAME_01073974);
         let tile = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, this));
-        // `0x781CD0` (lStewieAl's Tweaks' S0069 makes the `JZ` a `JMP`): books are not refused.
         let refused = !e.call(TILE_IS_TRUE, &args![tile, keyring_trait]).bool() || (current_item(e) != 0 && current_item_type(e) == 0x19);
         if refused {
             show_message(e, NO_HOTKEY_SETTING);
@@ -883,9 +882,6 @@ pub fn inventory_menu_drop_current_item(e: &mut Engine, count: i32) {
             let word = e.mem.u32(DROP_POSITION + 4 * i);
             e.mem.set_u32(position.addr() + 4 * i, word);
         }
-        // 00780c76: lStewieAl's Tweaks' row S0022.15 (`QuantityMenuCloseNullInventorySelectionCheck`):
-        // with no item selected (the quantity menu closed after the item went) nothing is dropped,
-        // where the exe reads the null item's form.
         let object = typed_call!(
             leaf::FAMILY,
             0x0044_ddc0,
@@ -948,9 +944,6 @@ fn player_value(e: &mut Engine, slot: u32, id: u32) -> i32 {
 /// item. Updates the menu.
 pub fn inventory_menu_select_current_item(e: &mut Engine, this: Ptr<InventoryMenu>) {
     let base = this.addr();
-    // 00780d70: lStewieAl's Tweaks' row S0022.16 (`MenuFixes`, "add a null check for the selected
-    // inventory item in InventoryMenu::HandleEquipOrUnEquip"): with no item selected the call ends
-    // (at `00780f5d`, the menu not updated), where the exe reads the null item's form.
     let object = typed_call!(
         leaf::FAMILY,
         0x0044_ddc0,
@@ -1046,10 +1039,6 @@ const WEAPON_TYPE_BADGE: u32 = 0x0066_ea20;
 const GET_EQUIP_TYPE: u32 = 0x0047_9430;
 const GET_EQUIP_TYPE_ICON: u32 = 0x0047_9540;
 
-/// The hotkey icon's equip type for `form`: `BGSEquipType::GetEquipType`'s answer, or with
-/// lStewieAl's Tweaks' S0070 on (`patchFixBookAndAmmoHotkeyIcons`'s `GetEquipTypeIconAidForBooks`,
-/// called at `0x78149C` here and at `0x701861` in the hotkey wheel), for `kNone` (-1) a book
-/// (the form's type byte 0x19) gets `kChems` (10) and ammunition (0x29) `kBigGuns` (0).
 pub(crate) fn equip_type_for_hotkey_icon(e: &mut Engine, form: u32) -> u32 {
     let equip_type = e.call(GET_EQUIP_TYPE, &args![form]).u32();
     equip_type
@@ -1239,7 +1228,6 @@ fn enter_item(e: &mut Engine, this: Ptr<InventoryMenu>) {
             0x0044_ddc0,
             leaf::word_at_8(e, current_item(e))
         );
-        // `0x78149C` (lStewieAl's Tweaks' S0070 calls `GetEquipTypeIconAidForBooks` there).
         let equip_type = equip_type_for_hotkey_icon(e, object);
         let icon = e.call(GET_EQUIP_TYPE_ICON, &args![equip_type]).u32();
         e.call(STRCAT_S, &args![path, 0x104u32, icon]);
@@ -1545,10 +1533,6 @@ pub fn inventory_menu_do_gamepad(
             handled = true;
         }
         0xf => {
-            // The switch's slot at `0x7823B0` (lStewieAl's Tweaks' S0022.34 points it at
-            // `OnWeaponModMenuOpenMenuKeyPress`): with the mod button's (+0x74) `target`
-            // (0xFAF) equal to 0.0 (`FLDZ; FCOMPP; TEST AH,0x44; JNP`), nothing is clicked and
-            // the answer is 1 (`0x78239D`).
             e.vcall(base, 0xc, &args![0x13u32, 0u32]);
             handled = true;
         }
@@ -2394,8 +2378,6 @@ fn click_use(e: &mut Engine, this: Ptr<InventoryMenu>) {
                 } else {
                     let keyring = e.global::<u32>(TRAIT_FROM_NAME_01073974);
                     let tile = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, this));
-                    // `0x78054D` (lStewieAl's Tweaks' S0069 writes `JMP 0x78058E` there): books are
-                    // not refused.
                     let refused = !e.call(TILE_IS_TRUE, &args![tile, keyring]).bool() || current_item_type(e) == 0x19;
                     if refused {
                         message_box(e, NO_HOTKEY_SETTING, [2, 0, MESSAGE_TEXT_TWO]);
@@ -2417,10 +2399,6 @@ fn click_use(e: &mut Engine, this: Ptr<InventoryMenu>) {
         }
         return;
     }
-    // 00780472: lStewieAl's Tweaks' row S0022.14 (`MenuFixes`, "replace an incorrect jump target
-    // after a null check"): with no item selected the click ends (Tweaks points the jump at the
-    // function's end, `00780b8e`), where the exe goes on to the ammunition case and reads the null
-    // item's form.
     if current_item_type(e) != 0x29 {
         return;
     }
@@ -3314,8 +3292,6 @@ mod n054_tests {
         assert!(calls_to(&e, SET_TAB_KNOB_POSITION).is_empty());
     }
 
-    /// lStewieAl's Tweaks' row S0022.15 with ordinary input: run with the row off, then on; the row
-    /// changes nothing (the same calls and answers).
     #[test]
     fn drop_uses_the_extra_list_only_when_it_holds_enough() {
         for on in [false, true] {
@@ -3361,8 +3337,6 @@ mod n054_tests {
         assert!(calls_to(&e, 0x00c3_03cc).is_empty());
     }
 
-    /// lStewieAl's Tweaks' row S0022.16 with ordinary input: run with the row off, then on; the row
-    /// changes nothing (the same calls and answers).
     #[test]
     fn select_equips_or_unequips() {
         for on in [false, true] {

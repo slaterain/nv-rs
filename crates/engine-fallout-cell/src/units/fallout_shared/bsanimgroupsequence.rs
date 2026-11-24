@@ -420,19 +420,15 @@ const PLAY_SOUNDS_FRAME: u32 = 0x1c0;
 ///   1.0, 2.0)`).
 /// - `"Enum: HitShader"`: `PlayerCharacter::PlayImpactBasedHitShader(player, actor)`.
 ///
-/// A sound plays through a `BSSoundHandle` made by `BSAudio::GetSoundHandleByNumericID` with
-/// the sound's form id and flags built from the sound's data (`004e75d0`, `005e39b0`), 0x200000
-/// for the player, and 0x40002002 / 0x40002101 / 0x40002102 for an actor or 0x40000022 /
-/// 0x40000121 / 0x40000122 without one; with an actor the sound follows the node and starts at
-/// its position (`0045bb80`), and an actor's sound that is neither 2D nor flagged must pass
-/// `0082eca0(sound, position, 1.0)` first. Afterwards, when `0059bb30(sequence)` is non-zero, the
-/// result is 1 unless `00639aa0(sequence)` is `-FLT_MAX` or `00598040(sequence) <
-/// 00508100(sequence)`; otherwise 0.
-/// The sequence's state as `PlaySounds` asks it (`NiControllerSequence::GetState`, `008041a0`,
-/// the word at +0x44). lStewieAl's Tweaks' row S0230 (`DoubleSoundFix`, the call at `0x4EEF3C`):
-/// Tweaks' `GetAnimStateHook` answers inactive (0) while the sequence's last time (+0x34) is
-/// still -FLT_MAX, the value before its first update, so text-key sounds near 0.0 are not played
-/// before the animation really runs and then again once it does.
+/// A sound plays through a `BSSoundHandle` made by `BSAudio::GetSoundHandleByNumericID` with the
+/// sound's form id and flags built from the sound's data (`004e75d0`, `005e39b0`), 0x200000 for the
+/// player, and 0x40002002 / 0x40002101 / 0x40002102 for an actor or 0x40000022 / 0x40000121 /
+/// 0x40000122 without one; with an actor the sound follows the node and starts at its position
+/// (`0045bb80`), and an actor's sound that is neither 2D nor flagged must pass `0082eca0(sound,
+/// position, 1.0)` first. Afterwards, when `0059bb30(sequence)` is non-zero, the result is 1 unless
+/// `00639aa0(sequence)` is `-FLT_MAX` or `00598040(sequence) < 00508100(sequence)`; otherwise 0.
+/// The sequence's state as `PlaySounds` asks it (`NiControllerSequence::GetState`, `008041a0`, the
+/// word at +0x44).
 fn play_sounds_state(e: &mut Engine, sequence: Ptr) -> u32 {
     e.call(0x0080_41a0, &args![sequence]).u32()
 }

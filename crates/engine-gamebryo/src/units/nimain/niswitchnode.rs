@@ -339,7 +339,6 @@ pub fn ni_switch_node_on_visible(e: &mut Engine, this: Ptr<NiSwitchNode>, cullin
 /// node's world bound is the selected child's (or the null bound if that
 /// child has none); with no selected child the bound's radius is set to 0.
 pub fn ni_switch_node_update_world_bound(e: &mut Engine, this: Ptr<NiSwitchNode>) {
-    // lStewieAl's Tweaks' S0237 (its jump at the entry, `0xA93F90`): `NiSwitchNode__UpdateWorldBound`.
     if e.get(this, NiSwitchNode::m_uFlags) & 1 == 0 {
         e.call(NI_NODE_UPDATE_WORLD_BOUND, &args![this]);
         return;

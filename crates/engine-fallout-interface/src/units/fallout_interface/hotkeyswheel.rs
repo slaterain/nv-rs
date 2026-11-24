@@ -343,7 +343,6 @@ pub fn hotkeys_wheel_update_hotkey_list(e: &mut Engine, this: Ptr<HotKeysWheel>)
                 if entry != 0 {
                     e.call(STRING_SET, &args![text, ICON_DIRECTORY]);
                     let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, entry));
-                    // `0x701861` (lStewieAl's Tweaks' S0070, as in the inventory menu).
                     let equip_type = super::inventorymenu::equip_type_for_hotkey_icon(e, form);
                     let icon = e
                         .call(GET_EQUIP_TYPE_ICON_FILENAME, &args![equip_type])
