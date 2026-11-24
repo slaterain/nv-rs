@@ -29,6 +29,7 @@
 pub mod cosave;
 pub mod ini;
 pub mod rows;
+pub mod run_and_gun;
 pub mod settings;
 
 // The unit tests' own program: no other crate's functions are linked in.
@@ -207,6 +208,7 @@ pub fn install(e: &mut Engine) {
         settings.long("Tweaks", "bRunAndGunAPInCombatOnly", 0) != 0,
     );
     rows::world::install(e);
+    run_and_gun::install(e);
     rows::forms::write_data(e);
     let log = start_lines(ini.is_some(), &settings, &keys, on.len());
     for line in &log {

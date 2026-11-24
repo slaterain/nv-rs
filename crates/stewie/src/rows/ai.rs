@@ -148,7 +148,7 @@ pub const ROWS: &[Row] = &[
         plan: "S0096",
         key: "bTCLMovement",
         tweaks: None,
-        summary: "changes play: with collision off (tcl), flying with the keyboard moves along your view, and holding jump rises",
+        summary: "changes play: with collision off (tcl), flying with the keyboard moves along your view, and holding jump rises with the keyboard or a controller",
     },
     Row {
         bit: stewie::RUN_AND_GUN_AP,
