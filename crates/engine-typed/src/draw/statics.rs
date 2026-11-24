@@ -171,7 +171,7 @@ pub(crate) fn decide(e: &Engine, passes: &[u32]) -> Option<u32> {
 }
 
 /// Takes the own state into the open packet as own blocks: the global blocks, the render-state cache, the
-/// accumulator's camera.
+/// accumulator's camera and cursor arrays.
 pub fn take(e: &Engine, acc: Ptr<BSShaderAccumulator>) {
     for (lo, hi) in GLOBAL_BLOCKS {
         capture::own(e, lo, 0, hi - lo);
@@ -183,9 +183,95 @@ pub fn take(e: &Engine, acc: Ptr<BSShaderAccumulator>) {
     }
     take_renderers(e);
     capture::own(e, acc.addr(), ACC_CAMERA.0, ACC_CAMERA.1);
+    take_cursors(e, acc);
+    take_pass_ranges(e, acc);
     // The held accumulator (`011f95f0`, in [`ACCUMULATORS`]) is a counted pointer: the drawing side's holds move its
     // objects' counts at the join (main's extra passes hold theirs meanwhile and let the same old one go).
     capture::own_counted(e, super::own::HELD_ACCUMULATOR);
+}
+
+/// A batch renderer's pass type range (+0x20, +0x24: `super::own::set_pass_range`).
+pub(crate) const PASS_RANGE: (u32, u32) = (0x20, 0x28);
+/// The most batch renderers the accumulator holds (its array at +0x174 has two words, as `00b63770` reads them).
+const MAX_RENDERERS: u32 = 2;
+
+/// The pass type ranges of the batch renderers the draw's range draws walk, as own blocks: the accumulator's renderers
+/// and the renderers of their holders the draw draws (`super::detach::drawn_slot`: `00b63770` walks a register group's
+/// holder's renderer). Main's passes after the cut set the same renderers' ranges (the screens and the sun drawn through
+/// the world accumulator in `00875110`) while the drawing side walks its own.
+pub fn take_pass_ranges(e: &Engine, acc: Ptr<BSShaderAccumulator>) {
+    if acc.addr() == 0 {
+        return;
+    }
+    // The count and the renderers as guest memory holds them (the cut's copies hold the same), as for the cursors.
+    let base = acc.addr();
+    let n = e.global::<u32>(base.wrapping_add(BSShaderAccumulator::uiBatchRendererCount.off));
+    for i in 0..n.min(MAX_RENDERERS) {
+        let at = BSShaderAccumulator::pBatchRenderer.off.wrapping_add(i * 4);
+        let renderer = e.global::<u32>(base.wrapping_add(at));
+        if renderer == 0 {
+            continue;
+        }
+        capture::own(e, renderer, PASS_RANGE.0, PASS_RANGE.1);
+        for slot in super::detach::HOLDERS.step_by(4) {
+            let holder = e.global::<u32>(renderer.wrapping_add(slot));
+            if holder == 0 || !super::detach::drawn_slot(slot) {
+                continue;
+            }
+            let inner = e.global::<u32>(holder.wrapping_add(8));
+            capture::own(e, inner, PASS_RANGE.0, PASS_RANGE.1);
+        }
+    }
+}
+
+/// The sky shader's class (`SkyShader`, vtable `010afe18`) and the values its constant set-up (`00b89d80`, `sky.rs`)
+/// writes into the shader object (0xf0 bytes, made by `00b8a390`) for its constant maps' "Params" (`00b8a480`: the pixel map's
+/// from +0xe8, the vertex map's from +0xe4, one register each). The upload (`00e826d0`) reads 16 bytes from each, past
+/// the object's end: the image `capture::own_image` makes holds these from the packet and the rest from guest memory.
+pub(crate) const SKY_SHADER: u32 = 0x010a_fe18;
+pub(crate) const SKY_VALUES: (u32, u32) = (0xe4, 0xf0);
+
+/// The shader objects' values a listed pass's set-up writes and its constant upload reads, as own blocks: the sky
+/// shader's ([`SKY_VALUES`]). Main's sun query (`006426a0`) and its sun drawn through the world accumulator
+/// (`00875110`) set the same object's values with the sky shader while the drawing side draws the sky.
+pub fn take_shader_values(e: &Engine, passes: &[u32]) {
+    let mut seen = engine_core::AddrSet::default();
+    for &pass in passes {
+        let geometry = super::packet::pass_geometry(e, pass);
+        if geometry == 0 {
+            continue;
+        }
+        let shader = e.global::<u32>(geometry.wrapping_add(GEOMETRY_SHADER));
+        if shader == 0 || !seen.insert(shader) {
+            continue;
+        }
+        if e.global::<u32>(shader) == SKY_SHADER {
+            capture::own(e, shader, SKY_VALUES.0, SKY_VALUES.1);
+        }
+    }
+}
+
+/// The accumulator's cursor arrays as own blocks, an entry for each of its renderers (`super::own::with_cursors`):
+/// main's own pass type range draws after the cut write them while the drawing side draws. An accumulator without
+/// arrays (none made yet, or no renderers) has nothing to take.
+pub fn take_cursors(e: &Engine, acc: Ptr<BSShaderAccumulator>) {
+    if acc.addr() == 0 {
+        return;
+    }
+    // The renderer count as guest memory holds it: the cut's copy of it holds the same.
+    let n = e.global::<u32>(
+        acc.addr()
+            .wrapping_add(BSShaderAccumulator::uiBatchRendererCount.off),
+    );
+    if n == 0 {
+        return;
+    }
+    for (at, size) in super::own::CURSOR_ARRAYS {
+        let array = e.global::<u32>(acc.addr().wrapping_add(at));
+        if array != 0 {
+            capture::own(e, array, 0, size.wrapping_mul(n));
+        }
+    }
 }
 
 /// The renderers' per-draw words ([`RENDERER_BLOCKS`]) as own blocks (one renderer held twice is taken once).

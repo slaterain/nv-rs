@@ -312,6 +312,81 @@ fn the_world_draw_runs_after_the_tail_from_the_packet_cut_before_it() {
     take_drawn();
     take_joined();
 
+    // The late joins: main passes the six late points with the job still posted (stepped, it has not run), counted as
+    // passed there; the frame's list reset joins it, from the packet cut before them. Off again, those points join.
+    draw_thread::set_late(&e, true);
+    let value = e.mem.u32(VALUE);
+    e.mem.set_u32(VALUE, 41);
+    draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
+    draw_thread::second_half(&mut e, 0x6000, 0x8800, 1);
+    draw_thread::world_pass_end(&mut e);
+    e.mem.set_u32(VALUE, 42);
+    for at in draw_thread::LATE_POINTS {
+        draw_thread::finish_at(&mut e, at);
+        assert!(draw_thread::posted(&e), "passed at {at:08x}");
+    }
+    assert!(take_drawn().is_empty(), "the job has not run");
+    draw_thread::finish_at(&mut e, 0x0087_6850);
+    assert!(!draw_thread::posted(&e));
+    assert_eq!(take_drawn(), [(1, true, 41), (2, true, 41)]);
+    assert_eq!(take_joined(), [41]);
+    let waits = draw_thread::join_waits(&e);
+    for at in draw_thread::LATE_POINTS {
+        assert_eq!(
+            waits.iter().find(|j| j.at == at).map(|j| j.passed),
+            Some(1),
+            "{at:08x}: {waits:x?}"
+        );
+    }
+    // Interleaved with the late joins on: main passes a late point, then the water's first person draw, the refraction
+    // normals and the depth-of-field re-render (whose passes write the same skins' bone caches and borrow from the
+    // texture pool) still wait for the job, which drew both halves from the cut before main's step there.
+    for kept in [0x0087_46d0u32, 0x0087_4920, 0x0087_5e40] {
+        e.mem.set_u32(VALUE, 43);
+        draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
+        draw_thread::second_half(&mut e, 0x6000, 0x8800, 1);
+        draw_thread::world_pass_end(&mut e);
+        e.mem.set_u32(VALUE, 44);
+        draw_thread::finish_at(&mut e, draw_thread::LATE_POINTS[0]);
+        assert!(
+            draw_thread::posted(&e),
+            "{kept:08x}: a late point passed first"
+        );
+        assert!(take_drawn().is_empty(), "{kept:08x}: the job has not run");
+        draw_thread::finish_at(&mut e, kept);
+        assert!(!draw_thread::posted(&e), "{kept:08x} joins");
+        assert_eq!(take_drawn(), [(1, true, 43), (2, true, 43)], "{kept:08x}");
+        assert_eq!(take_joined(), [43], "{kept:08x}");
+    }
+    // A job the cut says keeps its joins (the water reflection's copy) joins at a late point; the next cut clears it.
+    e.mem.set_u32(VALUE, 45);
+    draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
+    draw_thread::keep_joins(&e);
+    draw_thread::second_half(&mut e, 0x6000, 0x8800, 1);
+    draw_thread::world_pass_end(&mut e);
+    draw_thread::finish_at(&mut e, draw_thread::LATE_POINTS[1]);
+    assert!(!draw_thread::posted(&e), "a job that keeps its joins");
+    assert_eq!(take_drawn(), [(1, true, 45), (2, true, 45)]);
+    assert_eq!(take_joined(), [45]);
+    draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
+    draw_thread::second_half(&mut e, 0x6000, 0x8800, 1);
+    draw_thread::world_pass_end(&mut e);
+    draw_thread::finish_at(&mut e, draw_thread::LATE_POINTS[1]);
+    assert!(draw_thread::posted(&e), "the next cut passes again");
+    draw_thread::finish_at(&mut e, 0x0087_6850);
+    assert!(!draw_thread::posted(&e));
+    take_drawn();
+    take_joined();
+    draw_thread::set_late(&e, false);
+    draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
+    draw_thread::second_half(&mut e, 0x6000, 0x8800, 1);
+    draw_thread::finish_at(&mut e, draw_thread::LATE_POINTS[0]);
+    assert!(!draw_thread::posted(&e), "joined with the late joins off");
+    draw_thread::world_pass_end(&mut e);
+    take_drawn();
+    take_joined();
+    e.mem.set_u32(VALUE, value);
+
     // Main's wait at each join point and the job's own time: two first halves of 20 ms and 5 ms, each joined at
     // 00875110's entry (stepped, the job runs inside the join, so each wait holds its whole job); `NV_STAGE_TIME`'s
     // columns get the same.

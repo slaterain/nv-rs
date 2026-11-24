@@ -51,7 +51,7 @@ pub fn own_list_draw(e: &mut Engine, list: Ptr<PassList>, second: u32) {
     }
     let _: u32 = typed_call!(shader::FAMILY, 0x00b6_3e90, batch::release_spare(e, list));
     let head = detach::word(e, at.wrapping_add(PassList::pHead.off));
-    e.set(list, PassList::pSpare, head);
+    detach::set_word(e, at.wrapping_add(PassList::pSpare.off), head);
     detach::set_word(e, at.wrapping_add(PassList::pHead.off), 0);
     detach::set_word(e, at.wrapping_add(PassList::pTail.off), 0);
     detach::set_word(e, at.wrapping_add(PassList::uiCount.off), 0);

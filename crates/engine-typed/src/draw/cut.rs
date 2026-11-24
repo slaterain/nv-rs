@@ -55,8 +55,8 @@ pub(crate) const ACC_DEPTH_PASSES: (u32, u32) = (0x3a, 0x3b);
 /// and late-alpha bytes and the decal flag (+0x164 to +0x16c), the batch renderers, the cursor arrays' pointers and
 /// the renderer count (+0x174 to +0x18c), the shadow scene node (+0x194: the tall grass's light and the shadow projection's
 /// test read it), the render mode (+0x19c). The cursor arrays themselves (what +0x17c to
-/// +0x188 point to) are written and read by the world draw alone: they stay in guest memory (the depth-of-field
-/// re-render `00875e40`, their only other user, waits for the draw: piece 8).
+/// +0x188 point to) are written and read by each pass type range draw, main's after the cut too (the refraction
+/// normals, the depth-of-field re-render): the draw's own state (`super::statics::take_cursors`).
 pub(crate) const ACC_SETTINGS: [(u32, u32); 5] = [
     (0x31, 0x32),
     (0x164, 0x16d),
@@ -143,6 +143,7 @@ fn fill_reason(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulator>) -> Op
     super::statics::count(reason);
     if reason.is_none() {
         super::statics::take(e, acc);
+        super::statics::take_shader_values(e, &passes);
         for &pass in &passes {
             own_clip_plane_caches(e, pass);
         }
@@ -754,18 +755,44 @@ pub fn cut_for_thread(
         return None;
     }
     // The world draw's lists go with the packet (`capture::take_lists`): the drawing side walks and empties them there,
-    // guest memory holds a fresh frame's zeros meanwhile. Only render mode 0's draw is typed through the list
-    // accessors; another mode's draw is a translation reading the lists in place, so such a frame draws on main.
+    // guest memory holds a fresh frame's zeros meanwhile. Of the register groups' holders only those the draw draws go
+    // (`detach::drawn_list_words`): main's passes after the cut count and draw the others. Only render mode 0's draw
+    // is typed through the list accessors; another mode's draw is a translation reading the lists in place, so such a
+    // frame draws on main.
     if packet::render_mode(e, acc) != 0 {
         let _ = capture::end(e);
         return None;
     }
-    let mut words = Vec::new();
+    // With each list its spare node chain (main makes its own meanwhile; the join appends the drawing side's) and with
+    // each holder its count (its flags byte stays for main's passes).
+    let mut handed = detach::Handed::default();
     for i in 0..packet::renderer_count(e, acc) {
-        detach::list_words(e, packet::renderer(e, acc, i).addr(), &mut words);
+        detach::drawn_list_words(e, packet::renderer(e, acc, i).addr(), &mut handed);
     }
-    capture::take_lists(e, &words);
+    capture::take_handed(e, &handed);
+    // A draw that copies the water reflection borrows and returns through the texture manager's pool (`00b6e110`,
+    // `00b6da10`), as main's passes after the cut do, with no lock and no copy of its own: such a job keeps every join
+    // point (`engine_core::draw_thread::keep_joins`), so main's pool users wait for it as without the late joins.
+    if uses_texture_pool(e, acc) {
+        engine_core::draw_thread::keep_joins(e);
+    }
     capture::detach(e)
+}
+
+/// Whether the cut's job will borrow from or give back to the texture manager's pool: render mode 0's finish
+/// (`00b65c60`, `super::drivers::second_half`) borrows the water reflection's copy when +0x38 is set and a pass of the
+/// types 0x288..0x2ce is listed, and gives the kept copy back whenever +0x38 is set (`00b6da10` does nothing with
+/// none). The world accumulator has +0x38 set in every frame of the short route, indoors too: a frame with no such
+/// pass listed and no copy kept touches no pool and passes the late joins. The first half draws no type of that range,
+/// so the lists answer at the cut as they will in the second half. Read on main with the packet still held.
+pub(crate) fn uses_texture_pool(e: &mut Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
+    packet::copy_reflection(e, acc)
+        && (e.global::<u32>(super::own::REFLECTION_COPY) != 0
+            || engine_core::typed_call!(
+                super::FAMILY,
+                0x00b6_3120,
+                super::drivers::has_listed_pass(e, acc, 0x288u32, 0x2ceu32)
+            ))
 }
 
 // Export E2.
@@ -1085,5 +1112,48 @@ mod tests {
         take_geometry_values(&mut e, geometry);
         let _ = capture::word(&e, leaves, 0);
         assert_eq!(capture::end(&mut e).misses, 1);
+    }
+
+    /// Only a job that will borrow or give back the water reflection's copy keeps the late joins (#963, review finding
+    /// 5; the stepped gate of 2026-11-23 found +0x38 set in every frame, so keeping the joins on +0x38 alone passed no
+    /// late point all route long): +0x38 set with no pass of the types 0x288..0x2ce listed and no copy kept touches no
+    /// pool; a listed water pass or a kept copy does; with +0x38 clear neither is borrowed nor given back.
+    #[test]
+    fn only_a_job_that_borrows_or_gives_back_the_reflection_keeps_the_joins() {
+        use crate::shader::layout::BSBatchRenderer;
+        let mut e = Engine::new();
+        if !e.mem.is_mapped(0x011f_4000) {
+            e.map(0x011f_4000, 0x6000);
+        }
+        let acc = e.mem.alloc(0x1ac);
+        let renderer = e.mem.alloc(0x40);
+        e.mem
+            .set_u32(acc + BSShaderAccumulator::uiBatchRendererCount.off, 1);
+        e.mem
+            .set_u32(acc + BSShaderAccumulator::pBatchRenderer.off, renderer);
+        // The active list: its inline head (type 0x25c, outside the range) and one node.
+        let head = renderer + BSBatchRenderer::kActivePassIndexList.off;
+        let node = e.mem.alloc(8);
+        e.mem.set_u16(head, 0x25c);
+        e.mem.set_u32(head + 4, node);
+        e.mem.set_u16(node, 0x2cf);
+        let reflect = acc + BSShaderAccumulator::ucCopyReflection.off;
+        let acc = Ptr::new(acc);
+        e.mem.set_u8(reflect, 1);
+        e.mem.set_u32(super::super::own::REFLECTION_COPY, 0);
+        assert!(
+            !uses_texture_pool(&mut e, acc),
+            "+0x38 set, no water pass listed, no copy kept"
+        );
+        e.mem.set_u16(node, 0x28a);
+        assert!(uses_texture_pool(&mut e, acc), "a water pass listed");
+        e.mem.set_u8(reflect, 0);
+        assert!(!uses_texture_pool(&mut e, acc), "+0x38 clear");
+        e.mem.set_u16(node, 0x2cf);
+        e.mem.set_u8(reflect, 1);
+        e.mem
+            .set_u32(super::super::own::REFLECTION_COPY, 0x0040_0000);
+        assert!(uses_texture_pool(&mut e, acc), "a copy kept");
+        e.mem.set_u32(super::super::own::REFLECTION_COPY, 0);
     }
 }
