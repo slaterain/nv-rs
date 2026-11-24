@@ -1829,8 +1829,8 @@ const MESSAGE_MAX: usize = 0x203;
 /// `0x7754D0`, `0x77553C`, `0x775600`, `0x7714DA`, `0x7757B1`, `0x7757D3`, `0x77582B`; plan row
 /// G10, built in `crate::game_patches::ga`): the message is cut to the queue's text buffer less
 /// its end, as [`crate::game_patches::ga::corner_message_text_size`] answers it (0x103 bytes;
-/// the queue no longer asks G10's seams). The icon path and the sound stay 0x104 bytes even with that
-/// patch: cut to 0x103 always (JIP would stop the game there).
+/// the queue no longer asks G10's seams). The icon path and the sound stay 0x104 bytes: cut to
+/// 0x103 always (JIP would stop the game there).
 const HUD_TEXT_MAX: usize = 0x103;
 /// `kCommandInfo_MessageExAlt.numParams`: the seconds and xNVSE's 21 format parameters.
 const MESSAGE_PARAMS: u32 = 22;
