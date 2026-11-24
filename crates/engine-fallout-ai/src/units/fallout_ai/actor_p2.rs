@@ -3591,38 +3591,6 @@ fn update_weapon_sound(e: &mut Engine, f: &UpdateFrame) {
     e.call(EXTRA_SET_WEAPON_ATTACK_SOUND, &args![lists, sound]);
 }
 
-// Translated from lStewieAl's Tweaks 10.05 (main.h): PlaySoundSkipIsPlayingIfNotSprtlWood and
-// PlaySoundSkipIsPlaying.
-/// lStewieAl's Tweaks' row S0489's play of the weapon attack sound (`weapon` the actor's weapon,
-/// the exe's local at -0x3C): for any weapon but Sprtl Wood's unique gatling laser (form id
-/// `05000803` as Tweaks names it) a sound with a key (+0, not -1) is marked playing (+8 = 1) and a
-/// play message (1) with its key is queued on the audio manager (`011f6ef0`, `00adb1a0`) without
-/// asking whether it already plays; that weapon's sound plays as the exe's (`00ad8830` with 0).
-fn spin_weapon_play(e: &mut Engine, sound: u32, weapon: u32) {
-    if e.mem.u32(weapon + 0xc) == 0x0500_0803 {
-        e.call(SOUND_HANDLE_PLAY, &args![sound, 0u32]);
-        return;
-    }
-    let key = e.mem.u32(sound);
-    if key != u32::MAX {
-        e.mem.set_u32(sound + 8, 1);
-        e.call(
-            0x00ad_b1a0,
-            &args![
-                0x011f_6ef0u32,
-                1u32,
-                key,
-                0u32,
-                0u32,
-                0u32,
-                0.0f32,
-                0.0f32,
-                0.0f32
-            ],
-        );
-    }
-}
-
 /// Creates the sound handle for the weapon attack sound of `Actor::Update`
 /// (the weapon's sound file with flags depending on whether the actor is
 /// the player), follows the actor's 3D object (or the virtual `+0x20c`
@@ -11791,46 +11759,6 @@ mod tests {
             handle_scratch >= item + 0x24,
             "{handle_scratch:08x} {item:08x}"
         );
-    }
-
-    /// S0489 (`PlaySoundSkipIsPlayingIfNotSprtlWood`): a sound with a key (+0) is marked playing
-    /// (+8) and a play message (1, its key) goes to the audio manager without asking whether it
-    /// plays; no key (-1) does nothing; Sprtl Wood's Gatling laser (`05000803`) plays as the exe.
-    #[test]
-    fn s0489_the_spin_sound_is_started_without_the_playing_test() {
-        for (key, id, message, played) in [
-            (0x55u32, 0x0001_2345u32, true, false),
-            (u32::MAX, 0x0001_2345, false, false),
-            (0x55, 0x0500_0803, false, true),
-        ] {
-            let mut e = engine2();
-            double(&mut e, 0x00ad_b1a0, eax(0));
-            double(&mut e, SOUND_HANDLE_PLAY, eax(0));
-            let weapon = e.mem.alloc(0x40);
-            e.mem.set_u32(weapon + 0xc, id);
-            let sound = e.mem.alloc(0xc);
-            e.mem.set_u32(sound, key);
-            e.call_log = Some(vec![]);
-            spin_weapon_play(&mut e, sound, weapon);
-            assert_eq!(
-                was_called(&e, 0x00ad_b1a0),
-                message,
-                "key {key:#x} id {id:#x}"
-            );
-            assert_eq!(was_called(&e, SOUND_HANDLE_PLAY), played, "id {id:#x}");
-            if message {
-                assert_eq!(
-                    args_of(&e, 0x00ad_b1a0),
-                    vec![0x011f_6ef0, 1, 0x55, 0, 0, 0, 0, 0, 0]
-                );
-                assert_eq!(e.mem.u32(sound + 8), 1);
-            } else {
-                assert_eq!(e.mem.u32(sound + 8), 0);
-            }
-            if played {
-                assert_eq!(args_of(&e, SOUND_HANDLE_PLAY), vec![sound, 0]);
-            }
-        }
     }
 
     #[test]

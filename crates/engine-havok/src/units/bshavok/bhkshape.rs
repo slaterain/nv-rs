@@ -472,32 +472,6 @@ const CONVEX_LIST_SIZE: u32 = 0x48;
 /// `hkpShape::m_userData`: the shape's `bhkShape`.
 const SHAPE_USER_DATA: u32 = 0x8;
 
-/// lStewieAl's Tweaks' S0216 `GetSubMaterialVarType(shape, key, flag)` (`StairMaterialFix.cpp`, its
-/// replacement of `00c84f50`): unless `key` is -1 the shape's `FindShapeCollection` links are
-/// followed to their end (null or the shape itself ends them), then [`has_material_var`] answers
-/// whether `flag` is set in the material of the touched part.
-pub fn stair_sub_material_var_type(e: &mut Engine, shape: u32, key: u32, flag: u32) -> bool {
-    let mut shape = shape;
-    if key != u32::MAX {
-        loop {
-            let collection = e.vcall(shape, FIND_SHAPE_COLLECTION_SLOT, &args![]).u32();
-            if collection == 0 || collection == shape {
-                break;
-            }
-            shape = collection;
-        }
-    }
-    has_material_var(e, shape, key, flag)
-}
-
-/// Tweaks' `HasMaterialVar`: a key of -1 reads the shape's own material word.
-fn has_material_var(e: &mut Engine, shape: u32, key: u32, flag: u32) -> bool {
-    if key != u32::MAX {
-        return material_flag(e, shape, key, flag);
-    }
-    e.mem.u32(shape + MATERIAL_WORD) & flag != 0
-}
-
 /// Tweaks' `GetMaterialFlag`, by the shape's exact class (`GetRTTI`): a packed tri-strip shape's
 /// sub-shape word (`00ca5540`), a tri-strip shape's own test (`00ca6920`), a list shape's children's
 /// collections (any one set answers yes), a convex list shape's child at `key` (its own word when

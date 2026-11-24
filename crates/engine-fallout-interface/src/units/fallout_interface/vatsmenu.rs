@@ -2606,7 +2606,7 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
         && {
             let player = e.global::<u32>(PLAYER);
             // `0x7EDB33` (lStewieAl's Tweaks' S0144 calls `VATSReloadAPGetEquippedAmmo` there).
-            stewie_reload_ammo(e, weapon, player) != 0
+            e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0
         }
         && e.call(GET_FORM_CLIP_ROUNDS, &args![weapon, 0u32]).i32() > 1
     {
@@ -6175,14 +6175,6 @@ fn float_to_int_trunc(value: f32) -> i32 {
     }
 }
 
-/// The weapon's current ammo at `0x7EDB33` (`TESObjectWEAP::GetEquippedAmmo`, `00525980`); with
-/// lStewieAl's Tweaks' S0144 (`VATSReloadAPGetEquippedAmmo`, main.h) none while the VATS menu's
-/// (`011db0d4`) reserve ammo (+0xF4) is 0 or less or god mode is on (`011e07ba`, xNVSE's
-/// `g_bIsGodmode`, or `011e0898`, `bSetDemigodMode`), so no reload's points are charged.
-fn stewie_reload_ammo(e: &mut Engine, weapon: u32, player: u32) -> u32 {
-    let ammo = e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32();
-    ammo
-}
 
 // Translated from 007f5050 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `VATSMenu::GetShotBurstCount` (Xbox PDB), cdecl (action, long burst):

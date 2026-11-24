@@ -9693,26 +9693,6 @@ fn free_flight_push(
     e.vcall(this.addr(), 0x2a8, &args![sum]);
 }
 
-// Translated from lStewieAl's Tweaks 10.05 (main.h): TCLSetMovementHook.
-/// lStewieAl's Tweaks' row S0096 (`patchTCLMovement`, its call at `0x942793` in place of
-/// `00439ef0`): with collision off, while the jump control (0xC) is held (`00a24660` on the
-/// input `011f35cc`, state 0) the move's height (`delta` +8) grows by the player's speed
-/// multiplier (actor value 0x15, the owner +0xA4's slot 0xC) times 1.7; then `out` is `delta`
-/// less `position` (`float`s).
-fn tcl_set_movement(e: &mut Engine, delta: u32, out: u32, position: u32) {
-    let input = e.global::<u32>(0x011f_35cc);
-    if e.call(0x00a2_4660, &args![input, 0xcu32, 0u32]).u32() != 0 {
-        let player = e.global::<u32>(PLAYER_SINGLETON);
-        let speed = e.vcall(player + 0xa4, 0xc, &args![0x15u32]).f32();
-        let z = e.mem.f32(delta + 8);
-        e.mem.set_f32(delta + 8, z + speed * 1.7);
-    }
-    for i in 0..3 {
-        let moved = e.mem.f32(delta + 4 * i) - e.mem.f32(position + 4 * i);
-        e.mem.set_f32(out + 4 * i, moved);
-    }
-}
-
 /// The actor the player bumped into, from `PlayerCharacter::Update` (`0x93EF1D`, `00967a00`).
 /// lStewieAl's Tweaks' row S0132 (`patchBumpingCompanionsDoesntAlertEnemies`, its
 /// `PlayerCharacter_GetNonTeammateBumpedActor`): none when that actor is a teammate (+0x18D).
@@ -9784,54 +9764,10 @@ fn update_player_beam(
     }
     // lStewieAl's Tweaks' row S0130.05 (`OnPlayerUpdateReduceAmmo`, the call written at
     // `0x944152` with `push eax` at `0x944157`: the vcall's 0.0 is its answer 0).
-    player_beam_update_ammo(e);
     let beam = e
         .get(this.cast::<Actor>(), Actor::pContinuousBeamPersistant)
         .addr();
     e.vcall(beam, 0x310, &args![0.0f32]);
-}
-
-/// The player's update's part of the beam's ammunition (S0130.05): [`player_beam_reduce_ammo`]
-/// while [`beam_ammo_in_update`].
-pub(crate) fn player_beam_update_ammo(e: &mut Engine) {
-}
-
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/ContinuousBeamProjectileCrashFix.cpp):
-// OnPlayerUpdateReduceAmmo.
-/// lStewieAl's Tweaks' row S0130.05: unless the player's (`011dea3c`) continuous beam (+0x1A0)
-/// fades (flag 0x20 at +0xC8), when its shots (+0x154) over its weapon's (+0xF8) fire rate (+0x134,
-/// above 0) are below its age (+0xD8), one more shot is counted and the player's clip loses a
-/// round (`Actor::DecreaseClipAmmo`, slot `0x3f0`, with 1): with none taken the beam fades, else
-/// the kept word `BEAM_DECREASED_PLAYER_AMMO` is set for the beam's next impact (S0130.06). The
-/// division is a `float` one, as Tweaks' `iShotsFired / weap->fireRate`.
-fn player_beam_reduce_ammo(e: &mut Engine) {
-    let player = e.global::<u32>(PLAYER_SINGLETON);
-    let beam = e.mem.u32(player + 0x1a0);
-    // Tweaks reads the beam and its weapon's rate without a null test: a missing one does nothing
-    // here (a guard against a crash only; the exe's own vcall after it needs the beam).
-    if beam == 0 || e.mem.u32(beam + 0xc8) & 0x20 != 0 {
-        return;
-    }
-    let shots = e.mem.u32(beam + 0x154);
-    let weapon = e.mem.u32(beam + 0xf8);
-    let age = e.mem.f32(beam + 0xd8);
-    if weapon == 0 {
-        return;
-    }
-    let rate = e.mem.f32(weapon + 0x134);
-    if rate > 0.0 && (shots as f32 / rate) < age {
-        e.mem.set_u32(beam + 0x154, shots.wrapping_add(1));
-        if e.vcall(player, 0x3f0, &args![1u32]).u32() == 0 {
-            let flags = e.mem.u32(beam + 0xc8);
-            e.mem.set_u32(beam + 0xc8, flags | 0x20);
-        } else {
-            let kept = e.stewie_kept(
-                engine_core::extend::stewie::kept::BEAM_DECREASED_PLAYER_AMMO,
-                4,
-            );
-            e.mem.set_u8(kept, 1);
-        }
-    }
 }
 
 /// The vanity camera's gamepad test after its turn is added (`009445b0`, `0x945D53`: `004b71d0`).
@@ -20476,78 +20412,6 @@ mod tests {
         released_attack(&mut e, this, 0x1000, 0xa00, 0, &mut ready);
         assert!(!ready);
         assert_eq!(e.mem.u8(ATTACK_RELEASE_BYTE), 1);
-    }
-
-    /// S0130.05's due test divides in `float`, as Tweaks: 1 shot at a fire rate of 3 is
-    /// 0.33333334 in `float`, not below an age of 0.33333334, so nothing is taken (a `double`
-    /// division, 0.3333333333, would have been below it).
-    #[test]
-    fn s0130_05_the_due_test_divides_in_float() {
-        let mut e = engine();
-        e.map(0x011d_e000, 0x1000);
-        let this = player(&mut e);
-        let table = e.mem.alloc(0x800);
-        let target = e.mem.alloc(8);
-        e.register_double(target, move |_, _| int(1));
-        e.mem.set_u32(table + 0x3f0, target);
-        e.mem.set_u32(this.addr(), table);
-        e.set_global(PLAYER_SINGLETON, this.addr());
-        let weapon = e.mem.alloc(0x140);
-        e.mem.set_f32(weapon + 0x134, 3.0);
-        let beam = e.mem.alloc(0x160);
-        e.mem.set_u32(beam + 0x154, 1);
-        e.mem.set_u32(beam + 0xf8, weapon);
-        e.mem.set_f32(beam + 0xd8, 1.0f32 / 3.0);
-        e.mem.set_u32(this.addr() + 0x1a0, beam);
-        player_beam_reduce_ammo(&mut e);
-        assert!(called(&e, target).is_empty());
-        assert_eq!(e.mem.u32(beam + 0x154), 1);
-        e.mem.set_f32(beam + 0xd8, 0.3334);
-        player_beam_reduce_ammo(&mut e);
-        assert_eq!(called(&e, target), vec![vec![this.addr(), 1]]);
-    }
-
-    /// S0096 (`TCLSetMovementHook`, `0x942793`): the move is `delta` less `position`; holding
-    /// jump (`00a24660` on the input `011f35cc` with 0xC and 0) first raises `delta`'s height by
-    /// the speed multiplier (actor value 0x15, 100 here) times 1.7.
-    #[test]
-    fn s0096_holding_jump_rises_in_free_flight() {
-        for held in [false, true] {
-            let mut e = engine();
-            e.map(0x011d_e000, 0x1000);
-            e.map(0x011f_3000, 0x1000);
-            let this = player(&mut e);
-            e.set_global(PLAYER_SINGLETON, this.addr());
-            e.set_global(0x011f_35cc, 0x4400u32);
-            let table = e.mem.alloc(0x40);
-            let target = e.mem.alloc(8);
-            e.register_double(target, |_, _| float(100.0));
-            e.mem.set_u32(table + 0xc, target);
-            e.mem.set_u32(this.addr() + 0xa4, table);
-            e.register_double(0x00a2_4660, move |_, a| {
-                int(u32::from(
-                    held && a[0] == 0x4400 && a[1] == 0xc && a[2] == 0,
-                ))
-            });
-            let delta = e.mem.alloc(12);
-            let out = e.mem.alloc(12);
-            let position = e.mem.alloc(12);
-            for (i, (d, p)) in [(1.0f32, 0.5f32), (2.0, 0.5), (3.0, 1.0)]
-                .into_iter()
-                .enumerate()
-            {
-                e.mem.set_f32(delta + 4 * i as u32, d);
-                e.mem.set_f32(position + 4 * i as u32, p);
-            }
-            tcl_set_movement(&mut e, delta, out, position);
-            let z = if held { 3.0f32 + 100.0f32 * 1.7 } else { 3.0 };
-            assert_eq!(e.mem.f32(delta + 8), z, "held {held}");
-            assert_eq!(
-                [e.mem.f32(out), e.mem.f32(out + 4), e.mem.f32(out + 8)],
-                [0.5, 1.5, z - 1.0],
-                "held {held}"
-            );
-        }
     }
 
     /// S0082.01 at its two sites in `00948310`'s held attack: the burst end

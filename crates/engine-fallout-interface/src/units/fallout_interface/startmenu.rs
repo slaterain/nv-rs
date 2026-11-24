@@ -2076,7 +2076,6 @@ pub fn start_menu_do_gamepad(
                 let id: u32 = if button != 4 { 101 } else { 100 };
                 let highlighted = e.vcall(options.addr(), 4, &args![]).u32();
                 // `0x7CF387` (lStewieAl's Tweaks' S0022.11).
-                super::levelupmenu::stewie_arrow_selects(e, highlighted);
                 let tile = e.call(TILE_GET_CHILD_BY_ID, &args![highlighted, id]).u32();
                 if tile != 0
                     && e.call(TILE_IS_VISIBLE, &args![tile]).bool()
@@ -3020,7 +3019,7 @@ pub fn start_menu_choose_help(e: &mut Engine) {
         } else {
             let manager = e.call(INTERFACE_MANAGER_GETTER, &args![]).u32();
             // `0x7D08C6` (lStewieAl's Tweaks' S0022.37 calls `GetHelpMessageIdForMenu` there).
-            index = stewie_help_index(e, Ptr::new(manager + HELP_TABLE_OFFSET), entry);
+            index = fn_007d09c0(e, Ptr::new(manager + HELP_TABLE_OFFSET), entry);
         }
         let looked_up = (index as i32) < 0x29;
         if looked_up {
@@ -3081,16 +3080,6 @@ pub fn start_menu_choose_help(e: &mut Engine) {
     e.call(TUTORIAL_MENU_CREATE, &args![found, 1u32]);
 }
 
-/// The help index at `0x7D08C6`: the exe's [`fn_007d09c0`]; with lStewieAl's Tweaks' S0022.37
-/// (`MenuFixes::GetHelpMessageIdForMenu`) a minigame's help first: the caravan menu
-/// (`011d917c`) by its page (`currMenu` +0x28: bet 0x1E, deck building 0x1F, game 0x20 while
-/// `flags` (+0xE74) has 0x800, the starting caravans, else 0x21), then roulette (`011da878`),
-/// blackjack (`011d9050`) and slots (`011da9a4`): Tweaks' `kHelpBlackJack` (0x172094 - 0x168, so
-/// that the looked-up form is 0x172094), roulette and slots the two after it.
-fn stewie_help_index(e: &mut Engine, table: Ptr, class: u32) -> u32 {
-    const BLACKJACK: u32 = 0x0017_2094 - 0x168;
-    fn_007d09c0(e, table, class)
-}
 
 // Translated from 007d09c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The index (0..=0x29) of the help table entry (`table[i] >> 2 & 0x3f` plus

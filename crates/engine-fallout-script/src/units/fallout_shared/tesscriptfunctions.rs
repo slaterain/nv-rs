@@ -655,13 +655,6 @@ pub(crate) const TES_TEST_ALL_CELLS: u32 = 0x0045_56d0;
 const CONSOLE_OPEN: u32 = 0x011d_ea2e;
 const TLS_CONSOLE_LINE: u32 = 0x268;
 
-// Translated from lStewieAl's Tweaks 10.05, main.h: ConsolePrintIfConsoleCommandRunner (with
-// nvse/GameAPI.cpp's IsConsoleMode).
-/// Whether a print Tweaks' row S0056 gates goes out: always without the row; with it only in
-/// console mode (the console open and the running thread's console-line byte set).
-pub(crate) fn stewie_print_allowed(e: &mut Engine) -> bool {
-    true
-}
 /// `thiscall` on the `TES`: `bRunningCellTests` or `bRunningCellTests2`
 /// (`+0x51`, `+0x52`).
 pub(crate) const TES_IS_RUNNING_CELL_TESTS: u32 = 0x0045_1530;
@@ -1924,10 +1917,7 @@ pub fn script_player_spell_book(e: &mut Engine) -> bool {
         }
         node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
     }
-    // lStewieAl's Tweaks' row S0056 (`0x5B5CA5`): printed only from the console.
-    if stewie_print_allowed(e) {
-        console_print(e, &args![MSG_SPELLS_ADDED, added]);
-    }
+    console_print(e, &args![MSG_SPELLS_ADDED, added]);
     true
 }
 

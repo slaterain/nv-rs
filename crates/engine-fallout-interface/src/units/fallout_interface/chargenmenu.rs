@@ -1178,7 +1178,6 @@ pub fn char_gen_menu_do_gamepad(
             let id = 0xa + u32::from(button != 4);
             let highlighted = e.vcall(list, 4, &args![]).u32();
             // `0x7541C8` (lStewieAl's Tweaks' S0022.11).
-            super::levelupmenu::stewie_arrow_selects(e, highlighted);
             let child = e.call(TILE_GET_CHILD_BY_ID, &args![highlighted, id]).u32();
             if child != 0 && e.call(TILE_IS_TRUE, &args![child, TRAIT_VISIBLE]).bool() {
                 e.call(TILE_PLAY_TILE_SOUND, &args![child, 0xfcbu32]);

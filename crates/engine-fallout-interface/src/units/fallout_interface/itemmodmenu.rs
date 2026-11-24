@@ -585,7 +585,6 @@ pub fn item_mod_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
     item_mod_menu_init_item_mod_menu(e, mod_item(e), 0);
     // `0x783A35` (lStewieAl's Tweaks' S0088 calls `ItemModMenuHook` there: the refresh, then the
     // re-equip of a worn item).
-    stewie_after_mod_refresh(e);
     if e.call(ITEM_GET_WORN, &args![item, 0u32]).bool() {
         let player = e.global::<u32>(PLAYER);
         e.vcall(player, 0x3c4, &args![]);
@@ -593,13 +592,6 @@ pub fn item_mod_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
     }
 }
 
-/// The tail of lStewieAl's Tweaks' `ItemModMenuHook` (row S0088, `main.h`), after the refresh: with
-/// the row on and the target worn (byte `011d9f40`; no longer unequipped while the menu is open),
-/// the menu's target entry (`011d9f58`) is unequipped and equipped again: its first extra list
-/// (the word its `extendData` list starts with), `QueueUnEquipObject` then `QueueEquipObject` on
-/// the player with the entry's form (+8) and count (+4), flags 1, 0, 1. Off: nothing.
-pub fn stewie_after_mod_refresh(e: &mut Engine) {
-}
 
 // Translated from 00783af0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ItemModMenu::ItemModItem` (Xbox PDB): fits the mod `item` to one free

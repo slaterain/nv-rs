@@ -110,7 +110,7 @@ Before JIP is switched on, every call from `crates/jip` into the game's function
 argument word count (2026-11-15: 188 calls, one wrong and fixed); `crates/engine/tests/jip_call_arity.rs`
 now checks each call to a constant address against the translation it reaches.
 
-UI Organizer (UIO 2.30, which UI mods and then Stewie's tweaks need; maintainer, 2026-11-14) is being built
+UI Organizer (UIO 2.30, which UI mods need; maintainer, 2026-11-14) is being built
 in as `crates/uio` (docs/FIXES.md, "UI Organizer"): part 1 (its lists and conditions, the menus patched in
 memory, its reader at `Tile::ReadFile`), part 2 (its XML parser and parse cache, `UIOInjectComponent`
 for JIP's `InjectUIComponent`) and part 3 (its tile operators, the text zoom, the HUD's hardcore texts;

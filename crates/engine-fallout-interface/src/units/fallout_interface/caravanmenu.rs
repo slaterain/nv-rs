@@ -3309,8 +3309,6 @@ const CHANGES_ITEM_COUNT_004C8F30: u32 = 0x004c_8f30;
 const PICK_UP_SOUND_008ADCF0: u32 = 0x008a_dcf0;
 /// `QueueUIMessage` (`007052f0`, cdecl: text, icon type, icon path, sound, seconds, instant).
 const QUEUE_UI_MESSAGE_007052F0: u32 = 0x0070_52f0;
-/// The gift box icon `"glow_message_giftbox"` path Tweaks shows (`0101c140`).
-const GIFT_BOX_ICON_0101C140: u32 = 0x0101_c140;
 /// The game settings `sAddItemtoInventory` (`011d4e7c`) and `sPlural` (`011d3114`); a string
 /// setting's text pointer is at +4.
 const ADD_ITEM_SETTING: u32 = 0x011d_4e7c;
@@ -11823,43 +11821,6 @@ mod n052_tests {
             vec![handler, entry, 2, 0x2020]
         );
         assert!(calls_to(&e, HEAP_ALLOCATE_00AA3E40).is_empty());
-    }
-
-    /// Row S0092 on, the barter container short of caps (5 of 10) and the challenger short too
-    /// (3): the money's message in place of its move, then Tweaks' caps award: the message, 5
-    /// from the container, the challenger's 3 to the player, the last 2 added to the player, the
-    /// heap entry destroyed. Nothing is moved by `004821a0`.
-    #[test]
-    fn s0092_on_pays_once_with_messages() {
-        let (e, messages, [handler, player, challenger, caps, _]) = won_payout(true, 5, 3);
-        assert!(calls_to(&e, ENTRY_SET_ACTOR).is_empty());
-        let words = vec![0, GIFT_BOX_ICON_0101C140, 0x5150, 2.0f32.to_bits(), 0];
-        assert_eq!(
-            messages,
-            vec![
-                ("2 Bills added".to_string(), words.clone()),
-                ("10 Bottle Caps added".to_string(), words),
-            ]
-        );
-        let allocations = calls_to(&e, HEAP_ALLOCATE_00AA3E40);
-        assert_eq!(allocations, vec![vec![GAME_HEAP, 0xc], vec![GAME_HEAP, 8]]);
-        let removed = calls_to(&e, REMOVE_BARTER_ITEM);
-        assert_eq!(removed.len(), 2);
-        let caps_entry = removed[1][1];
-        assert_eq!(removed[1], vec![handler, caps_entry, 5, 0x2020]);
-        assert_eq!(e.mem.u32(caps_entry + 4), 0);
-        assert_eq!(e.mem.u32(caps_entry + 8), caps);
-        let list = e.mem.u32(caps_entry);
-        assert_eq!((e.mem.u32(list), e.mem.u32(list + 4)), (0, 0));
-        assert_eq!(
-            calls_to(&e, 0x00d0_017c),
-            vec![vec![challenger, caps, 0, 3, 0, 0, player, 0, 0, 1, 0]]
-        );
-        assert_eq!(calls_to(&e, 0x00d0_0190), vec![vec![player, caps, 0, 2]]);
-        assert_eq!(
-            calls_to(&e, ENTRY_DATA_DESTROY_004459E0),
-            vec![vec![caps_entry, 1]]
-        );
     }
 
     /// Row S0092 on: the challenger holding enough gives the rest (5) to the player, nothing is

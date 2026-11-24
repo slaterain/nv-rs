@@ -2643,63 +2643,6 @@ const SET_LINEAR_VELOCITY: u32 = 0x0056_1690;
 /// +0x4F0).
 const CONTROLLER_OUT_VELOCITY: u32 = 0x4f0;
 
-/// Row S0207's routine, Tweaks' `Projectile__SetVector` (`Fixes/NonHitscanProjectileSplashFix.cpp`):
-/// the movement direction (+0x104) set to `vector` and unitized as Tweaks' `NiPoint3::Unitize`
-/// (`float` maths: a length at most 1e-6 gives 0 and a zero vector), its length added to the
-/// distance travelled (+0x110) with `update_distance`; then, when the projectile has a character
-/// controller (its process +0x68, slot +0x28C), a 3D (slot +0x1D0), a collision object on it and
-/// that object's world object (+0x10) with a rigid body (slot +0x40), the world object's linear
-/// velocity is set to the controller's `OutVelocity`. So a projectile that is not hitscan moves its
-/// rigid body too, and water sees it (splashes).
-fn projectile_set_vector_with_velocity(
-    e: &mut Engine,
-    this: u32,
-    vector: [u32; 3],
-    update_distance: bool,
-) {
-    let direction = this + MOVEMENT_DIRECTION;
-    let [x, y, z] = vector.map(f32::from_bits);
-    let length = (x * x + y * y + z * z).sqrt();
-    let (unit, length) = if length > 1e-6 {
-        let recip = 1.0 / length;
-        ([x * recip, y * recip, z * recip], length)
-    } else {
-        ([0.0; 3], 0.0)
-    };
-    for (i, value) in unit.iter().enumerate() {
-        e.mem.set_f32(direction + 4 * i as u32, *value);
-    }
-    if update_distance {
-        let moved = this + 0x110;
-        let total = length + e.mem.f32(moved);
-        e.mem.set_f32(moved, total);
-    }
-    let process = e.mem.u32(this + 0x68);
-    if process == 0 {
-        return;
-    }
-    let controller = e.vcall(process, 0x28c, &args![]).u32();
-    if controller == 0 {
-        return;
-    }
-    let root = e.vcall(this, 0x1d0, &args![]).u32();
-    if root == 0 {
-        return;
-    }
-    let collision = e.call(FIND_COLLISION_OBJECT, &args![root]).u32();
-    if collision == 0 {
-        return;
-    }
-    let world_object = e.mem.u32(collision + 0x10);
-    if world_object == 0 || e.vcall(world_object, 0x40, &args![]).u32() == 0 {
-        return;
-    }
-    e.call(
-        SET_LINEAR_VELOCITY,
-        &args![world_object, controller + CONTROLLER_OUT_VELOCITY],
-    );
-}
-
 /// Sets a debug colour (`NiColorA` constructor `00414430`: r, g, b, a) in a
 /// temporary and copies it into `color`.
 fn debug_color(e: &mut Engine, color: u32, rgba: [f32; 4]) {
@@ -7544,24 +7487,6 @@ mod tests {
         let (this, _, _) = step_with_row(&mut e, false, true);
         assert_eq!(calls(&e, 0x009c_4e60)[0][0], this.addr());
         assert!(calls(&e, SET_LINEAR_VELOCITY).is_empty());
-    }
-
-    /// Row S0207 with no process (no character controller): the direction and the distance only;
-    /// a zero step gives a zero direction and adds nothing.
-    #[test]
-    fn s0207_without_a_controller_only_the_direction() {
-        let mut e = engine();
-        let (this, _, _) = step_with_row(&mut e, true, false);
-        assert!(e.mem.f32(this.addr() + MOVEMENT_DIRECTION) > 0.0);
-        assert!(calls(&e, SET_LINEAR_VELOCITY).is_empty());
-        assert!(calls(&e, FIND_COLLISION_OBJECT).is_empty());
-        let mut e = engine();
-        let this = projectile(&mut e);
-        e.mem.set_f32(this.addr() + 0x110, 10.0);
-        e.mem.set_f32(this.addr() + MOVEMENT_DIRECTION, 5.0);
-        projectile_set_vector_with_velocity(&mut e, this.addr(), [0; 3], true);
-        assert_eq!(e.mem.f32(this.addr() + MOVEMENT_DIRECTION), 0.0);
-        assert_eq!(e.mem.f32(this.addr() + 0x110), 10.0);
     }
 
     #[test]

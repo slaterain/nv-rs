@@ -414,13 +414,6 @@ fn tile_of(e: &Engine, this: u32, index: u32) -> u32 {
     e.mem.u32(this + 0x28 + 4 * index)
 }
 
-/// The font a message menu text is measured in (`FontManager::GetStringDimensions` `00a1b020`
-/// at `0x7A95D2`, `0x7A9850`, `0x7A9B74`): the exe's `font` (6 for the title, 2 otherwise); with
-/// lStewieAl's Tweaks' S0160 (`MessageMenuFontWidthFix::GetDimensions`) the text tile's own `font`
-/// trait (0xFB9), cut to a whole number.
-fn stewie_text_font(e: &mut Engine, tile: u32, font: u32) -> u32 {
-    font
-}
 
 /// `cvttss2si`: toward zero, `0x80000000` out of range.
 fn float_to_int(value: f32) -> i32 {
@@ -1018,7 +1011,7 @@ pub fn message_menu_load_next_message(e: &mut Engine, this: Ptr<MessageMenu>) {
             let font = e.call(FONT_MANAGER, &args![]).u32();
             // `0x7A95D2` (lStewieAl's Tweaks' S0160): the title tile's font.
             let title_tile = e.mem.u32(e.global::<u32>(MESSAGE_MENU) + 0x2c);
-            let font_id = stewie_text_font(e, title_tile, 6);
+            let font_id = 6;
             e.call(
                 CALCULATE_STRING_DIMENSIONS,
                 &args![font, out, title.addr(), font_id, maximum, 0u32],
@@ -1099,7 +1092,7 @@ pub fn message_menu_load_next_message(e: &mut Engine, this: Ptr<MessageMenu>) {
                             .u32();
                         let font = e.call(FONT_MANAGER, &args![]).u32();
                         // `0x7A9850` (lStewieAl's Tweaks' S0160): the button text tile's font.
-                        let font_id = stewie_text_font(e, text_tile, 2);
+                        let font_id = 2;
                         e.call(
                             CALCULATE_STRING_DIMENSIONS,
                             &args![font, local(0xdc), string, font_id, measured, 0u32],
@@ -1190,7 +1183,7 @@ pub fn message_menu_load_next_message(e: &mut Engine, this: Ptr<MessageMenu>) {
         let font = e.call(FONT_MANAGER, &args![]).u32();
         // `0x7A9B74` (lStewieAl's Tweaks' S0160): the message text tile's font.
         let message_text = e.mem.u32(e.global::<u32>(MESSAGE_MENU) + 0x34);
-        let font_id = stewie_text_font(e, message_text, 2);
+        let font_id = 2;
         e.call(
             CALCULATE_STRING_DIMENSIONS,
             &args![font, local(0x1b0), text, font_id, room_now, 0u32],

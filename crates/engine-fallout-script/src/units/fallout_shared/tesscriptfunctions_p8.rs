@@ -2070,10 +2070,7 @@ pub fn script_is_image_space_active_function(e: &mut Engine, a: ScriptArgs) -> b
     } else {
         MSG_IMAGE_SPACE_ACTIVE
     };
-    // lStewieAl's Tweaks' row S0056 (`0x5DE5C9`, `0x5DE5D8`): printed only from the console.
-    if stewie_print_allowed(e) {
-        e.call(CONSOLE_PRINT, &args![text]);
-    }
+    e.call(CONSOLE_PRINT, &args![text]);
     true
 }
 

@@ -1967,57 +1967,9 @@ const VALUE_TRAIT_011D9048: u32 = 0x011d_9048;
 /// The player's casino records list (`005a6260`: the player's +0x610), a form's id
 /// (`0084e3a0`: the word at +0xc), the allocator (`00401000`, cdecl).
 const CASINO_RECORDS_005A6260: u32 = 0x005a_6260;
-/// `LookupFormByID` (`004839c0`, cdecl) and the memory manager's free (`00aa4060` on `011f6238`): what
-/// Tweaks' `LookupFormByID` and `GameHeapFree` call.
-const LOOKUP_FORM_BY_ID_004839C0: u32 = 0x0048_39c0;
 const MEMORY_MANAGER_011F6238: u32 = 0x011f_6238;
 const MEMORY_FREE_00AA4060: u32 = 0x00aa_4060;
 
-/// lStewieAl's Tweaks' row S0036 (`patchRemoveInvalidCasinoDataChipsInSlotMachineMenu`: its
-/// `GetCasinoDataListHook` at the casino list's first read in the slot machine, roulette and blackjack
-/// menus' `Create`, `0x7C0AAE`, `0x7BBE72` and `0x73369E`): each of the player's casino records whose
-/// casino id (the record's first word) is set but no longer a form (its plugin gone) is freed and taken
-/// out of the list (a node of `[record, next]`, the first in place), so it is not saved, with Tweaks'
-/// console line. As Tweaks' `tList::RemoveMe` a node takes the next node's record and link and that
-/// node is freed (the last node only loses its record), except that the last node after another is
-/// unlinked from it and freed (`RemoveNext`).
-pub(crate) fn remove_invalid_casino_records(e: &mut Engine, list: u32) {
-    let mut node = list;
-    let mut previous = 0u32;
-    while node != 0 {
-        let record = e.mem.u32(node);
-        if record != 0 {
-            let id = e.mem.u32(record);
-            if id != 0 && e.call(LOOKUP_FORM_BY_ID_004839C0, &args![id]).u32() == 0 {
-                engine_core::extend::stewie::console_print(
-                    e,
-                    b"[Tweaks] Removed Invalid Chip %08X from CasinoData List!",
-                    &[id],
-                );
-                e.call(
-                    MEMORY_FREE_00AA4060,
-                    &args![MEMORY_MANAGER_011F6238, record],
-                );
-                let next = e.mem.u32(node + 4);
-                if next == 0 && previous != 0 {
-                    e.mem.set_u32(previous + 4, 0);
-                    e.call(MEMORY_FREE_00AA4060, &args![MEMORY_MANAGER_011F6238, node]);
-                    return;
-                }
-                if next == 0 {
-                    e.mem.set_u32(node, 0);
-                    return;
-                }
-                e.mem.set_u32(node, e.mem.u32(next));
-                e.mem.set_u32(node + 4, e.mem.u32(next + 4));
-                e.call(MEMORY_FREE_00AA4060, &args![MEMORY_MANAGER_011F6238, next]);
-                continue;
-            }
-        }
-        previous = node;
-        node = e.mem.u32(node + 4);
-    }
-}
 #[cfg(test)]
 const FORM_ID_0084E3A0: u32 = 0x0084_e3a0;
 const ALLOCATE_00401000: u32 = 0x0040_1000;
@@ -4828,86 +4780,6 @@ mod n059_tests {
         );
     }
 
-    /// lStewieAl's Tweaks' row S0036's walk: a list of `[record, next]` nodes, ids as given (0 a record
-    /// with no id, `u32::MAX` no record), the forms found for the ids below 0x100. What is left (ids),
-    /// the frees and the console lines.
-    fn casino_walk(ids: &[u32]) -> (Vec<u32>, Vec<Vec<u32>>, Vec<u32>) {
-        let mut e = Engine::new();
-        let mut nodes = vec![];
-        for &id in ids {
-            let node = e.mem.alloc(8);
-            if id != u32::MAX {
-                let record = e.mem.alloc(0xc);
-                e.mem.set_u32(record, id);
-                e.mem.set_u32(node, record);
-            }
-            if let Some(&last) = nodes.last() {
-                e.mem.set_u32(last + 4, node);
-            }
-            nodes.push(node);
-        }
-        e.register(LOOKUP_FORM_BY_ID_004839C0, |_, a| {
-            assert_ne!(a[0], 0, "a record with no id is not looked up");
-            u32::from(a[0] < 0x100).into_ret()
-        });
-        e.register(MEMORY_FREE_00AA4060, |_, _| Ret::default());
-        e.register(0x0071_b160, |_, _| 0x4000u32.into_ret());
-        let lines = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
-        let seen = lines.clone();
-        e.register_double(0x0071_d0a0, move |e, a| {
-            assert_eq!(a[0], 0x4000);
-            seen.borrow_mut().push(e.mem.u32(a[2]));
-            let mut text = vec![];
-            let mut at = a[1];
-            while e.mem.u8(at) != 0 {
-                text.push(e.mem.u8(at));
-                at += 1;
-            }
-            assert_eq!(
-                text,
-                b"[Tweaks] Removed Invalid Chip %08X from CasinoData List!"
-            );
-            Ret::default()
-        });
-        e.call_log = Some(vec![]);
-        remove_invalid_casino_records(&mut e, nodes.first().copied().unwrap_or(0));
-        let mut left = vec![];
-        let mut node = nodes.first().copied().unwrap_or(0);
-        while node != 0 {
-            let record = e.mem.u32(node);
-            left.push(if record == 0 {
-                u32::MAX
-            } else {
-                e.mem.u32(record)
-            });
-            node = e.mem.u32(node + 4);
-        }
-        let lines = lines.borrow().clone();
-        (left, calls_to(&e, MEMORY_FREE_00AA4060), lines)
-    }
-
-    /// Row S0036's walk, as Tweaks' `GetCasinoDataListHook`: a record whose casino is gone is freed and
-    /// its node taken out (`RemoveMe`: the next node copied in and freed; alone, the node only loses its
-    /// record; last after another: unlinked and freed), each with the console line naming its id;
-    /// records with no id, empty nodes and records of casinos still there stay; no list, nothing.
-    #[test]
-    fn s0036_the_records_of_casinos_that_are_gone() {
-        let (left, frees, lines) = casino_walk(&[]);
-        assert!(left.is_empty() && frees.is_empty() && lines.is_empty());
-        let (left, frees, lines) = casino_walk(&[0x10, 0, u32::MAX, 0x20]);
-        assert_eq!(left, [0x10, 0, u32::MAX, 0x20]);
-        assert!(frees.is_empty() && lines.is_empty());
-        // Alone: the node in place keeps no record.
-        let (left, frees, lines) = casino_walk(&[0x500]);
-        assert_eq!((left, frees.len(), lines), (vec![u32::MAX], 1, vec![0x500]));
-        // First: the next node's record and link copied in, that node freed; then two in a row and a
-        // last one after another (unlinked).
-        let (left, frees, lines) = casino_walk(&[0x500, 0x10, 0x600, 0x700, 0x20, 0x800]);
-        assert_eq!(left, [0x10, 0x20]);
-        assert_eq!(lines, [0x500, 0x600, 0x700, 0x800]);
-        assert_eq!(frees.len(), 8);
-        assert!(frees.iter().all(|w| w[0] == MEMORY_MANAGER_011F6238));
-    }
 
     #[test]
     fn create_stops_while_barred_and_sets_up_the_labels() {

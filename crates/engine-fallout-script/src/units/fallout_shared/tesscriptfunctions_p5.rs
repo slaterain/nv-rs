@@ -3628,14 +3628,10 @@ pub fn script_stop_magic_shader(e: &mut Engine, a: ScriptArgs) -> bool {
         PROCESS_LISTS_FINISH_MAGIC_SHADER,
         &args![PROCESS_LISTS, reference, shader],
     );
-    // lStewieAl's Tweaks' row S0056 (`0x5D21B8`, `0x5D21C7`): the two prints only from the console.
-    let print = super::tesscriptfunctions::stewie_print_allowed(e);
     if e.call(GET_REFERENCE_NAME, &args![reference]).u32() != 0 {
         let name = e.call(GET_REFERENCE_NAME, &args![reference]).u32();
-        if print {
-            console_print(e, &args![MSG_SHADER_REMOVED_NAMED, name]);
-        }
-    } else if print {
+        console_print(e, &args![MSG_SHADER_REMOVED_NAMED, name]);
+    } else {
         console_print(e, &args![MSG_SHADER_REMOVED_REFERENCE]);
     }
     true

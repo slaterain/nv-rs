@@ -224,12 +224,7 @@ pub fn fo_script_functions_get_vats_value_condition_function(
     }
     if e.call(IS_CONSOLE_VISIBLE, &[]).bool() {
         let shown = x87_load64(e.mem.u64(result));
-        // lStewieAl's Tweaks' row S0056 (`0x5952AB`): printed only from the console. Tweaks' print
-        // hands on only the format and the first number, so in the real game the line's other two
-        // values are whatever words follow on its stack; the port keeps the game's words.
-        if super::tesscriptfunctions::stewie_print_allowed(e) {
-            e.call(CONSOLE_PRINT, &args![DEBUG_FORMAT, value, form, shown]);
-        }
+        e.call(CONSOLE_PRINT, &args![DEBUG_FORMAT, value, form, shown]);
     }
     answered
 }

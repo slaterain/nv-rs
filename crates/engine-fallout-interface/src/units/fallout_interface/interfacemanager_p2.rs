@@ -547,25 +547,15 @@ pub fn interface_manager_check_menu_button(e: &mut Engine, button: i32, analog: 
         // The code returns 0 for both, 2 for only the second, 1 for only
         // the first.
         // `0x717C6B` and `0x717C85`: lStewieAl's Tweaks' S0022.47 (below).
-        return stewie_menu_button_debounce(e, button, button_state(new_pushed, old_pushed));
+        return button_state(new_pushed, old_pushed);
     }
 
     let down_now = u32::from(e.mem.u16(PAD_BUTTONS_NEW)) & mask != 0;
     let down_before = u32::from(e.mem.u16(PAD_BUTTONS_OLD)) & mask != 0;
     // `0x717CB0` and `0x717CC8`: lStewieAl's Tweaks' S0022.47 (below).
-    stewie_menu_button_debounce(e, button, button_state(down_now, down_before))
+    button_state(down_now, down_before)
 }
 
-/// lStewieAl's Tweaks' S0022.47 (`MenuFixes::OnControllerInputPressed` at `0x717C6B` and `0x717CB0`,
-/// `OnControllerInputDePressed` at `0x717C85` and `0x717CC8`, in place of `MOV EAX,2` and
-/// `MOV EAX,1`): for the pad's B button (10), a press clears the input globals' (`[011f35cc]`)
-/// menu mode debounce bit (bit 3 of the word at +0x1B92), and a release while that bit is set
-/// answers -1 (not held), so B closing the console does not also close the menu under it.
-/// Other states and buttons, or the row off: `state` as it is.
-fn stewie_menu_button_debounce(e: &mut Engine, button: i32, state: i32) -> i32 {
-    const BUTTON_B: i32 = 0xa;
-    state
-}
 
 // Translated from 00717de0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `InterfaceManager::ClearMenuButton` (Xbox PDB), static: when the manager
