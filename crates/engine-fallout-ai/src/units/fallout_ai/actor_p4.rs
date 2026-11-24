@@ -7219,6 +7219,38 @@ mod tests {
         assert_eq!(called(&log, target(ACTOR_VT, 0x338)).len(), 1);
     }
 
+    /// S0410 at its call sites in `Actor::Move` (`0x8A655C`, `0x8A6607`): the player's hard landing
+    /// in the loaded state plays its sound (`00ad8830`) and pain (`008a7d50`); with the row, in god
+    /// mode (`011e07ba`) neither; another actor in god mode still gets both.
+    #[test]
+    fn s0410_god_mode_silences_the_players_landing_through_move() {
+        // (row, the player, silenced)
+        for (on, is_player, silenced) in [
+            (false, true, false),
+            (true, true, true),
+            (true, false, false),
+        ] {
+            let (mut e, actor, _) = move_engine();
+            e.set_stewie(
+                engine_core::extend::stewie::GODMODE_NO_LEG_CRIPPLE_SOUND,
+                on,
+            );
+            answer(&mut e, ACTOR_VT, 0x360, 1);
+            e.map(0x011d_e000, 0x1000);
+            e.map(0x011e_0000, 0x1000);
+            e.set_global(0x011d_ea3c, if is_player { actor.addr() } else { 0x6100 });
+            e.mem.set_u8(0x011e_07ba, 1);
+            e.call_log = Some(vec![]);
+            e.call(0x008a_62b0, &args![actor, 0.5f32, 7u32, 1u32]);
+            let log = calls(&mut e);
+            let label = format!("on {on} player {is_player}");
+            assert_eq!(called(&log, 0x00ad_8830).is_empty(), silenced, "{label}");
+            assert_eq!(called(&log, 0x008a_7d50).is_empty(), silenced, "{label}");
+            // The landing's leg damage is not Tweaks' to skip.
+            assert_eq!(called(&log, target(ACTOR_VT, 0x3ac)).len(), 2, "{label}");
+        }
+    }
+
     #[test]
     fn move_light_landing_and_no_leg_damage_when_the_roll_fails() {
         let (mut e, actor, _) = move_engine();

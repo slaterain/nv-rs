@@ -23535,6 +23535,52 @@ mod tests {
         }
     }
 
+    /// S0082.01 at its call sites in `Actor::StartAttack` (`0x893C37`, `0x893B44`): the player in
+    /// god mode attacks a power attack (210) with a weapon whose ammunition is not there (no entry:
+    /// slot `0x14c` 0), or with a Rock-It Launcher and no Rock-It ammunition (`00969040` 0). Off: out
+    /// of ammunition (the forced firing cleared, slot `0x3f4` with 0; for the Rock-It Launcher also
+    /// its message queued), no attack played. On: the attack goes on (the worker plays the
+    /// group) without either.
+    #[test]
+    fn s0082_01_start_attack_in_god_mode_needs_no_ammunition() {
+        for rock_it in [false, true] {
+            for on in [false, true] {
+                let label = format!("on {on} rock-it {rock_it}");
+                let mut e = engine();
+                e.set_stewie(engine_core::extend::stewie::NO_AMMO_GODMODE, on);
+                e.map(0x011e_0000, 0x1000);
+                e.mem.set_u8(0x011e_07ba, 1);
+                let (actor, _, _) = attack_setup(&mut e);
+                set_player(&mut e, actor);
+                let process = e.get(actor, Actor::pCurrentProcess);
+                set_slot(&mut e, process, 0x148, ret(0x6800));
+                stub(&mut e, ENTRY_FORM, 0xf0f0);
+                stub(&mut e, WEAPON_GET_CURRENT_AMMO, 0xa1);
+                stub(&mut e, ANIM_GROUP_GET_TYPE, 210);
+                if rock_it {
+                    stub(&mut e, AMMO_FORM_IS_ROCK_IT_LAUNCHER, 1);
+                    stub(&mut e, PLAYER_GET_NUM_ROCK_IT_AMMO, 0);
+                }
+                assert!(!actor_start_attack(&mut e, actor, 210), "{label}");
+                assert_eq!(
+                    call_count(&e, ACTOR_PLAY_GROUP_WORKER),
+                    usize::from(on),
+                    "{label}"
+                );
+                assert_eq!(
+                    calls_to(&e, slot_target(&e, process, 0x3f4)).len(),
+                    usize::from(!on),
+                    "{label}"
+                );
+                assert_eq!(
+                    call_count(&e, INTERFACE_QUEUE_MENU_CREATE),
+                    usize::from(rock_it && !on),
+                    "{label}"
+                );
+            }
+        }
+    }
+
     /// S0926 (`CombatSoundCooldownFix`, `0x89D42B`): the hit's combat line is held while the hit
     /// sound's deadline (`011df684`) is after now; with the row never.
     #[test]

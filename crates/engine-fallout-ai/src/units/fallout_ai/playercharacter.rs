@@ -4914,8 +4914,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             // lStewieAl's Tweaks' row S0329 (`patchLeftRightMovementCancelsOut`, the bytes at `0x941BBA`,
             // `0x941C11`, `0x941C67` and `0x941CBD` with their jumps): a direction moves only while it
             // is held and the opposite one (forward 0 and back 1, left 2 and right 3) is not.
-            let cancel = e.stewie(engine_core::extend::stewie::OPPOSITE_KEYS_CANCEL);
-            let key_pressed = |e: &mut Engine, key: u32| movement_key(e, main_state, key, cancel);
+            let key_pressed = |e: &mut Engine, key: u32| movement_direction(e, main_state, key);
             if key_pressed(e, 0) {
                 e.call(0x0063_c8a0, &args![position_copy, right]);
                 if e.mem.u16(word_slot) & 0x200 == 0 {
@@ -4964,11 +4963,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
         e.mem.set_u8(this.addr() + 0x648, third_person);
         e.set(this, PlayerCharacter::b3rdPersonSaved, true);
         e.mem.set_u8(this.addr() + 0x64a, 1);
-        let process = process_of(e, this);
-        let skip_cancel = e.call(0x00a2_4660, &args![main_state, 4u32, 0u32]).u32() != 0
-            && e.global::<u8>(STATE_FLAG_011E07AA) != 0
-            && has_ammo_or_godmode_automatic(e, this, process)
-            && e.call(0x008a_6970, &args![this]).bool();
+        let skip_cancel = held_attack_goes_on(e, this, main_state);
         if !skip_cancel {
             let process = process_of(e, this);
             let weight = e.vcall(process, 0x444, &args![]).f64();
@@ -5249,33 +5244,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                 }
                 e.call(0x0069_3ef0, &args![this, 1u32]);
             }
-            let moved_by = local(frame, -0x2f0);
-            let tcl_row = e.stewie(engine_core::extend::stewie::TCL_MOVEMENT);
-            if tcl_row {
-                tcl_set_movement(e, position_copy, moved_by, second_copy);
-            } else {
-                e.call(0x0043_9ef0, &args![position_copy, moved_by, second_copy]);
-            }
-            e.call(0x0043_9180, &args![moved_by, delta]);
-            // S0096's `TCLMovementAddZHook` (jumped to at `0x9427AA`): with the keyboard (the move
-            // flags at -0x6C have 0x40) the whole move is added, not only its height.
-            let pushed = if tcl_row && e.mem.u8(word_slot) & 0x40 != 0 {
-                moved_by
-            } else {
-                let lift = e.mem.f32(moved_by + 8);
-                typed_call!(
-                    leaf::FAMILY,
-                    0x0041_6870,
-                    leaf::point3_new(e, local(frame, -0x2fc), 0.0f32, 0.0f32, lift)
-                )
-            };
-            let sum = e
-                .call(
-                    0x0043_9e90,
-                    &args![second_copy, local(frame, -0x308), pushed],
-                )
-                .u32();
-            e.vcall(this.addr(), 0x2a8, &args![sum]);
+            free_flight_push(e, this, frame, position_copy, second_copy, delta, word_slot);
         } else {
             e.call(0x0069_3ef0, &args![this, 0u32]);
         }
@@ -5797,18 +5766,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
         }
         let status_slot = local(frame, -0x2c8);
         e.mem.set_u8(status_slot, 0);
-        let progression = e.call(0x0046_4e10, &args![this]).u32();
-        if e.call(0x008d_51f0, &args![progression]).bool()
-            && !levelup_combat_test(e, this, status_slot)
-            && !e.call(0x0052_5430, &args![VATS_OBJECT]).bool()
-            && e.call(0x0094_44a0, &args![]).bool()
-            && e.call(0x0070_9be0, &args![]).bool()
-            && e.call(0x0094_4270, &args![]).u8() == 0
-            && !levelup_held(e, this)
-        {
-            let progression = e.call(0x0046_4e10, &args![this]).u32();
-            e.call(0x008d_5210, &args![progression]);
-        }
+        update_levelup(e, this, status_slot);
         let reputation = e.get(this, PlayerCharacter::pReputationUpdate);
         if !reputation.is_null()
             && !e.call(0x0095_3c50, &args![this, status_slot]).bool()
@@ -9698,6 +9656,25 @@ fn levelup_held(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
 /// The god mode byte (`g_bIsGodmode`, `011e07ba`).
 const GODMODE_BYTE: u32 = 0x011e_07ba;
 
+/// The level-up step of `PlayerCharacter::Update` (`0x94397F` on): with a level-up due
+/// (`008d51f0` on the progression, `00464e10`), the player not in combat ([`levelup_combat_test`]),
+/// outside VATS (`00525430`), `009444a0` and `00709be0` true, `00944270` 0 and the level-up not held
+/// ([`levelup_held`]), the level-up menu is shown (`008d5210`).
+fn update_levelup(e: &mut Engine, this: Ptr<PlayerCharacter>, status_slot: u32) {
+    let progression = e.call(0x0046_4e10, &args![this]).u32();
+    if e.call(0x008d_51f0, &args![progression]).bool()
+        && !levelup_combat_test(e, this, status_slot)
+        && !e.call(0x0052_5430, &args![VATS_OBJECT]).bool()
+        && e.call(0x0094_44a0, &args![]).bool()
+        && e.call(0x0070_9be0, &args![]).bool()
+        && e.call(0x0094_4270, &args![]).u8() == 0
+        && !levelup_held(e, this)
+    {
+        let progression = e.call(0x0046_4e10, &args![this]).u32();
+        e.call(0x008d_5210, &args![progression]);
+    }
+}
+
 /// The level-up's combat test in `PlayerCharacter::Update` (`0x943990`,
 /// `PlayerCharacter::IsPlayerCharacterInCombat` `00953c50`: the byte +0xDF0, and +0xDF1 into
 /// `out`). lStewieAl's Tweaks' row S0404 (`patchDelayLevelupAfterCombat`, its
@@ -9715,6 +9692,13 @@ fn levelup_combat_test(e: &mut Engine, this: Ptr<PlayerCharacter>, out: u32) -> 
         return true;
     }
     now.wrapping_sub(e.mem.u32(kept)) < 3000
+}
+
+/// The movement directions' test of `PlayerCharacter::Update` (forward 0, back 1, left 2, right 3):
+/// [`movement_key`] with lStewieAl's Tweaks' row S0329 (`patchLeftRightMovementCancelsOut`).
+fn movement_direction(e: &mut Engine, input: u32, key: u32) -> bool {
+    let cancel = e.stewie(engine_core::extend::stewie::OPPOSITE_KEYS_CANCEL);
+    movement_key(e, input, key, cancel)
 }
 
 /// A movement direction's test in `PlayerCharacter::Update` (`00a24660` on `input`: the control
@@ -9752,6 +9736,17 @@ fn current_ammo_or_godmode(e: &mut Engine, weapon: u32, player: u32) -> u32 {
     e.call(0x0052_5980, &args![weapon, player]).u32()
 }
 
+/// Whether `PlayerCharacter::Update` lets the player's held attack go on (the tests around `0x941DD4`):
+/// the attack control held (`00a24660` with 4 and 0), the byte `011e07aa` set, the ammunition test
+/// ([`has_ammo_or_godmode_automatic`], lStewieAl's Tweaks' row S0082.01) and `008a6970`.
+fn held_attack_goes_on(e: &mut Engine, this: Ptr<PlayerCharacter>, main_state: u32) -> bool {
+    let process = process_of(e, this);
+    e.call(0x00a2_4660, &args![main_state, 4u32, 0u32]).u32() != 0
+        && e.global::<u8>(STATE_FLAG_011E07AA) != 0
+        && has_ammo_or_godmode_automatic(e, this, process)
+        && e.call(0x008a_6970, &args![this]).bool()
+}
+
 /// The ammunition test of `PlayerCharacter::Update`'s held attack (`0x941DD4`: the process' slot
 /// `0x14c`, the ammunition entry, is there). lStewieAl's Tweaks' row S0082.01 (`NoAmmoGodmode`, its
 /// `PlayerHasAmmoInfoOrAutoWeaponAndGodmode` and the bytes after it): without an entry, also true
@@ -9774,6 +9769,46 @@ fn has_ammo_or_godmode_automatic(e: &mut Engine, this: Ptr<PlayerCharacter>, pro
     };
     let weapon = if entry != 0 { e.mem.u32(entry + 8) } else { 0 };
     weapon != 0 && e.mem.u8(weapon + 0x100) & 0x2 != 0 && e.mem.u32(weapon + 0xa8) != 0
+}
+
+/// The free-flight push of `PlayerCharacter::Update` (around `0x942793`, collision off): the move is
+/// the view-relative point `position` less `second` (`00439ef0` into the local -0x2F0), scaled by
+/// `delta` (`00439180`); its height alone (a point of 0, 0 and the height at -0x2FC) is added to
+/// `second` (`00439e90` into -0x308) and the sum given to the player's slot `0x2a8`.
+/// lStewieAl's Tweaks' row S0096 (`patchTCLMovement`): the move comes from [`tcl_set_movement`]
+/// (holding jump rises), and with the keyboard (the move flags at `word_slot` have 0x40, Tweaks'
+/// `TCLMovementAddZHook` jumped to at `0x9427AA`) the whole move is added, not only its height.
+fn free_flight_push(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    frame: u32,
+    position: u32,
+    second: u32,
+    delta: f32,
+    word_slot: u32,
+) {
+    let moved_by = local(frame, -0x2f0);
+    let tcl_row = e.stewie(engine_core::extend::stewie::TCL_MOVEMENT);
+    if tcl_row {
+        tcl_set_movement(e, position, moved_by, second);
+    } else {
+        e.call(0x0043_9ef0, &args![position, moved_by, second]);
+    }
+    e.call(0x0043_9180, &args![moved_by, delta]);
+    let pushed = if tcl_row && e.mem.u8(word_slot) & 0x40 != 0 {
+        moved_by
+    } else {
+        let lift = e.mem.f32(moved_by + 8);
+        typed_call!(
+            leaf::FAMILY,
+            0x0041_6870,
+            leaf::point3_new(e, local(frame, -0x2fc), 0.0f32, 0.0f32, lift)
+        )
+    };
+    let sum = e
+        .call(0x0043_9e90, &args![second, local(frame, -0x308), pushed])
+        .u32();
+    e.vcall(this.addr(), 0x2a8, &args![sum]);
 }
 
 // Translated from lStewieAl's Tweaks 10.05 (main.h): TCLSetMovementHook.
@@ -10377,6 +10412,51 @@ fn ranged_attack_reaction(
     *group = weapon_attack_group(e, weapon).unwrap_or(0x20);
 }
 
+/// The held attack's burst end (`00948310`, the test at `0x94928F`): with a VATS action (`action`), a weapon
+/// and its ammunition (`00525980`), the action's counter (+8) is cleared when the magazine entry
+/// (the process' slot `0x14c`) holds no rounds ([`burst_magazine_empty`], lStewieAl's Tweaks' row
+/// S0082.01: the bytes at `0x94928F`, written only without `[Tweaks] bVATSStopBurstIfTargetDead`,
+/// where a missing entry also ends the burst, read directly where the exe read through it).
+fn end_burst_without_rounds(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    weapon: u32,
+    action: u32,
+    player: u32,
+) {
+    if action != 0 && weapon != 0 && e.call(0x0052_5980, &args![weapon, player]).u32() != 0 {
+        let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+        let magazine = e.vcall(process, 0x14c, &args![]).u32();
+        if burst_magazine_empty(e, magazine) {
+            e.mem.set_u8(action + 8, 0);
+        }
+    }
+}
+
+/// Whether the held weapon fires on (`00948310`, the "main" weapon cases after `0x9492B5`): with
+/// no ammunition (`00525980`, lStewieAl's Tweaks' row S0082.01's `WeaponHasAmmoOrGodmode`: none in
+/// god mode, not demigod) for an automatic weapon (`00524b40`); else, with ammunition, while the
+/// magazine entry (the process' slot `0x14c`) is there.
+fn held_weapon_fires_on(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    weapon: u32,
+    player: u32,
+) -> bool {
+    if weapon == 0 {
+        return false;
+    }
+    let ammo = current_ammo_or_godmode(e, weapon, player);
+    if ammo == 0 && e.call(0x0052_4b40, &args![weapon]).u8() != 0 {
+        return true;
+    }
+    if e.call(0x0052_5980, &args![weapon, player]).u32() != 0 {
+        let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+        return e.vcall(process, 0x14c, &args![]).u32() != 0;
+    }
+    false
+}
+
 /// The attack button held (state 0) with the weapon out (slot `0x454`,
 /// `008a6970`) and the latch clear: advances the projectile release timer
 /// while charging a thrown or mine attack (process slots `0x1A8` / `0x1B4`
@@ -10411,31 +10491,8 @@ fn held_attack(
             );
         }
     }
-    if action != 0 && weapon != 0 && e.call(0x0052_5980, &args![weapon, player]).u32() != 0 {
-        let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
-        let magazine = e.vcall(process, 0x14c, &args![]).u32();
-        // lStewieAl's Tweaks' row S0082.01 (`NoAmmoGodmode`, the bytes at `0x94928F`, written only
-        // without `[Tweaks] bVATSStopBurstIfTargetDead`): a missing magazine entry also ends the
-        // burst, read directly (+4) where the exe read through the missing entry.
-        if burst_magazine_empty(e, magazine) {
-            e.mem.set_u8(action + 8, 0);
-        }
-    }
-    let mut main = false;
-    if weapon != 0 {
-        // S0082.01's `WeaponHasAmmoOrGodmode` (called at `0x9492B5`): no ammunition in god mode
-        // (not demigod), so an automatic weapon fires on.
-        let ammo = current_ammo_or_godmode(e, weapon, player);
-        let mut recheck = true;
-        if ammo == 0 && e.call(0x0052_4b40, &args![weapon]).u8() != 0 {
-            main = true;
-            recheck = false;
-        }
-        if recheck && e.call(0x0052_5980, &args![weapon, player]).u32() != 0 {
-            let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
-            main = e.vcall(process, 0x14c, &args![]).u32() != 0;
-        }
-    }
+    end_burst_without_rounds(e, this, weapon, action, player);
+    let main = held_weapon_fires_on(e, this, weapon, player);
     if main {
         let two = e.global::<f32>(0x0101_62c0);
         e.call(0x0096_3eb0, &args![this, 3u32, two, 0u32]);
@@ -21256,6 +21313,102 @@ mod tests {
         }
     }
 
+    /// S0096 at its call sites in `PlayerCharacter::Update` ([`free_flight_push`]): the view move
+    /// (1, 2, 3) less the position (0.5, 0.5, 1), scaled by 2. Off: `00439ef0` makes the move and
+    /// only its height (a point of 0, 0 and the height, at -0x2FC) is added (`00439e90`). On: Tweaks'
+    /// `TCLSetMovementHook` makes it (`00439ef0` not called; holding jump, 100 times 1.7 here, rises
+    /// with the keyboard and a controller alike); with the keyboard (move flag 0x40) the whole move
+    /// is added (`TCLMovementAddZHook`), with a controller its height alone.
+    #[test]
+    fn s0096_free_flight_pushes_the_whole_move_with_the_keyboard() {
+        // (row, the keyboard, jump held)
+        for (on, keyboard, jump) in [
+            (false, true, true),
+            (true, true, false),
+            (true, false, false),
+            (true, false, true),
+            (true, true, true),
+        ] {
+            let label = format!("on {on} keyboard {keyboard} jump {jump}");
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::TCL_MOVEMENT, on);
+            e.map(0x011d_e000, 0x1000);
+            e.map(0x011f_3000, 0x1000);
+            let this = player(&mut e);
+            e.set_global(PLAYER_SINGLETON, this.addr());
+            e.set_global(0x011f_35cc, 0x4400u32);
+            let speed = e.mem.alloc(0x40);
+            let speed_target = e.mem.alloc(8);
+            e.register_double(speed_target, |_, _| float(100.0));
+            e.mem.set_u32(speed + 0xc, speed_target);
+            e.mem.set_u32(this.addr() + 0xa4, speed);
+            let push = e.mem.alloc(8);
+            e.register_double(push, |_, _| Ret::default());
+            put_vtable(&mut e, this.addr(), 0x0268_0000, &[(0x2a8, push)]);
+            e.register_double(0x00a2_4660, move |_, a| {
+                int(u32::from(jump && a[1] == 0xc && a[2] == 0))
+            });
+            e.register_double(0x0043_9ef0, |e, a| {
+                for i in 0..3 {
+                    let v = e.mem.f32(a[0] + 4 * i) - e.mem.f32(a[2] + 4 * i);
+                    e.mem.set_f32(a[1] + 4 * i, v);
+                }
+                int(a[1])
+            });
+            e.register_double(0x0043_9180, |e, a| {
+                for i in 0..3 {
+                    let v = e.mem.f32(a[0] + 4 * i) * f32::from_bits(a[1]);
+                    e.mem.set_f32(a[0] + 4 * i, v);
+                }
+                int(a[0])
+            });
+            e.register_double(0x0041_6870, |e, a| {
+                for i in 0..3 {
+                    e.mem.set_u32(a[0] + 4 * i, a[1 + i as usize]);
+                }
+                int(a[0])
+            });
+            e.register_double(0x0043_9e90, |_, a| int(a[1]));
+            let block = e.mem.alloc(0x400);
+            let frame = block + 0x400;
+            let word_slot = e.mem.alloc(4);
+            e.mem.set_u8(word_slot, if keyboard { 0x40 } else { 0 });
+            let position = e.mem.alloc(12);
+            let second = e.mem.alloc(12);
+            for (i, (p, s)) in [(1.0f32, 0.5f32), (2.0, 0.5), (3.0, 1.0)]
+                .into_iter()
+                .enumerate()
+            {
+                e.mem.set_f32(position + 4 * i as u32, p);
+                e.mem.set_f32(second + 4 * i as u32, s);
+            }
+            free_flight_push(&mut e, this, frame, position, second, 2.0, word_slot);
+            let lifted = if on && jump {
+                3.0f32 + 100.0f32 * 1.7
+            } else {
+                3.0
+            };
+            let moved = [1.0f32, 3.0, (lifted - 1.0) * 2.0];
+            assert_eq!(called(&e, 0x0043_9ef0).len(), usize::from(!on), "{label}");
+            let added = called(&e, 0x0043_9e90);
+            assert_eq!(added.len(), 1, "{label}");
+            let pushed = added[0][2];
+            let whole = on && keyboard;
+            let expected = if whole { moved } else { [0.0, 0.0, moved[2]] };
+            assert_eq!(
+                [
+                    e.mem.f32(pushed),
+                    e.mem.f32(pushed + 4),
+                    e.mem.f32(pushed + 8)
+                ],
+                expected,
+                "{label}"
+            );
+            assert_eq!(pushed == local(frame, -0x2f0), whole, "{label}");
+            assert_eq!(called(&e, push).len(), 1, "{label}");
+        }
+    }
+
     /// S0097 does not change a direct call of `0093ab30` (JIP LN NVSE's `ToggleSneak` makes one;
     /// Tweaks only rewrites the vtable slot `0108AD7C`, see `crates/stewie`'s `run_and_gun.rs`):
     /// with the row on or off the action's whole cost (`0066dca0`: 30) is spent (slot `0x33c`),
@@ -21364,6 +21517,95 @@ mod tests {
         }
     }
 
+    /// S0082.01 at its two sites in `00948310`'s held attack: the burst end
+    /// ([`end_burst_without_rounds`], `0x94928F`): a VATS action (+8 set) with a weapon and its
+    /// ammunition but no magazine entry ends the burst (+8 cleared) with the row, and a magazine of
+    /// 0 rounds ends it either way, 3 rounds never; whether the weapon fires on
+    /// ([`held_weapon_fires_on`], `0x9492B5`): an automatic weapon (`00524b40`) with ammunition but
+    /// no magazine entry fires on in god mode with the row, not without it.
+    fn s0082_01_held_attack_ammunition_sites() {
+        // (row, the magazine's rounds or none, the burst ended)
+        for (on, rounds, ended) in [
+            (true, None, true),
+            (true, Some(0u32), true),
+            (false, Some(0), true),
+            (false, Some(3), false),
+            (true, Some(3), false),
+        ] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::NO_AMMO_GODMODE, on);
+            e.register_double(0x0052_5980, |_, _| int(0x7200));
+            e.register_double(0x0072_6070, |e, a| int(e.mem.u32(a[0] + 4)));
+            let magazine = match rounds {
+                Some(n) => {
+                    let m = e.mem.alloc(0xc);
+                    e.mem.set_u32(m + 4, n);
+                    m
+                }
+                None => 0,
+            };
+            let process = answering_object(&mut e, 0x0269_0000, &[(0x14c, magazine)]);
+            let this = player(&mut e);
+            e.mem.set_u32(this.addr() + 0x68, process);
+            let action = e.mem.alloc(0x10);
+            e.mem.set_u8(action + 8, 1);
+            end_burst_without_rounds(&mut e, this, 0x4400, action, this.addr());
+            assert_eq!(e.mem.u8(action + 8) == 0, ended, "on {on} {rounds:?}");
+        }
+        for (on, fires) in [(false, false), (true, true)] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::NO_AMMO_GODMODE, on);
+            e.map(0x011e_0000, 0x1000);
+            e.mem.set_u8(GODMODE_BYTE, 1);
+            e.register_double(0x0052_5980, |_, _| int(0x7200));
+            e.register_double(0x0052_4b40, |_, _| int(1));
+            let process = answering_object(&mut e, 0x026a_0000, &[(0x14c, 0)]);
+            let this = player(&mut e);
+            e.mem.set_u32(this.addr() + 0x68, process);
+            assert_eq!(
+                held_weapon_fires_on(&mut e, this, 0x4400, this.addr()),
+                fires,
+                "on {on}"
+            );
+        }
+    }
+
+    /// S0082.01 at its call site in `PlayerCharacter::Update` ([`held_attack_goes_on`], `0x941DD4`):
+    /// the attack held (`00a24660` with 4 and 0), `011e07aa` set and `008a6970` true, the player in
+    /// god mode with no ammunition entry (slot `0x14c` 0) and an automatic weapon with an
+    /// ammunition form: the attack goes on with the row, not without it; with an entry it goes on
+    /// either way.
+    #[test]
+    fn s0082_01_the_held_attack_goes_on_in_god_mode() {
+        s0082_01_held_attack_ammunition_sites();
+        for (on, entry, goes_on) in [(false, 0u32, false), (true, 0, true), (false, 0x7000, true)] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::NO_AMMO_GODMODE, on);
+            e.map(0x011e_0000, 0x1000);
+            e.mem.set_u8(GODMODE_BYTE, 1);
+            e.mem.set_u8(STATE_FLAG_011E07AA, 1);
+            e.register_double(0x00a2_4660, |_, a| int(u32::from(a[1] == 4 && a[2] == 0)));
+            e.register_double(0x008a_6970, |_, _| int(1));
+            let weapon = e.mem.alloc(0x200);
+            e.mem.set_u8(weapon + 0x100, 0x2);
+            e.mem.set_u32(weapon + 0xa8, 0x7100);
+            let weapon_entry = e.mem.alloc(0xc);
+            e.mem.set_u32(weapon_entry + 8, weapon);
+            let process = answering_object(
+                &mut e,
+                0x0268_0000,
+                &[(0x14c, entry), (0x148, weapon_entry)],
+            );
+            let this = player(&mut e);
+            e.mem.set_u32(this.addr() + 0x68, process);
+            assert_eq!(
+                held_attack_goes_on(&mut e, this, 0x1000),
+                goes_on,
+                "on {on} entry {entry:#x}"
+            );
+        }
+    }
+
     /// S0329 (`patchLeftRightMovementCancelsOut`): a direction moves when pressed or held; with
     /// the row only while held and its opposite (left 2 against right 3) is not held.
     #[test]
@@ -21389,6 +21631,24 @@ mod tests {
                 movement_key(&mut e, 0x1000, 2, on),
                 moves,
                 "on {on} pressed {pressed} held {held} right {right}"
+            );
+        }
+        // At the call site ([`movement_direction`], which reads the row): left and right both held
+        // move left with the row off, not with it on; left alone moves either way.
+        for (on, right, moves) in [
+            (false, true, true),
+            (true, true, false),
+            (true, false, true),
+        ] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::OPPOSITE_KEYS_CANCEL, on);
+            e.register_double(0x00a2_4660, move |_, a| {
+                int(u32::from(a[2] == 0 && (a[1] == 2 || (right && a[1] == 3))))
+            });
+            assert_eq!(
+                movement_direction(&mut e, 0x1000, 2),
+                moves,
+                "on {on} right {right}"
             );
         }
     }
@@ -21421,6 +21681,57 @@ mod tests {
         }
         assert_eq!(e.mem.u8(out), 0x55);
         assert_eq!(called(&e, 0x0095_3c50).len(), 1);
+    }
+
+    /// S0404 at its call site, the level-up step of `PlayerCharacter::Update` ([`update_levelup`]):
+    /// with a level-up due and every other test passing, the menu is shown (`008d5210`) when the
+    /// combat test says so. Off: `00953c50` decides (0 shows it, 1 does not) and the player's
+    /// combat byte is not read. On: in combat (+0xDF0) no menu; out of combat 1000 later still none,
+    /// 3000 later the menu.
+    #[test]
+    fn s0404_the_level_up_step_waits_after_combat() {
+        let world = |on: bool, in_combat_answer: u32| {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::DELAY_LEVELUP_AFTER_COMBAT, on);
+            e.map(0x011f_6000, 0x1000);
+            e.register_double(0x0046_4e10, |_, _| int(0x6600));
+            e.register_double(0x008d_51f0, |_, _| int(1));
+            e.register_double(0x0095_3c50, move |_, _| int(in_combat_answer));
+            e.register_double(0x0052_5430, |_, _| int(0));
+            e.register_double(0x0094_44a0, |_, _| int(1));
+            e.register_double(0x0070_9be0, |_, _| int(1));
+            e.register_double(0x0094_4270, |_, _| int(0));
+            e.register_double(0x005c_7870, |_, _| int(0));
+            e.register_double(0x008d_5210, |_, _| Ret::default());
+            let this = player(&mut e);
+            let status = e.mem.alloc(4);
+            (e, this, status)
+        };
+        for (answer, shown) in [(0u32, true), (1, false)] {
+            let (mut e, this, status) = world(false, answer);
+            e.mem.set_u8(this.addr() + 0xdf0, 1);
+            update_levelup(&mut e, this, status);
+            assert_eq!(
+                called(&e, 0x008d_5210),
+                if shown { vec![vec![0x6600]] } else { vec![] },
+                "off, 00953c50 answers {answer}"
+            );
+        }
+        let (mut e, this, status) = world(true, 0);
+        e.mem.set_u8(this.addr() + 0xdf0, 1);
+        e.mem.set_u32(0x011f_6394 + 0x14, 5000);
+        update_levelup(&mut e, this, status);
+        e.mem.set_u8(this.addr() + 0xdf0, 0);
+        e.mem.set_u32(0x011f_6394 + 0x14, 6000);
+        update_levelup(&mut e, this, status);
+        assert!(
+            called(&e, 0x008d_5210).is_empty(),
+            "in combat and 1000 after"
+        );
+        e.mem.set_u32(0x011f_6394 + 0x14, 8000);
+        update_levelup(&mut e, this, status);
+        assert_eq!(called(&e, 0x008d_5210), vec![vec![0x6600]], "3000 after");
+        assert!(called(&e, 0x0095_3c50).is_empty());
     }
 
     #[test]

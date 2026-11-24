@@ -2032,6 +2032,67 @@ fn vats_out_of_ammo(e: &mut Engine, row: bool, ammo_list: u32, menu: u32) -> boo
     total == 0.0 || total.is_nan()
 }
 
+/// The queued shot's tests in `DoIdle` (`0x7EDC3D` to `0x7EDD04`), true when the shot fails: a
+/// throwable (kind 0xA or 0xD) without `enough`, a Rock-It Launcher whose queued ammunition is not
+/// above 0.0, the attack action 0x16, a cost above the menu's action points (+0xE0) or unordered,
+/// a weapon with ammunition (`GET_CURRENT_AMMO`) whose queued ammunition is not above 0.0, or one
+/// out of ammunition ([`vats_out_of_ammo`]). lStewieAl's Tweaks' row S0082.01 (`NoAmmoGodmode`):
+/// in god mode (`011e07ba`) the throwable, action point and queued ammunition tests no longer stop
+/// the shot (its hooks at `0x7EDC3D`, `0x7EDCA3` and `0x7EDCE5`), and the ammunition test at
+/// `0x7EDD04` is its own.
+#[allow(clippy::too_many_arguments)]
+fn queued_shot_fails(
+    e: &mut Engine,
+    m: u32,
+    weapon: u32,
+    enough: bool,
+    rock_it: bool,
+    action: u32,
+    cost: f32,
+    ammo_list: u32,
+) -> bool {
+    let thrown = weapon != 0
+        && (e.call(WEAPON_KIND, &args![weapon]).u32() == 0xa
+            || e.call(WEAPON_KIND, &args![weapon]).u32() == 0xd);
+    let no_ammo_godmode = e.stewie(engine_core::extend::stewie::NO_AMMO_GODMODE);
+    let godmode = no_ammo_godmode && e.mem.u8(GODMODE_BYTE) != 0;
+    let mut fail = thrown && !enough && !godmode;
+    // `TEST AH,0x41; JNZ`: fails when the queued ammo is not above 0.0.
+    if !fail && rock_it && !above(queued_ammo(e, m), double_zero(e)) {
+        fail = true;
+    }
+    if !fail && action == 0x16 {
+        fail = true;
+    }
+    // `FCOMPP; TEST AH,0x41; JP`: fails when the cost is above the points
+    // or unordered.
+    if !fail && !at_most(cost as f64, load_f32(e, m + 0xe0) as f64) && !godmode {
+        fail = true;
+    }
+    if !fail
+        && weapon != 0
+        && {
+            let player = e.global::<u32>(PLAYER);
+            e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0
+        }
+        && !above(queued_ammo(e, m), double_zero(e))
+        && !godmode
+    {
+        fail = true;
+    }
+    if !fail
+        && weapon != 0
+        && {
+            let player = e.global::<u32>(PLAYER);
+            e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0
+        }
+        && vats_out_of_ammo(e, no_ammo_godmode, ammo_list, m)
+    {
+        fail = true;
+    }
+    fail
+}
+
 /// `[+0xF4] + [+0xF0]` of the menu (queued total and clip ammo) as x87
 /// adds them.
 fn queued_ammo(e: &Engine, menu: u32) -> f64 {
@@ -2595,48 +2656,7 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
     } else {
         true
     };
-    let thrown = weapon != 0
-        && (e.call(WEAPON_KIND, &args![weapon]).u32() == 0xa
-            || e.call(WEAPON_KIND, &args![weapon]).u32() == 0xd);
-    // lStewieAl's Tweaks' row S0082.01 (`NoAmmoGodmode`): in god mode (`011e07ba`) the throwable,
-    // action point and queued ammunition tests no longer stop the shot (its hooks at `0x7EDC3D`,
-    // `0x7EDCA3` and `0x7EDCE5`), and the ammunition test at `0x7EDD04` is its own.
-    let no_ammo_godmode = e.stewie(engine_core::extend::stewie::NO_AMMO_GODMODE);
-    let godmode = no_ammo_godmode && e.mem.u8(GODMODE_BYTE) != 0;
-    let mut fail = thrown && !enough && !godmode;
-    // `TEST AH,0x41; JNZ`: fails when the queued ammo is not above 0.0.
-    if !fail && rock_it && !above(queued_ammo(e, m), double_zero(e)) {
-        fail = true;
-    }
-    if !fail && action == 0x16 {
-        fail = true;
-    }
-    // `FCOMPP; TEST AH,0x41; JP`: fails when the cost is above the points
-    // or unordered.
-    if !fail && !at_most(cost as f64, load_f32(e, m + 0xe0) as f64) && !godmode {
-        fail = true;
-    }
-    if !fail
-        && weapon != 0
-        && {
-            let player = e.global::<u32>(PLAYER);
-            e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0
-        }
-        && !above(queued_ammo(e, m), double_zero(e))
-        && !godmode
-    {
-        fail = true;
-    }
-    if !fail
-        && weapon != 0
-        && {
-            let player = e.global::<u32>(PLAYER);
-            e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0
-        }
-        && vats_out_of_ammo(e, no_ammo_godmode, ammo_list, m)
-    {
-        fail = true;
-    }
+    let mut fail = queued_shot_fails(e, m, weapon, enough, rock_it, action, cost, ammo_list);
     if !fail && matches!(target_part_percent(e, this), Some(percent) if percent <= 0) {
         fail = true;
     }
@@ -10516,6 +10536,39 @@ mod tests {
         assert_eq!(stewie_entry_max_health(&mut e, entry), 150);
         e.mem.set_u8(armour + 4, 0x1f);
         assert_eq!(stewie_entry_max_health(&mut e, entry), 0);
+    }
+
+    /// S0082.01 at its call sites in `DoIdle` ([`queued_shot_fails`], `0x7EDC3D` to `0x7EDD04`):
+    /// a throwable (kind 0xA) without enough, a cost (30) above the points (10), the queued
+    /// ammunition at 0.0, the weapon's ammunition there but no ammunition entry. The shot fails
+    /// with the row off, and with it on out of god mode; on in god mode (`011e07ba`) it is queued.
+    /// With the row in god mode and only the cost above the points, also queued.
+    #[test]
+    fn s0082_01_god_mode_queues_the_vats_shot() {
+        // (row, god, a throwable without enough, fails)
+        for (on, god, throwable, fails) in [
+            (false, 1u8, true, true),
+            (true, 0, true, true),
+            (true, 1, true, false),
+            (false, 1, false, true),
+            (true, 1, false, false),
+        ] {
+            let mut e = engine();
+            let menu = open_menu(&mut e);
+            e.mem.set_f32(menu + 0xe0, 10.0);
+            e.mem.set_f32(menu + 0xf0, 0.0);
+            e.mem.set_f32(menu + 0xf4, 0.0);
+            e.mem.set_u8(0x011e_07ba, god);
+            e.set_stewie(stewie::NO_AMMO_GODMODE, on);
+            let kind = if throwable { 0xa } else { 0x3 };
+            e.register_double(WEAPON_KIND, move |_, _| word(kind));
+            e.register_double(GET_CURRENT_AMMO, |_, _| word(0x7700));
+            assert_eq!(
+                queued_shot_fails(&mut e, menu, 0x6000, false, false, 1, 30.0, 0),
+                fails,
+                "on {on} god {god} throwable {throwable}"
+            );
+        }
     }
 
     /// Row S0144 (`0x7EDB33`): the current ammo is asked either way; with the row on it counts as

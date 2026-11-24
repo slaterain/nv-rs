@@ -882,6 +882,37 @@ mod tests {
         assert_eq!(calls[1], (SLOT_BASE + 0x2a8, vec![PLAYER, calls[0].1[1]]));
     }
 
+    /// S0096 at its call site in `PlayerMover::Update` (`0x9EA1CE`): in free flight (`0050d4a0`
+    /// true) the move goes through the transform (`00439e90`) to the player (slot `0x2a8`), except
+    /// with the row and the keyboard (the move flags have 0x40): then neither, the player's update
+    /// moves it. A controller (no 0x40) or the row off: as the exe.
+    #[test]
+    fn s0096_free_flight_leaves_the_keyboards_move_to_the_player() {
+        // (row, the move flags, the move handed on)
+        for (on, mode, handed) in [(false, 0x4f, true), (true, 0x4f, false), (true, 0xf, true)] {
+            let (mut e, mover) = engine();
+            e.set_stewie(engine_core::extend::stewie::TCL_MOVEMENT, on);
+            e.set(mover, PlayerMover::MoveMode, mode);
+            e.register(GET_ANIMATION, |_, _| 0xa0u32.into_ret());
+            e.register(0x0088_6b30, |e, a| {
+                e.mem.set_f32(a[1], 7.0);
+                true.into_ret()
+            });
+            e.register(0x0050_d4a0, |_, _| true.into_ret());
+            e.register(0x0043_6aa0, |_, _| 0x99u32.into_ret());
+            let calls: Calls = Rc::default();
+            record(&mut e, 0x0043_9e90, &calls);
+            record(&mut e, SLOT_BASE + 0x2a8, &calls);
+            e.call_log = Some(vec![]);
+            e.call(0x009e_9e50, &args![mover, 0.5f32]);
+            assert_eq!(
+                calls.borrow().len(),
+                if handed { 2 } else { 0 },
+                "on {on} mode {mode:#x}"
+            );
+        }
+    }
+
     #[test]
     fn update_turn_timer_counts_down_and_keeps_the_turn() {
         let (mut e, mover) = engine();
