@@ -1587,7 +1587,10 @@ pub fn debug_text_create_debug_text(
             }
             // `0xA10311` (lStewieAl's Tweaks' S0095, `fixConsoleMainMenuVisibility`, points the `FLD`
             // at its own -200.0 while the exe's address is still there): the text nodes in front
-            // of the main menu.
+            // of the main menu. Tweaks' console text shadow (S0953, `bConsoleTextShadow`) patches
+            // this same place (`0x00A1030F`) with its own depths (-200 for the text, -210 for the
+            // shadow): when that row lands, its depth wins over S0095's here, with a test of both
+            // rows on.
             let depth: f32 = if e.stewie(engine_core::extend::stewie::CONSOLE_IN_FRONT_OF_MAIN_MENU)
             {
                 -200.0
