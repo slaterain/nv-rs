@@ -132,8 +132,6 @@ const RENDERER: u32 = 0x011f_91a8;
 const RELEASE_MAP: u32 = 0x00b6_d4c0;
 const PORTAL_GRAPH_UPDATE: u32 = 0x00c5_b8d0;
 const LIST_REMOVE_ALL: u32 = 0x00e7_4d40;
-const INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
-const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
 /// The node's queues: lights to add (+0xe4), to remove (+0xf0), to update (+0xfc), objects
 /// (+0x108) and objects for active lights only (+0x114); the portal graph (+0x1e0), the drained
 /// flag (+0x1fc); its light list (`lLightList` +0xb4, count +0xbc).
@@ -579,10 +577,7 @@ fn near_flag(e: &mut Engine, object: u32) -> u32 {
 
 /// An `NiPointer`'s release: the count at +4 down, the object deleted (virtual slot 4) at zero.
 fn release(e: &mut Engine, object: u32) {
-    if e.call(INTERLOCKED_DECREMENT, &args![object.wrapping_add(4)])
-        .u32()
-        == 0
-    {
+    if engine_core::sync_direct::interlocked_decrement(e, object.wrapping_add(4)) as u32 == 0 {
         e.vcall(object, 4, &args![]);
     }
 }
@@ -640,7 +635,7 @@ pub fn drain(e: &mut Engine, this: Ptr) {
         let shadowed = e.mem.u8(light.wrapping_add(LIGHT_CAST_SHADOW)) != 0;
         e.with_stack(4, |e, local| {
             e.mem.set_u32(local.addr(), light);
-            e.call(INTERLOCKED_INCREMENT, &args![light.wrapping_add(4)]);
+            engine_core::sync_direct::interlocked_increment(e, light.wrapping_add(4));
             if shadowed {
                 let map = e.mem.u32(light.wrapping_add(LIGHT_SHADOW_MAP));
                 let renderer = e.global::<u32>(RENDERER);

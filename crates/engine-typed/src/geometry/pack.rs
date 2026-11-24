@@ -694,7 +694,6 @@ pub fn copy_strided(
 const VERTEX_LAYOUT: u32 = 0x00e8_c120;
 const SET_FORMAT: u32 = 0x00e8_f010;
 const PACK_SKINNED_POSITIONS: u32 = 0x0068_7d40;
-const LEAVE_CRITICAL_SECTION: u32 = 0x00fd_f100;
 /// The most texture sets (`011bf558`).
 const TEXTURE_SET_LIMIT: u32 = 0x011b_f558;
 
@@ -894,10 +893,7 @@ pub fn pack_untransformed(
             e.call(MEMCPY, &args![destination, source, size]);
             e.set(manager, VertexBufferManager::pLocked, 0);
             e.set(manager, VertexBufferManager::uiLockedSize, 0);
-            e.call(
-                LEAVE_CRITICAL_SECTION,
-                &args![this.addr().wrapping_add(0x80)],
-            );
+            engine_core::sync_direct::leave_critical_section(e, this.addr().wrapping_add(0x80));
             if e.vcall(buffer, 0x30, &args![]).i32() < 0 {
                 return 0;
             }

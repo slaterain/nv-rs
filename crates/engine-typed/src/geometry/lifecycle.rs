@@ -23,8 +23,6 @@ const FREE: u32 = 0x00aa_4060;
 const GEOMETRY_GROUP: u32 = 0x011f_4880;
 const VTABLE: u32 = 0x0109_bf9c;
 const RENDERER: u32 = 0x011f_4748;
-/// `InterlockedDecrement` (import slot `00fdf1c4`, `stdcall`, the address).
-const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
 /// `NiObject`'s `LoadBinary` (`00a5d610`) and destructor body (`00a5d3d0`), the base step
 /// `SaveBinary` starts with (`00a89af0`), `NiStream::GetGroupFromID` (`00a634e0`) and the group's id
 /// (`00a634f0`), the link step from 10.3.0.7 (`00a645b0`), `NiSphere`'s `LoadBinary` and
@@ -427,9 +425,8 @@ pub fn destruct(e: &mut Engine, this: Ptr) {
         e.vcall(renderer, 0xf0, &args![base]);
     }
     let release = |e: &mut Engine, object: u32| {
-        let count = e
-            .call(INTERLOCKED_DECREMENT, &args![object.wrapping_add(4)])
-            .u32();
+        let count =
+            engine_core::sync_direct::interlocked_decrement(e, object.wrapping_add(4)) as u32;
         if count == 0 {
             e.vcall(object, 4, &args![]);
         }
