@@ -41,7 +41,6 @@ pub mod save_out;
 pub mod scene_light;
 #[cfg(test)]
 mod start_up_tests;
-pub mod thread_races;
 pub mod topic_index;
 pub mod uncap;
 

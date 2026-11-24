@@ -42,11 +42,6 @@ in the game's own `Fallout.ini`. The first fixes in, each described in [FIXES.md
 - Files read without the file thread, and without the limit of 512 open files (about 140 plugins)
   or of 2 GB for one file or archive (TTW's LOD archives).
 - No crash when running fast across cells.
-- The game's threads are safe where they share a scrap heap, the console, face generation and
-  loaded models.
-- V.A.T.S. chances without the 2-second wait.
-- Smaller saves (no witness lists).
-- Radio songs with their own length.
 - A modded race's own beards (kept under its head's folder) are offered only to that race in the
   character menu.
 - No hidden distant water under the Strip.
