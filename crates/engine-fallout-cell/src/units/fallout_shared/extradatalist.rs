@@ -681,7 +681,7 @@ pub fn fn_0040f900(e: &mut Engine) {
 /// True for the extra data types that `AddExtra` puts at the head of the
 /// chain instead of the end: `0x0C`, `0x0D`, `0x0E`, `0x15` and `0x2B`
 /// (a jump table in the exe).
-pub fn fn_0040f980(e: &mut Engine, extra_type: u32) -> bool {
+pub fn fn_0040f980(_e: &mut Engine, extra_type: u32) -> bool {
     matches!(extra_type, 0x0c | 0x0d | 0x0e | 0x15 | 0x2b)
 }
 
