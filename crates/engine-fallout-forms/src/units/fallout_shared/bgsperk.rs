@@ -1108,7 +1108,7 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
     let buffer = buffer.addr();
     e.with_stack(0x84 + TWEAKS_TEXT, |e, work| {
         let work = work.addr();
-        let tweaks_text = work + 0x84;
+        let _tweaks_text = work + 0x84;
         let mut short_heading = false;
         let mut item = e.call(GET_CONDITION_ITEM, &args![base + 0x40, 0u32]).u32();
         let ranks = u32::from(e.mem.u8(base + 0x39));
@@ -1248,54 +1248,6 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
 }
 
 const TWEAKS_TEXT: u32 = 0x60;
-
-/// `text` and its end at `at`; returns `at`.
-fn put_text(e: &mut Engine, at: u32, text: &[u8]) -> u32 {
-    e.mem.write(at, text);
-    e.mem.set_u8(at + text.len() as u32, 0);
-    at
-}
-
-const ACTOR_VALUE_INFOS: u32 = 0x011d_61c8;
-const ACTOR_VALUE_KARMA: u32 = 0x17;
-
-/// `snprintf(buffer, size, format, name, rank)` as the C runtime does it for the formats this line
-/// has: `%s` takes `name`, `%d` takes `rank` (signed), `%%` is a `%`; the text is cut to `size - 1`
-/// bytes and ended with a 0. Any other conversion is copied as it stands.
-fn snprintf_cut(e: &mut Engine, buffer: u32, size: u32, format: u32, name: u32, rank: u32) {
-    if size == 0 {
-        return;
-    }
-    let mut text = Vec::new();
-    let mut chars = e.mem.cstr(format).into_iter().peekable();
-    let mut words = [name, rank].into_iter();
-    while let Some(c) = chars.next() {
-        if c != b'%' {
-            text.push(c);
-            continue;
-        }
-        match chars.peek().copied() {
-            Some(b's') => {
-                chars.next();
-                let word = words.next().unwrap_or(0);
-                text.extend(e.mem.cstr(word));
-            }
-            Some(b'd') => {
-                chars.next();
-                let word = words.next().unwrap_or(0);
-                text.extend((word as i32).to_string().into_bytes());
-            }
-            Some(b'%') => {
-                chars.next();
-                text.push(b'%');
-            }
-            _ => text.push(c),
-        }
-    }
-    text.truncate((size - 1) as usize);
-    text.push(0);
-    e.mem.write(buffer, &text);
-}
 
 /// Chunk writers (cdecl): data (`TESForm::__AddChunkData`, `00485990`:
 /// signature, data, size), a word (`00485910`), a byte (`004858f0`, the

@@ -1998,12 +1998,6 @@ pub fn fn_00727680(e: &mut Engine, this: Ptr, _unused_1: u32, category: u32) {
     fn_00729970(e, Ptr::new(CATEGORY_ARRAY), COMPARE_007278C0);
 }
 
-/// `DataHandler::recipeList`'s offset (`004077e0` answers the handler plus it).
-const DATA_HANDLER_RECIPES: u32 = 0xa0;
-/// `ListBox::RestoreListState` (`00731360`, `RET 4`: a byte, whether to play the sound).
-const LIST_BOX_RESTORE_POSITION: u32 = 0x0073_1360;
-const EMPTY_TEXT: u32 = 0x0101_1584;
-
 /// The call at `0x7275D0` (`DoClick`'s category title, `Tile::SetString` with `string` 0xFC4 and
 /// reactions).
 fn set_category_title(e: &mut Engine, tile: u32, text: u32) {
@@ -2216,9 +2210,6 @@ fn show_selected(e: &mut Engine, this: Ptr) {
         e.call(TILE_SET_INT, &args![tile, 0xfa3u32, 0u32]);
     }
 }
-
-/// `0048e730` (`cdecl`, a form and the player): the form's icon path (`""` when it has none).
-const ICON_PATH_0048E730: u32 = 0x0048_e730;
 
 /// `show_selected` for a selected recipe (the menu's tiles through `pMe`).
 fn show_recipe(e: &mut Engine, this: Ptr, crafter: u32, selected: &mut u32) {
@@ -3127,15 +3118,6 @@ pub fn fn_00728da0(e: &mut Engine, _this: Ptr, form: u32, holder: u32) {
     }
 }
 
-/// The tile traits `user5` and `user6` (`0x1009`, `0x100A`).
-const USER5: u32 = 0x1009;
-const USER6: u32 = 0x100a;
-/// The form type of weapons, `TESObjectWEAP`'s vtable and its `eWeaponType` byte (+0xF4; from
-/// 10, `kWeapType_OneHandGrenade`, the thrown ones).
-const WEAPON_FORM_TYPE: u8 = 0x28;
-const WEAPON_VTABLE: u32 = 0x0102_c51c;
-const WEAPON_TYPE: u32 = 0xf4;
-const FIRST_THROWN_WEAPON_TYPE: u8 = 10;
 /// `fn_00728da0`'s weapon part (`traits`: title, value, the `0x1009` damage trait).
 fn show_weapon(e: &mut Engine, weapon: u32, tiles: &[u32; 12], traits: [u32; 3]) {
     let [title_trait, value_trait, damage_trait] = traits;

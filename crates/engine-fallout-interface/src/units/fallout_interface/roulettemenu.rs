@@ -144,7 +144,6 @@ const NODE_00572160: u32 = 0x0057_2160;
 const LIST_IS_EMPTY: u32 = 0x0082_56d0;
 const LIST_FREE_NODES: u32 = 0x0047_0470;
 const LIST_DELETE: u32 = 0x0047_02f0;
-const LIST_DELETE_ALL_0076B2A0: u32 = 0x0076_b2a0;
 const LIST_APPEND: u32 = 0x005a_e3d0;
 /// The list constructor (`0096a2d0`) and `006815c0` (`thiscall`, returns `this`).
 const LIST_CONSTRUCT: u32 = 0x0096_a2d0;
@@ -1475,8 +1474,6 @@ const KEY_0084E3A0: u32 = 0x0084_e3a0;
 #[cfg(test)]
 const WORD_AT_4_00726070: u32 = 0x0072_6070;
 const LIST_REMOVE_FIRST_0063F7B0: u32 = 0x0063_f7b0;
-const MEMORY_MANAGER_011F6238: u32 = 0x011f_6238;
-const MEMORY_FREE_00AA4060: u32 = 0x00aa_4060;
 
 /// The second trait id the bet and chip tiles use (`011da86c`), the "wrong bet" sound
 /// toggle (`011da900`), the spin's elapsed time (`011da904`, a `float`), the state seen on

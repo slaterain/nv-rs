@@ -16749,28 +16749,6 @@ mod tests {
         );
     }
 
-    /// An actor whose process has queued the reload loop (action 0x11) with its sequence
-    /// finished, the loop's time reached, and `entry` as its weapon entry; the entry's
-    /// `HasModEffectActive` reads the entry (+0) and the weapon's `GetAttackAnim` the form's byte
-    /// at +0x103, as the exe's do.
-    fn reload_loop_setup(e: &mut Engine, entry: u32) -> Ptr<Actor> {
-        let (actor, _, process) = pick_setup(e);
-        set_slot(e, process, 0x3e4, ret(0x11));
-        set_slot(e, process, 0x3e8, ret(0x6500));
-        set_slot(e, process, 0x148, ret(entry));
-        stub(e, SEQUENCE_GET_GENERIC_LOCATION, 1);
-        stub_with(e, ITEM_CHANGE_HAS_MOD_EFFECT_ACTIVE, |e, a| {
-            let _extra_lists = e.mem.u32(a[0]);
-            ret(0)
-        });
-        stub_with(e, WEAPON_GET_ATTACK_ANIM, |e, a| {
-            ret(u32::from(e.mem.u8(a[0] + 0x103)) + 0xb1)
-        });
-        // The entry's form (`0044ddc0`: its word at +8).
-        stub_with(e, 0x0044_ddc0, |e, a| ret(e.mem.u32(a[0] + 8)));
-        actor
-    }
-
     #[test]
     fn landing_from_a_jump_picks_a_landing_group_and_plays_the_sound() {
         let mut e = engine();

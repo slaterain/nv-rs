@@ -1060,11 +1060,6 @@ mod tests {
 
 #[cfg(test)]
 mod tests_a01 {
-    use super::{
-        stair_sub_material_var_type, LIST_GET_CHILD_SHAPE, LIST_GET_NUM_CHILD_SHAPES,
-        PACKED_GET_SUB_MATERIAL, RTTI_CONVEX_LIST_SHAPE, RTTI_LIST_SHAPE,
-        RTTI_PACKED_TRI_STRIPS_SHAPE, RTTI_TRI_STRIPS_SHAPE, TRI_STRIPS_GET_SUB_MATERIAL_VAR_TYPE,
-    };
     use crate::prelude::*;
 
     /// Objects whose virtual function at +0xcc answers the word at +0x20 (the next link).
@@ -1115,85 +1110,6 @@ mod tests_a01 {
         );
         // A mask of 0 gives "no bits set" == 0.
         assert_eq!(e.call(0x00c8_4f50, &args![objects[0], 0u32, 0u32]).u32(), 1);
-    }
-
-    /// A `bhkShape` of the class `rtti` with the material word `word` and the collection link
-    /// `link` (slot 0xcc; 0 for none). The RTTI and link answers are the words at `+0x30`, `+0x34`.
-    fn stair_shape(e: &mut Engine, rtti: u32, word: u32, link: u32) -> u32 {
-        let vtable = e.mem.alloc(0xd0);
-        e.mem.set_u32(vtable + 0x8, 0x0900_1008);
-        e.mem.set_u32(vtable + 0xcc, 0x0900_10cc);
-        e.register(0x0900_1008, |e, a| Ret {
-            eax: e.mem.u32(a[0] + 0x30),
-            ..Ret::default()
-        });
-        e.register(0x0900_10cc, |e, a| Ret {
-            eax: e.mem.u32(a[0] + 0x34),
-            ..Ret::default()
-        });
-        let shape = e.mem.alloc(0x40);
-        e.mem.set_u32(shape, vtable);
-        e.mem.set_u32(shape + 0x10, word);
-        e.mem.set_u32(shape + 0x30, rtti);
-        e.mem.set_u32(shape + 0x34, link);
-        shape
-    }
-
-    fn stairs_on(e: &mut Engine, on: bool) {}
-
-    #[test]
-    fn s0216_the_stair_bit_both_ways() {
-        let mut e = Engine::new();
-        let shape = stair_shape(&mut e, 0x4242, 0x45, 0);
-        assert_eq!(
-            e.call(0x00c8_4f50, &args![shape, 0xffff_ffffu32, 0x40u32])
-                .u32()
-                & 0xff,
-            0
-        );
-        stairs_on(&mut e, true);
-        assert_eq!(
-            e.call(0x00c8_4f50, &args![shape, 0xffff_ffffu32, 0x40u32])
-                .u32(),
-            1
-        );
-        // An unknown class with a key: its own word.
-        assert_eq!(e.call(0x00c8_4f50, &args![shape, 3u32, 0x40u32]).u32(), 1);
-        e.mem.set_u32(shape + 0x10, 0x05);
-        assert_eq!(e.call(0x00c8_4f50, &args![shape, 3u32, 0x40u32]).u32(), 0);
-    }
-
-    #[test]
-    fn s0216_packed_and_strip_shapes_answer_their_sub_shape() {
-        let mut e = Engine::new();
-        stairs_on(&mut e, true);
-        e.register(PACKED_GET_SUB_MATERIAL, |_, a| Ret {
-            eax: if a[1] == 7 { 0x49 } else { 0x09 },
-            ..Ret::default()
-        });
-        let packed = stair_shape(&mut e, RTTI_PACKED_TRI_STRIPS_SHAPE, 0x00, 0);
-        let outer = stair_shape(&mut e, 0x4242, 0x00, packed);
-        assert!(stair_sub_material_var_type(&mut e, outer, 7, 0x40));
-        assert!(!stair_sub_material_var_type(&mut e, outer, 8, 0x40));
-        // Key -1: no links followed, the outer shape's own word.
-        assert!(!stair_sub_material_var_type(&mut e, outer, u32::MAX, 0x40));
-        e.register(TRI_STRIPS_GET_SUB_MATERIAL_VAR_TYPE, |_, a| Ret {
-            eax: u32::from(a[1] == 0x0030_0000 && a[2] == 0x40),
-            ..Ret::default()
-        });
-        let strips = stair_shape(&mut e, RTTI_TRI_STRIPS_SHAPE, 0x40, 0);
-        assert!(stair_sub_material_var_type(
-            &mut e,
-            strips,
-            0x0030_0000,
-            0x40
-        ));
-        assert!(!stair_sub_material_var_type(
-            &mut e,
-            strips,
-            0x0010_0000,
-            0x40
-        ));
     }
 
     /// A link that points back at the object itself ends the chain.

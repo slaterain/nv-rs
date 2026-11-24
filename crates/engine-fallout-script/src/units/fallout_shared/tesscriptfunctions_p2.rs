@@ -459,19 +459,6 @@ fn nav_mesh_render(e: &mut Engine) -> u32 {
     e.call(NAV_MESH_RENDER, &args![]).u32()
 }
 
-/// The word `NAV_MESH_RENDER` (`00552ba0`) answers; the navigation mesh display's root node; the
-/// scene graph singleton (`SceneGraph::GetSingleton`).
-const NAV_MESH_RENDER_SINGLETON: u32 = 0x011d_6e2c;
-const NAV_MESH_ROOT_NODE: u32 = 0x011d_6e5c;
-const SCENE_GRAPH: u32 = 0x011d_eb7c;
-/// `NiNode`'s constructor through its creator (`stdcall`, no arguments), `NiGlobalStringTable::
-/// AddString` and `DecRefCount` (`cdecl`), `NiNode::AttachChild`'s vtable slot (`00a5ed10` in
-/// `NiNode`'s and `SceneGraph`'s tables).
-const NI_NODE_CREATE: u32 = 0x00a5_f030;
-const STRING_TABLE_ADD: u32 = 0x00a5_b690;
-const STRING_TABLE_RELEASE: u32 = 0x0043_81d0;
-const VSLOT_ATTACH_CHILD: u32 = 0xdc;
-
 fn nav_mesh_set_draw(e: &mut Engine, draw: bool) {
     let render = nav_mesh_render(e);
     e.call(NAV_MESH_RENDER_SET_DRAW, &args![render, draw]);
@@ -982,56 +969,6 @@ pub fn script_center_on_cell_function(e: &mut Engine, a: ScriptArgs) -> bool {
     }
     e.mem.free(name);
     ok
-}
-
-/// `DataHandler::GetCellByName` (`thiscall`) and `LookupFormByID`.
-const DATA_HANDLER_CELL_BY_NAME: u32 = 0x0046_1ae0;
-const LOOKUP_FORM_BY_ID: u32 = 0x0048_39c0;
-/// `kFormType_TESObjectCELL`.
-const FORM_TYPE_CELL: u8 = 0x39;
-
-/// The C runtime's `strtoul(text, nullptr, 16)`: blanks skipped, an optional sign, an optional
-/// `0x`/`0X`, then hex digits; a value past 32 bits gives `ULONG_MAX`, a `-` negates the value
-/// read (modulo 2^32); no digits give 0.
-fn strtoul_hex(text: &[u8]) -> u32 {
-    let mut i = 0;
-    while i < text.len() && matches!(text[i], b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r') {
-        i += 1;
-    }
-    let negative = match text.get(i) {
-        Some(b'-') => {
-            i += 1;
-            true
-        }
-        Some(b'+') => {
-            i += 1;
-            false
-        }
-        _ => false,
-    };
-    if text.get(i) == Some(&b'0')
-        && matches!(text.get(i + 1), Some(b'x' | b'X'))
-        && text.get(i + 2).is_some_and(u8::is_ascii_hexdigit)
-    {
-        i += 2;
-    }
-    let mut value: u64 = 0;
-    let mut overflow = false;
-    while let Some(digit) = text.get(i).and_then(|c| (*c as char).to_digit(16)) {
-        value = value * 16 + u64::from(digit);
-        if value > u64::from(u32::MAX) {
-            overflow = true;
-            value = u64::from(u32::MAX);
-        }
-        i += 1;
-    }
-    if overflow {
-        u32::MAX
-    } else if negative {
-        (value as u32).wrapping_neg()
-    } else {
-        value as u32
-    }
 }
 
 /// The tail the two exterior commands share: loads (or creates) the cell at

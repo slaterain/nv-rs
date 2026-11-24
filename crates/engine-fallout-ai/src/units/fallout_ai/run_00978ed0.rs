@@ -85,9 +85,6 @@ pub fn fn_00978f70(e: &mut Engine, this: Ptr) {
     e.call(0x009b_c470, &args![this]);
 }
 
-const ACTOR_CONTINUOUS_BEAM: u32 = 0x1a0;
-const RETURN_TRUE: u32 = 0x008d_0360;
-
 /// The common end of the two `BeamProjectile` constructors: the vtables,
 /// the pointer at +0x150 constructed empty, `004f15a0(0x3f)` and the
 /// pointer set to 0.
@@ -357,18 +354,6 @@ mod n028_tests {
         assert_eq!(calls_to(&e, 0x0040_1030), vec![vec![0x9000]]);
         e.call(0x0097_8f40, &[0x9000, 0]);
         assert_eq!(calls_to(&e, 0x0040_1030).len(), 1);
-    }
-
-    /// A beam (0x160 bytes) whose shooter (+0xFC) is `shooter`, and an actor whose vtable's +0x100 is
-    /// `is_actor` (`ReturnTrue` for an actor) holding `held` as its continuous beam (+0x1A0).
-    fn beam_and_shooter(e: &mut Engine, is_actor: u32) -> (u32, u32) {
-        let table = e.mem.alloc(0x200);
-        e.mem.set_u32(table + 0x100, is_actor);
-        let shooter = e.mem.alloc(0x200);
-        e.mem.set_u32(shooter, table);
-        let beam = e.mem.alloc(0x160);
-        e.mem.set_u32(beam + 0xfc, shooter);
-        (beam, shooter)
     }
 
     #[test]

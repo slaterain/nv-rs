@@ -59,8 +59,6 @@ const CAST_SOURCE_01183108: u32 = 0x0118_3108;
 const CAST_TARGET_01183158: u32 = 0x0118_3158;
 /// `MapMarkerData::GetLocationName` (engine map name for the name getter `00408da0`).
 const FORM_NAME_00408DA0: u32 = 0x0040_8da0;
-/// The exe's empty string (`01011584`).
-const EMPTY_STRING_01011584: u32 = 0x0101_1584;
 
 /// The name of an item's form (`00408da0` on its `TESFullName`).
 fn form_name(e: &mut Engine, form: u32) -> u32 {

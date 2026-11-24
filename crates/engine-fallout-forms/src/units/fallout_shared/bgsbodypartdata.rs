@@ -1518,27 +1518,6 @@ mod tests {
         );
     }
 
-    /// [`limb_doubles`] with a fourth part (index 3, node `0x2003`) whose node has no parent: the parent
-    /// getter reads a null node's word at +0x18 as the exe's does (the null page: a stop).
-    fn limb_doubles_with_a_rootless_part(e: &mut Engine, this: Ptr, children: u32) -> u32 {
-        let object = limb_doubles(e, this, children);
-        let part = body_part(e, 3);
-        e.mem.set_u32(this.addr() + 0x34 + 4 * 3, part);
-        e.mem.set_u32(part + 0x80, 0x103);
-        e.register(NODE_PARENT, |e, a| Ret {
-            eax: match a[0] {
-                0x2000 => 0x9000,
-                0x2001 => 0x3000,
-                0x2002 => 0x3001,
-                0x3001 => 0x3000,
-                0x2003 => 0,
-                node => e.mem.u32(node + 0x18),
-            },
-            ..Ret::default()
-        });
-        object
-    }
-
     #[test]
     fn show_child_limbs_enables_the_parts_below_the_ancestor() {
         let mut e = Engine::new();

@@ -309,24 +309,6 @@ fn static_trait(e: &mut Engine, guard: u32, slot: u32) -> u32 {
     e.global::<u32>(slot)
 }
 
-// Translated from 00753340 (decompiled, FalloutNV.exe 1.4.0.525)
-/// The exe's `"_MaxValue"` (`01073df8`), the points to give (+0x4C), "only add values" (+0x54),
-/// the player's actor value owner (+0xA4) and its `GetNormalizedPermanentAV` slot (+0x1C).
-const MAX_VALUE_TRAIT_NAME: u32 = 0x0107_3df8;
-const NUM_POINTS: u32 = 0x4c;
-const ONLY_ADD_VALUES: u32 = 0x54;
-const ACTOR_VALUE_OWNER: u32 = 0xa4;
-const NORMALIZED_PERMANENT_AV: u32 = 0x1c;
-
-/// `cvttss2si`: toward zero, `0x80000000` out of range.
-fn float_to_int(value: f32) -> i32 {
-    if (-2_147_483_648.0..2_147_483_648.0).contains(&value) {
-        value as i32
-    } else {
-        i32::MIN
-    }
-}
-
 /// `CharGenMenu::GetClass` (Xbox PDB): the class number `0x418`.
 pub fn char_gen_menu_get_class(_e: &mut Engine, _this: Ptr<CharGenMenu>) -> u32 {
     CHAR_GEN_MENU_CLASS

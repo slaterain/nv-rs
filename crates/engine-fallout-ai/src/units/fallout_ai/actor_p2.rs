@@ -4746,7 +4746,6 @@ pub fn actor_restore_fatigue(e: &mut Engine, this: Ptr<Actor>, amount: f32) {
 /// (with the item the process virtual `+0x148` yields, if any) and
 /// multiplied by the owner's value for actor value `0x0c`.
 pub fn actor_restore_action_points(e: &mut Engine, this: Ptr<Actor>, amount: f32) {
-    const FISTS_WEAPON: u32 = 0x011c_a278;
     if !e
         .vcall(this.addr(), VSLOT_ACTOR_FLAG_0X360, &args![])
         .bool()

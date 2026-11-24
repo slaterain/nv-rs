@@ -650,10 +650,6 @@ pub(crate) const FN_0057D0A0: u32 = 0x0057_d0a0;
 // Cell tests and the `TES` singleton (`GLOBAL_0011DEA10`).
 /// `TES::TestAllCells` (Xbox PDB), `thiscall` (`cell count or -1`).
 pub(crate) const TES_TEST_ALL_CELLS: u32 = 0x0045_56d0;
-/// The console's "open" byte and the running thread's TLS byte set while a console line runs
-/// (`+0x268`), as xNVSE's `IsConsoleMode` reads them.
-const CONSOLE_OPEN: u32 = 0x011d_ea2e;
-const TLS_CONSOLE_LINE: u32 = 0x268;
 
 /// `thiscall` on the `TES`: `bRunningCellTests` or `bRunningCellTests2`
 /// (`+0x51`, `+0x52`).

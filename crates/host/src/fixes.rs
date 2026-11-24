@@ -610,6 +610,23 @@ fn install_uio(e: &mut Engine) {
     uio::set_on(e, true);
 }
 
+/// JohnnyGuitar NVSE's editor-id restoration built in (`crates/johnnyguitar`), a flag the crate
+/// reads at its install: every loaded form keeps the editor id its record gives it, so text
+/// compiled while the game runs (the console, script runner files, `CompileScript`, lambdas from
+/// text) finds `PlayerRef` or `Caps001` by name, as with JohnnyGuitar installed (VNV installs it).
+/// Off (vanilla): the game's own few names, as without JohnnyGuitar.
+pub const JG_EDITOR_IDS: Fix = Fix {
+    name: "JohnnyGuitar's editor ids",
+    env: "NV_JG_EDITOR_IDS",
+    addresses: &[],
+    summary: "JohnnyGuitar NVSE's editor ids built in: every form keeps its editor id, so the console, script runner files and scripts compiled from text find forms such as PlayerRef by name, as on a VNV setup",
+    install: install_jg_editor_ids,
+};
+
+fn install_jg_editor_ids(e: &mut Engine) {
+    johnnyguitar::set_on(e, true);
+}
+
 /// The Mod Configuration Menu's NVSE plugin built in (`crates/mcm`: MCM.dll 1.5, "MCM Extensions"):
 /// its nine commands at `0x21C0` up, which MCM's scripts and the menus of the mods that use it call
 /// (`GetMCMFloat`, `SetMCMFloat`, `GetModINI`, ...). On in `fixes` (with JIP, which MCM's mods need),

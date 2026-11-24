@@ -134,8 +134,6 @@ const FORM_LOOK_UP: u32 = 0x0048_39c0;
 const REFERENCE_GET_BASE_FORM: u32 = 0x007a_f430;
 /// The parent cell of a reference (`+0x40`).
 const REFERENCE_PARENT_CELL: u32 = 0x008d_6f30;
-/// The reference's cell (`TESObjectREFR` +0x40), which `008d6f30` answers.
-const REFERENCE_CELL: u32 = 0x40;
 /// The reference's `ExtraDataList` (`this + 0x44`).
 const REFERENCE_EXTRA_DATA_LIST: u32 = 0x005d_43c0;
 /// The reference's 3D (the loaded model node), or null.
@@ -5909,15 +5907,12 @@ pub fn fn_0054f4c0(e: &mut Engine) -> u32 {
     e.global(0x011c_a438)
 }
 
-const FORCE_FULL_LOD_SETTING: u32 = 0x011d_5d00;
-
 fn restore_tree_full_lod(e: &mut Engine) {
     fn_0054f4d0(e, 0);
 }
 
 #[cfg(test)]
 mod s0103_tests {
-    use super::*;
 }
 
 // Translated from 0054f4d0 (decompiled, FalloutNV.exe 1.4.0.525)

@@ -177,18 +177,6 @@ fn copy_bound(e: &mut Engine, destination: u32, source: u32) {
     e.mem.set_f32(destination + 12, radius);
 }
 
-/// `NiAVObject::CreateBoundIfNone` (`005467e0`, `thiscall`): a new bound
-/// (radius 0) for an object without one.
-const CREATE_BOUND_IF_NONE: u32 = 0x0054_67e0;
-const ORPHANED_BOUND: u32 = 0x8_0000;
-
-/// Whether `index` names a slot of the children array (`0 <= index < m_usSize`, as
-/// `GetAtChecked` and the exe's detach fix-up test it).
-fn index_in_children(e: &Engine, this: Ptr<NiSwitchNode>, index: i32) -> bool {
-    let children = this.at(NiSwitchNode::m_kChildren);
-    (index as u32) < u32::from(e.get(children, NiTArray::m_usSize))
-}
-
 /// The selected child's world bound (the null bound if it has none) copied
 /// into the switch node's own.
 fn take_bound_from(e: &mut Engine, this: Ptr<NiSwitchNode>, child: u32) {
@@ -1252,21 +1240,6 @@ mod tests {
         f.e.set(node, NiSwitchNode::m_iIndex, -1);
         ni_switch_node_update_world_bound(&mut f.e, node);
         assert_eq!(f.bound_words(node.addr()), [11, 22, 33, 0]);
-    }
-
-    /// `CreateBoundIfNone` (`005467e0`) as a double: a zeroed bound for an
-    /// object without one.
-    fn create_bound_double(f: &mut Fixture) {
-        f.e.register(CREATE_BOUND_IF_NONE, |e, a| {
-            if e.mem.u32(a[0] + 0x20) == 0 {
-                let bound = e.mem.alloc(16);
-                for word in 0..4 {
-                    e.mem.set_u32(bound + 4 * word, 0);
-                }
-                e.mem.set_u32(a[0] + 0x20, bound);
-            }
-            Ret::default()
-        });
     }
 
     #[test]

@@ -276,7 +276,6 @@ const LIST_ITEM_TILE_INIT: u32 = 0x0073_ac90;
 const SET_ITEM_CARD: u32 = 0x0071_9790;
 /// Two float getters on an object (`this` only; ST0).
 const OBJECT_VALUE_004BE180: u32 = 0x004b_e180;
-const OBJECT_VALUE_004BE060: u32 = 0x004b_e060;
 /// `GetTickCount` behind a wrapper (no arguments).
 const CURRENT_TIME: u32 = 0x0045_7fe0;
 /// The message box shower (cdecl, six words).

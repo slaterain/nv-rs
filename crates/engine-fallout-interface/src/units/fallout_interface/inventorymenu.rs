@@ -129,7 +129,6 @@ const ITEM_OBJECT: u32 = 0x0044_ddc0;
 const FORM_TYPE: u32 = 0x0040_1170;
 /// Two float getters on the item's object (`this` only; ST0).
 const OBJECT_VALUE_004BE180: u32 = 0x004b_e180;
-const OBJECT_VALUE_004BE060: u32 = 0x004b_e060;
 /// The message box shower (cdecl, six words).
 const SHOW_MESSAGE: u32 = 0x0070_52f0;
 /// Adds the object to a list (`this`, address of the object).

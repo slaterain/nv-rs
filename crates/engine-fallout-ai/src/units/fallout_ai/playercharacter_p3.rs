@@ -443,34 +443,6 @@ fn equip_hot_key_replacement(e: &mut Engine, inventory: u32, item: Ptr, current:
     current
 }
 
-const MENU_VISIBILITY: u32 = 0x011f_308f;
-const INVENTORY_MENU_ID: u32 = 1002;
-const INVENTORY_MENU: u32 = 0x011d_9ea4;
-const INVENTORY_FILTER_AMMO: u32 = 4;
-/// `BaseExtraList::GetByType` (`00410220`, thiscall: the list, the type), the types
-/// `kExtraData_ContainerChanges` (0x15) and `kExtraData_Ammo` (0x6E), and `BGSListForm`'s form
-/// type (0x55).
-const EXTRA_GET_BY_TYPE: u32 = 0x0041_0220;
-const EXTRA_CONTAINER_CHANGES: u32 = 0x15;
-const EXTRA_AMMO: u32 = 0x6e;
-const FORM_TYPE_LIST: u8 = 0x55;
-
-/// The data of `actor`'s container changes (`ExtraContainerChanges` in its extra list at `+0x44`,
-/// its data at `+0xC`), 0 when it has none.
-fn container_changes_data(e: &mut Engine, actor: u32) -> u32 {
-    let extra = e
-        .call(
-            EXTRA_GET_BY_TYPE,
-            &args![actor + 0x44, EXTRA_CONTAINER_CHANGES],
-        )
-        .u32();
-    if extra == 0 {
-        0
-    } else {
-        e.mem.u32(extra + 0xc)
-    }
-}
-
 /// Builds `ItemChange(object, count)` in a fresh 0xc-byte block, null when
 /// the allocation fails.
 fn new_item_change(e: &mut Engine, object: u32, count: u32) -> u32 {
@@ -9266,26 +9238,6 @@ mod tests {
             "the equipped change differs from the replacement, so a new one is installed"
         );
         assert_eq!(calls_to(&log, ACTOR_QUEUE_EQUIP_OBJECT)[0][1], replacement);
-    }
-
-    /// The player re-equipping the ammunition `held` it already has (mode 0), whose process's
-    /// ammunition entry (slot 0x14c) is there when first asked and `later` after: the first
-    /// answer has `held` as its form, so no entry is installed.
-    fn reload_entry_world(e: &mut Engine, later: Option<u32>) -> (Ptr<PlayerCharacter>, u32) {
-        let held = 0x5000_1000;
-        let (player, change) = equip_world(e, held, 2, 5, 0);
-        let asked = std::rc::Rc::new(std::cell::Cell::new(0u32));
-        e.register_double(SLOT_B, move |_, _| {
-            asked.set(asked.get() + 1);
-            int(if asked.get() == 1 {
-                change
-            } else {
-                later.unwrap_or(change)
-            })
-        });
-        add_slot(e, player.addr(), 0x340, SLOT_E);
-        answer(e, SLOT_E, 0);
-        (player, held)
     }
 
     /// Answers the forms the reload counted in the inventory (`004c8f30` on the inventory changes):

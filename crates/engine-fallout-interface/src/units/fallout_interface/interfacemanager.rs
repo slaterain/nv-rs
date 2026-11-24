@@ -2572,8 +2572,6 @@ fn idle_read_mouse(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut Idle
     e.set(this, InterfaceManager::fMouseWheel, wheel as f32);
 }
 
-const FRAME_TIME_FLOAT: u32 = 0x011f_63a0;
-
 fn read_mouse_buttons(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut IdleState) {
     let controls = state.controls;
     let query = move |e: &mut Engine, which: u32| {
@@ -3225,43 +3223,9 @@ fn paused_or_trading(e: &mut Engine, this: Ptr<InterfaceManager>) -> bool {
     e.call(MENU_FLAG_QUERY_004A4040, &args![]).bool()
 }
 
-/// xNVSE's `InterfaceManager::GetTopVisibleMenuID`: 0 below menu mode (`cMenuMode` < 2); the
-/// active menu's id (`+0xD0`, its `+0x20`); else the last entry of the enter stack (`+0x114`, up to
-/// the first 0, read without a bound as xNVSE does) unless it is 1, else the first of the inventory,
-/// map, stats, repair and item-mod menus that is shown (`g_menuVisibility`), else 0.
-fn top_visible_menu_id(e: &mut Engine, this: Ptr<InterfaceManager>) -> u32 {
-    if e.get(this, InterfaceManager::cMenuMode) < 2 {
-        return 0;
-    }
-    let active = e.mem.u32(this.addr() + 0xd0);
-    if active != 0 {
-        return e.mem.u32(active + 0x20);
-    }
-    let mut top = 0;
-    let mut at = this.addr() + 0x114;
-    loop {
-        let entry = e.mem.u32(at);
-        if entry == 0 {
-            break;
-        }
-        top = entry;
-        at += 4;
-    }
-    if top != 1 {
-        return top;
-    }
-    [0x3ea, 0x3ff, 0x3eb, 0x40b, 0x425]
-        .into_iter()
-        .find(|&menu| e.mem.u8(MENU_VISIBILITY + menu) != 0)
-        .unwrap_or(0)
-}
-
 fn open_pipboy_reads_the_pad(e: &mut Engine) -> bool {
     e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool()
 }
-
-/// The console's open byte (xNVSE's `g_isConsoleOpen`, `0x11DEA2E`).
-const CONSOLE_IS_OPEN: u32 = 0x011d_ea2e;
 
 /// The `_PCButton_<key>` child tile of the frontmost menu: when it is
 /// enabled (`0xfa3`) it is clicked (`0xfaf` set: sound, click pulse and the
@@ -3883,11 +3847,6 @@ pub fn fn_0070f690(e: &mut Engine, this: Ptr<InterfaceManager>, callback: u32) {
     }
 }
 
-/// `g_menuVisibility` (one byte per menu type, xNVSE's `0x11F308F`).
-const MENU_VISIBILITY: u32 = 0x011f_308f;
-/// `InventoryMenu::SaveCurrentTabScrollPosition` (no arguments).
-const SAVE_INVENTORY_SCROLL: u32 = 0x0077_ffd0;
-
 // Translated from 0070f6e0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `InterfaceManager::DoGamepadEvent` (Xbox PDB): handles one gamepad event
 /// (`event` 0 reads the top one with `GetTopGamepadButton`). The menus are
@@ -4450,11 +4409,6 @@ fn stick_axis(e: &mut Engine, controls: u32, axis: u32) -> i32 {
     e.call(CONTROLS_AXIS_00A23390, &args![controls, 0u32, axis])
         .i32()
 }
-
-/// The start menu (`StartMenu *`).
-const START_MENU_SINGLETON: u32 = 0x011d_aac0;
-/// `StartMenu::IsInActionMapping` (`thiscall`): the control mapping waits for a key.
-const START_MENU_IS_IN_ACTION_MAPPING: u32 = 0x007c_e8f0;
 
 fn cleared_repeat_time(e: &mut Engine, this: Ptr<InterfaceManager>) {
     let time = e.call(FADE_CLOCK_READ, &args![FADE_CLOCK]).u32() << 1;
@@ -7280,44 +7234,6 @@ pub fn fn_00716010(e: &mut Engine, this: Ptr<InterfaceManager>, reference: u32) 
     }
     e.call(HUD_FORGET_REFERENCE, &args![reference]);
 }
-
-/// xNVSE's `tList::Remove(item)` (`GameTypes.h`) on the list whose first node (`[item, next]`) is at
-/// `list`: every node holding `item` goes; the first holder takes its next node's item and link and
-/// that node is freed (`RemoveMe`; with no next node it only loses its item), a later one is unlinked
-/// from the node before it and freed (`RemoveNext`). Freed with the game's heap (`GameHeapFree`).
-fn remove_from_list(e: &mut Engine, list: u32, item: u32) {
-    let mut node = list;
-    let mut previous = 0u32;
-    while node != 0 {
-        if e.mem.u32(node) != item {
-            previous = node;
-            node = e.mem.u32(node + 4);
-            continue;
-        }
-        if previous != 0 {
-            // RemoveNext on the node before: the next node after the removed one is looked at.
-            let next = e.mem.u32(node + 4);
-            e.mem.set_u32(previous + 4, next);
-            e.call(GAME_HEAP_FREE, &args![GAME_HEAP, node]);
-            node = next;
-        } else {
-            // RemoveMe: the next node's item and link copied in, that node freed; none: emptied.
-            let next = e.mem.u32(node + 4);
-            if next != 0 {
-                e.mem.set_u32(node, e.mem.u32(next));
-                e.mem.set_u32(node + 4, e.mem.u32(next + 4));
-                e.call(GAME_HEAP_FREE, &args![GAME_HEAP, next]);
-            } else {
-                e.mem.set_u32(node, 0);
-                node = 0;
-            }
-        }
-    }
-}
-
-/// `GameHeapFree` (xNVSE): `MemoryHeap::Free` (`00aa4060`) on the game's heap (`011f6238`).
-const GAME_HEAP_FREE: u32 = 0x00aa_4060;
-const GAME_HEAP: u32 = 0x011f_6238;
 
 // Translated from 007160b0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `InterfaceManager::ForceTextureRelease` (Xbox PDB): releases the

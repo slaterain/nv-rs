@@ -4890,7 +4890,6 @@ fn no_unequip_message(e: &mut Engine, actor: u32) {
 
 #[cfg(test)]
 mod s0128_tests {
-    use super::*;
 }
 
 // Translated from 004c37d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -12878,24 +12877,6 @@ mod tests {
         assert_eq!(e.call(0x004bd400, &args![this]).f32(), 130.0);
     }
 
-    /// A weapon whose extra data says mods 1 and 4 while its form has only mod 4 (`value` 20), at full
-    /// health (200): the item change and the weapon.
-    fn weapon_missing_its_first_mod(e: &mut Engine) -> (Ptr<ItemChange>, u32) {
-        let weapon = form(e, 0x28, 200, 100);
-        set(e, weapon, 0x98, 100);
-        casts(e, weapon, 0, 0);
-        let second = e.mem.alloc(0x100);
-        set(e, second, MOD_OBJECT_VALUE + 4, 20);
-        set(e, weapon, WEAPON_MOD_OBJECT, 0);
-        set(e, weapon, WEAPON_MOD_OBJECT + 8, second);
-        let x = extra(e);
-        e.mem.set_f32(x + X_HEALTH, 100.0);
-        set(e, x, X_HAS_MODS, 1);
-        set(e, x, X_MOD_FLAGS, 5);
-        let head = list(e, &[x]);
-        (change(e, head, weapon), weapon)
-    }
-
     #[test]
     fn rounding_to_a_multiple() {
         let mut e = engine();
@@ -14983,19 +14964,6 @@ mod tests {
         assert_eq!(e.mem.u32(player + 0x1f0), 7);
         e.call(0x004c0cd0, &args![player, 0u32]);
         assert_eq!(e.mem.u32(player + 0x1f0), 0);
-    }
-
-    /// A worn armour that may not be taken off (`GetCanNotWear` answers 1) in the changes of
-    /// `equip_setup`: the changes, the armour and the actor.
-    fn can_not_wear_world(e: &mut Engine) -> (Ptr<InventoryChanges>, u32, u32) {
-        e.register(GET_DISMEMBERMENT_EXTRA, |_, _| returns(0));
-        e.register(COMPARE_LIST_FOR_CONTAINER, |_, _| returns(0));
-        e.register(EXTRA_GET_CAN_NOT_WEAR, |_, _| returns(1));
-        let (this, armor, actor, _) = equip_setup(e, 0x18);
-        let worn = worn_plain_extra(e);
-        let change = entry(e, armor, &[worn], 1);
-        put_entry(e, this, change);
-        (this, armor, actor)
     }
 
     #[test]

@@ -451,13 +451,6 @@ fn start_dialogue(
     .bool()
 }
 
-/// `fDialogHitSoundCooldownMax` (`011df70c`).
-const HIT_SOUND_COOLDOWN_MAX: u32 = 0x011d_f70c;
-/// The game's random number generator (`00476c00`, `stdcall`, no words) and its "below `n`"
-/// (`00aa5230`, `thiscall(n)`).
-const GAME_RANDOM: u32 = 0x0047_6c00;
-const RANDOM_BELOW: u32 = 0x00aa_5230;
-
 // Translated from 00984210 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (`thiscall(index)`): the address of the
 /// 8-byte entry `index` at +0x58.

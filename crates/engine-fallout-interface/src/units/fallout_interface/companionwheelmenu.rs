@@ -179,12 +179,6 @@ const ENTRY_DELETE_004459E0: u32 = 0x0044_59e0;
 const ACTOR_GET_HEALTH_PERCENTAGE: u32 = 0x0089_3590;
 const GET_BODY_PART_CONDITION: u32 = 0x0064_6800;
 const ACTOR_DRINK_POTION: u32 = 0x008c_1f80;
-/// An actor's magic caster (+0x88), its virtual +0x40 (`SetCurrentSpell`), an alchemy item's magic
-/// item (+0x30) and `MagicCaster::ReleaseCast` (`00815870`, `thiscall`, one word).
-const ACTOR_MAGIC_CASTER: u32 = 0x88;
-const CASTER_SET_CURRENT_SPELL: u32 = 0x40;
-const ALCHEMY_MAGIC_ITEM: u32 = 0x30;
-const CASTER_RELEASE_CAST_00815870: u32 = 0x0081_5870;
 
 const ACTOR_UPDATE_MAGIC: u32 = 0x008c_3c40;
 const ACTOR_RESTORE_ACTOR_VALUE: u32 = 0x0088_b740;

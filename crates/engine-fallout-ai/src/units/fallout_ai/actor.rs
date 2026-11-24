@@ -482,13 +482,6 @@ pub fn fn_0087d890(e: &mut Engine, this: Ptr<Actor>, add_to_process_lists: bool)
     e.set(this, Actor::iMinorCrimes, 0);
 }
 
-/// The queued follower barks (`FollowerBarks`' list, `011e0098`: a `tList` whose first node is in
-/// place, each node its item and the next node; an item starts with its actor) and the memory
-/// manager's free (`00aa4060` on `011f6238`).
-const FOLLOWER_BARKS: u32 = 0x011e_0098;
-const MEMORY_MANAGER: u32 = 0x011f_6238;
-const MEMORY_FREE: u32 = 0x00aa_4060;
-
 // Translated from 0087dcb0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Actor::~Actor` (Xbox PDB), the body: puts the vtables back, deletes the
 /// ragdoll controller and the penetration utility, releases the sound handle of
@@ -5054,45 +5047,6 @@ mod tests {
         assert!(pos(0x0093_7030) < pos(0x0082_2a80));
         assert!(pos(0x0082_2a80) < pos(0x0081_53b0));
         assert_eq!(*calls.last().unwrap(), 0x0092_ec40);
-    }
-
-    /// The follower barks' list (`011e0098`: its first node in place) holding the items `items`, each
-    /// 16 bytes whose first word is its actor; the memory manager's free recorded.
-    fn follower_barks(e: &mut Engine, actors: &[u32]) -> Vec<u32> {
-        e.map(0x011e_0000, 0x1000);
-        e.register(0x00aa_4060, |_, _| Ret::default());
-        let items: Vec<u32> = actors
-            .iter()
-            .map(|actor| {
-                let item = e.mem.alloc(0x10);
-                e.mem.set_u32(item, *actor);
-                item
-            })
-            .collect();
-        let mut node = 0x011e_0098;
-        for (i, item) in items.iter().enumerate() {
-            e.mem.set_u32(node, *item);
-            if i + 1 < items.len() {
-                let next = e.mem.alloc(8);
-                e.mem.set_u32(node + 4, next);
-                node = next;
-            }
-        }
-        items
-    }
-
-    /// The barks' items left in the list, in order.
-    fn barks_left(e: &Engine) -> Vec<u32> {
-        let mut out = vec![];
-        let mut node = 0x011e_0098;
-        while node != 0 {
-            let item = e.mem.u32(node);
-            if item != 0 {
-                out.push(item);
-            }
-            node = e.mem.u32(node + 4);
-        }
-        out
     }
 
     #[test]

@@ -2656,11 +2656,6 @@ fn reload_loop_flag(e: &mut Engine, weapon: u32) -> bool {
     e.call(PROCESS_FLAG_BYTE, &args![weapon]).bool()
 }
 
-/// `numControlledBlocks` and `m_pkAccumRootName` of an `NiControllerSequence`; its name is at +8.
-const SEQUENCE_BLOCK_COUNT: u32 = 0x0c;
-const SEQUENCE_ACCUM_ROOT_NAME: u32 = 0x5c;
-const SEQUENCE_NAME: u32 = 0x08;
-
 /// The movement sequence's first interpolator at `0x492EBD`: `004937a0(sequence, 0)`, which reads
 /// the first entry of the controlled blocks whether or not there is one.
 fn movement_interpolator(e: &mut Engine, sequence: u32) -> u32 {
@@ -12649,68 +12644,9 @@ mod tests {
         assert_eq!(e.mem.u16(this.addr() + 0x122), 0xff);
     }
 
-    fn console_lines(e: &mut Engine) {
-        CONSOLE_LINES.with(|l| l.borrow_mut().clear());
-        e.register(0x0071_b160, |_, _| ret(0x5000));
-        e.register(0x0071_d0a0, |e, a| {
-            assert_eq!(e.mem.cstr(a[1]), b"%s");
-            let line = e.mem.cstr(e.mem.u32(a[2]));
-            CONSOLE_LINES.with(|l| l.borrow_mut().push(line));
-            Ret::default()
-        });
-    }
-
     thread_local! {
         static CONSOLE_LINES: std::cell::RefCell<Vec<Vec<u8>>> =
             const { std::cell::RefCell::new(Vec::new()) };
-    }
-
-    fn printed() -> Vec<Vec<u8>> {
-        CONSOLE_LINES.with(|l| l.borrow().clone())
-    }
-
-    /// An `Update` with a queued reload for the player, whose process answers `equipped` for its
-    /// weapon entry (slot 0x148); the weapon's form is the entry's word at +8.
-    fn queued_reload_fixture(equipped: u32) -> (Engine, Ptr<Animation>) {
-        let (mut e, this) = update_fixture();
-        let vtable = e.mem.u32(PLAYER);
-        e.register(0x00f4_04b0, |_, _| Ret::default());
-        e.mem.set_u32(vtable + 0x4b0, 0x00f4_04b0);
-        e.register_double(0x00f4_0148, move |_, _| ret(equipped));
-        let process = object_with_vtable(&mut e, 0x100, &[(0x148, 0x00f4_0148)]);
-        e.mem.set_u32(PLAYER + 0x68, process);
-        e.mem.set_u16(this.addr() + 0x122, 0x01ff);
-        e.mem.set_i32(this.addr() + 0x6c, 1);
-        e.set(this, Animation::pActorRef, Ptr::new(ACTOR));
-        e.register(ACTOR_IS_WEAPON_DRAWN, |_, _| ret(1));
-        e.register(ACTOR_SET_ANIM_ACTION, |_, _| Ret::default());
-        // `004938c0` reads the weapon's byte at +0x384, as the exe's does.
-        e.register(PROCESS_FLAG_BYTE, |e, a| {
-            ret(u32::from(e.mem.u8(a[0] + 0x384)))
-        });
-        (e, this)
-    }
-
-    /// A sequence with `blocks` controlled blocks (16-byte entries, the first's interpolator
-    /// 0x7700) and the accumulation root's and its own names.
-    fn movement_sequence(e: &mut Engine, blocks: u32) -> u32 {
-        let sequence = e.mem.alloc(0x80);
-        e.mem.set_u32(sequence + 0x0c, blocks);
-        if blocks != 0 {
-            let array = e.mem.alloc(16 * blocks);
-            e.mem.set_u32(array, 0x7700);
-            e.mem.set_u32(sequence + 0x14, array);
-        }
-        let root = cstring(e, "Bip01 NonAccum");
-        let name = cstring(e, "mtforward");
-        e.mem.set_u32(sequence + 0x5c, root);
-        e.mem.set_u32(sequence + 0x08, name);
-        // `004937a0(sequence, index)`: the entry's first word, read as the exe reads it.
-        e.register(SEQUENCE_INTERPOLATOR_AT, |e, a| {
-            let array = e.mem.u32(a[0] + 0x14);
-            ret(e.mem.u32(array + 16 * a[1]))
-        });
-        sequence
     }
 
     #[test]

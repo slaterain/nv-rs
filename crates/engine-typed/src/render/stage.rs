@@ -68,41 +68,6 @@ fn low8(word: u32) -> u8 {
     word as u8
 }
 
-const VALID_SAMPLER_STATES: u32 = 0x0126_f918;
-const SAMPLER_STATE_SLOTS: u32 = 0x0126_f92c;
-const SAMPLER_RENDER_STATE: u32 = 0x0126_f99c;
-
-/// Every read goes through the draw's own state ([`capture::own_at`]), and the getter's table read
-/// is done here, as `00e910f0` does it.
-fn sampler_state_changed(e: &Engine, this: Ptr<TextureStage>) -> bool {
-    let group = capture::own_at::<u32>(e, this.addr().wrapping_add(0x10));
-    let stage = capture::own_at::<u32>(e, this.addr().wrapping_add(4));
-    for i in 0..2u32 {
-        let state = capture::own_at::<u32>(e, VALID_SAMPLER_STATES + 4 * i);
-        let slot = u32::from(capture::own_at::<u16>(
-            e,
-            SAMPLER_STATE_SLOTS.wrapping_add(state.wrapping_mul(2)),
-        ));
-        if slot > 4 {
-            continue;
-        }
-        let wanted = if capture::own_at::<u8>(e, group.wrapping_add(0xa4 + slot)) != 0 {
-            capture::own_at::<u32>(e, group.wrapping_add(0x90 + 4 * slot))
-        } else if capture::own_at::<u8>(e, group.wrapping_add(0x80 + slot)) != 0 {
-            capture::own_at::<u32>(e, group.wrapping_add(0x6c + 4 * slot))
-        } else {
-            continue;
-        };
-        let cache = capture::own_at::<u32>(e, SAMPLER_RENDER_STATE);
-        let entry = stage.wrapping_mul(5).wrapping_add(slot).wrapping_mul(8);
-        let current = capture::own_at::<u32>(e, cache.wrapping_add(0xe20).wrapping_add(entry));
-        if current != wanted {
-            return true;
-        }
-    }
-    false
-}
-
 // Typed from 00e7eb00
 /// `NiD3DTextureStage::ApplyTexture` (the census's `ApplyRenderStateChanges`), `thiscall(stage,
 /// force)`: unless `force` is clear and the stage's texture is the one last bound to its stage

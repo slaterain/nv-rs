@@ -402,8 +402,6 @@ pub fn fn_00683900(
     this
 }
 
-const PROPERTY_SUBTEXTURE: u32 = 0xc0;
-
 /// The uniform form of [`fn_00683900`] (13 words after `this`).
 fn fn_00683900_entry(e: &mut Engine, a: &[u32]) -> Ret {
     let r = fn_00683900(

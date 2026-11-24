@@ -3105,11 +3105,6 @@ fn remap_waiting(e: &mut Engine, this: Ptr<StartMenu>) -> bool {
     e.call(WAITING_FOR_REMAP_PRESS, &args![this]).bool()
 }
 
-/// `IniSettingCollection::GetIniPrefs` (`*0x11F35A0`): the prefs collection, its path at +4.
-const INI_PREFS: u32 = 0x011f_35a0;
-/// `GetFileAttributesA` (KERNEL32 import slot `00fdf160`).
-const GET_FILE_ATTRIBUTES: u32 = 0x00fd_f160;
-
 // Translated from 007d6eb0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ListBox<StartMenu::Option*>::ListBox` (constructor): builds the base
 /// (`007240c0`), the embedded list (`0096a2d0` on `this + 4`), installs the

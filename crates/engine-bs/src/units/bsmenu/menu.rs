@@ -944,10 +944,6 @@ pub fn menu_start_fade_out(e: &mut Engine, this: Ptr<Menu>) {
     e.call(INTERFACE_UPDATE_ALL_TIMERS, &args![]);
 }
 
-const INVENTORY_MENU: u32 = 0x011d_9ea4;
-/// `InventoryMenu::SaveCurrentTabScrollPosition` (no arguments).
-const SAVE_INVENTORY_SCROLL: u32 = 0x0077_ffd0;
-
 // Translated from 00a1d9e0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Menu::InstantFadeOut` (Xbox PDB): unless the menu is `FADE_HIDDEN`, sets
 /// the tile's trait `0xfa3` to 0.0, fades its model

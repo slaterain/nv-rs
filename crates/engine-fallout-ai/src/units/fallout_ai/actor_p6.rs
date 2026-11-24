@@ -1089,9 +1089,6 @@ const GET_ANIM_GROUP: u32 = 0x0089_7910;
 /// `Animation::PlayGroup` (Xbox PDB): `ECX` = animation, four words (the
 /// group number in the low word, then three more).
 const PLAY_GROUP: u32 = 0x0049_4740;
-/// `Animation::ClearGroup` (`00496080`): `ECX` = animation, a group word and a blend time
-/// (`float`), `RET 8`.
-const ANIMATION_CLEAR_GROUP: u32 = 0x0049_6080;
 /// `Actor::StartAttack` (Xbox PDB): `ECX` = actor, the queued attack.
 const START_ATTACK: u32 = 0x0089_3a40;
 /// `Animation::SpecialIdleWorking_ov3` (Xbox PDB): `ECX` = animation.

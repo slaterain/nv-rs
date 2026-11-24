@@ -419,7 +419,6 @@ const TICK_COUNT: u32 = 0x0045_7fe0;
 /// `operator new(size)` (`00401000`) and `operator delete` (`00401030`).
 const OPERATOR_NEW: u32 = 0x0040_1000;
 const OPERATOR_DELETE: u32 = 0x0040_1030;
-const HUD_UPDATE_VISIBILITY_STATE_00771700: u32 = 0x0077_1700;
 /// The interface manager object getter (`004b7210`, the word at
 /// `011d8a80`, per `interface.rs`) and its `pMenusRoot` getter (`00586150`:
 /// the word at `+0x9c`).

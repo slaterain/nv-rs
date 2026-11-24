@@ -1963,8 +1963,6 @@ const VALUE_TRAIT_011D9048: u32 = 0x011d_9048;
 /// The player's casino records list (`005a6260`: the player's +0x610), a form's id
 /// (`0084e3a0`: the word at +0xc), the allocator (`00401000`, cdecl).
 const CASINO_RECORDS_005A6260: u32 = 0x005a_6260;
-const MEMORY_MANAGER_011F6238: u32 = 0x011f_6238;
-const MEMORY_FREE_00AA4060: u32 = 0x00aa_4060;
 
 #[cfg(test)]
 const FORM_ID_0084E3A0: u32 = 0x0084_e3a0;

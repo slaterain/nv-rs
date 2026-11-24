@@ -9535,8 +9535,6 @@ fn alt_blocked(e: &Engine, flag: u32) -> bool {
 fn jump_blocked(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
     e.call(0x005a_03f0, &args![this, 1u32]).bool()
 }
-/// `MapMenu`'s singleton (`011da368`).
-const MAP_MENU: u32 = 0x011d_a368;
 
 /// The auto vanity camera's test of `PlayerCharacter::Update` (`0x943593`, `004b9930` on the
 /// setting `bDisableAutoVanityMode`: its value at +4 is 0).
@@ -9566,9 +9564,6 @@ fn activate_or_workbench(
 fn levelup_held(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
     e.call(0x005c_7870, &args![this]).bool()
 }
-
-/// The god mode byte (`g_bIsGodmode`, `011e07ba`).
-const GODMODE_BYTE: u32 = 0x011e_07ba;
 
 /// The level-up step of `PlayerCharacter::Update` (around `0x943990`): with a level-up due
 /// (`008d51f0` on the progression, `00464e10`), the player not in combat ([`levelup_combat_test`]),
@@ -9725,15 +9720,10 @@ fn update_player_beam(
 fn vanity_turn_gamepad_test(e: &mut Engine) -> bool {
     e.call(0x004b_71d0, &args![]).u8() != 0
 }
-/// `bDisableController`'s value byte (`011d8c4c` +4).
-const CONTROLLER_DISABLED: u32 = 0x011d_8c50;
-/// The controller-connected byte `004b71d0` reads.
-const CONTROLLER_CONNECTED: u32 = 0x011d_8a84;
 
 /// The vanity camera's pitch rotation in `PlayerCharacter::UpdateCamera` (`0x94B521`,
 /// `NiMatrix3::MakeXRotation` `00524ac0`).
 fn vanity_pitch_rotation(e: &mut Engine, matrix: u32, angle: f32) {
-    const LIMIT: f64 = 1.553_343_1;
     let mut angle = angle;
     e.call(0x0052_4ac0, &args![matrix, angle]);
 }
@@ -20340,51 +20330,6 @@ mod tests {
         released_attack(&mut e, this, 0x1000, 0xa00, 0, &mut ready);
         assert!(!ready);
         assert_eq!(e.mem.u8(ATTACK_RELEASE_BYTE), 1);
-    }
-
-    fn s0082_01_held_attack_ammunition_sites() {
-        // (row, the magazine's rounds or none, the burst ended)
-        for (on, rounds, ended) in [
-            (true, None, true),
-            (true, Some(0u32), true),
-            (false, Some(0), true),
-            (false, Some(3), false),
-            (true, Some(3), false),
-        ] {
-            let mut e = engine();
-            e.register_double(0x0052_5980, |_, _| int(0x7200));
-            e.register_double(0x0072_6070, |e, a| int(e.mem.u32(a[0] + 4)));
-            let magazine = match rounds {
-                Some(n) => {
-                    let m = e.mem.alloc(0xc);
-                    e.mem.set_u32(m + 4, n);
-                    m
-                }
-                None => 0,
-            };
-            let process = answering_object(&mut e, 0x0269_0000, &[(0x14c, magazine)]);
-            let this = player(&mut e);
-            e.mem.set_u32(this.addr() + 0x68, process);
-            let action = e.mem.alloc(0x10);
-            e.mem.set_u8(action + 8, 1);
-            end_burst_without_rounds(&mut e, this, 0x4400, action, this.addr());
-            assert_eq!(e.mem.u8(action + 8) == 0, ended, "on {on} {rounds:?}");
-        }
-        for (on, fires) in [(false, false), (true, true)] {
-            let mut e = engine();
-            e.map(0x011e_0000, 0x1000);
-            e.mem.set_u8(GODMODE_BYTE, 1);
-            e.register_double(0x0052_5980, |_, _| int(0x7200));
-            e.register_double(0x0052_4b40, |_, _| int(1));
-            let process = answering_object(&mut e, 0x026a_0000, &[(0x14c, 0)]);
-            let this = player(&mut e);
-            e.mem.set_u32(this.addr() + 0x68, process);
-            assert_eq!(
-                held_weapon_fires_on(&mut e, this, 0x4400, this.addr()),
-                fires,
-                "on {on}"
-            );
-        }
     }
 
     #[test]

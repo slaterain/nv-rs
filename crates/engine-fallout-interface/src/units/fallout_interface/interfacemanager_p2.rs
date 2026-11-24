@@ -738,9 +738,6 @@ pub fn interface_manager_do_wheel_move(
     e.vcall(target, 0x28, &args![arg_1, arg_2]).u32()
 }
 
-/// `RecipeMenu`'s vtable (`0107048c`).
-const RECIPE_MENU_VTABLE: u32 = 0x0107_048c;
-
 // Translated from 007181d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `InterfaceManager::EnterRenderedMenu` (Xbox PDB): with a menu, makes it
 /// the current rendered menu (`00974d90` decides whether its virtual

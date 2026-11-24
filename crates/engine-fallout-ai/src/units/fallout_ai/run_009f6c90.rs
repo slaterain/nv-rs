@@ -20,7 +20,6 @@ const CURRENT_TICKS: u32 = 0x0045_7fe0;
 /// (unnamed, `modelloader.cpp`): `thiscall`; the kind the switch picks from.
 const SLOT_OBJECT_007031C0: u32 = 0x0070_31c0;
 const KIND_00446390: u32 = 0x0044_6390;
-const COMBAT_WEAPON_TYPE_00522C80: u32 = 0x0052_2c80;
 /// `512.0` (`0x010231a0`), `256.0` (`0x01032adc`) and `128.0` (`0x0101e704`), `float`s.
 const DISTANCE_512: u32 = 0x0102_31a0;
 const DISTANCE_256: u32 = 0x0103_2adc;

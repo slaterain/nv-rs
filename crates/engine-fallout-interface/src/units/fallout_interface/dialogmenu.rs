@@ -98,9 +98,6 @@ const FREE: u32 = 0x0040_1030;
 const IMAGE_SPACE_INSTANCE_STOP: u32 = 0x0052_93f0;
 /// `0083e510` (no arguments; in `menutopic.cpp`).
 const TOPICS_RELEASE_0083E510: u32 = 0x0083_e510;
-/// The radio's "in dialogue or a holotape playing" byte (`011dcfa4`, xNVSE's
-/// `SetInDialogueOrHolotapePlaying`): set, the radio plays quieter.
-const RADIO_QUIETER_011DCFA4: u32 = 0x011d_cfa4;
 
 /// `00483710` (`thiscall`): the `BSSoundHandle` destructor.
 const SOUND_HANDLE_DESTROY: u32 = 0x0048_3710;

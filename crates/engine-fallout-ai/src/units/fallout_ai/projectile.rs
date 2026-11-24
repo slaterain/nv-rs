@@ -7319,8 +7319,6 @@ mod tests {
         (this, Ptr::new(e.mem.alloc(0x30)))
     }
 
-    fn set_beam_ammo_rows(e: &mut Engine, on: bool) {}
-
     #[test]
     fn s0130_06_the_players_beam_takes_no_round_where_it_hits() {
         // (rows, the player's beam, the rounds taken, the shots after)
@@ -7330,7 +7328,6 @@ mod tests {
             (true, false, 1, 2),
         ] {
             let mut e = engine();
-            set_beam_ammo_rows(&mut e, on);
             let shooter = actor(&mut e);
             let other = actor(&mut e);
             e.set_global(PLAYER, if is_player { shooter } else { other });

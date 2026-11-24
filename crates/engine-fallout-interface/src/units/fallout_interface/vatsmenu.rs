@@ -2005,9 +2005,6 @@ fn target_part_percent(e: &mut Engine, menu: Ptr<VatsMenu>) -> Option<i32> {
     Some(ftol(e, chance * hundred))
 }
 
-/// The god mode byte (`g_bIsGodmode`, `011e07ba`).
-const GODMODE_BYTE: u32 = 0x011e_07ba;
-
 /// The VATS ammunition test at `0x7EDD04`: no ammunition entry (`ammo_list`, the process' slot
 /// `0x14c`), or its count (+4) not above 0.
 fn vats_out_of_ammo(e: &mut Engine, ammo_list: u32) -> bool {
@@ -6159,15 +6156,6 @@ fn fistp_truncate(value: f64) -> i32 {
         i32::MIN
     } else {
         value.trunc() as i32
-    }
-}
-
-/// `cvttss2si`: toward zero, `0x80000000` out of range.
-fn float_to_int_trunc(value: f32) -> i32 {
-    if (-2_147_483_648.0..2_147_483_648.0).contains(&value) {
-        value as i32
-    } else {
-        i32::MIN
     }
 }
 

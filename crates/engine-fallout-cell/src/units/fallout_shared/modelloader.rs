@@ -4876,16 +4876,6 @@ pub fn queued_helmet_attach(e: &mut Engine, this: Ptr<QueuedHelmet>) {
     fn_0043fb50(e, Ptr::new(loader), reference);
 }
 
-/// `BipedAnim`: the item of slot `index` (`slotData[index].item`, 16-byte entries from +0x2C) and
-/// the character (+0x2B0, the word `AttachHelmet` compares with the player at `004aeb77`).
-const BIPED_SLOT_ITEMS: u32 = 0x2c;
-const BIPED_CHARACTER: u32 = 0x2b0;
-/// The biped slots' names (`char*` each, `01188b98`).
-const BIPED_SLOT_NAMES: u32 = 0x0118_8b98;
-/// `TESObjectREFR::GetTheName` (`0055d520`, `thiscall`) and the form id's offset.
-const REFERENCE_GET_THE_NAME: u32 = 0x0055_d520;
-const FORM_REF_ID: u32 = 0x0c;
-
 fn helmet_slot_has_no_item(
     e: &mut Engine,
     this: Ptr<QueuedHelmet>,
@@ -11646,88 +11636,6 @@ mod tests {
     thread_local! {
         static HELMET_LINES: std::cell::RefCell<Vec<(Vec<u8>, Vec<u8>, Vec<u8>, u32)>> =
             const { std::cell::RefCell::new(Vec::new()) };
-    }
-
-    const CHARACTER_ID: u32 = 0x5678;
-    const DECOY_ID: u32 = 0x9abc;
-
-    /// A helmet whose slot 2 has a face model and a cloned node, for a biped whose slot 2 holds
-    /// `item` (0: none); `AttachHelmet` does nothing without both, as the exe's does, and otherwise
-    /// reads the slot's item (its form id at +0xC); the console's print keeps (format, slot name,
-    /// actor name, id). The helmet's reference is "Doc Mitchell" (0x1234); the biped's character
-    /// (+0x2B0) is "Sunny Smiles" (0x5678), or 0 without `character`; the word at +0x2AC is a
-    /// decoy, "Trudy" (0x9ABC). `GetTheName` answers each reference's own name.
-    fn helmet_with_slot_item(
-        e: &mut Engine,
-        item: u32,
-        character: bool,
-    ) -> (Ptr<QueuedHelmet>, Ptr) {
-        HELMET_LINES.with(|l| l.borrow_mut().clear());
-        let subject = reference(e);
-        let biped = biped_anim(e, subject, &[]);
-        let sunny = reference(e);
-        e.mem.set_u32(sunny.addr() + 0xc, CHARACTER_ID);
-        let trudy = reference(e);
-        e.mem.set_u32(trudy.addr() + 0xc, DECOY_ID);
-        e.mem.set_u32(
-            biped.addr() + 0x2b0,
-            if character { sunny.addr() } else { 0 },
-        );
-        e.mem.set_u32(biped.addr() + 0x2ac, trudy.addr());
-        e.mem.set_u32(biped.addr() + 0x2c + 0x10 * 2, item);
-        let this = queued_helmet(e, biped, subject, 4, 1);
-        e.mem.set_u32(this.addr() + 0xcc + 8, 0x3c02);
-        e.mem.set_u32(this.addr() + 0x7c + 8, 0x5002);
-        e.register(BIPED_ANIM_ATTACH_HELMET, |e, a| {
-            if a[1] == 0 || a[2] == 0 {
-                return 0u32.into_ret();
-            }
-            let item = e.mem.u32(a[0] + 0x2c + 0x10 * a[3]);
-            e.mem.u32(item + 0xc).into_ret()
-        });
-        e.map(0x0118_8000, 0x1000);
-        let names = e.mem.alloc(0x40);
-        e.mem.set_cstr(names, b"Hat");
-        e.mem.set_u32(0x0118_8b98 + 4 * 2, names);
-        // Each reference keeps its name's address at +0xFC, which `GetTheName` answers.
-        for (who, name) in [
-            (subject, &b"Doc Mitchell"[..]),
-            (sunny, b"Sunny Smiles"),
-            (trudy, b"Trudy"),
-        ] {
-            let text = e.mem.alloc(0x20);
-            e.mem.set_cstr(text, name);
-            e.mem.set_u32(who.addr() + 0xfc, text);
-        }
-        e.register(REFERENCE_GET_THE_NAME, |e, a| {
-            e.mem.u32(a[0] + 0xfc).into_ret()
-        });
-        e.register(0x0071_b160, |_, _| 0x5000u32.into_ret());
-        e.register(0x0071_d0a0, |e, a| {
-            let text = |e: &Engine, at: u32| e.mem.cstr(e.mem.u32(at));
-            let line = (
-                e.mem.cstr(a[1]),
-                text(e, a[2]),
-                if e.mem.cstr(a[1]).ends_with(b"null actor") {
-                    vec![]
-                } else {
-                    text(e, a[2] + 4)
-                },
-                e.mem.u32(a[2] + 8),
-            );
-            HELMET_LINES.with(|l| l.borrow_mut().push(line));
-            Ret::default()
-        });
-        (this, biped)
-    }
-
-    fn actor_line(name: &[u8], id: u32) -> (Vec<u8>, Vec<u8>, Vec<u8>, u32) {
-        (
-            b"Failed to resolve item for body part '%s' on actor %s (%08X)".to_vec(),
-            b"Hat".to_vec(),
-            name.to_vec(),
-            id,
-        )
     }
 
     #[test]

@@ -2068,35 +2068,6 @@ mod n039_tests {
         assert!(calls_to(&e, STRCAT_S).is_empty());
     }
 
-    /// An object for `004d66d0` whose property list (`0043b230` answering it) holds one entry holding
-    /// `property` (0 for an empty entry), the list's count 1 at +8, which `0076b610` reads as the exe
-    /// does (`*(list + 8) == 0`); the list's head and the entry are read through their first words.
-    fn object_with_one_property(e: &mut Engine, property: u32) -> u32 {
-        let object = leaf_object(e);
-        let node = e.mem.alloc(8);
-        e.mem.set_u32(node, property);
-        let list = e.mem.alloc(0xc);
-        e.mem.set_u32(list, node);
-        e.mem.set_u32(list + 8, 1);
-        // The first word of the list (its head) and of the entry (its property), as the exe reads
-        // them; `leaf_object` answers 0 for every other (its empty string lists).
-        e.register_double(FIRST_WORD, move |e, a| {
-            if a[0] == list || a[0] == node {
-                e.mem.u32(a[0]).into_ret()
-            } else {
-                0u32.into_ret()
-            }
-        });
-        e.register_double(0x0043_0830, move |_, _| list.into_ret());
-        e.register(0x0076_b610, |e, a| (e.mem.u32(a[0] + 8) == 0).into_ret());
-        e.register(LIST_NEXT, |e, a| {
-            let node = e.mem.u32(a[1]);
-            e.mem.set_u32(a[1], 0);
-            node.into_ret()
-        });
-        object
-    }
-
     #[test]
     fn fn_004d7440_destroys_both_windows() {
         let mut e = Engine::new();

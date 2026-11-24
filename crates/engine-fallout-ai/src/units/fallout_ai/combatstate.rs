@@ -2307,8 +2307,6 @@ pub fn fn_0099a840(e: &mut Engine, this: Ptr<CombatState>, item: u32) {
 pub const COMBAT_ITEM_RESTORE_TIMER: u32 = 0x011c_fdd8;
 /// `fCombatItemBuffTimer` (`Setting`, value at +4; the exe's default 45.0).
 pub const COMBAT_ITEM_BUFF_TIMER: u32 = 0x011c_f480;
-/// The game's timer clock (`0x11F1BF0`), the start time `AITimer::Reset` stores.
-const TIMER_CLOCK: u32 = 0x011f_1bf0;
 
 // Translated from 0099a8d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The attacker's cover was hit or the situation changed: with a cover
@@ -9027,24 +9025,6 @@ mod tests {
             9_999_999.0
         );
         assert_eq!(e.get(f.state, CombatState::iHasCombatWeapon), 2);
-    }
-
-    /// An inventory update with a target and one combat weapon (0x900, forced, kind 0), whose
-    /// projectile is `projectile`; `004fd3c0` reads the projectile's explosion at +0x84, as the
-    /// exe's does.
-    fn projectile_fixture(e: &mut Engine, projectile: u32) -> Fixture {
-        let f = fixture(e, true);
-        let acquired = object(e, 0x40);
-        stub(e, SLOTS + 0x148, acquired);
-        let extra = e.mem.alloc(4);
-        e.mem.set_u32(extra, 0x77);
-        stub(e, 0x0055_9450, extra);
-        stub(e, 0x0041_8b10, 1);
-        stub(e, ARRAY_SIZE, 0x900);
-        stub(e, 0x0052_2c80, 0);
-        stub(e, 0x0052_5a90, projectile);
-        e.register_double(0x004f_d3c0, |e, a| ret(e.mem.u32(a[0] + 0x84)));
-        f
     }
 
     #[test]

@@ -16096,11 +16096,6 @@ fn update_weapon_state(
     }
 }
 
-/// `TESPackage::type` (a `char` at +0x20): Guard.
-const PACKAGE_TYPE_GUARD: i8 = 0xe;
-/// `BaseProcess::GetRunOncePackageData` (vtable +0x270).
-const SLOT_GET_RUN_ONCE_PACKAGE_DATA: u32 = 0x270;
-
 /// The awake-and-aware timer of `Update` (`fAwarePlayerTimer`, +0x34c) with
 /// the run-once follow package: the timer runs down, and a follow package set
 /// as run-once ends when it is over. Returns the running package afterwards.

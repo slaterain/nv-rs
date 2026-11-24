@@ -414,15 +414,6 @@ fn tile_of(e: &Engine, this: u32, index: u32) -> u32 {
     e.mem.u32(this + 0x28 + 4 * index)
 }
 
-/// `cvttss2si`: toward zero, `0x80000000` out of range.
-fn float_to_int(value: f32) -> i32 {
-    if (-2_147_483_648.0..2_147_483_648.0).contains(&value) {
-        value as i32
-    } else {
-        i32::MIN
-    }
-}
-
 fn get_float(e: &mut Engine, tile: u32, id: u32) -> f32 {
     e.call(GET_FLOAT_TRAIT, &args![tile, id]).f32()
 }

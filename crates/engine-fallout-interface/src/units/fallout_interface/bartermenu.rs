@@ -39,9 +39,6 @@ const NODE_SET_NEXT: u32 = 0x006e_cd40;
 const NODE_DELETE: u32 = 0x0047_02f0;
 /// `004459e0` (`thiscall`, `RET 4`): the item data's deleting call, given 1.
 const ITEM_DATA_DELETE: u32 = 0x0044_59e0;
-/// `RepairMenu::GetSelection` (xNVSE's `GameUI.h`): the repair menu's target entry, 0 with no repair
-/// under way.
-const REPAIR_MENU_SELECTION: u32 = 0x011d_a760;
 /// The byte that keeps item tiles alive when set (`011d8909`).
 const KEEP_ITEM_TILES: u32 = 0x011d_8909;
 /// `007242c0` (`thiscall`, `RET 4`): whether the list box has a flag (by bit number).
@@ -807,8 +804,6 @@ const REFERENCE_NAME: u32 = 0x0055_d520;
 const REFRESH_REQUESTED_011D8FC0: u32 = 0x011d_8fc0;
 /// `00719790` (cdecl, five words, `interfacemanager.cpp`): the item stats display.
 const SHOW_ITEM_STATS_00719790: u32 = 0x0071_9790;
-/// `004be060` and `004be180` (`thiscall` on an object, `ST0`; `inventorychanges.cpp`).
-const STAT_004BE060: u32 = 0x004b_e060;
 const STAT_004BE180: u32 = 0x004b_e180;
 
 /// `"Barter menu called with NULL vendor!  Oh, noes!"` (`010707d0`),

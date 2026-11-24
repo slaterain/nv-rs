@@ -14403,14 +14403,6 @@ mod n056_tests {
         });
     }
 
-    fn controls(e: &mut Engine, disabled: u8, connected: u8, mouse_moved: u8, console: u8) {
-        let manager = e.mem.alloc(0x100);
-        e.mem.set_u32(rows::INTERFACE_MANAGER, manager);
-        e.mem.set_u8(manager + rows::HAS_MOUSE_MOVED, mouse_moved);
-        e.mem.set_u8(rows::CONTROLLER_DISABLED, disabled);
-        e.mem.set_u8(rows::CONTROLLER_CONNECTED, connected);
-        e.mem.set_u8(rows::CONSOLE_OPEN, console);
-    }
 
     /// `UpdateQuests` with an active quest: the focus calls and the calls of `004b71d0`.
     fn update_quests_focus(e: &mut Engine) -> (Vec<Vec<u32>>, usize) {

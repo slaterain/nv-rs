@@ -107,10 +107,6 @@ const FIRST_WORD: u32 = 0x0055_9450;
 const BOOK_TEST_00409700: u32 = 0x0040_9700;
 /// `InterfaceManager::PlayMenuSound` (`00717280`, cdecl).
 const PLAY_MENU_SOUND: u32 = 0x0071_7280;
-/// The interface manager (`InterfaceManager *`).
-const INTERFACE_MANAGER_SINGLETON: u32 = 0x011d_8a80;
-/// `OSInputGlobals::GetControlState` (`thiscall`: control, state; 0 is "held").
-const GET_CONTROL_STATE: u32 = 0x00a2_4660;
 /// The reference's extra data list (`005d43c0`) and `ExtraDataList::GetCount`
 /// (`00418770`, 16 bits).
 const EXTRA_LIST_005D43C0: u32 = 0x005d_43c0;

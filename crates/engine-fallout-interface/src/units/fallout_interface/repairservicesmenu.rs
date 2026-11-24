@@ -687,11 +687,6 @@ pub fn repair_services_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u
     }
 }
 
-/// `ListBox::SaveListState` (`007312e0`) and `ListBox::RestoreListState` (`00731360`, `RET 4`: a
-/// byte, whether to play the sound).
-const LIST_BOX_SAVE_POSITION: u32 = 0x0073_12e0;
-const LIST_BOX_RESTORE_POSITION: u32 = 0x0073_1360;
-
 fn update_keeping_scroll(e: &mut Engine, this: Ptr) {
     repair_services_menu_update(e, this);
 }
