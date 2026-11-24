@@ -15,8 +15,7 @@ this repository's LICENSE.
 Gameplay commands additionally read from carxt/JohnnyGuitarNVSE at
 59049a0c844111dab69aed372eb8e9c30f5cc5ae: JG/functions/fn_math.cpp (Clamp),
 fn_utility.cpp (EditorIDToFormID), fn_gameplay.cpp (SendStealingAlarm),
-fn_form.cpp (GetFactionFlags),
-internal/JG/JohnnyCommands.cpp and matching parameter definitions.
+fn_form.cpp (GetFactionFlags), internal/JG/JohnnyCommands.cpp and matching parameter definitions.
 
 JAM's command/event slice also uses that same 59049a0 source:
 fn_form.cpp (GetBaseEffectAV, GetBaseEffectArchetype, GetCalculatedWeaponDPS),
@@ -24,3 +23,8 @@ fn_gameplay.cpp (TogglePipBoy, IsCrimeOrEnemy), fn_event.cpp,
 events/{JohnnyEvents,EventFramework,LambdaVariableContext}.cpp and the matching
 game-class and parameter declarations. Exact game call sites are documented in
 docs/JAM.md; no C++ or executable bytes are included.
+
+The full-modlist native slice additionally reads fn_form.cpp (GetQuestFailed),
+fn_event.cpp and events/JohnnyEvents.cpp (quest completion/failure, perk, dying
+and first seen-data callbacks), alongside events/EventFramework.cpp,
+at the same 59049a0 commit; it preserves the original filter and lambda lifecycle.

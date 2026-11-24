@@ -517,7 +517,9 @@ pub fn fn_00518cf0(e: &mut Engine, reference: Ptr) {
     let flag = e.call(0x0040_8d60, &args![0x011d_8980u32]).u32();
     if e.mem.u8(flag) != 0 && object != 0 {
         let target: u32 = e.global(0x011d_e134);
-        e.call(0x0085_1d30, &args![target]);
+        if e.site(0x0051_8e41, &args![target]).is_none() {
+            e.call(0x0085_1d30, &args![target]);
+        }
     }
 }
 

@@ -423,11 +423,11 @@ pub fn form_gone(e: &mut crate::Engine, form: u32) {
 
 // ---- JohnnyGuitar's setter (`TESFormEx::hk_SetFormEditorID`), shared with JIP's light names ----
 
-/// A form's flags (+8: 0x4000 temporary), id (+0xC), files (+0x18, a `tList` of `ModInfo`, its
-/// name at +0x20); the game's form type name (`00440e30`, `thiscall`).
+/// A form's flags (+8: 0x4000 temporary), id (+0xC), and its source file name
+/// at +0x20; native GetFile owns the form's file-list layout (+0x10).
 const FORM_FLAGS: u32 = 0x08;
 const FORM_ID: u32 = 0x0c;
-const FORM_FILES: u32 = 0x18;
+const GET_FILE: u32 = 0x0048_4e60;
 const FILE_NAME: u32 = 0x20;
 const TEMPORARY: u32 = 0x4000;
 const FORM_TYPE_NAME: u32 = 0x0044_0e30;
@@ -500,21 +500,13 @@ pub fn add_to_game_map(e: &mut crate::Engine, form: u32, name: &[u8]) {
 }
 
 /// A form's file name: its `n`th file (`-1`: its last), "" for none.
-fn file_name(e: &crate::Engine, form: u32, last: bool) -> String {
-    let mut node = form + FORM_FILES;
-    let mut file = 0;
-    let mut steps = 0;
-    while node != 0 && steps < 0x1000 {
-        let data = e.mem.u32(node);
-        if data != 0 {
-            file = data;
-            if !last {
-                break;
-            }
-        }
-        node = e.mem.u32(node + 4);
-        steps += 1;
-    }
+fn file_name(e: &mut crate::Engine, form: u32, last: bool) -> String {
+    // JG LogEDIDConflict uses GetFile(-1)/GetFile(0). The native getter's
+    // 00484E60 -> 00460140 returns the embedded list at +0x10. +0x18 is
+    // already derived-class data (a Script header), never another file list.
+    let file = e
+        .call(GET_FILE, &[form, if last { u32::MAX } else { 0 }])
+        .u32();
     if file == 0 {
         return String::new();
     }

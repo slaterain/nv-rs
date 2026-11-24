@@ -322,6 +322,11 @@ pub fn fn_0066ee10(e: &mut Engine, index: u32) -> bool {
 /// x87 load): an answer does that. While the hook has no user: one load.
 pub fn fn_0066ee50(e: &mut Engine, owner: u32, index: u32, old: f32, delta: f32, extra: u32) {
     let info = info_of(e, index);
+    // JohnnyGuitar's info-lookup detour acts before the original callback test.
+    e.site(
+        0x0066_ee58,
+        &[owner, index, old.to_bits(), delta.to_bits(), extra, info],
+    );
     if info == 0 {
         return;
     }
@@ -1529,6 +1534,66 @@ mod b019_tests {
         assert_eq!(
             calls(&e, 0x00ab_0054),
             vec![vec![1, 6, 1.0f32.to_bits(), 2.0f32.to_bits(), 9]]
+        );
+    }
+
+    #[derive(Default)]
+    struct AvNotificationOrder(Vec<(u32, Vec<u32>)>);
+
+    #[test]
+    fn johnny_actor_value_notification_precedes_callback_test_and_jip_without_replacing_original() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = engine();
+        e.on_site(
+            SiteSlot::new(Owner::JohnnyGuitar, 0x0066_ee58),
+            |e, words| {
+                e.ext::<AvNotificationOrder>()
+                    .0
+                    .push((0x0066_ee58, words.to_vec()));
+                Some(99) // Notification answer is ignored.
+            },
+        );
+        e.call(0x0066_ee50, &args![1u32, 6u32, 1.0f32, 2.0f32, 9u32]);
+        assert_eq!(
+            e.ext::<AvNotificationOrder>().0,
+            [(
+                0x0066_ee58,
+                vec![1, 6, 1f32.to_bits(), 2f32.to_bits(), 9, 0]
+            )]
+        );
+        let info = info(&mut e, 6);
+        e.call(0x0066_ee50, &args![1u32, 6u32, 1.0f32, 2.0f32, 9u32]);
+        assert_eq!(
+            e.ext::<AvNotificationOrder>().0[1].1[5],
+            info,
+            "also notified without a vanilla modified callback"
+        );
+        e.mem.set_u32(info + 0x54, 0x00ab_0054);
+        e.register(0x00ab_0054, |e, words| {
+            e.ext::<AvNotificationOrder>()
+                .0
+                .push((0x00ab_0054, words.to_vec()));
+            Ret::default()
+        });
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0066_ee72), |e, words| {
+            e.ext::<AvNotificationOrder>()
+                .0
+                .push((0x0066_ee72, words.to_vec()));
+            Some(0)
+        });
+        e.add_hook_user(Hook::DamageActorValue, true);
+        e.ext::<AvNotificationOrder>().0.clear();
+        e.call(0x0066_ee50, &args![1u32, 6u32, 1.0f32, 2.0f32, 9u32]);
+        assert_eq!(
+            e.ext::<AvNotificationOrder>().0,
+            [
+                (
+                    0x0066_ee58,
+                    vec![1, 6, 1f32.to_bits(), 2f32.to_bits(), 9, info]
+                ),
+                (0x0066_ee72, vec![1, 6, 1f32.to_bits(), 2f32.to_bits(), 9]),
+                (0x00ab_0054, vec![1, 6, 1f32.to_bits(), 2f32.to_bits(), 9]),
+            ]
         );
     }
 

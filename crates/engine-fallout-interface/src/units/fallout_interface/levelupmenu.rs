@@ -2293,6 +2293,12 @@ pub fn fn_00786570(e: &mut Engine, tile: u32, perk: u32) {
     }
     let rank = perk_rank(e, perk);
     let player = level_up_player(e);
+    // JohnnyGuitar 59049a0 JohnnyEvents.cpp::DoAddPerk, before AddPerk:
+    // only the callback rank narrows to uint8_t; preserve the original word.
+    e.site(
+        0x0078_65bd,
+        &[player, perk, u32::from(rank.wrapping_add(1) as u8)],
+    );
     e.vcall(player, 0x498, &args![perk, rank.wrapping_add(1), 0u32]);
 }
 
@@ -4705,6 +4711,38 @@ mod level_up_menu_tests {
         assert_eq!(calls_to(&e, 0x0000_84a0), vec![vec![player, 0x7a00, 0]]);
         // The rank's AL is 2: rank 3.
         assert_eq!(calls_to(&e, 0x0000_8498), vec![vec![player, 0x7a00, 3, 0]]);
+    }
+
+    #[test]
+    fn johnny_add_perk_levelup_site_is_before_add_and_narrows_only_callback_rank() {
+        use engine_core::extend::{Owner, SiteSlot};
+        const SITE: u32 = 0x0078_65bd;
+        let mut e = engine();
+        e.on_site(SiteSlot::new(Owner::JohnnyGuitar, SITE), |e, words| {
+            e.call_log.as_mut().unwrap().push((SITE, words.to_vec()));
+            None
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0078_6570, &args![0x7400u32, 0x7a00u32]);
+        assert!(calls_to(&e, SITE).is_empty());
+        assert!(calls_to(&e, 0x0000_8498).is_empty());
+        e.register(TILE_IS_TRUE, |_, _| eax(1));
+        let player = player(&e);
+        for (rank_word, next, callback) in [(0x0102, 3, 3), (0xffff_ffff, 256, 0)] {
+            e.register_double(0x0000_84a0, move |_, _| eax(rank_word));
+            e.call_log = Some(vec![]);
+            e.call(0x0078_6570, &args![0x7400u32, 0x7a00u32]);
+            assert_eq!(calls_to(&e, SITE), vec![vec![player, 0x7a00, callback]]);
+            assert_eq!(
+                calls_to(&e, 0x0000_8498),
+                vec![vec![player, 0x7a00, next, 0]]
+            );
+            let log = e.call_log.as_ref().unwrap();
+            assert!(
+                log.iter().position(|(at, _)| *at == SITE).unwrap()
+                    < log.iter().position(|(at, _)| *at == 0x0000_8498).unwrap()
+            );
+        }
     }
 
     #[test]

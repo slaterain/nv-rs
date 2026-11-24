@@ -7444,7 +7444,13 @@ pub fn interface_manager_get_default_focus(e: &mut Engine, this: Ptr<InterfaceMa
         interface_manager_set_current_focus_target(e, this, 0, 0xfc3, 1);
         return;
     }
+    // JohnnyGuitar59049a0 DoKeyboardControllerSelection: capture before the
+    // original focus mutation; only this nonnull-found call site is patched.
+    let notify = e.site(0x0071_5cd5, &args![this.addr(), found, 0u32]);
     interface_manager_set_current_focus_target(e, this, found, 0xfc3, 1);
+    if let Some(menu) = notify {
+        let _ = e.site(0x0071_5cd5, &args![this.addr(), menu, 1u32]);
+    }
     if !e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool()
         || e.get(this, InterfaceManager::bShowMouse) != 0
     {
@@ -14427,7 +14433,27 @@ mod tests {
         returns(&mut e, FTOL, 5);
         returns(&mut e, TILE_IMAGE_NODE, 0x4000);
         returns(&mut e, HAS_360_CONTROLLER_GETTER, 0);
+        e.on_site(
+            engine_core::extend::SiteSlot::new(
+                engine_core::extend::Owner::JohnnyGuitar,
+                0x0071_5cd5,
+            ),
+            |e, w| {
+                if w[2] == 0 {
+                    assert_eq!(e.mem.u32(w[0] + 0xbc), 0);
+                    *e.ext::<usize>() = 1;
+                    Some(0)
+                } else {
+                    assert_eq!(w[1], 0, "captured null menu is not lost");
+                    assert_ne!(e.mem.u32(w[0] + 0xbc), 0);
+                    assert_eq!(*e.ext::<usize>(), 1);
+                    *e.ext::<usize>() = 2;
+                    None
+                }
+            },
+        );
         interface_manager_get_default_focus(&mut e, m);
+        assert_eq!(*e.ext::<usize>(), 2);
         assert_eq!(e.get(m, InterfaceManager::pMouseOverTarget), root);
         assert_eq!(calls(&e, NODE_SET_FLAG), vec![vec![0x4000, 1]]);
         assert!(calls(&e, TILE_SET_INT).contains(&vec![0xc0, 0xfa3, 0]));
@@ -14439,6 +14465,13 @@ mod tests {
         e2.set(m2, InterfaceManager::bMouseInMotion, 1);
         returns(&mut e2, GET_FRONTMOST_MENU, 0);
         e2.set(m2, InterfaceManager::pMouseOverTarget, 0x300);
+        e2.on_site(
+            engine_core::extend::SiteSlot::new(
+                engine_core::extend::Owner::JohnnyGuitar,
+                0x0071_5cd5,
+            ),
+            |_, _| panic!("the null-found original call is not patched"),
+        );
         interface_manager_get_default_focus(&mut e2, m2);
         assert_eq!(e2.get(m2, InterfaceManager::pMouseOverTarget), 0);
         assert_eq!(e2.get(m2, InterfaceManager::bMouseInMotion), 1);

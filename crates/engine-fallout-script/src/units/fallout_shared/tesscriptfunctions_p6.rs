@@ -2530,6 +2530,9 @@ pub fn script_add_perk_function(e: &mut Engine, a: ScriptArgs) -> bool {
             .u8() as u32;
         let highest = fn_005d4ee0(e, perk) as u32;
         if highest > rank {
+            // JohnnyGuitar 59049a0 JohnnyEvents.cpp::DoAddPerk: callback
+            // before the original virtual call; its rank argument is uint8_t.
+            e.site(0x005d_4e5b, &[actor, perk, u32::from((rank + 1) as u8)]);
             e.vcall(
                 actor,
                 ACTOR_SET_PERK_RANK_SLOT,
@@ -2569,6 +2572,8 @@ pub fn fn_005d4f00(e: &mut Engine, a: ScriptArgs) -> bool {
     let flag = (flag != 0) as u32;
     let actor = a.this_obj.addr();
     if perk != 0 && e.vcall(actor, REFR_IS_ACTOR_SLOT, &args![]).bool() {
+        // JohnnyEvents.cpp524–529,907: notify before the original removal.
+        e.site(0x005d_4f89, &[actor, perk, flag]);
         e.vcall(actor, ACTOR_PERK_SLOT_49C, &args![perk, flag]);
     }
     true
@@ -6442,6 +6447,48 @@ mod tests {
     }
 
     #[test]
+    fn johnny_add_perk_script_site_precedes_original_call_and_skips_non_additions() {
+        use engine_core::extend::{Owner, SiteSlot};
+        const SITE: u32 = 0x005d_4e5b;
+        let mut e = engine();
+        e.on_site(SiteSlot::new(Owner::JohnnyGuitar, SITE), |e, words| {
+            e.call_log.as_mut().unwrap().push((SITE, words.to_vec()));
+            None
+        });
+        let actor = perk_actor(&mut e, true, 1);
+        let perk = perk_with_max_rank(&mut e, 3);
+        let a = command(&mut e, actor);
+        parse_gives(&mut e, true, &[perk, 4]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_4d90, &args![a]).bool());
+        assert_eq!(calls(&e, SITE), vec![vec![actor, perk, 2]]);
+        assert_eq!(calls(&e, V_SET_RANK), vec![vec![actor, perk, 2, 1]]);
+        let log = e.call_log.as_ref().unwrap();
+        assert!(
+            log.iter().position(|(at, _)| *at == SITE).unwrap()
+                < log.iter().position(|(at, _)| *at == V_SET_RANK).unwrap()
+        );
+        assert_eq!(e.mem.f64(a.result.addr()), 2.0);
+
+        // Highest rank: no actual addition and therefore no callback.
+        e.register(V_RANK, |_, _| 3u32.into_ret());
+        start_log(&mut e);
+        assert!(e.call(0x005d_4d90, &args![a]).bool());
+        assert!(calls(&e, SITE).is_empty());
+        assert!(calls(&e, V_SET_RANK).is_empty());
+        for (is_actor, given_perk, parses) in
+            [(false, perk, true), (true, 0, true), (true, perk, false)]
+        {
+            e.register_double(V_IS_ACTOR, move |_, _| is_actor.into_ret());
+            parse_gives(&mut e, parses, &[given_perk, 0]);
+            start_log(&mut e);
+            assert_eq!(e.call(0x005d_4d90, &args![a]).bool(), parses);
+            assert!(calls(&e, SITE).is_empty());
+            assert!(calls(&e, V_SET_RANK).is_empty());
+        }
+    }
+
+    #[test]
     fn add_perk_keeps_a_rank_that_reached_the_maximum() {
         let mut e = engine();
         let actor = perk_actor(&mut e, true, 3);
@@ -6504,6 +6551,40 @@ mod tests {
         assert!(e.call(0x005d_4f00, &args![a]).bool());
         assert!(calls(&e, V_SLOT_49C).is_empty());
         assert_fails_when_unparsed(0x005d_4f00, V_SLOT_49C);
+    }
+
+    #[test]
+    fn johnny_remove_perk_site_precedes_original_and_keeps_qualification() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = engine();
+        let actor = perk_actor(&mut e, true, 1);
+        let a = command(&mut e, actor);
+        e.on_site(
+            SiteSlot::new(Owner::JohnnyGuitar, 0x005d_4f89),
+            |e, words| {
+                assert_eq!(&words[1..], &[0x4444, 1]);
+                e.mem.set_u32(words[0] + 0x80, 1);
+                Some(99) // Observer return cannot replace the original removal.
+            },
+        );
+        e.register(V_SLOT_49C, |e, words| {
+            assert_eq!(&words[1..], &[0x4444, 1]);
+            assert_eq!(e.mem.u32(words[0] + 0x80), 1);
+            e.mem.set_u32(words[0] + 0x80, 2);
+            Ret::default()
+        });
+        parse_gives(&mut e, true, &[0x4444, 9]);
+        assert!(e.call(0x005d_4f00, &args![a]).bool());
+        assert_eq!(e.mem.u32(actor + 0x80), 2);
+        e.mem.set_u32(actor + 0x80, 0);
+        parse_gives(&mut e, true, &[0, 9]);
+        assert!(e.call(0x005d_4f00, &args![a]).bool());
+        assert_eq!(e.mem.u32(actor + 0x80), 0);
+        let nonactor = perk_actor(&mut e, false, 1);
+        let a = command(&mut e, nonactor);
+        parse_gives(&mut e, true, &[0x4444, 9]);
+        assert!(e.call(0x005d_4f00, &args![a]).bool());
+        assert_eq!(e.mem.u32(nonactor + 0x80), 0);
     }
 
     #[test]

@@ -699,7 +699,13 @@ pub fn interface_manager_do_gamepad(
             {
                 let tile = e.vcall(handler, 0x08, &args![button]).u32();
                 if tile != 0 {
+                    // JohnnyGuitar59049a0 captures frontmost menu before the
+                    // original setter; notification precedes the handler callback.
+                    let notify = e.site(0x0071_8059, &args![this.addr(), tile, 0u32]);
                     e.call(0x0071_5860, &args![this, tile, 0xfc3u32, 1u32]);
+                    if let Some(menu) = notify {
+                        let _ = e.site(0x0071_8059, &args![this.addr(), menu, 1u32]);
+                    }
                     e.vcall(handler, 0x10, &args![]);
                     return true;
                 }
@@ -2982,9 +2988,30 @@ mod tests {
         stub(&mut e, 0x7300_0038, 0);
         stub(&mut e, 0x7300_0034, 0x3eb);
         stub(&mut e, IS_TOP_MENU_ID, 1);
+        e.on_site(
+            engine_core::extend::SiteSlot::new(
+                engine_core::extend::Owner::JohnnyGuitar,
+                0x0071_8059,
+            ),
+            |e, w| {
+                if w[2] == 0 {
+                    assert_eq!(w, &[0x1000, 0x4444, 0]);
+                    assert!(logged(e, 0x0071_5860).is_empty());
+                    *e.ext::<usize>() = 1;
+                    Some(0xdeadbeef)
+                } else {
+                    assert_eq!(w, &[0x1000, 0xdeadbeef, 1]);
+                    assert_eq!(logged(e, 0x0071_5860).len(), 1);
+                    assert!(logged(e, 0x7100_0010).is_empty());
+                    *e.ext::<usize>() = 2;
+                    None
+                }
+            },
+        );
         assert!(e
             .call(0x0071_7f80, &args![0x1000u32, target, 4u32, 0.5f32])
             .bool());
+        assert_eq!(*e.ext::<usize>(), 2);
         assert_eq!(logged(&e, 0x7100_0008), vec![vec![taker, 4]]);
         assert_eq!(logged(&e, IS_TOP_MENU_ID), vec![vec![0x3eb]]);
         assert_eq!(

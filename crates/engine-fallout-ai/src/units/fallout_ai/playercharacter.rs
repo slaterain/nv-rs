@@ -935,8 +935,15 @@ pub fn fn_0093a850(e: &mut Engine, this: Ptr<PlayerCharacter>, actor_value: u32,
 
 /// The value of `actor_value` the `ActorValueOwner` base reports (its virtual
 /// `+0xC`), or 0 when `0066ee10` says the value does not apply.
-fn owner_actor_value_or_zero(e: &mut Engine, this: Ptr<PlayerCharacter>, actor_value: u32) -> f32 {
-    if e.call(0x0066_ee10, &args![actor_value]).bool() {
+fn owner_actor_value_or_zero(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    actor_value: u32,
+    site: u32,
+) -> f32 {
+    let readable = e.call(0x0066_ee10, &args![actor_value]).bool();
+    let force = e.site(site, &args![this, actor_value, readable]).is_some();
+    if readable || force {
         e.vcall(
             this.addr() + ACTOR_VALUE_OWNER_BASE,
             0xc,
@@ -971,7 +978,7 @@ fn report_actor_value_change(
 /// `+0x48C` reports one, otherwise `delta` goes to virtual `+0x19C` of the
 /// object `004181e0` returns. The interface and the `ActorValueOwner` are told.
 pub fn fn_0093a8f0(e: &mut Engine, this: Ptr<PlayerCharacter>, actor_value: u32, delta: i32) {
-    let old = owner_actor_value_or_zero(e, this, actor_value);
+    let old = owner_actor_value_or_zero(e, this, actor_value, 0x0093_a90a);
     if !actor_value_has_override(e, this, actor_value) {
         let target: Ptr = e.call(0x0041_81e0, &args![this]).ptr();
         e.vcall(target.addr(), 0x19c, &args![actor_value, delta]);
@@ -987,7 +994,7 @@ pub fn fn_0093a8f0(e: &mut Engine, this: Ptr<PlayerCharacter>, actor_value: u32,
 /// [`fn_0093a8f0`] with a float delta (virtual `+0x198` of the object
 /// `004181e0` returns when there is no override).
 pub fn fn_0093aa10(e: &mut Engine, this: Ptr<PlayerCharacter>, actor_value: u32, delta: f32) {
-    let old = owner_actor_value_or_zero(e, this, actor_value);
+    let old = owner_actor_value_or_zero(e, this, actor_value, 0x0093_aa2a);
     if !actor_value_has_override(e, this, actor_value) {
         let target: Ptr = e.call(0x0041_81e0, &args![this]).ptr();
         e.vcall(target.addr(), 0x198, &args![actor_value, delta]);
@@ -1197,6 +1204,7 @@ fn report_change_from(
 /// `0094c4f0` (kind `kind`, the last argument 2), updates the interface, for
 /// health lost calls the player's virtual `+0x4B8` with `source`, and
 /// reports the change.
+#[allow(clippy::too_many_arguments)] // Original caller and its patched branch address.
 fn apply_actor_value_change(
     e: &mut Engine,
     this: Ptr<PlayerCharacter>,
@@ -1205,8 +1213,9 @@ fn apply_actor_value_change(
     lost: bool,
     kind: u32,
     source: Ptr,
+    site: u32,
 ) {
-    let old = owner_actor_value_or_zero(e, this, actor_value);
+    let old = owner_actor_value_or_zero(e, this, actor_value, site);
     e.call(0x0094_c4f0, &args![this, kind, actor_value, delta, 2u32]);
     e.call(0x0070_4e10, &args![actor_value]);
     if actor_value == 0x10 && lost {
@@ -1233,7 +1242,16 @@ pub fn fn_0093ae80(
     let delta = e
         .call(0x0088_0850, &args![this, actor_value, amount, source])
         .i32();
-    apply_actor_value_change(e, this, actor_value, delta as f32, delta < 0, 0, source);
+    apply_actor_value_change(
+        e,
+        this,
+        actor_value,
+        delta as f32,
+        delta < 0,
+        0,
+        source,
+        0x0093_aece,
+    );
 }
 
 // Translated from 0093afb0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1260,6 +1278,7 @@ pub fn fn_0093afb0(
         (delta as f64) < zero,
         0,
         source,
+        0x0093_b001,
     );
 }
 
@@ -1285,7 +1304,16 @@ pub fn fn_0093b0f0(
     let delta = e
         .call(0x0088_0850, &args![this, actor_value, amount, source])
         .i32();
-    apply_actor_value_change(e, this, actor_value, delta as f32, delta < 0, 1, source);
+    apply_actor_value_change(
+        e,
+        this,
+        actor_value,
+        delta as f32,
+        delta < 0,
+        1,
+        source,
+        0x0093_b15d,
+    );
 }
 
 // Translated from 0093b240 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1318,6 +1346,7 @@ pub fn fn_0093b240(
         (delta as f64) < zero,
         1,
         source,
+        0x0093_b2b0,
     );
 }
 
@@ -1428,10 +1457,11 @@ fn apply_health_change(
     delta: f32,
     lost: bool,
     source: Ptr,
+    site: u32,
 ) {
     let old = match old {
         Some(old) => old,
-        None => owner_actor_value_or_zero(e, this, actor_value),
+        None => owner_actor_value_or_zero(e, this, actor_value, site),
     };
     let flagged = e.call(0x0040_6d70, &args![actor_value, 0x200u32]).bool() as u32;
     e.call(0x0094_c4f0, &args![this, 2u32, actor_value, delta, flagged]);
@@ -1485,6 +1515,7 @@ pub fn fn_0093b3a0(
         delta as f32,
         delta < 0,
         source,
+        0x0093_b47a,
     );
 }
 
@@ -1549,6 +1580,7 @@ pub fn fn_0093b7a0(
         delta,
         (delta as f64) < zero,
         source,
+        0x0093_b87d,
     );
 }
 
@@ -1560,7 +1592,11 @@ fn read_then_fatigue_floor(
     actor_value: u32,
     delta: &mut f32,
 ) -> f32 {
-    if !e.call(0x0066_ee10, &args![actor_value]).bool() {
+    let readable = e.call(0x0066_ee10, &args![actor_value]).bool();
+    let force = e
+        .site(0x0093_b87d, &args![this, actor_value, readable])
+        .is_some();
+    if !(readable || force) {
         return 0.0;
     }
     let old = e
@@ -13735,6 +13771,57 @@ mod tests {
         e.map(0x0101_2000, 0x1000);
         e.set_global(ZERO_DOUBLE, 0.0f64);
         this
+    }
+
+    #[test]
+    fn johnny_player_old_value_branches_keep_original_test_and_single_forced_read() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        for (address, site) in [
+            (0x0093_a8f0, 0x0093_a90a),
+            (0x0093_aa10, 0x0093_aa2a),
+            (0x0093_ae80, 0x0093_aece),
+            (0x0093_afb0, 0x0093_b001),
+            (0x0093_b0f0, 0x0093_b15d),
+            (0x0093_b240, 0x0093_b2b0),
+            (0x0093_b3a0, 0x0093_b47a),
+            (0x0093_b7a0, 0x0093_b87d),
+        ] {
+            for enabled in [false, true] {
+                // The G105 read path and vanilla read path must both honor JG's
+                // preceding branch removal without reading twice.
+                for jip in [false, true] {
+                    let mut e = engine();
+                    let this = if address < 0x0093_ae80 {
+                        delta_world(&mut e, false, false, 8.0).0
+                    } else {
+                        let this = damage_world(&mut e, false, false, true);
+                        give_owner(&mut e, this, 0x0203_0000, &[(0xc, 0x00b0_000c)]);
+                        e.register(0x00b0_000c, |_, _| float(8.0));
+                        this
+                    };
+                    if enabled {
+                        e.on_site(SiteSlot::new(Owner::JohnnyGuitar, site), |_, _| Some(0));
+                    }
+                    if jip {
+                        e.set_jip_patches(jip_patches::FIXES);
+                    }
+                    e.call(address, &args![this, 7u32, 0u32, 0u32]);
+                    assert_eq!(
+                        called(&e, 0x0066_ee10).len(),
+                        1,
+                        "original test kept at {site:08x}"
+                    );
+                    assert_eq!(
+                        called(&e, 0x00b0_000c).len(),
+                        usize::from(enabled),
+                        "one forced old read at {site:08x}"
+                    );
+                    let reports = called(&e, 0x0066_ee50);
+                    assert_eq!(reports.len(), 1);
+                    assert_eq!(reports[0][2], if enabled { 8f32.to_bits() } else { 0 });
+                }
+            }
+        }
     }
 
     #[test]

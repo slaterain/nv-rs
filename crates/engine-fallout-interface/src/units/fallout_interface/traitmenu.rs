@@ -783,6 +783,9 @@ pub fn fn_007e76e0(e: &mut Engine, tile: u32, perk: u32) {
             .u8(),
     );
     let player: u32 = e.global(PLAYER);
+    // JohnnyGuitar 59049a0 JohnnyEvents.cpp::DoAddPerk runs before the
+    // original call, with a uint8_t rank. The call keeps its full rank word.
+    e.site(0x007e_772d, &[player, perk, u32::from((rank + 1) as u8)]);
     e.vcall(
         player,
         PLAYER_SLOT_SET_PERK_RANK,
@@ -1753,6 +1756,42 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x007e_76e0, &args![0x9000u32, 0x4000u32]);
         assert!(calls(&e, SET_RANK_SLOT_DOUBLE).is_empty());
+    }
+
+    #[test]
+    fn johnny_add_perk_trait_site_precedes_add_and_only_selected_tiles_emit() {
+        use engine_core::extend::{Owner, SiteSlot};
+        const SITE: u32 = 0x007e_772d;
+        let mut e = engine();
+        let player = player(&mut e);
+        e.on_site(SiteSlot::new(Owner::JohnnyGuitar, SITE), |e, words| {
+            e.call_log.as_mut().unwrap().push((SITE, words.to_vec()));
+            None
+        });
+        e.register(TILE_IS_TRUE, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        e.call(0x007e_76e0, &args![0x9000u32, 0x4000u32]);
+        assert!(calls(&e, SITE).is_empty());
+        assert!(calls(&e, SET_RANK_SLOT_DOUBLE).is_empty());
+        e.register(TILE_IS_TRUE, |_, _| ret(1));
+        for (rank_word, next, callback) in [(0x0102, 3, 3), (0xffff_ffff, 256, 0)] {
+            e.register_double(RANK_SLOT_DOUBLE, move |_, _| ret(rank_word));
+            e.call_log = Some(vec![]);
+            e.call(0x007e_76e0, &args![0x9000u32, 0x4000u32]);
+            assert_eq!(calls(&e, SITE), vec![vec![player, 0x4000, callback]]);
+            assert_eq!(
+                calls(&e, SET_RANK_SLOT_DOUBLE),
+                vec![vec![player, 0x4000, next, 0]]
+            );
+            let log = e.call_log.as_ref().unwrap();
+            assert!(
+                log.iter().position(|(at, _)| *at == SITE).unwrap()
+                    < log
+                        .iter()
+                        .position(|(at, _)| *at == SET_RANK_SLOT_DOUBLE)
+                        .unwrap()
+            );
+        }
     }
 
     #[test]

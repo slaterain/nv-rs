@@ -2828,6 +2828,8 @@ pub fn tes_object_cell_get_int_seen_section(
             section = e.mem.u32(previous + 0x28);
         } else {
             section = created;
+            // JohnnyGuitar hooks the list getter before installing the first section.
+            e.site(0x0055_7053, &[this.addr()]);
             let list = e.call(CELL_EXTRA_DATA_LIST, &args![this]).u32();
             e.call(EXTRA_LIST_SET_SEEN_DATA, &args![list, section]);
             e.vcall(this.addr(), CELL_CHANGED_SLOT, &args![0x8000_0000u32]);
@@ -8150,13 +8152,26 @@ mod tests {
             recorder.borrow_mut().push(a.to_vec());
             Ret::default()
         });
+        use engine_core::extend::{Owner, SiteSlot};
+        const NOTIFY: u32 = 0x0300_2000;
+        e.on_site(SiteSlot::new(Owner::JohnnyGuitar, 0x0055_7053), |e, a| {
+            let log = calls(e);
+            assert!(calls_to(&log, CELL_EXTRA_DATA_LIST).is_empty());
+            assert_eq!(calls_to(&log, INTERIOR_SEEN_DATA_CONSTRUCT).len(), 1);
+            e.call(NOTIFY, a);
+            None
+        });
+        quiet(&mut e, &[NOTIFY]);
+        start_log(&mut e);
         // Without creation: nothing.
         assert_eq!(e.call(0x0055_6ef0, &args![cell, 1u32, 2u32, 0u32]).u32(), 0);
         assert!(changed.borrow().is_empty());
+        assert!(calls_to(&calls(&e), NOTIFY).is_empty());
         start_log(&mut e);
         let created = e.call(0x0055_6ef0, &args![cell, 1u32, 2u32, 1u32]).u32();
         assert_ne!(created, 0);
         let log = calls(&e);
+        assert_eq!(calls_to(&log, NOTIFY), vec![vec![cell.addr()]]);
         assert_eq!(
             calls_to(&log, EXTRA_LIST_SET_SEEN_DATA),
             vec![vec![0x6100, created]]

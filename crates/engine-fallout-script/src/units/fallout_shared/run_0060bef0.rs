@@ -126,6 +126,9 @@ pub fn fn_0060c9c0(e: &mut Engine, this: Ptr<TESQuest>, enable: u8) {
     let flags = if enable != 0 { flags | 1 } else { flags & 0xfe };
     e.set(data, QuestData::ucFlags, flags);
     e.vcall(this.addr(), ADD_CHANGE_SLOT, &args![CHANGE_QUEST_FLAGS]);
+    // JohnnyEvents.cpp748–756,888: AFTER the original AddChange virtual call.
+    // Its source stack-address-to-bool quirk is owned by the JG handler.
+    e.site(0x0060_ca1f, &[this.addr()]);
 }
 
 // Translated from 0060c440 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -527,6 +530,8 @@ pub fn fn_0060ca30(e: &mut Engine, this: Ptr, on: u8) {
         e.mem.set_u8(at, flags);
         e.vcall(this.addr(), ADD_CHANGE_SLOT, &args![CHANGE_QUEST_FLAGS]);
         e.call(MISC_STAT_INCREMENT, &args![0u32]);
+        // JohnnyGuitar JohnnyEvents.cpp: before the original quest-name call.
+        e.site(0x0060_ca78, &[this.addr()]);
         e.call(SHOW_QUEST_NAME, &args![this]);
     } else if on == 0 && e.mem.u8(at) & 2 != 0 {
         let flags = e.mem.u8(at) & 0xfd;
@@ -875,6 +880,31 @@ mod tests {
         e.call(0x0060_c9c0, &args![quest, 3u32]);
         assert_eq!(e.mem.u8(data), 0b1011);
         assert_eq!(e.mem.u32(quest.addr() + CALLS), 3);
+    }
+
+    #[test]
+    fn johnny_quest_start_stop_site_runs_after_original_change_for_both_flags() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = quest_engine();
+        let quest = quest_block(&mut e);
+        e.on_site(
+            SiteSlot::new(Owner::JohnnyGuitar, 0x0060_ca1f),
+            |e, words| {
+                assert_eq!(words.len(), 1);
+                let quest = words[0];
+                let calls = e.mem.u32(quest + CALLS);
+                assert_eq!(e.mem.u32(quest + LAST_ARGUMENT), 2);
+                assert_eq!(e.mem.u32(quest + 0x78), calls - 1);
+                e.mem.set_u32(quest + 0x78, calls);
+                None
+            },
+        );
+        for flag in [1u32, 0] {
+            e.call(0x0060_c9c0, &args![quest, flag]);
+            assert_eq!(e.mem.u8(quest.addr() + DATA) & 1, flag as u8);
+        }
+        assert_eq!(e.mem.u32(quest.addr() + CALLS), 2);
+        assert_eq!(e.mem.u32(quest.addr() + 0x78), 2);
     }
 
     #[test]
@@ -1318,6 +1348,32 @@ mod b008_tests {
             calls(&mut e),
             vec![(CHANGE, vec![quest, 2]), (QUEST_DONE_0060CAD0, vec![0])]
         );
+    }
+
+    #[test]
+    fn complete_quest_callback_observes_flags_before_the_original_name_call_once() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = Engine::new();
+        let table = e.mem.alloc(0x50);
+        let quest = e.mem.alloc(0x6c);
+        e.mem.set_u32(quest, table);
+        e.mem.set_u32(table + ADD_CHANGE_SLOT, 0x0137_2000);
+        e.register(0x0137_2000, |_, _| Ret::default());
+        e.register(MISC_STAT_INCREMENT, |_, _| Ret::default());
+        e.register(QUEST_DONE_0060CAD0, |_, _| Ret::default());
+        e.on_site(SiteSlot::new(Owner::JohnnyGuitar, 0x0060_ca78), |e, a| {
+            assert_eq!(e.mem.u8(a[0] + DATA) & 2, 2);
+            e.mem.set_u8(a[0] + 0x60, e.mem.u8(a[0] + 0x60) + 1);
+            None
+        });
+        e.register(SHOW_QUEST_NAME, |e, a| {
+            assert_eq!(e.mem.u8(a[0] + 0x60), 1);
+            Ret::default()
+        });
+        for on in [1u32, 1, 0, 0] {
+            e.call(0x0060_ca30, &args![quest, on]);
+        }
+        assert_eq!(e.mem.u8(quest + 0x60), 1);
     }
 
     #[test]

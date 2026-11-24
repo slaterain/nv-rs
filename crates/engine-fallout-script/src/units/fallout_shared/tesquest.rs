@@ -271,6 +271,8 @@ pub fn tes_quest_set_failed(e: &mut Engine, this: Ptr<TESQuest>, failed: u8) {
         let flags = e.get(data, QuestData::ucFlags) | FLAG_BIT_1;
         e.set(data, QuestData::ucFlags, flags);
         e.vcall(this.addr(), ADD_CHANGE_SLOT, &args![CHANGE_QUEST_FLAGS]);
+        // JohnnyGuitar JohnnyEvents.cpp: before the original quest-name call.
+        e.site(0x0060_cb5a, &[this.addr()]);
         e.call(SHOW_QUEST_NAME, &args![this]);
         return;
     }
@@ -959,6 +961,25 @@ mod tests {
         assert_eq!(flags(&e, quest), 0x42);
         assert_eq!(calls_to(&e, ADD_CHANGE), [[quest.addr(), 2]]);
         assert_eq!(calls_to(&e, SHOW_QUEST_NAME), [[quest.addr()]]);
+    }
+
+    #[test]
+    fn failed_quest_callback_observes_flags_before_the_original_name_call_once() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let (mut e, quest) = world();
+        e.on_site(SiteSlot::new(Owner::JohnnyGuitar, 0x0060_cb5a), |e, a| {
+            assert_eq!(e.mem.u8(a[0] + DATA), 0x42);
+            e.mem.set_u8(a[0] + 0x60, e.mem.u8(a[0] + 0x60) + 1);
+            None
+        });
+        e.register(SHOW_QUEST_NAME, |e, a| {
+            assert_eq!(e.mem.u8(a[0] + 0x60), 1);
+            Ret::default()
+        });
+        for on in [1u32, 1, 0, 0] {
+            e.call(0x0060_caf0, &args![quest, on]);
+        }
+        assert_eq!(e.mem.u8(quest.addr() + 0x60), 1);
     }
 
     #[test]

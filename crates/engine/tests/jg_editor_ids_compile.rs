@@ -98,11 +98,14 @@ fn engine(on: bool) -> Engine {
             e.map(at, size);
         }
     }
-    nvse::line_reader::install(&mut e);
-    nvse::args::install(&mut e);
-    // Plugin commands extend the xNVSE table, as in host startup. The mapped
-    // executable table region above is empty for this compiler fixture.
-    nvse::table::install(&mut e);
+    // The host installs xNVSE before its plugins: JG's commands extend that table even
+    // when its editor-id row is off. Keep the same order in this partial compiler fixture.
+    // xNVSE also wraps the host's DirectInput8Create import. This compiler-only fixture
+    // has no platform host and must never create an input device.
+    e.register(0x00fd_f02c, |_, _| {
+        panic!("the compiler fixture must not create a DirectInput device")
+    });
+    nvse::install(&mut e);
     // The exe's bytes (Ghidra, `0118cdd4`): an inventory object is no variable and an object; an
     // integer may be a variable.
     e.mem.write(PARAMETER_TYPES + INVENTORY_OBJECT * 8, &[0, 1]);

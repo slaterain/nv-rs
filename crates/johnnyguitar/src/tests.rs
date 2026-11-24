@@ -190,6 +190,9 @@ fn engine_with(on: bool, jip_light_setter: bool) -> Engine {
         record(TYPE_NAME, w);
         ret(0)
     });
+    // These fixtures have no source files. Whole native GetFile/layout
+    // regressions live with the translated TESForm implementation.
+    e.register(0x0048_4e60, |_, _| ret(0));
     e.register(REFR_FULL_NAME, |e, w| ret(e.mem.u32(w[0] + 0x44)));
     e.register(REFR_GETTER, |e, w| ret(e.mem.u32(w[0] + 0x48)));
     e.register(GETTER_STUB, |_, _| ret(EMPTY_TEXT));
@@ -741,4 +744,62 @@ fn load_cost_of(count: u32) {
         c.heap_bytes
     );
     assert_eq!(found, u64::from(count));
+}
+
+#[test]
+fn lerp_real_float_arguments_preserve_rounding_extrapolation_and_failed_reads() {
+    let mut e = engine(false);
+    const OP: u32 = 0x3157;
+    let rec = nvse::table::record_of(&e, OP);
+    assert_eq!(nvse::table::opcode_by_name(&e, b"Lerp"), Some(OP));
+    assert_eq!(e.mem.u16(rec + 0x12), 3);
+    let params = e.mem.u32(rec + 0x14);
+    for i in 0..3 {
+        assert_eq!(
+            (
+                e.mem.u32(params + i * 12 + 4),
+                e.mem.u32(params + i * 12 + 8)
+            ),
+            (2, 0)
+        );
+    }
+    let (data, offset, result) = (alloc(0x100), alloc(4), alloc(8));
+    let run = |e: &mut Engine, values: &[f64]| {
+        let mut bytes = Vec::new();
+        for value in values {
+            bytes.push(b'z');
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        e.mem.set_u16(data, OP as u16);
+        e.mem.set_u16(data + 2, (bytes.len() + 2) as u16);
+        e.mem.set_u16(data + 4, values.len() as u16);
+        e.mem.write(data + 6, &bytes);
+        e.mem.set_u32(offset, 4);
+        e.mem.set_f64(result, 123.0);
+        let words = [params, data, 0, 0, 0, 0, result, offset];
+        e.call(e.mem.u32(rec + 0x18), &words);
+        e.mem.f64(result)
+    };
+    assert_eq!(run(&mut e, &[10.0, 20.0, 1.5]), 25.0);
+    assert_eq!(run(&mut e, &[10.0, 20.0, -0.5]), 5.0);
+    assert_eq!(
+        run(&mut e, &[16_777_217.0, 16_777_219.0, 0.25]),
+        16_777_216.0
+    );
+    assert!(run(&mut e, &[0.0, f64::INFINITY, 0.0]).is_nan());
+    assert!(run(&mut e, &[0.0, 1.0, f64::NAN]).is_nan());
+    assert_eq!(
+        run(&mut e, &[10.0, 20.0]),
+        10.0,
+        "ExtractArgsEx accepts a short packet; the source initializes omitted operands to zero"
+    );
+    e.mem.set_u16(data + 4, 3);
+    e.mem.set_u8(data + 24, b'?');
+    e.mem.set_u32(offset, 4);
+    e.mem.set_f64(result, 123.0);
+    e.call(
+        e.mem.u32(rec + 0x18),
+        &[params, data, 0, 0, 0, 0, result, offset],
+    );
+    assert_eq!(e.mem.f64(result), 0.0);
 }

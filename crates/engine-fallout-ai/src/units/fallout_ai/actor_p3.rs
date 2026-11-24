@@ -8059,9 +8059,12 @@ fn forget_actor_sound(
 /// compiler's cleanup does) and releases their memory.
 /// `handles` is the awake handle (`EBP-0x3c` of `0089d900`); the idle and the attack handles
 /// follow at +12 and +24 (`EBP-0x30`, `EBP-0x24`).
-fn destroy_kill_sound_handles(e: &mut Engine, handles: u32) {
+fn destroy_kill_sound_handles(e: &mut Engine, handles: u32, dying_actor: Option<Ptr<Actor>>) {
     e.call(SOUND_HANDLE_DESTROY, &args![handles]);
     e.call(SOUND_HANDLE_DESTROY, &args![handles + 12]);
+    if let Some(actor) = dying_actor {
+        e.site(0x0089_f49f, &[actor.addr()]);
+    }
     e.call(SOUND_HANDLE_DESTROY, &args![handles + 24]);
 }
 
@@ -8218,7 +8221,7 @@ fn kill_essential_actor(e: &mut Engine, ebp: u32, this: Ptr<Actor>, handles: u32
             ACTOR_SLOT_MODIFY_ACTOR_VALUE,
             &args![0x10u32, amount, 0u32],
         );
-        destroy_kill_sound_handles(e, handles);
+        destroy_kill_sound_handles(e, handles, None);
         return true;
     }
     let package = e.call(ACTOR_GET_CURRENT_EDITOR_PACKAGE, &args![this]).u32();
@@ -8936,7 +8939,7 @@ pub fn actor_kill(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, damage
             e.set(this, Actor::pMyKiller, attacker.cast());
             let tes = e.call(GET_TES, &args![]).u32();
             e.call(QUEUE_ACTOR_KILL, &args![tes, this, block, 0u32]);
-            destroy_kill_sound_handles(e, handles);
+            destroy_kill_sound_handles(e, handles, None);
             return;
         }
 
@@ -9025,7 +9028,7 @@ pub fn actor_kill(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, damage
         if beam != 0 {
             e.call(CONTINUOUS_BEAM_PROJECTILE_SET_KILL, &args![beam, this]);
         }
-        destroy_kill_sound_handles(e, handles);
+        destroy_kill_sound_handles(e, handles, Some(this));
     });
 }
 /// Acquire object slot `0x128`: returns the actor it is acquiring from.
@@ -19780,6 +19783,10 @@ mod tests {
         stub(&mut e, PICK_UP_GOES_TO_TASK_QUEUE, 1);
         stub(&mut e, GET_TES, 0x8a00);
         stub(&mut e, SOUND_HANDLE_IS_PLAYING, 1);
+        use engine_core::extend::{Owner, SiteSlot};
+        e.on_site(SiteSlot::new(Owner::JohnnyGuitar, 0x0089_f49f), |_, _| {
+            panic!("queued kill took the dying seam")
+        });
         actor_kill(&mut e, victim, attacker, 7.5);
         let constructed = calls_to(&e, SOUND_HANDLE_CONSTRUCT);
         assert_eq!(constructed.len(), 3);
@@ -19836,7 +19843,17 @@ mod tests {
         let (victim, _, _, _) = kill_setup(&mut e);
         stub(&mut e, GET_SAVED_ACQUIRE_OBJECT, 0);
         let frame = next_frame(&mut e, 0x374);
+        use engine_core::extend::{Owner, SiteSlot};
+        const NOTIFY: u32 = 0x0300_2000;
+        stub(&mut e, NOTIFY, 0);
+        e.on_site(SiteSlot::new(Owner::JohnnyGuitar, 0x0089_f49f), |e, a| {
+            assert_eq!(call_count(e, SOUND_HANDLE_DESTROY), 2);
+            assert_eq!(calls_to(e, ACTOR_SET_LIFE_STATE), vec![vec![a[0], 1]]);
+            e.call(NOTIFY, a);
+            None
+        });
         actor_kill(&mut e, victim, Ptr::NULL, 1.0);
+        assert_eq!(calls_to(&e, NOTIFY), vec![vec![victim.addr()]]);
         // 0089d900's aligned frame: the awake, idle and attack handles at EBP-0x3c, -0x30, -0x24.
         let ebp = (frame + 0x364 + 0xf) & !0xf;
         let handles: Vec<u32> = calls_to(&e, SOUND_HANDLE_DESTROY)

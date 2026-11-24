@@ -4151,6 +4151,59 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_runtime_script_names_use_native_source_files_not_script_header() {
+        use engine_core::editor_ids;
+        let mut e = list_engine();
+        // Script is 0x54 bytes (TESForm is only 0x18). Allocating bare
+        // TESForms would let these derived-header writes corrupt the next
+        // fixture's vtable/type rather than exercise native file lookup.
+        let runtime_script = |e: &mut Engine, id: u32| {
+            let script = Ptr::<TESForm>::new(e.mem.alloc(0x54));
+            e.mem.set_u32(script.addr(), WIDE_VTABLE);
+            e.set(script, TESForm::cFormType, 0x11);
+            e.set(script, TESForm::iFormFlags, 0);
+            e.set(script, TESForm::iFormID, id);
+            script
+        };
+        let old = runtime_script(&mut e, 0xff00_0800);
+        let new = runtime_script(&mut e, 0xff00_0801);
+        // The actual failing Script header: neither 3 nor 2 is a pointer.
+        for script in [old, new] {
+            e.mem.set_u32(script.addr() + 0x18, 3);
+            e.mem.set_u32(script.addr() + 0x1c, 2);
+        }
+        assert_eq!(e.get(old, TESForm::cFormType), 0x11);
+        assert_eq!(e.get(new, TESForm::cFormType), 0x11);
+        let text = e.mem.alloc(32);
+        e.mem.write(text, b"nvseRuntimeScriptLambda\0");
+        assert!(editor_ids::set_form_editor_id(&mut e, old.addr(), text));
+        assert!(editor_ids::set_form_editor_id(&mut e, new.addr(), text));
+        assert_eq!(
+            editor_ids::store(&mut e).lookup(b"nvseRuntimeScriptLambda"),
+            new.addr()
+        );
+        assert_eq!(
+            editor_ids::conflict_lines(&mut e),
+            ["FF000801 (\"\") steals EDID \"nvseRuntimeScriptLambda\" from FF000800 (\"\")"]
+        );
+        // Actual native list semantics: the old form's first and new form's
+        // last non-null files are used, including sparse nodes.
+        let (a, b, c) = (
+            test_file(&mut e, false),
+            test_file(&mut e, false),
+            test_file(&mut e, false),
+        );
+        e.mem.write(a + 0x20, b"First.esm\0");
+        e.mem.write(b + 0x20, b"Middle.esm\0");
+        e.mem.write(c + 0x20, b"Last.esp\0");
+        set_list(&mut e, new, &[a, 0, b]);
+        set_list(&mut e, old, &[0, b, c]);
+        assert!(editor_ids::set_form_editor_id(&mut e, old.addr(), text));
+        assert_eq!(editor_ids::conflict_lines(&mut e).last().unwrap(),
+            "FF000800 (\"Last.esp\") steals EDID \"nvseRuntimeScriptLambda\" from FF000801 (\"First.esm\")");
+    }
+
+    #[test]
     fn owner_master_is_the_last_master_in_the_list() {
         let mut e = list_engine();
         let f = wide_form(&mut e, 8, 0x20);

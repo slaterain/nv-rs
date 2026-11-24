@@ -3074,6 +3074,8 @@ pub fn start_menu_end_credits(e: &mut Engine, this: Ptr<StartMenu>) {
 /// the start menu has `FLAG_RESTART_REQUIRED`, one message is shown and the
 /// flag cleared; when it does not accept, another message is shown.
 pub fn fn_007d6d70(e: &mut Engine) {
+    // JohnnyGuitar59049a0 OnSettingsUpdate: BEFORE original call7D6D73.
+    e.site(0x007d_6d73, &[]);
     let first = e.call(SINGLETON_0045D180, &[]).u32();
     let first_value = e.call(OBJECT_PLUS_4, &args![first]).u32();
     let first = e.call(SINGLETON_0045D180, &[]).u32();
@@ -7468,6 +7470,34 @@ mod tests {
         start_menu_end_credits(&mut e, menu);
         assert!(calls(&e, MEDIA_PLAY).is_empty());
         assert_eq!(calls(&e, TES_GLOBAL_SET_VALUE).len(), 1);
+    }
+
+    #[test]
+    fn johnny_settings_event_precedes_original_singleton_call_and_preserves_function_calls() {
+        let mut e = engine();
+        stub(&mut e, SINGLETON_0045D180, 0x4001);
+        stub(&mut e, SINGLETON_004DE490, 0x4002);
+        e.register(OBJECT_PLUS_4, |_, a| ret(a[0] + 4));
+        e.register(OBJECT_TEST_005E01B0, |_, _| Ret::default());
+        fn_007d6d70(&mut e);
+        let original_calls = e.call_log.clone().unwrap();
+        e.call_log = Some(Vec::new());
+        e.on_site(
+            engine_core::extend::SiteSlot::new(
+                engine_core::extend::Owner::JohnnyGuitar,
+                0x007d_6d73,
+            ),
+            |e, a| {
+                assert!(a.is_empty());
+                assert!(
+                    e.call_log.as_ref().unwrap().is_empty(),
+                    "callback runs before original7D6D73 singleton call"
+                );
+                None
+            },
+        );
+        fn_007d6d70(&mut e);
+        assert_eq!(e.call_log.as_ref().unwrap(), &original_calls);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! First gameplay commands from JohnnyGuitarNVSE 59049a0, JG/functions/{fn_math,
-//! fn_utility,fn_gameplay,fn_form}.cpp and internal/JG/JohnnyCommands.cpp. Individual commands
+//! fn_utility,fn_gameplay}.cpp and internal/JG/JohnnyCommands.cpp. Individual commands
 //! are available without advertising the still-incomplete plugin as installed.
 use engine_core::prelude::*;
 use nvse::commands::{arg_in_buffer, console_print, double_words, is_console_mode, Read};
@@ -19,8 +19,8 @@ const FLOATS: &[Param] = &[
     param("float", 2, false),
     param("float", 2, false),
 ];
-const FORM: &[Param] = &[param("form", 0x3d, false)];
 const THEFT: &[Param] = &[param("target", 4, false), param("int", 1, true)];
+const FORM: &[Param] = &[param("form", 0x3d, false)];
 const ITEM: &[Param] = &[param("item", 3, true)];
 const MENU: &[Param] = &[param("int", 1, true)];
 const RENDER: &[Param] = &[
@@ -42,6 +42,7 @@ pub fn install(e: &mut Engine) {
             editor_id_to_form_id as AbiFn,
         ),
         (0x3155, "Clamp", FLOATS, false, Returns::Default, clamp),
+        (0x3157, "Lerp", FLOATS, false, Returns::Default, lerp),
         (
             0x31e0,
             "GetFactionFlags",
@@ -158,6 +159,21 @@ fn clamp(e: &mut Engine, words: &[u32]) -> Ret {
             value
         };
         a.set_result(e, f64::from(result));
+    }
+    handled(true)
+}
+
+/// JG59049a0 fn_math.cpp207: three float32 operands and float32 arithmetic,
+/// with no clamping of the interpolation value (including extrapolation).
+fn lerp(e: &mut Engine, words: &[u32]) -> Ret {
+    let a = CommandArgs::new(words);
+    a.set_result(e, 0.0);
+    let r = Read::of(e, &a);
+    if r.ok {
+        let start = r.float(0, 0.0);
+        let end = r.float(1, 0.0);
+        let value = r.float(2, 0.0);
+        a.set_result(e, f64::from((1.0f32 - value) * start + value * end));
     }
     handled(true)
 }

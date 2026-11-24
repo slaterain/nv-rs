@@ -303,6 +303,8 @@ pub fn fn_00555f60(e: &mut Engine, this: Ptr, position: u32) {
             } else {
                 0
             };
+            // JohnnyGuitar hooks the list getter before installing the seen data.
+            e.site(0x0055_678a, &[cell]);
             let extra = e.call(EXTRA_DATA, &args![cell]).u32();
             e.call(SET_SEEN_DATA, &args![extra, seen]);
             e.vcall(cell, 0x48, &args![0x8000_0000u32]);
@@ -713,8 +715,17 @@ mod tests {
         e.register(SET_CELL_FLAG, nothing);
         let position = e.mem.alloc(0xc);
         e.mem.set_f32(position + 8, 7.0);
+        use engine_core::extend::{Owner, SiteSlot};
+        e.on_site(SiteSlot::new(Owner::JohnnyGuitar, 0x0055_678a), |e, a| {
+            assert!(calls_to(e, EXTRA_DATA).is_empty());
+            assert_eq!(calls_to(e, SEEN_DATA_CONSTRUCT), vec![vec![0x0060_0000]]);
+            e.call(0x0300_2000, a);
+            None
+        });
+        e.register(0x0300_2000, nothing);
         e.call_log = Some(vec![]);
         e.call(0x0055_5f60, &args![this, position]);
+        assert_eq!(calls_to(&e, 0x0300_2000), vec![vec![this]]);
         assert_eq!(calls_to(&e, ALLOCATE), vec![vec![0x24]]);
         assert_eq!(
             calls_to(&e, SET_SEEN_DATA),

@@ -1474,8 +1474,11 @@ fn owner_of(actor: u32) -> u32 {
 
 /// The base value of actor value `index` (the owner's virtual `+0xc`), or
 /// `0.0` when `0066ee10` says the value has none.
-fn base_actor_value(e: &mut Engine, this: Ptr<Actor>, index: u32) -> f32 {
-    if e.call(ACTOR_VALUE_HAS_BASE, &args![index]).bool() {
+fn base_actor_value(e: &mut Engine, this: Ptr<Actor>, index: u32, site: u32) -> f32 {
+    let readable = e.call(ACTOR_VALUE_HAS_BASE, &args![index]).bool();
+    // JG removes only the branch, retaining the original getter test call.
+    let force = e.site(site, &args![this, index, readable]).is_some();
+    if readable || force {
         e.vcall(this.addr() + ACTOR_VALUE_OWNER, 0xc, &args![index])
             .f32()
     } else {
@@ -2196,7 +2199,7 @@ pub fn fn_008806d0(e: &mut Engine, this: Ptr<Actor>, index: u32, value: i32) {
 /// `index` when the actor's virtual `+0x360` is false and it has a process,
 /// and `0066ee50` reports the change.
 pub fn fn_00880700(e: &mut Engine, this: Ptr<Actor>, index: u32, amount: f32) {
-    let base = base_actor_value(e, this, index);
+    let base = base_actor_value(e, this, index, 0x0088_071a);
     let mut amount = amount;
     if e.call(ACTOR_VALUE_HAS_FLAG, &args![index, 0x100u32]).bool() {
         let zero: f64 = e.global(0x0101_2060);
@@ -2218,10 +2221,10 @@ pub fn fn_00880700(e: &mut Engine, this: Ptr<Actor>, index: u32, amount: f32) {
         let process = actor_process(e, this);
         e.vcall(process.addr(), 0x3b0, &args![index]);
     }
-    e.call(
-        ACTOR_VALUE_CHANGED,
-        &args![owner_of(this.addr()), index, base, amount, 0u32],
-    );
+    let words = args![owner_of(this.addr()), index, base, amount, 0u32];
+    if e.site(0x0088_0842, &words).is_none() {
+        e.call(ACTOR_VALUE_CHANGED, &words);
+    }
 }
 
 // Translated from 00880850 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2292,7 +2295,7 @@ pub fn fn_00880950(e: &mut Engine, this: Ptr<Actor>, index: u32, value: i32, sou
         return;
     }
     let value = fn_00880850(e, this.cast(), index, value, source.addr());
-    let base = base_actor_value(e, this, index);
+    let base = base_actor_value(e, this, index, 0x0088_09c6);
     if !e.get(this, Actor::pCurrentProcess).is_null() {
         let process = actor_process(e, this);
         e.vcall(process.addr(), 0x3a4, &args![this, index, value]);
@@ -2317,7 +2320,7 @@ pub fn fn_00880ad0(e: &mut Engine, this: Ptr<Actor>, index: u32, amount: f32, so
         return;
     }
     let amount = fn_00880890(e, this.cast(), index, amount, source.addr());
-    let base = base_actor_value(e, this, index);
+    let base = base_actor_value(e, this, index, 0x0088_0b53);
     if !e.get(this, Actor::pCurrentProcess).is_null() {
         let process = actor_process(e, this);
         e.vcall(process.addr(), 0x3a0, &args![this, index, amount]);
@@ -2343,7 +2346,7 @@ pub fn fn_00880c70(e: &mut Engine, this: Ptr<Actor>, index: u32, value: i32, sou
         return;
     }
     let value = fn_00880850(e, this.cast(), index, value, source.addr());
-    let base = base_actor_value(e, this, index);
+    let base = base_actor_value(e, this, index, 0x0088_0ce6);
     e.call(
         0x0093_7480,
         &args![this.byte_add(0xd0), index as u8 as u32, value as f32, 2u32],
@@ -2371,7 +2374,7 @@ pub fn fn_00880e00(e: &mut Engine, this: Ptr<Actor>, index: u32, amount: f32, so
         return;
     }
     let amount = fn_00880890(e, this.cast(), index, amount, source.addr());
-    let base = base_actor_value(e, this, index);
+    let base = base_actor_value(e, this, index, 0x0088_0e83);
     e.call(
         0x0093_7480,
         &args![this.byte_add(0xd0), index as u8 as u32, amount, 2u32],
@@ -2398,7 +2401,7 @@ pub fn fn_00880fb0(e: &mut Engine, this: Ptr<Actor>, index: u32, value: i32, sou
         return;
     }
     let value = fn_00880850(e, this.cast(), index, value, source.addr());
-    let base = base_actor_value(e, this, index);
+    let base = base_actor_value(e, this, index, 0x0088_1026);
     if !e.get(this, Actor::pCurrentProcess).is_null() {
         let process = actor_process(e, this);
         e.vcall(process.addr(), 0x3ac, &args![this, index, value]);
@@ -2427,7 +2430,7 @@ pub fn fn_00881130(e: &mut Engine, this: Ptr<Actor>, index: u32, amount: f32, so
         return;
     }
     let mut amount = fn_00880890(e, this.cast(), index, amount, source.addr());
-    let base = base_actor_value(e, this, index);
+    let base = base_actor_value(e, this, index, 0x0088_11b3);
     if index == 0x16 && (amount as f64) < zero {
         let limit_slot = e.call(0x0040_3e20, &args![0x011d_2664u32]).u32();
         let limit = e.mem.f32(limit_slot);
@@ -2470,7 +2473,7 @@ pub fn fn_00881360(e: &mut Engine, this: Ptr<Actor>, index: u32, amount: f32) {
     if e.call(ACTOR_VALUE_HAS_FLAG, &args![index, 0x100u32]).bool() {
         return;
     }
-    let base = base_actor_value(e, this, index);
+    let base = base_actor_value(e, this, index, 0x0088_1397);
     let current = e
         .vcall(this.addr() + ACTOR_VALUE_OWNER, 4, &args![index])
         .f32();
@@ -7120,6 +7123,86 @@ mod tests_block2 {
     }
 
     // ---- 00880700 ----
+
+    #[test]
+    fn johnny_actor_old_value_branches_preserve_test_call_and_force_only_the_read() {
+        use engine_core::extend::{Owner, SiteSlot};
+        for (address, site, amount) in [
+            (0x0088_0700, 0x0088_071a, 0f32.to_bits()),
+            (0x0088_0950, 0x0088_09c6, 0),
+            (0x0088_0ad0, 0x0088_0b53, 0f32.to_bits()),
+            (0x0088_0c70, 0x0088_0ce6, 0),
+            (0x0088_0e00, 0x0088_0e83, 0f32.to_bits()),
+            (0x0088_0fb0, 0x0088_1026, 0),
+            (0x0088_1130, 0x0088_11b3, 0f32.to_bits()),
+            (0x0088_1360, 0x0088_1397, 0f32.to_bits()),
+        ] {
+            for enabled in [false, true] {
+                let mut e = new_engine();
+                let actor = actor(&mut e, &[0x490, 0x360, 0x48, 0x394]);
+                give_owner(&mut e, actor, &[4, 0xc]);
+                install_float_to_int(&mut e);
+                e.register(0x0040_4040, |_, words| f32::from_bits(words[0]).into_ret());
+                e.register(ACTOR_VALUE_IS_STAT, |_, _| ret(1));
+                stub(&mut e, &[0x0093_7480]);
+                let test = record(&mut e, ACTOR_VALUE_HAS_BASE, ret(0));
+                e.register(ACTOR_VALUE_HAS_FLAG, |_, _| ret(0));
+                let reads = record(&mut e, slot(OWNER_VTABLE, 0xc), 8f32.into_ret());
+                let report = record(&mut e, ACTOR_VALUE_CHANGED, Ret::default());
+                if enabled {
+                    e.on_site(SiteSlot::new(Owner::JohnnyGuitar, site), |_, _| Some(0));
+                }
+                let mut words = vec![actor.addr(), 7, amount];
+                if address != 0x0088_0700 && address != 0x0088_1360 {
+                    words.push(0);
+                }
+                e.call(address, &words);
+                assert_eq!(
+                    test.borrow().len(),
+                    1,
+                    "original HasOnChangedCallback call kept at {site:08x}"
+                );
+                assert_eq!(
+                    reads.borrow().len(),
+                    usize::from(enabled),
+                    "only conditional branch removed"
+                );
+                assert_eq!(report.borrow().len(), 1);
+                assert_eq!(
+                    report.borrow()[0][2],
+                    if enabled { 8f32.to_bits() } else { 0 }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn johnny_set_mode_site_is_only_the_final_original_change_call() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = new_engine();
+        let actor = actor(&mut e, &[0x490, 0x360]);
+        give_owner(&mut e, actor, &[0xc]);
+        e.register(ACTOR_VALUE_HAS_BASE, |_, _| ret(1));
+        e.register(slot(OWNER_VTABLE, 0xc), |_, _| 8f32.into_ret());
+        e.register(ACTOR_VALUE_HAS_FLAG, |_, _| ret(0));
+        let changed = record(&mut e, slot(VTABLE, 0x490), Ret::default());
+        let reports = record(&mut e, ACTOR_VALUE_CHANGED, Ret::default());
+        e.on_site(
+            SiteSlot::new(Owner::JohnnyGuitar, 0x0088_0842),
+            |e, words| {
+                assert_eq!(words[1..], [7, 8f32.to_bits(), 3f32.to_bits(), 0]);
+                e.call(ACTOR_VALUE_CHANGED, words);
+                Some(0)
+            },
+        );
+        e.call(0x0088_0700, &args![actor, 7u32, 3f32]);
+        assert_eq!(changed.borrow().len(), 1);
+        assert_eq!(
+            reports.borrow().len(),
+            1,
+            "wrapped call is not repeated by vanilla"
+        );
+    }
 
     #[test]
     fn float_actor_value_change_clamps_with_flag_0x100() {

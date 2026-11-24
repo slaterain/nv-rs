@@ -129,6 +129,34 @@ type Row = (
 /// (`paramInfo`, `scriptData`, `thisObj`, `containingObj`, `scriptObj`, `eventList`, `result`,
 /// `opcodeOffsetPtr`), which the game's script runner passes to every command's routine.
 const UNREAD: &[Row] = &[
+    (
+        "johnnyguitar",
+        "av_events.rs",
+        "0x0066_ee50",
+        N(5),
+        "ActorValue change notification (actorvalue.rs): owner, value index, old f32, delta f32, extra word",
+    ),
+    (
+        "johnnyguitar",
+        "process_events.rs",
+        "original",
+        N(1),
+        "captured MoveToHigh/Low/MiddleLow/MiddleHigh virtual: only the actor this pointer (null-process branch)",
+    ),
+    (
+        "johnnyguitar",
+        "process_events.rs",
+        "original",
+        N(1),
+        "the same captured process-change virtual: only the actor this pointer (notification branch)",
+    ),
+    (
+        "johnnyguitar",
+        "sleep_settings_events.rs",
+        "original",
+        N(3),
+        "SleepWaitMenu::DoClick (007c0220): the menu, tile id and tile pointer",
+    ),
     // JIP LN.
     (
         "jip",
