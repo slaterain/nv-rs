@@ -465,3 +465,53 @@ pub fn set_variable(e: &mut Engine, this: Ptr, id: u32, value: f64) {
     }
     e.call(SCRIPT_LOG, &args![FORMAT_SET_VARIABLE_NO_SCRIPT, id]);
 }
+
+// Typed from 005a90b0
+/// The locals' action of `form` in the action list. With `create` and no match, the last entry
+/// with no form instead. Null when there is no list.
+pub fn find_action(e: &mut Engine, this: Ptr, form: u32, create: bool) -> Ptr {
+    let mut node = e.mem.u32(this.addr() + LOCALS_ACTIONS);
+    if node == 0 {
+        return Ptr::NULL;
+    }
+    let mut empty_entry = 0u32;
+    while node != 0 {
+        let item = list_item(e, node);
+        if item == 0 {
+            break;
+        }
+        let entry_form = e.mem.u32(item);
+        if entry_form == form {
+            return Ptr::new(item);
+        }
+        if entry_form == 0 {
+            empty_entry = item;
+        }
+        node = list_next(e, node);
+    }
+    if create {
+        Ptr::new(empty_entry)
+    } else {
+        Ptr::NULL
+    }
+}
+
+// Typed from 005a8e20
+/// `ScriptLocals::SetActionFlag`: ORs `flags` into the action of `form` and into the entry with no
+/// form (the "any form" entry), both found with the create flag. False when there is no action
+/// list or neither entry exists.
+pub fn set_locals_action_flag(e: &mut Engine, this: Ptr, form: u32, flags: u32) -> bool {
+    if e.mem.u32(this.addr() + LOCALS_ACTIONS) == 0 {
+        return false;
+    }
+    let mut found = false;
+    for target in [form, 0] {
+        let action = typed_call!(FAMILY, 0x005a_90b0, find_action(e, this, target, true));
+        if !action.is_null() {
+            let old = e.mem.u32(action.addr() + 4);
+            e.mem.set_u32(action.addr() + 4, old | flags);
+            found = true;
+        }
+    }
+    found
+}

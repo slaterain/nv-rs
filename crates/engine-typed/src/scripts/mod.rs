@@ -10,7 +10,7 @@
 //! - [`numbers`]: the text tests of an operand (`IsAnInteger`, `IsAFloat`);
 //! - [`value`]: the operand reader and its two lookups;
 //! - [`run`]: `Script::Run` and the run manager every script run goes through, a fresh runner, and
-//!   the locals' variable set and action flags' clear a run makes.
+//!   the locals' variable set, action flags' clear and set, and the action lookup.
 //!
 //! What stays by address: the tokenizer (`00593870`, which lStewieAl's Tweaks' script inlines
 //! replace; a built-in of it reaches every caller there), the operand reader (`005ac7a0`, a
@@ -90,5 +90,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005a_e2e0, run::forget_referenced_objects(Ptr)),
         entry!(0x005a_8ea0, run::clear_action_flags(Ptr)),
         entry!(0x005a_9290, run::set_variable(Ptr, u32, f64)),
+        entry!(0x005a_90b0, run::find_action(Ptr, u32, bool) -> Ptr),
+        entry!(0x005a_8e20, run::set_locals_action_flag(Ptr, u32, u32) -> bool),
     ]
 }
