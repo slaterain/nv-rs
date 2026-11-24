@@ -857,6 +857,7 @@ dependencies = [
 name = "engine-platform"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "bink",
  "d3d9-stream",
  "d3d9-wgpu",

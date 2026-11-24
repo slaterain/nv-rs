@@ -371,6 +371,8 @@ pub mod units {
     pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
         crate::install_layer(&crate::LAYER);
         engine_core::mod_files::install(&crate::mod_files::CALLS);
+        engine_core::key_text::install(crate::key_text::get);
+        engine_core::clipboard::install(crate::clipboard::read);
         out.extend(crate::layer_funcs());
     }
 }
@@ -1211,3 +1213,7 @@ mod tests {
         }
     }
 }
+
+mod key_text;
+
+mod clipboard;

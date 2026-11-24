@@ -279,6 +279,7 @@ pub(super) fn reactivated(wparam: u32) {
 /// not yet taken dropped (the game takes no move while another program is active: `00871d10`
 /// asks for the active window).
 pub(super) fn focus_lost() {
+    crate::key_text::clear();
     if let Ok(mut i) = input().lock() {
         lose_focus(&mut i);
     }

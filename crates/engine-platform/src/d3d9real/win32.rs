@@ -406,7 +406,11 @@ fn window_input(_window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) {
                 shot::report_asked();
             }
             if let Some(code) = dik(lparam.0) {
-                i.keys[code as usize] = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
+                let down = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
+                i.keys[code as usize] = down;
+                if down {
+                    crate::key_text::observe_windows(u32::from(code));
+                }
             }
         }
         WM_LBUTTONDOWN | WM_LBUTTONUP => button(&mut i, 0, message == WM_LBUTTONDOWN),
