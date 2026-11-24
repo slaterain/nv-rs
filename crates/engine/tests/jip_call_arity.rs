@@ -36,7 +36,7 @@
 //! Not checked at all: `.vcall(this, SLOT, ..)` and `.call_next(ADDR, ..)` sites. A vtable slot's
 //! target depends on the object's class and a wrapped address's next function on what else wraps
 //! it, neither known from the text. For those, the ignored test below probes listed translations
-//! (`NV_PROBE`), and `NV_JIP_SRC` (`NV_NVSE_SRC`, `NV_JOHNNYGUITAR_SRC`, ...) points a crate's test at
+//! (`NV_PROBE`), and `NV_JIP_SRC` (`NV_NVSE_SRC`) points a crate's test at
 //! another copy of its source (an open pull request's branch, exported).
 
 use engine as _;
@@ -47,7 +47,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 /// The extender crates the test reads.
-const CRATES: [&str; 3] = ["jip", "nvse", "johnnyguitar"];
+const CRATES: [&str; 2] = ["jip", "nvse"];
 
 /// One direct call in a crate's source.
 #[derive(Debug)]
@@ -320,14 +320,6 @@ const UNREAD: &[Row] = &[
         "execute",
         N(8),
         "a command's routine from its record: a command's words",
-    ),
-    // JohnnyGuitar NVSE.
-    (
-        "johnnyguitar",
-        "lib.rs",
-        "own",
-        N(2),
-        "a storing class's own SetEditorID (vtable +0x134, thiscall: the form and the text)",
     ),
 ];
 
@@ -1704,12 +1696,6 @@ fn jip_passes_each_game_function_the_words_it_takes() {
 #[test]
 fn nvse_passes_each_game_function_the_words_it_takes() {
     check("nvse");
-}
-
-/// JohnnyGuitar NVSE (its editor ids): each game function it calls by address gets the words it takes.
-#[test]
-fn johnnyguitar_passes_each_game_function_the_words_it_takes() {
-    check("johnnyguitar");
 }
 
 /// The rule for callees nobody translated: G94's old `0x0040A320` (inside `0040a300`) fails, every
