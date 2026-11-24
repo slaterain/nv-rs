@@ -115,6 +115,8 @@ fn window_closed() -> ! {
             std::thread::park();
         }
     }
+    // The log lines still on their way written first, so this line ends the log.
+    crate::run_end_hooks();
     eprintln!(
         "NV_D3D9={}: the game's window was closed: the run ends",
         tag()
