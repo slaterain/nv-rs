@@ -80,7 +80,8 @@ use winit::event::{
     DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent,
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::PhysicalKey;
+use winit::keyboard::{Key, PhysicalKey};
+use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{CursorGrabMode, Fullscreen, Window, WindowButtons, WindowId};
 
 /// How often the window thread looks for windows to make between the system's events (as the
@@ -852,6 +853,24 @@ impl ApplicationHandler for Layer {
             } => {
                 let name = key_name(event.physical_key);
                 if let Some(dik) = input::key_event(is_synthetic, name.as_deref()) {
+                    if event.state == ElementState::Pressed {
+                        let base = event.key_without_modifiers();
+                        let base = match &base {
+                            Key::Character(text) => Some(text.as_str()),
+                            _ => None,
+                        };
+                        let dead = matches!(event.logical_key, Key::Dead(_));
+                        // ToANSIChar ignores Ctrl/Alt. winit's text ignores Ctrl;
+                        // Alt/AltGr and dead combinations without an equivalent
+                        // layout result stay unavailable rather than guessed.
+                        crate::key_text::record(
+                            u32::from(dik),
+                            event.text.as_deref(),
+                            base,
+                            dead,
+                            self.alt,
+                        );
+                    }
                     input::key(
                         dik,
                         event.state == ElementState::Pressed,

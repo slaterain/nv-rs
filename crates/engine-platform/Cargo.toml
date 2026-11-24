@@ -47,6 +47,8 @@ windows = { version = "0.58", features = ["Win32_Devices_DeviceAndDriverInstalla
 # the framed window with a plain frame and no title. The borderless window (play's default) has
 # no frame either way.
 [target.'cfg(not(windows))'.dependencies]
+# Read text only on explicit paste; Wayland support does not require XWayland.
+arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
 raw-window-handle = "=0.6.2"
 

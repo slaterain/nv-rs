@@ -130,3 +130,6 @@ pub(crate) fn test_panic_hook_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
+
+pub mod clipboard;
+pub mod key_text;
