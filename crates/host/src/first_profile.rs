@@ -360,6 +360,14 @@ pub fn first_start_with(
     Ok(log)
 }
 
+/// The same Documents folder the game and `Fallout.ini` reader use. A supplied adapter table
+/// can name an isolated profile; first-start writes must not fall back to the normal profile.
+/// The INI reader appends `My Games/FalloutNV/Fallout.ini`, so its third ancestor is Documents.
+pub fn documents_from_table(table: &str) -> Result<Option<std::path::PathBuf>, String> {
+    Ok(crate::game_ini::path_from_table(table)?
+        .and_then(|ini| ini.ancestors().nth(3).map(std::path::Path::to_path_buf)))
+}
+
 /// Off Windows, at a play run's start (after the renderer choice and the machine table, before the
 /// game reads its INI files): the profile files in `documents` (`My Games\FalloutNV`) prepared
 /// from the game in `game_folder` and the table's facts ([`first_start_with`]), written through
@@ -426,6 +434,36 @@ mod tests {
             screen: Some((2560, 1440)),
             device: Some("AMD Radeon RX 7800 XT (RADV NAVI32)"),
         })
+    }
+
+    #[test]
+    fn first_start_documents_follow_the_last_table_entry() {
+        let hex = |s: &str| s.bytes().map(|b| format!("{b:02x}")).collect::<String>();
+        let table = format!(
+            "SHGetFolderPathA\t5 0\t0\t{}\nSHGetFolderPathA\t5 0\t0\t{}\n",
+            hex(r"D:\normal\Documents"),
+            hex(r"D:\isolated\Documents"),
+        );
+        assert_eq!(
+            documents_from_table(&table).unwrap(),
+            Some(std::path::PathBuf::from(r"D:\isolated\Documents")),
+        );
+        assert_eq!(documents_from_table(""), Ok(None));
+        assert!(documents_from_table("SHGetFolderPathA\t5 0\t0\tff\n").is_err());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn first_start_documents_on_drive_z_use_the_native_profile() {
+        let hex: String = r"Z:\isolated\mods\Documents"
+            .bytes()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let table = format!("SHGetFolderPathA\t5 0\t0\t{hex}\n");
+        assert_eq!(
+            documents_from_table(&table).unwrap(),
+            Some(std::path::PathBuf::from("/isolated/mods/Documents")),
+        );
     }
 
     /// A first start makes both files: the game's defaults with nv-rs's sections, and the High
