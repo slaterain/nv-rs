@@ -1743,7 +1743,7 @@ DLL), MIT licence. It is a row: it changes how every menu file is read. Parts 1,
 
 lStewieAl's Tweaks ("lStewieAl's Tweaks and Engine Fixes", 10.05), the NVSE plugin of engine fixes
 and tweaks every VNV player runs, is being built in as `crates/stewie` (`measure/stewie/PLAN.md`: its
-1,082 changes to the game, from its source), with its author's permission. The row `NV_STEWIE`
+1,082 changes to the game, from its source). The row `NV_STEWIE`
 (Fallout.ini `bStewieTweaks`) is on in the fixes preset and off in vanilla. With it on:
 
 - **Each change is a row of its own**, named after Tweaks' function that makes it, with its number in
@@ -2083,8 +2083,7 @@ controller's input.
 
 ## Credits
 
-Written with the fix plugins' knowledge, by their authors' permission (2026-11-03); no code is
-translated from them in these fixes.
+Written with the fix plugins' knowledge; no code is translated from them in these fixes.
 
 - **New Vegas Tick Fix (NVTF)**, carxt, lStewieAl and jazzisparis, LGPL-2.1: `BSTimer`'s fixed
   step from the measured frame and the survey of what goes wrong at high frame rates.
