@@ -995,7 +995,7 @@ pub fn ni_t_pointer_map_delete_item(e: &mut Engine, _this: Ptr<NiTPointerMap>, i
     e.mem.set_u32(POOL_LOCK_COUNT, count);
     e.mem.set_u32(POOL_FREE_LIST, item.addr());
     if count == 0 {
-        e.mem.set_u32(POOL_LOCK, 0);
+        e.mem.set_u32_release(POOL_LOCK, 0);
     }
 }
 

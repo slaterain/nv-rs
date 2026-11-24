@@ -406,7 +406,7 @@ fn g10_each_seam_answers_jips_text_buffer() {
     assert_eq!(
         corner_message_text_size(&mut e),
         0x104,
-        "the queue reads FIXES too"
+        "the queue's own size"
     );
 }
 

@@ -815,7 +815,7 @@ fn remove_head_entry(e: &mut Engine, list: u32) {
     e.mem.set_u32(NODE_POOL_LOCK_COUNT_011C5F84, lock_count);
     e.mem.set_u32(NODE_POOL_FREE_011C5F58, node);
     if lock_count == 0 {
-        e.mem.set_u32(NODE_POOL_LOCK_011C5F80, 0);
+        e.mem.set_u32_release(NODE_POOL_LOCK_011C5F80, 0);
     }
     let count = e.mem.u32(list.wrapping_add(8)).wrapping_sub(1);
     e.mem.set_u32(list.wrapping_add(8), count);

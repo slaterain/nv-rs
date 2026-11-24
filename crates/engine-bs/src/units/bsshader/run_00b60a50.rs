@@ -155,7 +155,7 @@ fn free_item(e: &mut Engine, item: u32) {
     e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
     e.mem.set_u32(NODE_POOL_FREE_LIST, item);
     if count == 0 {
-        e.mem.set_u32(NODE_POOL_LOCK, 0);
+        e.mem.set_u32_release(NODE_POOL_LOCK, 0);
     }
 }
 

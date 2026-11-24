@@ -12,8 +12,7 @@
 //! its `spLight` stops the game: `ResortLights` (`00b70390`) asks its luminance (`00b9dbe0` reads
 //! `spLight` +0x8c: "read of unmapped memory at 0000008c" in the staged fight with JIP's projectile
 //! lights, 2026-11-22), the active-light getters read its app-culled bit, the pass staging
-//! (`00b70820`) its colour. JIP LN NVSE meets the same entries: its game patches put a null check
-//! into one of these walkers only, `GetNumberofActiveNonShadowLights` (G01, `0xB707E0`).
+//! (`00b70820`) its colour.
 //!
 //! **The row.** An entry whose light is not a live `ShadowSceneLight` (another vtable than
 //! `010b7eb8`, or `spLight` 0) is dead; a null entry is left to the walkers, which stop there as the

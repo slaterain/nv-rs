@@ -820,7 +820,7 @@ pub fn fn_00a7aff0(e: &mut Engine, this: Ptr) {
         e.set_global::<u32>(NODE_POOL_LOCK_COUNT, count);
         e.set_global::<u32>(NODE_POOL_FREE, item);
         if count == 0 {
-            e.set_global::<u32>(NODE_POOL_LOCK, 0);
+            e.mem.set_u32_release(NODE_POOL_LOCK, 0);
         }
         let remaining = e.get(list, NiTPointerList::m_uiCount).wrapping_sub(1);
         e.set(list, NiTPointerList::m_uiCount, remaining);
