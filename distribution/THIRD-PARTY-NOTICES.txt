@@ -2068,3 +2068,11 @@ UI Organizer 2.30 (jazzisparis, Jef)
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE.
   Modified: the code translated to Rust; the list unchanged.
+
+High Res Local Maps 1.2 (Ungeziefi, WallSoGB)
+  https://www.nexusmods.com/newvegas/mods/77963
+  Selected resolution behavior translated to Rust. The original DLL and assets are not bundled.
+
+High Resolution Screens 1.2 (lStewieAl, Wall_SoGB)
+  https://www.nexusmods.com/newvegas/mods/77989
+  Selected render-target and input behavior translated to Rust. The original DLL and assets are not bundled.

@@ -2232,7 +2232,10 @@ pub fn fn_005d4580(e: &mut Engine, _args: ScriptArgs) -> bool {
     for _ in 0..0x19 {
         fn_005d45e0(e);
     }
-    e.mem.set_u8(MAP_MENU_BUSY_FLAG, 0);
+    // HighResLocalMaps 1.2 replaces the final clear's immediate at 005D45B5
+    // with 1; the command still sets the byte before all 25 map steps.
+    let keep_high_res = engine_core::resolution_mods::local_maps_enabled(e);
+    e.mem.set_u8(MAP_MENU_BUSY_FLAG, u8::from(keep_high_res));
     true
 }
 
@@ -6031,6 +6034,37 @@ mod tests {
         start_log(&mut e);
         assert!(e.call(0x005d_4580, &args![a]).bool());
         assert!(calls(&e, MAP_MENU_FUNCTION_0079FFB0).is_empty());
+    }
+
+    #[test]
+    fn local_maps_keep_the_high_res_byte_after_the_whole_map_command_only_when_enabled() {
+        for enabled in [false, true] {
+            for has_menu in [false, true] {
+                let mut e = engine();
+                engine_core::resolution_mods::set_local_maps(&mut e, enabled, 2);
+                if has_menu {
+                    let menu = object(&mut e);
+                    e.mem.set_u32(menu + 0x128, 9);
+                    e.set_global(MAP_MENU, menu);
+                } else {
+                    e.set_global(MAP_MENU, 0u32);
+                }
+                e.register(MAP_MENU_FUNCTION_0079FFB0, |e, _| {
+                    assert_eq!(e.mem.u8(MAP_MENU_BUSY_FLAG), 1);
+                    let menu: u32 = e.global(MAP_MENU);
+                    assert_eq!(e.mem.u32(menu + 0x128), 0);
+                    Ret::default()
+                });
+                let a = command(&mut e, 0);
+                start_log(&mut e);
+                assert!(e.call(0x005d_4580, &args![a]).bool());
+                assert_eq!(
+                    calls(&e, MAP_MENU_FUNCTION_0079FFB0).len(),
+                    if has_menu { 25 } else { 0 }
+                );
+                assert_eq!(e.mem.u8(MAP_MENU_BUSY_FLAG), u8::from(enabled));
+            }
+        }
     }
 
     #[test]

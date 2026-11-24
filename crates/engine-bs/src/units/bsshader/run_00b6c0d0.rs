@@ -125,7 +125,14 @@ fn aspect_size(
     flags: Ptr,
     flag_word: u32,
 ) {
-    e.mem.set_u32(width.addr(), 0x500);
+    // HDPipboy 1.2 replaces only the initial width at 00B6CD2C / 00B6CEC3.
+    // The target queries, unsigned x87 arithmetic and output readback stay below.
+    let initial_width = if engine_core::resolution_mods::screens_enabled(e) {
+        e.global::<u32>(WIDTH_011F9430)
+    } else {
+        0x500
+    };
+    e.mem.set_u32(width.addr(), initial_width);
     let first = e.vcall(renderer.addr(), 0xc8, &args![]).u32();
     let second = e.vcall(renderer.addr(), 0xc8, &args![]).u32();
     let target_height = e.vcall(first, 0x90, &args![0u32]).u32();
@@ -350,11 +357,11 @@ pub fn fn_00b6c2c0(
             put(e, format, 0);
         }
         0x1c..=0x1e => {
-            let size = if e.global::<u8>(BYTE_SETTING_012004FC) != 0 {
-                0x200
-            } else {
-                0x80
-            };
+            // HighResLocalMaps 1.2 changes the AND immediates at 00B6CFE4 and
+            // 00B6D015, leaving NEG/SBB and the addition of 0x80 unchanged.
+            let high_res = e.global::<u8>(BYTE_SETTING_012004FC) != 0;
+            let mask = engine_core::resolution_mods::local_map_mask(e);
+            let size = (0u32.wrapping_sub(u32::from(high_res)) & mask).wrapping_add(0x80);
             put(e, height, size);
             put(e, width, size);
             put(e, flags, if kind == 0x1c { 4 } else { 0 });
@@ -1098,6 +1105,54 @@ mod tests {
     }
 
     #[test]
+    fn local_maps_describe_all_three_kinds_with_the_original_flag_arithmetic() {
+        // Expected sizes from the DLL's original immediate masks, not from the
+        // configuration helper: option 0 = 256, option 2 = 1024, all others = 512.
+        for (option, enabled_size) in [(0, 256), (1, 512), (2, 1024), (-1, 512), (3, 512)] {
+            for enabled in [false, true] {
+                let mut r = rig((1920, 1080), (800, 600), 3);
+                engine_core::resolution_mods::set_local_maps(&mut r.e, enabled, option);
+                for byte in [0u8, 1, 0xff] {
+                    r.e.set_global(BYTE_SETTING_012004FC, byte);
+                    let size = if byte == 0 {
+                        128
+                    } else if enabled {
+                        enabled_size
+                    } else {
+                        512
+                    };
+                    for (kind, flags) in [(0x1c, 4), (0x1d, 0), (0x1e, 0)] {
+                        // Whole ABI result: format, cleared word, flags and the
+                        // common postlude's last word must remain unchanged.
+                        assert_eq!(
+                            describe(&mut r, kind),
+                            [size, size, 0x17, 0, flags, 0],
+                            "enabled={enabled}, option={option}, byte={byte}, kind={kind:x}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn local_maps_leave_every_other_descriptor_kind_and_its_postlude_unchanged() {
+        let mut r = rig((1920, 1080), (800, 600), 3);
+        r.e.set_global(BYTE_SETTING_012004FC, 1u8);
+        let kinds: Vec<u32> = (0..=0x34)
+            .chain([u32::MAX])
+            .filter(|kind| !(0x1c..=0x1e).contains(kind))
+            .collect();
+        let original: Vec<_> = kinds.iter().map(|&kind| describe(&mut r, kind)).collect();
+        for option in [0, 1, 2] {
+            engine_core::resolution_mods::set_local_maps(&mut r.e, true, option);
+            for (&kind, &expected) in kinds.iter().zip(&original) {
+                assert_eq!(describe(&mut r, kind), expected, "kind={kind:x}");
+            }
+        }
+    }
+
+    #[test]
     fn fn_00b6c2c0_kinds_0x20_0x21_take_the_format_byte() {
         let mut r = rig((1920, 1080), (800, 600), 0);
         assert_eq!(describe(&mut r, 0x20), [1920, 1080, 0x15, 0, 0x42, 0]);
@@ -1120,6 +1175,96 @@ mod tests {
         // A zero-wide target: infinity, the indefinite integer's low word.
         let mut r = rig((0, 1080), (0, 0), 3);
         assert_eq!(describe(&mut r, 0x2d)[1], 0);
+    }
+
+    #[test]
+    fn screens_describe_all_aspect_kinds_at_the_global_width_with_original_truncation() {
+        for enabled in [false, true] {
+            for (global_width, enabled_height) in [(3840, 2160), (3441, 1935), (0, 0)] {
+                let mut r = rig((1920, 1080), (0, 0), 3);
+                engine_core::resolution_mods::set_screens(&mut r.e, enabled);
+                r.e.set_global(WIDTH_011F9430, global_width);
+                // The DLL does not substitute this value for the computed height.
+                r.e.set_global(HEIGHT_011F9434, 1440u32);
+                let (width, height) = if enabled {
+                    (global_width, enabled_height)
+                } else {
+                    (1280, 720)
+                };
+                for (kind, flags, last) in [(0x2d, 4, 0), (0x31, 4, 0), (0x30, 0x40, 3)] {
+                    assert_eq!(describe(&mut r, kind), [width, height, 0, 0, flags, last]);
+                }
+            }
+        }
+        // Unsigned loads must preserve the high bit, and invalid FISTP results
+        // keep the low word of the integer indefinite rather than saturating.
+        for (target, global_width, height) in [
+            ((1, 1), u32::MAX, u32::MAX),
+            ((0, 1080), 3840, 0),
+            ((0, 0), 0, 0),
+        ] {
+            let mut r = rig(target, (0, 0), 3);
+            engine_core::resolution_mods::set_screens(&mut r.e, true);
+            r.e.set_global(WIDTH_011F9430, global_width);
+            assert_eq!(describe(&mut r, 0x31), [global_width, height, 0, 0, 4, 0]);
+        }
+    }
+
+    #[test]
+    fn screens_keep_the_two_target_queries_and_read_back_the_width_after_the_getters() {
+        let mut r = rig((999, 1080), (0, 0), 3);
+        engine_core::resolution_mods::set_screens(&mut r.e, true);
+        r.e.set_global(WIDTH_011F9430, 3840u32);
+        let second_target = r.e.mem.alloc(0x10);
+        r.e.mem.set_u32(second_target, r.e.mem.u32(TARGET));
+        r.e.mem.set_u32(second_target + 4, 1920);
+        r.e.mem.set_u32(second_target + 8, 777);
+        let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = events.clone();
+        let out = r.out;
+        r.e.register_double(0x0f00_00c8, move |e, _| {
+            // The initial width store precedes both target lookups.
+            assert_eq!(e.mem.u32(out), 3840);
+            let first = seen.borrow().is_empty();
+            seen.borrow_mut().push("target");
+            if first {
+                TARGET.into_ret()
+            } else {
+                second_target.into_ret()
+            }
+        });
+        let seen = events.clone();
+        r.e.register_double(TARGET_HEIGHT, move |e, a| {
+            assert_eq!(a, &[TARGET, 0]);
+            seen.borrow_mut().push("height");
+            e.mem.u32(TARGET + 8).into_ret()
+        });
+        let seen = events.clone();
+        r.e.register_double(TARGET_WIDTH, move |e, a| {
+            assert_eq!(a, &[second_target, 0]);
+            seen.borrow_mut().push("width");
+            // Distinguish output readback from both the initial width and a
+            // second global lookup. Only the output word feeds the multiply.
+            e.mem.set_u32(out, 3441);
+            e.set_global(WIDTH_011F9430, 1111u32);
+            e.mem.u32(second_target + 4).into_ret()
+        });
+        assert_eq!(describe(&mut r, 0x30), [3441, 1935, 0, 0, 0x40, 3]);
+        assert_eq!(&*events.borrow(), &["target", "target", "height", "width"]);
+    }
+
+    #[test]
+    fn screens_leave_every_other_descriptor_kind_and_its_postlude_unchanged() {
+        let mut r = rig((1920, 1080), (800, 600), 3);
+        let kinds: Vec<u32> = (0..=0x34)
+            .chain([u32::MAX])
+            .filter(|&kind| !matches!(kind, 0x2d | 0x30 | 0x31))
+            .collect();
+        let original: Vec<_> = kinds.iter().map(|&kind| describe(&mut r, kind)).collect();
+        engine_core::resolution_mods::set_screens(&mut r.e, true);
+        for (&kind, &expected) in kinds.iter().zip(&original) {
+            assert_eq!(describe(&mut r, kind), expected, "kind={kind:x}");
+        }
     }
 
     #[test]

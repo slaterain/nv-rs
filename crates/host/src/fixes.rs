@@ -6,6 +6,12 @@
 //! translation at its exe address, a fix that is off registers nothing, so the translation runs as
 //! it is and no call tests a flag. The translations themselves are never edited for a fix.
 //!
+//! Optional native resolution mods are an explicit exception: their rows publish startup
+//! choices through `engine_core::resolution_mods`, and the native drawing branches read them.
+//! They bind no replacement function and stay off in both presets; off keeps the original
+//! resolution and input paths. Startup runs after the executable establishes its game-folder
+//! current directory and before any real-thread engines are copied.
+//!
 //! [`crate::Host::start`] installs nothing: tests and tools run the original. The viewer reads the
 //! choice ([`Choice::read`]) and calls [`crate::Host::start_with`].
 
@@ -46,6 +52,8 @@ pub static FIXES: &[Fix] = &[
     JG_EDITOR_IDS,
     MCM,
     STEWIE,
+    HIGH_RES_LOCAL_MAPS,
+    HIGH_RES_SCREENS,
     UIO,
     SCRIPT_ERROR_GUARD,
     IMOD_EVENT_FORM_CHECK,
@@ -666,12 +674,63 @@ fn install_mcm(e: &mut Engine) {
     mcm::set_on(e, true);
 }
 
+/// HighResLocalMaps 1.2: the author's optional local-map texture changes.
+pub const HIGH_RES_LOCAL_MAPS: Fix = Fix {
+    name: "HighResLocalMaps built in",
+    env: "NV_HIGH_RES_LOCAL_MAPS",
+    addresses: &[],
+    summary: "optional HighResLocalMaps 1.2 native local-map resolution changes; reads [Main] iResScale from Data\\NVSE\\Plugins\\HighResLocalMaps.ini (default 1); off in every preset",
+    install: install_high_res_local_maps,
+};
+
+fn install_high_res_local_maps(e: &mut Engine) {
+    // The DLL reads a WinAPI profile integer, not SimpleIni or a Rust integer.
+    // Keep its unsigned return bits when passing the author's signed option to
+    // the native mask selection. The platform reader resolves this relative
+    // path against Engine::with_exe's game directory on every operating system.
+    let option = e.with_stack(128, |e, base| {
+        let section = base;
+        let key = base.addr() + 8;
+        let file = base.addr() + 24;
+        e.mem.set_cstr(section.addr(), b"Main");
+        e.mem.set_cstr(key, b"iResScale");
+        e.mem
+            .set_cstr(file, br"Data\NVSE\Plugins\HighResLocalMaps.ini");
+        engine_platform::ini::get_private_profile_int_a(
+            e,
+            section,
+            Ptr::new(key),
+            1,
+            Ptr::new(file),
+        ) as i32
+    });
+    engine_core::resolution_mods::set_local_maps(e, true, option);
+}
+
+/// HDPipboy 1.2: independent optional Pip-Boy/terminal target and input changes.
+pub const HIGH_RES_SCREENS: Fix = Fix {
+    name: "High Resolution Screens built in",
+    env: "NV_HIGH_RES_SCREENS",
+    addresses: &[],
+    summary: "optional HDPipboy 1.2 native Pip-Boy and terminal resolution and input changes; independent of HighResLocalMaps and off in every preset",
+    install: install_high_res_screens,
+};
+
+fn install_high_res_screens(e: &mut Engine) {
+    engine_core::resolution_mods::set_screens(e, true);
+}
+
 /// A row whose binding [`install`] makes itself, with the choice.
 fn install_nothing(_: &mut Engine) {}
 
 /// Rows that are off in every preset until the maintainer turns them on: only their own variable or `Fallout.ini`
 /// line turns them on.
-pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env, HAVOK_REF_COUNTS.env];
+pub const OFF_IN_EVERY_PRESET: &[&str] = &[
+    DRAW_THREAD.env,
+    HAVOK_REF_COUNTS.env,
+    HIGH_RES_LOCAL_MAPS.env,
+    HIGH_RES_SCREENS.env,
+];
 
 /// The rows that register nothing at an exe address: the menu limit paces the uncapped step;
 /// the extender's rows set flags `crates/nvse` reads.
@@ -686,6 +745,8 @@ const NO_ADDRESS: &[&str] = &[
     JG_EDITOR_IDS.name,
     MCM.name,
     STEWIE.name,
+    HIGH_RES_LOCAL_MAPS.name,
+    HIGH_RES_SCREENS.name,
     UIO.name,
     SCRIPT_ERROR_GUARD.name,
     IMOD_EVENT_FORM_CHECK.name,
@@ -3144,6 +3205,65 @@ bJGEditorIDs=0
             // Not reported as installed in any preset while its script commands are not built:
             // IsPluginInstalled "lStewieAl's Tweaks" answers 0.
             assert!(nvse::commands::extender::plugin_info(&e, stewie::NAME.as_bytes()).is_none());
+        }
+    }
+
+    #[test]
+    fn optional_resolution_rows_are_independent_and_off_in_both_presets() {
+        use engine_core::resolution_mods as resolution;
+        for choice in [Choice::vanilla(), Choice::from_parts(None, no_env).unwrap()] {
+            assert!(!choice.is_on(&HIGH_RES_LOCAL_MAPS));
+            assert!(!choice.is_on(&HIGH_RES_SCREENS));
+        }
+        let maps = Choice::from_parts(None, env_of(&[(HIGH_RES_LOCAL_MAPS.env, "1")])).unwrap();
+        assert!(maps.is_on(&HIGH_RES_LOCAL_MAPS));
+        assert!(!maps.is_on(&HIGH_RES_SCREENS));
+        let screens = with_ini(None, "[nv-rs Fixes]\nbHighResScreens=1\n", &[]);
+        assert!(screens.is_on(&HIGH_RES_SCREENS));
+        assert!(!screens.is_on(&HIGH_RES_LOCAL_MAPS));
+
+        let mut e = Engine::new();
+        e.map(0x0120_0000, 0x1000);
+        install(&mut e, &maps);
+        assert!(resolution::local_maps_enabled(&e));
+        assert_eq!(resolution::local_map_mask(&e), 0x180);
+        assert!(!resolution::screens_enabled(&e));
+        assert_eq!(e.mem.u8(0x0120_04fc), 1);
+
+        let mut e = Engine::new();
+        (HIGH_RES_SCREENS.install)(&mut e);
+        assert!(resolution::screens_enabled(&e));
+        assert!(!resolution::local_maps_enabled(&e));
+    }
+
+    #[test]
+    fn local_map_option_uses_profile_integer_conversion_and_game_relative_path() {
+        use engine_core::resolution_mods as resolution;
+        for (text, mask) in [
+            ("[Main]\niResScale=0\n", 0x80),
+            ("[main]\nIRESSCALE=0x2 trailing\n", 0x380),
+            ("[Main]\niResScale=-1\n", 0x180),
+            ("[Main]\niResScale=4294967296\n", 0x80),
+            ("[Main]\niResScale=invalid\n", 0x80),
+            ("[Other]\niResScale=2\n", 0x180),
+        ] {
+            let mut e = Engine::new();
+            e.map(0x0120_0000, 0x1000);
+            // A virtual Windows path, resolved entirely in the platform's
+            // memory file system on every host; no player's file is touched.
+            e.kernel.current_directory = br"Z:\resolution-row-test".to_vec();
+            engine_platform::state_mut(&mut e.kernel.platform)
+                .disk
+                .files
+                .insert(
+                    br"z:\resolution-row-test\data\nvse\plugins\highreslocalmaps.ini".to_vec(),
+                    text.as_bytes().to_vec(),
+                );
+            (HIGH_RES_SCREENS.install)(&mut e);
+            (HIGH_RES_LOCAL_MAPS.install)(&mut e);
+            assert_eq!(resolution::local_map_mask(&e), mask, "{text}");
+            assert!(resolution::screens_enabled(&e));
+            assert_eq!(e.mem.u8(0x0120_04fc), 1);
         }
     }
 

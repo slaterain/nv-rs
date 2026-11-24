@@ -5681,6 +5681,9 @@ fn pick_tile_results(
                     let setting = e.call(SETTING_BYTE, &args![SETTING_HOLDER_011DB2CC]).u32();
                     if e.mem.u8(setting) != 0
                         && e.get(this, InterfaceManager::bMouseOverRenderedMenu) != 0
+                        // HDPipboy 1.2 changes 00712BA1 to jump past only
+                        // this scaling block; the preceding tests still run.
+                        && !engine_core::resolution_mods::screens_enabled(e)
                     {
                         let width = e.call(REAL_SCREEN_WIDTH, &args![]).f64();
                         let reference = e.call(SCREEN_WIDTH_CONSTANT, &args![]).f64();
@@ -12516,6 +12519,62 @@ mod tests {
         assert_eq!(calls(&e, CAMERA_BUILD_PICK_RAY)[0][..3], [0x2222, 321, 123]);
         e.set(m, InterfaceManager::field_4b0, 250.0);
         assert_eq!(fn_007126c0(&mut e, m, 0), tile);
+    }
+
+    #[test]
+    fn high_res_screens_skip_only_the_rendered_menu_pick_rectangle_scaling() {
+        // (321,123) is inside the original rectangle but outside the scaled
+        // one; (321,250) is inside only the scaled rectangle.
+        for enabled in [false, true] {
+            for (y, hit_when_off, hit_when_on) in [(123u32, false, true), (250, true, false)] {
+                let (mut e, m, tile) = tile_pick_world();
+                engine_core::resolution_mods::set_screens(&mut e, enabled);
+                returns(&mut e, TILE_GET_VALUE_Q, 1);
+                let flag = e.mem.alloc(4);
+                e.mem.set_u8(flag, 1);
+                returns(&mut e, SETTING_BYTE, flag);
+                e.set(m, InterfaceManager::bMouseOverRenderedMenu, 1);
+                e.set(m, InterfaceManager::field_4ac, 321.0);
+                e.set(m, InterfaceManager::field_4b0, y as f32);
+                e.register(TILE_IS_TRUE, |_, a| Ret {
+                    eax: (a[1] == 0xfaf || a[1] == 0xfae) as u32,
+                    ..Ret::default()
+                });
+                returns(&mut e, TILE_IMAGE_NODE, 0x8000);
+                returns(&mut e, NODE_CHILD_POINTER, 1);
+                returns(&mut e, NODE_GET_PROPERTY, 0x8200);
+                let rect = e.mem.alloc(0x10);
+                for (i, v) in [100i32, 100, 400, 200].iter().enumerate() {
+                    e.mem.set_i32(rect + 4 * i as u32, *v);
+                }
+                returns(&mut e, PROPERTY_RECT, rect);
+                returns_st0(&mut e, REAL_SCREEN_WIDTH, 1920.0);
+                returns_st0(&mut e, SCREEN_WIDTH_CONSTANT, 960.0);
+                e.mem.set_f64(PICK_SCALED_TILE_VALUE, 112.0);
+                let expected_hit = if enabled { hit_when_on } else { hit_when_off };
+                assert_eq!(
+                    fn_007126c0(&mut e, m, 0),
+                    if expected_hit { tile } else { 0 }
+                );
+                // The earlier rendered-menu coordinate replacement still
+                // controls the ray, and both setting evaluations are retained.
+                assert_eq!(calls(&e, CAMERA_BUILD_PICK_RAY)[0][..3], [0x2222, 321, y]);
+                assert_eq!(
+                    calls(&e, SETTING_BYTE),
+                    vec![vec![SETTING_HOLDER_011DB2CC], vec![SETTING_HOLDER_011DB2CC]]
+                );
+                assert_eq!(calls(&e, REAL_SCREEN_WIDTH).len(), usize::from(!enabled));
+                assert_eq!(
+                    calls(&e, SCREEN_WIDTH_CONSTANT).len(),
+                    usize::from(!enabled)
+                );
+                assert_eq!(calls(&e, NI_PICK_DESTRUCT).len(), 1);
+                assert_eq!(
+                    calls(&e, NODE_SET_FLAG),
+                    vec![vec![0xc0de, 1], vec![0xc0de, 0]]
+                );
+            }
+        }
     }
 
     #[test]

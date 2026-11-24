@@ -2915,6 +2915,11 @@ pub fn tile_final_post_parse(
 // Translated from 00a03c60 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Tile::GetRenderedMenu` (Xbox PDB): `bRenderedMenu` of the tile's menu.
 pub fn tile_get_rendered_menu(e: &mut Engine, this: Ptr<Tile>) -> u8 {
+    // HDPipboy 1.2 replaces 00A03C60 with a false return. Keep this in the
+    // getter so native direct callers and the registered entry agree.
+    if engine_core::resolution_mods::screens_enabled(e) {
+        return 0;
+    }
     let menu = tile_get_menu(e, this);
     e.mem.u8(menu.addr() + 0x1c)
 }
@@ -10605,6 +10610,33 @@ mod tests {
         add_child(&mut e, other_root, other);
         assert_eq!(e.call(0x00a0_3c90, &args![other]).u32(), 0);
         assert_eq!(e.call(0x00a0_3c90, &args![Ptr::<Tile>::NULL]).u32(), 0);
+    }
+
+    #[test]
+    fn screens_return_false_through_both_getter_paths_without_changing_the_menu() {
+        let mut e = tile_engine();
+        let root = typed_tile(&mut e, TYPE_RECT);
+        let (menu_tile, menu) = make_menu_tile(&mut e, 0);
+        let leaf = typed_tile(&mut e, TYPE_RECT);
+        add_child(&mut e, root, menu_tile);
+        add_child(&mut e, menu_tile, leaf);
+        e.call_log = Some(vec![]);
+        for byte in [0u8, 1, 0xff] {
+            e.mem.set_u8(menu.addr() + 0x1c, byte);
+            engine_core::resolution_mods::set_screens(&mut e, false);
+            assert_eq!(tile_get_rendered_menu(&mut e, leaf), byte);
+            assert_eq!(e.call(0x00a0_3c60, &args![leaf]).u8(), byte);
+            engine_core::resolution_mods::set_screens(&mut e, true);
+            assert_eq!(tile_get_rendered_menu(&mut e, leaf), 0);
+            assert_eq!(e.call(0x00a0_3c60, &args![leaf]).u8(), 0);
+            assert_eq!(e.mem.u8(menu.addr() + 0x1c), byte);
+            // The DLL returns before consulting the tile, even for null.
+            assert_eq!(tile_get_rendered_menu(&mut e, Ptr::<Tile>::NULL), 0);
+            assert_eq!(e.call(0x00a0_3c60, &args![Ptr::<Tile>::NULL]).u8(), 0);
+        }
+        engine_core::resolution_mods::set_screens(&mut e, false);
+        assert_eq!(tile_get_rendered_menu(&mut e, leaf), 0xff);
+        assert_lock_balanced(&e);
     }
 
     #[test]
