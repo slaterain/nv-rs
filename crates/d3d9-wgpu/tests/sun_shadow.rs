@@ -3992,9 +3992,15 @@ fn a_still_casters_pipeline_made_ahead_casts_once_it_is_there() {
     };
     let before = snapshot();
     let frames = ahead_frames(1).expect("the adapter");
-    let made =
-        snapshot()[Count::ShadowPipelines as usize] - before[Count::ShadowPipelines as usize];
-    assert!(made >= 1, "the box's caster pipeline made: {made}");
+    let now = snapshot();
+    let made = |c: Count| now[c as usize] - before[c as usize];
+    assert!(
+        made(Count::ShadowPipelinesAhead) >= 1,
+        "the box's caster pipeline made on a thread of its own: {}",
+        made(Count::ShadowPipelinesAhead)
+    );
+    // (None made on the render thread: `cables_pipelines_made_ahead_are_all_made_off_the_render_thread`
+    // counts that on its turn, where no other test makes any.)
     for p in [
         [-50.0, 150.0, 0.0],
         [-60.0, 140.0, 0.0],
@@ -4046,7 +4052,7 @@ fn a_caster_kind_seen_before_on_this_machine_is_made_at_the_start() {
     let new = ahead_in(&dir);
     let text = std::fs::read_to_string(dir.join("casters.txt")).expect("the casters' list");
     assert!(
-        text.lines().any(|l| l.starts_with("c1 0 p2 ")),
+        text.lines().any(|l| l.starts_with("c1 0 0 p2 ")),
         "the box's kind listed: {text}"
     );
     let seen = ahead_in(&dir);
