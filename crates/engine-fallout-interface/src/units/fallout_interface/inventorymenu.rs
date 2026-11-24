@@ -1364,10 +1364,8 @@ pub fn inventory_menu_is_item_repairable(
     } else {
         0
     };
-    if item != 0 {
-        if rounded_health(e, item) == full {
-            return false;
-        }
+    if item != 0 && rounded_health(e, item) == full {
+        return false;
     }
     if item == 0 || object == 0 {
         return false;
