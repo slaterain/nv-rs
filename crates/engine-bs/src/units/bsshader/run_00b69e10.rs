@@ -460,7 +460,7 @@ pub fn fn_00b6a6c0(e: &mut Engine, this: Ptr, clone: u32, process: u32) {
         let count = e.mem.u32(NODE_POOL_LOCK_COUNT).wrapping_sub(1);
         e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
         if count == 0 {
-            e.mem.set_u32(NODE_POOL_LOCK, 0);
+            e.mem.set_u32_release(NODE_POOL_LOCK, 0);
         }
         e.mem.set_u32(node + 8, element);
         e.mem.set_u32(node, 0);
