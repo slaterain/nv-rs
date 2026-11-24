@@ -1040,8 +1040,7 @@ const GET_EQUIP_TYPE: u32 = 0x0047_9430;
 const GET_EQUIP_TYPE_ICON: u32 = 0x0047_9540;
 
 pub(crate) fn equip_type_for_hotkey_icon(e: &mut Engine, form: u32) -> u32 {
-    let equip_type = e.call(GET_EQUIP_TYPE, &args![form]).u32();
-    equip_type
+    e.call(GET_EQUIP_TYPE, &args![form]).u32()
 }
 /// `strcpy_s` and `strcat_s` (cdecl: buffer, size, text) and `strlen`.
 const STRCPY_S: u32 = 0x0040_6d30;

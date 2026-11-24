@@ -1357,8 +1357,6 @@ pub fn fn_00c6d7e0(e: &mut Engine, shape: u32, check: u8, fallback: u8, layer: i
     u8::from(blocked == 0)
 }
 
-const STAIR_FLAG: u32 = 0x40;
-
 // Translated from 00c6d840 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpWorldObject::getProperty` (Xbox PDB): writes the 8-byte value of the first property
 /// with `key` (array `m_properties` at `+0x78`, size `+0x7C`, 16-byte entries: key, pad,

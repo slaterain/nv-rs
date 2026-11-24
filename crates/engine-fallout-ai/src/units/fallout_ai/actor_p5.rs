@@ -2471,7 +2471,7 @@ pub fn fn_008b3fe0(
             let scratch = first_transform + 0x80;
             let cloning = first_transform + 0xc0;
             e.call(0x004a_d050, &args![cloning, 1.0f32]);
-            let clone = e.call(0x00a5_d2c0, &args![model, cloning]).u32();
+            clone = e.call(0x00a5_d2c0, &args![model, cloning]).u32();
             e.call(0x0047_6a80, &args![first_transform]);
             e.call(0x0047_6a80, &args![second_transform]);
             let owner = e.vcall(this.addr(), 0x1d0, &args![]).u32();
@@ -3305,6 +3305,7 @@ fn limb_piece(
     if parent == 0 {
         parent = limb;
     }
+    let clone: u32;
     {
         e.call(0x0047_6a80, &args![transform_b]);
         e.call(0x0047_6a80, &args![transform_a]);

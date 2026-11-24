@@ -1570,13 +1570,12 @@ fn do_click_marker(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32) {
             let map = e.get(this, MapMenu::pMapTile);
             let x = e.call(TILE_GET_FLOAT, &args![map, 0xfa1u32]).f64();
             let start_x = x87_load32(e.mem.u32(base + 0x120));
-            let still = equal(start_x, x) && {
+            equal(start_x, x) && {
                 let map = e.get(this, MapMenu::pMapTile);
                 let y = e.call(TILE_GET_FLOAT, &args![map, 0xfa2u32]).f64();
                 let start_y = x87_load32(e.mem.u32(base + 0x124));
                 equal(start_y, y)
-            };
-            still
+            }
         };
         // With no map tile the exe's jump to the message stays.
         if not_dragged {

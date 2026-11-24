@@ -643,12 +643,12 @@ pub fn fn_0095d850(
         .u32();
 
     let equipped_change = process_slot(e, this, 0x14c, &args![]);
-    if (equipped_change == 0
+    if equipped_change == 0
         || typed_call!(
             leaf::FAMILY,
             0x0044_ddc0,
             leaf::word_at_8(e, equipped_change)
-        ) != current)
+        ) != current
     {
         install_item_change(e, this, current, count);
     }

@@ -216,7 +216,7 @@ pub fn fn_007308e0(e: &mut Engine, this: Ptr<ListBox>) {
 fn delete_item(
     e: &mut Engine,
     this: Ptr<ListBox>,
-    in_loop: bool,
+    _in_loop: bool,
     item: impl Fn(&mut Engine) -> u32,
 ) {
     if e.global::<u8>(KEEP_ITEM_TILES) == 0 {
