@@ -191,18 +191,25 @@ fn install_load_steps(e: &mut Engine) {
 /// lock (+0x180) and read and inflated the texture's file inside it, so main, binding another
 /// texture, waited for that read (6-13 ms in border frames). With the row the file is read first,
 /// with the same calls, and only the making stays under the lock, in the same order
-/// (`engine::units::unplaced::run_00e673f0::read_first`). Vanilla reads it under the lock.
+/// (`engine::units::unplaced::run_00e673f0::read_first`). A texture the model loader's queued
+/// texture makes with a file object of its own (`00a5fe30`, from `QueuedTexture::Run`) is read
+/// first too: that call makes the texture's renderer data before it hands the texture out, so its
+/// file is that making's alone. Vanilla reads both under the lock.
 pub const TEXTURE_READ_FIRST: Fix = Fix {
     name: "texture files read before the renderer's lock",
     env: "NV_TEXTURE_READ_FIRST",
-    addresses: &[0x00e6_dc40],
+    addresses: &[0x00e6_dc40, 0x00a5_fe30],
     summary: "a texture file is read and unpacked before the renderer's lock is taken, so drawing does not wait for it",
     install: install_texture_read_first,
 };
 
 fn install_texture_read_first(e: &mut Engine) {
-    use engine::units::unplaced::run_00e673f0::read_first::fn_00e6dc40_reading_first;
+    use engine::units::unplaced::run_00e673f0::read_first::{
+        fn_00a5fe30_reading_first, fn_00e6dc40_reading_first,
+    };
     let (at, f) = engine::entry!(0x00e6_dc40, fn_00e6dc40_reading_first(Ptr, Ptr) -> bool);
+    e.register(at, f);
+    let (at, f) = engine::entry!(0x00a5_fe30, fn_00a5fe30_reading_first(u32, Ptr, Ptr, u8) -> Ptr);
     e.register(at, f);
 }
 
