@@ -2088,7 +2088,10 @@ fn stewie_set_category_index(e: &mut Engine, index: i32) {
     let title = e.mem.u32(menu + 0x2c);
     // Tweaks calls whatever the call at `0x7275D0` goes to (`GetRelJumpAddr`).
     set_category_title(e, title, label);
-    list_box_tes_recipe_filter(e, Ptr::new(menu + RECIPE_LIST), FILTER_00728D60);
+    let filter = e
+        .site(0x0072_7637, &args![FILTER_00728D60])
+        .unwrap_or(FILTER_00728D60);
+    list_box_tes_recipe_filter(e, Ptr::new(menu + RECIPE_LIST), filter);
 }
 
 // Translated from 007278c0 (decompiled, FalloutNV.exe 1.4.0.525)

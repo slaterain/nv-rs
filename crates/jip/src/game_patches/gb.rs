@@ -489,13 +489,15 @@ pub(crate) fn map_skip_centring_pending(e: &mut Engine) -> bool {
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: RefreshMapMenuHook.
-/// G87: 1 (skip the centring) when JIP's flag was set, which clears it; else 0 (the exe's path).
+/// G87: 1 (skip the centring) when JIP's flag was set, which clears it. With
+/// no JIP request, let the next owner of the shared seam answer. The native
+/// MapMenu caller's `unwrap_or(0)` retains the exe's centring path when neither
+/// owner asks to skip; Some(0) here would mask Tweaks Menu Search's request.
 fn map_skip_centring(e: &mut Engine, _: &[u32]) -> Option<u32> {
-    Some(u32::from(
-        e.ext_free::<MapSkipCentring>()
-            .0
-            .swap(false, Ordering::Relaxed),
-    ))
+    e.ext_free::<MapSkipCentring>()
+        .0
+        .swap(false, Ordering::Relaxed)
+        .then_some(1)
 }
 
 /// `GetTickCount` through the exe's import slot (JIP calls the same system function through

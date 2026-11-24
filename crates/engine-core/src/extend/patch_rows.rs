@@ -38,6 +38,8 @@ mod gt;
 mod gw;
 mod gx;
 mod jg;
+mod stewie_menu;
+mod stewie_menu_extra;
 mod stewie_save;
 mod stewie_save_extra;
 
@@ -63,6 +65,8 @@ pub(super) const SITES: &[&[Entry]] = &[
     jg::SITES,
     stewie_save::SITES,
     stewie_save_extra::SITES,
+    stewie_menu::SITES,
+    stewie_menu_extra::SITES,
 ];
 
 /// Every file's wraps.

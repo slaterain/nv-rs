@@ -452,6 +452,7 @@ pub fn fn_0077ff90(e: &mut Engine, this: Ptr<InventoryMenu>) -> bool {
 /// card is filled with the tile at +0x30 when the player's actor value
 /// `0x12` is not 0.0.
 pub fn inventory_menu_do_idle(e: &mut Engine, this: Ptr<InventoryMenu>) {
+    menu_search_observe(e, 0x0078_1bbd);
     let me_addr = this.addr();
     if !e.call(IS_TOP_MENU_ID, &args![INVENTORY_MENU_CLASS]).bool() {
         return;
@@ -1942,8 +1943,10 @@ pub fn inventory_menu_update_inventory_menu(e: &mut Engine) {
     {
         relabel(e);
     }
-    let tile = tile_at(e, me(e), 0x3c);
-    set_trait_from_int(e, tile, TRAIT_VISIBLE, 0);
+    if !menu_search_observe(e, 0x0078_2f17) {
+        let tile = tile_at(e, me(e), 0x3c);
+        set_trait_from_int(e, tile, TRAIT_VISIBLE, 0);
+    }
     let keyring = e.global::<u32>(TRAIT_FROM_NAME_01073984);
     let tile = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, me(e)));
     e.call(SET_TRAIT_FROM_INT, &args![tile, keyring, 0u32]);
@@ -1974,27 +1977,32 @@ pub fn inventory_menu_update_inventory_menu(e: &mut Engine) {
         );
         e.call(UPDATE_LIST_CLEAR, &args![me(e) + ITEM_UPDATE_LIST]);
     } else {
-        let list = me(e) + INVENTORY_LIST;
-        let player = e.global::<u32>(PLAYER);
-        e.call(
-            LIST_FILL,
-            &args![list, player, 0u32, 0u32, 0x0078_2850u32, 0u32, 0u32],
-        );
-        let found = changes != 0
-            && e.with_stack(4, |e, slot| {
-                e.call(CHANGES_FIND_TYPE, &args![changes, 0x2eu32, slot])
-                    .u32()
-                    != 0
-            });
-        if found {
-            let text = e.call(SETTING_STRING, &args![EXTRA_ENTRY_SETTING]).u32();
+        if menu_search_observe(e, 0x0078_319c) {
+            e.call(0x0077_ffd0, &args![]);
+        } else {
             let list = me(e) + INVENTORY_LIST;
-            let entry = e
-                .call(LIST_ADD_ITEM, &args![list, 0u32, text, 0u32, 0u32])
-                .u32();
-            e.call(SET_TRAIT_FROM_INT, &args![entry, 0xfaau32, 0x1eu32]);
+            let player = e.global::<u32>(PLAYER);
+            e.call(
+                LIST_FILL,
+                &args![list, player, 0u32, 0u32, 0x0078_2850u32, 0u32, 0u32],
+            );
+            let found = changes != 0
+                && e.with_stack(4, |e, slot| {
+                    e.call(CHANGES_FIND_TYPE, &args![changes, 0x2eu32, slot])
+                        .u32()
+                        != 0
+                });
+            if found {
+                let text = e.call(SETTING_STRING, &args![EXTRA_ENTRY_SETTING]).u32();
+                let list = me(e) + INVENTORY_LIST;
+                let entry = e
+                    .call(LIST_ADD_ITEM, &args![list, 0u32, text, 0u32, 0u32])
+                    .u32();
+                e.call(SET_TRAIT_FROM_INT, &args![entry, 0xfaau32, 0x1eu32]);
+            }
         }
-        e.call(LIST_FILTER, &args![me(e) + INVENTORY_LIST, 0x0078_2620u32]);
+        let filter = menu_search_filter(e, 0x0078_3214, 0x0078_2620);
+        e.call(LIST_FILTER, &args![me(e) + INVENTORY_LIST, filter]);
         let list = me(e) + INVENTORY_LIST;
         e.call(
             LIST_SORT,
@@ -2348,7 +2356,8 @@ pub fn inventory_menu_do_click(e: &mut Engine, this: Ptr<InventoryMenu>, id: i32
         0xa => {
             inventory_menu_save_page_state(e);
             set_keyring(e, this, 0);
-            filter_and_sort(e, base + INVENTORY_LIST, 0x0078_2620);
+            let filter = menu_search_filter(e, 0x0078_0894, 0x0078_2620);
+            filter_and_sort(e, base + INVENTORY_LIST, filter);
             inventory_menu_load_page_state(e);
         }
         7 => click_drop(e, this),
@@ -2380,7 +2389,8 @@ fn click_tab(e: &mut Engine, this: Ptr<InventoryMenu>, id: i32) {
         e.call(TRIGGER_BURST, &args![pipboy, first, second, constant]);
         let manager = e.call(INTERFACE_SINGLETON, &args![]).u32();
         fn_00780be0(e, Ptr::new(manager), id as u8);
-        filter_and_sort(e, base + INVENTORY_LIST, 0x0078_2620);
+        let filter = menu_search_filter(e, 0x0078_028e, 0x0078_2620);
+        filter_and_sort(e, base + INVENTORY_LIST, filter);
         inventory_menu_load_page_state(e);
         fn_00782470(e, 1);
     }
@@ -4401,6 +4411,35 @@ mod n054_tests {
             assert_eq!(calls_to(&e, GET_EQUIP_TYPE), [vec![form]]);
         }
     }
+    #[test]
+    fn menu_search_idle_observer_runs_before_original_top_menu_guard() {
+        let mut e = Engine::new();
+        let this = e.new_object::<InventoryMenu>();
+        answer(&mut e, IS_TOP_MENU_ID, 0);
+        e.call_log = Some(vec![]);
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::Stewie, 0x0078_1bbd),
+            |e, w| {
+                assert!(w.is_empty());
+                assert!(calls_to(e, IS_TOP_MENU_ID).is_empty());
+                *e.ext::<usize>() = 1;
+                None
+            },
+        );
+        inventory_menu_do_idle(&mut e, this);
+        assert_eq!(*e.ext::<usize>(), 1);
+        assert_eq!(calls_to(&e, IS_TOP_MENU_ID).len(), 1);
+        assert!(calls_to(&e, GET_PIPBOY).is_empty());
+    }
+}
+
+// Owned Tweaks 10.05 Menu Search changes the three PUSH-filter immediates and
+// observes the idle getter call. No site users leaves each vanilla call intact.
+fn menu_search_filter(e: &mut Engine, address: u32, original: u32) -> u32 {
+    e.site(address, &args![original]).unwrap_or(original)
+}
+fn menu_search_observe(e: &mut Engine, address: u32) -> bool {
+    e.site(address, &args![]).is_some()
 }
 
 #[cfg(test)]

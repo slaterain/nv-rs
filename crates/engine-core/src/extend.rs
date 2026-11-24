@@ -751,6 +751,12 @@ pub const SITES: &[Entry] = &[
         owners: NVSE,
         step: "I-9",
     },
+    // JIP G87 and Tweaks Menu Search suppress centering during their own map refresh.
+    Entry {
+        addr: 0x0079_df73,
+        owners: &[Owner::Jip, Owner::Stewie],
+        step: "map-refresh-centering",
+    },
     // MapMenu's companion markers 0079ea30: JIP LN NVSE's CreateMapMarkers.
     Entry {
         addr: 0x0079_eba1,
@@ -3118,7 +3124,9 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 131);
+        assert_eq!(SITES.len(), 132);
+        assert!(find(SITES, Owner::Jip, 0x0079_df73).is_some());
+        assert!(find(SITES, Owner::Stewie, 0x0079_df73).is_some());
         // lStewieAl's Tweaks' (its seams in the text key event and Idle), Tweaks' alone.
         for a in [0x0070_e4db, 0x0070_e500, 0x0071_5563] {
             assert!(find(SITES, Owner::Stewie, a).is_some(), "{a:08x}");

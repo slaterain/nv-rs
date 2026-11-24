@@ -792,6 +792,7 @@ fn start_menu_create_body(e: &mut Engine, frame: u32, flag_a: u8, flag_b: u8) ->
             }
             let this = e.global::<u32>(START_MENU);
             start_menu_create_inner(e, Ptr::new(this), flag_a, flag_b);
+            let _ = e.site(0x007c_ba5a, &args![]);
             e.call(TILE_UNLOCK, &args![]);
             return true;
         }
@@ -3780,6 +3781,7 @@ pub fn start_menu_choose_back(e: &mut Engine) {
         }
         BackStage::SaveLoad => {
             let menu = start_menu_global(e);
+            let _ = e.site(0x007d_1076, &args![]);
             start_menu_update_can_load_status(e, menu.cast());
             let menu = start_menu_global(e);
             e.vcall(menu.addr() + 0x174, 0, &args![0u32]);

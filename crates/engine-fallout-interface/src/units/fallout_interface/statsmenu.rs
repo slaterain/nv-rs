@@ -407,6 +407,7 @@ pub fn fn_007dc0a0(e: &mut Engine, value: Ptr) -> Ptr {
 /// +0x16c of the open menu) get traits `0xfaf` and `0xfa3` set to it; the state is kept.
 pub fn stats_menu_do_idle(e: &mut Engine, this: Ptr) {
     e.mem.set_u8(this.addr() + 0x2a1, 0);
+    let _ = e.site(0x007d_c504, &args![]);
     let pipboy = e.call(INTERFACE_GET_PIPBOY, &args![]).u32();
     if e.call(BYTE_AT_28_00974D90, &args![pipboy]).bool() {
         e.call(INTERFACE_MANAGER_004B7210, &args![]);
@@ -1192,6 +1193,7 @@ pub fn fn_007dfe40(e: &mut Engine, _this: Ptr) -> i32 {
 /// (`007dc9b0(007d86c0(perks, 0, 0))`), any other the icon tile (+0xf4) is hidden.
 pub fn stats_menu_set_current_page(e: &mut Engine, this: Ptr, page: i32) {
     if !(0..=4).contains(&page) {
+        let _ = e.site(0x007e_0051, &args![this.addr()]);
         return;
     }
     let burst = x87_quiet_bits(e.global::<u32>(BURST_SCALE_01016248));
@@ -1245,6 +1247,7 @@ pub fn stats_menu_set_current_page(e: &mut Engine, this: Ptr, page: i32) {
             }
         }
     }
+    let _ = e.site(0x007e_0051, &args![this.addr()]);
 }
 
 // Translated from 007e04e0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -6704,5 +6707,25 @@ mod stewie_menus5_tests {
         e.on_site_for_test(0x007e_0c1f, jip);
         assert_eq!(effect_duration(&mut e, item), 77);
         assert_eq!(perks_asked(&e), 0);
+    }
+}
+
+#[cfg(test)]
+mod menu_search_boundary_tests {
+    use super::*;
+    use engine_core::extend::{Owner, SiteSlot};
+    #[test]
+    fn menu_search_invalid_stats_page_still_reaches_original_common_epilogue() {
+        let mut e = Engine::new();
+        e.map(0x02000000, 0x1000);
+        e.on_site(SiteSlot::new(Owner::Stewie, 0x007e0051), |e, words| {
+            assert_eq!(words, &[0x12345678]);
+            e.mem.set_u32(0x02000000, 1);
+            Some(0)
+        });
+        e.call_log = Some(vec![]);
+        stats_menu_set_current_page(&mut e, Ptr::new(0x12345678), 99);
+        assert!(e.call_log.as_ref().unwrap().is_empty());
+        assert_eq!(e.mem.u32(0x02000000), 1);
     }
 }

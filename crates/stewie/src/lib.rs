@@ -28,6 +28,7 @@
 
 pub mod cosave;
 pub mod ini;
+pub(crate) mod menu_search;
 pub mod rows;
 pub mod run_and_gun;
 mod save_manager;
@@ -195,6 +196,7 @@ pub fn install(e: &mut Engine) {
     };
     let (settings, on) = settings_and_rows(ini.as_deref(), &overlays, &keys);
     save_manager::install(e, &settings);
+    menu_search::install(e, &settings);
     e.clear_stewie();
     for row in &on {
         e.set_stewie(row.bit, true);

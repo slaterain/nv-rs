@@ -1379,6 +1379,7 @@ fn level_up_menu_create_body(e: &mut Engine, tile: u32) {
         set_float(e, tile, 0xfad, x87_store32(depth));
     }
     let class = fn_00785180(e);
+    let _ = e.site(0x0078_4db8, &args![]);
     let interface = e.call(FOCUS_OWNER_004B7210, &args![]).u32();
     e.call(
         SHOW_TUTORIAL,
@@ -1529,6 +1530,7 @@ pub fn fn_00785190(e: &mut Engine, this: Ptr) -> bool {
 /// menu's tile to 1, fades the menu out and clears `pMe`.
 pub fn level_up_menu_close(e: &mut Engine) {
     e.call(HUD_CLEAR_XP_METER, &args![]);
+    let _ = e.site(0x0078_51d3, &args![]);
     if level_up_me(e) == 0 {
         return;
     }
@@ -3929,6 +3931,15 @@ mod level_up_menu_tests {
     #[test]
     fn create_builds_the_menu_with_its_perks() {
         let mut e = engine();
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::Stewie, 0x00784db8),
+            |e, w| {
+                assert!(w.is_empty());
+                assert!(calls_to(e, SHOW_TUTORIAL).is_empty());
+                *e.ext::<usize>() += 1;
+                None
+            },
+        );
         let this = menu(&mut e);
         e.mem.set_u32(this + 0xc4, 0);
         // An open menu to delete first.

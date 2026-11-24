@@ -587,6 +587,10 @@ fn the_row_adds_exactly_the_fix_lists() {
         .chain(engine_core::extend::PATCH_WRAPS)
         .flat_map(|t| t.iter().map(|r| r.addr))
         .chain(fix_sites.iter().chain(&fix_wraps).copied())
+        // An area's installed hooks can share a core SITES row with another
+        // extender. Observe every explicitly declared JIP-own address too;
+        // neither the expected set nor owner membership is weakened.
+        .chain(jip_sites.iter().chain(&jip_wraps).copied())
         .collect();
     let mut e = base();
     let bare = snapshot(&e);
@@ -609,6 +613,77 @@ fn the_row_adds_exactly_the_fix_lists() {
     set_row(&mut first, true);
     crate::install_as(&mut first, true);
     assert_eq!(snapshot(&first), after, "the host's order");
+}
+
+#[test]
+fn shared_map_site_registers_each_owner_independently_and_preserves_requests() {
+    use engine_core::extend::{SiteSlot, SITES};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    #[derive(Default)]
+    struct SearchRequest {
+        active: AtomicBool,
+        queries: AtomicU32,
+    }
+    let map = super::gb::MAP_SKIP_CENTRING.addr();
+    let row = SITES.iter().find(|row| row.addr == map).unwrap();
+    assert_eq!(row.owners, &[Owner::Jip, Owner::Stewie]);
+    assert!(!engine_core::extend::PATCH_SITES
+        .iter()
+        .flat_map(|rows| rows.iter())
+        .any(|row| row.addr == map));
+    for installed in [false, true] {
+        for row_on in [false, true] {
+            for search_mode in [0, 1, 2] {
+                let search_installed = search_mode != 0;
+                let search_active = search_mode == 2;
+                let mut e = base();
+                set_row(&mut e, row_on);
+                crate::install_as(&mut e, installed);
+                if search_installed {
+                    // The second owner's request has the same SiteFn contract
+                    // as MenuSearch's skip_center: Some(1) only for its refresh.
+                    e.ext_free::<SearchRequest>()
+                        .active
+                        .store(search_active, Ordering::Relaxed);
+                    e.on_site(SiteSlot::new(Owner::Stewie, map), |e, _| {
+                        let request = e.ext_free::<SearchRequest>();
+                        request.queries.fetch_add(1, Ordering::Relaxed);
+                        request.active.load(Ordering::Relaxed).then_some(1)
+                    });
+                }
+                let owners: Vec<_> = [
+                    installed.then_some(Owner::Jip),
+                    search_installed.then_some(Owner::Stewie),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                assert_eq!(e.site_owners(map), owners);
+                assert_eq!(e.site(map, &[]).unwrap_or(0), u32::from(search_active));
+                if installed {
+                    super::gb::skip_map_centring_once(&mut e);
+                    let before = e
+                        .ext_free::<SearchRequest>()
+                        .queries
+                        .load(Ordering::Relaxed);
+                    assert_eq!(e.site(map, &[]), Some(1));
+                    assert_eq!(
+                        e.ext_free::<SearchRequest>()
+                            .queries
+                            .load(Ordering::Relaxed),
+                        before,
+                        "JIP's active request short-circuits the later pure query"
+                    );
+                    assert_eq!(e.site(map, &[]).unwrap_or(0), u32::from(search_active));
+                    assert_eq!(
+                        e.ext_free::<SearchRequest>().active.load(Ordering::Relaxed),
+                        search_active,
+                        "Stewie's source query never consumes its refresh flag"
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// The maintainer's rule for mods' settings files: a `jip_nvse.ini` in the port's own folder beside

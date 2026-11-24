@@ -1091,6 +1091,7 @@ fn finish_barter_create(
     }
     e.call(DIALOG_SERVICE_START, &args![]);
     let class = fn_0072d6c0(e);
+    let _ = e.site(0x0072_d3b3, &args![]);
     e.call(
         SHOW_TUTORIAL,
         &args![interface.wrapping_add(0x4d4), 0x17u32, class, 0x200u32],
@@ -1202,6 +1203,7 @@ pub fn fn_0072d6d0(e: &mut Engine) {
     e.call(TILE_SET_INT, &args![menu_tile, 0x1772u32, 1u32]);
     let me = barter_menu(e).addr();
     e.call(MENU_START_FADE_OUT, &args![me]);
+    let _ = e.site(0x0072_d763, &args![]);
 }
 
 /// The filter-tab steps of `DoClick` for one side: plays the filter sound, then moves the
@@ -1228,7 +1230,13 @@ fn step_filter_mode(
         }
         let tile = e.mem.u32(base + title);
         barter_menu_set_filter_mode_title(e, this, tile);
-        list_box_item_change_filter(e, Ptr::new(base + list), 0x0073_04b0);
+        let site = if list == PLAYER_ITEMS {
+            0x0072_da1d
+        } else {
+            0x0072_dacb
+        };
+        let filter = e.site(site, &args![0x0073_04b0u32]).unwrap_or(0x0073_04b0);
+        list_box_item_change_filter(e, Ptr::new(base + list), filter);
         let shown = e
             .call(ITEM_CHANGE_NUM_UNFILTERED, &args![base + list])
             .u32();
@@ -1536,7 +1544,8 @@ pub fn fn_0072dc30(e: &mut Engine, this: Ptr<BarterMenu>, form: u32) {
             e.call(LIST_SAVE_STATE, &args![current]);
         }
     }
-    if form != 0 {
+    let mut skip_readd = false;
+    if form != 0 || e.site(0x0072_dc9c, &args![form]).is_some() {
         // The frame below `EBP`: the local list is at `EBP - 0x20`.
         e.with_stack(8, |e, group| {
             let group = group.addr();
@@ -1545,6 +1554,10 @@ pub fn fn_0072dc30(e: &mut Engine, this: Ptr<BarterMenu>, form: u32) {
             let inventory = e.call(GET_INVENTORY_CHANGES, &args![player]).u32();
             let handler = e.global::<u32>(DATA_HANDLER);
             let container = e.call(BARTER_CONTAINER_00740960, &args![handler]).u32();
+            if e.site(0x0072_dcd3, &args![]).is_some() {
+                skip_readd = true;
+                return;
+            }
             if inventory != 0 {
                 refresh_group(e, this, inventory, form, group, PLAYER_ITEMS, false);
             }
@@ -1584,16 +1597,24 @@ pub fn fn_0072dc30(e: &mut Engine, this: Ptr<BarterMenu>, form: u32) {
             ],
         );
     }
-    readd_transaction_items(e, this, form, ITEMS_TO_BUY, PLAYER_ITEMS);
-    readd_transaction_items(e, this, form, ITEMS_TO_SELL, VENDOR_ITEMS);
+    if !skip_readd {
+        readd_transaction_items(e, this, form, ITEMS_TO_BUY, PLAYER_ITEMS);
+        readd_transaction_items(e, this, form, ITEMS_TO_SELL, VENDOR_ITEMS);
+    }
     let player_list = Ptr::new(base + PLAYER_ITEMS);
     let vendor_list = Ptr::new(base + VENDOR_ITEMS);
     fn_007314c0(e, player_list, 0x0072_eac0, 0, 0x7fff_ffff);
     fn_007314c0(e, player_list, 0x0072_f210, 0, 0x7fff_ffff);
-    list_box_item_change_filter(e, player_list, 0x0073_04b0);
+    let filter = e
+        .site(0x0072_e1bf, &args![0x0073_04b0u32])
+        .unwrap_or(0x0073_04b0);
+    list_box_item_change_filter(e, player_list, filter);
     e.vcall(base + PLAYER_ITEMS, 0x20, &args![0x0072_f070u32]);
     fn_007314c0(e, vendor_list, 0x0072_f210, 0, 0x7fff_ffff);
-    list_box_item_change_filter(e, vendor_list, 0x0073_04b0);
+    let filter = e
+        .site(0x0072_e208, &args![0x0073_04b0u32])
+        .unwrap_or(0x0073_04b0);
+    list_box_item_change_filter(e, vendor_list, filter);
     e.vcall(base + VENDOR_ITEMS, 0x20, &args![0x0072_f070u32]);
     if e.get(this, BarterMenu::plbCurrListbox) == 0 && e.call(FLAG_004B71D0, &args![]).bool() {
         e.set(this, BarterMenu::plbCurrListbox, base + VENDOR_ITEMS);

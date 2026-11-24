@@ -658,6 +658,7 @@ fn finish_create(e: &mut Engine, root: u32, interface: u32, reference: u32, mode
         );
     }
     let class = fn_0075b700(e);
+    let _ = e.site(0x0075_b46f, &args![]);
     e.call(
         SHOW_TUTORIAL,
         &args![interface.wrapping_add(0x4d4), 0x16u32, class, 0x200u32],
@@ -787,6 +788,7 @@ pub fn container_menu_close(e: &mut Engine) {
     }
     let list = me(e).wrapping_add(ACTIVE_MINE_LIST);
     e.call(SIMPLE_LIST_CLEAR, &args![list]);
+    let _ = e.site(0x0075_ba66, &args![]);
     let tile = tile_at(e, me(e), 4);
     set_trait_from_int(e, tile, 0x1772, 1);
     let this = me(e);
@@ -1028,7 +1030,16 @@ fn step_filter(
         e.set(this, field, mode);
         let tile = tile_at(e, this.addr(), title);
         container_menu_set_filter_mode_title(e, this, tile);
-        e.call(LIST_FILTER, &args![this.addr() + list, FILTER_MODE_FUNC]);
+        let filter = search_filter(
+            e,
+            if list == ITEMS {
+                0x0075_c12b
+            } else {
+                0x0075_c1d9
+            },
+            FILTER_MODE_FUNC,
+        );
+        e.call(LIST_FILTER, &args![this.addr() + list, filter]);
         if e.call(LIST_NUM_UNFILTERED, &args![this.addr() + list])
             .u32()
             != 0
@@ -1191,9 +1202,9 @@ pub fn container_menu_update_lists(e: &mut Engine, this: Ptr<ContainerMenu>, for
             container_menu_update_item_in_list(e, this, form, changes, me_addr + ITEMS);
         } else {
             let player = player_actor(e);
-            fill_list(e, me_addr + ITEMS, player);
+            fill_list(e, me_addr + ITEMS, player, 0x0075_c3ce);
         }
-    } else if form != 0 {
+    } else if form != 0 || e.site(0x0075_c3f5, &args![form]).is_some() {
         let player = player_actor(e);
         let player_changes = e.call(GET_INVENTORY_CHANGES, &args![player]).u32();
         let reference = e.get(this, ContainerMenu::pContainerRef);
@@ -1203,7 +1214,9 @@ pub fn container_menu_update_lists(e: &mut Engine, this: Ptr<ContainerMenu>, for
         } else {
             0
         };
-        let ammo = if e.call(FORM_TYPE, &args![form]).u32() == 0x28 {
+        let ammo = if e.site(0x0075_c443, &args![form]).is_none()
+            && e.call(FORM_TYPE, &args![form]).u32() == 0x28
+        {
             let reference = e.get(this, ContainerMenu::pContainerRef);
             let actor = if is_actor(e, reference) {
                 e.get(this, ContainerMenu::pContainerRef)
@@ -1220,7 +1233,7 @@ pub fn container_menu_update_lists(e: &mut Engine, this: Ptr<ContainerMenu>, for
         }
         if e.get(this, ContainerMenu::eContainerMode) == 3 {
             let reference = e.get(this, ContainerMenu::pContainerRef);
-            fill_list(e, me_addr + CONTAINER, reference);
+            fill_list(e, me_addr + CONTAINER, reference, 0x0075_c514);
         } else {
             container_menu_update_item_in_list(
                 e,
@@ -1241,9 +1254,9 @@ pub fn container_menu_update_lists(e: &mut Engine, this: Ptr<ContainerMenu>, for
         }
     } else {
         let player = player_actor(e);
-        fill_list(e, me_addr + ITEMS, player);
+        fill_list(e, me_addr + ITEMS, player, 0x0075_c584);
         let reference = e.get(this, ContainerMenu::pContainerRef);
-        fill_list(e, me_addr + CONTAINER, reference);
+        fill_list(e, me_addr + CONTAINER, reference, 0x0075_c5a8);
     }
     add_active_mines(e, this, form);
     add_dropped_weapon(e, this, form);
@@ -1252,7 +1265,16 @@ pub fn container_menu_update_lists(e: &mut Engine, this: Ptr<ContainerMenu>, for
             LIST_BOX_FOR_EACH,
             &args![me_addr + list, INIT_FUNC, 0u32, 0x7fff_ffffu32],
         );
-        e.call(LIST_FILTER, &args![me_addr + list, FILTER_MODE_FUNC]);
+        let filter = search_filter(
+            e,
+            if list == ITEMS {
+                0x0075_c9dc
+            } else {
+                0x0075_ca31
+            },
+            FILTER_MODE_FUNC,
+        );
+        e.call(LIST_FILTER, &args![me_addr + list, filter]);
         e.vcall(me_addr + list, 0x20, &args![COMPARE_FUNC]);
     }
     show_weights(e);
@@ -1260,10 +1282,11 @@ pub fn container_menu_update_lists(e: &mut Engine, this: Ptr<ContainerMenu>, for
 }
 
 /// Fills a list from a reference's inventory with the first-pass filter.
-fn fill_list(e: &mut Engine, list: u32, reference: u32) {
+fn fill_list(e: &mut Engine, list: u32, reference: u32, site: u32) {
+    let filter = search_filter(e, site, FIRST_PASS_FILTER);
     e.call(
         LIST_FILL,
-        &args![list, reference, FIRST_PASS_FILTER, 0u32, 0u32, 0u32, 0u32],
+        &args![list, reference, filter, 0u32, 0u32, 0u32, 0u32],
     );
 }
 
@@ -3235,6 +3258,15 @@ mod tests {
     #[test]
     fn create_sets_up_the_menu() {
         let mut e = Engine::new();
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::Stewie, 0x0075b46f),
+            |e, w| {
+                assert!(w.is_empty());
+                assert!(calls_to(e, SHOW_TUTORIAL).is_empty());
+                *e.ext::<usize>() += 1;
+                None
+            },
+        );
         let this = container(&mut e);
         let me_addr = this.addr();
         let vtable = e.mem.u32(me_addr);
@@ -4853,4 +4885,9 @@ mod n053_tests {
         assert_eq!(e.mem.u32(this + 0xfc), 0);
         assert_eq!(calls(&e, STRING_DESTROY).len(), 3);
     }
+}
+
+// Owned Tweaks10.05 filter-pointer immediates; no registered handler preserves vanilla.
+fn search_filter(e: &mut Engine, site: u32, original: u32) -> u32 {
+    e.site(site, &args![original]).unwrap_or(original)
 }

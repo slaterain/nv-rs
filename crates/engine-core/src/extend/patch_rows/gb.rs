@@ -62,9 +62,6 @@ pub(in super::super) const SITES: &[Entry] = &[
     row(0x0079_0966),
     // `MapMenu::DoGamepad` 00799790, the zoom axis.
     row(0x0079_9861),
-    // G87 (`RefreshMapMenuHook`, a jump at 0x79DF73): `MapMenu::AddMapIcons` 0079dbb0 skips
-    // centring the map once when JIP's item-list refresh asked for it.
-    row(0x0079_df73),
     // G69 (`WriteRelJump(0x7AC179, QttMenuEnableWheelHook)`): `QuantityMenu::DoIdle` takes the
     // mouse wheel (a fix).
     row(0x007a_c179),

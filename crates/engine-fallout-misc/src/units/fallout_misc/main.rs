@@ -950,6 +950,8 @@ fn run_main(e: &mut Engine, ebp: u32, instance: u32) -> u32 {
             break;
         }
         let main_object = e.global::<u32>(MAIN_OBJECT);
+        // Stewie delayed Menu Search setup: original call site 0086B650.
+        e.site(0x0086_b650, &[]);
         if e.call(0x0067_8ce0, &args![main_object]).bool() {
             let main_object = e.global::<u32>(MAIN_OBJECT);
             e.call(0x0087_74a0, &args![main_object, 1u32]);

@@ -543,7 +543,8 @@ fn scripted_save(e: &mut Engine, _: &[u32]) -> Option<u32> {
 }
 #[derive(Default)]
 struct RecipeHooks(bool);
-/// Install the crafting hooks at the original call sites.
+/// One OwnerStewie dispatcher composes two independent features at the exact
+/// original call sites, keeping SaveManager before and MenuSearch after calls.
 pub(super) fn install_recipe_hooks(e: &mut Engine) {
     if e.ext::<RecipeHooks>().0 {
         return;
@@ -551,10 +552,12 @@ pub(super) fn install_recipe_hooks(e: &mut Engine) {
     e.ext::<RecipeHooks>().0 = true;
     e.on_site(SiteSlot::new(Owner::Stewie, 0x0072_72f2), |e, words| {
         recipe_lifecycle(e, true, words[0]);
+        crate::menu_search::recipe_lifecycle(e, true, words[0]);
         None
     });
     e.on_site(SiteSlot::new(Owner::Stewie, 0x0072_6f2a), |e, words| {
         recipe_lifecycle(e, false, words[0]);
+        crate::menu_search::recipe_lifecycle(e, false, words[0]);
         None
     });
 }

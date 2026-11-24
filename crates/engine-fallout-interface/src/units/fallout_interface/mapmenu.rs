@@ -1806,6 +1806,7 @@ pub fn map_menu_do_idle(e: &mut Engine, this: Ptr<MapMenu>) {
             .wrapping_add(e.get(this, MapMenu::iSoundPlayStartTime));
         e.set(this, MapMenu::iSoundPlayStartTime, start);
     }
+    let _ = e.site(0x0079_a221, &args![]);
     let pipboy = e.call(GET_PIPBOY, &args![]).u32();
     if !e.call(PIPBOY_FLAG_00974D90, &args![pipboy]).bool() {
         return;
@@ -2068,7 +2069,9 @@ pub fn map_menu_update_menu(e: &mut Engine) {
             e.call(TILE_SET_STRING, &args![child, 0xfc4u32, headline, 1u32]);
         }
         let menu = map_menu(e);
+        let _ = e.site(0x0079_af0d, &args![menu, 0u32]);
         e.call(UPDATE_CURRENT_PAGE, &args![menu]);
+        let _ = e.site(0x0079_af0d, &args![menu, 1u32]);
         e.call(STRING_DESTRUCT, &args![text]);
     });
 }
@@ -5942,7 +5945,10 @@ pub fn map_menu_update_notes(e: &mut Engine, this: Ptr<MapMenu>) {
         index = index.wrapping_add(1);
     }
     list_box_bgs_note_set_enabled(e, Ptr::new(base + 0x160), 1);
-    list_box_bgs_note_filter(e, Ptr::new(base + 0x160), NOTES_FILTER_CALLBACK_0079B390);
+    let callback = e
+        .site(0x0079_b331, &args![NOTES_FILTER_CALLBACK_0079B390])
+        .unwrap_or(NOTES_FILTER_CALLBACK_0079B390);
+    list_box_bgs_note_filter(e, Ptr::new(base + 0x160), callback);
     let showing = u32::from(e.get(this, MapMenu::bShowingAllNotes));
     let showing_id = e.call(TEXT_TO_TRAIT, &args![SHOWING_ALL_NOTES_TEXT]).u32();
     let tile_12 = map_tile(e, base, 12);
@@ -6071,11 +6077,10 @@ pub fn fn_0079b600(e: &mut Engine, this: Ptr<MapMenu>) {
         }
         node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
     }
-    list_box_tes_challenge_filter(
-        e,
-        Ptr::new(base + 0x1f0),
-        CHALLENGES_FILTER_CALLBACK_0079B720,
-    );
+    let callback = e
+        .site(0x0079_b6ea, &args![CHALLENGES_FILTER_CALLBACK_0079B720])
+        .unwrap_or(CHALLENGES_FILTER_CALLBACK_0079B720);
+    list_box_tes_challenge_filter(e, Ptr::new(base + 0x1f0), callback);
     e.vcall(
         base + 0x1f0,
         0x20,
@@ -6260,6 +6265,7 @@ pub fn map_menu_update_quests(e: &mut Engine, this: Ptr<MapMenu>) {
     e.vcall(base + 0x1c0, 0x20, &args![QUESTS_SORT_CALLBACK_0079BC90]);
     e.vcall(base + 0x130, 0x20, &args![QUESTS_SORT_CALLBACK_0079BC90]);
     list_box_tes_quest_set_enabled(e, Ptr::new(base + 0x130), 1);
+    let _ = e.site(0x0079_bb86, &args![base + 0x130]);
     let player = e.mem.u32(PLAYER_011DEA3C);
     if e.call(PLAYER_QUEST_005CBB50, &args![player]).u32() == 0 {
         list_box_bgs_quest_objective_filter(
@@ -6397,11 +6403,10 @@ pub fn map_menu_update_radio_list(e: &mut Engine, this: Ptr<MapMenu>) {
             set_item_alpha(e, tile, !reachable);
             node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
         }
-        list_box_tes_object_refr_filter(
-            e,
-            Ptr::new(base + 0x190),
-            RADIO_LIST_FILTER_CALLBACK_0079BE30,
-        );
+        let callback = e
+            .site(0x0079_c015, &args![RADIO_LIST_FILTER_CALLBACK_0079BE30])
+            .unwrap_or(RADIO_LIST_FILTER_CALLBACK_0079BE30);
+        list_box_tes_object_refr_filter(e, Ptr::new(base + 0x190), callback);
         e.vcall(base + 0x190, 0x20, &args![RADIO_SORT_CALLBACK_0079BD70]);
         e.call(LIST_REMOVE_ALL, &args![in_range]);
         e.call(LIST_DESTRUCT, &args![in_range]);
@@ -7056,7 +7061,9 @@ pub fn map_menu_update_world_map(e: &mut Engine, this: Ptr<MapMenu>) {
     e.mem.set_u32(base + 0xf0, x);
     e.mem.set_u32(base + 0xf4, y);
     let tile_4 = map_tile(e, base, 4);
-    if e.call(TILE_GET_CHILD_BY_ID, &args![tile_4, 0x1au32]).u32() == 0 {
+    let existing_marker = e.call(TILE_GET_CHILD_BY_ID, &args![tile_4, 0x1au32]).u32();
+    let skip_markers = e.site(0x0079_d0d9, &args![]).is_some();
+    if existing_marker == 0 && !skip_markers {
         let root = e.get(this, MapMenu::pRootMapSpace);
         let list = e
             .call(WORLD_BUILD_MAP_MARKER_LIST, &args![root, 0u32])
@@ -7095,9 +7102,10 @@ fn add_world_map_marker(e: &mut Engine, this: Ptr<MapMenu>, marker: u32) {
         space = e.call(WORLD_GET_PARENT, &args![space]).u32();
     }
     let data = e.call(REFR_GET_MAP_MARKER_DATA, &args![marker]).u32();
-    if !e.call(MARKER_GET_VISIBLE, &args![data]).bool()
-        || typed_call!(leaf::FAMILY, 0x0044_0da0, leaf::form_flag_800(e, marker))
-    {
+    let visible = e
+        .site(0x0079_d18f, &args![data])
+        .unwrap_or_else(|| u32::from(e.call(MARKER_GET_VISIBLE, &args![data]).bool()));
+    if visible == 0 || typed_call!(leaf::FAMILY, 0x0044_0da0, leaf::form_flag_800(e, marker)) {
         return;
     }
     if space != e.get(this, MapMenu::pRootMapSpace) {
@@ -7386,7 +7394,10 @@ fn add_door_marker(e: &mut Engine, this: Ptr<MapMenu>, reference: u32) {
         e.mem.u32(position + 8),
     ];
     if e.call(REFERENCE_FLAG_00477BA0, &args![reference]).bool()
-        || e.call(REFERENCE_FLAG_0057B4B0, &args![reference]).bool()
+        || e.site(0x0079_d90a, &args![reference]).map_or_else(
+            || e.call(REFERENCE_FLAG_0057B4B0, &args![reference]).bool(),
+            |result| result != 0,
+        )
         || door == 0
         || e.call(DOOR_FLAG_00517FD0, &args![door]).bool()
     {
@@ -7661,7 +7672,10 @@ pub fn map_menu_add_map_icons(e: &mut Engine, this: Ptr<MapMenu>) {
     }
     // JIP's G87 (`0x79DF73`): an answer other than 0 skips the centring (to `0x79E053`); JIP's
     // other path is the exe's (its `fmul 0.5` for the exe's `fdiv 2.0` gives the same float).
-    let skip = e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+    let has_search = e
+        .site_owners(JIP_MAP_SKIP_CENTRING)
+        .contains(&engine_core::extend::Owner::Stewie);
+    let skip = (e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 || has_search)
         && e.site(JIP_MAP_SKIP_CENTRING, &[]).unwrap_or(0) != 0;
     let two: f64 = e.global(TWO_DOUBLE);
     for (size_id, along, target) in [(0xfb1u32, point[0], 0xfa1u32), (0xfb0, point[1], 0xfa2)] {
@@ -15271,5 +15285,54 @@ mod n056_tests {
             let lookups = calls_to(&e, TILE_GET_CHILD_BY_ID);
             assert_eq!(lookups.first(), Some(&vec![map, 0x25]));
         }
+    }
+}
+
+#[cfg(test)]
+mod menu_search_boundary_tests {
+    use super::*;
+    use engine_core::extend::{Owner, SiteSlot};
+    fn fixture() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x02000000, 0x1000);
+        e.mem.set_u32(0x02000100, 0x02000200);
+        e.mem.set_u32(0x02000200 + 0x1f4, 0x03000000);
+        e.register(0x03000000, |_, _| 0x02000500u32.into_ret());
+        e
+    }
+    #[test]
+    fn menu_search_map_marker_visibility_replacement_preserves_prior_queries() {
+        let mut e = fixture();
+        e.register(REFR_GET_WORLD_SPACE, |_, _| 0u32.into_ret());
+        e.register(REFR_GET_MAP_MARKER_DATA, |_, _| 0x02000600u32.into_ret());
+        e.register(MARKER_GET_VISIBLE, |_, _| panic!("original query replaced"));
+        e.on_site(SiteSlot::new(Owner::Stewie, 0x0079d18f), |e, words| {
+            assert_eq!(words, &[0x02000600]);
+            e.mem.set_u32(0x02000000, 1);
+            Some(0)
+        });
+        add_world_map_marker(&mut e, Ptr::new(0x02000700), 0x02000100);
+        assert_eq!(e.mem.u32(0x02000000), 1);
+    }
+    #[test]
+    fn menu_search_door_filter_runs_after_first_vanilla_exclusion() {
+        let mut e = fixture();
+        e.mem.set_u32(0x02000120, 0x02000600);
+        e.register(FORM_TYPE, |_, _| 0x1cu32.into_ret());
+        e.register(REFERENCE_FLAG_00477BA0, |e, _| {
+            e.mem.set_u32(0x02000000, 1);
+            0u32.into_ret()
+        });
+        e.register(REFERENCE_FLAG_0057B4B0, |_, _| {
+            panic!("original query replaced")
+        });
+        e.on_site(SiteSlot::new(Owner::Stewie, 0x0079d90a), |e, words| {
+            assert_eq!(words, &[0x02000100]);
+            assert_eq!(e.mem.u32(0x02000000), 1);
+            e.mem.set_u32(0x02000000, 2);
+            Some(1)
+        });
+        add_door_marker(&mut e, Ptr::new(0x02000700), 0x02000100);
+        assert_eq!(e.mem.u32(0x02000000), 2);
     }
 }

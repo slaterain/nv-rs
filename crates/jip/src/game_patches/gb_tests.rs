@@ -127,14 +127,15 @@ fn g87_skips_the_centring_once() {
     let mut e = engine();
     crate::install_as(&mut e, true);
     set_row(&mut e, false);
-    assert_eq!(e.site(MAP, &[]), Some(0));
+    assert_eq!(e.site(MAP, &[]), None);
+    assert_eq!(e.site(MAP, &[]).unwrap_or(0), 0, "native centring fallback");
     skip_map_centring_once(&mut e);
     assert_eq!(e.site(MAP, &[]), Some(1));
-    assert_eq!(e.site(MAP, &[]), Some(0), "cleared by the skip");
+    assert_eq!(e.site(MAP, &[]), None, "cleared by the skip");
     skip_map_centring_once(&mut e);
     skip_map_centring_once(&mut e);
     assert_eq!(e.site(MAP, &[]), Some(1));
-    assert_eq!(e.site(MAP, &[]), Some(0), "a flag, not a count");
+    assert_eq!(e.site(MAP, &[]), None, "a flag, not a count");
 }
 
 /// A fade fixture: a tile whose values (sorted by id, 0x10 bytes each, the number at +8) are
@@ -322,7 +323,8 @@ fn g88_sets_as_jips_tile_set_float() {
 }
 
 /// Every GB handler at its own address after install, with words on which the others answer
-/// differently: the dead-zone seams answer their doubles, G87 0 (no skip asked), G88 1 for an
+/// differently: the dead-zone seams answer their doubles, G87 falls through
+/// (native fallback 0, no skip asked), G88 1 for an
 /// ended type-6 control (and its value set), 0 for a type-5 one.
 #[test]
 fn every_gb_handler_sits_at_its_address() {
@@ -335,7 +337,9 @@ fn every_gb_handler_sits_at_its_address() {
         assert_eq!(e.site(site, &[]), Some(right), "{site:08x}");
     }
     let f = fade(&mut e, 0x3000, (4.4, 8.8), 0x1000, 700.0);
-    assert_eq!(e.site(MAP, &[f.control, 6]), Some(0));
+    assert_eq!(e.site_owners(MAP), vec![engine_core::extend::Owner::Jip]);
+    assert_eq!(e.site(MAP, &[f.control, 6]), None);
+    assert_eq!(e.site(MAP, &[f.control, 6]).unwrap_or(0), 0);
     assert_eq!(numbers(&e, &f)[1], 51.0, "G87 sets nothing");
     assert_eq!(e.site(FADE_6, &[f.control, 6]), Some(1));
     assert_eq!(numbers(&e, &f)[1], 4.4);

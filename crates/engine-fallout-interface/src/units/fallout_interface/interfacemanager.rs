@@ -4082,14 +4082,14 @@ pub fn fn_0070f690(e: &mut Engine, this: Ptr<InterfaceManager>, callback: u32) {
         e.set(this, InterfaceManager::field_4bc, 4);
         e.set(this, InterfaceManager::field_4c0, callback);
     }
-    // lStewieAl's Tweaks' S0021 (`OnPipboyClose` called at `0x70F6D3`, the common end): with the
-    // inventory menu shown (`g_menuVisibility[1002]`) its scroll place is saved. Tweaks' menu search
-    // and sort button parts there belong to features the port does not build.
+    // Tweaks 10.05 OnPipboyClose (0x100794e0–0x100794fe), hooked at 0x70f6d3:
+    // save the scroll position if Inventory is visible, then run Menu Search's reset.
     if e.stewie(engine_core::extend::stewie::INVENTORY_SCROLL_KEPT)
         && e.mem.u8(MENU_VISIBILITY + 1002) != 0
     {
         e.call(SAVE_INVENTORY_SCROLL, &args![]);
     }
+    let _ = e.site(0x0070_f6d3, &args![]);
 }
 
 /// `g_menuVisibility` (one byte per menu type, xNVSE's `0x11F308F`).
@@ -15782,4 +15782,59 @@ mod tests {
         }
     }
     // @@TESTS-END@@
+}
+
+#[cfg(test)]
+mod menu_search_close_tests {
+    use super::*;
+    #[test]
+    fn pipboy_close_saves_visible_inventory_scroll_before_resetting_search() {
+        use engine_core::extend::{stewie, Owner, SiteSlot};
+
+        const CALLBACK: u32 = 0x1234_5678;
+        const SEARCH_RESET: u32 = 0x0070_f6d3;
+        for (mode, keep_scroll, inventory_visible, expected) in [
+            (3, true, true, &[SAVE_INVENTORY_SCROLL, SEARCH_RESET][..]),
+            (
+                0,
+                true,
+                true,
+                &[CALLBACK, SAVE_INVENTORY_SCROLL, SEARCH_RESET],
+            ),
+            (0, true, false, &[CALLBACK, SEARCH_RESET]),
+            (0, false, true, &[CALLBACK, SEARCH_RESET]),
+        ] {
+            let mut e = Engine::new();
+            let address = e.mem.alloc(0x600);
+            let this = Ptr::<InterfaceManager>::new(address);
+            e.mem.set_u32(address + 0x4bc, mode);
+            e.set_stewie(stewie::INVENTORY_SCROLL_KEPT, keep_scroll);
+            e.map(MENU_VISIBILITY & !0xfff, 0x1000);
+            e.mem
+                .set_u8(MENU_VISIBILITY + 1002, u8::from(inventory_visible));
+            e.register(CALLBACK, |e, words| {
+                assert!(words.is_empty());
+                e.ext::<Vec<u32>>().push(CALLBACK);
+                Ret::default()
+            });
+            e.register(SAVE_INVENTORY_SCROLL, |e, words| {
+                assert!(words.is_empty());
+                e.ext::<Vec<u32>>().push(SAVE_INVENTORY_SCROLL);
+                Ret::default()
+            });
+            e.on_site(SiteSlot::new(Owner::Stewie, SEARCH_RESET), |e, words| {
+                assert!(words.is_empty());
+                e.ext::<Vec<u32>>().push(SEARCH_RESET);
+                None
+            });
+
+            fn_0070f690(&mut e, this, CALLBACK);
+
+            assert_eq!(e.ext::<Vec<u32>>().as_slice(), expected);
+            if mode == 3 {
+                assert_eq!(e.mem.u32(address + 0x4bc), 4);
+                assert_eq!(e.mem.u32(address + 0x4c0), CALLBACK);
+            }
+        }
+    }
 }
