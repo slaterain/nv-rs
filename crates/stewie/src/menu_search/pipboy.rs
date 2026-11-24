@@ -681,7 +681,9 @@ fn rebuild_objectives(e: &mut Engine, menu: u32) {
         }
         node = e.mem.u32(node + 4);
     }
-    e.vcall(list, 0x20, &args![e.mem.u32(0x0079_bb44)]);
+    // Tweaks 10.05 reads the immediate operand of the game's push at 0079BB43.
+    // Native code passes that comparator directly because executable text is unmapped.
+    e.vcall(list, 0x20, &args![0x0079_bc90u32]);
 }
 #[cfg(test)]
 mod tests;

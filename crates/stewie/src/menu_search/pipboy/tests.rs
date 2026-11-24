@@ -103,6 +103,45 @@ fn quest_objective_visibility_and_completion_settings_do_not_bypass_name_search(
     });
     assert_eq!(quest_filter(&mut e, &[quest]).eax, 0);
 }
+
+#[test]
+fn quest_page_refresh_passes_the_stock_objective_comparator_without_exe_text() {
+    let mut e = engine();
+    let menu = e.mem.u32(GLOBALS[0]);
+    let objectives = menu + 0x1c0;
+    let vtable = 0x0200_2000;
+    let clear = 0x0300_0000;
+    let sort = 0x0300_0004;
+    e.mem.set_u8(menu + 0x80, 0x22);
+    e.mem.set_u32(0x011d_ea3c, 0x0200_1000);
+    e.mem.set_u32(objectives, vtable);
+    e.mem.set_u32(vtable + 0x1c, clear);
+    e.mem.set_u32(vtable + 0x20, sort);
+    e.register(0x0072_9fe0, |_, _| Ret::default());
+    e.register(0x0071_ae60, |_, _| ret(1));
+    e.register(clear, |_, _| Ret::default());
+    e.register(sort, |_, w| {
+        assert_eq!(w, [0x0200_01c0, 0x0079_bc90]);
+        Ret::default()
+    });
+    state(&mut e, |s| s.menus[0].tile = 0x0200_3000);
+    assert!(!e.mem.is_mapped(0x0079_bb44));
+    e.call_log = Some(Vec::new());
+
+    assert_eq!(map_page(&mut e, &[menu, 1]), None);
+
+    let calls = e.call_log.take().unwrap();
+    assert_eq!(
+        calls,
+        [
+            (0x0072_9fe0, vec![menu + 0x130, QUEST]),
+            (0x0071_ae60, vec![menu + 0x130]),
+            (clear, vec![objectives]),
+            (sort, vec![objectives, 0x0079_bc90]),
+        ]
+    );
+}
+
 #[test]
 fn stats_misc_filters_tile_strings_not_row_data_and_restores_highlight() {
     let mut e = engine();
