@@ -966,7 +966,14 @@ pub fn fn_0095d850(
             }
         }
     }
-    if !e.call(TEST_DWORD_AT_8, &args![OBJECT_011F2250]).bool() {
+    // lStewieAl's Tweaks' row S0097 (its `ReloadDamageAPHook` called at `0x95DD7C`): the action
+    // points are also kept when the animation is not a reload (`mode`, the second word, not 2).
+    let skip = if e.stewie(engine_core::extend::stewie::RUN_AND_GUN_AP) {
+        e.mem.u32(OBJECT_011F2250 + 8) != 0 || mode != 2
+    } else {
+        e.call(TEST_DWORD_AT_8, &args![OBJECT_011F2250]).bool()
+    };
+    if !skip {
         e.vcall(this.addr(), 0x340, &args![9u32]);
     }
     true
@@ -9916,6 +9923,42 @@ mod tests {
             calls_to(&log, ACTOR_QUEUE_EQUIP_OBJECT),
             vec![vec![player.addr(), item.addr(), 2, 0, 1, 0, 0]]
         );
+    }
+
+    /// S0097 (`ReloadDamageAPHook`, `0x95DD7C`): the equip of mode 1 (not a reload animation)
+    /// charges the player's action points for action 9 (slot `0x340`) outside VATS; with the row
+    /// it charges none.
+    #[test]
+    fn s0097_switching_weapons_charges_no_reload_points() {
+        for on in [false, true] {
+            let mut e = engine(CALLEES_0095D850);
+            e.set_stewie(engine_core::extend::stewie::RUN_AND_GUN_AP, on);
+            e.map(0x011f_2000, 0x1000);
+            let held = 0x5000_1000;
+            let (player, _) = equip_world(&mut e, held, 2, 0, 0);
+            add_slot(&mut e, player.addr(), 0x4b0, SLOT_D);
+            add_slot(&mut e, player.addr(), 0x340, SLOT_E);
+            answer(&mut e, SLOT_D, 0);
+            answer(&mut e, SLOT_E, 0);
+            answer(&mut e, WEAPON_GET_CURRENT_AMMO, held);
+            answer(&mut e, WEAPON_GET_ATTACK_ANIM_BASE, 0x30);
+            answer(&mut e, ACTOR_GET_ANIM_GROUP, 0x1234);
+            answer(&mut e, ANIM_GROUP_GET_TYPE, 0x30);
+            answer(&mut e, TEST_BIT_2_BYTE_AT_100, 1);
+            answer(&mut e, ANIMATION_GET_ACTION, 0x55);
+            let log = logged(&mut e, |e| {
+                e.call(
+                    0x0095_d850,
+                    &args![player, Ptr::<()>::new(held), 1u32, 0u32],
+                );
+            });
+            let charged = if on {
+                vec![]
+            } else {
+                vec![vec![player.addr(), 9]]
+            };
+            assert_eq!(calls_to(&log, SLOT_E), charged, "on {on}");
+        }
     }
 
     #[test]

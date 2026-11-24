@@ -71,7 +71,13 @@ progress three (Main::OnIdle's, `HUDMainMenu::DoIdle`'s, `MessageMenu::DoIdle`'s
   - **Call targets.** Every call through `Engine::call` and `Engine::vcall` is counted by exe
     address; the table lists the top `NV_PROFILE_CALLS` (default 60) with calls a frame, their
     share, and self time a frame and a call. The count costs the profiled run about 1 ms a frame;
-    `NV_PROFILE_CALLS=0` turns it off.
+    `NV_PROFILE_CALLS=0` turns it off. These counts include the calls between typed functions,
+    which go by address only while a diagnostic such as the profiler is on: in play they are
+    plain Rust calls.
+  - **Calls by address in play (`NV_CALL_COUNT=1`, without the profiler).** Not a diagnostic:
+    typed families keep their direct calls, so its table (by target and by caller-to-target edge,
+    main and the other game threads apart, in calls a frame) shows only what still goes through
+    `Engine::call` and `Engine::vcall` in play, and, in rows marked `direct`, the calls made directly but found by their address (the drawing writer's device calls). One table shared by every thread, relaxed adds. Off, the call path is unchanged: the switch is a bit of the engine's byte of diagnostics, which the fast path already tests; on, the calls by address take the full path to be counted, so the frame rate while counting is lower than in play.
   - **Symbols.** `dbghelp` looks for the program's PDB first in the folder `<exe stem>.sym` beside
     it (so a copied build keeps its own: `nv-viewer-TAG.exe` with
     `nv-viewer-TAG.sym\nv_viewer.pdb`), then beside the program, then in `NV_PROFILE_SYMBOLS`

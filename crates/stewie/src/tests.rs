@@ -1199,3 +1199,109 @@ fn the_last_share_row_is_bit_1023() {
     assert_eq!(last.index(), 1023);
     assert_eq!(usize::from(bits::OTHER_TWEAKS), 1024);
 }
+
+/// The two Tweaks keys group 8's rows read inside their seams reach the engine at the install:
+/// `[Tweaks] bRunAndGunAPInCombatOnly` (S0097) and `bVATSStopBurstIfTargetDead` (S0082.01), code
+/// default 0 each.
+#[test]
+fn the_install_reads_the_run_and_gun_and_vats_burst_keys() {
+    let mut e = engine(None);
+    set_on(&mut e, true);
+    install(&mut e);
+    assert!(!e.stewie_run_and_gun_combat_only());
+    assert!(!e.stewie_vats_stop_burst());
+
+    let mut e = engine(Some(
+        b"[Tweaks]\r\nbRunAndGunAPInCombatOnly=1\r\nbVATSStopBurstIfTargetDead=1\r\n",
+    ));
+    set_on(&mut e, true);
+    install(&mut e);
+    assert!(e.stewie_run_and_gun_combat_only());
+    assert!(e.stewie_vats_stop_burst());
+}
+
+/// S0097 (`patchRunAndGunDontLetAPBeNegative`): with the row the install points `PlayerCharacter`'s
+/// vtable slot `0108AD7C` at Tweaks' function; with its key `bRunAndGunDontLetAPBeNegative` off the
+/// slot keeps `0093ab30`.
+#[test]
+fn s0097_the_install_rewrites_only_the_vtable_slot() {
+    for row_on in [true, false] {
+        let mut e = engine(None);
+        e.map(run_and_gun::SLOT & !0xfff, 0x1000);
+        e.mem.set_u32(run_and_gun::SLOT, 0x0093_ab30);
+        set_on(&mut e, true);
+        if !row_on {
+            set_keys(
+                &mut e,
+                rows::Keys {
+                    rows: vec![("bRunAndGunDontLetAPBeNegative", false)],
+                    ..Default::default()
+                },
+            );
+        }
+        install(&mut e);
+        let expected = if row_on {
+            run_and_gun::ROUTINE
+        } else {
+            0x0093_ab30
+        };
+        assert_eq!(e.mem.u32(run_and_gun::SLOT), expected, "row {row_on}");
+    }
+}
+
+/// S0097 through the game's virtual call (slot `+0x340` of a `PlayerCharacter` whose vtable holds
+/// the slot `0108AD7C`): the action's cost (`0066dca0`: 30) is held to the player's action points
+/// (`0066ef50` with 0xC) and spent (slot `0x33c`) when above 0; outside VATS out of combat (+0xDF0)
+/// with `bRunAndGunAPInCombatOnly` nothing is taken; in VATS (+8 of `011f2250`) it is.
+#[test]
+fn s0097_the_virtual_call_spends_at_most_the_points_left() {
+    const SPEND: u32 = 0x7d00_033c;
+    // (the points, combat only, in combat, in VATS, spent)
+    for (points, only, combat, vats, spent) in [
+        (20.0f32, false, false, false, Some(20.0f32)),
+        (40.0, false, false, false, Some(30.0)),
+        (0.0, false, false, false, None),
+        (20.0, true, false, false, None),
+        (20.0, true, true, false, Some(20.0)),
+        (20.0, true, false, true, Some(20.0)),
+    ] {
+        let mut e = Engine::new();
+        e.set_stewie(bits::RUN_AND_GUN_AP, true);
+        e.set_stewie_run_and_gun_combat_only(only);
+        let table = run_and_gun::SLOT - 0x340;
+        e.map(table & !0xfff, 0x2000);
+        e.map(0x011d_e000, 0x1000);
+        e.map(0x011f_2000, 0x1000);
+        run_and_gun::install(&mut e);
+        let player = e.mem.alloc(0xe00);
+        e.mem.set_u32(player, table);
+        e.mem.set_u8(player + 0xdf0, u8::from(combat));
+        e.set_global(0x011d_ea3cu32, player);
+        e.mem.set_u32(0x011f_2250 + 8, u32::from(vats));
+        e.mem.set_u32(table + 0x33c, SPEND);
+        e.register_double(SPEND, |_, _| Ret::default());
+        e.register_double(0x0066_dca0, |_, _| Ret {
+            st0: 30.0,
+            ..Ret::default()
+        });
+        e.register_double(0x0066_ef50, move |_, _| Ret {
+            st0: f64::from(points),
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.vcall(player, 0x340, &args![9u32]);
+        let spends: Vec<Vec<u32>> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == SPEND)
+            .map(|(_, w)| w.clone())
+            .collect();
+        let label = format!("{points} {only} {combat} {vats}");
+        match spent {
+            Some(v) => assert_eq!(spends, vec![vec![player, v.to_bits()]], "{label}"),
+            None => assert!(spends.is_empty(), "{label}"),
+        }
+    }
+}

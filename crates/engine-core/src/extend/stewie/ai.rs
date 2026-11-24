@@ -175,3 +175,81 @@ pub const AMMO_SWAP_NO_INSTANT_REFILL: Row = Row::share(AI_FIXES, AI_FIXES_END, 
 /// S0121 `patchPreventReloadingIfClipIsOverfilled` (`0095d850` (`0x95DAE5`, `0x95DC01`),
 /// `0095d450` (`0x95D65D`)): a clip holding as many rounds as its size or more is not reloaded.
 pub const NO_RELOAD_OVERFILLED_CLIP: Row = Row::share(AI_FIXES, AI_FIXES_END, 51);
+/// S0130.02 `ContinuousBeamProjectileCrashFix` (`Actor::Update` `00888b50` (`0x889869`)): an NPC's
+/// continuous beam keeps firing while its attack animation runs and fades when it ends. Acts
+/// only with `BEAM_SHOOTER_POINTER` (S0130.01) on too.
+pub const NPC_CONTINUOUS_BEAM: Row = Row::share(AI_FIXES, AI_FIXES_END, 52);
+/// S0130.04 `ContinuousBeamProjectileCrashFix` (`PlayerCharacter::Update` `0093e860` (`0x9440C2`);
+/// `Projectile::AddImpact` `009bf5a0` (`0x9BFD6B`)): in god mode the player's continuous beam fires
+/// without ammunition.
+pub const BEAM_GODMODE_FIRING: Row = Row::share(AI_FIXES, AI_FIXES_END, 53);
+/// S0130.05 `ContinuousBeamProjectileCrashFix` (`PlayerCharacter::Update` `0093e860`
+/// (`0x944152`)): the player's continuous beam uses its ammunition in the player's update, so
+/// firing at the sky uses ammunition too. Acts only with `BEAM_NO_PLAYER_AMMO_IN_IMPACT` on too
+/// (Tweaks installs the ammunition parts together).
+pub const BEAM_PLAYER_AMMO_IN_UPDATE: Row = Row::share(AI_FIXES, AI_FIXES_END, 54);
+/// S0130.06 `ContinuousBeamProjectileCrashFix` (`Projectile::AddImpact` `009bf5a0` (`0x9BFD0E`,
+/// `0x9BFCC1`); `PlayerCharacter::Update` `0093e860` (`0x944127`)): the player's continuous beam
+/// uses no ammunition where it hits (only with `BEAM_PLAYER_AMMO_IN_UPDATE` on too), and stops when
+/// the weapon is put away.
+pub const BEAM_NO_PLAYER_AMMO_IN_IMPACT: Row = Row::share(AI_FIXES, AI_FIXES_END, 55);
+/// S0198 `VanityCamRotationFix` (`009445b0` (`0x945D53`); `PlayerCharacter::UpdateCamera`
+/// `0094ae40` (`0x94B521`)): the vanity camera's turn stays within a circle and its pitch within
+/// 89 degrees.
+pub const VANITY_CAM_ROTATION: Row = Row::share(AI_FIXES, AI_FIXES_END, 56);
+/// S0489 `patchSpinWeaponsAlwaysPlaySound` (`Actor::Update` `00888b50` (`0x8893F8`, `0x889422`,
+/// `0x8895A8`)): a weapon with a looping attack sound plays it again after a short stop.
+pub const SPIN_WEAPON_SOUND: Row = Row::share(AI_FIXES, AI_FIXES_END, 57);
+/// S0926 `CombatSoundCooldownFix` (`009839b0` (`0x983A37`, `0x9841CC`); `Actor::HitMe` `0089a760`
+/// (`0x89D42B`, `0x89D4ED`)): the combat line and hit sound cooldowns start only when a line was
+/// said.
+pub const COMBAT_SOUND_COOLDOWN: Row = Row::share(AI_FIXES, AI_FIXES_END, 58);
+/// S0122 `patchSpeakingToSleepingGenericNPCsSkipsDialogueMenu` (`HighProcess::Update` `008eeec0`
+/// (`0x8EF5A1`)): an NPC running a dialogue package keeps wanting to speak to the player.
+pub const DIALOGUE_PACKAGE_KEEPS_TALK: Row = Row::share(AI_FIXES, AI_FIXES_END, 59);
+/// S0132 `patchBumpingCompanionsDoesntAlertEnemies` (`PlayerCharacter::Update` `0093e860`
+/// (`0x93EF1D`)): bumping into a companion no longer alerts anyone.
+pub const BUMPED_COMPANION_NO_ALERT: Row = Row::share(AI_FIXES, AI_FIXES_END, 60);
+/// S0148 `patchResetForceFireWeaponWhenReloadJamming` (`Actor::StartAttack` `00893a40`
+/// (`0x8940A5`)): a jam or power attack group clears the process' forced firing.
+pub const JAM_CLEARS_FORCE_FIRE: Row = Row::share(AI_FIXES, AI_FIXES_END, 61);
+/// S0157 `patchAllowWaitingOnMidairFurniture` (`PlayerCharacter::Update` `0093e860`
+/// (`0x9424FD`)): the player may wait while seated on furniture above the ground.
+pub const WAIT_ON_MIDAIR_FURNITURE: Row = Row::share(AI_FIXES, AI_FIXES_END, 62);
+/// S0165 `patchThresholdThrowingVelocityStrength` (`009bca60` (`0x9BCEA7`)): a thrown weapon's
+/// speed uses the player's Strength held within its limits.
+pub const THROW_STRENGTH_CLAMPED: Row = Row::share(AI_FIXES, AI_FIXES_END, 63);
+/// S0166 `patchThresholdExplosivesWeaponDamage` (`009b0f80` (`0x9B1033`)): an explosion's skill
+/// bonus uses the skill held within its limits.
+pub const EXPLOSIVES_SKILL_CLAMPED: Row = Row::share(AI_FIXES, AI_FIXES_END, 64);
+/// S0179 `GodmodeSkipsPowerArmorTraining` (`Actor::EquipObject` `0088c830` (`0x88C8DA`)): in god
+/// mode the player can wear power armour without the training.
+pub const GODMODE_POWER_ARMOR: Row = Row::share(AI_FIXES, AI_FIXES_END, 65);
+/// S0192 `StoreWeaponModFlagsOnProjectiles` (`009bbef0` (`0x9BC0D2`, `0x9BC1D2`)): a projectile
+/// keeps its weapon's mod flags.
+pub const PROJECTILE_WEAPON_MOD_FLAGS: Row = Row::share(AI_FIXES, AI_FIXES_END, 66);
+/// S0223 `ToggleDetectCommandAffectsMines` (`009c39e0` (`0x9C39FF`)): with detection turned off
+/// by the console, mines are not set off.
+pub const DETECTION_OFF_MINES: Row = Row::share(AI_FIXES, AI_FIXES_END, 67);
+/// S0096 `patchTCLMovement` (`PlayerMover::Update` `009e9e50` (`0x9EA1CE`);
+/// `PlayerCharacter::Update` `0093e860` (`0x942793`, `0x9427AA`)): with collision off, keyboard
+/// flying moves along the view and the jump control rises.
+pub const TCL_MOVEMENT: Row = Row::share(AI_FIXES, AI_FIXES_END, 68);
+/// S0097 `patchRunAndGunDontLetAPBeNegative` (`PlayerCharacter`'s vtable slot `0108AD7C`
+/// (`0093ab30`); `0095d850` (`0x95DD7C`)): action points spent for an action never go below 0,
+/// and a reload charges them only as a reload.
+pub const RUN_AND_GUN_AP: Row = Row::share(AI_FIXES, AI_FIXES_END, 69);
+/// S0410 `GodmodePreventsLegCrippleSound` (`Actor::Move` `008a62b0` (`0x8A655C`, `0x8A6607`)): a
+/// fall plays no landing sound or pain for the player in god mode.
+pub const GODMODE_NO_LEG_CRIPPLE_SOUND: Row = Row::share(AI_FIXES, AI_FIXES_END, 70);
+/// S0082.01 `NoAmmoGodmode` (`Actor::StartAttack` `00893a40` (`0x893C37`, `0x893B44`);
+/// `PlayerCharacter::Update` `0093e860` (`0x941DD4`); `00948310` (`0x9492B5`, `0x94928F`);
+/// `VATSMenu` `007ec810` (`0x7EDC3D`, `0x7EDCA3`, `0x7EDCE5`, `0x7EDD04`)): in god mode the player
+/// fires without ammunition or action points, in and out of VATS.
+pub const NO_AMMO_GODMODE: Row = Row::share(AI_FIXES, AI_FIXES_END, 71);
+/// S0329 `patchLeftRightMovementCancelsOut` (`PlayerCharacter::Update` `0093e860` (`0x941BBA`,
+/// `0x941C11`, `0x941C67`, `0x941CBD`)): holding two opposite movement keys moves neither way.
+pub const OPPOSITE_KEYS_CANCEL: Row = Row::share(AI_FIXES, AI_FIXES_END, 72);
+/// S0404 `patchDelayLevelupAfterCombat` (`PlayerCharacter::Update` `0093e860` (`0x943990`)): the
+/// level-up menu waits 3 seconds after combat ends.
+pub const DELAY_LEVELUP_AFTER_COMBAT: Row = Row::share(AI_FIXES, AI_FIXES_END, 73);

@@ -13,13 +13,15 @@
 //! animated actors, each at its own animation time, carry controllers as the game loads them (the
 //! scaled-time flag, `ComputeScaledTime`): transform and visibility controllers whose interpolators
 //! read one shared transform data (Euler rotation keys, whose search hints each interpolation
-//! writes) and bool data, and a transform controller without an interpolator. Then
-//! the actors that must run whole on main: one with a controller on a bone, one ragdolled (its blend
-//! object reads the body into the node), one whose animation is not pending (a dead actor that asks
-//! for its lighting), and one whose geometry has no world bound yet (allocated on main).
+//! writes) and bool data, and a transform controller without an interpolator. A ragdolled actor's
+//! bone reads its body into its node (`hktoNiTransform`, `SetTransform`). Then the actors that
+//! must run whole on main: one with a controller on a bone, two ragdolled ones (a bone that calls
+//! the transform hook, a body of an unknown class), one whose animation is not pending (a dead
+//! actor that asks for its lighting), and one whose geometry has no world bound yet (allocated on
+//! main).
 //!
-//! Recorded on the host, with whether main made it: the Havok parts (the hard keyframe, the
-//! by-address `hktoNiTransform` of the ragdoll), the head's pass (with its parent's world
+//! Recorded on the host, with whether main made it: the Havok parts (the hard keyframe), the
+//! transform hook and the unknown body's getters, the head's pass (with its parent's world
 //! translation), the controller's update and the lighting queue. Compared after each pass: the
 //! records, and every object's bytes the pass may write.
 //!
@@ -57,6 +59,9 @@ const SET_BOUND_FN: u32 = VT_FN + 0x1c;
 const MOVE_BODY_FN: u32 = VT_FN + 0x20;
 /// An interpolator update of a class a helper does not know (recorded).
 const ODD_INTERPOLATOR_FN: u32 = VT_FN + 0x24;
+/// A body getter of a class a helper does not know (recorded), and the transform hook (recorded).
+const ODD_BODY_FN: u32 = VT_FN + 0x28;
+const TRANSFORM_HOOK_FN: u32 = VT_FN + 0x2c;
 /// The controllers and interpolators a helper may run: `NiTransformController::Update`,
 /// `NiVisController::Update`, `NiTransformInterpolator::Update`, `NiBoolInterpolator::Update`.
 const TRANSFORM_CONTROLLER_UPDATE: u32 = 0x00a3_6680;
@@ -89,7 +94,15 @@ const SETTING_VALUE: u32 = 0x0040_8d60;
 const TASKLET_VALUE: u32 = 0x0300_0000;
 const OBJECT_TEST: u32 = 0x0047_b470;
 const APPLY_HARD_KEYFRAME: u32 = 0x00c8_e160;
-const COLLISION_HK_TO_NI: u32 = 0x00c6_5a80;
+/// What a ragdoll's bone reads its body with: `bhkRigidBody::GetPosition_ov2` and `GetRotation_ov2`
+/// (the body's slots 0xd4 and 0xd8), `bhkNiCollisionObject::SetTransform` (the collision object's
+/// slot 0xb8), the hook it calls with the notify bit (`01267b68`), and `bhkRigidBody::GetPosition`
+/// (the game's own conversion, to check the node against).
+const BODY_GET_POSITION: u32 = 0x00c8_d0f0;
+const BODY_GET_ROTATION: u32 = 0x00c8_d130;
+const SET_TRANSFORM: u32 = 0x00c6_bbb0;
+const TRANSFORM_HOOK: u32 = 0x0126_7b68;
+const RIGID_BODY_GET_POSITION: u32 = 0x0056_0bc0;
 const OBJECT_LIGHTING: u32 = 0x00b5_d9f0;
 const INCREMENT: u32 = 0x00fd_f1c0;
 const DECREMENT: u32 = 0x00fd_f1c4;
@@ -126,6 +139,8 @@ struct World {
     objects: Vec<u32>,
     /// The transform data and bool data the animated actors share (`animation_data`).
     animation: Option<(u32, u32)>,
+    /// The ragdolled actor's ragdoll bone.
+    ragdoll: u32,
 }
 
 impl World {
@@ -313,12 +328,62 @@ fn blend(w: &mut World, e: &mut Engine, k: &Kinds, bone: u32, keyframed: bool, a
     e.mem.set_u32(bone + 0x1c, c);
 }
 
+/// A ragdoll's bone as the census finds them (`bhkBlendCollisionObject` flags 0x29: keyframed bit
+/// 0, local bit 3; blend amount 0.0; motion mode 1 already set; a dynamic body, motion type 3): its
+/// `hktoNiTransform` reads the body's position and rotation and `SetTransform` sets the node's local
+/// transform from its parent's world and its world. `notify`: the notify bit (2) too, so
+/// `SetTransform` calls the transform hook; `odd_body`: the body's getters of a class a helper does
+/// not know.
+fn ragdoll(w: &mut World, e: &mut Engine, bone: u32, x: f32, notify: bool, odd_body: bool) {
+    let vt = w.vtable(
+        e,
+        &[
+            (0x90, BLEND_UPDATE),
+            (0xa4, BLEND_HK_TO_NI),
+            (0xa8, NI_TO_HK),
+            (0xb8, SET_TRANSFORM),
+        ],
+    );
+    let c = w.alloc(e, 0x28);
+    e.mem.set_u32(c, vt);
+    e.mem.set_u32(c + 8, bone);
+    e.mem.set_u16(c + 0xc, if notify { 0x2d } else { 0x29 });
+    let (position, rotation) = if odd_body {
+        (ODD_BODY_FN, ODD_BODY_FN)
+    } else {
+        (BODY_GET_POSITION, BODY_GET_ROTATION)
+    };
+    let body_vt = w.vtable(
+        e,
+        &[(0xd4, position), (0xd8, rotation), (0xe8, MOVE_BODY_FN)],
+    );
+    let body = w.alloc(e, 0x40);
+    e.mem.set_u32(body, body_vt);
+    let havok = w.alloc(e, 0x180);
+    e.mem.set_u8(havok + 0xe8, 3);
+    for (i, v) in [x / 7.0 + 0.1, 0.2, 0.15, 0.0].iter().enumerate() {
+        e.mem.set_f32(havok + 0x120 + 4 * i as u32, *v);
+    }
+    for (i, v) in [0.1f32, 0.2, 0.3, 0.927_362].iter().enumerate() {
+        e.mem.set_f32(havok + 0x160 + 4 * i as u32, *v);
+    }
+    e.mem.set_u32(body + 8, havok);
+    e.mem.set_u32(c + 0x10, body);
+    e.mem.set_u32(c + 0x20, 1);
+    e.mem.set_u32(bone + 0x1c, c);
+}
+
 /// What an actor holds besides the common tree.
 #[derive(Clone, Copy, PartialEq)]
 enum Extra {
     None,
     Controller,
     Ragdoll,
+    /// A ragdoll's bone whose `SetTransform` would call the transform hook: a `collision` barrier.
+    RagdollHook,
+    /// A ragdoll's bone whose body's getters are of a class a helper does not know: a `collision`
+    /// barrier.
+    RagdollOddBody,
     NotPending,
     NoBound,
     /// A skeleton of nodes without a world bound that never take one (as a creature's bones), and a
@@ -470,14 +535,15 @@ fn actor(w: &mut World, e: &mut Engine, k: &Kinds, x: f32, extra: Extra, lightin
     );
     geometry(w, e, k, bones[2], 0.75, true);
     blend(w, e, k, bones[1], true, 1.0);
-    blend(
-        w,
-        e,
-        k,
-        bones[3],
-        true,
-        if extra == Extra::Ragdoll { 0.0 } else { 1.0 },
-    );
+    match extra {
+        Extra::Ragdoll => {
+            ragdoll(w, e, bones[3], x, false, false);
+            w.ragdoll = bones[3];
+        }
+        Extra::RagdollHook => ragdoll(w, e, bones[3], x, true, false),
+        Extra::RagdollOddBody => ragdoll(w, e, bones[3], x, false, true),
+        _ => blend(w, e, k, bones[3], true, 1.0),
+    }
     blend(w, e, k, bones[4], false, 1.0);
     // The head under the last bone, with a geometry under it.
     let head = node(w, e, k.head, bones[4], [0.0, 0.0, 0.1], 2);
@@ -721,9 +787,15 @@ fn stand_ins(e: &mut Engine) {
         record("hard keyframe", words);
         ret(0)
     });
-    e.register(COLLISION_HK_TO_NI, |e, a| {
-        let node = e.mem.u32(a[0] + 8);
-        record("ragdoll hktoNi", vec![a[0], node]);
+    e.register(ODD_BODY_FN, |e, a| {
+        for (i, v) in [0.5f32, 0.5, 0.5, 0.5].iter().enumerate() {
+            e.mem.set_f32(a[1] + 4 * i as u32, *v);
+        }
+        record("odd body", vec![a[0]]);
+        ret(a[1])
+    });
+    e.register(TRANSFORM_HOOK_FN, |_, a| {
+        record("transform hook", a.to_vec());
         ret(0)
     });
     e.register(HEAD_DOWNWARD, |e, a| {
@@ -787,9 +859,20 @@ fn stand_ins(e: &mut Engine) {
         (0x0109_a000, 0x1000),
         // The double FLT_MAX (010231b0) `ComputeScaledTime` tests the low key time against.
         (0x0102_3000, 0x1000),
+        // `SetTransform`'s translation epsilon (01013ea4).
+        (0x0101_3000, 0x1000),
     ] {
         e.map(page, len);
     }
+    // `SetTransform`'s epsilons as the exe holds them (rotation 0.001, translation 0.01) and its hook
+    // (called for an object with the notify bit).
+    e.mem.set_u32(0x0101_7d00, 0x3a83_126f);
+    e.mem.set_u32(0x0101_3ea4, 0x3c23_d70a);
+    e.mem.set_u32(TRANSFORM_HOOK, TRANSFORM_HOOK_FN);
+    // The scale Havok positions are multiplied by into the game's units (`011c3d18`, set at start-up).
+    e.mem.set_f32(0x011c_3d18, 7.0);
+    // The 2.0 `NiQuaternion::ToRotation` doubles with (`01011590`).
+    e.mem.set_u64(0x0101_1590, 2.0f64.to_bits());
     e.mem.set_u64(0x0102_31b0, f64::from(f32::MAX).to_bits());
     for (at, f) in KEY_TABLES {
         e.mem.set_u32(at, f);
@@ -826,6 +909,7 @@ fn world(e: &mut Engine) -> World {
         reset: Vec::new(),
         objects: Vec::new(),
         animation: None,
+        ragdoll: 0,
     };
     let node_vt = w.vtable(e, &[(0xa4, NODE_DOWNWARD), (0xb8, WORLD_DATA)]);
     let geometry_vt = w.vtable(
@@ -875,6 +959,8 @@ fn world(e: &mut Engine) -> World {
         (Extra::None, true),
         (Extra::None, false),
         (Extra::Ragdoll, true),
+        (Extra::RagdollHook, true),
+        (Extra::RagdollOddBody, true),
         (Extra::NotPending, true),
         (Extra::None, true),
         (Extra::NoBound, true),
@@ -999,7 +1085,15 @@ fn parallel_bones_end_in_the_serial_state() {
     assert!(tags(&serial, "hard keyframe") >= 20, "{serial:?}");
     assert!(tags(&serial, "head") >= 9, "{serial:?}");
     assert_eq!(tags(&serial, "controller"), 1, "{serial:?}");
-    assert_eq!(tags(&serial, "ragdoll hktoNi"), 1, "{serial:?}");
+    // The ragdoll's bone took its body's position (the game's own conversion of it); the bone
+    // asking for the transform hook called it, the body of an unknown class was read twice.
+    let body = e.mem.u32(e.mem.u32(w.ragdoll + 0x1c) + 0x10);
+    let at = e.mem.alloc(0x10);
+    e.call(RIGID_BODY_GET_POSITION, &args![body, at]);
+    let words = |e: &Engine, a: u32| (0..3).map(|k| e.mem.u32(a + 4 * k)).collect::<Vec<u32>>();
+    assert_eq!(words(&e, w.ragdoll + 0x8c), words(&e, at));
+    assert_eq!(tags(&serial, "transform hook"), 1, "{serial:?}");
+    assert_eq!(tags(&serial, "odd body"), 2, "{serial:?}");
     assert!(tags(&serial, "lighting") >= 8, "{serial:?}");
     assert_eq!(
         tags(&serial, "other"),
@@ -1036,21 +1130,28 @@ fn parallel_bones_end_in_the_serial_state() {
             );
         }
         assert_eq!(counts.frames, 1, "{counts:?}");
-        // Exact: twenty actors walked (the skinned one among them: its flagged bones without
+        // Exact: twenty-one actors walked (the skinned one among them: its flagged bones without
         // bounds are walked, not deferred; the two animated ones: their transform and visibility
         // controllers run on the helpers, in two stretches, as they share their Euler keys; the
-        // two alone between two barriers run serially), eleven whole on main (three controllers:
-        // an unknown controller, an unknown interpolator, one driving another actor's bone; a
-        // ragdoll; three nodes that allocate their bound; four skins read out of order),
-        // twenty-one subtrees deferred (twenty heads and the geometry without a bound).
-        assert_eq!(counts.walked, 20, "{counts:?}");
-        assert_eq!(counts.barriers, 11, "{counts:?} {reasons:?}");
-        assert_eq!(counts.subtrees, 21, "{counts:?}");
+        // ragdolled one: its ragdoll bone reads its body on the helper; the two alone between two
+        // barriers run serially), twelve whole on main (three controllers: an unknown controller, an
+        // unknown interpolator, one driving another actor's bone; two ragdoll bones: one calling the
+        // transform hook, one with a body of an unknown class; three nodes that allocate their
+        // bound; four skins read out of order), twenty-two subtrees deferred (twenty-one heads and
+        // the geometry without a bound).
+        assert_eq!(counts.walked, 21, "{counts:?}");
+        assert_eq!(counts.barriers, 12, "{counts:?} {reasons:?}");
+        assert_eq!(counts.subtrees, 22, "{counts:?}");
         assert_eq!(counts.splits, 1, "{counts:?}");
+        assert!(
+            counts.forks >= 1 && counts.by_main <= counts.walked,
+            "{counts:?}"
+        );
         let count_of = |name: &str| reasons.iter().find(|r| r.0 == name).map_or(0, |r| r.1);
         assert_eq!(count_of("bound"), 3, "{reasons:?}");
         assert_eq!(count_of("skin"), 4, "{reasons:?}");
         assert_eq!(count_of("controllers"), 3, "{reasons:?}");
+        assert_eq!(count_of("collision"), 2, "{reasons:?}");
         assert!(counts.havok >= 20, "{counts:?}");
         assert_eq!(counts.mismatches, 0, "{counts:?}");
         let names: Vec<&str> = reasons.iter().map(|r| r.0).collect();
@@ -1069,7 +1170,7 @@ fn parallel_bones_end_in_the_serial_state() {
         counts.differences, 0,
         "{counts:?}; the serial pass's end state kept: {end_state}"
     );
-    assert_eq!(counts.checked_actors, 20, "{counts:?}");
+    assert_eq!(counts.checked_actors, 21, "{counts:?}");
     assert_eq!(counts.splits, 1, "{counts:?}");
     assert_eq!(
         got, serial,

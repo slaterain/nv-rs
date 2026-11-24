@@ -52,12 +52,30 @@ fn s0111_obeys_tweaks_fix_looping_reload_ammo_swap() {
     assert!(!rows::on(row, &keys, &off));
 }
 
-/// S0660, S0664 and S0782 follow Tweaks' own `[Tweaks]` keys (code default 0, VNV's 1): on with
-/// no file (the port's defaults are VNV's), off when the player's Tweaks INI sets the key to 0, off
-/// with no file under `bMissingKeysAsTweaks` (Tweaks' code default), and off by their own keys.
+/// S0926 follows Tweaks' own `[INI] bCombatDialogueCooldownFix` (main INI only, code default 1,
+/// not in VNV's INI): on with no file either way, off when the player's Tweaks INI sets 0.
+#[test]
+fn s0926_obeys_tweaks_combat_dialogue_cooldown_fix() {
+    let row = rows::all().find(|r| r.plan == "S0926").unwrap();
+    assert_eq!(row.tweaks, Some(("INI", "bCombatDialogueCooldownFix")));
+    let keys = rows::Keys::default();
+    assert!(rows::on(row, &keys, &Settings::new(&[], false)));
+    assert!(rows::on(row, &keys, &Settings::new(&[], true)));
+    let off = Settings::new(&[("p", b"[INI]\nbCombatDialogueCooldownFix=0\n")], false);
+    assert!(!rows::on(row, &keys, &off));
+}
+
+/// S0329, S0404, S0410, S0489, S0660, S0664 and S0782 follow Tweaks' own `[Tweaks]` keys (code
+/// default 0, VNV's 1): on with no file (the port's defaults are VNV's), off when the player's
+/// Tweaks INI sets the key to 0, off with no file under `bMissingKeysAsTweaks` (Tweaks' code
+/// default), and off by their own keys.
 #[test]
 fn tweaks_keyed_rows_follow_their_tweaks_keys() {
     for (plan, key) in [
+        ("S0329", "bLeftAndRightCancelEachOther"),
+        ("S0404", "bDelayPostCombatLevelUp"),
+        ("S0410", "bGodmodePreventsLegCrippleSound"),
+        ("S0489", "bSpinWeaponsSoundFix"),
         ("S0660", "bExplosionKnockbackDirectionFix"),
         ("S0664", "bFixKillChallengeSourceWeapon"),
         ("S0782", "bHiddenFragsFix"),
@@ -130,6 +148,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bFixCombatMissileDepthGamesettings",
         Row::at(AI_FIXES, 19),
     ),
+    ("S0082.01", "bNoAmmoGodmodeFiring", Row::at(AI_FIXES, 71)),
     (
         "S0089.01",
         "bRememberAmmoCountOnLoadSavedCount",
@@ -166,6 +185,12 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         Row::at(AI_FIXES, 31),
     ),
     ("S0094", "bFixDisintegrationsStat", Row::at(AI_FIXES, 33)),
+    ("S0096", "bTCLMovement", Row::at(AI_FIXES, 68)),
+    (
+        "S0097",
+        "bRunAndGunDontLetAPBeNegative",
+        Row::at(AI_FIXES, 69),
+    ),
     (
         "S0111",
         "bFixLoopingReloadAmmoSwapInstantRefill",
@@ -180,6 +205,36 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "S0121",
         "bPreventReloadingIfClipIsOverfilled",
         Row::at(AI_FIXES, 51),
+    ),
+    (
+        "S0122",
+        "bSpeakingToSleepingGenericNPCsSkipsDialogueMenu",
+        Row::at(AI_FIXES, 59),
+    ),
+    (
+        "S0130.02",
+        "bContinuousBeamProjectileCrashFixNPCs",
+        Row::at(AI_FIXES, 52),
+    ),
+    (
+        "S0130.04",
+        "bContinuousBeamProjectileCrashFixGodmode",
+        Row::at(AI_FIXES, 53),
+    ),
+    (
+        "S0130.05",
+        "bContinuousBeamProjectileCrashFixAmmoInUpdate",
+        Row::at(AI_FIXES, 54),
+    ),
+    (
+        "S0130.06",
+        "bContinuousBeamProjectileCrashFixNoImpactAmmo",
+        Row::at(AI_FIXES, 55),
+    ),
+    (
+        "S0132",
+        "bBumpingCompanionsDoesntAlertEnemies",
+        Row::at(AI_FIXES, 60),
     ),
     (
         "S0133",
@@ -197,11 +252,21 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bFixCrippledLimbAnimsNotUpdatingIfLimbsFixed",
         Row::at(AI_FIXES, 0),
     ),
+    (
+        "S0148",
+        "bResetForceFireWeaponWhenReloadJamming",
+        Row::at(AI_FIXES, 61),
+    ),
     ("S0149", "bVATSFatalCheckDifficulty", Row::at(AI_FIXES, 35)),
     (
         "S0153",
         "bFixWeaponNifRoundNotCullingInFirstPerson",
         Row::at(AI_FIXES, 44),
+    ),
+    (
+        "S0157",
+        "bAllowWaitingOnMidairFurniture",
+        Row::at(AI_FIXES, 62),
     ),
     (
         "S0159",
@@ -213,7 +278,22 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bPreventLevelupInTestAllCells",
         Row::at(AI_FIXES, 45),
     ),
+    (
+        "S0165",
+        "bThresholdThrowingVelocityStrength",
+        Row::at(AI_FIXES, 63),
+    ),
+    (
+        "S0166",
+        "bThresholdExplosivesWeaponDamage",
+        Row::at(AI_FIXES, 64),
+    ),
     ("S0171", "bKnockDownHandGripFix", Row::at(AI_FIXES, 12)),
+    (
+        "S0179",
+        "bGodmodeSkipsPowerArmorTraining",
+        Row::at(AI_FIXES, 65),
+    ),
     (
         "S0180",
         "bMineDisarmedLightLoadingFix",
@@ -234,6 +314,12 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bInventoryCalcWeaponDamageUseAmmoFixProjectile",
         Row::at(AI_FIXES, 24),
     ),
+    (
+        "S0192",
+        "bStoreWeaponModFlagsOnProjectiles",
+        Row::at(AI_FIXES, 66),
+    ),
+    ("S0198", "bVanityCamRotationFix", Row::at(AI_FIXES, 56)),
     (
         "S0199.01",
         "bMiscCrashFixesDialogueNoPackage",
@@ -271,6 +357,11 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0217", "bRagdollControllerUpdateFix", Row::at(AI_FIXES, 5)),
     ("S0221", "bDeathAnimFix", Row::at(AI_FIXES, 6)),
     (
+        "S0223",
+        "bToggleDetectCommandAffectsMines",
+        Row::at(AI_FIXES, 67),
+    ),
+    (
         "S0224",
         "bPreventJumpingWhenFastTraveling",
         Row::at(AI_FIXES, 49),
@@ -279,6 +370,22 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0229", "bArmorUpdateFix", Row::at(AI_FIXES, 7)),
     ("S0230", "bDoubleSoundFix", Row::at(AI_FIXES, 18)),
     ("S0241", "bActorGetHeadingTargetFix", Row::at(AI_FIXES, 38)),
+    (
+        "S0329",
+        "bLeftRightMovementCancelsOut",
+        Row::at(AI_FIXES, 72),
+    ),
+    ("S0404", "bDelayLevelupAfterCombat", Row::at(AI_FIXES, 73)),
+    (
+        "S0410",
+        "bGodmodePreventsLegCrippleSound",
+        Row::at(AI_FIXES, 70),
+    ),
+    (
+        "S0489",
+        "bSpinWeaponsAlwaysPlaySound",
+        Row::at(AI_FIXES, 57),
+    ),
     ("S0660", "bFixExplosionPushDirection", Row::at(AI_FIXES, 39)),
     (
         "S0664",
@@ -290,4 +397,5 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bShootableNonPlayableExplosives",
         Row::at(AI_FIXES, 41),
     ),
+    ("S0926", "bCombatSoundCooldownFix", Row::at(AI_FIXES, 58)),
 ];

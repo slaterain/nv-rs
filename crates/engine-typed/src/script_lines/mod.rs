@@ -7,10 +7,13 @@
 //! action flags' clear) goes direct while that family is direct.
 //!
 //! - [`runner`]: the line loop, the action list's run, `ParseLine` and `EvaluateLine` with its
-//!   `set`, `if` and command lines.
+//!   `set`, `if` and command lines;
+//! - [`params`]: the other script functions xNVSE wraps: a command's parameter read
+//!   (`Script::ParseParameters` `005accb0`), the script event mark (`Script::SetActionFlag`
+//!   `005ac750`, with JIP LN's three seams) and the locals' deleting destructor (`0041af70`).
 //!
-//! What stays by address: `ParseLine` and `EvaluateLine` from the loops (xNVSE's wraps), the
-//! operand reader and the parameter parser (`overridable.tsv`), every command's and block type's
+//! What stays by address: `ParseLine`, `EvaluateLine` and the parameter parser from the loops
+//! (xNVSE's wraps), the operand reader (`overridable.tsv`), every command's and block type's
 //! handler, the logs and the console, the locals' making and delete, and the casts. The seams stay
 //! at their points: JIP LN's script wait (`005e0ec9`, `005e1716`), its kept failed scripts
 //! (`005e0fbe`, `005e1a23`, `005e1f0b`), and the seams before a block type's handler (`005e16c3`)
@@ -24,7 +27,10 @@
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
+// The varargs entry by its bare name: the repo hygiene test finds a registration's module by it.
+use params::parse_parameters_entry;
 
+pub mod params;
 pub mod runner;
 
 /// This family's bit: what each `typed_call!` of it names.
@@ -52,5 +58,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
             0x005e_1550,
             runner::run_line(Ptr, Ptr, i32, Ptr, Ptr, u32, Ptr, u32, bool, bool) -> bool
         ),
+        (0x005a_ccb0, parse_parameters_entry as AbiFn),
+        entry!(0x005a_c750, params::set_action_flag(u32, Ptr, u32) -> bool),
+        entry!(0x0041_af70, params::delete_locals(Ptr, u32) -> Ptr),
     ]
 }
