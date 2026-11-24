@@ -23105,21 +23105,158 @@ mod tests {
             vec![vec![frame + 0xf4]]
         );
     }
-    /// `0x89B455`: the kill effect's weapon is the player's (none here, so the effect is not
-    /// looked at).
+    /// `0x89B455`: the kill effect's weapon is the player's. With none the effect is not looked
+    /// at; a weapon of kind 0x22 asks the entry point 0x2E for the attacker.
     #[test]
     fn hit_me_kill_effect_takes_the_players_weapon() {
-        let mut e = engine();
-        let world = hit_world(&mut e, true);
-        stub(&mut e, WEAPON_GETTER_8D85E0, 0x22);
-        stub(&mut e, HANDLE_ENTRY_POINT, 0);
+        for weapon in [false, true] {
+            let mut e = engine();
+            let world = hit_world(&mut e, true);
+            if weapon {
+                shared_acquire(&mut e, &[(PROCESS_SLOT_CURRENT_WEAPON, ret(0x5100))]);
+                stub(&mut e, ENTRY_FORM, 0x6400);
+            }
+            stub(&mut e, WEAPON_GETTER_8D85E0, 0x22);
+            stub(&mut e, HANDLE_ENTRY_POINT, 0);
+            e.call_log = Some(vec![]);
+            let mut s = HitMe {
+                this: world.victim,
+                hit: world.hit,
+                kind: 0,
+                player: world.player.addr(),
+                ebp: 0,
+                moved: false,
+                flag_1a: false,
+                arrows: 0,
+                weapon_type: 1,
+                crippled: false,
+                kind_one: false,
+                flag_63: false,
+                flag_64: false,
+                health: 0.0,
+                fatigue: 0.0,
+                total: 0.0,
+                blocked: 0.0,
+                not_fleeing: false,
+                dead: true,
+                limb: -1,
+                cripple_roll: false,
+                torso_hit: false,
+            };
+            hit_me_kill_effect(&mut e, &mut s);
+            let forms = calls_to(&e, WEAPON_GETTER_8D85E0);
+            let entry: Vec<Vec<u32>> = calls_to(&e, HANDLE_ENTRY_POINT)
+                .iter()
+                .map(|w| w[..2].to_vec())
+                .collect();
+            if weapon {
+                assert_eq!(forms, vec![vec![0x6400]]);
+                assert_eq!(entry, vec![vec![0x2e, world.player.addr()]]);
+            } else {
+                assert!(forms.is_empty() && entry.is_empty());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod hit_me_span_tests {
+    //! Two spans of `Actor::HitMe` on a small rig: the worn armour's damage (`0x89D2F6` to
+    //! `0x89D362`) and the ammo's script effect (`0x89ABDC` to `0x89AC5B`).
+
+    use super::*;
+
+    const BASE: u32 = 0x0530_0000;
+    const ACTOR: Ptr<Actor> = Ptr::new(BASE + 0x100);
+
+    fn calls_of(log: &[(u32, Vec<u32>)], addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    const ARMOUR_ITEM: u32 = BASE + 0x600;
+    const ARMOUR: u32 = BASE + 0x680;
+    const ARMOUR_HIT: Ptr<HitData> = Ptr::new(BASE + 0x700);
+    const ARMOUR_VTABLE: u32 = BASE + 0xb00;
+    const ARMOUR_DAMAGE_SLOT: u32 = 0x00c9_93c8;
+
+    /// [`ACTOR`] with a vtable whose `0x3C8` is a stand-in, a worn armour entry ([`ARMOUR_ITEM`],
+    /// its form of health 150) and a hit of armour damage 70.25.
+    fn armour_world() -> Engine {
+        let mut e = Engine::new();
+        e.map(BASE, 0x1000);
+        e.mem.set_u32(ACTOR.addr(), ARMOUR_VTABLE);
+        e.mem.set_u32(ARMOUR_VTABLE + 0x3c8, ARMOUR_DAMAGE_SLOT);
+        e.register(ARMOUR_DAMAGE_SLOT, |_, _| Ret::default());
+        e.register(ENTRY_DELETE, |_, _| Ret::default());
+        e.register(0x0095_08b0, |_, _| Ret::default());
+        e.mem.set_u32(ARMOUR_ITEM + 8, ARMOUR);
+        e.mem.set_u32(ARMOUR + 0x6c, 150);
+        e.set(ARMOUR_HIT, HitData::fArmorDamage, 70.25f32);
+        e
+    }
+
+    fn damage_armour(e: &mut Engine, item: u32) -> Vec<(u32, Vec<u32>)> {
+        e.call_log = Some(vec![]);
+        damage_worn_armor(e, ACTOR, item, ARMOUR_HIT);
+        e.call_log.take().unwrap_or_default()
+    }
+
+    /// The actor's `0x3C8` takes `(item, 70.25, 0)`, then the entry is deleted with 1. No item:
+    /// nothing.
+    #[test]
+    fn the_worn_armour_takes_the_hits_armour_damage() {
+        let mut e = armour_world();
+        let log = damage_armour(&mut e, ARMOUR_ITEM);
+        assert_eq!(
+            calls_of(&log, ARMOUR_DAMAGE_SLOT),
+            vec![vec![ACTOR.addr(), ARMOUR_ITEM, 70.25f32.to_bits(), 0]]
+        );
+        assert_eq!(calls_of(&log, ENTRY_DELETE), vec![vec![ARMOUR_ITEM, 1]]);
+        assert!(damage_armour(&mut e, 0).is_empty(), "no item");
+    }
+
+    const AMMO_HIT: Ptr<HitData> = Ptr::new(BASE + 0x200);
+    const AMMO_WEAPON: u32 = BASE + 0x300;
+    /// The weapon's current ammo.
+    const AMMO: u32 = BASE + 0x400;
+    const AMMO_PROJECTILE: u32 = BASE + 0x500;
+    /// The ammo's script (`TESScriptableForm::script`, `+0xA0`).
+    const AMMO_SCRIPT: u32 = 0x0bad_5c00;
+
+    /// A hit with `weapon` (no aggressor) on [`ACTOR`] whose weapon's current ammo has a script,
+    /// the exe's calls as stand-ins.
+    fn ammo_world(weapon: u32) -> Engine {
+        let mut e = Engine::new();
+        e.map(BASE, 0x1000);
+        // The default weapon form (`0x11CA278`), which the branch without a weapon reads.
+        e.map(0x011c_a000, 0x1000);
+        e.register(REFR_EXTRA_DATA_LIST, |_, _| 0x77u32.into_ret());
+        e.register(SCRIPT_SET_ACTION_FLAG, |_, _| Ret::default());
+        e.register(WEAPON_GET_CURRENT_AMMO, |_, _| AMMO.into_ret());
+        e.register(0x0072_6070, |e, a| {
+            e.mem.u32(a[0].wrapping_add(4)).into_ret()
+        });
+        e.register(SCRIPT_RUN_EFFECT_START, |_, _| Ret::default());
+        e.mem.set_u32(AMMO, 0x0102_6064);
+        e.mem.set_u32(AMMO + 0xa0, AMMO_SCRIPT);
+        e.mem.set_u32(AMMO_PROJECTILE + 0x60, AMMO);
+        e.set(AMMO_HIT, HitData::pWeapon, Ptr::new(weapon));
+        e.set(AMMO_HIT, HitData::pSourceRef, Ptr::new(AMMO_PROJECTILE));
+        e
+    }
+
+    /// Runs `hit_me_report_attack` on [`ACTOR`] and [`AMMO_HIT`]: the calls made.
+    fn report_attack(e: &mut Engine) -> Vec<(u32, Vec<u32>)> {
         e.call_log = Some(vec![]);
         let mut s = HitMe {
-            this: world.victim,
-            hit: world.hit,
+            this: ACTOR,
+            hit: AMMO_HIT,
             kind: 0,
-            player: world.player.addr(),
-            ebp: 0,
+            player: 0,
+            ebp: BASE + 0xf00,
             moved: false,
             flag_1a: false,
             arrows: 0,
@@ -23133,13 +23270,31 @@ mod tests {
             total: 0.0,
             blocked: 0.0,
             not_fleeing: false,
-            dead: true,
+            dead: false,
             limb: -1,
             cripple_roll: false,
             torso_hit: false,
         };
-        hit_me_kill_effect(&mut e, &mut s);
-        assert!(calls_to(&e, WEAPON_GETTER_8D85E0).is_empty());
-        assert!(calls_to(&e, HANDLE_ENTRY_POINT).is_empty());
+        hit_me_report_attack(e, &mut s);
+        e.call_log.take().unwrap_or_default()
+    }
+
+    /// The weapon's three current-ammo calls, then the ammo's script effect
+    /// `(script, actor, 0)`; with no weapon, no script effect.
+    #[test]
+    fn the_ammos_script_effect_starts_on_the_actor_hit() {
+        let mut e = ammo_world(AMMO_WEAPON);
+        let log = report_attack(&mut e);
+        assert_eq!(
+            calls_of(&log, WEAPON_GET_CURRENT_AMMO),
+            vec![vec![AMMO_WEAPON, 0]; 3]
+        );
+        assert_eq!(
+            calls_of(&log, SCRIPT_RUN_EFFECT_START),
+            vec![vec![AMMO_SCRIPT, ACTOR.addr(), 0]]
+        );
+        let mut e = ammo_world(0);
+        let log = report_attack(&mut e);
+        assert!(calls_of(&log, SCRIPT_RUN_EFFECT_START).is_empty());
     }
 }

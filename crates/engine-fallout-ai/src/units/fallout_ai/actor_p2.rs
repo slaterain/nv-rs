@@ -16473,6 +16473,48 @@ mod tests {
         assert_eq!(modifier.borrow()[0][0], 0x5500);
         assert_eq!(scaled.borrow()[0][1], 20.0f32.to_bits());
     }
+    /// A target with no weapon (`0x88EBAA` to `0x88EC51`: no impact data): the default set's path
+    /// after `0x88EC51` gives the decal (the set's entry for the base's material 7, and its
+    /// texture set at the decal record's `+0x30`).
+    #[test]
+    fn hit_effects_take_the_default_sound_set_without_impact_data() {
+        let mut e = engine3();
+        let (actor, hit) = hit_world(&mut e);
+        e.register(WEIGHT_OVERRIDE_FLAG, |_, _| eax(1));
+        armed_target(&mut e, hit);
+        double(&mut e, ACTOR_GET_CURRENT_WEAPON, eax(0));
+        slot_at(&mut e, FORM_TABLE, VSLOT_ACTOR_FLAG_0X360, eax(1));
+        e.register(RANDOM_FLOAT, |_, a| st0(f32::from_bits(a[0])));
+        let seen = snapshot_hits(&mut e);
+        e.register(LIST_ENTRY_COUNT, |_, _| eax(2));
+        let first = e.mem.alloc(0x20);
+        let second = e.mem.alloc(0x20);
+        e.mem.set_u32(first + 8, 0x8100);
+        e.mem.set_u32(second + 8, 0x8200);
+        e.register_double(LIST_ENTRY, move |_, a| {
+            eax(if a[1] == 0 { first } else { second })
+        });
+        let this_address = actor.addr();
+        e.register(COLLIDABLE_3D_OBJECT, |_, a| eax(a[0] + 1));
+        e.register_double(FIND_REFERENCE_FOR_3D, move |_, a| {
+            eax(if a[0] == 0x8101 { this_address } else { 0x9999 })
+        });
+        e.register(ACTOR_BODY_PART_NUMBER, |_, _| eax(3));
+        double(&mut e, HIT_SECOND_DISTANCE, st0(1000.0));
+        e.mem.set_f32(0x011c_e270, 1.0);
+        slot(&mut e, ACTOR_TABLE, VSLOT_GET_3D, eax(0x5555));
+        double(&mut e, DEFAULT_SOUND_SET_SOURCE, eax(0x7480));
+        let entry = record(&mut e, SOUND_SET_ENTRY, eax(0x7500));
+        e.call_log = Some(vec![]);
+        fn_0088e8d0(&mut e, actor, 5.0, Ptr::new(hit));
+        let addresses = logged_addresses(&e);
+        assert!(addresses.contains(&ACTOR_GET_CURRENT_WEAPON));
+        assert!(!addresses.contains(&IMPACT_SOUND_SOURCE));
+        assert!(addresses.contains(&DEFAULT_SOUND_SET_SOURCE));
+        assert_eq!(entry.borrow()[0], vec![0x7480, 7]);
+        assert_eq!(seen.borrow()[0].1[0x30 / 4], 0x7600);
+    }
+
     /// `0x88DCDB`: `UnEquipObject`'s last argument for the worn item taken off is 1, so the
     /// player's un-equip notice for it is sent.
     #[test]

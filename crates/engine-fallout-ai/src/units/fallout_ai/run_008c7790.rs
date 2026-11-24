@@ -1133,6 +1133,8 @@ mod object_tests {
             assert_eq!(find(&calls, STEP_0096BCD0), vec![OBJECT_C, 0, 0]);
             assert_eq!(find(&calls, STEP_0096DB30), vec![OBJECT_C, 0, 0, 0]);
             assert_eq!(find(&calls, PRINT_LISTS), vec![OBJECT_C, 0, 0]);
+            // `0x8C7C4E`: `00455640` on the word at `OBJECT_D`.
+            assert_eq!(find(&calls, STEP_00455640), vec![0xd000]);
             assert_eq!(find(&calls, STEP_00453550), vec![0xd000, 2.5f32.to_bits()]);
             assert_eq!(find(&calls, SEMAPHORE_WAIT), vec![SEMAPHORE_OBJECT]);
             if optional {
@@ -1177,6 +1179,8 @@ mod object_tests {
                 .map(|c| c.1[0])
                 .collect();
             assert_eq!(waits, vec![0x1101, 0x1103, 0x1107]);
+            // `0x8C7E18`: `00455640` on the word at `OBJECT_D`.
+            assert_eq!(find(&calls, STEP_00455640), vec![0xd000]);
             assert_eq!(find(&calls, STEP_0096BCD0), vec![OBJECT_C, 0, 0]);
             assert_eq!(e.mem.u32(this + 0x0c), 0xb);
         }

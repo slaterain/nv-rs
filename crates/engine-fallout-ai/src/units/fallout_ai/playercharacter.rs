@@ -19336,6 +19336,41 @@ mod tests {
         assert_eq!(ufo_dead_zone(&mut e, 5000), 0);
     }
 
+    /// The free camera (`0094a8c0`) with analog input: the four axes go through the exe's dead
+    /// zone 7849 (`0x94A93C`, `0x94A95F` look x and y, `0x94AB59`, `0x94AB88` move x and y). Sticks
+    /// of 10000 turn and move the camera on all four; sticks of 5000 on none.
+    #[test]
+    fn the_ufo_camera_reads_the_sticks_through_the_dead_zone() {
+        for (stick, moved) in [(10000u32, true), (5000, false)] {
+            let (mut e, this) = ufo_world();
+            assert_eq!(e.global::<f64>(DEAD_ZONE_DOUBLE), 7849.0);
+            e.register(0x004b_71d0, |_, _| int(1));
+            e.register(0x00a2_3390, move |_, _| int(stick));
+            e.register(0x0040_8820, |_, a| float(f32::from_bits(a[0]).abs() as f64));
+            e.set_global(0x011e_0a6c, 0.1f32); // look speed
+            e.set_global(0x011e_090c, 2.0f32); // move speed
+            e.register(0x0045_7fe0, |_, _| int(5000));
+            e.set_global(0x011e_0bf8, 4000u32);
+            e.register(0x0040_ebd0, |_, a| {
+                float(f32::from_bits(a[0]).min(f32::from_bits(a[1])) as f64)
+            });
+            e.call(0x0094_a8c0, &args![this]);
+            let heading = e.get(this, PlayerCharacter::fUFOCameraHeading);
+            let pitch = e.get(this, PlayerCharacter::fUFOCameraPitch);
+            let position = read_floats(&e, member(this, PlayerCharacter::UFOCameraPos));
+            let turned = [
+                heading != 0.0,
+                pitch != 0.0,
+                position[0] != 0.0,
+                position[1] != 0.0,
+            ];
+            assert_eq!(
+                turned, [moved; 4],
+                "stick {stick}: heading {heading} pitch {pitch} {position:?}"
+            );
+        }
+    }
+
     #[test]
     fn the_ufo_camera_turns_with_the_look_axes_and_moves_with_the_keys() {
         let (mut e, this) = ufo_world();

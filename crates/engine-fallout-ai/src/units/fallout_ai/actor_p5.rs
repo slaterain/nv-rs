@@ -11664,4 +11664,23 @@ mod tests {
             .collect();
         assert_eq!(destroyed, vec![frame + 0x9c, frame + 0x90]);
     }
+
+    /// The iron sights test `008bbc10` (called at `0x8B0FBF`): its answer is the iron sights word
+    /// `00646910` gets (its fourth).
+    #[test]
+    fn the_iron_sights_test_is_the_gun_skills_iron_sights_word() {
+        for answer in [0u32, 1] {
+            let (mut e, actor, _) = cached_value_engine();
+            e.set(actor, Actor::fGunSkillHUD, -1.0);
+            let iron_sights = Rc::new(Cell::new(u32::MAX));
+            let seen = iron_sights.clone();
+            e.register_double(0x0064_6910, move |_, a| {
+                seen.set(a[3]);
+                float(f32::from_bits(a[2]) as f64 * 2.0)
+            });
+            e.register_double(0x008b_bc10, move |_, _| int(answer));
+            assert_eq!(e.call(0x008b_0dd0, &args![actor, 0u32]).f32(), 21.0);
+            assert_eq!(iron_sights.get(), answer);
+        }
+    }
 }

@@ -7898,6 +7898,26 @@ mod tests {
         assert_eq!(e.get(this, Projectile::fExplosionTimer), 6.0);
     }
 
+    /// A creature (slot 0x218) as the triggering actor: the timer is its `actor value 0x23` (of
+    /// its `+0xA4`) x `00644790(base)` / the double at `01017a40` + the setting: 10 x 2 / 4 + 6 =
+    /// 11.
+    #[test]
+    fn a_creature_that_triggers_the_mine_sets_a_skill_timer() {
+        let mut e = engine();
+        let (this, first, _) = mine_world(&mut e, 1);
+        set_slot(&mut e, first, 0x218, RETURNS_TRUE);
+        stub_float(&mut e, 0x0064_4790, 2.0);
+        e.register_double(0x0066_ef20, move |_, a| {
+            assert_eq!(a, &[first + 0xa4, 0x23]);
+            10u32.into_ret()
+        });
+        e.set_global(0x0101_7a40, 4.0f64);
+        assert!(fn_009c39e0(&mut e, this));
+        assert_eq!(calls(&e, TEST_FLAGS).len(), 1);
+        assert_eq!(calls(&e, 0x0066_ef20).len(), 1);
+        assert_eq!(e.get(this, Projectile::fExplosionTimer), 11.0);
+    }
+
     /// Only an actor in range that the mine reacts to triggers it.
     #[test]
     fn the_mine_ignores_actors_out_of_range_or_unreacting() {
