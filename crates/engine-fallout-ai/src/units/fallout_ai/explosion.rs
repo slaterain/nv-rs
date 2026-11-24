@@ -342,24 +342,10 @@ pub fn fn_009ac9c0(
         let mut constructor_owner = owner;
         if !owner.is_null() {
             if e.vcall(owner.addr(), 0x224, &args![]).bool() {
-                // 009aca23..009aca58: JIP's G30 (a fix) reads the shooter at +0xFC and runs the
-                // entry point for any actor shooter with the projectile's weapon; the seam
-                // answers the multiplier (words: the projectile, the multiplier's bits). One
-                // load while JIP is not installed.
-                let jip = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
-                    e.site(0x009a_ca23, &[owner.addr(), damage_multiplier.to_bits()])
-                } else {
-                    None
-                };
-                let shooter = match jip {
-                    Some(multiplier) => {
-                        damage_multiplier = f32::from_bits(multiplier);
-                        Ptr::new(e.mem.u32(owner.addr() + 0xfc))
-                    }
-                    None => e.call(0x0087_4480, &args![owner]).ptr::<()>(),
-                };
+                // 009aca23..009aca58: the shooter, and the entry point for the player.
+                let shooter = e.call(0x0087_4480, &args![owner]).ptr::<()>();
                 constructor_owner = shooter;
-                if jip.is_none() && shooter == player {
+                if shooter == player {
                     let entry_value = e.call(0x0047_6c90, &args![owner]).u32();
                     e.with_stack(4, |e, output| {
                         e.mem.set_f32(output.addr(), damage_multiplier);
@@ -543,18 +529,8 @@ pub fn explosion_initialize(e: &mut Engine, this: Ptr) {
         let threshold = e.call(0x0040_3e20, &args![0x011d_0520u32]).ptr::<()>();
         let in_face = e.mem.f32(threshold.addr()) < power && e.mem.u8(this.addr() + 0xd8) == 0;
         if in_face {
-            // 009acec6: JIP's G124 (its own) gives no image space while its hit effects are
-            // off; the seam answers it (no words), no answer calls the exe's getter. One load
-            // while JIP is not installed.
-            let jip = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
-                e.site(0x009a_cec6, &[])
-            } else {
-                None
-            };
-            let modifier = match jip {
-                Some(modifier) => Ptr::new(modifier),
-                None => tes_image_space_modifier_get_explosion_in_face(e),
-            };
+            // 009acec6: the image space modifier.
+            let modifier = tes_image_space_modifier_get_explosion_in_face(e);
             e.call(0x0052_99a0, &args![modifier, 1.0f32, 0u32]);
         }
 
@@ -695,17 +671,8 @@ pub fn explosion_initialize(e: &mut Engine, this: Ptr) {
 
             explosion_start_sounds(e, this);
             let first_valid = e.call(0x00ad_8ce0, &args![this.addr() + 0xac]).bool();
-            // 009ad2c5: JIP's G125 (its own) skips the shake while its hit effects are off; the
-            // seam answers 1 to skip (words: the explosion). One load while JIP is not
-            // installed.
-            let skip_shake = |e: &mut Engine| {
-                e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
-                    && e.site(0x009a_d2c5, &[this.addr()])
-                        .is_some_and(|skip| skip & 0xff != 0)
-            };
-            if (first_valid || e.call(0x00ad_8ce0, &args![this.addr() + 0xb8]).bool())
-                && !skip_shake(e)
-            {
+            // 009ad2c5: the shake.
+            if first_valid || e.call(0x00ad_8ce0, &args![this.addr() + 0xb8]).bool() {
                 let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
                 let setting = e.call(0x0040_3e20, &args![0x011d_0280u32]).u32();
                 let shake =
@@ -1265,7 +1232,8 @@ pub fn fn_009ae5d0(e: &mut Engine, this: Ptr, _unused_1: u32) {
     e.mem.set_u32(this.addr() + 0xe4, frame_count);
     if !fn_009ad5f0(e, this) {
         fn_009b13a0(e, this);
-        light_fade(e, this);
+        // `0x9AE68C`: its light's fade (`009b1320`).
+        fn_009b1320(e, this);
     }
 
     let now = e.call(0x0051_b8e0, &args![this]).f32();
@@ -1278,18 +1246,6 @@ pub fn fn_009ae5d0(e: &mut Engine, this: Ptr, _unused_1: u32) {
             fn_009ac9a0(e, this);
         }
     }
-}
-
-/// The explosion's update (`009ae5d0`) at `0x9AE68C`: its light's fade (`009b1320`). JIP LN NVSE's G97 (group GK's
-/// row and handler, a fix row: the call becomes `SetExplosionLightFadeHook`) answers the seam with the explosion and
-/// sets the fade itself; one load while JIP's fixes are not in.
-fn light_fade(e: &mut Engine, this: Ptr) {
-    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
-        && e.site(0x009a_e68c, &[this.addr()]).is_some()
-    {
-        return;
-    }
-    fn_009b1320(e, this);
 }
 
 // Translated from 009afbb0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -5492,7 +5448,7 @@ mod tests {
 
     #[test]
     fn initialize_sound_water_debug_and_script_keep_snapshot_arguments() {
-        let log = initialize_snapshot_world(0);
+        let log = initialize_snapshot_world();
         assert!(log
             .iter()
             .any(|call| call.0 == 0x0045_0f90 && call.1 == [0x6000, 1]));
@@ -5505,9 +5461,8 @@ mod tests {
     }
 
     /// `Explosion::Initialize` run through its sound, shake, water, debug and script steps
-    /// (the explosion at 0x1000; the in-face image space 0xB100, the shake 6.0) with the JIP
-    /// word `word` and G124 / G125 test handlers; the call log.
-    fn initialize_snapshot_world(word: u32) -> Vec<(u32, Vec<u32>)> {
+    /// (the explosion at 0x1000; the in-face image space 0xB100, the shake 6.0); the call log.
+    fn initialize_snapshot_world() -> Vec<(u32, Vec<u32>)> {
         let mut e = engine_with(&[
             0x0042_ce10,
             0x0043_9ef0,
@@ -5691,114 +5646,28 @@ mod tests {
             assert_eq!(e.mem.u32(a[1]), 0x1000);
             Ret::default()
         });
-
-        e.on_site(
-            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::Jip, 0x009a_cec6),
-            at_g124,
-        );
-        e.on_site(
-            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::Jip, 0x009a_d2c5),
-            at_g125,
-        );
-        e.set_jip_patches(word);
         explosion_initialize(&mut e, this);
         e.call_log.unwrap()
     }
 
-    thread_local! {
-        /// G124's and G125's asks (the seam's address, then its words) and their answers.
-        static HIT_EFFECTS: std::cell::RefCell<(Vec<Vec<u32>>, Option<u32>, Option<u32>)> =
-            const { std::cell::RefCell::new((Vec::new(), None, None)) };
-    }
-
-    fn at_g124(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        HIT_EFFECTS.with(|s| {
-            let mut s = s.borrow_mut();
-            s.0.push([&[0x009a_cec6u32][..], a].concat());
-            s.1
-        })
-    }
-
-    /// G125's ask, with the last call made before it (the exe asks right after the block's
-    /// handle test `00ad8ce0`, before the position call).
-    fn at_g125(e: &mut Engine, a: &[u32]) -> Option<u32> {
-        let last = e
-            .call_log
-            .as_ref()
-            .and_then(|log| log.last().map(|call| call.0))
-            .unwrap_or(0);
-        HIT_EFFECTS.with(|s| {
-            let mut s = s.borrow_mut();
-            s.0.push([&[0x009a_d2c5u32][..], a, &[last]].concat());
-            s.2
-        })
-    }
-
-    /// JIP's G124 (`0x9ACEC6`) and G125 (`0x9AD2C5`) seams, JIP's own: not asked while JIP is
-    /// not installed; asked with JIP installed (whatever the fixes row), G124 with no words
-    /// where the exe gets the in-face image space (its answer is the image space given to
-    /// `005299a0`; no answer calls the exe's getter), G125 with the explosion inside the shake
-    /// block (1 skips the shake, 0 or no answer shakes).
+    /// `0x9ACEC6` and `0x9AD2C5`: the in-face image space (`0xB100`) is given to `005299a0`, and
+    /// the shake runs with its setting read (`0x11D0280`).
     #[test]
-    fn g124_g125_seams_turn_off_the_hit_effects() {
-        use engine_core::extend::jip_patches;
-        let mut base_positions: Option<usize> = None;
-        // (word, G124's answer, G125's answer, asked, the image space, shaken)
-        for (word, face, shake, asked, image, shaken) in [
-            (0, Some(0), Some(1), false, 0xb100, true),
-            (jip_patches::FIXES, Some(0), Some(1), false, 0xb100, true),
-            (jip_patches::INSTALLED, Some(0), Some(1), true, 0, false),
-            (
-                jip_patches::INSTALLED | jip_patches::FIXES,
-                Some(0x0b20_0000),
-                Some(0x101),
-                true,
-                0x0b20_0000,
-                false,
-            ),
-            (jip_patches::INSTALLED, None, Some(0), true, 0xb100, true),
-            (
-                jip_patches::INSTALLED,
-                None,
-                Some(0x100),
-                true,
-                0xb100,
-                true,
-            ),
-            (jip_patches::INSTALLED, None, None, true, 0xb100, true),
-        ] {
-            HIT_EFFECTS.with(|s| *s.borrow_mut() = (Vec::new(), face, shake));
-            let log = initialize_snapshot_world(word);
-            // The first row (JIP not installed, shaken) gives the slot 0x1F4 count with the shake.
-            let seen = HIT_EFFECTS.with(|s| s.take().0);
-            assert_eq!(
-                seen,
-                if asked {
-                    vec![vec![0x009a_cec6], vec![0x009a_d2c5, 0x1000, 0x00ad_8ce0]]
-                } else {
-                    vec![]
-                },
-                "{word:x}"
-            );
-            let faces: Vec<&Vec<u32>> = log
-                .iter()
-                .filter(|call| call.0 == 0x0052_99a0)
-                .map(|call| &call.1)
-                .collect();
-            assert_eq!(faces, [&vec![image, 1.0f32.to_bits(), 0]], "{word:x}");
-            let shakes = log.iter().filter(|call| call.0 == 0x008d_1960).count();
-            assert_eq!(shakes, usize::from(shaken), "{word:x}");
-            // The shake's position call (slot 0x1F4, here 0x6100) and its setting read
-            // (`0x11D0280`) are skipped with it: JIP jumps to 9ad2fe before `mov edx,[eax+0x1F4]`.
-            let settings = log
-                .iter()
-                .filter(|call| call.0 == 0x0040_3e20 && call.1 == [0x011d_0280])
-                .count();
-            assert_eq!(settings, usize::from(shaken), "{word:x}");
-            let positions = log.iter().filter(|call| call.0 == 0x0000_6100).count();
-            let base = *base_positions.get_or_insert(positions);
-            assert_eq!(positions + usize::from(!shaken), base, "{word:x}");
-        }
+    fn initialize_gives_the_in_face_image_space_and_shakes() {
+        let log = initialize_snapshot_world();
+        let faces: Vec<&Vec<u32>> = log
+            .iter()
+            .filter(|call| call.0 == 0x0052_99a0)
+            .map(|call| &call.1)
+            .collect();
+        assert_eq!(faces, [&vec![0xb100, 1.0f32.to_bits(), 0]]);
+        let shakes = log.iter().filter(|call| call.0 == 0x008d_1960).count();
+        assert_eq!(shakes, 1);
+        let settings = log
+            .iter()
+            .filter(|call| call.0 == 0x0040_3e20 && call.1 == [0x011d_0280])
+            .count();
+        assert_eq!(settings, 1);
     }
 
     #[test]
@@ -7121,89 +6990,30 @@ mod tests {
         }
     }
 
-    thread_local! {
-        static G97_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
-        static G97_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
-    }
-
-    fn at_g97(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        G97_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
-        G97_ANSWER.with(|c| c.get())
-    }
-
-    /// JIP LN NVSE's G97 seam at `0x9AE68C`: not asked while JIP is not installed or installed without its fixes
-    /// (the game's fade `009b1320` runs: here it reads the light member, none); with its fixes asked with the
-    /// explosion, an answer taking the game's fade's place and no answer letting it run.
+    /// The game's own explosion update (`009ae5d0`), with the explosion in a cell, runs the game's
+    /// fade `009b1320` at `0x9AE68C` once (it reads the light member first, `00559450`).
     #[test]
-    fn g97_seam_takes_the_light_fade_only_with_jips_fixes() {
-        use engine_core::extend::jip_patches;
-        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
-        for (word, answer, asked, faded) in [
-            (0, Some(0), false, true),
-            (jip_patches::INSTALLED, Some(0), false, true),
-            (fixes, Some(0), true, false),
-            (fixes, None, true, true),
-        ] {
-            let mut e = engine_with(&[]);
-            e.on_site_for_test(0x009a_e68c, at_g97);
-            G97_ASKED.with(|s| s.borrow_mut().clear());
-            G97_ANSWER.with(|c| c.set(answer));
-            e.set_jip_patches(word);
-            e.register_double(0x0055_9450, |_, _| 0u32.into_ret());
-            light_fade(&mut e, Ptr::new(0x1000));
-            let want = if asked { vec![vec![0x1000]] } else { vec![] };
-            assert_eq!(G97_ASKED.with(|s| s.take()), want, "{word:x} {answer:?}");
-            let reads = e
-                .call_log
-                .as_ref()
-                .unwrap()
-                .iter()
-                .filter(|(a, _)| *a == 0x0055_9450)
-                .count();
-            assert_eq!(reads, usize::from(faded), "{word:x} {answer:?}");
-        }
-    }
-
-    /// The game's own explosion update (`009ae5d0`), with the explosion in a cell, reaches the G97 seam at
-    /// `0x9AE68C`: with JIP's fixes and an answer, the game's fade `009b1320` does not run (it reads the light
-    /// member first, `00559450`); otherwise it runs once.
-    #[test]
-    fn g97_the_explosions_update_asks_the_seam() {
-        use engine_core::extend::jip_patches;
-        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
-        for (word, answer, asked, faded) in [
-            (0, Some(0), false, true),
-            (jip_patches::INSTALLED, Some(0), false, true),
-            (fixes, Some(0), true, false),
-            (fixes, None, true, true),
-        ] {
-            let mut e = list_engine();
-            e.on_site_for_test(0x009a_e68c, at_g97);
-            G97_ASKED.with(|s| s.borrow_mut().clear());
-            G97_ANSWER.with(|c| c.set(answer));
-            e.set_jip_patches(word);
-            // Not the first frame; build time above the age (no build step); no radiation; not expired.
-            e.mem.set_u32(0x10e4, 1);
-            e.mem.set_f32(0x1090, 1.0);
-            e.register_double(0x0051_b8e0, |_, _| 0.0f32.into_ret());
-            e.register(0x0050_7e10, |_, _| 4.0f32.into_ret());
-            e.register(0x008d_6f30, |_, _| 0x3000u32.into_ret());
-            e.register(0x0041_81e0, |_, _| 0x3100u32.into_ret());
-            e.register(0x004e_3cc0, |_, _| 5.0f32.into_ret());
-            e.register(0x008d_01e0, |_, _| 0.0f32.into_ret());
-            e.register_double(0x0055_9450, |_, _| 0u32.into_ret());
-            fn_009ae5d0(&mut e, Ptr::new(0x1000), 0);
-            let want = if asked { vec![vec![0x1000]] } else { vec![] };
-            assert_eq!(G97_ASKED.with(|s| s.take()), want, "{word:x} {answer:?}");
-            let reads = e
-                .call_log
-                .as_ref()
-                .unwrap()
-                .iter()
-                .filter(|(a, _)| *a == 0x0055_9450)
-                .count();
-            assert_eq!(reads, usize::from(faded), "{word:x} {answer:?}");
-        }
+    fn the_explosions_update_fades_its_light() {
+        let mut e = list_engine();
+        // Not the first frame; build time above the age (no build step); no radiation; not expired.
+        e.mem.set_u32(0x10e4, 1);
+        e.mem.set_f32(0x1090, 1.0);
+        e.register_double(0x0051_b8e0, |_, _| 0.0f32.into_ret());
+        e.register(0x0050_7e10, |_, _| 4.0f32.into_ret());
+        e.register(0x008d_6f30, |_, _| 0x3000u32.into_ret());
+        e.register(0x0041_81e0, |_, _| 0x3100u32.into_ret());
+        e.register(0x004e_3cc0, |_, _| 5.0f32.into_ret());
+        e.register(0x008d_01e0, |_, _| 0.0f32.into_ret());
+        e.register_double(0x0055_9450, |_, _| 0u32.into_ret());
+        fn_009ae5d0(&mut e, Ptr::new(0x1000), 0);
+        let reads = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == 0x0055_9450)
+            .count();
+        assert_eq!(reads, 1);
     }
 
     #[test]
@@ -8466,124 +8276,63 @@ mod tests {
         assert!(!log.iter().any(|call| call.0 == 0x005e_58f0));
     }
 
-    thread_local! {
-        static G30_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
-        static G30_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
-    }
-
-    fn at_g30(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        G30_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
-        G30_ANSWER.with(|c| c.get())
-    }
-
-    /// JIP's G30 seam at `0x9ACA23` (a fix), for a projectile source: not asked without the
-    /// FIXES bit; asked with the projectile and the multiplier's bits (1.0), its answer is the
-    /// multiplier (the damage 8 scaled by it) and the constructor's owner is the word at the
-    /// projectile's +0xFC (no shooter call); no answer leaves the exe's path.
+    /// `0x9ACA23`, for a projectile source: the constructor's owner is the shooter call's answer
+    /// (one call) and the damage 8 is not scaled.
     #[test]
-    fn g30_seam_answers_the_multiplier_and_reads_the_shooter() {
-        use engine_core::extend::{jip_patches, Owner, SiteSlot};
-        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
-        let one = 1.0f32.to_bits();
-        for (word, answer, asked, owner, damage) in [
-            (0, Some(1.5f32.to_bits()), false, 0x2800, 8.0f32),
-            (
-                jip_patches::INSTALLED,
-                Some(1.5f32.to_bits()),
-                false,
-                0x2800,
-                8.0,
-            ),
-            (fixes, Some(1.5f32.to_bits()), true, 0x2900, 12.0),
-            (fixes, None, true, 0x2800, 8.0),
-        ] {
-            let mut e = list_engine();
-            e.map(0x011d_e000, 0x1000);
-            e.set_global(0x011d_ea3c, 0x3000u32);
-            e.mem.set_u32(0x2000, 0x4000);
-            e.mem.set_u32(0x20fc, 0x2900);
-            e.mem.set_u32(0x4224, 0x6000_0224);
-            e.register(0x6000_0224, |_, _| true.into_ret());
-            e.register(0x0087_4480, |_, _| 0x2800u32.into_ret());
-            e.on_site(SiteSlot::new(Owner::Jip, 0x009a_ca23), at_g30);
-            G30_ASKED.with(|s| s.borrow_mut().clear());
-            G30_ANSWER.with(|c| c.set(answer));
-            e.set_jip_patches(word);
-            let log = factory_with_stubbed_constructor(&mut e, 0x2000);
-            let seen = G30_ASKED.with(|s| s.take());
-            assert_eq!(
-                seen,
-                if asked {
-                    vec![vec![0x2000, one]]
-                } else {
-                    vec![]
-                }
-            );
-            let constructed = log.iter().find(|call| call.0 == 0x009a_c200).unwrap();
-            assert_eq!(constructed.1[2], owner, "{word:x}");
-            assert_eq!(
-                log.iter().filter(|call| call.0 == 0x0087_4480).count(),
-                usize::from(owner == 0x2800)
-            );
-            let scaled = log.iter().find(|call| call.0 == 0x0040_7880).unwrap();
-            assert_eq!(scaled.1[1], damage.to_bits(), "{word:x}");
-        }
+    fn a_projectiles_shooter_owns_the_explosion_and_keeps_the_damage() {
+        let mut e = list_engine();
+        e.map(0x011d_e000, 0x1000);
+        e.set_global(0x011d_ea3c, 0x3000u32);
+        e.mem.set_u32(0x2000, 0x4000);
+        e.mem.set_u32(0x20fc, 0x2900);
+        e.mem.set_u32(0x4224, 0x6000_0224);
+        e.register(0x6000_0224, |_, _| true.into_ret());
+        e.register(0x0087_4480, |_, _| 0x2800u32.into_ret());
+        let log = factory_with_stubbed_constructor(&mut e, 0x2000);
+        let constructed = log.iter().find(|call| call.0 == 0x009a_c200).unwrap();
+        assert_eq!(constructed.1[2], 0x2800);
+        assert_eq!(log.iter().filter(|call| call.0 == 0x0087_4480).count(), 1);
+        let scaled = log.iter().find(|call| call.0 == 0x0040_7880).unwrap();
+        assert_eq!(scaled.1[1], 8.0f32.to_bits());
     }
 
-    /// G30 with the player as the projectile's shooter. JIP's 53 bytes end with
-    /// `jmp 0x9ACB0D`, past the exe's player-only block (`0x476C90`, then `0x5E58F0` with
-    /// entry 0x48): with the seam's answer the multiplier is the answer alone (8 x 1.5),
-    /// neither call is made, and the constructor's owner is the word at +0xFC. With JIP not
-    /// installed the exe's block runs once (9aca4b..9aca73): `0x5E58F0(0x48, player,
-    /// 0x476C90(projectile), &multiplier)`.
+    /// The player as the projectile's shooter: the exe's player-only block runs once
+    /// (9aca4b..9aca73): `0x5E58F0(0x48, player, 0x476C90(projectile), &multiplier)`, the damage
+    /// 8 doubled by it.
     #[test]
-    fn g30_player_shooter_skips_the_exe_player_block() {
-        use engine_core::extend::{jip_patches, Owner, SiteSlot};
-        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
-        // (word, the damage word, the exe block's calls)
-        for (word, damage, block_calls) in [(fixes, 12.0f32, 0usize), (0, 16.0, 1)] {
-            let mut e = list_engine();
-            e.map(0x011d_e000, 0x1000);
-            e.set_global(0x011d_ea3c, 0x3000u32);
-            e.mem.set_u32(0x2000, 0x4000);
-            e.mem.set_u32(0x20fc, 0x3000);
-            e.mem.set_u32(0x4224, 0x6000_0224);
-            e.register(0x6000_0224, |_, _| true.into_ret());
-            e.register(0x0087_4480, |_, _| 0x3000u32.into_ret());
-            e.register(0x0047_6c90, |_, a| {
-                assert_eq!(a, &[0x2000]);
-                0x7700u32.into_ret()
-            });
-            e.register(0x005e_58f0, |e, a| {
-                let before = e.mem.f32(a[3]);
-                e.mem.set_f32(a[3], before * 2.0);
-                Ret::default()
-            });
-            e.on_site(SiteSlot::new(Owner::Jip, 0x009a_ca23), at_g30);
-            G30_ASKED.with(|s| s.borrow_mut().clear());
-            G30_ANSWER.with(|c| c.set(Some(1.5f32.to_bits())));
-            e.set_jip_patches(word);
-            let log = factory_with_stubbed_constructor(&mut e, 0x2000);
-            G30_ASKED.with(|s| s.borrow_mut().clear());
-            let constructed = log.iter().find(|call| call.0 == 0x009a_c200).unwrap();
-            assert_eq!(constructed.1[2], 0x3000, "{word:x}");
-            let perk: Vec<&Vec<u32>> = log
-                .iter()
-                .filter(|call| call.0 == 0x005e_58f0)
-                .map(|call| &call.1)
-                .collect();
-            assert_eq!(perk.len(), block_calls, "{word:x}");
-            for words in perk {
-                assert_eq!(words[..3], [0x48, 0x3000, 0x7700]);
-            }
-            assert_eq!(
-                log.iter().filter(|call| call.0 == 0x0047_6c90).count(),
-                block_calls,
-                "{word:x}"
-            );
-            let scaled = log.iter().find(|call| call.0 == 0x0040_7880).unwrap();
-            assert_eq!(scaled.1[1], damage.to_bits(), "{word:x}");
+    fn a_player_shooter_runs_the_players_perk_entry() {
+        let mut e = list_engine();
+        e.map(0x011d_e000, 0x1000);
+        e.set_global(0x011d_ea3c, 0x3000u32);
+        e.mem.set_u32(0x2000, 0x4000);
+        e.mem.set_u32(0x20fc, 0x3000);
+        e.mem.set_u32(0x4224, 0x6000_0224);
+        e.register(0x6000_0224, |_, _| true.into_ret());
+        e.register(0x0087_4480, |_, _| 0x3000u32.into_ret());
+        e.register(0x0047_6c90, |_, a| {
+            assert_eq!(a, &[0x2000]);
+            0x7700u32.into_ret()
+        });
+        e.register(0x005e_58f0, |e, a| {
+            let before = e.mem.f32(a[3]);
+            e.mem.set_f32(a[3], before * 2.0);
+            Ret::default()
+        });
+        let log = factory_with_stubbed_constructor(&mut e, 0x2000);
+        let constructed = log.iter().find(|call| call.0 == 0x009a_c200).unwrap();
+        assert_eq!(constructed.1[2], 0x3000);
+        let perk: Vec<&Vec<u32>> = log
+            .iter()
+            .filter(|call| call.0 == 0x005e_58f0)
+            .map(|call| &call.1)
+            .collect();
+        assert_eq!(perk.len(), 1);
+        for words in perk {
+            assert_eq!(words[..3], [0x48, 0x3000, 0x7700]);
         }
+        assert_eq!(log.iter().filter(|call| call.0 == 0x0047_6c90).count(), 1);
+        let scaled = log.iter().find(|call| call.0 == 0x0040_7880).unwrap();
+        assert_eq!(scaled.1[1], 16.0f32.to_bits());
     }
 
     #[test]
