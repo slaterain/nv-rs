@@ -9656,7 +9656,7 @@ fn levelup_held(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
 /// The god mode byte (`g_bIsGodmode`, `011e07ba`).
 const GODMODE_BYTE: u32 = 0x011e_07ba;
 
-/// The level-up step of `PlayerCharacter::Update` (`0x94397F` on): with a level-up due
+/// The level-up step of `PlayerCharacter::Update` (around `0x943990`): with a level-up due
 /// (`008d51f0` on the progression, `00464e10`), the player not in combat ([`levelup_combat_test`]),
 /// outside VATS (`00525430`), `009444a0` and `00709be0` true, `00944270` 0 and the level-up not held
 /// ([`levelup_held`]), the level-up menu is shown (`008d5210`).
