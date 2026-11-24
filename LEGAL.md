@@ -40,18 +40,15 @@ program (`FalloutNV.exe`) with a decompiler. Since 2026-10-05 the maintainer
 has also allowed two further sources:
 
 - names and type information from the publicly circulating Xbox 360
-  development builds' debug symbols
-  ([ADR-0002](docs/adr/0002-xbox-prototype-symbols.md));
-- logic translated from the decompiled program, marked in the code
-  ([ADR-0003](docs/adr/0003-decompiled-code-in-the-project.md)).
+  development builds' debug symbols;
+- logic translated from the decompiled program, marked in the code.
 
 Both are recorded where they are used, so they can be found and removed if
 required.
 
 Since 2026-11-02 the project may also use
 [fnv_decomp](https://github.com/momusdigital/fnv_decomp), the fnvdecomp
-community's C++ reconstruction of the same program
-([ADR-0009](docs/adr/0009-fnv-decomp.md)). Its repository grants no licence.
+community's C++ reconstruction of the same program. Its repository grants no licence.
 Only its contributors' own work is used, not its `third_party/` folder (zlib,
 under its own licence), and nothing from it gives rights in the game or in the
 libraries linked into it. Rust
@@ -138,5 +135,4 @@ terms, whose notice must be kept:
 ## Requests from rights holders
 
 Rights holders who have a concern can open an issue or contact the
-maintainer (see [docs/GOVERNANCE.md](docs/GOVERNANCE.md)). Marked material
-can be located and removed quickly.
+maintainer. Marked material can be located and removed quickly.

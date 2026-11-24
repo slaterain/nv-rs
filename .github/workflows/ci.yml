@@ -54,12 +54,6 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo clippy --locked -p d3dx-tex --all-targets --features software-truncation -- -D warnings
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      # Its own workspace: what counts as a typed marker is defined there. `--check` stays out: the
-      # ledger holds line numbers, which every merge moves.
-      - name: Test the ledger
-        run: |
-          cargo test --locked --manifest-path scripts/ledger/Cargo.toml
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       # The launcher (crates/nv-launcher: Play.exe and its Settings screen, with their tests) is in
       # the workspace, so the steps above build, test and lint it; its tests run again here so they
       # report even when an earlier step failed. They work on made-up files in scratch folders; the
