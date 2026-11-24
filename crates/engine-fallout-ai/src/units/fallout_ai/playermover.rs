@@ -140,6 +140,12 @@ pub fn fn_009e9e30(e: &mut Engine, this: Ptr<PlayerMover>) {
     e.call(ACTOR_MOVER_DESTRUCT, &args![this]);
 }
 
+/// lStewieAl's Tweaks' row S0096 (`patchTCLMovement`): the mover moves by the keyboard (its flags
+/// +0x94 have 0x40, `kNonController`).
+fn tcl_keyboard(e: &mut Engine, this: Ptr<PlayerMover>) -> bool {
+    e.stewie(engine_core::extend::stewie::TCL_MOVEMENT) && e.mem.u32(this.addr() + 0x94) & 0x40 != 0
+}
+
 // Translated from 009e9e50 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `PlayerMover::Update` (Xbox PDB): builds the player's move vector for
 /// this frame and hands it to the player character.
@@ -300,6 +306,12 @@ pub fn player_mover_update(e: &mut Engine, this: Ptr<PlayerMover>, seconds: f32)
         }
 
         if e.call(0x0050_d4a0, &args![player]).bool() {
+            // lStewieAl's Tweaks' row S0096 (`patchTCLMovement`, its `TCLMovementAddXYHook` jumped
+            // to at `0x9EA1CE`): with the keyboard (the mover's flags +0x94 have 0x40) the move is
+            // not added here (on to the end, `0x9EA2E2`); the player's update moves it.
+            if tcl_keyboard(e, this) {
+                return;
+            }
             let source = e.call(0x0043_6aa0, &args![player]).u32();
             e.call(0x0043_9e90, &args![source, transformed, vector]);
             e.vcall(player, 0x2a8, &args![transformed]);
@@ -534,6 +546,27 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// S0096 (`TCLMovementAddXYHook`, `0x9EA1CE`): with the row, a mover whose flags (+0x94) have
+    /// 0x40 (the keyboard) leaves its flat move to the player's update; a controller does not.
+    #[test]
+    fn s0096_the_keyboard_skips_the_movers_flat_flying_move() {
+        for (on, flags, skips) in [
+            (false, 0x40u32, false),
+            (true, 0x40, true),
+            (true, 0x3f, false),
+        ] {
+            let mut e = Engine::new();
+            e.set_stewie(engine_core::extend::stewie::TCL_MOVEMENT, on);
+            let mover = Ptr::<PlayerMover>::new(e.mem.alloc(0x100));
+            e.mem.set_u32(mover.addr() + 0x94, flags);
+            assert_eq!(
+                tcl_keyboard(&mut e, mover),
+                skips,
+                "on {on} flags {flags:#x}"
+            );
+        }
+    }
 
     type Calls = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
     type Points = Rc<RefCell<Vec<[f32; 3]>>>;
@@ -847,6 +880,37 @@ mod tests {
         assert_eq!(calls[0].0, 0x0043_9e90);
         assert_eq!(calls[0].1[0], 0x99);
         assert_eq!(calls[1], (SLOT_BASE + 0x2a8, vec![PLAYER, calls[0].1[1]]));
+    }
+
+    /// S0096 at its call site in `PlayerMover::Update` (`0x9EA1CE`): in free flight (`0050d4a0`
+    /// true) the move goes through the transform (`00439e90`) to the player (slot `0x2a8`), except
+    /// with the row and the keyboard (the move flags have 0x40): then neither, the player's update
+    /// moves it. A controller (no 0x40) or the row off: as the exe.
+    #[test]
+    fn s0096_free_flight_leaves_the_keyboards_move_to_the_player() {
+        // (row, the move flags, the move handed on)
+        for (on, mode, handed) in [(false, 0x4f, true), (true, 0x4f, false), (true, 0xf, true)] {
+            let (mut e, mover) = engine();
+            e.set_stewie(engine_core::extend::stewie::TCL_MOVEMENT, on);
+            e.set(mover, PlayerMover::MoveMode, mode);
+            e.register(GET_ANIMATION, |_, _| 0xa0u32.into_ret());
+            e.register(0x0088_6b30, |e, a| {
+                e.mem.set_f32(a[1], 7.0);
+                true.into_ret()
+            });
+            e.register(0x0050_d4a0, |_, _| true.into_ret());
+            e.register(0x0043_6aa0, |_, _| 0x99u32.into_ret());
+            let calls: Calls = Rc::default();
+            record(&mut e, 0x0043_9e90, &calls);
+            record(&mut e, SLOT_BASE + 0x2a8, &calls);
+            e.call_log = Some(vec![]);
+            e.call(0x009e_9e50, &args![mover, 0.5f32]);
+            assert_eq!(
+                calls.borrow().len(),
+                if handed { 2 } else { 0 },
+                "on {on} mode {mode:#x}"
+            );
+        }
     }
 
     #[test]

@@ -320,8 +320,11 @@ pub mod kept {
     pub const COMBAT_SOUND_PLAYER_TARGET: usize = 8;
     /// S0926's `static UInt32 lastRNG` (4 bytes): the extra wait drawn for that actor's next line.
     pub const COMBAT_SOUND_TARGET_WAIT: usize = 9;
+    /// S0404's `static int lastCombatTime` (4 bytes): the time (milliseconds) the player was last in
+    /// combat.
+    pub const LAST_COMBAT_TIME: usize = 10;
     /// How many.
-    pub const COUNT: usize = 10;
+    pub const COUNT: usize = 11;
 }
 
 /// The last thing each of Tweaks' warnings printed (its functions' statics), its print queue and
@@ -349,6 +352,12 @@ pub(crate) struct Prints {
     /// `[Extra Console Details] bMeshPath` (Tweaks' code default 0): S0059 prints every selected
     /// reference's model path with it.
     mesh_path: AtomicBool,
+    /// `[Tweaks] bRunAndGunAPInCombatOnly` (Tweaks' code default 0): S0097 takes action points outside
+    /// VATS only in combat with it.
+    run_and_gun_combat_only: AtomicBool,
+    /// `[Tweaks] bVATSStopBurstIfTargetDead` (Tweaks' code default 0): S0082.01 leaves the burst's
+    /// ammunition test at `0x94928F` alone with it.
+    vats_stop_burst: AtomicBool,
     /// S0022.45's `ConsoleManager_HandleControllerHotkeys` statics: `lastHeldKey` (an Xbox control
     /// code, 0 for none), `nextKeyRepeatTime` and `nextThumbStickRepeatTime` (milliseconds).
     pub(crate) console_pad_last_held: AtomicU32,
@@ -367,6 +376,8 @@ impl Default for Prints {
             lod_ref: AtomicU32::new(0),
             slip_guard: AtomicBool::new(false),
             mesh_path: AtomicBool::new(false),
+            run_and_gun_combat_only: AtomicBool::new(false),
+            vats_stop_burst: AtomicBool::new(false),
             console_pad_last_held: AtomicU32::new(0),
             console_pad_next_repeat: AtomicU32::new(0),
             console_stick_next_repeat: AtomicU32::new(0),
@@ -699,6 +710,34 @@ impl Engine {
     /// Whether the missing-data guard is on for Tweaks' rows ([`Engine::set_stewie_slip_guard`]).
     pub fn stewie_slip_guard(&self) -> bool {
         self.extend.stewie.3.slip_guard.load(Relaxed)
+    }
+
+    /// `[Tweaks] bVATSStopBurstIfTargetDead` (`crates/stewie`'s install): whether S0082.01 leaves the
+    /// burst's ammunition test alone (Tweaks writes its bytes there only without the key).
+    pub fn set_stewie_vats_stop_burst(&self, on: bool) {
+        self.extend.stewie.3.vats_stop_burst.store(on, Relaxed);
+    }
+
+    /// Whether `[Tweaks] bVATSStopBurstIfTargetDead` is set
+    /// ([`Engine::set_stewie_vats_stop_burst`]).
+    pub fn stewie_vats_stop_burst(&self) -> bool {
+        self.extend.stewie.3.vats_stop_burst.load(Relaxed)
+    }
+
+    /// `[Tweaks] bRunAndGunAPInCombatOnly` (`crates/stewie`'s install): whether S0097 takes action
+    /// points outside VATS only while the player is in combat.
+    pub fn set_stewie_run_and_gun_combat_only(&self, on: bool) {
+        self.extend
+            .stewie
+            .3
+            .run_and_gun_combat_only
+            .store(on, Relaxed);
+    }
+
+    /// Whether S0097 takes action points outside VATS only in combat
+    /// ([`Engine::set_stewie_run_and_gun_combat_only`]).
+    pub fn stewie_run_and_gun_combat_only(&self) -> bool {
+        self.extend.stewie.3.run_and_gun_combat_only.load(Relaxed)
     }
 
     /// `[Extra Console Details] bMeshPath` (`crates/stewie`'s install): whether S0059 prints the
