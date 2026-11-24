@@ -105,7 +105,7 @@ JIP's game patches (step 3.9, its changes to the game's own code) are fix rows b
 (`crates/jip/src/game_patches`; per-area seam tables in `engine-core/src/extend/patch_rows`, so several
 can be built at once); the first (3.9a) remembers each dialogue line's topic as JIP does and starts
 every command's result at 0. Like the rest of JIP, they act only once JIP answers "installed", which the row
-`NV_JIP_INSTALLED` (`bJIPInstalled`; step 3.10) switches on: on in the fixes preset with MCM since the turn-on (after the in-game pair, `measure/jip/TURN-ON.md`).
+`NV_JIP_INSTALLED` (`bJIPInstalled`; step 3.10) switches on: on in the fixes preset since the turn-on (after the in-game pair, `measure/jip/TURN-ON.md`).
 Before JIP is switched on, every call from `crates/jip` into the game's functions was checked for its
 argument word count (2026-11-15: 188 calls, one wrong and fixed); `crates/engine/tests/jip_call_arity.rs`
 now checks each call to a constant address against the translation it reaches.

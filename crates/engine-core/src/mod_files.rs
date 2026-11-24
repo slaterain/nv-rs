@@ -1,5 +1,5 @@
-//! Mods' own files, as the built-in script extenders reach them (MCM's `GetModINI`/`SetModINI`,
-//! later JIP LN's INI and file commands): the seam between those crates, which do not depend on
+//! Mods' own files, as the built-in script extenders reach them (JIP LN's INI and file
+//! commands): the seam between those crates, which do not depend on
 //! the platform layer, and the platform layer's `mod_files`, which keeps a mod's writes in a
 //! folder of the port's own beside the saves (the maintainer, 2026-11-16) and reads them back
 //! before the game's own Data.
@@ -213,7 +213,7 @@ pub fn name_key(name: &[u8]) -> Vec<u16> {
 /// profile calls take it from the Windows folder (`ini.rs`'s `profile_path`, measured): a mod's
 /// file never belongs in the Windows folder, and the port keeps every mod file under the game's
 /// name rules so a write lands in the port's folder; no extender command passes a bare name today
-/// (MCM and JIP LN add `Data\Config\`).
+/// (JIP LN adds `Data\Config\`).
 pub fn profile_string(e: &Engine, name: &[u8], section: &[u8], key: &[u8]) -> Option<Vec<u8>> {
     let file = text::Decoded::of(&read(e, name)?);
     let value = ini_value(&file.text, &file.arg(section), &file.arg(key))?;
