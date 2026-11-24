@@ -393,9 +393,6 @@ const CANDIDATE_LIST_NEW: u32 = 0x0078_d880;
 /// `LoadingMenu::BuildCandidateList` (`0078ac60`), called by address: JIP LN's
 /// `bLoadScreenFix` (O16, step 3.9) wraps it (overridable.tsv).
 const BUILD_CANDIDATES: u32 = 0x0078_ac60;
-/// JIP LN's O16 seam (`PickLoadScreenHook`, step 3.9) in place of the list
-/// lock test (`call 0078a930`) before the second pass without the location.
-const PICK_LOAD_SCREEN_SITE: u32 = 0x0078_a79b;
 const CANDIDATE_LIST_DESTRUCTOR: u32 = 0x0078_d8b0;
 /// Misc state queries and actions.
 const XUI_IS_UP: u32 = 0x0070_edf0;
@@ -1765,7 +1762,9 @@ pub fn loading_menu_make_load_screen_list(e: &mut Engine, this: Ptr<LoadingMenu>
             if e.get(this, LoadingMenu::pLocation).addr() != 0 {
                 let count = e.call(LIST_COUNT, &args![load_screens(this)]).u32();
                 let limit = setting_int(e, SETTING_MAX_SCREENS);
-                if count < limit && !second_pass_held(e, this) {
+                // The second pass (without the location) is held back by the list lock
+                // (`0078a930`, at `0x78A79B`).
+                if count < limit && !fn_0078a930(e) {
                     e.set(this, LoadingMenu::pLocation, Ptr::NULL);
                     e.call(BUILD_CANDIDATES, &args![this, candidates]);
                     fn_0078adc0(e, this, candidates.addr());
@@ -1800,22 +1799,6 @@ pub fn loading_menu_make_load_screen_list(e: &mut Engine, this: Ptr<LoadingMenu>
     e.call(CALC_FACES, &args![this]);
     let current = e.get(this, LoadingMenu::pCurrentLoadScreen).addr();
     fn_0078b3f0(e, this, current, 1);
-}
-
-/// Whether `MakeLoadScreenList`'s second pass (without the location) is held
-/// back: the list lock (`0078a930`, at `0x78A79B`); with JIP LN's
-/// `bLoadScreenFix` (O16) its seam's answer (non-zero: held) takes the
-/// lock test's place, and with no answer the lock test stands.
-fn second_pass_held(e: &mut Engine, this: Ptr<LoadingMenu>) -> bool {
-    let jip = if e.jip_patches() & engine_core::extend::jip_patches::LOAD_SCREEN_FIX != 0 {
-        e.site(PICK_LOAD_SCREEN_SITE, &[this.addr()])
-    } else {
-        None
-    };
-    match jip {
-        Some(held) => held != 0,
-        None => fn_0078a930(e),
-    }
 }
 
 // Translated from 0078a910 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -5750,47 +5733,19 @@ mod tests {
         );
     }
 
-    /// JIP LN's O16 seam at `0x78A79B`: with its bit clear the list lock decides and the seam is
-    /// not asked; with it set the seam is asked with the menu, an answer (non-zero: held, 0: go
-    /// on) replaces the lock test, and no answer leaves it.
+    /// The list lock at `0x78A79B` decides the second pass (locked: held).
     #[test]
-    fn jip_o16_seam_decides_the_second_pass() {
-        use engine_core::extend::jip_patches::LOAD_SCREEN_FIX;
-        thread_local! {
-            static ASKED: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
-            static REPLY: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
-        }
-        fn o16(_: &mut Engine, a: &[u32]) -> Option<u32> {
-            ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
-            REPLY.with(|r| r.get())
-        }
-        let run = |word: u32, locked: u8, reply: Option<u32>| {
+    fn the_list_lock_decides_the_second_pass() {
+        let run = |locked: u8| {
             let mut l = list_rig(vec![1, 0]);
-            l.r.e.set_jip_patches(word);
-            REPLY.with(|r| r.set(reply));
-            l.r.e.on_site_for_test(PICK_LOAD_SCREEN_SITE, o16);
             l.r.e.set(l.menu, LoadingMenu::pLocation, Ptr::new(0x55));
             l.r.e.mem.set_u32(0x7010, 3);
             l.r.e.mem.set_u8(LIST_LOCKED, locked);
             loading_menu_make_load_screen_list(&mut l.r.e, l.menu);
-            (l.r.calls_to(CANDIDATES_RESET).len(), l.menu.addr())
+            l.r.calls_to(CANDIDATES_RESET).len()
         };
-        // Off: the lock decides, nothing asked.
-        assert_eq!(run(0, 0, Some(1)).0, 2);
-        assert_eq!(run(0, 1, Some(0)).0, 1);
-        assert!(ASKED.with(|s| s.borrow().is_empty()));
-        // On: the answer decides.
-        let (passes, menu) = run(LOAD_SCREEN_FIX, 0, Some(1));
-        assert_eq!(passes, 1, "held");
-        assert_eq!(ASKED.with(|s| s.borrow().last().cloned()), Some(vec![menu]));
-        assert_eq!(
-            run(LOAD_SCREEN_FIX, 1, Some(0)).0,
-            2,
-            "go on, though locked"
-        );
-        // On with no answer: the lock again.
-        assert_eq!(run(LOAD_SCREEN_FIX, 1, None).0, 1);
-        assert_eq!(run(LOAD_SCREEN_FIX, 0, None).0, 2);
+        assert_eq!(run(0), 2);
+        assert_eq!(run(1), 1);
     }
 
     #[test]

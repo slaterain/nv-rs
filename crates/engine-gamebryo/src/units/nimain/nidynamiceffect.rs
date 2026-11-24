@@ -67,7 +67,7 @@ fn release_node_pool(e: &mut Engine) {
     let count = e.global::<u32>(NODE_POOL_LOCK_COUNT).wrapping_sub(1);
     e.set_global::<u32>(NODE_POOL_LOCK_COUNT, count);
     if count == 0 {
-        e.set_global::<u32>(NODE_POOL_LOCK, 0);
+        e.mem.set_u32_release(NODE_POOL_LOCK, 0);
     }
 }
 
@@ -98,7 +98,7 @@ pub fn fn_00a68e30(e: &mut Engine, this: Ptr) {
         e.set_global::<u32>(NODE_POOL_LOCK_COUNT, count);
         e.set_global::<u32>(NODE_POOL_FREE, node);
         if count == 0 {
-            e.set_global::<u32>(NODE_POOL_LOCK, 0);
+            e.mem.set_u32_release(NODE_POOL_LOCK, 0);
         }
         let remaining = e.mem.u32(t + 0xc0).wrapping_sub(1);
         e.mem.set_u32(t + 0xc0, remaining);

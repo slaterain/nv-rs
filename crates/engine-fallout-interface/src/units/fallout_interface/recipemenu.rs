@@ -1842,15 +1842,6 @@ pub fn recipe_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
     } else {
         tile
     };
-    // Seam (JIP LN NVSE's EnableImprovedRecipeMenu: the switch's bound at `0x7274E1` raised to
-    // 15, the byte map's ids 9 to 15 and the jump table's entry for id 7 rewritten, so ids 7 and
-    // 15 go to JIP's RecipeMenuAcceptHook): words: the menu, the id; an answer means JIP's code
-    // ran in place of the switch. Asked only while JIP is installed.
-    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
-        && e.site(0x0072_74e1, &[this.addr(), id as u32]).is_some()
-    {
-        return;
-    }
     match id {
         0..=2 => {
             if e.global::<u8>(INGREDIENTS_FOCUSED_011D8EA5) != 0 {
@@ -2025,15 +2016,8 @@ pub fn fn_007278c0(e: &mut Engine, first: u32, second: u32) -> i32 {
 /// count (unsigned), the smallest kept (signed); 0 when any count is short.
 pub fn fn_00727920(e: &mut Engine, recipe: u32) -> u32 {
     let crafter = accepted_crafter(e);
-    // Seam (JIP LN NVSE's UnlockRecipeMenuQuantity and EnableImprovedRecipeMenu:
-    // `SafeWrite32(0x727975, ..)`, the 100 stored first): no words; an answer is the number
-    // stored instead. Asked only while JIP is installed.
-    let most = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
-        e.site(0x0072_7975, &[]).unwrap_or(100)
-    } else {
-        100
-    };
-    e.set_global(CAN_MAKE_011D8EA8, most);
+    // The 100 stored first (`0x727975`).
+    e.set_global(CAN_MAKE_011D8EA8, 100u32);
     if e.call(RECIPE_CATEGORY_006A1B60, &args![recipe]).u32() == 0
         || e.call(RECIPE_CATEGORY_KEY_006286D0, &args![recipe]).u32() == 0
     {
@@ -2448,23 +2432,6 @@ const MANY_ADDED_FORMAT: u32 = 0x0101_c178;
 const TWO_STRINGS_FORMAT: u32 = 0x0101_2058;
 const GIFT_ICON_TEXT: u32 = 0x0101_c140;
 
-/// The fix row's bit (JIP LN NVSE's game patches, step 3.9 GB-3).
-fn jip_fixes(e: &Engine) -> bool {
-    e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
-}
-
-/// `CALL 0x4C0BF0` on the crafted weapon (`0x72880D`): JIP LN NVSE's `IsDisposableWeaponHook`
-/// (G100) answers there with the fix row on (the weapon's type above 9); otherwise, or with no
-/// answer, the exe's call. One load while off.
-fn jip_disposable_weapon(e: &mut Engine, weapon: u32) -> bool {
-    if jip_fixes(e) {
-        if let Some(answer) = e.site(0x0072_880d, &[weapon]) {
-            return answer != 0;
-        }
-    }
-    e.call(FORM_004C0BF0, &args![weapon]).bool()
-}
-
 /// After crafting ammunition (`0x728718`): the crafter's equipped ammunition entry (its process's
 /// slot 0x14c) gets its count cleared (`006ecd40` with 0).
 fn clear_crafter_ammo_count(e: &mut Engine, crafter: u32) {
@@ -2584,7 +2551,8 @@ pub fn fn_007284f0(e: &mut Engine, count: i32) {
             let total = made.wrapping_mul(count);
             let kind = e.call(FORM_TYPE, &args![chosen]).u32();
             let through_container = if kind == 0x28 {
-                !jip_disposable_weapon(e, chosen)
+                // `CALL 0x4C0BF0` on the crafted weapon (`0x72880D`).
+                !e.call(FORM_004C0BF0, &args![chosen]).bool()
             } else {
                 e.call(FORM_TYPE, &args![chosen]).u32() == 0x18
                     || e.call(FORM_TYPE, &args![chosen]).u32() == 0x1a
@@ -2608,14 +2576,7 @@ pub fn fn_007284f0(e: &mut Engine, count: i32) {
                 let crafter = me_tile(e, CRAFTER_REF);
                 e.call(ADD_ITEM_00574FA0, &args![crafter, chosen, 0u32, total]);
             }
-            // Seam (JIP LN NVSE's ToggleCraftingMessages: five bytes at `0x728933` made a jump
-            // past the message, to `0x7289FC`, while crafting messages are off): no words; an
-            // answer of 1 skips the message. Asked only while JIP is installed.
-            let quiet = e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
-                && e.site(0x0072_8933, &[]).is_some_and(|answer| answer != 0);
-            if !quiet {
-                crafted_message(e, chosen, total);
-            }
+            crafted_message(e, chosen, total);
         }
         // The seam at the next output (`0x7289FF`, every pass, also with nothing chosen):
         // JIP LN NVSE's ItemCrafted hook runs the crafting events with the chosen form and
@@ -2624,14 +2585,6 @@ pub fn fn_007284f0(e: &mut Engine, count: i32) {
             e.site(0x0072_89ff, &[chosen, made.wrapping_mul(count) as u32]);
         }
         node = node_next(e, node);
-    }
-    // Seam (JIP LN NVSE's EnableImprovedRecipeMenu: `WriteRelJump(0x728A0C, RecipeMenuCloseHook)`,
-    // in place of the menu's close): words: the last form chosen; an answer means JIP's hook ran
-    // (the menu stays open). Asked only while JIP is installed.
-    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
-        && e.site(0x0072_8a0c, &[chosen]).is_some()
-    {
-        return;
     }
     recipe_menu_close(e);
 }
@@ -2859,12 +2812,6 @@ const ROUND_00476B20: u32 = 0x0047_6b20;
 const GET_FORM_ENCHANTING: u32 = 0x004b_e330;
 const FORM_FLAG_0040E210: u32 = 0x0040_e210;
 const BUILD_MENU_STRING: u32 = 0x0040_6620;
-/// `00503a70` (`thiscall` on an ammo form, `RET 8`: a buffer and its size): the ammo's effects
-/// text, called only through JIP LN NVSE's G68.
-const AMMO_MENU_STRING: u32 = 0x0050_3a70;
-/// `"%.2f"` (`01030018`), JIP LN NVSE's G13 weight format.
-#[cfg(test)]
-const TWO_DECIMAL_FORMAT: u32 = 0x0103_0018;
 /// `"%d"`, `"%.1f"`, `"%.0f"`, `"%.1fx%d"`, `"%s (%i/%i)"`, `"--"`.
 const INT_FORMAT: u32 = 0x0102_0764;
 const ONE_DECIMAL_FORMAT: u32 = 0x0102_0768;
@@ -2961,19 +2908,13 @@ pub fn fn_00728da0(e: &mut Engine, _this: Ptr, form: u32, holder: u32) {
     let offset_a = 0.0f32.to_bits();
     let offset_b = 0.0f32.to_bits();
     let price = e.call(GET_FORM_VALUE, &args![form]).i32();
-    // `0x728E10` (JIP LN NVSE's G13, an 8-byte NOP over `FSTP [esp]; CALL 0x647C00` with the fix
-    // row on): the `FILD` of the value is stored as it is. One load while off.
-    let value = if jip_fixes(e) && e.site(0x0072_8e10, &[]).is_some() {
-        x87_store32(f64::from(price))
-    } else {
-        let value = e
-            .call(
-                VALUE_00647C00,
-                &args![x87_store32(f64::from(price)), 1.0f32.to_bits()],
-            )
-            .f64();
-        x87_store32(value)
-    };
+    let value = e
+        .call(
+            VALUE_00647C00,
+            &args![x87_store32(f64::from(price)), 1.0f32.to_bits()],
+        )
+        .f64();
+    let value = x87_store32(value);
     let player = e.global::<u32>(PLAYER);
     let flag = e.call(PLAYER_004D1360, &args![player]).u8();
     let weight = e.call(GET_FORM_WEIGHT, &args![form, u32::from(flag)]).f64();
@@ -3038,17 +2979,9 @@ pub fn fn_00728da0(e: &mut Engine, _this: Ptr, form: u32, holder: u32) {
             };
         }
     }
-    // `0x7294DC` (JIP LN NVSE's `RecipeMenuAmmoEffectsHook`, G68, with the fix row on): for
-    // ammunition the text is built from the ammo (`00503a70`, `thiscall`, the buffer and 0x100),
-    // whatever the effect list holds; anything else takes the exe's test. One load while off.
-    let ammo = jip_fixes(e) && e.site(0x0072_94dc, &[form]).is_some();
-    if ammo || (effects != 0 && node_item(e, effects + 4) != 0) {
+    if effects != 0 && node_item(e, effects + 4) != 0 {
         e.with_stack(0x100, |e, buffer| {
-            if ammo {
-                e.call(AMMO_MENU_STRING, &args![form, buffer, 0x100u32]);
-            } else {
-                e.call(BUILD_MENU_STRING, &args![effects, buffer, 0x100u32]);
-            }
+            e.call(BUILD_MENU_STRING, &args![effects, buffer, 0x100u32]);
             if e.call(STRING_LENGTH, &args![buffer]).u32() != 0 {
                 e.call(TILE_SET_STRING, &args![tiles[6], value_trait, buffer, 1u32]);
                 flags |= 0x40;
@@ -3059,13 +2992,6 @@ pub fn fn_00728da0(e: &mut Engine, _this: Ptr, form: u32, holder: u32) {
     } else {
         flags &= !0x40;
     }
-    // `0x729616`, the weight's `"%.1f"` operand (JIP LN NVSE's G13 writes `"%.2f"` there, with the
-    // fix row on: the seam answers the format). One load while off.
-    let weight_format = if jip_fixes(e) {
-        e.site(0x0072_9616, &[]).unwrap_or(ONE_DECIMAL_FORMAT)
-    } else {
-        ONE_DECIMAL_FORMAT
-    };
     e.with_stack(0x10, |e, buffer| {
         show_amount(
             e,
@@ -3074,7 +3000,14 @@ pub fn fn_00728da0(e: &mut Engine, _this: Ptr, form: u32, holder: u32) {
             tiles[3],
             value_trait,
         );
-        show_amount(e, buffer, (weight, weight_format), tiles[2], value_trait);
+        // `0x729616`: the weight's `"%.1f"` operand.
+        show_amount(
+            e,
+            buffer,
+            (weight, ONE_DECIMAL_FORMAT),
+            tiles[2],
+            value_trait,
+        );
     });
     for (tile, setting) in ITEM_TITLE_SETTINGS {
         let text = e.call(SETTING_STRING, &args![setting]).u32();
@@ -4488,25 +4421,9 @@ mod n057_tests {
         }
     }
 
-    thread_local! {
-        static G100_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
-    }
-
-    fn g100_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
-        panic!("G100's seam asked with the fix row's bit clear")
-    }
-    fn g100_disposable(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        G100_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
-        Some(1)
-    }
-    fn g100_kept(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        G100_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
-        Some(0)
-    }
-
-    /// `fn_007284f0` (`make_run`'s recipe) making a weapon (type 0x28) with G100's seam at
-    /// `0x72880D`: returns the engine after `count` 3 and the form.
-    fn make_weapon(word: u32, handler: engine_core::extend::SiteFn) -> (Engine, u32) {
+    /// `fn_007284f0` (`make_run`'s recipe) making a weapon (type 0x28): returns the engine after
+    /// `count` 3 and the form.
+    fn make_weapon() -> (Engine, u32) {
         let mut e = engine();
         let menu = recipe_menu(&mut e);
         e.set_global(RECIPE_MENU, menu);
@@ -4531,138 +4448,17 @@ mod n057_tests {
         answer(&mut e, FORM_TYPE, 0x28);
         // The container path's scale `float` (`01030ff0`).
         e.map(0x0103_0000, 0x1000);
-        e.set_jip_patches(word);
-        e.on_site_for_test(0x0072_880d, handler);
         e.call_log = Some(vec![]);
         e.call(0x0072_84f0, &args![3i32]);
         (e, form)
     }
 
-    /// G100 through the crafting function (REVIEW-679): with `INSTALLED | FIXES` the seam at
-    /// `0x72880D` is asked with the made weapon, `004c0bf0` is not called, and the answer picks
-    /// the branch (1: given plainly with `00574fa0`; 0: through a `TESContainer`). With the bit
-    /// clear the seam is not asked (a handler that panics) and the exe's `004c0bf0` decides.
+    /// A crafted weapon: the exe's `004c0bf0` decides (0: through a `TESContainer`).
     #[test]
-    fn jip_g100_seam_in_the_crafting_function() {
-        use engine_core::extend::jip_patches::{FIXES, INSTALLED};
-        for word in [0, INSTALLED] {
-            let (e, form) = make_weapon(word, g100_never);
-            assert_eq!(calls_to(&e, FORM_004C0BF0), vec![vec![form]]);
-            assert_eq!(calls_to(&e, CONTAINER_CONSTRUCT).len(), 1);
-        }
-        G100_ASKED.with(|s| s.take());
-        let (e, form) = make_weapon(INSTALLED | FIXES, g100_disposable);
-        assert_eq!(G100_ASKED.with(|s| s.take()), vec![vec![form]]);
-        assert!(calls_to(&e, FORM_004C0BF0).is_empty());
-        assert!(calls_to(&e, CONTAINER_CONSTRUCT).is_empty());
-        assert_eq!(calls_to(&e, ADD_ITEM_00574FA0).len(), 1);
-        let (e, form) = make_weapon(INSTALLED | FIXES, g100_kept);
-        assert_eq!(G100_ASKED.with(|s| s.take()), vec![vec![form]]);
-        assert!(calls_to(&e, FORM_004C0BF0).is_empty());
+    fn crafting_a_weapon_asks_the_disposable_test() {
+        let (e, form) = make_weapon();
+        assert_eq!(calls_to(&e, FORM_004C0BF0), vec![vec![form]]);
         assert_eq!(calls_to(&e, CONTAINER_CONSTRUCT).len(), 1);
-        assert!(calls_to(&e, ADD_ITEM_00574FA0).is_empty());
-    }
-
-    thread_local! {
-        static JIP_ASKED: std::cell::RefCell<Vec<(u32, Vec<u32>)>> = const { std::cell::RefCell::new(Vec::new()) };
-    }
-    fn jip_yes(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        JIP_ASKED.with(|s| s.borrow_mut().push((1, a.to_vec())));
-        Some(1)
-    }
-    fn jip_zero(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        JIP_ASKED.with(|s| s.borrow_mut().push((0, a.to_vec())));
-        Some(0)
-    }
-    fn jip_none(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        JIP_ASKED.with(|s| s.borrow_mut().push((2, a.to_vec())));
-        None
-    }
-    fn jip_seven(_: &mut Engine, _: &[u32]) -> Option<u32> {
-        Some(7)
-    }
-    thread_local! {
-        static JIP_CLICK_NONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    }
-    /// The click seam's handler: `jip_none` while `JIP_CLICK_NONE` is set, else `jip_zero`.
-    fn jip_click(e: &mut Engine, a: &[u32]) -> Option<u32> {
-        if JIP_CLICK_NONE.with(|c| c.get()) {
-            jip_none(e, a)
-        } else {
-            jip_zero(e, a)
-        }
-    }
-
-    /// `make_run`'s recipe (not a weapon) made 3 times, with handlers at JIP's seams for the
-    /// crafted message (`0x728933`) and the close (`0x728A0C`), and `word` as the JIP word.
-    fn make_with(
-        word: u32,
-        message: engine_core::extend::SiteFn,
-        close: engine_core::extend::SiteFn,
-    ) -> (Engine, u32) {
-        JIP_ASKED.with(|s| s.take());
-        let mut e = engine();
-        let menu = recipe_menu(&mut e);
-        e.set_global(RECIPE_MENU, menu);
-        let crafter = e.mem.alloc(0x200);
-        e.put_vtable(0x0c00_0000, &[0x0000_a000; 0x120]);
-        answer(&mut e, 0x0000_a000, 1);
-        e.mem.set_u32(crafter, 0x0c00_0000);
-        e.mem.set_u32(menu + CRAFTER_REF, crafter);
-        answer(&mut e, GET_PROCESS, crafter);
-        let form = e.mem.alloc(4);
-        e.mem.set_u32(form, 0x0c00_0000);
-        let input = e.mem.alloc(8);
-        e.mem.set_u32(input, 2);
-        e.mem.set_u32(input + 4, form);
-        let output = e.mem.alloc(8);
-        e.mem.set_u32(output, 1);
-        e.mem.set_u32(output + 4, form);
-        let inputs = chain(&mut e, &[input]);
-        let outputs = chain(&mut e, &[output]);
-        answer(&mut e, RECIPE_INPUTS_005A8080, inputs);
-        answer(&mut e, RECIPE_OUTPUTS_005D43C0, outputs);
-        answer(&mut e, FORM_TYPE, 0x1f);
-        e.set_jip_patches(word);
-        e.on_site_for_test(0x0072_8933, message);
-        e.on_site_for_test(0x0072_8a0c, close);
-        e.call_log = Some(vec![]);
-        e.call(0x0072_84f0, &args![3i32]);
-        (e, form)
-    }
-
-    /// JIP's ToggleCraftingMessages seam (`0x728933`): asked once an output is given, only while
-    /// JIP is installed; an answer of 1 skips the message (the item is still given), 0 or none
-    /// shows it. JIP's close seam (`0x728A0C`): asked with the last form chosen; an answer keeps
-    /// the menu open (no close), none closes it as the exe.
-    #[test]
-    fn jip_crafting_message_and_close_seams() {
-        use engine_core::extend::jip_patches::{FIXES, INSTALLED};
-        for word in [0, FIXES] {
-            let (e, _) = make_with(word, jip_yes, jip_zero);
-            assert!(
-                JIP_ASKED.with(|s| s.take()).is_empty(),
-                "{word:x}: not asked"
-            );
-            assert_eq!(calls_to(&e, SHOW_MESSAGE_007052F0).len(), 1);
-            assert_eq!(calls_to(&e, SERVICE_END), vec![vec![0]]);
-        }
-        let (e, form) = make_with(INSTALLED, jip_yes, jip_zero);
-        assert_eq!(
-            JIP_ASKED.with(|s| s.take()),
-            vec![(1, vec![]), (0, vec![form])]
-        );
-        assert!(calls_to(&e, SHOW_MESSAGE_007052F0).is_empty(), "no message");
-        assert!(calls_to(&e, STRING_OBJECT_CONSTRUCT).is_empty());
-        assert_eq!(calls_to(&e, ADD_ITEM_00574FA0).len(), 1, "still given");
-        assert!(calls_to(&e, SERVICE_END).is_empty(), "the menu stays open");
-        let (e, form) = make_with(INSTALLED, jip_zero, jip_none);
-        assert_eq!(
-            JIP_ASKED.with(|s| s.take()),
-            vec![(0, vec![]), (2, vec![form])]
-        );
-        assert_eq!(calls_to(&e, SHOW_MESSAGE_007052F0).len(), 1);
-        assert_eq!(calls_to(&e, SERVICE_END), vec![vec![0]], "closed");
     }
 
     thread_local! {
@@ -4674,15 +4470,11 @@ mod n057_tests {
     }
 
     /// A recipe with an input of its own form and two outputs of two other forms (1 and 2
-    /// made), made 3 times with JIP installed, crafting messages off (`jip_yes` at
-    /// `0x728933`), the close seam answering (`jip_zero` at `0x728A0C`) and a user of JIP's
-    /// ItemCrafted hook (`0x7289FF`): both outputs are given; the message seam is asked for each
-    /// and the ItemCrafted seam too (with each form and its count), the close seam once, after
-    /// the loop, with the last output's form; no message, the menu stays open.
+    /// made), made 3 times with a user of JIP's ItemCrafted hook (`0x7289FF`): both outputs are
+    /// given, the ItemCrafted seam is asked for each (with each form and its count), and the
+    /// menu closes after the loop.
     #[test]
-    fn jip_close_seam_after_every_output() {
-        use engine_core::extend::jip_patches::INSTALLED;
-        JIP_ASKED.with(|s| s.take());
+    fn item_crafted_after_every_output() {
         CRAFTED.with(|s| s.take());
         let mut e = engine();
         let menu = recipe_menu(&mut e);
@@ -4713,10 +4505,7 @@ mod n057_tests {
         answer(&mut e, RECIPE_INPUTS_005A8080, inputs);
         answer(&mut e, RECIPE_OUTPUTS_005D43C0, outputs);
         answer(&mut e, FORM_TYPE, 0x1f);
-        e.set_jip_patches(INSTALLED);
         e.add_hook_user(engine_core::extend::Hook::ItemCrafted, true);
-        e.on_site_for_test(0x0072_8933, jip_yes);
-        e.on_site_for_test(0x0072_8a0c, jip_zero);
         e.on_site_for_test(0x0072_89ff, crafted);
         e.call_log = Some(vec![]);
         e.call(0x0072_84f0, &args![3i32]);
@@ -4726,119 +4515,18 @@ mod n057_tests {
             "both outputs given"
         );
         assert_eq!(
-            JIP_ASKED.with(|s| s.take()),
-            vec![(1, vec![]), (1, vec![]), (0, vec![second])],
-            "the message seam per output, the close seam once after them"
-        );
-        assert_eq!(
             CRAFTED.with(|s| s.take()),
             vec![vec![first, 3], vec![second, 6]],
-            "ItemCrafted with the messages off"
+            "ItemCrafted for each output"
         );
-        assert!(calls_to(&e, SHOW_MESSAGE_007052F0).is_empty());
-        assert!(calls_to(&e, SERVICE_END).is_empty(), "the menu stays open");
+        assert_eq!(calls_to(&e, SERVICE_END), vec![vec![0]], "closed");
     }
 
-    /// JIP's click seam (`0x7274E1`): asked with the menu and the id while JIP is installed; an
-    /// answer means JIP's code ran (no quantity menu here), none leaves the exe's switch.
+    /// At a workbench (an accepted crafter, the menu's category, inventory for 250 crafts) the
+    /// inputs' count is held to the exe's 100.
     #[test]
-    fn jip_click_seam() {
-        use engine_core::extend::jip_patches::INSTALLED;
-        let mut e = engine();
-        let menu = recipe_menu(&mut e);
-        e.set_global(CAN_MAKE_011D8EA8, 9u32);
-        JIP_ASKED.with(|s| s.take());
-        JIP_CLICK_NONE.with(|c| c.set(false));
-        e.on_site_for_test(0x0072_74e1, jip_click);
-        e.call_log = Some(vec![]);
-        e.call(0x0072_74b0, &args![menu, 7i32, 0u32]);
-        assert!(
-            JIP_ASKED.with(|s| s.take()).is_empty(),
-            "not installed: not asked"
-        );
-        assert_eq!(calls_to(&e, QUANTITY_MENU_CREATE).len(), 1);
-        e.set_jip_patches(INSTALLED);
-        e.call_log = Some(vec![]);
-        e.call(0x0072_74b0, &args![menu, 7i32, 0u32]);
-        assert_eq!(JIP_ASKED.with(|s| s.take()), vec![(0, vec![menu, 7])]);
-        assert!(
-            calls_to(&e, QUANTITY_MENU_CREATE).is_empty(),
-            "JIP's code instead"
-        );
-        JIP_CLICK_NONE.with(|c| c.set(true));
-        e.call_log = Some(vec![]);
-        e.call(0x0072_74b0, &args![menu, 7i32, 0u32]);
-        assert_eq!(JIP_ASKED.with(|s| s.take()), vec![(2, vec![menu, 7])]);
-        assert_eq!(
-            calls_to(&e, QUANTITY_MENU_CREATE),
-            vec![vec![9, MAKE_CALLBACK_007284F0, 0x7fff_ffff]]
-        );
-        // JIP's ids past the exe's switch (15, its second make button, and 12, one JIP makes do
-        // nothing): asked too, with the menu and the id, and answered.
-        JIP_CLICK_NONE.with(|c| c.set(false));
-        for id in [15i32, 12] {
-            e.call_log = Some(vec![]);
-            e.call(0x0072_74b0, &args![menu, id, 0u32]);
-            assert_eq!(
-                JIP_ASKED.with(|s| s.take()),
-                vec![(0, vec![menu, id as u32])],
-                "{id}"
-            );
-            assert!(calls_to(&e, QUANTITY_MENU_CREATE).is_empty(), "{id}");
-        }
-        // An exe id (8, which clears the ingredient focus) answered: the exe's case does not
-        // run; with no answer it does.
-        e.set_global(INGREDIENTS_FOCUSED_011D8EA5, 1u8);
-        e.call(0x0072_74b0, &args![menu, 8i32, 0u32]);
-        assert_eq!(JIP_ASKED.with(|s| s.take()), vec![(0, vec![menu, 8])]);
-        assert_eq!(
-            e.global::<u8>(INGREDIENTS_FOCUSED_011D8EA5),
-            1,
-            "the switch stopped"
-        );
-        JIP_CLICK_NONE.with(|c| c.set(true));
-        e.call(0x0072_74b0, &args![menu, 8i32, 0u32]);
-        assert_eq!(JIP_ASKED.with(|s| s.take()), vec![(2, vec![menu, 8])]);
-        assert_eq!(
-            e.global::<u8>(INGREDIENTS_FOCUSED_011D8EA5),
-            0,
-            "the exe's case"
-        );
-    }
-
-    /// JIP's quantity seam (`0x727975`): while JIP is installed its answer is stored in place of
-    /// the 100 (with no crafter, the answer itself).
-    #[test]
-    fn jip_most_seam() {
-        use engine_core::extend::jip_patches::INSTALLED;
-        let mut e = engine();
-        let menu = recipe_menu(&mut e);
-        e.set_global(RECIPE_MENU, menu);
-        answer(&mut e, RECIPE_CATEGORY_006A1B60, 0x90);
-        answer(&mut e, RECIPE_CATEGORY_KEY_006286D0, 1);
-        e.on_site_for_test(0x0072_7975, jip_seven);
-        assert_eq!(e.call(0x0072_7920, &args![0x7100u32]).u32(), 100);
-        e.set_jip_patches(INSTALLED);
-        assert_eq!(e.call(0x0072_7920, &args![0x7100u32]).u32(), 7);
-        assert_eq!(e.global::<u32>(CAN_MAKE_011D8EA8), 7);
-    }
-
-    thread_local! {
-        /// What the quantity seam's handler answers.
-        static MOST: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-    }
-    fn jip_most(_: &mut Engine, _: &[u32]) -> Option<u32> {
-        Some(MOST.with(|m| m.get()))
-    }
-
-    /// The quantity seam at a workbench (an accepted crafter, the menu's category, inventory
-    /// for 250 crafts): the answer is the bound the inputs' count is held to: JIP's no limit
-    /// (`0x7FFFFFFF`) gives the 250, an answer of 120 gives 120; with JIP not installed, the
-    /// exe's 100.
-    #[test]
-    fn jip_most_seam_with_a_crafter() {
-        use engine_core::extend::jip_patches::INSTALLED;
-        let run = |word: u32, most: u32| {
+    fn most_is_100_with_a_crafter() {
+        let run = || {
             let mut e = engine();
             let menu = recipe_menu(&mut e);
             e.set_global(RECIPE_MENU, menu);
@@ -4860,16 +4548,11 @@ mod n057_tests {
             let entry = e.mem.alloc(8);
             e.mem.set_u32(entry + 4, 500);
             answer(&mut e, GET_INVENTORY_ITEM, entry);
-            MOST.with(|m| m.set(most));
-            e.on_site_for_test(0x0072_7975, jip_most);
-            e.set_jip_patches(word);
             let made = e.call(0x0072_7920, &args![0x7100u32]).u32();
             assert_eq!(e.global::<u32>(CAN_MAKE_011D8EA8), made);
             made
         };
-        assert_eq!(run(INSTALLED, 0x7fff_ffff), 250);
-        assert_eq!(run(INSTALLED, 120), 120);
-        assert_eq!(run(0, 0x7fff_ffff), 100);
+        assert_eq!(run(), 100);
     }
 
     #[test]
@@ -5013,39 +4696,6 @@ mod n057_tests {
         assert_eq!(y[0], vec![0x2100 + 24, 0xfa2, 160.0f32.to_bits(), 1]);
     }
 
-    // ---- JIP LN NVSE's game patches, group GB-3 (G13, G68, G100) ----
-
-    use engine_core::extend::jip_patches::{FIXES, INSTALLED};
-
-    thread_local! {
-        static ASKED: std::cell::RefCell<Vec<(u32, Vec<u32>)>> =
-            const { std::cell::RefCell::new(Vec::new()) };
-    }
-    fn asked() -> Vec<(u32, Vec<u32>)> {
-        ASKED.with(|a| a.borrow_mut().drain(..).collect())
-    }
-    fn record(at: u32, words: &[u32]) {
-        ASKED.with(|a| a.borrow_mut().push((at, words.to_vec())));
-    }
-    fn never(_: &mut Engine, _: &[u32]) -> Option<u32> {
-        panic!("a seam asked with the fix row's bit clear")
-    }
-    fn g13_value(_: &mut Engine, w: &[u32]) -> Option<u32> {
-        record(0x0072_8e10, w);
-        Some(1)
-    }
-    fn g13_format(_: &mut Engine, w: &[u32]) -> Option<u32> {
-        record(0x0072_9616, w);
-        Some(TWO_DECIMAL_FORMAT)
-    }
-    fn g68_ammo(_: &mut Engine, w: &[u32]) -> Option<u32> {
-        record(0x0072_94dc, w);
-        Some(1)
-    }
-    fn nothing(_: &mut Engine, _: &[u32]) -> Option<u32> {
-        None
-    }
-
     /// An engine for `fn_00728da0` on a form of `kind` (twelve tiles from `0x2100`), the form's value
     /// 7 (scaled by `00647c00` to 3.0) and weight 0.5; answers the holder.
     fn info_engine(kind: u32) -> (Engine, u32) {
@@ -5090,129 +4740,27 @@ mod n057_tests {
             .collect()
     }
 
-    /// G13 (`0x728E10`, `0x729616`): with the fix row's bit and JIP's answers, the value is the
-    /// form's plain value (7, no `00647c00`) and a weight below 1 takes `"%.2f"`; the value's own
-    /// `"%.1f"` (below 1) stays. Off, or `INSTALLED` alone: not asked (a handler that panics),
-    /// the exe's scaled value 3 and `"%.1f"`. With the bit and no handler: the exe's.
+    /// The value is the form's value scaled by `00647c00` (3) with `"%.0f"`, the weight 0.5 with
+    /// `"%.1f"`.
     #[test]
-    fn jip_g13_plain_value_and_two_decimal_weight() {
-        for word in [0, INSTALLED] {
-            let (mut e, holder) = info_engine(0x1f);
-            e.set_jip_patches(word);
-            e.on_site_for_test(0x0072_8e10, never);
-            e.on_site_for_test(0x0072_9616, never);
-            e.call_log = Some(vec![]);
-            e.call(0x0072_8da0, &args![0u32, 0x7300u32, holder]);
-            assert_eq!(calls_to(&e, VALUE_00647C00).len(), 1);
-            assert_eq!(
-                amounts(&e),
-                [(NO_DECIMAL_FORMAT, 3.0), (ONE_DECIMAL_FORMAT, 0.5)]
-            );
-        }
+    fn item_information_value_and_weight_formats() {
         let (mut e, holder) = info_engine(0x1f);
-        e.set_jip_patches(INSTALLED | FIXES);
         e.call_log = Some(vec![]);
         e.call(0x0072_8da0, &args![0u32, 0x7300u32, holder]);
-        assert_eq!(calls_to(&e, VALUE_00647C00).len(), 1, "no handler");
+        assert_eq!(calls_to(&e, VALUE_00647C00).len(), 1);
         assert_eq!(
             amounts(&e),
             [(NO_DECIMAL_FORMAT, 3.0), (ONE_DECIMAL_FORMAT, 0.5)]
         );
-        let (mut e, holder) = info_engine(0x1f);
-        e.set_jip_patches(INSTALLED | FIXES);
-        e.on_site_for_test(0x0072_8e10, g13_value);
-        e.on_site_for_test(0x0072_9616, g13_format);
-        asked();
-        e.call_log = Some(vec![]);
-        e.call(0x0072_8da0, &args![0u32, 0x7300u32, holder]);
-        assert!(calls_to(&e, VALUE_00647C00).is_empty());
-        assert_eq!(
-            amounts(&e),
-            [(NO_DECIMAL_FORMAT, 7.0), (TWO_DECIMAL_FORMAT, 0.5)]
-        );
-        assert_eq!(asked(), [(0x0072_8e10, vec![]), (0x0072_9616, vec![])]);
-        // A value below 1 keeps `"%.1f"` (only the weight's operand is JIP's).
-        answer(&mut e, GET_FORM_VALUE, 0);
-        st0(&mut e, GET_FORM_WEIGHT, 0.25);
-        e.call_log = Some(vec![]);
-        e.call(0x0072_8da0, &args![0u32, 0x7300u32, holder]);
-        let formats = calls_to(&e, FORMAT);
-        assert_eq!(formats.last().unwrap()[2], TWO_DECIMAL_FORMAT);
-        assert_eq!(calls_to(&e, COPY).len(), 1, "a value of 0 is \"--\"");
     }
 
-    /// G68 (`0x7294DC`, words: the form): with the bit and JIP's answer, the effects text is the
-    /// ammo's (`00503a70` on the form, the buffer and 0x100) although the form has no effect
-    /// list, shown in tile 6 (its flag 0x40 on). Off, `INSTALLED` alone or no answer: the exe's
-    /// test (no list: tile 6 hidden, nothing built).
+    /// A form without an effect list (ammunition here): tile 6 hidden, nothing built.
     #[test]
-    fn jip_g68_ammo_effects_text() {
-        for (word, handler) in [
-            (0, never as engine_core::extend::SiteFn),
-            (INSTALLED, never),
-            (INSTALLED | FIXES, nothing),
-        ] {
-            let (mut e, holder) = info_engine(0x29);
-            e.set_jip_patches(word);
-            e.on_site_for_test(0x0072_94dc, handler);
-            e.call_log = Some(vec![]);
-            e.call(0x0072_8da0, &args![0u32, 0x7300u32, holder]);
-            assert!(calls_to(&e, AMMO_MENU_STRING).is_empty());
-            assert!(calls_to(&e, BUILD_MENU_STRING).is_empty());
-            assert!(calls_to(&e, TILE_SET_INT).contains(&vec![0x2100 + 24, 0xfa3, 0]));
-        }
+    fn item_information_without_effects_hides_tile_6() {
         let (mut e, holder) = info_engine(0x29);
-        e.set_jip_patches(INSTALLED | FIXES);
-        e.on_site_for_test(0x0072_94dc, g68_ammo);
-        asked();
         e.call_log = Some(vec![]);
-        e.call(0x0072_8da0, &args![0u32, 0x7400u32, holder]);
-        assert_eq!(asked(), [(0x0072_94dc, vec![0x7400])]);
-        let built = calls_to(&e, AMMO_MENU_STRING);
-        assert_eq!(built.len(), 1);
-        assert_eq!((built[0][0], built[0][2]), (0x7400, 0x100));
+        e.call(0x0072_8da0, &args![0u32, 0x7300u32, holder]);
         assert!(calls_to(&e, BUILD_MENU_STRING).is_empty());
-        assert!(calls_to(&e, TILE_SET_STRING)
-            .iter()
-            .any(|c| c[0] == 0x2100 + 24 && c[2] == built[0][1]));
-        assert!(calls_to(&e, TILE_SET_INT).contains(&vec![0x2100 + 24, 0xfa3, 1]));
-        // An empty text hides tile 6 again (the exe's length test after JIP's build).
-        answer(&mut e, STRING_LENGTH, 0);
-        e.call_log = Some(vec![]);
-        e.call(0x0072_8da0, &args![0u32, 0x7400u32, holder]);
         assert!(calls_to(&e, TILE_SET_INT).contains(&vec![0x2100 + 24, 0xfa3, 0]));
-    }
-
-    fn g100_weapon(_: &mut Engine, w: &[u32]) -> Option<u32> {
-        record(0x0072_880d, w);
-        Some(1)
-    }
-
-    /// G100 (`0x72880D`, words: the weapon): with the bit and JIP's answer, the answer decides and
-    /// `004c0bf0` is not called; with no answer, off or `INSTALLED` alone, the exe's call.
-    #[test]
-    fn jip_g100_disposable_weapon_seam() {
-        for (word, handler) in [
-            (0, never as engine_core::extend::SiteFn),
-            (INSTALLED, never),
-            (INSTALLED | FIXES, nothing),
-        ] {
-            let mut e = engine();
-            answer(&mut e, FORM_004C0BF0, 0);
-            e.set_jip_patches(word);
-            e.on_site_for_test(0x0072_880d, handler);
-            e.call_log = Some(vec![]);
-            assert!(!jip_disposable_weapon(&mut e, 0x7500));
-            assert_eq!(calls_to(&e, FORM_004C0BF0), [vec![0x7500]]);
-        }
-        let mut e = engine();
-        answer(&mut e, FORM_004C0BF0, 0);
-        e.set_jip_patches(INSTALLED | FIXES);
-        e.on_site_for_test(0x0072_880d, g100_weapon);
-        asked();
-        e.call_log = Some(vec![]);
-        assert!(jip_disposable_weapon(&mut e, 0x7500));
-        assert!(calls_to(&e, FORM_004C0BF0).is_empty());
-        assert_eq!(asked(), [(0x0072_880d, vec![0x7500])]);
     }
 }
