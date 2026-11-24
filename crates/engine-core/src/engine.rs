@@ -217,6 +217,10 @@ const DIAG_HOOK: u8 = 4;
 const DIAG_CALL_TRACE: u8 = 8;
 const DIAG_TRACE: u8 = 16;
 const DIAG_PROFILE: u8 = 32;
+/// `NV_CALL_COUNT` ([`crate::call_count`]): every call by address takes the full path, where it is
+/// counted. Not a diagnostic of the typed seam or the drawing writer: their direct calls stay
+/// direct ([`Engine::diagnosing_direct`]).
+const DIAG_CALL_COUNT: u8 = 64;
 
 /// The game's memory plus every translated function, by exe address.
 pub struct Engine {
@@ -233,6 +237,9 @@ pub struct Engine {
     /// `NV_PROFILE`. Their setters keep it ([`Engine::set_call_hook`] and the others), so
     /// [`Engine::call`]'s fast path tests this one byte for all six ([`Engine::diagnosing`]).
     diag: u8,
+    /// `NV_CALL_COUNT=1` ([`crate::call_count`]), read when the engine is made: its bit in
+    /// [`Engine::diag`] sends every call by address to the full path, which counts it.
+    count_calls: bool,
     /// When `Some`, every call made through [`Engine::call`] is recorded
     /// as (address, argument words). Tests use it to check what a
     /// translation called.
@@ -468,6 +475,7 @@ impl Engine {
             funcs,
             call_cache: empty_call_cache(),
             diag: 0,
+            count_calls: crate::call_count::on(),
             call_log: None,
             tls: 0,
             clock_ms: 0,
@@ -896,6 +904,7 @@ impl Engine {
                 .collect(),
             call_cache: empty_call_cache(),
             diag: 0,
+            count_calls: self.count_calls,
             call_log: None,
             tls: 0,
             clock_ms: self.clock_ms,
@@ -984,10 +993,6 @@ impl Engine {
             "the engine's diagnostic bits ({:#x}) don't say which diagnostics are on",
             self.diag
         );
-        // `NV_CALL_COUNT=1` ([`crate::call_count`]): off, one relaxed load and a branch not taken.
-        if crate::call_count::on() {
-            crate::call_count::count(self, addr);
-        }
         if let Some(f) = self.cached(addr) {
             if !self.diagnosing() {
                 // With the thread host's hook the slice counts down by one (`None`: used up, 0);
@@ -1025,14 +1030,14 @@ impl Engine {
         typed: impl FnOnce(&mut Engine) -> u32,
     ) -> Ret {
         if let Some(f) = self.cached(addr) {
-            if crate::abi::same_fn(f, expect) && !self.diagnosing() {
+            if crate::abi::same_fn(f, expect) && !self.diagnosing_direct() {
                 let left = self
                     .slice_left
                     .checked_sub(u64::from(self.slice_hook.is_some()));
                 match left {
                     Some(left) if self.call_stack.len() < self.call_stack.capacity() => {
                         // Found by address, made directly: a direct row of `NV_CALL_COUNT`.
-                        if crate::call_count::on() {
+                        if self.counting_calls() {
                             crate::call_count::count_direct(self, addr);
                         }
                         self.slice_left = left;
@@ -1042,7 +1047,7 @@ impl Engine {
                         return crate::abi::RetVal::into_ret(ret);
                     }
                     None => {
-                        if crate::call_count::on() {
+                        if self.counting_calls() {
                             crate::call_count::count_direct(self, addr);
                         }
                         // As [`Engine::call_at_slice_end`].
@@ -1085,6 +1090,27 @@ impl Engine {
         self.diag != 0 || self.mem.block_check_on() || self.call_log.is_some()
     }
 
+    /// [`Engine::diagnosing`] but for `NV_CALL_COUNT` ([`crate::call_count`]), which is not a diagnostic of
+    /// the typed seam or the drawing writer: what their direct calls test, so that they stay direct
+    /// while the calls by address are counted.
+    #[inline(always)]
+    pub(crate) fn diagnosing_direct(&self) -> bool {
+        self.diag & !DIAG_CALL_COUNT != 0 || self.mem.block_check_on() || self.call_log.is_some()
+    }
+
+    /// Whether `NV_CALL_COUNT` counts this engine's calls ([`crate::call_count`]).
+    #[inline(always)]
+    pub(crate) fn counting_calls(&self) -> bool {
+        self.diag & DIAG_CALL_COUNT != 0
+    }
+
+    /// Tests: `NV_CALL_COUNT` on or off for this engine alone.
+    #[cfg(test)]
+    pub(crate) fn set_count_calls(&mut self, on: bool) {
+        self.count_calls = on;
+        self.sync_diag();
+    }
+
     /// [`Engine::diagnosing`] from each diagnostic itself: the debug builds check the bits
     /// against it at every call.
     fn diagnosing_each(&self) -> bool {
@@ -1096,6 +1122,7 @@ impl Engine {
             || self.trace.is_some()
             || self.mem.block_check_on()
             || crate::profile::on()
+            || self.count_calls
     }
 
     /// Sets [`Engine::diag`] from the diagnostics it stands for: their setters' last step.
@@ -1107,7 +1134,8 @@ impl Engine {
             | bit(self.call_trace.is_some(), DIAG_CALL_TRACE)
             | bit(self.trace.is_some(), DIAG_TRACE)
             // Set once, before the first engine is made, and never changed after.
-            | bit(crate::profile::on(), DIAG_PROFILE);
+            | bit(crate::profile::on(), DIAG_PROFILE)
+            | bit(self.count_calls, DIAG_CALL_COUNT);
     }
 
     /// The call budget ([`Engine::set_call_budget`]): how many more calls may run.
@@ -1288,6 +1316,10 @@ impl Engine {
             let caller = self.call_stack.last().copied().unwrap_or(0);
             self.mem.set_check_frame(addr, caller)
         });
+        // `NV_CALL_COUNT`: counted before the call stack takes it (its top is the caller).
+        if self.diag & DIAG_CALL_COUNT != 0 {
+            crate::call_count::count(self, addr);
+        }
         // `NV_PROFILE` (a diagnostic): the sampler's shadow of the call stack.
         let profiled = crate::profile::on();
         if profiled {
