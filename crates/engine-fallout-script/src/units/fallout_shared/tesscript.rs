@@ -731,7 +731,9 @@ pub fn fn_005a8d20(e: &mut Engine, this: Ptr<ScriptLocals>, form: u32) {
             let list = new_list(e);
             e.set(this, ScriptLocals::m_pActionList, Ptr::new(list));
         }
-        let action = fn_005a90b0(e, this, form, false);
+        let action = e
+            .call(0x005a_90b0, &args![this, form, 0u32])
+            .ptr::<ActionObject>();
         if action.is_null() {
             let block = new_block(e, 8);
             e.mem.set_u32(block, form);
@@ -761,7 +763,9 @@ pub fn script_locals_set_action_flag(
     }
     let mut found = false;
     for target in [form, 0] {
-        let action = fn_005a90b0(e, this, target, true).cast::<ActionObject>();
+        let action = e
+            .call(0x005a_90b0, &args![this, target, 1u32])
+            .ptr::<ActionObject>();
         if !action.is_null() {
             let old = e.get(action, ActionObject::iFlags);
             e.set(action, ActionObject::iFlags, old | flags);
@@ -789,7 +793,9 @@ pub fn fn_005a8ea0(e: &mut Engine, this: Ptr<ScriptLocals>) {
 /// Whether the entry of `form` has any of the flags in `mask`; a form with no
 /// entry gets one (`fn_005a8d20`) and the answer is false.
 pub fn fn_005a8ef0(e: &mut Engine, this: Ptr<ScriptLocals>, form: u32, mask: u32) -> bool {
-    let action = fn_005a90b0(e, this, form, false).cast::<ActionObject>();
+    let action = e
+        .call(0x005a_90b0, &args![this, form, 0u32])
+        .ptr::<ActionObject>();
     if action.is_null() {
         fn_005a8d20(e, this, form);
         return false;
@@ -1436,7 +1442,7 @@ pub fn script_locals_load_game(e: &mut Engine, this: Ptr<ScriptLocals>, buffer: 
             e.call(0x005a_8ea0, &args![this]);
         }
         if e.mem.u8(action_flag) != 0 {
-            script_locals_set_action_flag(e, this, 0, 0x1000);
+            e.call(0x005a_8e20, &args![this, 0u32, 0x1000u32]);
         }
     });
 }
@@ -2924,7 +2930,7 @@ pub fn script_set_action_flag(e: &mut Engine, form: u32, extra_list: Ptr, flags:
             };
             result = match merged {
                 Some(answer) => answer != 0,
-                None => script_locals_set_action_flag(e, locals, form, flags),
+                None => e.call(0x005a_8e20, &args![locals, form, flags]).bool(),
             };
         }
     }
@@ -3487,17 +3493,14 @@ pub fn script_parse_parameters(
                 1 | 0x17 => {
                     let value = e.with_stack(8, |e, slot| {
                         e.mem.set_f64(slot.addr(), 0.0);
-                        let ok = fn_005ac7a0(
-                            e,
-                            slot.addr(),
-                            code,
-                            offset,
-                            reference,
-                            container,
-                            script,
-                            locals,
-                            1,
-                        );
+                        let ok = e
+                            .call(
+                                0x005a_c7a0,
+                                &args![
+                                    slot, code, offset, reference, container, script, locals, 1u32
+                                ],
+                            )
+                            .bool();
                         ok.then(|| e.mem.f64(slot.addr()))
                     });
                     let Some(value) = value else {
@@ -3512,17 +3515,14 @@ pub fn script_parse_parameters(
                 2 => {
                     let value = e.with_stack(8, |e, slot| {
                         e.mem.set_f64(slot.addr(), 0.0);
-                        let ok = fn_005ac7a0(
-                            e,
-                            slot.addr(),
-                            code,
-                            offset,
-                            reference,
-                            container,
-                            script,
-                            locals,
-                            1,
-                        );
+                        let ok = e
+                            .call(
+                                0x005a_c7a0,
+                                &args![
+                                    slot, code, offset, reference, container, script, locals, 1u32
+                                ],
+                            )
+                            .bool();
                         ok.then(|| e.mem.f64(slot.addr()))
                     });
                     let Some(value) = value else {

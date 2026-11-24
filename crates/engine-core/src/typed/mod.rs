@@ -392,7 +392,7 @@ impl Engine {
                  that is on"
             ),
         }
-        self.typed.forced || !self.diagnosing()
+        self.typed.forced || !self.diagnosing_direct()
     }
 
     /// Whether the differential test's direct run is on: a build with debug assertions asks at each
@@ -539,7 +539,7 @@ impl Engine {
         if self.typed.forced {
             return;
         }
-        self.typed.direct = if self.diagnosing() {
+        self.typed.direct = if self.diagnosing_direct() {
             0
         } else {
             self.typed.allowed

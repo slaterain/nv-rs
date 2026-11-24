@@ -2893,8 +2893,9 @@ fn constant_changes_between_draws_in_one_pass_reach_the_shaders() {
     );
 }
 
-/// The pipeline cache file's envelope, as `cache.rs` writes it (magic, version 2, length,
-/// FNV-1a 64 of the bytes): the test makes files of its own with it.
+/// The pipeline cache file's envelope of version 2 (magic, version, length, FNV-1a 64 of the
+/// bytes), which `cache.rs` still reads (as a cache never carried): the test makes files of its
+/// own with it.
 fn envelope(data: &[u8]) -> Vec<u8> {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for &b in data {
@@ -2962,7 +2963,16 @@ fn the_pipeline_cache_file_is_kept_and_a_bad_one_is_ignored() {
     assert_eq!(pixels, plain);
     assert!(note.as_deref().unwrap().ends_with("KB read"), "{note:?}");
     // Each bad file: ignored by name, a new cache, the same pixels.
-    let wgpu_bytes = &good[28..];
+    // wgpu's bytes after our envelope's header: 40 bytes in version 3 (the lineage after the
+    // hash), 28 in version 2.
+    let version = u32::from_le_bytes(good[8..12].try_into().unwrap());
+    assert_eq!(version, 3, "the envelope the device writes");
+    let wgpu_bytes = &good[40..];
+    assert_eq!(
+        &wgpu_bytes[..8],
+        b"WGPUPLCH",
+        "wgpu's own header follows ours"
+    );
     let mut altered = good.clone();
     let n = altered.len();
     altered[n / 2] ^= 0x55;
@@ -2977,8 +2987,8 @@ fn the_pipeline_cache_file_is_kept_and_a_bad_one_is_ignored() {
     for (bytes, why) in [
         (altered, "do not match their hash"),
         (truncated, "truncated"),
-        (foreign, "ignored"),
-        (other_backend, "ignored"),
+        (foreign, "different device"),
+        (other_backend, "different device"),
     ] {
         std::fs::write(&file, &bytes).unwrap();
         let (pixels, note) = draw(Some(folder.clone())).unwrap();
