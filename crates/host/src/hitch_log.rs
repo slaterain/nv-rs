@@ -1478,12 +1478,12 @@ impl Frame {
     }
 }
 
-/// Where the log's lines leave main: main formats a line and hands it over ([`Lines::send`], a channel push that
-/// never waits); a thread of the log's own keeps it for the F12 report and then writes it. The write can block for as
-/// long as the file, pipe or console behind the standard error stream makes it wait (a pipe whose reader a busy
-/// machine starves, a disk flushing other writes): in the lead's route run with mods on 2026-11-23, while the
-/// Vulkan driver compiled a cold pipeline cache, main spent 360 ms writing one hitch line, a stutter of the log's own
-/// making. Every other input of the line is a counter or a record only main and the counting touch.
+/// Where the log's lines leave main: main formats a line, keeps the F12 report's copy of it and hands it over
+/// ([`Lines::send`], a channel push that never waits); a thread of the log's own writes it. The write can block for as
+/// long as the file, pipe or console behind the stream makes it wait (a pipe whose reader a busy machine starves, a
+/// disk flushing other writes): in the lead's route run with mods on 2026-11-23, while the Vulkan driver compiled a
+/// cold pipeline cache, main spent 360 ms writing one hitch line, a stutter of the log's own making. Every other input
+/// of the line is a counter or a record only main and the counting touch.
 pub struct Lines {
     /// The writer thread's channel (none when the thread could not be started: main writes, as before).
     tx: Option<Sender<String>>,
@@ -1491,13 +1491,15 @@ pub struct Lines {
     sent: AtomicU64,
     /// Lines written, and the condition variable [`Lines::flush`] waits on.
     written: Arc<(Mutex<u64>, Condvar)>,
-    /// What a line goes through (keeping it, writing it).
-    out: fn(&mut dyn Write, String),
+    /// What keeps a line on main before the hand-over (the F12 report's copy), so a report built after
+    /// [`Lines::send`] has it whatever the writer thread is doing.
+    keep: fn(String),
 }
 
 impl Lines {
-    /// A writer thread over `sink`: each line goes through `out`, in the order sent.
-    pub fn new(mut sink: Box<dyn Write + Send>, out: fn(&mut dyn Write, String)) -> Lines {
+    /// A writer thread over `sink`: each line written whole ([`write_line`]), in the order sent; `keep` takes each
+    /// line on the caller's thread first.
+    pub fn new(mut sink: Box<dyn Write + Send>, keep: fn(String)) -> Lines {
         let written = Arc::new((Mutex::new(0u64), Condvar::new()));
         let (tx, rx) = std::sync::mpsc::channel::<String>();
         let done = written.clone();
@@ -1505,7 +1507,7 @@ impl Lines {
             .name("hitch log".into())
             .spawn(move || {
                 for line in rx {
-                    out(&mut *sink, line);
+                    write_line(&mut *sink, line);
                     count_written(&done);
                 }
             });
@@ -1513,12 +1515,13 @@ impl Lines {
             tx: thread.is_ok().then_some(tx),
             sent: AtomicU64::new(0),
             written,
-            out,
+            keep,
         }
     }
 
-    /// Hands `line` to the writer thread; never waits for its write.
+    /// Keeps `line` (on this thread) and hands it to the writer thread; never waits for its write.
     pub fn send(&self, line: String) {
+        (self.keep)(line.clone());
         self.sent.fetch_add(1, SeqCst);
         let line = match &self.tx {
             Some(tx) => match tx.send(line) {
@@ -1528,7 +1531,7 @@ impl Lines {
             None => line,
         };
         // No writer thread: written here, as before.
-        (self.out)(&mut std::io::stderr(), line);
+        write_line(&mut std::io::stderr(), line);
         count_written(&self.written);
     }
 
@@ -1559,27 +1562,100 @@ fn count_written(written: &(Mutex<u64>, Condvar)) {
     wake.notify_all();
 }
 
-/// A line of the run's log: kept for the F12 report's `hitches.txt` first (so a write that blocks does not keep it
-/// from the report), then written to the standard error stream.
-fn keep_and_write(sink: &mut dyn Write, line: String) {
-    engine_platform::d3d9real::note_report_hitch(line.clone());
-    let _ = writeln!(sink, "{line}");
+/// A line written with one call, its text and its newline together, so another thread's write to the same stream (the
+/// viewer's 5-second summary, a panic's message) cannot land between them.
+fn write_line(sink: &mut dyn Write, line: String) {
+    let mut line = line;
+    line.push('\n');
+    let _ = sink.write_all(line.as_bytes());
+}
+
+/// The standard error stream as the run's line writer writes it ([`lines`]): each line in one `write_all` under the
+/// stream's lock. (Tests can hold its writes: [`tests::hold_point`].)
+struct ErrStream;
+
+impl Write for ErrStream {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.write_all(bytes).map(|()| bytes.len())
+    }
+
+    fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        #[cfg(test)]
+        tests::hold_point();
+        std::io::stderr().write_all(bytes)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::stderr().flush()
+    }
+}
+
+/// The standard output stream for [`print_line`].
+struct OutStream;
+
+impl Write for OutStream {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.write_all(bytes).map(|()| bytes.len())
+    }
+
+    fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        let mut out = std::io::stdout().lock();
+        out.write_all(bytes)?;
+        out.flush()
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::stdout().flush()
+    }
 }
 
 static LINES: OnceLock<Lines> = OnceLock::new();
+static OUT_LINES: OnceLock<Lines> = OnceLock::new();
 
-/// The run's line writer, started at the first line; its lines are written out before the process ends.
+/// How long a panic on the host's main thread waits for the lines on their way ([`lines`]' panic hook).
+const PANIC_FLUSH: Duration = Duration::from_millis(250);
+
+/// The run's line writer, started at the first line. Its lines are written out before the process ends: every end
+/// goes through the platform layer's `end_process`, which runs [`flush_lines`] first (`engine_platform::on_end`); and
+/// a panic on the host's main thread (the one that started it) waits a moment for them before its own message (a game
+/// thread's panic is the game's, caught and kept quiet on purpose: nothing is waited for there).
 fn lines() -> &'static Lines {
     LINES.get_or_init(|| {
-        engine_platform::on_exit(flush_lines);
-        Lines::new(Box::new(std::io::stderr()), keep_and_write)
+        engine_platform::on_end(flush_lines);
+        let host = std::thread::current().id();
+        let before = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if std::thread::current().id() == host {
+                for lines in [&LINES, &OUT_LINES] {
+                    if let Some(lines) = lines.get() {
+                        lines.flush(PANIC_FLUSH);
+                    }
+                }
+            }
+            before(info)
+        }));
+        Lines::new(
+            Box::new(ErrStream),
+            engine_platform::d3d9real::note_report_hitch,
+        )
     })
 }
 
-/// Waits (at most a second) until every hitch line handed over is written: before the process ends.
+/// A line for the standard output, written off main as the hitch lines are (the viewer's 5-second summary).
+pub fn print_line(line: String) {
+    // Started with the hitch lines' writer, whose end flush and panic hook cover both.
+    let _ = lines();
+    OUT_LINES
+        .get_or_init(|| Lines::new(Box::new(OutStream), |_| {}))
+        .send(line);
+}
+
+/// Waits (at most a second each) until every line handed over is written: before the process ends.
 pub fn flush_lines() {
-    if let Some(lines) = LINES.get() {
-        lines.flush(Duration::from_secs(1));
+    for lines in [&LINES, &OUT_LINES] {
+        if let Some(lines) = lines.get() {
+            lines.flush(Duration::from_secs(1));
+        }
     }
 }
 
@@ -2684,10 +2760,10 @@ mod tests {
     }
 
     /// A stream whose writes wait until the test opens it (a pipe whose reader a busy machine starves, a console or
-    /// file that holds the write): what it took, in order.
+    /// file that holds the write): each write call it took, in order.
     struct HeldStream {
         open: Arc<(Mutex<bool>, Condvar)>,
-        took: Arc<Mutex<String>>,
+        took: Arc<Mutex<Vec<String>>>,
     }
 
     impl Write for HeldStream {
@@ -2700,7 +2776,7 @@ mod tests {
             self.took
                 .lock()
                 .unwrap()
-                .push_str(&String::from_utf8_lossy(bytes));
+                .push(String::from_utf8_lossy(bytes).into_owned());
             Ok(bytes.len())
         }
 
@@ -2709,23 +2785,27 @@ mod tests {
         }
     }
 
-    fn write_only(sink: &mut dyn Write, line: String) {
-        let _ = writeln!(sink, "{line}");
+    /// The lines [`keep_for_test`] kept.
+    static KEPT: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    fn keep_for_test(line: String) {
+        KEPT.lock().unwrap().push(line);
     }
 
     /// A write that blocks (one hitch line's write took 360 ms in a route run) does not hold up main: each line is
-    /// handed over at once while the stream holds every write, nothing is written meanwhile, and once the stream takes
-    /// writes again the lines are written whole and in order, and a flush waits for them.
+    /// kept (the report's copy) and handed over at once while the stream holds every write, nothing is written
+    /// meanwhile, and once the stream takes writes again each line is written in one call, text and newline together,
+    /// in order, and a flush waits for them.
     #[test]
     fn a_write_that_blocks_does_not_hold_up_main() {
         let open = Arc::new((Mutex::new(false), Condvar::new()));
-        let took = Arc::new(Mutex::new(String::new()));
+        let took = Arc::new(Mutex::new(Vec::new()));
         let lines = Lines::new(
             Box::new(HeldStream {
                 open: open.clone(),
                 took: took.clone(),
             }),
-            write_only,
+            keep_for_test,
         );
         // The stream opens by itself after 5 s, so a send that waited for the write would show as a slow send
         // (not a test that never ends).
@@ -2747,16 +2827,67 @@ mod tests {
             sent_in < Duration::from_secs(2),
             "the sends waited for the write: {sent_in:?}"
         );
+        assert_eq!(
+            *KEPT.lock().unwrap(),
+            ["hitch 0", "hitch 1", "hitch 2"],
+            "kept on the sending thread before any write"
+        );
         assert!(
             !lines.flush(Duration::from_millis(100)),
             "nothing written while the stream holds its writes"
         );
-        assert_eq!(*took.lock().unwrap(), "");
+        assert!(took.lock().unwrap().is_empty());
         *open.0.lock().unwrap() = true;
         open.1.notify_all();
         let _ = done.send(());
         assert!(lines.flush(Duration::from_secs(30)), "all written");
-        assert_eq!(*took.lock().unwrap(), "hitch 0\nhitch 1\nhitch 2\n");
+        assert_eq!(
+            *took.lock().unwrap(),
+            ["hitch 0\n", "hitch 1\n", "hitch 2\n"],
+            "one write a line"
+        );
+        opener.join().unwrap();
+    }
+
+    /// The run's writer's stream held ([`hold_point`]; the global writer's test sets it).
+    static HOLD: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+
+    /// [`ErrStream`]'s writes wait here while [`HOLD`] is set.
+    pub(super) fn hold_point() {
+        let mut held = HOLD.0.lock().unwrap_or_else(PoisonError::into_inner);
+        while *held {
+            held = HOLD.1.wait(held).unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    /// The run's own writer ([`lines`]): a line sent is in the F12 report's hitch lines at once, while its write to the
+    /// standard error stream is still held; and the platform layer's end of the process (its end hooks, which
+    /// `end_process` runs first) waits for the held write before it goes on.
+    #[test]
+    fn the_run_s_lines_are_in_the_report_at_once_and_written_at_the_end() {
+        engine_platform::d3d9real::set_report_hitch_totals(Some((0, 0, 0)));
+        let line = format!("hitch log test line {}", std::process::id());
+        *HOLD.0.lock().unwrap() = true;
+        lines().send(line.clone());
+        assert!(
+            engine_platform::d3d9real::report_hitches_for_test().contains(&line),
+            "in the report while its write is held"
+        );
+        let writer = LINES.get().expect("the run's writer");
+        assert!(!writer.flush(Duration::ZERO), "its write is held");
+        // The stream lets the write go 300 ms from now; the end hooks wait for it.
+        let opener = std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(300));
+            *HOLD.0.lock().unwrap() = false;
+            HOLD.1.notify_all();
+        });
+        let t = Instant::now();
+        engine_platform::run_end_hooks();
+        assert!(
+            writer.flush(Duration::ZERO),
+            "written when the end hooks return (after {:?})",
+            t.elapsed()
+        );
         opener.join().unwrap();
     }
 }
