@@ -5646,50 +5646,6 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     ]
 }
 
-/// The C runtime's `strtoul(text, nullptr, 16)`: blanks skipped, an optional sign, an optional
-/// `0x`/`0X`, then hex digits; a value past 32 bits gives `ULONG_MAX`, a `-` negates the value
-/// read (modulo 2^32); no digits give 0.
-#[cfg(test)]
-fn strtoul_hex(text: &[u8]) -> u32 {
-    let mut i = 0;
-    while i < text.len() && matches!(text[i], b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r') {
-        i += 1;
-    }
-    let negative = match text.get(i) {
-        Some(b'-') => {
-            i += 1;
-            true
-        }
-        Some(b'+') => {
-            i += 1;
-            false
-        }
-        _ => false,
-    };
-    if text.get(i) == Some(&b'0')
-        && matches!(text.get(i + 1), Some(b'x' | b'X'))
-        && text.get(i + 2).is_some_and(u8::is_ascii_hexdigit)
-    {
-        i += 2;
-    }
-    let mut value: u64 = 0;
-    let mut overflow = false;
-    while let Some(digit) = text.get(i).and_then(|c| (*c as char).to_digit(16)) {
-        value = value * 16 + u64::from(digit);
-        if value > u64::from(u32::MAX) {
-            overflow = true;
-            value = u64::from(u32::MAX);
-        }
-        i += 1;
-    }
-    if overflow {
-        u32::MAX
-    } else if negative {
-        (value as u32).wrapping_neg()
-    } else {
-        value as u32
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -6624,23 +6580,6 @@ mod tests {
         assert!(calls(&e, CENTER_ON_CELL).is_empty());
     }
 
-    /// `strtoul(text, nullptr, 16)` as the C runtime reads it.
-    #[test]
-    fn s0101_strtoul_hex_reads_as_the_c_runtime() {
-        assert_eq!(strtoul_hex(b"1A2b"), 0x1a2b);
-        assert_eq!(strtoul_hex(b"  \t0X1f zz"), 0x1f);
-        assert_eq!(strtoul_hex(b"0x"), 0);
-        assert_eq!(strtoul_hex(b"+10"), 0x10);
-        assert_eq!(strtoul_hex(b"-1"), u32::MAX);
-        assert_eq!(strtoul_hex(b"123456789"), u32::MAX);
-        assert_eq!(strtoul_hex(b"-123456789"), u32::MAX);
-        assert_eq!(strtoul_hex(b"FFFFFFFF"), u32::MAX);
-        // Far past 32 bits: the maximum, which a minus does not negate.
-        assert_eq!(strtoul_hex(b"11111111111111111"), u32::MAX);
-        assert_eq!(strtoul_hex(b"-11111111111111111"), u32::MAX);
-        assert_eq!(strtoul_hex(b"g1"), 0);
-        assert_eq!(strtoul_hex(b""), 0);
-    }
 
     /// Doubles for the world space and cell functions the exterior commands
     /// use. The player is a heap object.

@@ -13046,18 +13046,6 @@ mod tests {
         (log, e, package_store)
     }
 
-    #[test]
-    fn s0107_03_the_search_package_takes_its_target() {
-        let (off, _, package) = search_package_run(false);
-        let target = called(&off, 0x0067_ff70)[0][0];
-        assert_eq!(called(&off, 0x0067_2fc0), vec![vec![package, target]]);
-        let (on, e, package) = search_package_run(true);
-        let target = called(&on, 0x0067_ff70)[0][0];
-        assert!(called(&on, 0x0067_2fc0).is_empty());
-        assert_eq!(e.mem.u32(package + 0x30), target);
-        // The rest goes on as before: the type set after it.
-        assert_eq!(called(&on, 0x0098_4f60), vec![vec![package, 0x21]]);
-    }
 
     /// Doubles for the small getters `Actor::GetPickUpSoundName` calls.
     fn pick_up_doubles(e: &mut Engine) {

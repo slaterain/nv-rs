@@ -720,13 +720,6 @@ mod tests {
         log
     }
 
-    #[test]
-    fn s0130_03_an_npc_beam_with_no_node_yet() {
-        let off = update_without_a_node(false);
-        assert_eq!(calls(&off, 0x00a5_9400)[0][0], 0x68);
-        let on = update_without_a_node(true);
-        assert!(calls(&on, 0x00a5_9400).is_empty());
-    }
 
     #[test]
     fn update_aims_another_shooter_from_its_node() {

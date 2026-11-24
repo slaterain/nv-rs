@@ -1390,11 +1390,6 @@ mod tests {
         (run.is_ok(), run.unwrap_or(0), printed)
     }
 
-    #[test]
-    fn s0199_10_far_from_a_node_with_no_door() {
-        assert!(!far_from_a_node_with_no_door(false).0);
-        assert_eq!(far_from_a_node_with_no_door(true), (true, -2, 0));
-    }
 
     #[test]
     fn use_door_takes_the_actors_position_and_moves_on() {

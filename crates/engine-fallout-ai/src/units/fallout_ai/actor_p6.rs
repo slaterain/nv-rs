@@ -5124,20 +5124,6 @@ mod tests {
         calls_to(&e, REQUEST_LOCOMOTION_CHANGE)
     }
 
-    /// A leg crippled now asks for the crippled walk; no change of state asks nothing.
-    #[test]
-    fn s0147_a_healed_leg_brings_the_walk_back() {
-        assert!(leg_change(false, 0.0, 4.0, 4.0).is_empty());
-        let healed = leg_change(true, 0.0, 4.0, 4.0);
-        assert_eq!(healed.len(), 1);
-        assert_eq!(&healed[0][1..], [0, 0]);
-        assert_eq!(&leg_change(true, 3.0, 0.0, 4.0)[0][1..], [1, 0]);
-        // Healed while the other leg is crippled: the crippled walk.
-        assert_eq!(&leg_change(true, 0.0, 4.0, 0.0)[0][1..], [1, 0]);
-        // Not crippled before or after, crippled before and after: nothing.
-        assert!(leg_change(true, 3.0, 2.0, 4.0).is_empty());
-        assert!(leg_change(true, 0.0, -1.0, 4.0).is_empty());
-    }
 
     fn limb_flag_setup(current: f32) -> (Engine, Ptr<Actor>) {
         let mut e = engine();

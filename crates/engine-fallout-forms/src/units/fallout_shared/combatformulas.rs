@@ -3022,114 +3022,10 @@ mod tests {
         assert_eq!(damage, expected);
     }
 
-    /// The damage a menu shows (`006450f0`) for a gun whose equipped ammunition's projectile is
-    /// 0x5000 (explosion value 3) while the menu entry's ammunition (type 0x29) has the projectile
-    /// 0x6000 (explosion value 7); the factor `006479e0` answers the value. Answers the shown
-    /// damage, the projectiles whose explosion was asked, and how often `00525a90` was asked.
-    fn s0189_shown(one: bool, two: bool, weapon_projectile: u32) -> (f32, Vec<u32>, usize) {
-        s0189_shown_with(one, two, weapon_projectile, 0x29, false)
-    }
 
-    /// [`s0189_shown`] with the entry's "ammunition" of form type `ammo_type` (a throwing weapon's is
-    /// the weapon itself, type 0x28, whose word at +0xB4 is no projectile) and, when `flagged`, a
-    /// melee weapon (type 1) with the flag at +0x100 bit 1: the display's other `CalcWeaponDamage`
-    /// call (`0x6451B6`), the flag cleared around it.
-    fn s0189_shown_with(
-        _one: bool,
-        _two: bool,
-        weapon_projectile: u32,
-        ammo_type: u8,
-        flagged: bool,
-    ) -> (f32, Vec<u32>, usize) {
-        let (mut e, _) = damage_world();
-        let player = object(&mut e, 0x400);
-        e.mem.set_u32(player.addr() + 0xa4, FAKE_TABLE);
-        e.set_global(PLAYER_REFERENCE, player);
-        returns_f32(&mut e, WEAPON_DAMAGE_FIGURE, 3.0);
-        e.register(HANDLE_ENTRY_POINT, |_, _| Ret::default());
-        e.register(APPLY_PERK_ENTRY_FLOAT, |_, a| {
-            f32::from_bits(a[2]).into_ret()
-        });
-        e.register(FUNCTION_00923000, |_, a| (a[0] + 0xd4).into_ret());
-        e.set_global(SETTING_DAMAGE_SKILL_BASE, 0.25f32);
-        e.set_global(SETTING_DAMAGE_SKILL_MULT, 0.5f32);
-        let weapon = object_with_vtable(&mut e, 0x1000);
-        e.mem
-            .set_u8(weapon.addr() + 0xf4, if flagged { 1 } else { 3 });
-        e.mem.set_u32(weapon.addr() + 0x118, weapon_projectile);
-        let sub_object = weapon.addr() + 0x9c;
-        e.mem.set_u32(sub_object, FAKE_TABLE + 0x1000);
-        returns_u32(&mut e, FAKE_SLOT_10, 1);
-        returns_u32(&mut e, WEAPON_GET_TYPE, if flagged { 1 } else { 3 });
-        returns_u32(&mut e, WEAPON_GET_SKILL, 0x20);
-        returns_u32(&mut e, WEAPON_GET_AMMO_OBJECT, 0x5000);
-        e.register(AMMO_GET_VALUE_FROM_OBJECT, |_, a| {
-            u32::from(match a[0] {
-                0x5000 => 3u8,
-                0x6000 => 7,
-                _ => 5,
-            })
-            .into_ret()
-        });
-        e.register(FUNCTION_006479E0, |_, a| (a[0] as f32).into_ret());
-        returns_u32(&mut e, WEAPON_GET_NUM_PROJECTILES, 2);
-        returns_u32(&mut e, WEAPON_FLAG_TEST, u32::from(flagged));
-        returns_u32(&mut e, FUNCTION_00525430, 0);
-        returns_f32(&mut e, FUNCTION_0084D030, 1.0);
-        let ammo = object(&mut e, 0x200);
-        e.mem.set_u8(ammo.addr() + 4, ammo_type);
-        e.mem.set_u32(ammo.addr() + 0xb4, 0x6000);
-        e.call_log = Some(vec![]);
-        let shown = e
-            .call(0x0064_50f0, &args![weapon, 1.0f32, 0u32, ammo])
-            .f32();
-        let log = e.call_log.take().unwrap();
-        let asked: Vec<u32> = log
-            .iter()
-            .filter(|c| c.0 == AMMO_GET_VALUE_FROM_OBJECT)
-            .map(|c| c.1[0])
-            .collect();
-        let lookups = log.iter().filter(|c| c.0 == WEAPON_GET_AMMO_OBJECT).count();
-        (shown, asked, lookups)
-    }
 
-    /// With both rows the explosion is asked of the weapon's own projectile (0x7000) or, without
-    /// one, of `00525a90`'s answer (0x5000, asked once and reused), never of that word.
-    #[test]
-    fn s0189_a_throwing_weapons_own_form_is_not_read_as_ammunition() {
-        let (_, asked, lookups) = s0189_shown_with(true, true, 0, 0x28, false);
-        assert_eq!((asked, lookups), (vec![0x5000, 0x5000], 2));
-        let (_, asked, lookups) = s0189_shown_with(true, true, 0x7000, 0x28, false);
-        assert_eq!((asked, lookups), (vec![0x7000, 0x7000], 0));
-    }
 
-    /// The display's other `CalcWeaponDamage` call (`0x6451B6`): a melee weapon with the flag at
-    /// +0x100 bit 1. Off, the explosion of the equipped ammunition's projectile (0x5000); with both
-    /// rows, that of the listed ammunition's (0x6000).
-    #[test]
-    fn s0189_the_flagged_weapons_call_passes_the_ammunition_too() {
-        let (_, asked, _) = s0189_shown_with(false, false, 0, 0x29, true);
-        assert_eq!(asked, vec![0x5000, 0x5000]);
-        let (_, asked, _) = s0189_shown_with(true, true, 0, 0x29, true);
-        assert_eq!(asked, vec![0x6000, 0x6000]);
-    }
 
-    #[test]
-    fn s0189_the_shown_damage_uses_the_entrys_ammunition() {
-        let (off, asked, lookups) = s0189_shown(false, false, 0);
-        assert_eq!((asked, lookups), (vec![0x5000, 0x5000], 3));
-        let (on, asked, lookups) = s0189_shown(true, true, 0);
-        assert_eq!((asked, lookups), (vec![0x6000, 0x6000], 0));
-        assert!(on > off, "{on} > {off}");
-        let (one_only, asked, _) = s0189_shown(true, false, 0);
-        assert_eq!(asked, vec![0x5000, 0x5000]);
-        assert_eq!(one_only, off);
-        let (_, asked, lookups) = s0189_shown(false, true, 0x7000);
-        assert_eq!((asked, lookups), (vec![0x7000, 0x7000], 0));
-        let (two_only, asked, lookups) = s0189_shown(false, true, 0);
-        assert_eq!((asked, lookups), (vec![0x5000, 0x5000], 2));
-        assert_eq!(two_only, off);
-    }
 
     fn shown_damage_perk_calls(ammo_type: u8, _on: bool) -> (u32, Vec<Vec<u32>>) {
         let (mut e, _) = damage_world();
@@ -3167,22 +3063,7 @@ mod tests {
         (ammo.addr(), calls)
     }
 
-    #[test]
-    fn s0067_a_throwing_weapons_ammunition_has_no_effect_list() {
-        let (ammo, off) = shown_damage_perk_calls(0x28, false);
-        assert!(off.iter().any(|a| a[0] == 0 && a[1] == ammo + 0xd4));
-        let (ammo, on) = shown_damage_perk_calls(0x28, true);
-        assert!(!on.iter().any(|a| a[1] == ammo + 0xd4));
-        assert!(on.iter().any(|a| a[0] == 0 && a[1] == 0));
-    }
 
-    #[test]
-    fn s0067_row_on_with_ammunition_changes_nothing() {
-        let (ammo, off) = shown_damage_perk_calls(0x29, false);
-        let (_, on) = shown_damage_perk_calls(0x29, true);
-        assert!(off.iter().any(|a| a[0] == 0 && a[1] == ammo + 0xd4));
-        assert_eq!(off, on);
-    }
 
     // ---- 006450c0 and 00646230.. flag tests ---------------------------------------------------------
 

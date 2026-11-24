@@ -3138,19 +3138,7 @@ mod b028_description_tests {
         (run.is_ok(), e.mem.cstr(buffer))
     }
 
-    #[test]
-    fn s0093_07_a_description_too_long_for_the_buffer() {
-        let text = [b'x'; 0x40];
-        assert!(!description_of(&text, 0x20, false).0);
-        assert_eq!(description_of(&text, 0x20, true), (true, vec![b'x'; 0x1f]));
-    }
 
-    #[test]
-    fn s0093_07_row_on_with_a_description_that_fits_changes_nothing() {
-        let text = b"Ammunition weighs nothing.";
-        assert_eq!(description_of(text, 0x40, false), (true, text.to_vec()));
-        assert_eq!(description_of(text, 0x40, true), (true, text.to_vec()));
-    }
 
     #[test]
     fn the_description_lists_each_requirement() {

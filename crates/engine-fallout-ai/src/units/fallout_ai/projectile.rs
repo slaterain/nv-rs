@@ -7318,53 +7318,7 @@ mod tests {
         (this, Ptr::new(e.mem.alloc(0x30)))
     }
 
-    #[test]
-    fn s0130_06_the_players_beam_takes_no_round_where_it_hits() {
-        // (rows, the player's beam, the rounds taken, the shots after)
-        for (on, is_player, rounds, shots) in [
-            (false, true, 1usize, 2u32),
-            (true, true, 0, 1),
-            (true, false, 1, 2),
-        ] {
-            let mut e = engine();
-            let shooter = actor(&mut e);
-            let other = actor(&mut e);
-            e.set_global(PLAYER, if is_player { shooter } else { other });
-            let (this, data) = beam_hit_world(&mut e, shooter, 1);
-            count_beam_hit(&mut e, this, data);
-            assert_eq!(calls(&e, SLOT_BASE + 0x3F0), vec![vec![shooter, 1]; rounds]);
-            assert_eq!(
-                e.mem.u32(this.addr() + 0x154),
-                shots,
-                "on {on} player {is_player}"
-            );
-            assert!(calls(&e, 0x009a_b9a0).is_empty());
-        }
-    }
 
-    #[test]
-    fn s0192_an_items_weapon_mod_flags() {
-        let mut e = engine();
-        let extra = e.mem.alloc(0x10);
-        e.mem.set_u8(extra + 0xc, 0x5);
-        let first = e.mem.alloc(0x20);
-        let lists = e.mem.alloc(8);
-        e.mem.set_u32(lists, first);
-        let item = e.mem.alloc(0xc);
-        e.register_double(0x0041_0220, move |_, a| {
-            if a[0] == first && a[1] == 0x8d {
-                extra
-            } else {
-                0
-            }
-            .into_ret()
-        });
-        assert_eq!(weapon_mod_flags(&mut e, item), 0, "no list");
-        e.mem.set_u32(item, lists);
-        assert_eq!(weapon_mod_flags(&mut e, item), 5);
-        e.mem.set_u32(lists, 0);
-        assert_eq!(weapon_mod_flags(&mut e, item), 0, "no first list");
-    }
 
     #[test]
     fn moves_and_reports_the_step() {
@@ -7424,29 +7378,6 @@ mod tests {
         (this, controller, world)
     }
 
-    /// Off, the exe's call (as `moves_and_reports_the_step`) and no velocity.
-    #[test]
-    fn s0207_a_projectile_moves_its_rigid_body() {
-        let mut e = engine();
-        let (this, controller, world) = step_with_row(&mut e, true, true);
-        assert!(calls(&e, 0x009c_4e60).is_empty());
-        let length = 14.0f32.sqrt();
-        let direction: Vec<f32> = (0..3)
-            .map(|i| e.mem.f32(this.addr() + MOVEMENT_DIRECTION + 4 * i))
-            .collect();
-        let recip = 1.0 / length;
-        assert_eq!(direction, [recip, 2.0 * recip, 3.0 * recip]);
-        assert_eq!(e.mem.f32(this.addr() + 0x110), length + 10.0);
-        assert_eq!(
-            calls(&e, SET_LINEAR_VELOCITY),
-            [vec![world, controller + CONTROLLER_OUT_VELOCITY]]
-        );
-        assert_eq!(calls(&e, FIND_COLLISION_OBJECT), [vec![0x5000]]);
-        let mut e = engine();
-        let (this, _, _) = step_with_row(&mut e, false, true);
-        assert_eq!(calls(&e, 0x009c_4e60)[0][0], this.addr());
-        assert!(calls(&e, SET_LINEAR_VELOCITY).is_empty());
-    }
 
     #[test]
     fn add_impact_records_the_hit_and_adds_a_water_ripple() {

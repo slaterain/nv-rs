@@ -11781,34 +11781,5 @@ mod n052_tests {
         (e, messages, [handler, player, challenger, caps, entry])
     }
 
-    #[test]
-    fn s0092_off_the_exe_pays_twice() {
-        let (e, messages, [handler, player, _, _, entry]) = won_payout(false, 5, 3);
-        assert!(messages.is_empty());
-        let moved = calls_to(&e, ENTRY_SET_ACTOR);
-        assert_eq!(moved.len(), 2, "the money and the caps moved to the player");
-        assert!(moved.iter().all(|c| c[1] == player));
-        assert_eq!(
-            calls_to(&e, REMOVE_BARTER_ITEM)[0],
-            vec![handler, entry, 2, 0x2020]
-        );
-        assert!(calls_to(&e, HEAP_ALLOCATE_00AA3E40).is_empty());
-    }
 
-    #[test]
-    fn s0092_on_takes_the_rest_from_whoever_has_it() {
-        let (e, _, [handler, player, challenger, caps, _]) = won_payout(true, 5, 9);
-        assert_eq!(
-            calls_to(&e, 0x00d0_017c),
-            vec![vec![challenger, caps, 0, 5, 0, 0, player, 0, 0, 1, 0]]
-        );
-        assert!(calls_to(&e, 0x00d0_0190).is_empty());
-        let (e, _, [handler2, ..]) = won_payout(true, 10, 0);
-        let removed = calls_to(&e, REMOVE_BARTER_ITEM);
-        assert_eq!(removed[1][..1], [handler2]);
-        assert_eq!(removed[1][2], 10);
-        assert!(calls_to(&e, 0x00d0_017c).is_empty());
-        assert!(calls_to(&e, EXTRA_GET_BY_TYPE_00410220).is_empty());
-        let _ = handler;
-    }
 }

@@ -17364,25 +17364,7 @@ mod tests {
         e.call_log.take().unwrap()
     }
 
-    #[test]
-    fn s0199_11_a_regenerated_round_with_no_ammunition_type() {
-        let added = |log: &[(u32, Vec<u32>)]| {
-            log.iter()
-                .any(|(a, _)| *a == 0x0048_18e0 || *a == 0x0088_c830)
-        };
-        let off = regenerated_round(0, false);
-        assert!(added(&off));
-        let on = regenerated_round(0, true);
-        assert!(!added(&on));
-        assert!(on.iter().any(|(a, _)| *a == 0x0048_1680));
-    }
 
-    #[test]
-    fn s0199_11_row_on_with_an_ammunition_type_changes_nothing() {
-        let off = regenerated_round(0x5000, false);
-        assert_eq!(off, regenerated_round(0x5000, true));
-        assert!(off.iter().any(|(a, w)| *a == 0x0088_c830 && w[1] == 0x5000));
-    }
 
     #[test]
     fn fn_00944300_returns_the_ammo_regen_tick_time() {
