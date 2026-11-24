@@ -1,5 +1,5 @@
-//! Every call a built-in extender (xNVSE `crates/nvse`, JIP LN `crates/jip`, MCM
-//! `crates/mcm`) makes to one of the game's
+//! Every call a built-in extender (xNVSE `crates/nvse`, JIP LN `crates/jip`)
+//! makes to one of the game's
 //! functions by a constant address passes as many argument words as that function's translation
 //! takes: a call with too few stops the game ("call has N argument words, needs more"), one with
 //! too many hands a later argument to nobody. Here because this crate registers every translation.
@@ -36,7 +36,7 @@
 //! Not checked at all: `.vcall(this, SLOT, ..)` and `.call_next(ADDR, ..)` sites. A vtable slot's
 //! target depends on the object's class and a wrapped address's next function on what else wraps
 //! it, neither known from the text. For those, the ignored test below probes listed translations
-//! (`NV_PROBE`), and `NV_JIP_SRC` (`NV_NVSE_SRC`, `NV_MCM_SRC`, ...) points a crate's test at
+//! (`NV_PROBE`), and `NV_JIP_SRC` (`NV_NVSE_SRC`, `NV_JG_SRC`, ...) points a crate's test at
 //! another copy of its source (an open pull request's branch, exported).
 
 use engine as _;
@@ -47,7 +47,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 /// The extender crates the test reads.
-const CRATES: [&str; 4] = ["jip", "nvse", "mcm", "johnnyguitar"];
+const CRATES: [&str; 3] = ["jip", "nvse", "johnnyguitar"];
 
 /// One direct call in a crate's source.
 #[derive(Debug)]
@@ -1704,11 +1704,6 @@ fn jip_passes_each_game_function_the_words_it_takes() {
 #[test]
 fn nvse_passes_each_game_function_the_words_it_takes() {
     check("nvse");
-}
-
-#[test]
-fn mcm_passes_each_game_function_the_words_it_takes() {
-    check("mcm");
 }
 
 /// JohnnyGuitar NVSE (its editor ids): each game function it calls by address gets the words it takes.

@@ -113,9 +113,6 @@ pub(crate) fn install_rows_and_extenders(engine: &mut Engine, choice: &fixes::Ch
     // johnnyguitarnvse.dll after jip_nvse.dll and before MCM.dll (`crates/johnnyguitar`); after
     // JIP, so its light slots stay JIP's.
     johnnyguitar::install(engine);
-    // The Mod Configuration Menu's plugin, when its row is on: xNVSE loads MCM.dll after
-    // jip_nvse.dll and before ui_organizer.dll (`crates/mcm`).
-    mcm::install(engine);
 }
 
 /// The start-up log's lines on JIP's state, after it installed (`row_on`: its row asked for it;

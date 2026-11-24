@@ -13,7 +13,6 @@ Marks: ✅ working (not free of bugs), 🔨 started, ⬜ planned.
 - [Native 64-bit code](#native-64-bit-code)
 - [xNVSE built in](#xnvse-built-in)
 - [JIP LN built in](#jip-ln-built-in)
-- [Mod Configuration Menu (MCM) built in](#mod-configuration-menu-mcm-built-in)
 - [lStewieAl's Tweaks](#lstewieals-tweaks)
 - [Mod installers (FOMOD)](#mod-installers-fomod)
 - [The launcher](#the-launcher)
@@ -108,8 +107,8 @@ console commands it re-exports are copies of the console's own.
 ## JIP LN built in
 
 🔨 JIP LN's script commands and game patches, with nothing to install. All are built, and JIP
-answers "installed" in the default fixes preset, together with MCM's plugin (vanilla
-leaves both off; `bJIPInstalled=0` in `Fallout.ini` turns JIP off). The per-patch detail is in
+answers "installed" in the default fixes preset, (vanilla
+leaves it off; `bJIPInstalled=0` in `Fallout.ini` turns JIP off). The per-patch detail is in
 [FIXES.md, "JIP LN NVSE's game patches"](FIXES.md#jip-ln-nvses-game-patches) and
 [FIXES.md, "JIP LN NVSE switched on"](FIXES.md#jip-ln-nvse-switched-on).
 
@@ -272,12 +271,6 @@ Not built, because they do nothing on this port:
 - the editor's two patches: the port does not run the editor (GECK);
 - NVAC's console alerts and Enhanced Camera's ground fix: they patch those programs' DLLs, which the
   port does not load (Enhanced Camera's fix is not one of the 183).
-
-## Mod Configuration Menu (MCM) built in
-
-🔨 The script commands MCM's menu needs, with nothing to install: its nine commands (MCM 1.5's
-`MCM.dll`, built from its machine code), its menu traits and its mods' INI settings, kept between
-sessions beside the saves. On in the fixes preset with JIP, off in vanilla (`bMCM`, `NV_MCM`).
 
 ## lStewieAl's Tweaks
 
