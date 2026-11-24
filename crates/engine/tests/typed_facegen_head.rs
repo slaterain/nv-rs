@@ -18,7 +18,9 @@
 
 use engine as _;
 use engine_core::prelude::*;
-use engine_core::typed::diff::{Case, Diff, Input};
+use engine_core::typed::diff::{
+    memory_differences_beside_stack, memory_digest_beside_stack, Case, Diff, Input,
+};
 use engine_core::typed::leaf;
 use engine_typed::facegen::{self, head};
 
@@ -711,4 +713,213 @@ fn facegen_head_get_compressed_image() {
     .max_calls(100_000)
     .run()
     .assert_same();
+}
+
+// ------------------------------------------------------------------------------------------------
+// The checks that fail: translation and typed version on two engines made alike
+// ------------------------------------------------------------------------------------------------
+
+/// The invalid-parameter calls (`_invalid_parameter_noinfo`, `00ec7c56`), counted.
+const INVALID: u32 = TEST + 0x40;
+
+/// `_invalid_parameter_noinfo` as a counter that goes on (as the C runtime's goes on to report and
+/// the caller then reads on, which a release build does when no handler stops it).
+fn count_invalid(e: &mut Engine) {
+    e.register(0x00ec_7c56, |e, _| {
+        counted(e, INVALID);
+        ret(0)
+    });
+}
+
+/// Runs the translation at `typed.0` and, on a second engine made alike, the typed version, on the
+/// words `setup` answers, and compares what the Diff cannot when a checked getter fails (the
+/// translation's invalid-parameter calls lie under the getters the Diff leaves out, the typed
+/// version's are its own): the answer, how many invalid-parameter calls each made (at least one),
+/// the heap's top and free bytes, and every byte of memory beside the stack. Under both control
+/// words.
+fn both_ways(typed: (u32, AbiFn), setup: impl Fn(&mut Engine) -> Vec<u32>) {
+    for word in [0x027fu16, 0x007f] {
+        let mut sides = Vec::new();
+        for typed_side in [false, true] {
+            let mut e = Engine::new_untyped_for_test();
+            engine_core::x87::set_control_word(word);
+            let words = setup(&mut e);
+            count_invalid(&mut e);
+            // The stack for locals made before the call, as the Diff makes it: a side that never
+            // uses it would otherwise leave the heap a megabyte lower.
+            e.with_stack(4, |_, _| ());
+            if typed_side {
+                e.register(typed.0, typed.1);
+            }
+            let answer = e.call(typed.0, &words);
+            sides.push((e, answer.eax));
+        }
+        let (a, b) = (&sides[0].0, &sides[1].0);
+        assert_eq!(
+            sides[0].1, sides[1].1,
+            "the answer, control word {word:04x}"
+        );
+        assert!(
+            a.mem.u32(INVALID) > 0,
+            "no check failed: the case tests nothing"
+        );
+        assert_eq!(
+            a.mem.u32(INVALID),
+            b.mem.u32(INVALID),
+            "invalid-parameter calls"
+        );
+        assert_eq!(
+            (a.mem.heap_top(), a.mem.heap_available()),
+            (b.mem.heap_top(), b.mem.heap_available()),
+            "the heap"
+        );
+        let differences = memory_differences_beside_stack(a, b, 8);
+        assert!(
+            differences.is_empty(),
+            "memory differs at {differences:08x?}, control word {word:04x}"
+        );
+        assert_eq!(memory_digest_beside_stack(a), memory_digest_beside_stack(b));
+    }
+}
+
+/// A head part for [`facegen_head_failing_checks_of_the_morphs`]: `vertices` in the geometry,
+/// `offsets` per morph (the EGM data is built for `offsets - 3`), `total` additional vertices (none
+/// when not above `vertices`), the set 0 coordinates with `floats` coefficients.
+fn failing_mesh(e: &mut Engine, vertices: u32, offsets: u32, total: u32, floats: u32) -> Vec<u32> {
+    constants(e, 1, 256.0, 0x3780_0000);
+    stand_ins(e);
+    mesh_stand_ins(e);
+    let stride = 16;
+    let array = e.mem.alloc(stride * vertices + 16);
+    for v in 0..vertices {
+        for k in 0..4 {
+            e.mem
+                .set_u32(array + stride * v + 4 * k, value(v, k + 5, 1));
+        }
+    }
+    e.mem.set_u32(ARRAY, array);
+    e.mem.set_u32(STRIDE, stride);
+    e.mem.set_u32(VERTICES, vertices);
+    e.mem.set_u32(HAS_DATA, 3);
+    if total > vertices {
+        let extra = e.mem.alloc(12 * total);
+        for v in 0..total {
+            for k in 0..3 {
+                e.mem.set_u32(extra + 12 * v + 4 * k, value(v, k + 9, 1));
+            }
+        }
+        let data = e.mem.alloc(0x18);
+        e.mem.set_u32(data + 0xc, extra);
+        e.mem.set_u32(data + 0x10, total);
+        e.mem.set_u32(EXTRA_DATA, data);
+    }
+    let data = egm(e, offsets - 3, [3, 2], 0, 1);
+    let coords = coordinates(e, [floats, 2, 0, 0], 1);
+    let mesh = e.mem.alloc(0x24);
+    e.mem.set_u32(mesh + 8, data);
+    e.mem.set_u32(LOADED, 1);
+    let model = e.mem.alloc(0x10);
+    e.mem.set_u32(model + 8, mesh);
+    let geometry = e.mem.alloc(0xc0);
+    let geometry_data = e.mem.alloc(0x40);
+    e.mem.set_u32(geometry + 0xb8, geometry_data);
+    vec![model, coords, geometry, 1]
+}
+
+#[test]
+fn facegen_head_failing_checks_of_the_morphs() {
+    let typed = || {
+        entry!(
+            0x0065_a970,
+            head::apply_coordinates(Ptr<_>, u32, u32, u8) -> bool
+        )
+    };
+    // The offsets end before the additional vertices do: their reads and steps past the end.
+    both_ways(typed(), |e| failing_mesh(e, 9, 10, 12, 3));
+    // The set 0 coordinates have no coefficient: each morph's row read past the empty vector.
+    both_ways(typed(), |e| failing_mesh(e, 6, 9, 0, 0));
+}
+
+/// A face tint for [`facegen_head_failing_checks_of_the_tint`]: 4 by 3 texels, three morphs; the
+/// second morph's last channel empty when `empty_channel`, the coefficients' vector empty (its
+/// count still three) when `empty_floats`.
+fn failing_tint(e: &mut Engine, empty_channel: bool, empty_floats: bool) -> Vec<u32> {
+    constants(e, 1, 256.0, 0x3780_0000);
+    stand_ins(e);
+    tint_stand_ins(e);
+    let data = egt(e, 4, 3, 3, 1, None, 1);
+    if empty_channel {
+        let morph = e.mem.u32(data + 4 + 0xc) + 0x58;
+        let vector = morph + 0x10 + 0x18 * 2;
+        let first = e.mem.u32(vector + 0xc);
+        e.mem.set_u32(vector + 0x10, first);
+    }
+    let coords = coordinates(e, [0, 0, 3, 0], 1);
+    if empty_floats {
+        let set = coords + 0x40;
+        let first = e.mem.u32(set + 0xc);
+        e.mem.set_u32(set + 0x10, first);
+    }
+    let texture_data = e.mem.alloc(0xc);
+    e.mem.set_u32(texture_data + 8, data);
+    e.mem.set_u32(LOADED, 1);
+    let model = e.mem.alloc(0x10);
+    e.mem.set_u32(model + 0xc, texture_data);
+    let texture = e.mem.alloc(4);
+    vec![model, coords, texture, 0]
+}
+
+#[test]
+fn facegen_head_failing_checks_of_the_tint() {
+    let typed = || {
+        entry!(
+            0x0065_b410,
+            head::apply_coordinate_texturing(Ptr<_>, u32, u32, u32) -> bool
+        )
+    };
+    both_ways(typed(), |e| failing_tint(e, true, false));
+    both_ways(typed(), |e| failing_tint(e, false, true));
+}
+
+/// An image for [`facegen_head_failing_checks_of_the_image`]: 3 by 2 pixels with `values` values
+/// in a block with room for all six (the reads past the vector's end stay in it); its vector with
+/// no proxy when `no_proxy` (the page at 0 mapped, so the missing container's last reads as 0).
+fn failing_image(e: &mut Engine, values: u32, no_proxy: bool) -> Vec<u32> {
+    constants(e, 1, 256.0, 0x3780_0000);
+    stand_ins(e);
+    image_stand_ins(e);
+    let block = e.mem.alloc(16 * 6);
+    for k in 0..6u32 {
+        for word in 0..4u32 {
+            let bits = (((k * 53 + word * 29) % 600) as f32 / 2.0 - 20.0).to_bits();
+            e.mem.set_u32(block + 16 * k + 4 * word, bits);
+        }
+    }
+    let image = e.mem.alloc(0x2c);
+    e.mem.set_u32(image + 0xc + 0xc, block);
+    e.mem.set_u32(image + 0xc + 0x10, block + 16 * values);
+    if no_proxy {
+        e.map(0, 0x1000);
+    } else {
+        proxy(e, image + 0xc);
+    }
+    e.mem.set_u32(image + 0x24, 3);
+    e.mem.set_u32(image + 0x28, 2);
+    let size = e.mem.alloc(8);
+    vec![image, 0, 255.0f32.to_bits(), 1.0f32.to_bits(), size]
+}
+
+#[test]
+fn facegen_head_failing_checks_of_the_image() {
+    let typed = || {
+        entry!(
+            0x0064_ceb0,
+            head::get_compressed_image(Ptr<_>, f32, f32, f32, u32) -> u32
+        )
+    };
+    // Short by one and by two: the value-by-value path, its last reads and steps past the end.
+    both_ways(typed(), |e| failing_image(e, 5, false));
+    both_ways(typed(), |e| failing_image(e, 4, false));
+    // No proxy: every read and step fails a test.
+    both_ways(typed(), |e| failing_image(e, 6, true));
 }
