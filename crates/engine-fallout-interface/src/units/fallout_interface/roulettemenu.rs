@@ -1485,23 +1485,6 @@ const LIST_REMOVE_FIRST_0063F7B0: u32 = 0x0063_f7b0;
 const MEMORY_MANAGER_011F6238: u32 = 0x011f_6238;
 const MEMORY_FREE_00AA4060: u32 = 0x00aa_4060;
 
-/// Row S0196.03's step, Tweaks' `tList::DeleteHead` on a list of `[item, next]` nodes (the first in
-/// place): the first item is freed and cleared; with a next node, its item and link are copied in and
-/// that node is freed.
-fn delete_head(e: &mut Engine, list: u32) {
-    let item = e.mem.u32(list);
-    if item != 0 {
-        e.call(MEMORY_FREE_00AA4060, &args![MEMORY_MANAGER_011F6238, item]);
-        e.mem.set_u32(list, 0);
-    }
-    let next = e.mem.u32(list + 4);
-    if next != 0 {
-        e.mem.set_u32(list, e.mem.u32(next));
-        e.mem.set_u32(list + 4, e.mem.u32(next + 4));
-        e.call(MEMORY_FREE_00AA4060, &args![MEMORY_MANAGER_011F6238, next]);
-    }
-}
-
 /// The second trait id the bet and chip tiles use (`011da86c`), the "wrong bet" sound
 /// toggle (`011da900`), the spin's elapsed time (`011da904`, a `float`), the state seen on
 /// the last idle (`011a081c`) and `DoIdle`'s function-local static (`011da908`, its guard

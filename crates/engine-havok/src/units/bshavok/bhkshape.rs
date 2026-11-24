@@ -1238,7 +1238,6 @@ mod tests_a01 {
     }
 
     fn stairs_on(e: &mut Engine, on: bool) {
-        e.set_stewie(engine_core::extend::stewie::STAIR_MATERIAL, on);
     }
 
     /// S0216 off: the exe's `((word & 0x40) != 0) == 0x40` never holds, so a stair word answers 0;

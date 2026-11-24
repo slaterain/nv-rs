@@ -16,9 +16,6 @@ const MISSING_ON_OWNER_NAME: u32 = 0x0101_d424;
 const MISSING_ON_OWNER_ID: u32 = 0x0101_d3e4;
 /// "MASTERFILE: Unable to find race (%08X) on unknown owner."
 const MISSING_ON_UNKNOWN_OWNER: u32 = 0x0101_d3a8;
-/// The race lStewieAl's Tweaks gives an NPC whose race is missing (CaucasianVanilla).
-const RACE_CAUCASIAN_VANILLA: u32 = 0x19;
-
 // Translated from 0048b870 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `TESRaceForm::CopyComponent` (Xbox PDB; `ECX` and one stack word, the source component,
 /// `RET 4`): casts the source from `BaseFormComponent` to `TESRaceForm` with

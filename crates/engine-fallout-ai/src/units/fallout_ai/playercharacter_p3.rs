@@ -458,15 +458,6 @@ const EXTRA_CONTAINER_CHANGES: u32 = 0x15;
 const EXTRA_AMMO: u32 = 0x6e;
 const FORM_TYPE_LIST: u8 = 0x55;
 
-// Translated from lStewieAl's Tweaks 10.05 (xNVSE's GameUI.cpp): IsAmmoInventoryActive.
-/// Whether the inventory menu is open on its ammunition tab.
-fn ammo_inventory_active(e: &mut Engine) -> bool {
-    e.mem.u8(MENU_VISIBILITY + INVENTORY_MENU_ID) != 0 && {
-        let menu = e.mem.u32(INVENTORY_MENU);
-        e.mem.u32(menu + 0x84) == INVENTORY_FILTER_AMMO
-    }
-}
-
 /// The data of `actor`'s container changes (`ExtraContainerChanges` in its extra list at `+0x44`,
 /// its data at `+0xC`), 0 when it has none.
 fn container_changes_data(e: &mut Engine, actor: u32) -> u32 {
@@ -505,49 +496,6 @@ pub(crate) fn tweaks_item_count(e: &mut Engine, actor: u32, form: u32) -> i32 {
         node = e.mem.u32(node + 4);
     }
     total
-}
-
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/RememberAmmoCountOnLoad.cpp):
-// GetAmmoForHotkeySlotHook.
-/// Row S0089.08: none while the inventory's ammunition tab is open (the player is choosing);
-/// else the ammunition remembered on the equipped weapon (the `ExtraAmmo`, +0xC, of its entry's
-/// first extra list) when the player has rounds of it; else the hotkeyed ammunition of `slot`
-/// (`004bfb30`) when the player has rounds of it; else none.
-fn ammo_for_hot_key_slot(e: &mut Engine, player: u32, slot: u32) -> u32 {
-    if ammo_inventory_active(e) {
-        return 0;
-    }
-    let extra = e
-        .call(
-            EXTRA_GET_BY_TYPE,
-            &args![player + 0x44, EXTRA_CONTAINER_CHANGES],
-        )
-        .u32();
-    let data = e.mem.u32(extra + 0xc);
-    let process = e.mem.u32(player + 0x68);
-    let weapon_info = e.vcall(process, 0x148, &args![]).u32();
-    if weapon_info != 0 {
-        // The entry's extra lists (a `tList`: its first node's data). Tweaks reads the list
-        // pointer without a test; an entry without one has nothing remembered here.
-        let lists = e.mem.u32(weapon_info);
-        let first = if lists != 0 { e.mem.u32(lists) } else { 0 };
-        if first != 0 {
-            let remembered = e.call(EXTRA_GET_BY_TYPE, &args![first, EXTRA_AMMO]).u32();
-            if remembered != 0 {
-                let ammo = e.mem.u32(remembered + 0xc);
-                if ammo != 0 && e.call(INVENTORY_GET_OBJECT_COUNT, &args![data, ammo]).u32() != 0 {
-                    return ammo;
-                }
-            }
-        }
-    }
-    let ammo = e.call(HOT_KEY_TO_OBJECT, &args![player, slot]).u32();
-    let count = e.call(INVENTORY_GET_OBJECT_COUNT, &args![data, ammo]).u32();
-    if count != 0 {
-        ammo
-    } else {
-        0
-    }
 }
 
 // Translated from lStewieAl's Tweaks 10.05 (Fixes/RememberAmmoCountOnLoad.cpp):
@@ -9476,7 +9424,6 @@ mod tests {
         let menu = e.mem.alloc(0x100);
         e.mem.set_u32(menu + 0x84, tab);
         e.mem.set_u32(0x011d_9ea4, menu);
-        e.set_stewie(engine_core::extend::stewie::HOTKEY_AMMO_NEEDS_ROUNDS, on);
         let log = logged(&mut e, |e| {
             e.call(
                 0x0095_d450,

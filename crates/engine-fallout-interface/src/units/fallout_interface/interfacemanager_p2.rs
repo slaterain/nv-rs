@@ -758,21 +758,6 @@ pub fn interface_manager_do_wheel_move(
 /// `RecipeMenu`'s vtable (`0107048c`).
 const RECIPE_MENU_VTABLE: u32 = 0x0107_048c;
 
-/// lStewieAl's Tweaks' `MenuFixes::RecipeMenuHandleMousewheel` (row S0022.08): over tile id 1 (the
-/// category title) the menu clicks (vtable +0xC, `HandleClick`) id 2 for the wheel up (the
-/// interface manager's `mouseWheel`, +0x44, above 0; Tweaks'
-/// `bInvertContainerTitleScrollwheelDirection` is 0 in VNV and not built) and id 0 otherwise.
-/// Its answer (a `void` function's) is taken as 0.
-fn stewie_recipe_menu_wheel(e: &mut Engine, menu: u32, tile_id: u32) {
-    if tile_id != 1 {
-        return;
-    }
-    let manager = e.mem.u32(0x011d_8a80);
-    let up = e.mem.f32(manager + 0x44) > 0.0;
-    let id = if up { 2u32 } else { 0 };
-    e.vcall(menu, 0xc, &args![id, 0u32]);
-}
-
 // Translated from 007181d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `InterfaceManager::EnterRenderedMenu` (Xbox PDB): with a menu, makes it
 /// the current rendered menu (`00974d90` decides whether its virtual
@@ -4116,7 +4101,6 @@ mod tests {
 
     fn fn_00719580_refreshes_children_before_the_matching_tile_row(on: bool) {
         let mut e = base_engine();
-        e.set_stewie(stewie::TILE_LABEL_NULL_NAME, on);
         e.register(0x0055_9450, |e, a| ret(e.mem.u32(a[0])));
         e.register(0x0057_cbe0, |e, a| {
             let node = e.mem.u32(a[1]);

@@ -2122,7 +2122,6 @@ mod n053_tests {
 
     fn close_offers_a_matching_save_or_closes_row(on: bool) {
         let mut e = engine();
-        e.set_stewie(stewie::CREDITS_NO_LOADED_SAVE, on);
         let start = start_menu(&mut e);
         e.mem.set_u32(start + 0x1a8, 0x4000_0000);
         e.call(0x0075_f750, &args![]);

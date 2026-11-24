@@ -59,10 +59,6 @@ pub mod stewie_menus {
         }
     }
 
-    /// Tweaks' `IsControllerModeAndNotConsoleOpen`: the pad, with the console closed.
-    pub fn controller_and_no_console(e: &Engine) -> bool {
-        controller_connected(e) && e.mem.u8(CONSOLE_OPEN) == 0
-    }
 }
 
 /// The vtable of the `BSSimpleArray` instance with RTTI name `.?AV?$BSSimpleArray@V?$BSStringT@D@@$0EAA@@` (read at the word before the vtable: its complete object locator, then the type descriptor).
@@ -3086,35 +3082,6 @@ const ACTION_COPY: u32 = 0x7d0;
 const ACTION_SUB: u32 = 0x7d2;
 const ACTION_MUL: u32 = 0x7d3;
 
-/// lStewieAl's Tweaks' `MenuFixes::OnReconnectControllerSetMapSelectionPos` (row S0022.31) on
-/// `tile`'s `x` (0xFA1) or `y` (0xFA2): the value is taken off the reaction map and made
-/// `(parent's width - own width) * 0.5` (height for `y`) as value actions, then calculated, so the
-/// rectangle stays centred in its parent. Tweaks reads through a null value (a tile without the
-/// trait); here nothing is done then.
-fn stewie_centre_in_parent(e: &mut Engine, tile: u32, trait_id: u32) {
-    let size = if trait_id == 0xfa1 {
-        TRAIT_WIDTH
-    } else {
-        TRAIT_HEIGHT
-    };
-    let value = e.call(TILE_GET_VALUE, &args![tile, trait_id]).u32();
-    if value == 0 {
-        return;
-    }
-    e.call(VALUE_CLEAR_ACTIONS, &args![value]);
-    let parent = e.mem.u32(tile.wrapping_add(0x28));
-    e.call(
-        VALUE_ADD_ACTION_TILE,
-        &args![value, ACTION_COPY, parent, size],
-    );
-    e.call(VALUE_ADD_ACTION_TILE, &args![value, ACTION_SUB, tile, size]);
-    e.call(
-        VALUE_ADD_ACTION_FLOAT,
-        &args![value, ACTION_MUL, 0.5f32.to_bits()],
-    );
-    e.call(VALUE_CALCULATE, &args![value, 0u32]);
-}
-
 // Translated from 0079b430 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (cdecl): clears the open map menu's
 /// `pSelectedNote` when it is `note`.
@@ -5123,21 +5090,6 @@ const PAD_BEFORE: u32 = 0x011f_35b8;
 const PAD_BUTTON_X: u16 = 0x4000;
 /// Thiscall on a tile (trait): plays the sound the trait names (`00a0b110`); `clicksound` is 0xFCB.
 const TILE_PLAY_SOUND_00A0B110: u32 = 0x00a0_b110;
-
-/// lStewieAl's Tweaks' `MenuFixes::OnMapMove` (row S0022.25): with the pad's X pressed this
-/// frame (xNVSE's `GetXIControlPressed(kXboxCtrl_BUTTON_X)`: down now, up last frame) the menu's
-/// `HandleClick` (vtable +0xC) with the X button's id 0xC and no tile, then the X button's tile
-/// (`MM_ButtonX`, +0x58) plays its click sound.
-fn stewie_map_move(e: &mut Engine, this: Ptr<MapMenu>) {
-    let now = e.mem.u16(PAD_NOW + 4);
-    let before = e.mem.u16(PAD_BEFORE + 4);
-    if now & PAD_BUTTON_X != 0 && before & PAD_BUTTON_X == 0 {
-        let base = this.addr();
-        e.vcall(base, 0xc, &args![0xcu32, 0u32]);
-        let button = e.mem.u32(base + 0x58);
-        e.call(TILE_PLAY_SOUND_00A0B110, &args![button, 0xfcbu32]);
-    }
-}
 
 fn gamepad_sticks(e: &mut Engine, this: Ptr<MapMenu>) -> bool {
     let base = this.addr();
@@ -8099,49 +8051,6 @@ pub fn map_menu_add_companion_markers(e: &mut Engine, this: Ptr<MapMenu>) {
 const TRAIT_NAME_TO_ID_00A01860: u32 = 0x00a0_1860;
 /// A map marker tile's `id` (`kTile_MM_LocationMarker`).
 const LOCATION_MARKER_ID: f64 = 26.0;
-
-/// lStewieAl's Tweaks' `MenuFixes::OnResetCompanionTiles` (row S0022.41) before the map tile's
-/// lookup of child 0x25: each child of the map tile whose `id` (0xFAA) is a location marker's
-/// (0x1A) and whose `_LocationName` string is `"Companion"` (case-blind) is taken out of the
-/// children list (`0057c730`), released (`009ff690`) and destroyed (vtable +0 with 1); the walk
-/// starts again from the first child after each one, as Tweaks' does. A child without the
-/// `_LocationName` value is passed over (Tweaks' `GetValueString` answers null for it).
-fn stewie_remove_companion_markers(e: &mut Engine, this: Ptr<MapMenu>) {
-    let map = e.get(this, MapMenu::pMapTile);
-    let name_trait = e
-        .call(TRAIT_NAME_TO_ID_00A01860, &args![LOCATION_NAME_TEXT])
-        .u32();
-    // The children list (`DList<Tile>` at +4): first node at +4; a node is next, prev, data.
-    let mut node = e.mem.u32(map.wrapping_add(4));
-    while node != 0 {
-        let tile = e.mem.u32(node.wrapping_add(8));
-        if tile != 0 {
-            let id = e.call(TILE_GET_FLOAT, &args![tile, 0xfaau32]).f64();
-            if equal(id, LOCATION_MARKER_ID) {
-                let value = e.call(TILE_GET_VALUE, &args![tile, name_trait]).u32();
-                let name = if value == 0 {
-                    0
-                } else {
-                    e.mem.u32(value.wrapping_add(0xc))
-                };
-                if name != 0 && e.call(STRICMP, &args![name, COMPANION_TEXT]).u32() == 0 {
-                    e.with_stack(4, |e, slot| {
-                        e.mem.set_u32(slot.addr(), tile);
-                        e.call(
-                            CHILD_LIST_REMOVE_0057C730,
-                            &args![map.wrapping_add(4), slot],
-                        );
-                    });
-                    e.call(TILE_RELEASE, &args![tile]);
-                    e.vcall(tile, 0, &args![1u32]);
-                    node = e.mem.u32(map.wrapping_add(4));
-                    continue;
-                }
-            }
-        }
-        node = e.mem.u32(node);
-    }
-}
 
 /// Whether `reference` shares the player's cell (`008d6f30`).
 fn in_player_cell(e: &mut Engine, reference: u32) -> bool {
@@ -14581,36 +14490,6 @@ mod n056_tests {
         e.mem.set_u8(rows::CONTROLLER_DISABLED, disabled);
         e.mem.set_u8(rows::CONTROLLER_CONNECTED, connected);
         e.mem.set_u8(rows::CONSOLE_OPEN, console);
-    }
-
-    /// xNVSE's `IsControllerConnected` (a disabled byte of exactly 1 says no), Tweaks'
-    /// `IsControllerConnectedOrMouseNotMoved` and `IsControllerModeAndNotConsoleOpen`.
-    #[test]
-    fn stewie_controller_tests_read_the_bytes_as_xnvse_does() {
-        for (disabled, connected, moved, console, pad, or_still, no_console) in [
-            (0, 0, 1, 0, false, false, false),
-            (0, 0, 0, 0, false, true, false),
-            (0, 1, 1, 0, true, true, true),
-            (0, 1, 1, 1, true, true, false),
-            (1, 1, 1, 0, false, false, false),
-            (1, 1, 0, 0, false, true, false),
-            (2, 1, 1, 0, true, true, true),
-        ] {
-            let mut e = engine();
-            controls(&mut e, disabled, connected, moved, console);
-            let case = (disabled, connected, moved, console);
-            assert_eq!(rows::controller_connected(&e), pad, "{case:?}");
-            assert_eq!(rows::controller_or_mouse_still(&e), or_still, "{case:?}");
-            assert_eq!(rows::controller_and_no_console(&e), no_console, "{case:?}");
-        }
-    }
-
-    /// The group's bits are share 3's first twelve fix bits (470 on), one each.
-    #[test]
-    fn stewie_menu_rows_hold_share_3s_first_bits() {
-        for (n, (name, row)) in rows::ROWS.iter().enumerate() {
-            assert_eq!(row.index(), 470 + n, "{name}");
-        }
     }
 
     /// `UpdateQuests` with an active quest: the focus calls and the calls of `004b71d0`.

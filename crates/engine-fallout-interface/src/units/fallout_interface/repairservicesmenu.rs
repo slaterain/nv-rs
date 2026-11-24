@@ -702,10 +702,6 @@ fn update_keeping_scroll(e: &mut Engine, this: Ptr) {
     repair_services_menu_update(e, this);
 }
 
-/// `Actor::ResetActorDTDR`'s vtable slot (xNVSE's `Actor` virtuals; Tweaks'
-/// `VendorRepairItemResetDRDT` calls `[vtable+0x3C4]`).
-const RESET_ACTOR_DT_DR: u32 = 0x3c4;
-
 /// The repaired condition the vendor reaches: `0040ebd0((setting 011d0ff0 + (setting
 /// 011d018c - setting 011d0ff0) * iVendorRepairSkill / 100) / 10, 1.0)`, as a `float`.
 fn vendor_fraction(e: &mut Engine, this: Ptr) -> u32 {

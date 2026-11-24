@@ -472,35 +472,6 @@ const STRING_TABLE_ADD: u32 = 0x00a5_b690;
 const STRING_TABLE_RELEASE: u32 = 0x0043_81d0;
 const VSLOT_ATTACH_CHILD: u32 = 0xdc;
 
-// Translated from lStewieAl's Tweaks 10.05, Fixes/ToggleNavMeshFix.cpp: SetRootDrawNode (with
-// Internal/netimmerse.cpp's NiNode::Create and NiFixedString::operator=).
-/// With no root node: a new `NiNode` named "NavMeshRootNode" (its name `+8` a global string, the
-/// old one released), kept with one more reference (`+4`), and attached to the scene graph
-/// (`AttachChild(node, true)`).
-fn nav_mesh_set_root_draw_node(e: &mut Engine) {
-    if e.global::<u32>(NAV_MESH_ROOT_NODE) != 0 {
-        return;
-    }
-    let scene_graph = e.global::<u32>(SCENE_GRAPH);
-    let node = e.call(NI_NODE_CREATE, &args![]).u32();
-    let name = b"NavMeshRootNode\0";
-    e.with_stack(name.len() as u32, |e, at| {
-        e.mem.write(at.addr(), name);
-        let old = e.mem.u32(node + 8);
-        if old != at.addr() {
-            let handle = e.call(STRING_TABLE_ADD, &args![at.addr()]).u32();
-            e.mem.set_u32(node + 8, handle);
-            if old != 0 {
-                e.call(STRING_TABLE_RELEASE, &args![old]);
-            }
-        }
-    });
-    e.set_global(NAV_MESH_ROOT_NODE, node);
-    let count = e.mem.u32(node + 4);
-    e.mem.set_u32(node + 4, count.wrapping_add(1));
-    e.vcall(scene_graph, VSLOT_ATTACH_CHILD, &args![node, 1u32]);
-}
-
 fn nav_mesh_set_draw(e: &mut Engine, draw: bool) {
     let render = nav_mesh_render(e);
     e.call(NAV_MESH_RENDER_SET_DRAW, &args![render, draw]);
@@ -1018,30 +989,6 @@ const DATA_HANDLER_CELL_BY_NAME: u32 = 0x0046_1ae0;
 const LOOKUP_FORM_BY_ID: u32 = 0x0048_39c0;
 /// `kFormType_TESObjectCELL`.
 const FORM_TYPE_CELL: u8 = 0x39;
-
-// Translated from lStewieAl's Tweaks 10.05, main.h: CenterOnCellHook.
-/// The cell `CenterOnCellHook` hands the player's `CenterOnCell`: `DataHandler::GetCellByName`
-/// with `name`; failing that, `strtoul(name, nullptr, 16)` when not 0, looked up as a form id
-/// and kept only when it is a cell (its type byte `+4`).
-fn center_on_cell_hook_cell(e: &mut Engine, name: u32) -> u32 {
-    let handler = e.global::<u32>(DATA_HANDLER);
-    let cell = e
-        .call(DATA_HANDLER_CELL_BY_NAME, &args![handler, name])
-        .u32();
-    if cell != 0 {
-        return cell;
-    }
-    let id = strtoul_hex(&e.mem.cstr(name));
-    if id == 0 {
-        return 0;
-    }
-    let form = e.call(LOOKUP_FORM_BY_ID, &args![id]).u32();
-    if form != 0 && e.mem.u8(form + 4) == FORM_TYPE_CELL {
-        form
-    } else {
-        0
-    }
-}
 
 /// The C runtime's `strtoul(text, nullptr, 16)`: blanks skipped, an optional sign, an optional
 /// `0x`/`0X`, then hex digits; a value past 32 bits gives `ULONG_MAX`, a `-` negates the value

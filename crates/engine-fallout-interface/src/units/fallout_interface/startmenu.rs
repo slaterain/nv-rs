@@ -423,9 +423,6 @@ const TICK_COUNT: u32 = 0x0045_7fe0;
 /// `operator new(size)` (`00401000`) and `operator delete` (`00401030`).
 const OPERATOR_NEW: u32 = 0x0040_1000;
 const OPERATOR_DELETE: u32 = 0x0040_1030;
-/// The settings' save (`007d6d70`, Tweaks' `SaveIniSettings`) and
-/// `HUDMainMenu::UpdateVisibilityState` (`00771700`, xNVSE), lStewieAl's Tweaks' S0020.
-const SAVE_INI_SETTINGS_007D6D70: u32 = 0x007d_6d70;
 const HUD_UPDATE_VISIBILITY_STATE_00771700: u32 = 0x0077_1700;
 /// The interface manager object getter (`004b7210`, the word at
 /// `011d8a80`, per `interface.rs`) and its `pMenusRoot` getter (`00586150`:
@@ -5822,7 +5819,6 @@ mod tests {
 
     fn get_at_by_list_index_compares_the_tiles_trait_row(on: bool) {
         let mut r = rig();
-        r.e.set_stewie(stewie::LIST_BOX_GET_AT_NULL_ITEM, on);
         let a = r.item(0xc1, 0);
         let b = r.item(0xc2, 0);
         let list = r.list_box(&[a, b]);

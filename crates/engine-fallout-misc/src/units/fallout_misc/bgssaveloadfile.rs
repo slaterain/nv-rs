@@ -287,32 +287,6 @@ pub fn get_screenshot(e: &mut Engine, this: Ptr<BGSSaveLoadFileEntry>) -> u32 {
     result
 }
 
-/// lStewieAl's Tweaks' S0022.44 (`OnInitSaveFileForScreenshotImage`, its jump at `0x8468A0` after
-/// the header is read for the picture): a save whose file name is a player's own (`00851aa0`: not
-/// a numbered, auto or quick save) gets that name as its location line (the old line freed when
-/// there is one, the name copied into a new game-heap block), as `LoadData` already does.
-fn custom_name_as_location(e: &mut Engine, this: Ptr<BGSSaveLoadFileEntry>) {
-    let name = e.get(this, BGSSaveLoadFileEntry::pFileName);
-    let manager = e.mem.u32(MANAGER);
-    if !e.call(0x00851aa0, &args![manager, name]).bool() {
-        return;
-    }
-    let old = e.get(this, BGSSaveLoadFileEntry::pLocation);
-    if old != 0 {
-        e.call(0x00401030, &args![old]);
-    }
-    let mut length = 0u32;
-    while e.mem.u8(name.wrapping_add(length)) != 0 {
-        length += 1;
-    }
-    let copy = e.call(0x00401000, &args![length + 1]).u32();
-    for i in 0..=length {
-        let byte = e.mem.u8(name.wrapping_add(i));
-        e.mem.set_u8(copy.wrapping_add(i), byte);
-    }
-    e.set(this, BGSSaveLoadFileEntry::pLocation, copy);
-}
-
 // Translated from 00846900 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `BGSSaveLoadFileEntry::LoadData` (Xbox PDB).
 pub fn load_data(e: &mut Engine, this: Ptr<BGSSaveLoadFileEntry>) {

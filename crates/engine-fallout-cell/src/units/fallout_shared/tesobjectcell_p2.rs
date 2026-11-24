@@ -5909,9 +5909,6 @@ pub fn fn_0054f4c0(e: &mut Engine) -> u32 {
     e.global(0x011c_a438)
 }
 
-/// `BSTreeManager *` (xNVSE's `GetSingleton`, `0x11D5C48`) and the `bForceFullLOD` setting
-/// (`0x11D5D00`, its value at `+4`), read by lStewieAl's Tweaks' S0103.
-const TREE_MANAGER_SINGLETON: u32 = 0x011d_5c48;
 const FORCE_FULL_LOD_SETTING: u32 = 0x011d_5d00;
 
 /// The local map picture's end (`0x54F413`): the trees' full-LOD flag back to 0 (`0054f4d0`);

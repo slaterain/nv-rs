@@ -49,7 +49,6 @@ fn vtable(e: &mut Engine) {
 fn changes_map(e: &mut Engine, on: bool) -> u32 {
     heap(e);
     vtable(e);
-    e.set_stewie(stewie::CHANGES_MAP_BUCKETS, on);
     let map = e.mem.alloc(0x10);
     e.call(0x0084_5550, &args![map]);
     map

@@ -462,61 +462,6 @@ const HIT_SOUND_COOLDOWN_MAX: u32 = 0x011d_f70c;
 const GAME_RANDOM: u32 = 0x0047_6c00;
 const RANDOM_BELOW: u32 = 0x00aa_5230;
 
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/CombatSoundCooldownFix.cpp):
-// OnCheckTimerShouldAllowSound.
-/// lStewieAl's Tweaks' row S0926 at `0x983A37` (after the exe's 1500 test, in place of taking the
-/// time): for the actor the player last hit that said a line with the hit sound's cooldown at 0
-/// (the kept word `COMBAT_SOUND_PLAYER_TARGET`), an extra wait of 1000 to 2499 (drawn once with
-/// the game's random numbers, `00aa5230(1500)` + 1000, kept in `COMBAT_SOUND_TARGET_WAIT`) is taken
-/// off `now`; a line is allowed when more than 1500 have passed since the last line's time
-/// (`011f170c`, unsigned), which clears the drawn wait.
-pub fn combat_sound_allowed(e: &mut Engine, actor: u32, now: u32) -> bool {
-    let target = e.stewie_kept(
-        engine_core::extend::stewie::kept::COMBAT_SOUND_PLAYER_TARGET,
-        4,
-    );
-    let wait = e.stewie_kept(
-        engine_core::extend::stewie::kept::COMBAT_SOUND_TARGET_WAIT,
-        4,
-    );
-    let last: u32 = e.global(LAST_LINE_TIME);
-    let mut now = now;
-    if actor == e.mem.u32(target) {
-        if e.mem.u32(wait) == 0 {
-            let random = e.call(GAME_RANDOM, &[]).u32();
-            let drawn = e.call(RANDOM_BELOW, &args![random, 1500u32]).u32();
-            e.mem.set_u32(wait, drawn.wrapping_add(1000));
-        }
-        now = now.wrapping_sub(e.mem.u32(wait));
-    }
-    if now.wrapping_sub(last) > LINE_GAP {
-        e.mem.set_u32(wait, 0);
-        return true;
-    }
-    false
-}
-
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/CombatSoundCooldownFix.cpp):
-// GetDialogHitCooldownTime.
-/// lStewieAl's Tweaks' row S0926 at `0x9841CC` (a line was said): the last line's time
-/// (`011f170c`) becomes `now`; with `fDialogHitSoundCooldownMax` at 0 (TTW's value) it is set
-/// 1490 earlier, so the next line may come 10 later, and when the `other` actor is the player the
-/// speaker becomes the kept `COMBAT_SOUND_PLAYER_TARGET`.
-pub fn combat_sound_said(e: &mut Engine, actor: u32, other: u32, now: u32) {
-    let mut time = now;
-    if e.mem.f32(HIT_SOUND_COOLDOWN_MAX + 4) == 0.0 {
-        time = now.wrapping_sub(1490);
-        if other == e.global::<u32>(PLAYER) {
-            let target = e.stewie_kept(
-                engine_core::extend::stewie::kept::COMBAT_SOUND_PLAYER_TARGET,
-                4,
-            );
-            e.mem.set_u32(target, actor);
-        }
-    }
-    e.set_global(LAST_LINE_TIME, time);
-}
-
 // Translated from 00984210 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (`thiscall(index)`): the address of the
 /// 8-byte entry `index` at +0x58.

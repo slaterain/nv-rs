@@ -2228,66 +2228,6 @@ pub fn fo_pipboy_manager_fade_light_effect(
     e.mem.set_u32(base + LIGHT_EFFECT_END, end.to_bits());
 }
 
-/// lStewieAl's Tweaks' S0046 `PipboyManager__SetLightEffect` (its call at `0x70EFCD` in
-/// `UpdatePipboy`'s raise, in place of `FadeLightEffect(1)`): when the first-person light is on
-/// (`+0x160`) or the screen's light effect is still lit ([`stewie_screen_light_lit`]), the effect
-/// starts now (`timeGlobals->msPassed`, the word `00825c00` reads, as a float at `+0x164`; `+0x162`
-/// set) toward 0.0 (`+0x168`).
-pub fn stewie_set_light_effect(e: &mut Engine, this: Ptr<FOPipboyManager>) {
-    if e.get(this, FOPipboyManager::b1stPersonLightOn) == 0 && !stewie_screen_light_lit(e, this) {
-        return;
-    }
-    let base = this.addr();
-    let time = e.mem.u32(TIMER_011F6394 + 0x14);
-    e.mem
-        .set_u32(base + LIGHT_EFFECT_START, (time as f32).to_bits());
-    e.mem.set_u8(base + LIGHT_EFFECT_ON, 1);
-    e.mem.set_u32(base + LIGHT_EFFECT_END, 0.0f32.to_bits());
-}
-
-/// Tweaks' `IsPipboyScreenLightEffectActive`: under the first-person Pip-Boy root, the node
-/// `PipboyLightEffect` (or `PipboyLightEffect:0`, the names the exe's own code looks up), its node
-/// (`GetNiNode`), the first child's tri-strips (`GetTriStrips`), and the alpha of their material
-/// property (`+0x3C`) or else their shader property (`+0x28`) not 0. Tweaks takes the node and its
-/// first child without testing them: with the missing-data guard row a missing one answers no.
-pub fn stewie_screen_light_lit(e: &mut Engine, this: Ptr<FOPipboyManager>) -> bool {
-    let root = e.mem.u32(this.addr() + PIPBOY_ROOT);
-    if root == 0 {
-        return false;
-    }
-    let mut light = find_under(e, root, LIGHT_NAME_ONE);
-    if light == 0 {
-        light = find_under(e, root, LIGHT_NAME_TWO);
-    }
-    if light == 0 {
-        return false;
-    }
-    let node = e.vcall(light, 0xc, &args![]).u32();
-    let guard = e.stewie_slip_guard();
-    if node == 0 && guard {
-        return false;
-    }
-    // `GetAt(0)`: the first entry of `m_children` (data at `+0xA0`), its `NiPointer`'s object.
-    let children = e.mem.u32(node.wrapping_add(0xa0));
-    if children == 0 && guard {
-        return false;
-    }
-    let child = e.mem.u32(children);
-    if child == 0 {
-        return false;
-    }
-    let strips = e.vcall(child, 0x18, &args![]).u32();
-    if strips == 0 {
-        return false;
-    }
-    let material = e.call(GET_PROPERTY, &args![strips, 2u32]).u32();
-    if material != 0 {
-        return e.mem.f32(material + 0x3c) != 0.0;
-    }
-    let shader = e.call(GET_PROPERTY, &args![strips, 3u32]).u32();
-    shader != 0 && e.mem.f32(shader + 0x28) != 0.0
-}
-
 // Translated from 007fa810 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `FOPipboyManager::FadeLight` (engine map; `thiscall`, `RET 4`: the
 /// time): the fade value (as in `UpdateLightEffect`, over the setting
@@ -2431,7 +2371,6 @@ mod n086_tests {
 
     fn on_menu_open_starts_the_hum_and_the_burst_row(on: bool) {
         let mut e = Engine::new();
-        e.set_stewie(engine_core::extend::stewie::PIPBOY_EQUIP_CRASH, on);
         world(&mut e);
         sounds(&mut e);
         quiet(

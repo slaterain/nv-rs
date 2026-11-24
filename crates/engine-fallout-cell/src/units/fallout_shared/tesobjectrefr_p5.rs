@@ -1856,23 +1856,6 @@ pub fn tes_object_refr_get_target_type(e: &mut Engine, this: Ptr) -> u32 {
     }
 }
 
-/// lStewieAl's Tweaks' `MenuFixes::GetCreaturePickpocketPrompt` (row S0022.51): 0 when the
-/// creature's base data (`TESActorBaseData`) does not allow pickpocketing (slot +0x1C); else 1
-/// (Pickpocket) while the player's mover (+0x190, `GetMovementFlags` slot +0x20) is sneaking
-/// (0x400) and not swimming (0x800), 0 otherwise.
-fn stewie_creature_pickpocket_prompt(e: &mut Engine, base_data: u32, player: u32) -> u32 {
-    if !e.vcall(base_data, 0x1c, &args![]).bool() {
-        return 0;
-    }
-    let mover = e.mem.u32(player + 0x190);
-    if mover == 0 {
-        // No mover: Tweaks would call through a null pointer (our guard).
-        return 0;
-    }
-    let flags = e.vcall(mover, 0x20, &args![]).u32();
-    u32::from(flags & 0x400 != 0 && flags & 0x800 == 0)
-}
-
 // Translated from 00579620 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Casts `form` between two run-time types (`01183028` to `01183158`); when
 /// the cast succeeds, returns what `0048cee0` says about the result,

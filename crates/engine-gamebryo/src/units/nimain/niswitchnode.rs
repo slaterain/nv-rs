@@ -180,51 +180,13 @@ fn copy_bound(e: &mut Engine, destination: u32, source: u32) {
 /// `NiAVObject::CreateBoundIfNone` (`005467e0`, `thiscall`): a new bound
 /// (radius 0) for an object without one.
 const CREATE_BOUND_IF_NONE: u32 = 0x0054_67e0;
-/// `NiAVObject`'s `m_flags` bits Tweaks' S0237 tests (its `netimmerse.h`):
-/// the bound is fixed, and the bound is the node's own (not a child's).
-const FIXED_BOUND: u32 = 0x2000;
 const ORPHANED_BOUND: u32 = 0x8_0000;
-
-/// Tweaks' `IsVisualObject`: the object has a world bound whose radius
-/// word is not 0.
-fn is_visual_object(e: &Engine, object: u32) -> bool {
-    let bound = e.mem.u32(object + NiSwitchNode::m_kWorldBound.off);
-    bound != 0 && e.mem.u32(bound + 12) != 0
-}
-
-/// Tweaks' `*m_kWorldBound = child->GetWorldBound()` for a visual child:
-/// the child's four words copied as they are.
-fn copy_child_bound(e: &mut Engine, this: Ptr<NiSwitchNode>, child: u32) {
-    let source = e.mem.u32(child + NiSwitchNode::m_kWorldBound.off);
-    let destination = e.get(this, NiSwitchNode::m_kWorldBound);
-    for word in 0..4 {
-        let value = e.mem.u32(source + word * 4);
-        e.mem.set_u32(destination + word * 4, value);
-    }
-}
 
 /// Whether `index` names a slot of the children array (`0 <= index < m_usSize`, as
 /// `GetAtChecked` and the exe's detach fix-up test it).
 fn index_in_children(e: &Engine, this: Ptr<NiSwitchNode>, index: i32) -> bool {
     let children = this.at(NiSwitchNode::m_kChildren);
     (index as u32) < u32::from(e.get(children, NiTArray::m_usSize))
-}
-
-/// lStewieAl's Tweaks' S0237 `UpdateSwitchWorldBound(this, child)`, in
-/// place of [`take_bound_from`] at the end of the three update passes
-/// (`0xA940DE`, `0xA941D8`, `0xA942B7`): unless the node's bound is fixed,
-/// the bound is made when missing, its radius word set to 0, and the
-/// child's bound copied when the child has one with a radius.
-fn switch_world_bound(e: &mut Engine, this: Ptr<NiSwitchNode>, child: u32) {
-    if e.get(this, NiSwitchNode::m_uFlagsAV) & FIXED_BOUND != 0 {
-        return;
-    }
-    e.call(CREATE_BOUND_IF_NONE, &args![this]);
-    let bound = e.get(this, NiSwitchNode::m_kWorldBound);
-    e.mem.set_u32(bound + 12, 0);
-    if is_visual_object(e, child) {
-        copy_child_bound(e, this, child);
-    }
 }
 
 /// The selected child's world bound (the null bound if it has none) copied

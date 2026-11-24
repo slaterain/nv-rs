@@ -1279,140 +1279,6 @@ fn put_text(e: &mut Engine, at: u32, text: &[u8]) -> u32 {
 const ACTOR_VALUE_INFOS: u32 = 0x011d_61c8;
 const ACTOR_VALUE_KARMA: u32 = 0x17;
 
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/PerkMenuDescriptionTypoFix.cpp):
-// IsDisplayableCondition.
-/// Whether the perk menu shows `condition`: a `GetPermanentActorValue` (its opcode `| 0x1000` is
-/// `0x11EF`) of a value other than karma whose info has a name, or a `HasPerk` (`0x11C1`).
-fn is_shown_condition(e: &mut Engine, condition: u32) -> bool {
-    if condition == 0 {
-        return false;
-    }
-    match e.mem.u32(condition + 8) | 0x1000 {
-        0x11ef => {
-            let code = e.mem.u32(condition + 0xc);
-            if code == ACTOR_VALUE_KARMA {
-                return false;
-            }
-            let info = e
-                .mem
-                .u32(ACTOR_VALUE_INFOS.wrapping_add(code.wrapping_mul(4)));
-            info != 0 && e.mem.u16(info + 0x40) != 0
-        }
-        0x11c1 => true,
-        _ => false,
-    }
-}
-
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/PerkMenuDescriptionTypoFix.cpp):
-// GetNthConditionReturnNullIfNoValidItemsInRestOfList (with xNVSE's `tList::GetNthNode`).
-/// The condition at node `n` of the list `conditions` (a `tList`: the data word, the next node at
-/// `+4`), or 0 when no condition the menu shows is at that node or after it.
-fn nth_condition_if_one_shown_follows(e: &mut Engine, conditions: u32, n: u32) -> u32 {
-    if (n as i32) < 0 {
-        return 0;
-    }
-    let mut node = conditions;
-    for _ in 0..n {
-        node = e.mem.u32(node + 4);
-        if node == 0 {
-            return 0;
-        }
-    }
-    let mut rest = node;
-    while rest != 0 {
-        if is_shown_condition(e, e.mem.u32(rest)) {
-            return e.mem.u32(node);
-        }
-        rest = e.mem.u32(rest + 4);
-    }
-    0
-}
-
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/PerkMenuDescriptionTypoFix.cpp): AddCommaIfMissing.
-/// `comma` appended (`strcat_s`, `00406d50`) unless the text ends with ", " (and is longer than two).
-fn add_comma_if_missing(e: &mut Engine, buffer: u32, size: u32, comma: u32) {
-    let text = e.mem.cstr(buffer);
-    let len = text.len();
-    if len <= 2 || text[len - 1] != b' ' || text[len - 2] != b',' {
-        e.call(STRING_APPEND, &args![buffer, size, comma]);
-    }
-}
-
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/PerkMenuDescriptionTypoFix.cpp): StripTrailingCommas.
-/// A text longer than two that ends with "," or ", " loses them.
-fn strip_trailing_commas(e: &mut Engine, at: u32) {
-    let text = e.mem.cstr(at);
-    let len = text.len();
-    if len > 2 {
-        if text[len - 1] == b',' {
-            e.mem.set_u8(at + len as u32 - 1, 0);
-        } else if text[len - 1] == b' ' && text[len - 2] == b',' {
-            e.mem.set_u8(at + len as u32 - 2, 0);
-        }
-    }
-}
-
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/PerkMenuDescriptionTypoFix.cpp):
-// OnFormatPerkHandleConditions (IsConditionNot, IsConditionOR).
-/// A perk requirement formatted (`[condition, perk, n]`, `[buffer, size, format, name, rank]`): a
-/// condition that the perk must be missing (`== 0`, or `!= ` a nonzero value) gets "NOT " before
-/// it, and one joined by OR to a shown condition after it loses its trailing comma and gets
-/// " OR " (the setting `sOr`, `0x11D324C`). The new format is made at `scratch`: Tweaks' 0x20-byte
-/// buffer, the format cut to fit it, its appends not bounded (`strncat`).
-fn format_perk_condition(
-    e: &mut Engine,
-    [condition, perk, n]: [u32; 3],
-    words: [u32; 5],
-    scratch: u32,
-) {
-    let [buffer, size, format, name, rank] = words;
-    let operator = (e.mem.u8(condition) & 0xe0) >> 5;
-    let value = e.call(0x0068_1490, &args![condition]).f64() as f32;
-    let not = if operator == 1 {
-        value != 0.0
-    } else {
-        value == 0.0
-    };
-    let or = e.mem.u8(condition) & 1 != 0
-        && nth_condition_if_one_shown_follows(e, perk + 0x40, n.wrapping_add(1)) != 0;
-    let mut format = format;
-    if not || or {
-        let mut text = Vec::new();
-        let mut room = 0x20usize;
-        if not {
-            text.extend_from_slice(b"NOT ");
-            room -= 4;
-        }
-        let mut copied = e.mem.cstr(format);
-        copied.truncate(room - 1);
-        let start = text.len();
-        text.extend(copied);
-        if or {
-            let mut own = text.split_off(start);
-            let len = own.len();
-            if len > 2 {
-                if own[len - 1] == b',' {
-                    own.truncate(len - 1);
-                } else if own[len - 1] == b' ' && own[len - 2] == b',' {
-                    own.truncate(len - 2);
-                }
-            }
-            text.extend(own);
-            let setting = e.call(SETTING_STRING, &args![0x011d_324cu32]).u32();
-            text.push(b' ');
-            text.extend(e.mem.cstr(setting));
-            text.push(b' ');
-        }
-        // Tweaks' appends can run past its 0x20 bytes (a very long `sOr`); here the stack room
-        // (`TWEAKS_TEXT - 0x10`) bounds them.
-        text.truncate((TWEAKS_TEXT - 0x11) as usize);
-        format = put_text(e, scratch, &text);
-    }
-    // Tweaks formats with `snprintf`, which cuts the text to fit (the exe's `vsprintf_s` would
-    // stop the game on a text too long for the work buffer, a mod's long perk name).
-    snprintf_cut(e, buffer, size, format, name, rank);
-}
-
 /// `snprintf(buffer, size, format, name, rank)` as the C runtime does it for the formats this line
 /// has: `%s` takes `name`, `%d` takes `rank` (signed), `%%` is a `%`; the text is cut to `size - 1`
 /// bytes and ended with a 0. Any other conversion is copied as it stands.
@@ -1449,19 +1315,6 @@ fn snprintf_cut(e: &mut Engine, buffer: u32, size: u32, format: u32, name: u32, 
     text.truncate((size - 1) as usize);
     text.push(0);
     e.mem.write(buffer, &text);
-}
-
-/// What lStewieAl's Tweaks' `_strncat` does (`snprintf(buffer, size, "%s%s", buffer, text)`): the
-/// buffer's text and `text` joined, cut to `size - 1` bytes and ended with a 0.
-fn append_cut_to_fit(e: &mut Engine, buffer: u32, size: u32, text: u32) {
-    if size == 0 {
-        return;
-    }
-    let mut joined = e.mem.cstr(buffer);
-    joined.extend(e.mem.cstr(text));
-    joined.truncate((size - 1) as usize);
-    joined.push(0);
-    e.mem.write(buffer, &joined);
 }
 
 /// Chunk writers (cdecl): data (`TESForm::__AddChunkData`, `00485990`:
@@ -3346,7 +3199,6 @@ mod b028_description_tests {
         set_items(&mut e, vec![]);
         let this = perk(&mut e, 1);
         let buffer = e.mem.alloc(size);
-        e.set_stewie(engine_core::extend::stewie::PERK_DESCRIPTION_TOO_LONG, on);
         let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             e.call(0x005e_bac0, &args![this, buffer, size]);
         }));

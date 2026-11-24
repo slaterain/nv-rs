@@ -186,20 +186,6 @@ const CASTER_SET_CURRENT_SPELL: u32 = 0x40;
 const ALCHEMY_MAGIC_ITEM: u32 = 0x30;
 const CASTER_RELEASE_CAST_00815870: u32 = 0x0081_5870;
 
-/// Row S0199.08's step, as Tweaks' `OnCompanionUseStimpak`: with a potion, the companion's caster
-/// takes the potion's magic item as its spell and releases the cast (with no form); nothing is removed.
-fn companion_use_stimpak(e: &mut Engine, companion: u32, potion: u32) {
-    if potion == 0 {
-        return;
-    }
-    let caster = companion + ACTOR_MAGIC_CASTER;
-    e.vcall(
-        caster,
-        CASTER_SET_CURRENT_SPELL,
-        &args![potion + ALCHEMY_MAGIC_ITEM],
-    );
-    e.call(CASTER_RELEASE_CAST_00815870, &args![caster, 0u32]);
-}
 const ACTOR_UPDATE_MAGIC: u32 = 0x008c_3c40;
 const ACTOR_RESTORE_ACTOR_VALUE: u32 = 0x0088_b740;
 const ACTOR_008A7760: u32 = 0x008a_7760;

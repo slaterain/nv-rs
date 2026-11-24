@@ -1059,20 +1059,6 @@ const TEXT_BUFFER_SIZE: u32 = 0x200;
 const LOCK_LEVEL_TO_ENUM: u32 = 0x0043_0b40;
 const LOCK_LEVEL_SETTINGS: u32 = 0x0118_4a98;
 
-// Translated from lStewieAl's Tweaks 10.05, Fixes/LockCommandFixes.cpp: OnLockCommandConsolePrint.
-/// Tweaks' row S0213's console line: the level's name (its game setting's text, by
-/// `NumericValueToEnum`) after the number, "Locked %s with lock level %d (%s)".
-fn lock_command_console_print(e: &mut Engine, name: u32, level: u32) {
-    let which = e.call(LOCK_LEVEL_TO_ENUM, &args![level]).u32();
-    let setting = e.mem.u32(LOCK_LEVEL_SETTINGS + which.wrapping_mul(4));
-    let text = e.mem.u32(setting + 4);
-    let format = b"Locked %s with lock level %d (%s)\0";
-    e.with_stack(format.len() as u32, |e, at| {
-        e.mem.write(at.addr(), format);
-        console_print(e, &[at.addr(), name, level, text]);
-    });
-}
-
 /// Whether the commands echo their result to the console: the byte at
 /// `+0x268` of the TLS block.
 fn echo_enabled(e: &mut Engine) -> bool {

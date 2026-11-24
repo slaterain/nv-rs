@@ -368,11 +368,6 @@ fn bind() {
         .assert_same();
 }
 
-/// The render state cache's sampler getter (`00e910f0`, the word at `010f095c` that lStewieAl's
-/// Tweaks' S0225 calls through); the typed compare reads its table inline, so its call is left
-/// out of the comparison.
-const SAMPLER_GETTER: u32 = 0x00e9_10f0;
-
 #[test]
 fn apply() {
     for real_shader in [true, false] {

@@ -451,10 +451,6 @@ fn compass_world(e: &mut Engine, case: &Case) -> Vec<u32> {
     let cvt = vtable(e, 0xa00);
     e.mem.set_u32(compass, cvt);
     // [9]: S0022.35 (`HUD_COMPASS_FOLLOWS_ITS_ALPHA`) on; the HUD's alpha (`011d979c`) 200.
-    e.set_stewie(
-        engine_core::extend::stewie::HUD_COMPASS_FOLLOWS_ITS_ALPHA,
-        case.word(9) == 1,
-    );
     e.mem.set_f32(0x011d_979c, 200.0);
     let strip = if w(1) & 1 == 0 { e.mem.alloc(0x90) } else { 0 };
     e.register_double(VT_FN + 0xa00 + 0x20, move |_, _| ret(strip));

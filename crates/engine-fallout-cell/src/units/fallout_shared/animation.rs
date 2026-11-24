@@ -13874,7 +13874,6 @@ mod tests {
 
     fn detaching_an_idle_removes_its_add_on_through_the_scene_row(on: bool) {
         let (mut e, idle, object, parent) = detach_fixture(true, true);
-        e.set_stewie(engine_core::extend::stewie::NULL_ANIM_REMOVE_RECURSE, on);
         let actor = e.get(idle, AnimIdle::pActor).addr();
         let a = idle.addr();
         start_log(&mut e);

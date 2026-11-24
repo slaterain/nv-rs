@@ -7491,17 +7491,6 @@ pub fn actor_damage_equipment(
     1
 }
 
-/// Row S0782's test, Tweaks' `IsValidExplosionWeapon` (`Features/ShootableNonPlayableExplosives`):
-/// the weapon is not a quest item (its form's slot `0x94`) and has a projectile (+0x118) whose flags
-/// (+0x60) have Explosion (0x2).
-fn hidden_frag_explosive(e: &mut Engine, weapon: u32) -> bool {
-    if e.vcall(weapon, FORM_VSLOT_0X94, &args![]).bool() {
-        return false;
-    }
-    let projectile = e.mem.u32(weapon + 0x118);
-    projectile != 0 && e.mem.u16(projectile + 0x60) & 0x2 != 0
-}
-
 /// The end of `DamageEquipment` for a weapon that is gone and must vanish:
 /// the player is told, the moving sounds of the actor stop, and either the
 /// VATS playback ends (the player's weapon, with the VATS object in state 4)
@@ -13689,7 +13678,6 @@ mod tests {
 
     fn ammo_is_swapped_through_an_item_change_row(on: bool) {
         let mut e = engine3();
-        e.set_stewie(engine_core::extend::stewie::EQUIP_AMMO_NULL_PROCESS, on);
         let (actor, item) = equip_world(&mut e, 0x29);
         let process = with_process(&mut e, actor);
         let held = e.mem.alloc(0x20);

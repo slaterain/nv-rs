@@ -4390,30 +4390,3 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod stewie_menus6_tests {
-    use super::*;
-    use engine_core::extend::stewie;
-
-    /// An inventory entry whose form (refID `id`, vtable slot 0x94 false) is of type 0x1D (always
-    /// usable), no extra list; the calls logged.
-    fn grx_engine(id: u32) -> (Engine, u32) {
-        let mut e = Engine::new();
-        let vtable = e.mem.alloc(0x100);
-        e.mem.set_u32(vtable + 0x94, 0x00c3_0094);
-        let form = e.mem.alloc(0x40);
-        e.mem.set_u32(form, vtable);
-        e.mem.set_u32(form + 0xc, id);
-        let entry = e.mem.alloc(0x10);
-        e.mem.set_u32(entry + 8, form);
-        for address in [0x00c3_0094u32, GET_FORM_HEALTH] {
-            e.register_double(address, |_, _| Ret::default());
-        }
-        e.register_double(FORM_TYPE, |_, _| Ret {
-            eax: 0x1d,
-            ..Ret::default()
-        });
-        e.call_log = Some(vec![]);
-        (e, entry)
-    }
-}

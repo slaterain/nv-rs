@@ -4192,7 +4192,6 @@ mod tests {
 
     fn do_idle_clears_the_subtitle_and_fills_the_card_row(on: bool) {
         let mut e = Engine::new();
-        e.set_stewie(stewie::CONTAINER_MOUSEOVER_NO_FORM, on);
         let this = container(&mut e);
         e.set(this, ContainerMenu::m_nTimeToClearSubtitle, 100);
         e.set_global(ITEM_ENTERED, 1u8);

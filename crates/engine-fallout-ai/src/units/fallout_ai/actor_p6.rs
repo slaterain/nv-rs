@@ -649,28 +649,6 @@ pub fn actor_mobility_condition_modified_callback(
     actor_queue_replacement_locomotion(e, Ptr::new(actor), flag, current, other);
 }
 
-/// Row S0147's step, as Tweaks' `OnLimbConditionChangeUpdateAnims` (`main.h`): when the leg's
-/// crippled state changed (it was crippled when `was_non_crippled` is 0, it is when `changed` is at
-/// most 0), the actor's locomotion is chosen again (`008b7360`): crippled when this leg or the
-/// other (`other` at most 0) is. So healing a crippled leg brings the walk back as well.
-fn on_limb_condition_change_update_anims(
-    e: &mut Engine,
-    actor: u32,
-    was_non_crippled: f32,
-    changed: f32,
-    other: f32,
-) {
-    let was_crippled = was_non_crippled == 0.0;
-    let is_crippled = changed <= 0.0;
-    if is_crippled != was_crippled {
-        let crippled = is_crippled || other <= 0.0;
-        e.call(
-            REQUEST_LOCOMOTION_CHANGE,
-            &args![actor, u32::from(crippled), 0u32],
-        );
-    }
-}
-
 // Translated from 008b9960 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `cdecl` callback for actor values `0x10` and `0x16`: when the actor has a
 /// process, compares the owner's virtual `+0x20` value with `previous +
@@ -5152,7 +5130,6 @@ mod tests {
         e.register_double(GET_BODY_PART_CONDITION, move |_, a| {
             st0(if a[1] == 0x1d { current } else { other })
         });
-        e.set_stewie(engine_core::extend::stewie::CRIPPLED_LIMB_ANIMS, on);
         e.call_log = Some(vec![]);
         actor_mobility_condition_modified_callback(
             &mut e,
@@ -6042,7 +6019,6 @@ mod tests {
         // Ammunition entry count 3 + 1 = 4 and 4 in the inventory: nothing to
         // reload, and the clip rounds are 4 as well.
         let (mut e, actor, _) = reload_setup(0x800 | 0x200 | 0x2, 4, 4, 3);
-        e.set_stewie(engine_core::extend::stewie::RELOAD_LOOP_NULL_WEAPON, on);
         e.call_log = Some(vec![]);
         fn_008ba600(&mut e, actor);
         // Slot kind 2, group index 8 (flag 0x2 with 0x200).

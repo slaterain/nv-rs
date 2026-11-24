@@ -6184,8 +6184,6 @@ mod tests {
         e.mem.set_u32(a + 0x114, item);
         let held = e.mem.alloc(0x20);
         e.mem.set_u32(a + 0x118, held);
-        e.set_stewie(stewie::LOAD_GAME_PLAYER_WEAPON_WITHOUT_3D, without_3d);
-        e.set_stewie(stewie::AMMO_COUNT_FROM_SAVE, keep_count);
         middle_high_process_load_game_ov2(&mut e, p, buffer);
         let kept = e.stewie_kept(stewie::kept::SAVED_AMMO_COUNT, 4);
         (!calls(&e, ACTOR_EQUIP_WORN).is_empty(), e.mem.u32(kept))

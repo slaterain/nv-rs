@@ -1383,7 +1383,6 @@ mod tests {
         e.register(REFERENCE_NAME, |_, _| word(0x5555));
         e.register(DEBUG_PRINT, nothing);
         e.set_global(DOOR_ARRIVAL_TOLERANCE, 5.0f64);
-        e.set_stewie(engine_core::extend::stewie::USE_DOOR_NULL_DOOR, on);
         let point = e.mem.alloc(0xc);
         e.call_log = Some(vec![]);
         let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

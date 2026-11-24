@@ -318,48 +318,6 @@ const ONLY_ADD_VALUES: u32 = 0x54;
 const ACTOR_VALUE_OWNER: u32 = 0xa4;
 const NORMALIZED_PERMANENT_AV: u32 = 0x1c;
 
-/// lStewieAl's Tweaks' `CharGenMenu_SetupSPECIALHook` (row S0110,
-/// `patchFixStuckInAddSPECIALPointsIfAtMaxAlready`, Tweaks' `bCapSPECIALPoints`): over the list's
-/// items (+0x58's nodes: the item's tile and actor value), what each stat can still take
-/// (`_MaxValue` of its tile, 0 without one, less the player's normalized permanent value, not
-/// below 0) and the maxima are summed (each `int += float` in single precision, cut to a whole
-/// number). With "only add values" the points to give are at most that remainder; otherwise
-/// between 0 and the maxima's sum less the stats' count.
-fn stewie_cap_special_points(e: &mut Engine, menu: u32) {
-    let max_trait = e
-        .call(TILE_TEXT_TO_TRAIT, &args![MAX_VALUE_TRAIT_NAME])
-        .u32();
-    let owner = e.global::<u32>(PLAYER).wrapping_add(ACTOR_VALUE_OWNER);
-    let mut remaining = 0i32;
-    let mut max_total = 0i32;
-    let mut stats = 0i32;
-    let mut node = menu + ITEM_LIST + 4;
-    while node != 0 {
-        let item = e.mem.u32(node);
-        let tile = e.mem.u32(item);
-        let value = e.mem.u32(item + 4);
-        let current = e.vcall(owner, NORMALIZED_PERMANENT_AV, &args![value]).u32();
-        let max = if tile != 0 {
-            e.call(GET_FLOAT_TRAIT, &args![tile, max_trait]).f64() as f32
-        } else {
-            0.0
-        };
-        let left = max - current as f32;
-        let left = if 0.0 > left { 0.0 } else { left };
-        remaining = float_to_int(remaining as f32 + left);
-        max_total = float_to_int(max_total as f32 + max);
-        stats += 1;
-        node = e.mem.u32(node + 4);
-    }
-    let points = e.mem.i32(menu + NUM_POINTS);
-    let capped = if e.mem.u8(menu + ONLY_ADD_VALUES) != 0 {
-        points.min(remaining)
-    } else {
-        points.min(max_total.wrapping_sub(stats)).max(0)
-    };
-    e.mem.set_i32(menu + NUM_POINTS, capped);
-}
-
 /// `cvttss2si`: toward zero, `0x80000000` out of range.
 fn float_to_int(value: f32) -> i32 {
     if (-2_147_483_648.0..2_147_483_648.0).contains(&value) {
@@ -1664,50 +1622,6 @@ mod tests {
         e.set_global(PLAYER, player);
         e.register_double(0x00c2_001c, move |_, a| current[a[1] as usize].into_ret());
         this
-    }
-
-    /// Row S0110 (lStewieAl's Tweaks' `CharGenMenu_SetupSPECIALHook`): with "only add values" the
-    /// points to give (+0x4C) are at most what the stats can still take (`_MaxValue` less the
-    /// value, not below 0; no tile: 0); otherwise kept between 0 and the maxima's sum less the
-    /// stats' count.
-    #[test]
-    fn s0110_special_points_are_capped() {
-        // Tiles 0x100.. answer `_MaxValue` (trait 0x77) 10, 10, 6; no tile for the fourth.
-        for (only_add, points, current, wanted) in [
-            (1u8, 40i32, &[4u32, 10, 9, 0][..], 6i32),
-            (1, 3, &[4, 10, 9, 0][..], 3),
-            (1, 40, &[10, 10, 6, 0][..], 0),
-            (0, 40, &[4, 10, 9, 0][..], 22),
-            (0, 5, &[4, 10, 9, 0][..], 5),
-            (0, -3, &[4, 10, 9, 0][..], 0),
-        ] {
-            let mut e = Engine::new();
-            let current: &'static [u32] = current.to_vec().leak();
-            let this = special_menu(
-                &mut e,
-                &[(0x100, 0), (0x101, 1), (0x102, 2), (0, 3)],
-                current,
-            );
-            answer(&mut e, TILE_TEXT_TO_TRAIT, 0x77);
-            e.register(GET_FLOAT_TRAIT, |_, a| Ret {
-                st0: if a[0] == 0x102 { 6.0 } else { 10.0 },
-                ..Ret::default()
-            });
-            e.mem.set_u8(this.addr() + 0x54, only_add);
-            e.mem.set_i32(this.addr() + 0x4c, points);
-            e.call_log = Some(vec![]);
-            stewie_cap_special_points(&mut e, this.addr());
-            assert_eq!(
-                e.mem.i32(this.addr() + 0x4c),
-                wanted,
-                "add {only_add} points {points} {current:?}"
-            );
-            assert_eq!(
-                calls_to(&e, TILE_TEXT_TO_TRAIT),
-                vec![vec![MAX_VALUE_TRAIT_NAME]]
-            );
-            assert_eq!(calls_to(&e, GET_FLOAT_TRAIT).len(), 3);
-        }
     }
 
     #[test]

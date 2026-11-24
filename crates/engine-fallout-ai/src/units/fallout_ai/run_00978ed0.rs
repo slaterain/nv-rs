@@ -88,23 +88,8 @@ pub fn fn_00978f70(e: &mut Engine, this: Ptr) {
     e.call(0x009b_c470, &args![this]);
 }
 
-/// A projectile's shooter (+0xFC), an actor's continuous beam (+0x1A0), and the function an actor's
-/// vtable holds at +0x100 (`IsActor`): `ReturnTrue` (`008d0360`), which Tweaks' `IS_ACTOR` compares.
-const PROJECTILE_SHOOTER: u32 = 0xfc;
 const ACTOR_CONTINUOUS_BEAM: u32 = 0x1a0;
 const RETURN_TRUE: u32 = 0x008d_0360;
-
-/// Row S0130.01's step: the shooter of `beam`, when it is an actor (its vtable's +0x100 is
-/// `ReturnTrue`, read and not called, as Tweaks reads it) whose continuous beam is `beam`, has none.
-fn forget_shooters_beam(e: &mut Engine, beam: u32) {
-    let shooter = e.mem.u32(beam + PROJECTILE_SHOOTER);
-    if shooter != 0
-        && e.mem.u32(e.mem.u32(shooter) + 0x100) == RETURN_TRUE
-        && e.mem.u32(shooter + ACTOR_CONTINUOUS_BEAM) == beam
-    {
-        e.mem.set_u32(shooter + ACTOR_CONTINUOUS_BEAM, 0);
-    }
-}
 
 /// The common end of the two `BeamProjectile` constructors: the vtables,
 /// the pointer at +0x150 constructed empty, `004f15a0(0x3f)` and the

@@ -404,9 +404,6 @@ pub fn fn_00683900(
     this
 }
 
-/// The decal's byte Tweaks' S0238 keeps the subtexture index in (`+0x29`, after `bFinished`), and
-/// the shader property's byte it hands it to (`+0xC0`).
-const DECAL_SUBTEXTURE: u32 = 0x29;
 const PROPERTY_SUBTEXTURE: u32 = 0xc0;
 
 /// The uniform form of [`fn_00683900`] (13 words after `this`).

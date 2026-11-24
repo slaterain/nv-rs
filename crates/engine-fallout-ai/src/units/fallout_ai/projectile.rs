@@ -3017,24 +3017,6 @@ fn count_beam_hit(e: &mut Engine, this: Ptr<Projectile>, data: Ptr<ImpactData>) 
 }
 
 // Translated from lStewieAl's Tweaks 10.05 (Fixes/ContinuousBeamProjectileCrashFix.cpp):
-// OnGetProjectileAgeForDamage.
-/// lStewieAl's Tweaks' row S0130.06 (the call at `0x9BFCC1`, in place of `00885bd0`, the age
-/// +0xD8): the player's beam (shooter +0xFC the player) after the player's update took a round
-/// (the kept word `BEAM_DECREASED_PLAYER_AMMO`, cleared here) answers `FLT_MAX`, so this impact
-/// counts as a shot and does damage; any other answers its age.
-fn beam_age_for_damage(e: &mut Engine, this: Ptr<Projectile>) -> f64 {
-    let kept = e.stewie_kept(
-        engine_core::extend::stewie::kept::BEAM_DECREASED_PLAYER_AMMO,
-        4,
-    );
-    if e.mem.u32(this.addr() + 0xfc) == e.global::<u32>(PLAYER) && e.mem.u8(kept) != 0 {
-        e.mem.set_u8(kept, 0);
-        return f32::MAX as f64;
-    }
-    e.mem.f32(this.addr() + 0xd8) as f64
-}
-
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/ContinuousBeamProjectileCrashFix.cpp):
 // GetAmmoCount.
 /// The shooter's loaded count after a beam's shot (`0x9BFD6B`, `Actor::GetAmmoCount` `008a88b0`).
 /// lStewieAl's Tweaks' row S0130.04: the player (`011dea3c`) in god mode (`011e07ba`) or demigod
@@ -7418,11 +7400,6 @@ mod tests {
 
     /// Both halves of the beam's ammunition move (S0130.05 and S0130.06) on or off.
     fn set_beam_ammo_rows(e: &mut Engine, on: bool) {
-        e.set_stewie(engine_core::extend::stewie::BEAM_PLAYER_AMMO_IN_UPDATE, on);
-        e.set_stewie(
-            engine_core::extend::stewie::BEAM_NO_PLAYER_AMMO_IN_IMPACT,
-            on,
-        );
     }
 
     /// S0130.06 (the bytes at `0x9BFD0E`): a due hit (1 shot, rate 10, age 0.5) of the player's
@@ -7536,10 +7513,6 @@ mod tests {
             set_slot(e, world, 0x40, 0x7E00_0080);
         }
         stub(e, SET_LINEAR_VELOCITY, 0);
-        e.set_stewie(
-            engine_core::extend::stewie::NON_HITSCAN_PROJECTILE_SPLASH,
-            on,
-        );
         fn_009bf370(e, this, 0.5, 7, 8, 9);
         (this, controller, world)
     }

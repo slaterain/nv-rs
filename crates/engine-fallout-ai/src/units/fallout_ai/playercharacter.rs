@@ -9564,14 +9564,6 @@ fn swap_ammo(e: &mut Engine, this: Ptr<PlayerCharacter>, long_enough: bool) {
     e.call(0x0094_62c0, &args![this, long_enough, 0u32]);
 }
 
-/// S0210's `SetIsUsingAutomaticWeapon(false)` on the player's process (Tweaks'
-/// `PlayerCharacter::GetSingleton()->baseProcess`, slot `0x6e0`).
-fn clear_automatic_firing(e: &mut Engine) {
-    let player = e.global::<u32>(PLAYER_SINGLETON);
-    let process = e.mem.u32(player + 0x68);
-    e.vcall(process, 0x6e0, &args![0u32]);
-}
-
 /// The activation of `PlayerCharacter::Update` (`0x94328E`, `TESObjectREFR::Activate` `00573170`);
 /// its answer true means activated (no "no activate" sound).
 fn activate_or_workbench(
@@ -17508,7 +17500,6 @@ mod tests {
             e.register(stub, |_, _| Ret::default());
         }
         e.register_double(0x0052_5980, move |_, _| kind.into_ret());
-        e.set_stewie(engine_core::extend::stewie::REGEN_AMMO_NO_TYPE, on);
         e.call_log = Some(vec![]);
         add_regenerated_round(&mut e, 0x1234);
         e.call_log.take().unwrap()
@@ -20575,7 +20566,6 @@ mod tests {
             (true, Some(3), false),
         ] {
             let mut e = engine();
-            e.set_stewie(engine_core::extend::stewie::NO_AMMO_GODMODE, on);
             e.register_double(0x0052_5980, |_, _| int(0x7200));
             e.register_double(0x0072_6070, |e, a| int(e.mem.u32(a[0] + 4)));
             let magazine = match rounds {
@@ -20596,7 +20586,6 @@ mod tests {
         }
         for (on, fires) in [(false, false), (true, true)] {
             let mut e = engine();
-            e.set_stewie(engine_core::extend::stewie::NO_AMMO_GODMODE, on);
             e.map(0x011e_0000, 0x1000);
             e.mem.set_u8(GODMODE_BYTE, 1);
             e.register_double(0x0052_5980, |_, _| int(0x7200));

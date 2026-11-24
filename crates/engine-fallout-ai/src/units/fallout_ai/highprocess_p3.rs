@@ -16104,39 +16104,6 @@ const PACKAGE_TYPE_GUARD: i8 = 0xe;
 /// `BaseProcess::GetRunOncePackageData` (vtable +0x270).
 const SLOT_GET_RUN_ONCE_PACKAGE_DATA: u32 = 0x270;
 
-/// Row S0137's test, Tweaks' `ActorInCombatOrPatrolRadiusBreached` (`main.h`): the actor's
-/// in-combat byte (+0x104), else `Actor::IsGuardRadiusBreached` (Tweaks' `GameObjects.cpp`): with
-/// a process (+0x68), the guard data of a running package (`GetRunningPackage`, +0x27C) of type
-/// Guard (the process' current package data, +0x8), replaced by the run-once package data
-/// (`GetRunOncePackageData`, +0x270) when the run-once package (+0x20C) is a Guard package; true
-/// when there is such data and its warning timer (+0x10) is above 0.0.
-fn actor_in_combat_or_guard_radius_breached(e: &mut Engine, actor: u32) -> bool {
-    if e.mem.u8(actor + 0x104) != 0 {
-        return true;
-    }
-    let process = e.mem.u32(actor + 0x68);
-    if process == 0 {
-        return false;
-    }
-    let is_guard = |e: &mut Engine, package: u32| {
-        package != 0 && e.mem.u8(package + 0x20) as i8 == PACKAGE_TYPE_GUARD
-    };
-    let mut data = 0;
-    let running = e
-        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
-        .u32();
-    if is_guard(e, running) {
-        data = e.mem.u32(process + 0x8);
-    }
-    let run_once = e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32();
-    if is_guard(e, run_once) {
-        data = e
-            .vcall(process, SLOT_GET_RUN_ONCE_PACKAGE_DATA, &args![])
-            .u32();
-    }
-    data != 0 && e.mem.f32(data + 0x10) > 0.0
-}
-
 /// The awake-and-aware timer of `Update` (`fAwarePlayerTimer`, +0x34c) with
 /// the run-once follow package: the timer runs down, and a follow package set
 /// as run-once ends when it is over. Returns the running package afterwards.

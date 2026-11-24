@@ -6166,47 +6166,6 @@ fn fistp_truncate(value: f64) -> i32 {
     }
 }
 
-/// lStewieAl's Tweaks' `GetContChangeMaxHealth` (row S0022.23, main.h) for an inventory entry: a
-/// weapon (form type 0x28) gives its health (+0x98) plus, when one of its fitted mods (the first
-/// extra list's `ExtraWeaponModFlags`, `0042e560`'s bits 0..2) has the effect
-/// `IncreaseMaxCondition` (10, `effectMods` +0x180), the values (`value1Mod` +0x18C) of every
-/// mod slot with that effect, summed as floats and cut to a whole number; armour (0x18) its
-/// health (+0x6C); anything else 0.
-fn stewie_entry_max_health(e: &mut Engine, entry: u32) -> u32 {
-    const INCREASE_MAX_CONDITION: u32 = 10;
-    let form = e.mem.u32(entry + 8);
-    if form == 0 {
-        // No form: Tweaks would read through a null pointer (our guard).
-        return 0;
-    }
-    match e.mem.u8(form + 4) {
-        0x28 => {
-            let lists = e.mem.u32(entry);
-            let extra = if lists != 0 { e.mem.u32(lists) } else { 0 };
-            let flags = if extra != 0 {
-                e.call(0x0042_e560, &args![extra]).u8()
-            } else {
-                0
-            };
-            let effect = |e: &Engine, slot: u32| e.mem.u32(form + 0x180 + 4 * slot);
-            let modded = (0..3)
-                .any(|slot| flags & (1 << slot) != 0 && effect(e, slot) == INCREASE_MAX_CONDITION);
-            let mut bonus = 0.0f32;
-            if modded {
-                for slot in 0..3 {
-                    if effect(e, slot) == INCREASE_MAX_CONDITION {
-                        bonus += e.mem.f32(form + 0x18c + 4 * slot);
-                    }
-                }
-            }
-            let health = e.mem.u32(form + 0x98) as f32;
-            float_to_int_trunc(health + bonus) as u32
-        }
-        0x18 => e.mem.u32(form + 0x6c),
-        _ => 0,
-    }
-}
-
 /// `cvttss2si`: toward zero, `0x80000000` out of range.
 fn float_to_int_trunc(value: f32) -> i32 {
     if (-2_147_483_648.0..2_147_483_648.0).contains(&value) {
@@ -10386,47 +10345,6 @@ mod tests {
         e.register(WEAPON_VALUE_821640, |_, _| float(1.0));
         e.mem.set_f32(SETTING_SHOT_BURST_TIME + 4, 2.5);
         e
-    }
-
-    /// Row S0022.23's entry health (`GetContChangeMaxHealth`): a weapon's health (+0x98) plus
-    /// the values of every mod slot with `IncreaseMaxCondition` (10) when a fitted one has it
-    /// (the first extra list's `00042e560` flags); armour its +0x6C; other forms 0.
-    #[test]
-    fn s0022_23_the_entry_health_counts_condition_mods() {
-        let mut e = engine();
-        let weapon = e.mem.alloc(0x200);
-        e.mem.set_u8(weapon + 4, 0x28);
-        e.mem.set_u32(weapon + 0x98, 200);
-        for (slot, effect, value) in [(0u32, 10u32, 25.5f32), (1, 3, 99.0), (2, 10, 10.0)] {
-            e.mem.set_u32(weapon + 0x180 + 4 * slot, effect);
-            e.mem.set_f32(weapon + 0x18c + 4 * slot, value);
-        }
-        let extra = e.mem.alloc(0x10);
-        let lists = e.mem.alloc(8);
-        e.mem.set_u32(lists, extra);
-        let entry = e.mem.alloc(0x10);
-        e.mem.set_u32(entry, lists);
-        e.mem.set_u32(entry + 8, weapon);
-        for (flags, wanted) in [(0u8, 200u32), (1, 235), (2, 200), (4, 235), (7, 235)] {
-            e.register_double(0x0042_e560, move |_, _| word(u32::from(flags)));
-            assert_eq!(
-                stewie_entry_max_health(&mut e, entry),
-                wanted,
-                "flags {flags}"
-            );
-        }
-        // No extra list: no flags asked.
-        e.mem.set_u32(entry, 0);
-        e.call_log = Some(vec![]);
-        assert_eq!(stewie_entry_max_health(&mut e, entry), 200);
-        assert!(calls(&e, 0x0042_e560).is_empty());
-        let armour = e.mem.alloc(0x100);
-        e.mem.set_u8(armour + 4, 0x18);
-        e.mem.set_u32(armour + 0x6c, 150);
-        e.mem.set_u32(entry + 8, armour);
-        assert_eq!(stewie_entry_max_health(&mut e, entry), 150);
-        e.mem.set_u8(armour + 4, 0x1f);
-        assert_eq!(stewie_entry_max_health(&mut e, entry), 0);
     }
 
     /// An equipped weapon (form type 0x28, health +0x98 200, one condition mod of 50 fitted)

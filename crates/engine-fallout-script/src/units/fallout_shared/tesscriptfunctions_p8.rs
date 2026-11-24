@@ -6429,7 +6429,6 @@ mod tests {
     ) {
         let mut e = engine();
         if row_on {
-            e.set_stewie(stewie::SET_ACTOR_REF_ESSENTIAL_NULL_CHECK, true);
         }
         let this_obj = object_with(&mut e, &[(0x100, V_IS_ACTOR)]);
         let a = command(&mut e, this_obj);

@@ -3116,40 +3116,6 @@ const INI_PREFS: u32 = 0x011f_35a0;
 /// `GetFileAttributesA` (KERNEL32 import slot `00fdf160`).
 const GET_FILE_ATTRIBUTES: u32 = 0x00fd_f160;
 
-/// lStewieAl's Tweaks' `MoreDescriptiveSettingsSaveError::OnFailSaveSettings` (row S0883), at
-/// `0x7D6E50` in place of the setting's text: into its 0x200-byte static (`snprintf`, cut to
-/// 0x1FF), with the prefs ini's path (`GetFileAttributesA`): read-only (attribute 1) and missing
-/// (`INVALID_FILE_ATTRIBUTES`) get Tweaks' own sentences, anything else the setting's text
-/// (`sMenuDisplayFailSaveSettings`, its +4 read raw), two line breaks and the path.
-fn stewie_save_settings_error(e: &mut Engine) -> u32 {
-    let path = e.mem.u32(INI_PREFS) + 4;
-    let name = e.mem.cstr(path);
-    let attributes = e.call(GET_FILE_ATTRIBUTES, &args![path]).u32();
-    let mut text = Vec::new();
-    if attributes == u32::MAX {
-        text.extend_from_slice(b"Failed to save settings to file ");
-        text.extend_from_slice(&name);
-        text.extend_from_slice(
-            b" as it is missing, you may need to run the launcher to generate it. Selected settings will not be saved.",
-        );
-    } else if attributes & 1 != 0 {
-        text.extend_from_slice(b"Failed to save settings to file ");
-        text.extend_from_slice(&name);
-        text.extend_from_slice(
-            b" as it is marked 'read-only'. Selected settings will not be saved.",
-        );
-    } else {
-        let setting = e.mem.u32(SETTING_011D3138 + 4);
-        text.extend_from_slice(&e.mem.cstr(setting));
-        text.extend_from_slice(b"\n\n");
-        text.extend_from_slice(&name);
-    }
-    text.truncate(0x1ff);
-    let buffer = e.stewie_kept(stewie::kept::SAVE_SETTINGS_ERROR, 0x200);
-    e.mem.set_cstr(buffer, &text);
-    buffer
-}
-
 // Translated from 007d6eb0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ListBox<StartMenu::Option*>::ListBox` (constructor): builds the base
 /// (`007240c0`), the embedded list (`0096a2d0` on `this + 4`), installs the

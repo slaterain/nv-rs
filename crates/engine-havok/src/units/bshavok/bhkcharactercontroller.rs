@@ -1357,17 +1357,6 @@ pub fn fn_00c6d7e0(e: &mut Engine, shape: u32, check: u8, fallback: u8, layer: i
     u8::from(blocked == 0)
 }
 
-/// lStewieAl's Tweaks' S0216 stair test of a `bhkShape` and a shape key, as its patched bytes
-/// do it: key -1 the shape's own material word `& 0x40`, else `GetSubMaterialVarType(key, 0x40)`
-/// (Tweaks' replacement of `00c84f50`).
-fn stair_bit(e: &mut Engine, shape: u32, key: i32) -> bool {
-    if key == -1 {
-        e.mem.u32(shape + 0x10) & STAIR_FLAG != 0
-    } else {
-        super::bhkshape::stair_sub_material_var_type(e, shape, key as u32, STAIR_FLAG)
-    }
-}
-
 /// Tweaks' `STAIR_FLAG`: the stair bit of a Havok material word.
 const STAIR_FLAG: u32 = 0x40;
 

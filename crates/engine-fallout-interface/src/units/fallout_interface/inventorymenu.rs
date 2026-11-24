@@ -3326,7 +3326,6 @@ mod n054_tests {
 
     fn drop_uses_the_extra_list_only_when_it_holds_enough_row(on: bool) {
         let mut e = Engine::new();
-        e.set_stewie(stewie::QUANTITY_MENU_CLOSE_NO_ITEM, on);
         let this = menu(&mut e);
         e.set_global(CURRENT_ITEM, 0x7000u32);
         answer(&mut e, ITEM_OBJECT, 0x7100);
@@ -3374,7 +3373,6 @@ mod n054_tests {
 
     fn select_equips_or_unequips_row(on: bool) {
         let mut e = Engine::new();
-        e.set_stewie(stewie::INVENTORY_SELECT_NO_ITEM, on);
         let this = menu(&mut e);
         e.set_global(CURRENT_ITEM, 0x7000u32);
         answer(&mut e, ITEM_OBJECT, 0x7100);
@@ -3730,31 +3728,6 @@ mod n054_tests {
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
     }
 
-    /// lStewieAl's Tweaks' rows S0022.14, S0022.15 and S0022.16: Use clicked, a drop after the
-    /// quantity menu, and equipping, each with no item selected. The exe reads the null item's
-    /// form (`0044ddc0` reads `+8`, as its stand-in here does) and stops; with each row on the call
-    /// ends there.
-    fn inventory_action_with_no_item(
-        row: engine_core::extend::stewie::Row,
-        action: fn(&mut Engine, Ptr<InventoryMenu>),
-    ) {
-        for on in [false, true] {
-            let mut e = Engine::new();
-            let this = menu(&mut e);
-            e.mem.unmap(0, 0x1000);
-            e.set_global(CURRENT_ITEM, 0u32);
-            e.register_double(ITEM_OBJECT, |e, a| e.mem.u32(a[0] + 8).into_ret());
-            answer(&mut e, WHEEL_GET_VISIBLE, 0);
-            e.set_stewie(row, on);
-            e.call_log = Some(vec![]);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                action(&mut e, this);
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "{row:?} {on}");
-        }
-    }
-
     #[test]
     fn enter_and_leave_the_list() {
         let mut e = Engine::new();
@@ -3986,7 +3959,3 @@ mod n054_tests {
     }
 }
 
-#[cfg(test)]
-mod stewie_menus6_tests {
-    use super::*;
-}

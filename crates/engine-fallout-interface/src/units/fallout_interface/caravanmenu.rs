@@ -3320,10 +3320,6 @@ const VENDOR_CONTAINER: u32 = 0x628;
 /// A reference's slots `RemoveItem` (+0x17C) and `AddItem` (+0x190), and its base form (+0x20).
 const SLOT_REMOVE_ITEM: u32 = 0x17c;
 const SLOT_ADD_ITEM: u32 = 0x190;
-/// Tweaks' `bHideCapsAddedMessages` (`[Tweaks]`): 0 in the code, the VNV INI and the VNV Extended
-/// INI. The setting reaches this crate with the Tweaks settings table; until then it reads as 0.
-const HIDE_CAPS_ADDED_MESSAGES: bool = false;
-
 /// A C string in guest memory, up to `limit` bytes.
 fn guest_text(e: &Engine, at: u32, limit: usize) -> Vec<u8> {
     let mut text = vec![];
@@ -3338,218 +3334,6 @@ fn guest_text(e: &Engine, at: u32, limit: usize) -> Vec<u8> {
         text.push(byte);
     }
     text
-}
-
-/// xNVSE's `TESForm::GetTheName` as Tweaks calls it on an inventory item: a reference's base form
-/// (vtable +0xF0, `GetIsReference`; the base at +0x20), then its `TESFullName` (the dynamic cast)
-/// and that name's text when it has one, else `""`. (xNVSE's cell branch is not reached: Tweaks
-/// asks it only for the item types of [`stewie_payout_message`].)
-fn stewie_the_name(e: &mut Engine, form: u32) -> Vec<u8> {
-    let mut base = form;
-    if e.vcall(form, 0xf0, &args![]).bool() && e.mem.u32(form + 0x20) != 0 {
-        base = e.mem.u32(form + 0x20);
-    }
-    let full_name = e
-        .call(
-            DYNAMIC_CAST_00EC43FB,
-            &args![base, 0u32, RTTI_TES_FORM, RTTI_TES_FULL_NAME, 0u32],
-        )
-        .u32();
-    if full_name == 0 {
-        return vec![];
-    }
-    let data = e.mem.u32(full_name + 4);
-    if data == 0 || e.mem.u16(full_name + 8) == 0 {
-        return vec![];
-    }
-    guest_text(e, data, 0x1000)
-}
-
-/// lStewieAl's Tweaks' `CaravanDoublePayoutFix::TESContainer__QueueUIMessage_` (row S0092): for an
-/// inventory item (armour, book, light, misc, weapon, ammo, key, aid, recipe, weapon mod, casino
-/// chips, caravan card or caravan money) and a count other than 0, the corner message
-/// `"<name> <sAddItemtoInventory>"` (one) or `"<count> <name><sPlural> <sAddItemtoInventory>"`
-/// (`snprintf` into 260 bytes), with the gift box icon, the item's pick-up sound and 2 seconds.
-fn stewie_payout_message(e: &mut Engine, item: u32, count: i32) {
-    if item == 0 || count == 0 {
-        return;
-    }
-    let kind = e.mem.u8(item + 4);
-    if !matches!(
-        kind,
-        0x18 | 0x19 | 0x1e | 0x1f | 0x28 | 0x29 | 0x2e | 0x2f | 0x32 | 0x67 | 0x6c | 0x73 | 0x74
-    ) {
-        return;
-    }
-    let name = stewie_the_name(e, item);
-    let added = e.mem.u32(ADD_ITEM_SETTING + 4);
-    let added = guest_text(e, added, 0x1000);
-    let mut text = if count == 1 {
-        [name.as_slice(), b" ", added.as_slice()].concat()
-    } else {
-        let plural = e.mem.u32(PLURAL_SETTING + 4);
-        let plural = guest_text(e, plural, 0x1000);
-        [
-            count.to_string().as_bytes(),
-            b" ",
-            name.as_slice(),
-            plural.as_slice(),
-            b" ",
-            added.as_slice(),
-        ]
-        .concat()
-    };
-    text.truncate(259);
-    text.push(0);
-    let sound = e
-        .call(PICK_UP_SOUND_008ADCF0, &args![item, 0u32, 1u32])
-        .u32();
-    e.with_stack(0x104, |e, buffer| {
-        for (i, byte) in text.iter().enumerate() {
-            e.mem.set_u8(buffer.addr() + i as u32, *byte);
-        }
-        e.call(
-            QUEUE_UI_MESSAGE_007052F0,
-            &args![
-                buffer,
-                0u32,
-                GIFT_BOX_ICON_0101C140,
-                sound,
-                2.0f32.to_bits(),
-                0u32
-            ],
-        );
-    });
-}
-
-/// lStewieAl's Tweaks' `CaravanDoublePayoutFix::TESContainer__QueueUIMessage` (row S0092), called
-/// at `0x74CDB2` in place of the stack container's `MoveAllItems` (`004821a0`): only the message
-/// for the container's last entry (its count and form); the items are not moved there, since
-/// `RemoveItemBarterContainer` gives them to the player after.
-fn stewie_container_message(e: &mut Engine, container: u32) {
-    // `formCountList` at +4 (`tList`: data, next); its last node's data.
-    let mut node = container + 4;
-    while e.mem.u32(node + 4) != 0 {
-        node = e.mem.u32(node + 4);
-    }
-    let entry = e.mem.u32(node);
-    if entry == 0 {
-        return;
-    }
-    let count = e.mem.i32(entry);
-    let item = e.mem.u32(entry + 4);
-    stewie_payout_message(e, item, count);
-}
-
-/// xNVSE's `TESObjectREFR::GetItemCount` (Tweaks calls it on the challenger): the reference's
-/// container changes (extra data 0x15 of its list at +0x44, its data at +0xC), then the count of
-/// `form` (`004c8f30`), or for a form list (type 0x55) the sum over its forms (list at +0x18);
-/// 0 without container changes.
-fn stewie_item_count(e: &mut Engine, reference: u32, form: u32) -> i32 {
-    let extra = e
-        .call(
-            EXTRA_GET_BY_TYPE_00410220,
-            &args![reference + 0x44, 0x15u32],
-        )
-        .u32();
-    if extra == 0 {
-        return 0;
-    }
-    let data = e.mem.u32(extra + 0xc);
-    if data == 0 {
-        return 0;
-    }
-    if e.mem.u8(form + 4) != 0x55 {
-        return e
-            .call(CHANGES_ITEM_COUNT_004C8F30, &args![data, form])
-            .i32();
-    }
-    let mut total = 0i32;
-    let mut node = form + 0x18;
-    while node != 0 {
-        let item = e.mem.u32(node);
-        if item != 0 {
-            let count = e
-                .call(CHANGES_ITEM_COUNT_004C8F30, &args![data, item])
-                .i32();
-            total = total.wrapping_add(count);
-        }
-        node = e.mem.u32(node + 4);
-    }
-    total
-}
-
-/// lStewieAl's Tweaks' `CaravanDoublePayoutFix::CaravanWinAwardCaps` (row S0092), jumped to at
-/// `0x74CE21` in place of the exe's caps payment after a won game (the exe goes on at the
-/// function's end, `0x74D177`): a heap entry for the caps (xNVSE's `EntryData::Create(caps, 0)`:
-/// 0xC bytes and an empty 8-byte extra data list), the "caps added" message (unless
-/// `bHideCapsAddedMessages`), then the caps from the barter container (`RemoveItemBarterContainer`
-/// with the challenger's base form) as far as it holds them and the rest from the challenger
-/// (`RemoveItem` to the player) as far as it has them, the remainder added to the player
-/// (`AddItem`); the entry destroyed.
-fn stewie_award_caps(e: &mut Engine, this: Ptr<CaravanMenu>, caps_to_earn: i32) {
-    let menu = this.addr();
-    let caps = e.call(FORM_BY_ID, &args![CAPS_FORM_ID]).u32();
-    let entry = e
-        .call(HEAP_ALLOCATE_00AA3E40, &args![GAME_HEAP, 0xcu32])
-        .u32();
-    let list = e
-        .call(HEAP_ALLOCATE_00AA3E40, &args![GAME_HEAP, 8u32])
-        .u32();
-    e.mem.set_u32(list, 0);
-    e.mem.set_u32(list + 4, 0);
-    e.mem.set_u32(entry, list);
-    e.mem.set_u32(entry + 8, caps);
-    e.mem.set_u32(entry + 4, 0);
-    if !HIDE_CAPS_ADDED_MESSAGES {
-        stewie_payout_message(e, caps, caps_to_earn);
-    }
-    let handler = e.global::<u32>(DATA_HANDLER);
-    let vendor = e.mem.u32(handler + VENDOR_CONTAINER);
-    let in_container = e.call(GET_GOLD_AMOUNT, &args![vendor]).i32();
-    let challenger = word_at(e, menu, CHALLENGER);
-    let base = e.mem.u32(challenger + 0x20);
-    if caps_to_earn <= in_container {
-        e.call(
-            REMOVE_BARTER_ITEM,
-            &args![handler, entry, caps_to_earn as u32, base],
-        );
-    } else {
-        e.call(
-            REMOVE_BARTER_ITEM,
-            &args![handler, entry, in_container as u32, base],
-        );
-        let rest = caps_to_earn.wrapping_sub(in_container);
-        let challenger = word_at(e, menu, CHALLENGER);
-        let theirs = stewie_item_count(e, challenger, caps);
-        let player = e.global::<u32>(PLAYER);
-        let taken = if theirs >= rest { rest } else { theirs };
-        e.vcall(
-            challenger,
-            SLOT_REMOVE_ITEM,
-            &args![
-                caps,
-                0u32,
-                taken as u32,
-                0u32,
-                0u32,
-                player,
-                0u32,
-                0u32,
-                1u32,
-                0u32
-            ],
-        );
-        if theirs < rest {
-            let player = e.global::<u32>(PLAYER);
-            e.vcall(
-                player,
-                SLOT_ADD_ITEM,
-                &args![caps, 0u32, rest.wrapping_sub(theirs) as u32],
-            );
-        }
-    }
-    e.call(ENTRY_DATA_DESTROY_004459E0, &args![entry, 1u32]);
 }
 
 /// The money entries of an inventory-change list (form type 0x74, positive
@@ -11881,16 +11665,6 @@ mod n052_tests {
         );
     }
 
-    /// The bytes Tweaks' `IsControllerModeAndNotConsoleOpen` reads: `isControllerDisabled`,
-    /// `isControllerConnected` and the console's open byte.
-    fn stewie_controls(e: &mut Engine, connected: u8, console: u8) {
-        e.map(0x011d_8000, 0x1000);
-        e.map(0x011d_e000, 0x1000);
-        e.mem.set_u8(stewie_menus::CONTROLLER_DISABLED, 0);
-        e.mem.set_u8(stewie_menus::CONTROLLER_CONNECTED, connected);
-        e.mem.set_u8(stewie_menus::CONSOLE_OPEN, console);
-    }
-
     /// `DoIdle` in the deck menu with the stick's x at 20000: whether the stick was read, and
     /// whether `004b71d0` was asked.
     fn caravan_stick_read(e: &mut Engine, this: Ptr<CaravanMenu>) -> (bool, bool) {
@@ -11959,7 +11733,6 @@ mod n052_tests {
         use std::cell::RefCell;
         use std::rc::Rc;
         let mut e = engine();
-        e.set_stewie(stewie_menus::CARAVAN_SINGLE_PAYOUT, on);
         e.map(0x011d_3000, 0x2000);
         let (this, player) = setup(&mut e);
         let menu = this.addr();
@@ -12106,43 +11879,5 @@ mod n052_tests {
         assert!(calls_to(&e, 0x00d0_017c).is_empty());
         assert!(calls_to(&e, EXTRA_GET_BY_TYPE_00410220).is_empty());
         let _ = handler;
-    }
-
-    /// Tweaks' message leaves out forms that are not inventory items and a count of 0, and says
-    /// one item without a count or plural.
-    #[test]
-    fn s0092_message_types_and_counts() {
-        use std::cell::RefCell;
-        use std::rc::Rc;
-        let mut e = engine();
-        e.map(0x011d_3000, 0x2000);
-        let mut names = vec![];
-        let weapon = named_form(&mut e, 0x28, "Varmint Rifle", &mut names);
-        let npc = named_form(&mut e, 0x2a, "Benny", &mut names);
-        e.register_double(DYNAMIC_CAST_00EC43FB, move |_, a| {
-            ret(names
-                .iter()
-                .find(|(f, _)| *f == a[0])
-                .map_or(0, |(_, n)| *n))
-        });
-        let added = guest_c_string(&mut e, "added");
-        e.mem.set_u32(ADD_ITEM_SETTING + 4, added);
-        e.register(PICK_UP_SOUND_008ADCF0, |_, _| ret(0x5150));
-        let texts: Rc<RefCell<Vec<String>>> = Rc::default();
-        let seen = texts.clone();
-        e.register_double(QUEUE_UI_MESSAGE_007052F0, move |e, a| {
-            seen.borrow_mut().push(
-                guest_text(e, a[0], 0x200)
-                    .into_iter()
-                    .map(char::from)
-                    .collect(),
-            );
-            Ret::default()
-        });
-        stewie_payout_message(&mut e, weapon, 1);
-        stewie_payout_message(&mut e, weapon, 0);
-        stewie_payout_message(&mut e, npc, 2);
-        stewie_payout_message(&mut e, 0, 2);
-        assert_eq!(*texts.borrow(), vec!["Varmint Rifle added".to_string()]);
     }
 }

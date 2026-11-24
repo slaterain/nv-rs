@@ -603,32 +603,6 @@ fn resize_root(e: &mut Engine, root: u32) {
     }
 }
 
-/// lStewieAl's Tweaks' `MenuFixes::OnDebugLockPickHealthDisplayInit` (row S0022.13, "fix the
-/// debug lockpick menu always starting showing 100% pick health instead of the actual health"),
-/// called at `0x78DEC2` in place of the debug caption's `Tile::SetString`: the caption becomes
-/// `"PICK HEALTH: %d%%"` (`snprintf` into 0x20 bytes) with the open menu's pick health times 100
-/// cut to a whole number (`int(pinHealth * 100)`: a float product, truncated; a value out of
-/// range gives the CPU's 0x80000000), set as `string` (0xFC4) with the tile's reactions updated.
-fn stewie_debug_pick_health(e: &mut Engine, tile: u32) {
-    let menu: u32 = e.global(LOCK_PICK_MENU_ME);
-    let health = f32::from_bits(e.mem.u32(menu + PICK_HEALTH));
-    let percent = health * 100.0;
-    let shown = if (-2_147_483_648.0..2_147_483_648.0).contains(&percent) {
-        percent as i32
-    } else {
-        i32::MIN
-    };
-    let mut text = format!("PICK HEALTH: {shown}%").into_bytes();
-    text.truncate(0x1f);
-    text.push(0);
-    e.with_stack(0x20, |e, buffer| {
-        for (i, byte) in text.iter().enumerate() {
-            e.mem.set_u8(buffer.addr() + i as u32, *byte);
-        }
-        e.call(TILE_SET_STRING, &args![tile, 0xfc4u32, buffer, 1u32]);
-    });
-}
-
 // Translated from 0078db00 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 0078db00 - the C++ exception-unwinding frame (FS:[0]) that releases the sound handle when a call throws, and the /GS stack cookie check (00ec408c), are not translated
 /// `LockPickMenu::Create` (Xbox PDB), `cdecl (target, level, flag)`: the

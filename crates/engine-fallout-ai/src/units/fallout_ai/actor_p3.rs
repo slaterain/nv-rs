@@ -2849,12 +2849,6 @@ fn play_dry_fire_sound(e: &mut Engine, this: Ptr<Actor>, weapon_form: Ptr, playe
     });
 }
 
-// Translated from lStewieAl's Tweaks 10.05 (xNVSE's GameData.cpp): IsGodmodeNotDemigodmode.
-/// God mode (`011e07ba`) without demigod mode (`011e07bb` or the setting byte `011e0898`).
-pub(crate) fn godmode_not_demigod(e: &Engine) -> bool {
-    e.mem.u8(0x011e_07ba) != 0 && !(e.mem.u8(0x011e_07bb) != 0 || e.mem.u8(0x011e_0898) != 0)
-}
-
 /// The player's Rock-It Launcher ammunition count in `Actor::StartAttack` (`0x893B44`, `00969040`).
 /// lStewieAl's Tweaks' row S0082.01 (`NoAmmoGodmode`, its `GetRockItAmmoOrGodmode`): 1 in god mode
 /// (not demigod).
@@ -14165,25 +14159,6 @@ fn hit_bark_cooling_down(e: &mut Engine, now: u32) -> bool {
     e.global::<u32>(HIT_BARK_DEADLINE) > now
 }
 
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/CombatSoundCooldownFix.cpp):
-// OnPlayCombatAttackSound.
-/// lStewieAl's Tweaks' row S0926: after the hit actor said its combat line, the hit sound's
-/// deadline (`011df684`) becomes the tick count (`GetTickCount`) plus a random wait between
-/// `fDialogHitSoundCooldownMin` and `fDialogHitSoundCooldownMax` (`011df73c`, `011df70c`, their
-/// values times 1000 as `float`s, cut to whole numbers; `00944460`). The exe's own restart of the
-/// deadline once it has passed (`0x89D431`) stays as it is.
-fn hit_sound_cooldown_after_line(e: &mut Engine) {
-    let min = e.mem.f32(SETTING_BARK_DELAY_LOWER + 4) * 1000.0;
-    let max = e.mem.f32(SETTING_BARK_DELAY_UPPER + 4) * 1000.0;
-    let now = e.call(IMPORT_GET_TICK_COUNT, &args![]).u32();
-    let wait = e
-        .call(
-            RANDOM_RANGE_944460,
-            &args![min as i32 as u32, max as i32 as u32],
-        )
-        .u32();
-    e.set_global(HIT_BARK_DEADLINE, now.wrapping_add(wait));
-}
 /// `bhkBlendController::DoHit` (Xbox PDB), cdecl: the first value found by
 /// `004aae30`, a `float` and a flag.
 const BLEND_CONTROLLER_DO_HIT: u32 = 0x00c9_b250;
@@ -16676,7 +16651,6 @@ mod tests {
 
     fn walking_forward_picks_the_walk_group_and_scales_its_speed_row(on: bool) {
         let mut e = engine();
-        e.set_stewie(engine_core::extend::stewie::MISSING_ANIM_NULL_CHECK, on);
         let (actor, animation, _) = pick_setup(&mut e);
         stub(&mut e, ACTOR_ANIM_FLAGS, 0x0101);
         stub_float(&mut e, ACTOR_GET_WALK_SPEED, 150.0);

@@ -716,7 +716,6 @@ mod tests {
         let (_, _, log) = update_with(world, |e| {
             e.register(0x0b00_020c, |_, _| 0u32.into_ret());
             e.register(TRANSFORM, |_, a| (a[0] + 0x68).into_ret());
-            e.set_stewie(engine_core::extend::stewie::BEAM_NPC_NULL_NODE, on);
         });
         log
     }

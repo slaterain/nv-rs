@@ -996,24 +996,6 @@ pub fn combat_formulas_calc_weapon_damage(
         * perk_mult as f64) as f32
 }
 
-/// Row S0189.02's lookup, Tweaks' `OnCalcDamageGetProjectile` (`InventoryCalcWeaponDamageUseAmmoFix`):
-/// the projectile (+0xB4) of `ammo` when it is an ammunition form (type 0x29) that has one, else
-/// the weapon's own projectile (+0x118) when set, else `TESObjectWEAP::GetProjectile` (`00525ae0`,
-/// the holder's equipped ammunition's).
-fn calc_damage_projectile(e: &mut Engine, weapon: Ptr, ammo: u32, holder: Ptr) -> Ptr {
-    if ammo != 0 && e.mem.u8(ammo + 4) == FORM_TYPE_AMMO {
-        let projectile = e.mem.u32(ammo + 0xb4);
-        if projectile != 0 {
-            return Ptr::new(projectile);
-        }
-    }
-    let projectile = e.mem.u32(weapon.addr() + 0x118);
-    if projectile != 0 {
-        return Ptr::new(projectile);
-    }
-    combat_formulas_get_arm_condition(e, weapon, holder)
-}
-
 /// `player + 0xa4` without the null test (the exe adds the offset to the global directly).
 fn actor_value_owner_unchecked(actor: Ptr) -> Ptr {
     Ptr::new(actor.addr().wrapping_add(ACTOR_VALUE_OWNER))
@@ -3102,11 +3084,6 @@ mod tests {
         let ammo = object(&mut e, 0x200);
         e.mem.set_u8(ammo.addr() + 4, ammo_type);
         e.mem.set_u32(ammo.addr() + 0xb4, 0x6000);
-        e.set_stewie(engine_core::extend::stewie::WEAPON_DAMAGE_DISPLAY_AMMO, one);
-        e.set_stewie(
-            engine_core::extend::stewie::WEAPON_DAMAGE_AMMO_PROJECTILE,
-            two,
-        );
         e.call_log = Some(vec![]);
         let shown = e
             .call(0x0064_50f0, &args![weapon, 1.0f32, 0u32, ammo])
@@ -3200,10 +3177,6 @@ mod tests {
             log.borrow_mut().push(a.to_vec());
             f32::from_bits(a[2]).into_ret()
         });
-        e.set_stewie(
-            engine_core::extend::stewie::THROWING_WEAPON_AMMO_EFFECTS,
-            on,
-        );
         e.call(0x0064_50f0, &args![weapon, 1.0f32, 0u32, ammo]);
         let calls = applied.borrow().clone();
         (ammo.addr(), calls)

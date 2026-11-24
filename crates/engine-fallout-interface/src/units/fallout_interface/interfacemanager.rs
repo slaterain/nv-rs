@@ -3280,57 +3280,6 @@ fn top_visible_menu_id(e: &mut Engine, this: Ptr<InterfaceManager>) -> u32 {
         .unwrap_or(0)
 }
 
-/// lStewieAl's Tweaks' `ToggleConsoleHook` after the call it wraps answered `next`: 1 when that is
-/// not 0; else 1 (and the menu-mode debounce set) when the console (`ConsoleManager::GetSingleton`,
-/// `0071b160` with 1) is open (`+0x38`) and the pad's B was pressed this frame; else 0. The
-/// debounce's pad half, B's release not reaching the menu behind the closed console, is Tweaks'
-/// S0022.47 in `CheckMenuButton` (the menus share's row, pull request #943).
-fn stewie_console_pad_b(e: &mut Engine, next: u32) -> u32 {
-    use engine_core::extend::stewie as tweaks;
-    if next != 0 {
-        return 1;
-    }
-    let console = e.call(MENU_CONSOLE_INSTANCE, &args![1u32]).u32();
-    if e.mem.u8(console.wrapping_add(0x38)) != 0 && tweaks::pad_pressed(e, tweaks::PAD_B) {
-        tweaks::set_debounce_menu_mode(e);
-        return 1;
-    }
-    0
-}
-
-/// lStewieAl's Tweaks' S0062 `PCButtonGetTraitName`'s names by DirectInput scan code: the number
-/// keys of both rows, Caps Lock, Tab, either Alt and F1 to F12; nothing for any other key.
-fn scancode_button_name(code: u32) -> &'static str {
-    match code {
-        0x0b | 0x52 => "0",
-        0x02 | 0x4f => "1",
-        0x03 | 0x50 => "2",
-        0x04 | 0x51 => "3",
-        0x05 | 0x4b => "4",
-        0x06 | 0x4c => "5",
-        0x07 | 0x4d => "6",
-        0x08 | 0x47 => "7",
-        0x09 | 0x48 => "8",
-        0x0a | 0x49 => "9",
-        0x3a => "CAPS",
-        0x0f => "TAB",
-        0x38 | 0xb8 => "ALT",
-        0x3b => "F1",
-        0x3c => "F2",
-        0x3d => "F3",
-        0x3e => "F4",
-        0x3f => "F5",
-        0x40 => "F6",
-        0x41 => "F7",
-        0x42 => "F8",
-        0x43 => "F9",
-        0x44 => "F10",
-        0x57 => "F11",
-        0x58 => "F12",
-        _ => "",
-    }
-}
-
 /// The open Pip-Boy's close test reads the pad (`004b71d0` at `0x70E854`); with lStewieAl's
 /// Tweaks' S0022.10 (`IsControllerConnectedAndNotMenumodeOverride`) not while the input's
 /// menu-mode debounce is set (then the keyboard's menu-mode release is read).

@@ -3870,8 +3870,3 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod stewie_menus5_tests {
-    use super::*;
-    use engine_core::extend::stewie;
-}

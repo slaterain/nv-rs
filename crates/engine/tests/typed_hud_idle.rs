@@ -291,10 +291,6 @@ fn idle_world(e: &mut Engine, case: &Case) -> Vec<u32> {
     }
     // [11]: lStewieAl's Tweaks' S0022.42 (`HUD_HEALTH_BAR_NOT_TIED_TO_PROMPT`) on (bit 0), the
     // action prompt (+0x9C) shown (bit 1).
-    e.set_stewie(
-        engine_core::extend::stewie::HUD_HEALTH_BAR_NOT_TIED_TO_PROMPT,
-        w(11) & 1 != 0,
-    );
     if w(11) & 2 != 0 {
         let t = at(e, 0x9c);
         set_trait(e, t, 0xfa3, 1.0);

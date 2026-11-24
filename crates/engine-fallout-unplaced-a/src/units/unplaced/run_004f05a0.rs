@@ -463,7 +463,6 @@ mod tests {
     fn node_visit_row(on: bool) {
         const IS_NODE: u32 = 0x0300_0000;
         let mut e = Engine::new();
-        e.set_stewie(engine_core::extend::stewie::NULL_ANIM_REMOVE_RECURSE, on);
         e.map(INVALID_INDEX, 4);
         e.set_global(INVALID_INDEX, 0xffffu16);
         // Object 0x100 is a node (itself) with children 0x200 and 0x300;
@@ -550,7 +549,6 @@ mod n075_tests {
 
     fn fn_004f06d0_visit_row(on: bool) {
         let mut e = Engine::new();
-        e.set_stewie(engine_core::extend::stewie::NULL_ANIM_REMOVE_RECURSE, on);
         e.map(0x0109_6000, 0x1000);
         e.set_global(INVALID_INDEX, 0xffffu16);
         // Objects: vtable slot +0xc answers the node (the object itself for the parent,

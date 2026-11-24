@@ -1351,26 +1351,6 @@ fn effect_duration(e: &mut Engine, effect: u32) -> u32 {
     e.call(EFFECT_GET_DURATION, &args![effect]).u32()
 }
 
-/// lStewieAl's Tweaks' `EffectItemGetModifiedDuration` (row S0066, main.h): the effect item's
-/// duration (+8, a whole number made a float), for an effect whose setting (+0x14) is not
-/// hostile (`effectFlags` +0x58 bit 1) changed by the player's (`011dea3c`)
-/// `ModifyPositiveChemDuration` perk entries (`ApplyPerkModifiers` `005e58f0`, entry point
-/// 0x19), cut to a whole number.
-fn stewie_modified_duration(e: &mut Engine, effect: u32) -> u32 {
-    let mut duration = e.mem.u32(effect + 8) as f32;
-    let setting = e.mem.u32(effect + 0x14);
-    // No setting: Tweaks would read through a null pointer (our guard: no perks).
-    if setting != 0 && e.mem.u32(setting + 0x58) & 1 == 0 {
-        let player = e.global::<u32>(0x011d_ea3c);
-        duration = e.with_stack(4, |e, value| {
-            e.mem.set_f32(value.addr(), duration);
-            e.call(0x005e_58f0, &args![0x19u32, player, value.addr()]);
-            e.mem.f32(value.addr())
-        });
-    }
-    duration as u32
-}
-
 // Translated from 007e0b20 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 007e0b20 - the C++ exception frame (FS:[0] chain, unwind state 0 around the entry's construction) is not translated.
 /// `StatsMenu::StatusDataList::Register` (Xbox PDB; `RET 4`, an effect item): an entry
@@ -6632,40 +6612,3 @@ mod n058_tests {
     }
 }
 
-#[cfg(test)]
-mod stewie_menus5_tests {
-    use super::*;
-    use engine_core::extend::{jip_patches, stewie};
-
-    /// An effect item (duration +8 = 30) whose setting's `effectFlags` (+0x58) are `flags`, the
-    /// player at `011dea3c`, and `ApplyPerkModifiers` (`005e58f0`) adding 15 to the float.
-    fn effect(e: &mut Engine, flags: u32) -> u32 {
-        if !e.mem.is_mapped(0x011d_ea3c) {
-            e.map(0x011d_e000, 0x1000);
-        }
-        e.mem.set_u32(0x011d_ea3c, 0x7100);
-        let setting = e.mem.alloc(0x60);
-        e.mem.set_u32(setting + 0x58, flags);
-        let item = e.mem.alloc(0x20);
-        e.mem.set_u32(item + 8, 30);
-        e.mem.set_u32(item + 0x14, setting);
-        e.register_double(0x005e_58f0, |e, a| {
-            assert_eq!(a[..2], [0x19, 0x7100]);
-            let value = e.mem.f32(a[2]);
-            e.mem.set_f32(a[2], value + 15.5);
-            Ret::default()
-        });
-        e.register_double(EFFECT_GET_DURATION, |_, _| 30u32.into_ret());
-        e.call_log = Some(vec![]);
-        item
-    }
-
-    fn perks_asked(e: &Engine) -> usize {
-        e.call_log
-            .as_ref()
-            .unwrap()
-            .iter()
-            .filter(|(a, _)| *a == 0x005e_58f0)
-            .count()
-    }
-}

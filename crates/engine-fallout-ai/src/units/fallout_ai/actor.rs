@@ -489,34 +489,6 @@ const FOLLOWER_BARKS: u32 = 0x011e_0098;
 const MEMORY_MANAGER: u32 = 0x011f_6238;
 const MEMORY_FREE: u32 = 0x00aa_4060;
 
-/// Row S0183's step, as Tweaks' `OnActorFree`: every bark naming `actor` is freed and its node taken
-/// out as Tweaks' `tList::RemoveMe` does (the next node's item and link copied in and that node
-/// freed; the last node only loses its item).
-fn forget_follower_barks(e: &mut Engine, actor: u32) {
-    let mut node = FOLLOWER_BARKS;
-    loop {
-        let item = e.mem.u32(node);
-        if item != 0 && e.mem.u32(item) == actor {
-            e.call(MEMORY_FREE, &args![MEMORY_MANAGER, item]);
-            let next = e.mem.u32(node + 4);
-            if next == 0 {
-                e.mem.set_u32(node, 0);
-                return;
-            }
-            let next_item = e.mem.u32(next);
-            let after = e.mem.u32(next + 4);
-            e.mem.set_u32(node, next_item);
-            e.mem.set_u32(node + 4, after);
-            e.call(MEMORY_FREE, &args![MEMORY_MANAGER, next]);
-        } else {
-            node = e.mem.u32(node + 4);
-            if node == 0 {
-                return;
-            }
-        }
-    }
-}
-
 // Translated from 0087dcb0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Actor::~Actor` (Xbox PDB), the body: puts the vtables back, deletes the
 /// ragdoll controller and the penetration utility, releases the sound handle of

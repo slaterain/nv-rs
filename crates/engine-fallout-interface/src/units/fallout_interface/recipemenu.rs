@@ -2006,71 +2006,12 @@ const LIST_BOX_RESTORE_POSITION: u32 = 0x0073_1360;
 /// The exe's `""` (`01011584`), for Tweaks' `String::CStr` of an empty name.
 const EMPTY_TEXT: u32 = 0x0101_1584;
 
-/// lStewieAl's Tweaks' `RecipeMenuRefreshFix::OnPreRefreshRecipeMenu` (row S0200), called at
-/// `0x7276A6` in place of `004077e0`: keeps the category index (`0119fbf4`), saves the open
-/// menu's (`011d8e90`) recipe list's scroll position (`ListBox::SaveListState`, `007312e0`) and
-/// frees its tiles (`FreeAllTiles`, vtable +0x1c); the list walked is then the data handler's
-/// recipes. Answers the index kept.
-fn stewie_pre_refresh(e: &mut Engine) -> u32 {
-    let previous = e.global::<u32>(FILTER_INDEX_0119FBF4);
-    let list = me(e).wrapping_add(RECIPE_LIST);
-    e.call(LIST_BOX_SAVE_LIST_STATE, &args![list]);
-    let list = me(e).wrapping_add(RECIPE_LIST);
-    e.vcall(list, 0x1c, &args![]);
-    previous
-}
-
-/// `RecipeMenuRefreshFix::OnPostRefreshRecipeMenu` (row S0200), at `0x7278A9` after the exe's
-/// category sort: xNVSE's `RecipeMenu::SetCategoryIndex(previous)` on the open menu, then
-/// `ListBox::RestorePosition(false)` (`00731360` with 0) on its recipe list.
-fn stewie_post_refresh(e: &mut Engine, previous: u32) {
-    stewie_set_category_index(e, previous as i32);
-    let list = me(e).wrapping_add(RECIPE_LIST);
-    e.call(LIST_BOX_RESTORE_POSITION, &args![list, 0u32]);
-}
-
 /// The call at `0x7275D0` (`DoClick`'s category title, `Tile::SetString` with `string` 0xFC4 and
 /// reactions). Tweaks' `bCapitalizeRecipeCategories` (on in VNV, a row of its own not built yet)
 /// replaces this call; S0200's `SetCategoryIndex` goes through it too (Tweaks calls the call's
 /// target), so that row's seam belongs here.
 fn set_category_title(e: &mut Engine, tile: u32, text: u32) {
     e.call(TILE_SET_STRING, &args![tile, 0xfc4u32, text, 1u32]);
-}
-
-/// xNVSE's `RecipeMenu::SetCategoryIndex` (`GameUI.cpp`): below -1 becomes the category array's
-/// last (`size - 1`, the array's +8 read raw), above `size` (an unsigned compare, so `size` itself
-/// stays) becomes -1; stored in `0119fbf4`. The items title (+0x2C) gets `string` (0xFC4, with
-/// reactions) the `sRecipes` setting's text (`011d2088`'s +4) for -1, else the category's name
-/// (`data[index]`'s `TESFullName` at +0x18: its text at +0x1C when the text and its length at
-/// +0x20 are set, else `""`); then the recipe list is filtered with the exe's `fn_00728d60` (the
-/// word at `0x727637`).
-fn stewie_set_category_index(e: &mut Engine, index: i32) {
-    let size = e.mem.u32(CATEGORY_ARRAY + 8);
-    let index = if index < -1 {
-        size.wrapping_sub(1)
-    } else if index as u32 > size {
-        u32::MAX
-    } else {
-        index as u32
-    };
-    e.set_global(FILTER_INDEX_0119FBF4, index);
-    let label = if index == u32::MAX {
-        e.mem.u32(SETTING_011D2088 + 4)
-    } else {
-        let data = e.mem.u32(CATEGORY_ARRAY + 4);
-        let category = e.mem.u32(data.wrapping_add(index.wrapping_mul(4)));
-        let text = e.mem.u32(category + 0x1c);
-        if text != 0 && e.mem.u16(category + 0x20) != 0 {
-            text
-        } else {
-            EMPTY_TEXT
-        }
-    };
-    let menu = me(e);
-    let title = e.mem.u32(menu + 0x2c);
-    // Tweaks calls whatever the call at `0x7275D0` goes to (`GetRelJumpAddr`).
-    set_category_title(e, title, label);
-    list_box_tes_recipe_filter(e, Ptr::new(menu + RECIPE_LIST), FILTER_00728D60);
 }
 
 // Translated from 007278c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2283,25 +2224,6 @@ fn show_selected(e: &mut Engine, this: Ptr) {
 
 /// `0048e730` (`cdecl`, a form and the player): the form's icon path (`""` when it has none).
 const ICON_PATH_0048E730: u32 = 0x0048_e730;
-
-/// lStewieAl's Tweaks' `RecipeMenuArmorIconHook` (row S0044, `patchFixRecipeMenuArmorIcons`: "armor
-/// icons in the recipe menu favoured their glow variants as the UI Message icon was used instead
-/// of the inventory icon"), jumped to at `0x728378` for a form of the `0x1183A34` cast: the path
-/// is `0048e730(form, player)`; its first byte 0 hides the icon tile (+0x4C, `visible` 0, the exe's
-/// `0x7283D9`), anything else becomes its `filename` (0xFCC) and shows it (the exe's `0x7283AE`).
-fn stewie_armour_icon(e: &mut Engine, base: u32, form: u32) {
-    let player = e.global::<u32>(PLAYER);
-    let path = e.call(ICON_PATH_0048E730, &args![form, player]).u32();
-    if e.mem.u8(path) == 0 {
-        let tile = e.mem.u32(base + 0x4c);
-        e.call(TILE_SET_INT, &args![tile, 0xfa3u32, 0u32]);
-        return;
-    }
-    let tile = e.mem.u32(base + 0x4c);
-    e.call(TILE_SET_STRING, &args![tile, 0xfccu32, path, 1u32]);
-    let tile = e.mem.u32(base + 0x4c);
-    e.call(TILE_SET_INT, &args![tile, 0xfa3u32, 1u32]);
-}
 
 /// `show_selected` for a selected recipe (the menu's tiles through `pMe`).
 fn show_recipe(e: &mut Engine, this: Ptr, crafter: u32, selected: &mut u32) {
@@ -3225,31 +3147,6 @@ const WEAPON_FORM_TYPE: u8 = 0x28;
 const WEAPON_VTABLE: u32 = 0x0102_c51c;
 const WEAPON_TYPE: u32 = 0xf4;
 const FIRST_THROWN_WEAPON_TYPE: u8 = 10;
-/// Tweaks' `g_fCraftedItemHealth`: 0.8 (its `fCraftedItemHealthPct` 80, VNV's value; that setting
-/// and `bRepairScalesCraftingCondition`, 0 in VNV, are rows of their own not built yet).
-const CRAFTED_ITEM_HEALTH: f32 = 0.8;
-
-/// lStewieAl's Tweaks' `MenuFixes::RecipeMenuInitConditionTile` (row S0022.12, "fix the ^
-/// indicator being in the wrong place for armors"), called at `0x7296E0` in place of tile 4's
-/// `Tile::SetString`: `user6` becomes 1.0 for a weapon (the form's type byte 0x28) and 0.0 for
-/// anything else (the notch's place), `user5` the crafted condition (1.0 for a thrown weapon: type
-/// 0x28, `TESObjectWEAP`'s vtable and `eWeaponType` 10 or more), each with `Tile::SetFloat`
-/// (`0xA012D0`, reactions updated), then the exe's `SetString(title, text, 1)`.
-fn stewie_condition_tile(e: &mut Engine, tile: u32, form: u32, title_trait: u32, text: u32) {
-    let is_weapon = e.mem.u8(form + 4) == WEAPON_FORM_TYPE;
-    let place = if is_weapon { 1.0f32 } else { 0.0 };
-    e.call(TILE_SET_FLOAT, &args![tile, USER6, place.to_bits(), 1u32]);
-    let thrown = is_weapon
-        && e.mem.u32(form) == WEAPON_VTABLE
-        && e.mem.u8(form + WEAPON_TYPE) >= FIRST_THROWN_WEAPON_TYPE;
-    let condition = if thrown { 1.0f32 } else { CRAFTED_ITEM_HEALTH };
-    e.call(
-        TILE_SET_FLOAT,
-        &args![tile, USER5, condition.to_bits(), 1u32],
-    );
-    e.call(TILE_SET_STRING, &args![tile, title_trait, text, 1u32]);
-}
-
 /// `fn_00728da0`'s weapon part (`traits`: title, value, the `0x1009` damage trait).
 fn show_weapon(e: &mut Engine, weapon: u32, tiles: &[u32; 12], traits: [u32; 3]) {
     let [title_trait, value_trait, damage_trait] = traits;
@@ -5415,59 +5312,6 @@ mod n057_tests {
         e.mem.set_u32(CATEGORY_ARRAY + 4, data);
         e.mem.set_u32(CATEGORY_ARRAY + 8, names.len() as u32);
         texts
-    }
-
-    /// Row S0200's `SetCategoryIndex` (xNVSE's): below -1 is the last category, above the count
-    /// is -1 (the count itself is kept: the compare is unsigned), -1 titles the list with
-    /// `sRecipes`' text, any other its category's name (`""` for an empty one); then the list is
-    /// filtered (`0x728d60`'s filter: the num-filtered static asked).
-    #[test]
-    fn s0200_set_category_index() {
-        for (index, stored, label) in [
-            (-1i32, -1i32, Some(0x6500u32)),
-            (0, 0, None),
-            (1, 1, None),
-            (-2, 2, None),
-            (-7, 2, None),
-            (4, -1, Some(0x6500)),
-        ] {
-            let mut e = engine();
-            e.map(0x011d_2000, 0x1000);
-            e.mem.set_u32(SETTING_011D2088 + 4, 0x6500);
-            let menu = recipe_menu(&mut e);
-            e.set_global(RECIPE_MENU, menu);
-            let texts = categories(&mut e, &[b"Food", b"", b"Ammo"]);
-            e.call_log = Some(vec![]);
-            stewie_set_category_index(&mut e, index);
-            assert_eq!(
-                e.global::<i32>(FILTER_INDEX_0119FBF4),
-                stored,
-                "index {index}"
-            );
-            let label = label.unwrap_or(match stored {
-                0 => texts[0],
-                1 => EMPTY_TEXT,
-                _ => texts[2],
-            });
-            assert_eq!(
-                calls_to(&e, TILE_SET_STRING),
-                [vec![0x2000 + 0x2c - TILES, 0xfc4, label, 1]],
-                "index {index}"
-            );
-        }
-        // The count itself: the category past the last is read (here a zeroed slot: `""`).
-        let mut e = engine();
-        let menu = recipe_menu(&mut e);
-        e.set_global(RECIPE_MENU, menu);
-        let data = e.mem.alloc(0x10);
-        let past = e.mem.alloc(0x40);
-        e.mem.set_u32(data + 8, past);
-        e.mem.set_u32(CATEGORY_ARRAY + 4, data);
-        e.mem.set_u32(CATEGORY_ARRAY + 8, 2);
-        e.call_log = Some(vec![]);
-        stewie_set_category_index(&mut e, 2);
-        assert_eq!(e.global::<i32>(FILTER_INDEX_0119FBF4), 2);
-        assert_eq!(calls_to(&e, TILE_SET_STRING)[0][2], EMPTY_TEXT);
     }
 
     /// The test vtable's `FreeAllTiles` slot (+0x1C) address.

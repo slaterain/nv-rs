@@ -4390,19 +4390,6 @@ pub fn fn_00952ff0(e: &mut Engine, this: Ptr<PlayerCharacter>, out: u32) -> u32 
     out
 }
 
-/// lStewieAl's Tweaks' S0107.04 static `strSpeaker` (`engine_core::extend::stewie::kept::SPEAKER_NAME`):
-/// the address of its 4-byte `NiFixedString`, whose handle is made the first time it is used, as
-/// Tweaks' `strSpeaker = "Bip01 Speaker"` does (`NiGlobalStringTable::AddString`, `00a5b690`, on the
-/// exe's own text `0108b3a4`, the same characters).
-fn kept_speaker_name(e: &mut Engine) -> u32 {
-    let name = e.stewie_kept(engine_core::extend::stewie::kept::SPEAKER_NAME, 4);
-    if e.mem.u32(name) == 0 {
-        let handle = e.call(0x00a5_b690, &args![SPEAKER_NODE_NAME]).u32();
-        e.mem.set_u32(name, handle);
-    }
-    name
-}
-
 // Translated from 00953060 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `PlayerCharacter::FocusOnActor` (Xbox PDB): turns the camera and the
 /// player towards the head of `actor` (dialogue). `strength` is clamped to
@@ -13033,7 +13020,6 @@ mod tests {
 
     fn dropping_the_current_ammunition_empties_it_and_places_the_reference_row(on: bool) {
         let mut e = engine();
-        e.set_stewie(engine_core::extend::stewie::DROP_AMMO_NULL_ENTRY, on);
         list_helpers(&mut e);
         let player = new_player(&mut e);
         let p = player.addr();

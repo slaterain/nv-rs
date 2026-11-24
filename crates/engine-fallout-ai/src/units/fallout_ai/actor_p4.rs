@@ -4014,27 +4014,6 @@ pub fn fn_008a89a0(e: &mut Engine, this: Ptr<Actor>, amount: u32) -> u32 {
     left
 }
 
-/// Row S0024's test, Tweaks' `ActorDecreaseAmmoCheckShouldQueueFollowerTopicHook` (`main.h`): a
-/// teammate (the byte at +0x18D) whose equipped weapon (`Actor::GetEquippedWeapon`: the process
-/// at +0x68, its weapon info from slot +0x148, the item at +0x8) has a recharge rate
-/// (`TESObjectWEAP` +0x1A4) of 0.0, so a companion with a recharging weapon says no out-of-ammo
-/// line.
-fn follower_out_of_ammo_topic_wanted(e: &mut Engine, actor: u32) -> bool {
-    if e.mem.u8(actor + 0x18d) == 0 {
-        return false;
-    }
-    let process = e.mem.u32(actor + 0x68);
-    if process == 0 {
-        return false;
-    }
-    let info = e.vcall(process, 0x148, &args![]).u32();
-    if info == 0 {
-        return false;
-    }
-    let weapon = e.mem.u32(info + 0x8);
-    weapon != 0 && e.mem.f32(weapon + 0x1a4) == 0.0
-}
-
 /// `0.75` (`double`): the part of the height difference `008ac8b0` returns.
 const HEIGHT_FACTOR: u32 = 0x0101_de30;
 /// `100.0` (`double`): what `008ac9d0` divides the item health by.
@@ -13062,7 +13041,6 @@ mod tests {
         let package_store = e.mem.alloc(0x200);
         e.register_double(0x009f_66b0, move |_, _| package_store.into_ret());
         e.register(0x0067_1d10, |_, a| (a[0] + 0x100).into_ret());
-        e.set_stewie(engine_core::extend::stewie::PACKAGE_TARGET_LEAK, on);
         e.call_log = Some(vec![]);
         e.call(0x008a_d970, &args![actor, 0x77u32, 4u32, 5u32, 6u32, 1u32]);
         let log = calls(&mut e);

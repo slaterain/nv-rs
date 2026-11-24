@@ -19,21 +19,6 @@ pub fn fn_008d4e80(e: &mut Engine, this: Ptr) {
     e.mem.set_f32(this.addr() + 0x1bc, minus_one);
 }
 
-/// Row S0229's routine, Tweaks' `ResetArmorRating` (`Fixes/ArmorUpdateFix.cpp`): both armour
-/// values to -1.0, as the exe, and then, when the actor has a process (+0x68), the process's
-/// cached Damage Resistance (0x12) and Damage Threshold (0x4C) marked out of date (its virtual
-/// +0x3B0, `SetCachedActorValueOutOfDate`), so an actor's (NPC's or creature's) DR and DT follow
-/// a change of armour.
-fn reset_armor_rating(e: &mut Engine, this: u32) {
-    e.mem.set_f32(this + 0x1b8, -1.0);
-    e.mem.set_f32(this + 0x1bc, -1.0);
-    let process = e.mem.u32(this + 0x68);
-    if process != 0 {
-        e.vcall(process, 0x3b0, &args![0x12u32]);
-        e.vcall(process, 0x3b0, &args![0x4cu32]);
-    }
-}
-
 /// The double 0.0 the armour values are compared with (`.rdata`).
 const ZERO_DOUBLE: u32 = 0x0101_2060;
 /// The double factor (0.01 in the exe) `fn_008d4eb0` and `fn_008d4f10` scale by.
@@ -101,37 +86,6 @@ pub fn fn_008d4cc0(e: &mut Engine, this: u32) -> f32 {
         return f32::from_bits(x87_quiet_bits(stored));
     }
     computed_armour_value(e, this, 0x1b8, 0x12, &[0x18, 0x10, 0x14])
-}
-
-/// Row S0206's routine, Tweaks' `Creature__GetTotalArmorDR` (`Fixes/CreatureDRFix.cpp`): the
-/// stored total DR (+0x1B8) while it is not below 0.0; otherwise the actor's own value for Damage
-/// Resistance (0x12) from vtable slot +0x48C (`InternalGetActorValue`, 0.0 when it does not set
-/// its flag) plus the actor-value owner's (+0xA4) damage (slot +0x14) and permanent value (slot
-/// +0x18), stored and answered. The exe's `fn_008d4cc0` totals the actor's own value when it has
-/// one (otherwise the base value, `0087d880`) plus the permanent value, slot +0x10 (temporary) and
-/// the damage: Tweaks drops the base-value fallback and slot +0x10, which counted a creature's DR
-/// twice.
-pub fn creature_get_total_armor_dr(e: &mut Engine, this: u32) -> f32 {
-    let stored = e.mem.f32(this + 0x1b8);
-    if stored >= 0.0 {
-        return stored;
-    }
-    let internal = e.with_stack(4, |e, flag| {
-        let flag = flag.addr();
-        e.mem.set_u8(flag, 0);
-        let value = e.vcall(this, 0x48c, &args![0x12u32, flag]).f32();
-        if e.mem.u8(flag) != 0 {
-            value
-        } else {
-            0.0
-        }
-    });
-    let values = this + VALUES;
-    let damage = e.vcall(values, 0x14, &args![0x12u32]).f32();
-    let permanent = e.vcall(values, 0x18, &args![0x12u32]).f32();
-    let total = damage + permanent + internal;
-    e.mem.set_f32(this + 0x1b8, total);
-    total
 }
 
 // Translated from 008d4db0 (PC disassembly, FalloutNV.exe 1.4.0.525)
