@@ -53,6 +53,10 @@ const DEFINITION2: u32 = CONFIG + 0x300;
 const LOOKED_UP_ID: u32 = 0x7777;
 const DEFINITION_FOR: u32 = CONFIG + 24;
 const DEFINITION: u32 = CONFIG + 0x40;
+/// The commands' and the parameter block's list for `ParseParameters` (12 bytes an entry, the type at
+/// +4): types the read does not know (0x3e), so a parse with parameters answers false and stores
+/// nothing; a count of 0 answers true.
+const PARAMETERS: u32 = CONFIG + 0x800;
 const FORM_VTABLE: u32 = CONFIG + 0x100;
 const HANDLER: u32 = 0x00ff_3000;
 const BLOCK_HANDLER: u32 = 0x00ff_3020;
@@ -135,7 +139,7 @@ fn world(e: &mut Engine) {
         (0u32, 0u8, 0u32, BLOCK_HANDLER),
         (1, 1, 0, BLOCK_HANDLER),
         (2, 0, 0, 0),
-        (3, 0, 0x0060_0000, BLOCK_HANDLER),
+        (3, 0, PARAMETERS, BLOCK_HANDLER),
     ] {
         let entry = BLOCK_TYPES + kind * 0x28;
         e.mem.set_u8(entry, needs);
@@ -166,7 +170,10 @@ fn world(e: &mut Engine) {
     e.register(0x0050_0940, |_, a| ret(a[0] + 0x18));
     e.register(0x0048_3710, |_, _| ret(0));
     e.register(0x005a_bf60, |e, _| ret(e.mem.u32(CONFIG + 0x30)));
-    e.register(0x0041_af70, |_, _| ret(0));
+    // The locals' deleting destructor (`0041af70`) is the script_lines family's own: its destructor
+    // and `operator delete` stand in.
+    e.register(0x005a_8bc0, |_, _| ret(0));
+    e.register(0x0040_1030, |_, _| ret(0));
     e.register(0x005e_1140, |_, _| ret(0));
     e.register(0x005d_43c0, |e, a| ret(e.mem.u32(a[0] + 0x44)));
     e.register(0x0040_1170, |e, a| {
@@ -210,7 +217,6 @@ fn world(e: &mut Engine) {
             0
         })
     });
-    e.register(0x005a_ccb0, |_, _| ret(1));
     // A reference variable's form lookup: its form for the one id, none for others.
     e.register(0x0048_39c0, |e, a| {
         ret(if a[0] == LOOKED_UP_ID {
@@ -245,7 +251,10 @@ fn world(e: &mut Engine) {
     e.mem.set_u32(FORM_VTABLE + 0xf0, SLOT_F0_FN);
     e.mem.set_u32(FORM_VTABLE + 0x48, SLOT_48_FN);
     e.mem.set_u32(DEFINITION_FOR, 0x1010);
-    e.mem.set_u32(DEFINITION + 0x14, 0x0060_0000);
+    for entry in 0..8 {
+        e.mem.set_u32(PARAMETERS + entry * 12 + 4, 0x3e);
+    }
+    e.mem.set_u32(DEFINITION + 0x14, PARAMETERS);
     e.mem.set_u32(DEFINITION + 0x18, HANDLER);
     e.mem.set_u32(DEFINITION2, 0x0050_3000);
     e.mem.set_u8(DEFINITION2 + 0x10, 1);
