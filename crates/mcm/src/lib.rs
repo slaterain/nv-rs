@@ -1,5 +1,5 @@
-//! The Mod Configuration Menu's NVSE plugin (`NVSE\Plugins\MCM.dll`, MCM 1.5 by Pelinor, with
-//! its author's permission; `NOTICE`) built in. MCM's own scripts and the menus of the mods that
+//! The Mod Configuration Menu's NVSE plugin (`NVSE\Plugins\MCM.dll`, MCM 1.5 by Pelinor;
+//! `NOTICE`) built in. MCM's own scripts and the menus of the mods that
 //! use it call its nine commands; the DLL is a 32-bit plugin nv-rs cannot load, so they are
 //! rebuilt here from its machine code (`build43-scratch/measure/mcm/NOTES.md`).
 //!

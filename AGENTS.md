@@ -45,7 +45,7 @@ layer on 2026-11-03 (ADR-0011; `docs/history/README.md`).
   (ADR-0003). This replaces the older reference-doc rule "never copy
   decompiled code into the project". Raw decompiler exports, databases and
   executable bytes are still never committed.
-- Since 2026-11-02, with its authors' permission: the community's matching
+- Since 2026-11-02: the community's matching
   decompilation `momusdigital/fnv_decomp` may be used for names, types,
   layouts and logic translated into Rust (ADR-0009). Read it alongside FNV's
   Ghidra decompilation, not instead of it: the exe stays the reference.

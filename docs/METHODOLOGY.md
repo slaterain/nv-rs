@@ -707,8 +707,7 @@ decision records take precedence over this document where they differ:
   repository layout and docs were to follow Mudcrab's shape; they do not.
 - [ADR-0009](adr/0009-fnv-decomp.md) (2026-11-02): the community's matching
   decompilation fnv_decomp may be read alongside the exe and used for names,
-  types, layouts and logic translated into Rust, with its authors'
-  permission. The "Don't" rules against committing decompilation still hold
+  types, layouts and logic translated into Rust. The "Don't" rules against committing decompilation still hold
   for its C++: none of it is committed. What comes from it is marked
   `fnv_decomp`.
 

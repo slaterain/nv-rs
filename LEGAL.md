@@ -52,11 +52,9 @@ Since 2026-11-02 the project may also use
 [fnv_decomp](https://github.com/momusdigital/fnv_decomp), the fnvdecomp
 community's C++ reconstruction of the same program
 ([ADR-0009](docs/adr/0009-fnv-decomp.md)). Its repository grants no licence.
-Its authors wrote to the maintainer on 2026-11-02 (spelling
-corrected): "You are fine to use everything however you please, you don't have
-to credit us, that's why we chose to send it out with no license." The
-permission covers their own work, not its `third_party/` folder (zlib, under
-its own licence) and not the game or the libraries linked into it. Rust
+Only its contributors' own work is used, not its `third_party/` folder (zlib,
+under its own licence), and nothing from it gives rights in the game or in the
+libraries linked into it. Rust
 translated from it, and names, types and layouts taken from it, are marked
 where they are used (`fnv_decomp`), like the sources above; no C++ from it is
 committed. Material from it is not covered by the project's licence, like
@@ -128,12 +126,12 @@ terms, whose notice must be kept:
   the module says so in its first lines.
 - `crates/uio` translates UI Organizer 2.30 (Copyright (c) 2020 Jef, MIT licence); the notice is
   in [crates/uio/NOTICE](crates/uio/NOTICE).
-- `crates/mcm` rebuilds the NVSE plugin of The Mod Configuration Menu 1.5 (Pelinor) with its
-  author's permission; see [crates/mcm/NOTICE](crates/mcm/NOTICE).
+- `crates/mcm` rebuilds the NVSE plugin of The Mod Configuration Menu 1.5 (Pelinor); see
+  [crates/mcm/NOTICE](crates/mcm/NOTICE).
 - `crates/johnnyguitar` builds JohnnyGuitar NVSE 5.28 (carxt and its contributors) in,
-  piece by piece, with its authors' permission; JohnnyGuitar NVSE is under the LGPL-2.1, used here
+  piece by piece; JohnnyGuitar NVSE is under the LGPL-2.1, used here
   under the GPL-3.0 (this repository's LICENSE) as its section 3 allows; see [crates/johnnyguitar/NOTICE](crates/johnnyguitar/NOTICE).
-- `crates/stewie` builds lStewieAl's Tweaks 10.05 (lStewieAl) in with its author's permission,
+- `crates/stewie` builds lStewieAl's Tweaks 10.05 (lStewieAl) in,
   with Viva New Vegas' INI values for it (ModdingLinked, MIT licence); see
   [crates/stewie/NOTICE](crates/stewie/NOTICE).
 - These notices, and those above, are in every package's licenses folder, Windows', Linux's and
