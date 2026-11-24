@@ -17960,12 +17960,4 @@ mod tests {
         );
     }
 
-    #[cfg(test)]
-    fn g4_pages(e: &mut Engine, addresses: &[u32]) {
-        for &address in addresses {
-            if !e.mem.is_mapped(address) {
-                e.map(address & !0xfff, 0x1000);
-            }
-        }
-    }
 }

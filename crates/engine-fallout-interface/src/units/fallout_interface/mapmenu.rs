@@ -3010,15 +3010,6 @@ pub fn map_menu_do_controller_switch(e: &mut Engine, this: Ptr<MapMenu>, on: u8)
     e.call(TILE_SET_FLOAT, &args![tile, 0xfa2u32, y, 1u32]);
 }
 
-#[cfg(test)]
-#[cfg(test)]
-const TRAIT_WIDTH: u32 = 0xfb1;
-#[cfg(test)]
-#[cfg(test)]
-const TRAIT_HEIGHT: u32 = 0xfb0;
-#[cfg(test)]
-#[cfg(test)]
-const ACTION_COPY: u32 = 0x7d0;
 
 // Translated from 0079b430 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (cdecl): clears the open map menu's
@@ -5020,15 +5011,6 @@ fn gamepad_scroll(e: &mut Engine, scroll_bar: u32, axis_x: i32) -> bool {
     true
 }
 
-/// `DoGamepad`'s stick part (with `00709d40`): see [`map_menu_do_gamepad`].
-/// The pad's state this frame and last frame (`XINPUT_GAMEPAD_EX` at `011f35a8` and `011f35b8`:
-/// the event count, then the buttons word at +4) and the X button's bit.
-#[cfg(test)]
-#[cfg(test)]
-const PAD_NOW: u32 = 0x011f_35a8;
-#[cfg(test)]
-#[cfg(test)]
-const PAD_BEFORE: u32 = 0x011f_35b8;
 /// Thiscall on a tile (trait): plays the sound the trait names (`00a0b110`); `clicksound` is 0xFCB.
 #[cfg(test)]
 const TILE_PLAY_SOUND_00A0B110: u32 = 0x00a0_b110;

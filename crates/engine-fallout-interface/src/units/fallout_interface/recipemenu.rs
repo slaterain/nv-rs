@@ -5216,27 +5216,5 @@ mod n057_tests {
         assert_eq!(asked(), [(0x0072_880d, vec![0x7500])]);
     }
 
-    /// Tile 4 of `info_engine`'s twelve.
-    #[cfg(test)]
-    const CONDITION_TILE: u32 = 0x2100 + 4 * 4;
 
-    /// A category array (`011d8f08`) of `names.len()` categories, each name's text at +0x1C and
-    /// its length at +0x20 (an empty name: the text set, length 0).
-    #[cfg(test)]
-    fn categories(e: &mut Engine, names: &[&[u8]]) -> Vec<u32> {
-        let data = e.mem.alloc(4 * names.len() as u32 + 4);
-        let mut texts = vec![];
-        for (i, name) in names.iter().enumerate() {
-            let category = e.mem.alloc(0x40);
-            let text = e.mem.alloc(0x20);
-            e.mem.set_cstr(text, name);
-            e.mem.set_u32(category + 0x1c, text);
-            e.mem.set_u16(category + 0x20, name.len() as u16);
-            e.mem.set_u32(data + 4 * i as u32, category);
-            texts.push(text);
-        }
-        e.mem.set_u32(CATEGORY_ARRAY + 4, data);
-        e.mem.set_u32(CATEGORY_ARRAY + 8, names.len() as u32);
-        texts
-    }
 }

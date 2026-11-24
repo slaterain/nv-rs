@@ -1620,15 +1620,4 @@ mod n057_tests {
         assert_eq!(calls_to(&e, TILE_SET_INT), vec![vec![0x2038, 0xfaf, 0]]);
     }
 
-    /// The addresses of the calls in the log, in order, of those in `wanted`.
-    #[cfg(test)]
-    fn order(e: &Engine, wanted: &[u32]) -> Vec<u32> {
-        e.call_log
-            .as_ref()
-            .unwrap()
-            .iter()
-            .map(|(a, _)| *a)
-            .filter(|a| wanted.contains(a))
-            .collect()
-    }
 }
