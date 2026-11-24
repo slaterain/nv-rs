@@ -931,7 +931,11 @@ pub fn actor_move(e: &mut Engine, this: Ptr<Actor>, delta: f32, arg_b: u32, flag
             .u32();
         e.call(SOUND_HANDLE_ASSIGN, &args![sound, found]);
         e.call(SOUND_HANDLE_DESTRUCT, &args![named]);
-        e.call(0x00ad_8830, &args![sound, 0u32]);
+        // lStewieAl's Tweaks' row S0410 (`GodmodePreventsLegCrippleSound`, its `PlaySoundIfNotGodmode`
+        // called at `0x8A655C`): not for the player in god mode.
+        if !leg_cripple_sound_silenced(e, this.addr()) {
+            e.call(0x00ad_8830, &args![sound, 0u32]);
+        }
         fn_008a6630(e, moved);
         let limb_damage =
             // `FMUL dword` (`008a6576`).
@@ -948,8 +952,20 @@ pub fn actor_move(e: &mut Engine, this: Ptr<Actor>, delta: f32, arg_b: u32, flag
         e.call(SOUND_HANDLE_DESTRUCT, &args![sound]);
         e.mem.free(sound);
     }
-    e.call(0x008a_7d50, &args![this, 1u32, 1u32]);
+    // S0410's `SkipTriggerPainSoundIfGodmodeAndPlayer` (called at `0x8A6607`).
+    if !leg_cripple_sound_silenced(e, this.addr()) {
+        e.call(0x008a_7d50, &args![this, 1u32, 1u32]);
+    }
     moved
+}
+
+/// lStewieAl's Tweaks' row S0410 (`GodmodePreventsLegCrippleSound`, `[Tweaks]
+/// bGodmodePreventsLegCrippleSound`): the actor is the player (`011dea3c`) in god mode (`011e07ba`)
+/// or demigod mode (`011e0898`), whose landing sound and pain are skipped.
+fn leg_cripple_sound_silenced(e: &mut Engine, actor: u32) -> bool {
+    e.stewie(engine_core::extend::stewie::GODMODE_NO_LEG_CRIPPLE_SOUND)
+        && actor == e.global::<u32>(0x011d_ea3c)
+        && (e.mem.u8(0x011e_07ba) != 0 || e.mem.u8(0x011e_0898) != 0)
 }
 
 // Translated from 008a6630 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -6322,6 +6338,37 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 mod tests {
     use super::*;
 
+    /// S0410 (`GodmodePreventsLegCrippleSound`): the landing sound and pain are skipped with the row
+    /// for the player (`011dea3c`) in god mode (`011e07ba`) or demigod mode (`011e0898`) only.
+    #[test]
+    fn s0410_god_mode_silences_the_players_hard_landing() {
+        // (row, the player, god, demigod, silenced)
+        for (on, is_player, god, demigod, silenced) in [
+            (false, true, 1u8, 0u8, false),
+            (true, true, 1, 0, true),
+            (true, true, 0, 1, true),
+            (true, true, 0, 0, false),
+            (true, false, 1, 0, false),
+        ] {
+            let mut e = Engine::new();
+            e.set_stewie(
+                engine_core::extend::stewie::GODMODE_NO_LEG_CRIPPLE_SOUND,
+                on,
+            );
+            e.map(0x011d_e000, 0x1000);
+            e.map(0x011e_0000, 0x1000);
+            e.set_global(0x011d_ea3c, 0x6000u32);
+            e.mem.set_u8(0x011e_07ba, god);
+            e.mem.set_u8(0x011e_0898, demigod);
+            let actor = if is_player { 0x6000 } else { 0x6100 };
+            assert_eq!(
+                leg_cripple_sound_silenced(&mut e, actor),
+                silenced,
+                "on {on} player {is_player} {god} {demigod}"
+            );
+        }
+    }
+
     /// Vtables of the fake actor, process and other objects. Slot `s` of
     /// the table at `at` points at the fake function [`target`]`(at, s)`.
     const ACTOR_VT: u32 = 0x0900_0000;
@@ -7170,6 +7217,38 @@ mod tests {
         );
         // The hurt call also runs in the loaded state.
         assert_eq!(called(&log, target(ACTOR_VT, 0x338)).len(), 1);
+    }
+
+    /// S0410 at its call sites in `Actor::Move` (`0x8A655C`, `0x8A6607`): the player's hard landing
+    /// in the loaded state plays its sound (`00ad8830`) and pain (`008a7d50`); with the row, in god
+    /// mode (`011e07ba`) neither; another actor in god mode still gets both.
+    #[test]
+    fn s0410_god_mode_silences_the_players_landing_through_move() {
+        // (row, the player, silenced)
+        for (on, is_player, silenced) in [
+            (false, true, false),
+            (true, true, true),
+            (true, false, false),
+        ] {
+            let (mut e, actor, _) = move_engine();
+            e.set_stewie(
+                engine_core::extend::stewie::GODMODE_NO_LEG_CRIPPLE_SOUND,
+                on,
+            );
+            answer(&mut e, ACTOR_VT, 0x360, 1);
+            e.map(0x011d_e000, 0x1000);
+            e.map(0x011e_0000, 0x1000);
+            e.set_global(0x011d_ea3c, if is_player { actor.addr() } else { 0x6100 });
+            e.mem.set_u8(0x011e_07ba, 1);
+            e.call_log = Some(vec![]);
+            e.call(0x008a_62b0, &args![actor, 0.5f32, 7u32, 1u32]);
+            let log = calls(&mut e);
+            let label = format!("on {on} player {is_player}");
+            assert_eq!(called(&log, 0x00ad_8830).is_empty(), silenced, "{label}");
+            assert_eq!(called(&log, 0x008a_7d50).is_empty(), silenced, "{label}");
+            // The landing's leg damage is not Tweaks' to skip.
+            assert_eq!(called(&log, target(ACTOR_VT, 0x3ac)).len(), 2, "{label}");
+        }
     }
 
     #[test]
