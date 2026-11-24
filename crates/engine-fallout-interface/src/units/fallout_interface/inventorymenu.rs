@@ -3302,7 +3302,7 @@ mod n054_tests {
         }
     }
 
-    fn drop_uses_the_extra_list_only_when_it_holds_enough_row(on: bool) {
+    fn drop_uses_the_extra_list_only_when_it_holds_enough_row(_on: bool) {
         let mut e = Engine::new();
         let this = menu(&mut e);
         e.set_global(CURRENT_ITEM, 0x7000u32);
@@ -3347,7 +3347,7 @@ mod n054_tests {
         }
     }
 
-    fn select_equips_or_unequips_row(on: bool) {
+    fn select_equips_or_unequips_row(_on: bool) {
         let mut e = Engine::new();
         let this = menu(&mut e);
         e.set_global(CURRENT_ITEM, 0x7000u32);

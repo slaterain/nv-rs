@@ -11667,33 +11667,6 @@ mod n052_tests {
         );
     }
 
-    /// `DoIdle` in the deck menu with the stick's x at 20000: whether the stick was read, and
-    /// whether `004b71d0` was asked.
-    fn caravan_stick_read(e: &mut Engine, this: Ptr<CaravanMenu>) -> (bool, bool) {
-        e.set(this, CaravanMenu::eActiveMenu, 1);
-        idle_at(e, this, 0, 0.0);
-        e.register(CONTROLS_AXIS_00A23390, |_, a| {
-            ret(if a[2] == 7 { 20000 } else { 0 })
-        });
-        e.register(FLOAT_MAGNITUDE_00408820, |_, a| {
-            ret_f(f64::from(f32::from_bits(a[0]).abs()))
-        });
-        e.register(FLOAT_MAGNITUDE_00408840, |_, a| {
-            ret_f(f64::from(f32::from_bits(a[0]).abs()))
-        });
-        e.register(GET_FLOAT_TRAIT, |_, _| ret_f(7.0));
-        let menu = this.addr();
-        let deck: Vec<u32> = (0..13).map(|_| card(e, 1, 1, 0)).collect();
-        fill_array(e, menu + DECK_ARRAY, &deck);
-        e.mem.set_u32(menu + SELECTION_DELAY, 0.5f32.to_bits());
-        e.mem.set_u32(menu + PENDING_KEY, KEY_UP);
-        do_idle(e, this);
-        (
-            !calls_to(e, CONTROLS_AXIS_00A23390).is_empty(),
-            !calls_to(e, KEYS_BLOCKED_004B71D0).is_empty(),
-        )
-    }
-
     fn named_form(e: &mut Engine, kind: u8, name: &str, names: &mut Vec<(u32, u32)>) -> u32 {
         let table = e.mem.alloc(0x100);
         e.mem.set_u32(table + 0xf0, 0x00d0_10f0);
@@ -11725,7 +11698,7 @@ mod n052_tests {
     /// 40), so 10 is left to pay in caps; the barter container holds `in_container` caps and the
     /// challenger `theirs`. Answers the messages' texts (with their other words) and the engine.
     fn won_payout(
-        on: bool,
+        _on: bool,
         in_container: u32,
         theirs: u32,
     ) -> (Engine, Vec<(String, Vec<u32>)>, [u32; 5]) {

@@ -17960,31 +17960,12 @@ mod tests {
         );
     }
 
+    #[cfg(test)]
     fn g4_pages(e: &mut Engine, addresses: &[u32]) {
         for &address in addresses {
             if !e.mem.is_mapped(address) {
                 e.map(address & !0xfff, 0x1000);
             }
         }
-    }
-
-    /// A HUD (`011d96c0`) of 0x400 bytes, the calls logged.
-    fn g4_hud(e: &mut Engine) -> u32 {
-        g4_pages(e, &[0x011d_96c0, 0x011d_979c, 0x0101_e568]);
-        let hud = e.mem.alloc(0x400);
-        e.mem.set_u32(0x011d_96c0, hud);
-        e.mem.set_f64(0x0101_e568, 255.0);
-        e.call_log = Some(vec![]);
-        hud
-    }
-
-    fn g4_calls(e: &Engine, at: u32) -> Vec<Vec<u32>> {
-        e.call_log
-            .as_ref()
-            .unwrap()
-            .iter()
-            .filter(|(a, _)| *a == at)
-            .map(|(_, w)| w.clone())
-            .collect()
     }
 }

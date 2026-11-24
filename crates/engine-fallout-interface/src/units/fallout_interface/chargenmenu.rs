@@ -1570,38 +1570,6 @@ mod tests {
         assert!(calls_to(&e, INIT_ATTRIBUTE_LIST).is_empty());
     }
 
-    /// A menu whose list (+0x58) holds `stats` (tile, actor value) and a player whose actor
-    /// value owner (+0xA4) answers each value's normalized permanent value from `current`.
-    fn special_menu(
-        e: &mut Engine,
-        stats: &[(u32, u32)],
-        current: &'static [u32],
-    ) -> Ptr<CharGenMenu> {
-        let this = menu(e);
-        let mut node = this.addr() + 0x5c;
-        for (i, &(tile, value)) in stats.iter().enumerate() {
-            let item = e.mem.alloc(0xc);
-            e.mem.set_u32(item, tile);
-            e.mem.set_u32(item + 4, value);
-            e.mem.set_u32(node, item);
-            if i + 1 < stats.len() {
-                let next = e.mem.alloc(8);
-                e.mem.set_u32(node + 4, next);
-                node = next;
-            }
-        }
-        if !e.mem.is_mapped(PLAYER) {
-            e.map(PLAYER & !0xfff, 0x1000);
-        }
-        let player = e.mem.alloc(0x200);
-        let vtable = e.mem.alloc(0x40);
-        e.mem.set_u32(vtable + 0x1c, 0x00c2_001c);
-        e.mem.set_u32(player + 0xa4, vtable);
-        e.set_global(PLAYER, player);
-        e.register_double(0x00c2_001c, move |_, a| current[a[1] as usize].into_ret());
-        this
-    }
-
     #[test]
     fn create_reports_a_missing_tile() {
         let mut e = Engine::new();

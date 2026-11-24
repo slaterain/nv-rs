@@ -5217,53 +5217,12 @@ mod n057_tests {
     }
 
     /// Tile 4 of `info_engine`'s twelve.
+    #[cfg(test)]
     const CONDITION_TILE: u32 = 0x2100 + 4 * 4;
-
-    /// The calls to `addr` on tile 4, in order.
-    fn on_condition_tile(e: &Engine) -> Vec<(u32, Vec<u32>)> {
-        e.call_log
-            .as_ref()
-            .unwrap()
-            .iter()
-            .filter(|(a, w)| {
-                (*a == TILE_SET_FLOAT || *a == TILE_SET_STRING)
-                    && w.first() == Some(&CONDITION_TILE)
-            })
-            .cloned()
-            .collect()
-    }
-
-    /// `do_enter_shows_the_selected_recipe`'s menu with the output's form `form` cast to
-    /// `0x1183A34` only (the `0x1183200` cast answers 0); the test answers the icon path.
-    fn icon_engine(form: u32) -> (Engine, u32) {
-        let mut e = engine();
-        let menu = recipe_menu(&mut e);
-        e.set_global(RECIPE_MENU, menu);
-        e.mem.set_u32(menu + CURRENT_LIST, menu + RECIPE_LIST);
-        let output = e.mem.alloc(8);
-        e.mem.set_u32(output + 4, form);
-        let outputs = chain(&mut e, &[output]);
-        answer(&mut e, LIST_BOX_CURRENT_ITEM, 0x7100);
-        answer(&mut e, RECIPE_CATEGORY_006A1B60, 0x90);
-        answer(&mut e, RECIPE_OUTPUTS_005D43C0, outputs);
-        answer(&mut e, RECIPE_INPUTS_005A8080, 0);
-        answer(&mut e, LIST_COUNT_005AE380, 1);
-        answer(&mut e, TILE_GET_MENU, 0x5000);
-        answer(&mut e, MENU_RENDER_TEMPLATE, 0x6000);
-        e.register_double(RT_DYNAMIC_CAST, |_, a| {
-            let cast = if a[3] == RTTI_01183A34 { a[0] } else { 0 };
-            cast.into_ret()
-        });
-        answer(&mut e, FORM_00480F80, 1);
-        answer(&mut e, FORM_00481280, 0x6400);
-        e.set_global(PLAYER, 0x5500u32);
-        let holder = e.mem.alloc(0x10);
-        e.mem.set_u32(menu + 0x50, holder);
-        (e, menu)
-    }
 
     /// A category array (`011d8f08`) of `names.len()` categories, each name's text at +0x1C and
     /// its length at +0x20 (an empty name: the text set, length 0).
+    #[cfg(test)]
     fn categories(e: &mut Engine, names: &[&[u8]]) -> Vec<u32> {
         let data = e.mem.alloc(4 * names.len() as u32 + 4);
         let mut texts = vec![];
@@ -5280,7 +5239,4 @@ mod n057_tests {
         e.mem.set_u32(CATEGORY_ARRAY + 8, names.len() as u32);
         texts
     }
-
-    /// The test vtable's `FreeAllTiles` slot (+0x1C) address.
-    const FREE_ALL_TILES_SLOT: u32 = 0x0000_801c;
 }

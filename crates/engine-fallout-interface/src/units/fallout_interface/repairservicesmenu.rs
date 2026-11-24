@@ -1620,26 +1620,8 @@ mod n057_tests {
         assert_eq!(calls_to(&e, TILE_SET_INT), vec![vec![0x2038, 0xfaf, 0]]);
     }
 
-    /// A single item (`ItemChange` with one extra list, `0x4400`) whose repair finds the player's
-    /// entry with no stack to join: `RepairItem` sets the new list's health and the old one's.
-    fn repairable_item(e: &mut Engine) -> u32 {
-        let low = e.mem.alloc(4);
-        e.mem.set_u32(low, 20.0f32.to_bits());
-        answer(e, SETTING_VALUE, low);
-        answer(e, HEALTH_FORM_GET_FORM_HEALTH, 100);
-        let lists = e.mem.alloc(8);
-        e.mem.set_u32(lists, 0x4400);
-        let item = e.mem.alloc(0xc);
-        e.mem.set_u32(item, lists);
-        let entry_lists = e.mem.alloc(8);
-        let entry = e.mem.alloc(0xc);
-        e.mem.set_u32(entry, entry_lists);
-        answer(e, GET_OBJECT_IN_LIST, entry);
-        answer(e, EXTRA_GET_COUNT, 1);
-        item
-    }
-
     /// The addresses of the calls in the log, in order, of those in `wanted`.
+    #[cfg(test)]
     fn order(e: &Engine, wanted: &[u32]) -> Vec<u32> {
         e.call_log
             .as_ref()

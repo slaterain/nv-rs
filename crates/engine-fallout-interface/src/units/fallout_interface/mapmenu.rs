@@ -3011,9 +3011,12 @@ pub fn map_menu_do_controller_switch(e: &mut Engine, this: Ptr<MapMenu>, on: u8)
 }
 
 #[cfg(test)]
+#[cfg(test)]
 const TRAIT_WIDTH: u32 = 0xfb1;
 #[cfg(test)]
+#[cfg(test)]
 const TRAIT_HEIGHT: u32 = 0xfb0;
+#[cfg(test)]
 #[cfg(test)]
 const ACTION_COPY: u32 = 0x7d0;
 
@@ -5021,7 +5024,9 @@ fn gamepad_scroll(e: &mut Engine, scroll_bar: u32, axis_x: i32) -> bool {
 /// The pad's state this frame and last frame (`XINPUT_GAMEPAD_EX` at `011f35a8` and `011f35b8`:
 /// the event count, then the buttons word at +4) and the X button's bit.
 #[cfg(test)]
+#[cfg(test)]
 const PAD_NOW: u32 = 0x011f_35a8;
+#[cfg(test)]
 #[cfg(test)]
 const PAD_BEFORE: u32 = 0x011f_35b8;
 /// Thiscall on a tile (trait): plays the sound the trait names (`00a0b110`); `clicksound` is 0xFCB.
@@ -13283,16 +13288,6 @@ mod n056_tests {
         assert_eq!(subtitle[0][7..], [player, 0]);
     }
 
-    /// The subtitle list as a holotape with sound and no subtitle left has it: its buffer allocated,
-    /// 4 reserved, none in it.
-    fn empty_subtitles(e: &mut Engine, menu: Ptr<MapMenu>) {
-        let subtitles = Ptr::<BSSimpleArray>::new(menu.addr() + 0xa8);
-        let buffer = e.mem.alloc(0x20);
-        e.set(subtitles, BSSimpleArray::pBuffer, buffer);
-        e.set(subtitles, BSSimpleArray::iReservedSize, 4);
-        e.set(subtitles, BSSimpleArray::iSize, 0);
-    }
-
     #[test]
     fn update_playing_sounds_shows_the_time_and_ends() {
         let mut e = engine();
@@ -14400,150 +14395,5 @@ mod n056_tests {
                 ..Ret::default()
             }
         });
-    }
-
-    /// `UpdateQuests` with an active quest: the focus calls and the calls of `004b71d0`.
-    fn update_quests_focus(e: &mut Engine) -> (Vec<Vec<u32>>, usize) {
-        let menu = open_menu(e, 0x100);
-        let table = e.mem.alloc(0x40);
-        for slot in [0x10u32, 0x1c, 0x20] {
-            e.mem.set_u32(table + slot, 0x0010_0000 + slot);
-            e.register(0x0010_0000 + slot, |_, _| Ret::default());
-        }
-        e.mem.set_u32(menu.addr(), table);
-        for list in [0x130u32, 0x1c0] {
-            e.mem.set_u32(menu.addr() + list, table);
-            e.mem.set_u32(menu.addr() + list + 0xc, 0x900 + list);
-            e.mem.set_u32(menu.addr() + list + 0x18, 0x0107_0000);
-        }
-        let player = e.mem.alloc(0x800);
-        e.mem.set_u32(PLAYER_011DEA3C, player);
-        returns(e, PLAYER_QUEST_005CBB50, 0x4400);
-        returns(e, LIST_BOX_GET_TILE_FOR, 0x7300);
-        e.call_log = Some(vec![]);
-        e.call(0x0079_b8e0, &args![menu]);
-        (
-            calls_to(e, SET_CURRENT_FOCUS_TARGET),
-            calls_to(e, FLAG_004B71D0).len(),
-        )
-    }
-
-    /// `DoClick` on a local map marker (id 0x1A) with the drag start at (1.0, 1.0) and the map
-    /// tile at `at` (both axes): whether the "undiscovered" message was shown, and the name
-    /// compares made.
-    fn click_marker(e: &mut Engine, map: u32, at: f64) -> (bool, usize) {
-        e.map(0x011d_9000, 0x1000);
-        let menu = open_menu(e, 0x7000);
-        e.set(menu, MapMenu::iCurrentPage, 0x21);
-        e.set(menu, MapMenu::pMapTile, map);
-        e.mem.set_u32(menu.addr() + 0x120, 1.0f32.to_bits());
-        e.mem.set_u32(menu.addr() + 0x124, 1.0f32.to_bits());
-        e.set_global(TWO_FLOAT, 2.0f32);
-        returns(e, FLAG_004B71D0, 0);
-        returns_float(e, TILE_GET_FLOAT, at);
-        returns(e, TILE_IS_TRUE, 0);
-        returns(e, ADD_USER_TRAIT, 0x61);
-        returns(e, TILE_GET_STRING, 0x3700);
-        returns(e, STRICMP, 1);
-        returns(e, OBJECT_FIELD_00403DF0, 0x3600);
-        e.call_log = Some(vec![]);
-        e.call(0x0079_6fd0, &args![menu, 0x1ai32, 0x7400u32]);
-        (
-            !calls_to(e, SHOW_MESSAGE_007052F0).is_empty(),
-            calls_to(e, STRICMP).len(),
-        )
-    }
-
-    /// The pad's buttons word now and last frame (X is 0x4000).
-    fn pad_buttons(e: &mut Engine, now: u16, before: u16) {
-        e.map(0x011f_3000, 0x1000);
-        e.mem.set_u16(PAD_NOW + 4, now);
-        e.mem.set_u16(PAD_BEFORE + 4, before);
-    }
-
-    /// `DoGamepad` on the local map with the zoom axis at `zoom` and the pan axes at `pan`; the
-    /// menu's `HandleClick` (vtable +0xC) answers into the log.
-    fn gamepad_with_axes(e: &mut Engine, zoom: i32, pan: i32) -> Ptr<MapMenu> {
-        let menu = open_menu(e, 0x100);
-        let table = e.mem.alloc(0x20);
-        e.mem.set_u32(table + 0xc, 0x0010_000c);
-        e.register(0x0010_000c, |_, _| Ret::default());
-        e.mem.set_u32(menu.addr(), table);
-        gamepad_ready(e);
-        returns(e, FLAG_00709D40, 1);
-        e.set(menu, MapMenu::iCurrentPage, 0x21);
-        e.set(menu, MapMenu::pMapTile, 0x104);
-        e.set_global::<f64>(ZOOM_DEAD_ZONE_DOUBLE, 7849.0);
-        e.set_global::<f64>(PAN_DEAD_ZONE_DOUBLE, 8689.0);
-        e.set_global::<f64>(AXIS_RANGE_DOUBLE, 32767.0);
-        e.set_global::<f64>(PAN_SPEED_Y_DOUBLE, -20.0);
-        e.set_global::<f64>(PAN_SPEED_X_DOUBLE, 20.0);
-        e.register_double(INPUT_AXIS_00A23390, move |_, a| Ret {
-            eax: if a[2] == 8 { zoom as u32 } else { pan as u32 },
-            ..Ret::default()
-        });
-        e.register(MAGNITUDE_00408820, |_, a| Ret {
-            st0: f64::from(f32::from_bits(a[0])).abs(),
-            ..Ret::default()
-        });
-        menu
-    }
-
-    /// A map tile whose children list (`DList` at +4: first, last, count; a node is next, prev,
-    /// tile) holds `count` tiles, each with a vtable whose slot 0 (destroy) is `0x0010_0100`.
-    fn map_with_children(e: &mut Engine, count: usize) -> (u32, Vec<u32>) {
-        let map = e.mem.alloc(0x40);
-        let tiles: Vec<u32> = (0..count)
-            .map(|_| with_vtable(e, 0x40, &[(0, 0x0010_0100)]))
-            .collect();
-        let mut next = 0;
-        let mut last = 0;
-        for &tile in tiles.iter().rev() {
-            let node = e.mem.alloc(0xc);
-            e.mem.set_u32(node, next);
-            e.mem.set_u32(node + 8, tile);
-            if next != 0 {
-                e.mem.set_u32(next + 4, node);
-            } else {
-                last = node;
-            }
-            next = node;
-        }
-        e.mem.set_u32(map + 4, next);
-        e.mem.set_u32(map + 8, last);
-        e.mem.set_u32(map + 0xc, count as u32);
-        e.register(0x0010_0100, |_, _| Ret::default());
-        // The list removal unlinks the slot's tile.
-        e.register_double(CHILD_LIST_REMOVE_0057C730, |e, a| {
-            let tile = e.mem.u32(a[1]);
-            let mut previous = 0;
-            let mut node = e.mem.u32(a[0]);
-            while node != 0 {
-                let next = e.mem.u32(node);
-                if e.mem.u32(node + 8) == tile {
-                    if previous == 0 {
-                        e.mem.set_u32(a[0], next);
-                    } else {
-                        e.mem.set_u32(previous, next);
-                    }
-                    break;
-                }
-                previous = node;
-                node = next;
-            }
-            Ret::default()
-        });
-        (map, tiles)
-    }
-
-    /// The tiles still on `map`'s children list.
-    fn children_of(e: &Engine, map: u32) -> Vec<u32> {
-        let mut out = vec![];
-        let mut node = e.mem.u32(map + 4);
-        while node != 0 {
-            out.push(e.mem.u32(node + 8));
-            node = e.mem.u32(node);
-        }
-        out
     }
 }

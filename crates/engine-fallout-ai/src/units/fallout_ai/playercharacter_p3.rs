@@ -9259,7 +9259,7 @@ mod tests {
 
     /// [`s0089_08_choice`] with the inventory menu's filter `tab` (4: ammunition).
     fn s0089_08_choice_on_tab(
-        on: bool,
+        _on: bool,
         rounds: u32,
         remembered_rounds: Option<u32>,
         tab_open: bool,
