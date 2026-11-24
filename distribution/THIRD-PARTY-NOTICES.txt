@@ -2044,7 +2044,7 @@ DXVK v3.1.1 (Philip Rebohle and contributors)
 UI Organizer 2.30 (jazzisparis, Jef)
   License: MIT
   Repository: https://github.com/jazzisparis/UIO-User-Interface-Organizer
-  Used for: crates/uio, UI Organizer translated to Rust (commit 426d963, the source of ui_organizer.dll 2.30), and its list of the UI mods it knows, the UIO 2.30 package's Data\uio\supported.txt, built in unchanged (crates/uio/data/supported.txt; read when the game folder has none). Used with the author's permission; the list file is not in the source repository and is included under the same notice.
+  Used for: crates/uio, UI Organizer translated to Rust (commit 426d963, the source of ui_organizer.dll 2.30), and its list of the UI mods it knows, the UIO 2.30 package's Data\uio\supported.txt, built in unchanged (crates/uio/data/supported.txt; read when the game folder has none). The list file is not in the source repository and is included under the same notice.
   Notice:
     MIT License
 

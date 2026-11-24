@@ -1,5 +1,5 @@
-This crate translates parts of xNVSE, the New Vegas Script Extender, into Rust (ADR-0016),
-with its authors' permission (the maintainer, 2026-11-03). Source: xNVSE 6.4.9,
+This crate translates parts of xNVSE, the New Vegas Script Extender, into Rust (ADR-0016).
+Source: xNVSE 6.4.9,
 https://github.com/xNVSE/NVSE, commit 0ccd23a. No C++ is included.
 
 Credits, as xNVSE's README gives them:

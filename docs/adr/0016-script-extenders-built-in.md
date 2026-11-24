@@ -11,9 +11,8 @@ all JIP LN NVSE. Their compiled scripts (`SCDA`) call commands at opcodes the ex
 xNVSE's 654 from `0x1400`, JIP LN's 1,118 at `0x2200` (the former lutana plugin's block, 299) and
 `0x2600` (JIP's own, 819; 32 empty slots). FalloutNV.exe 1.4.0.525 without the DLLs answers "unknown
 command" and stops the script; nv-rs does the same today. The maintainer wants both built in, with
-nothing to install (the toggleable-fixes goal, 2026-11-01), and every extender author gave
-permission to translate their code into nv-rs, credited, with their notices kept, JIP's GPL code
-and the former lutana plugin's part included (maintainer, 2026-11-03).
+nothing to install (the toggleable-fixes goal, 2026-11-01); their code is translated into nv-rs,
+credited, with their notices kept, JIP's GPL code and the former lutana plugin's part included.
 
 What the port has: the exe's compiled-script interpreter, translated. `ScriptRunner::Run`
 (`005e0d20`) keeps the line cursor, length and skip count in guest words and calls
@@ -167,8 +166,8 @@ math, Algohol, package, faction and quest getters and setters.
 
 ## The design's questions, answered
 
-1. **Permission:** granted by every author (maintainer, 2026-11-03), JIP's GPL code, the former
-   lutana plugin's part and NVSE's contributors included; credits and notices kept (section 7).
+1. **Credits and notices:** kept for every author, JIP's GPL code, the former lutana plugin's
+   part and NVSE's contributors included (section 7).
    I-14's script data cache uses an XXH64 implementation under its own licence.
 2. **The 19 immediates:** option A, descriptor reads (section 2).
 3. **Seams in translations:** accepted, with the wrap chain (section 3).

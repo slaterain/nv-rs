@@ -1,6 +1,6 @@
 //! JIP LN NVSE, xNVSE's largest plugin, built in (ADR-0016; step 3 of the plan: the plugins VNV
-//! and TTW need, JIP LN first). Translated from JIP LN NVSE 57.30 (`5a30ac4`) with its authors'
-//! permission; credits and notices in `NOTICE`. JIP patches the old 32-bit program, so its DLL
+//! and TTW need, JIP LN first). Translated from JIP LN NVSE 57.30 (`5a30ac4`);
+//! credits and notices in `NOTICE`. JIP patches the old 32-bit program, so its DLL
 //! cannot load into nv-rs: it is rebuilt here, on the built-in xNVSE (`crates/nvse`), the way
 //! xNVSE runs it as a plugin.
 //!
