@@ -6168,20 +6168,6 @@ pub fn fn_008a0360(e: &mut Engine, this: Ptr<Actor>) -> u32 {
     }
 }
 
-/// The player's control flag test in [`fn_008a03a0`] (`005a03f0` with flag 1, called at
-/// `0x8A04B2`: `+0x680` bit 0). JIP LN NVSE's G126 (`GetControlFlagHook`, JIP's own) replaces
-/// the call: the seam is asked with the player and its answer's low byte is the test's result
-/// (the call not made). With the word's `INSTALLED` bit clear: one load, then the exe's call.
-#[inline]
-fn player_controls_test(e: &mut Engine, player: u32) -> bool {
-    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
-        if let Some(answer) = e.site(0x008a_04b2, &[player]) {
-            return answer as u8 != 0;
-        }
-    }
-    e.call(PLAYER_TEST_5A03F0, &args![player, 1u32]).bool()
-}
-
 // Translated from 008a03a0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Keeps the actor's combat going once the screen has faded in: does
 /// nothing while the fader (number 1) is visible, for actors failing
@@ -6234,7 +6220,12 @@ pub fn fn_008a03a0(e: &mut Engine, this: Ptr<Actor>) {
         return;
     }
     let player_address = e.global::<u32>(PLAYER_CHARACTER);
-    if target == player_address && player_controls_test(e, player_address) {
+    // The player's control flag test (`005a03f0` with flag 1, called at `0x8A04B2`: `+0x680`
+    // bit 0).
+    if target == player_address
+        && e.call(PLAYER_TEST_5A03F0, &args![player_address, 1u32])
+            .bool()
+    {
         return;
     }
     if target != 0 {
@@ -8091,7 +8082,9 @@ fn record_kill_statistics(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>
         let kind = e.call(CREATURE_GETTER_59F3A0, &args![creature]).u8() as i8;
         (kind as i32 + 1) as u8
     };
-    if !kill_challenge_teammate(e, this) {
+    // The killed actor's teammate test before the kill challenges (`0056_6950` called at
+    // `0x89DC0E` in `Actor::Kill`).
+    if !e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![this]).bool() {
         for (first, second) in [(1u32, 1u32), (0, 1)] {
             let number = weapon_number(e, weapon_form);
             let slot = weapon_slot(e, weapon_form);
@@ -8393,8 +8386,6 @@ fn kill_actor(
     release_furniture_marker(e, this);
     if this.addr() != player {
         e.call(ACTOR_WORKER_87EEF0, &args![this]);
-        e.set(this, Actor::pMyKiller, attacker.cast());
-    } else if player_killer_patched(e, 0x0089_e790, this) {
         e.set(this, Actor::pMyKiller, attacker.cast());
     }
     let group = e
@@ -8930,9 +8921,7 @@ pub fn actor_kill(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, damage
         if export && this.addr() == player_address {
             e.set(this, Actor::pMyKiller, attacker.cast());
             e.call(PLAYER_EXPORT_PROGRESS_DATA, &args![player_address, 1u32]);
-            if !player_killer_patched(e, 0x0089_f351, this) {
-                e.set(this, Actor::pMyKiller, Ptr::NULL);
-            }
+            e.set(this, Actor::pMyKiller, Ptr::NULL);
         }
         update_kill_counts(e, ebp, this, attacker, player_address);
         if fn_0089f500(e, Ptr::new(player_address)) != 0 {
@@ -9309,77 +9298,6 @@ const DETECTION_FORMULA: u32 = 0x0064_2ed0;
 /// perception.
 const ACTOR_VALUE_PERCEPTION: u32 = 6;
 
-/// The killed actor's teammate test before the kill challenges in [`record_kill_statistics`]
-/// (`0056_6950` called at `0x89DC0E` in `Actor::Kill`). JIP LN NVSE's G98 (`KillChallengeFixHook`,
-/// a fix, the row `NV_JIP_GAME_PATCHES`) replaces the call: the seam is asked with the actor and
-/// its answer's low byte is the test's result. With the word's `FIXES` bit clear: one load, then the
-/// exe's call.
-#[inline]
-fn kill_challenge_teammate(e: &mut Engine, this: Ptr<Actor>) -> bool {
-    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
-        if let Some(skip) = e.site(0x0089_dc0e, &[this.addr()]) {
-            return skip as u8 != 0;
-        }
-    }
-    e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![this]).bool()
-}
-
-/// JIP LN NVSE's G33 (JIP's own, `INSTALLED`; `GetKiller` reads it) in `Actor::Kill`: at `0x89E790`
-/// the player's killer is stored too (the jump lands on the store, past `0087eef0`), at `0x89F351`
-/// it is not cleared after the progress export. True when the seam `site` answers. With the word's
-/// `INSTALLED` bit clear: one load, false (the exe's jumps).
-#[inline]
-fn player_killer_patched(e: &mut Engine, site: u32, this: Ptr<Actor>) -> bool {
-    e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
-        && e.site(site, &[this.addr()]).is_some()
-}
-
-/// The mark [`actor_set_life_state`] gives a change of state (slot `0x48`, its `push 0x400` at
-/// `0x8A19CE`). JIP LN NVSE's G18 (a fix) writes `0x404` (the state saved with the actor): the
-/// seam at `0x8A19CF` answers the word. With the word's `FIXES` bit clear: one load, then `0x400`.
-#[inline]
-fn life_state_mark(e: &mut Engine, this: Ptr<Actor>) -> u32 {
-    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
-        if let Some(mark) = e.site(0x008a_19cf, &[this.addr()]) {
-            return mark;
-        }
-    }
-    0x400
-}
-
-/// The detected actor's teammate test in [`detection_level_against_actor`] (`0056_6950`, the
-/// byte `+0x18D`), called at `0x8A0DAB`, `0x8A1291` and `0x8A131D`. JIP LN NVSE's
-/// `DetectionTeammateHook` (its patch G53, part of JIP once it answers "installed") replaces the
-/// three calls: the seam is asked with the actor and its answer's low byte is the test's result
-/// (the call not made). With the word's `INSTALLED` bit clear: one load, then the exe's call.
-#[inline]
-fn detection_teammate(e: &mut Engine, site: u32, actor: Ptr<Actor>) -> bool {
-    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
-        if let Some(teammate) = e.site(site, &[actor.addr()]) {
-            return teammate as u8 != 0;
-        }
-    }
-    e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![actor]).bool()
-}
-
-/// The detected actor's level word in [`detection_level_against_actor`]: its actor value owner's
-/// (`+0xA4`) virtual `+0x28`, called at `0x8A147C`. JIP LN NVSE's `DetectionGetLevelHook` (G53)
-/// replaces that call: the seam is asked with the actor and an answer is the owner the function
-/// read from the actor's own table is called on instead (JIP: the player's, for an actor with its
-/// detection fix flag). With the word's `INSTALLED` bit clear: one load, then the exe's call.
-#[inline]
-fn detection_level_source(e: &mut Engine, actor: Ptr<Actor>) -> u32 {
-    let owner = actor.addr() + 0xa4;
-    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
-        if let Some(source) = e.site(0x008a_147c, &[actor.addr()]) {
-            let vtable = e.mem.u32(owner);
-            let function = e.mem.u32(vtable.wrapping_add(0x28));
-            return e.call(function, &[source]).u32();
-        }
-    }
-    e.vcall(owner, 0x28, &args![]).u32()
-}
-
 // Translated from 008a0d10 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Actor::GetDetectionLevelAgainstActor` (Xbox PDB): how well `this` detects
 /// `other`; returns the level (`-100` when nothing can be detected, `0` when
@@ -9462,7 +9380,9 @@ fn detection_level_against_actor(
     if second >= limit {
         return -100;
     }
-    if detection_teammate(e, 0x008a_0dab, other)
+    // The detected actor's teammate test (`0056_6950`, the byte `+0x18D`), called at `0x8A0DAB`
+    // (and at `0x8A1291` and `0x8A131D` below).
+    if e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![other]).bool()
         && !e.call(ACTOR_IN_COMBAT, &args![other]).bool()
         && e.call(ACTOR_IS_MOVING, &args![player_addr]).bool()
         && !e.call(ACTOR_IN_COMBAT, &args![player_addr]).bool()
@@ -9637,7 +9557,7 @@ fn detection_level_against_actor(
         )
         .f64();
     let mut other_stealth = e.call(FTOL, &args![other_stealth]).i32();
-    if detection_teammate(e, 0x008a_1291, other) {
+    if e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![other]).bool() {
         let player_stealth = e
             .call(
                 GET_CLAMPED_ACTOR_FLOAT_VALUE,
@@ -9654,7 +9574,7 @@ fn detection_level_against_actor(
     if value > zero || e.vcall(other.addr() + 0xa4, 0x08, &args![0x31u32]).i32() > 0 {
         stealth_flag = 1;
     }
-    if detection_teammate(e, 0x008a_131d, other) {
+    if e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![other]).bool() {
         let value = e.vcall(player_addr + 0xa4, 0x0c, &args![0x30u32]).f64();
         if value > zero || e.vcall(player_addr + 0xa4, 0x08, &args![0x31u32]).i32() > 0 {
             stealth_flag = 1;
@@ -9685,7 +9605,8 @@ fn detection_level_against_actor(
         byte_4938e0 = 0;
     }
     let this_word = e.vcall(this.addr() + 0xa4, 0x28, &args![]).u32() & 0xffff;
-    let other_word = detection_level_source(e, other) & 0xffff;
+    // The owner's (`+0xA4`) virtual `+0x28`, called at `0x8A147C`.
+    let other_word = e.vcall(other.addr() + 0xa4, 0x28, &args![]).u32() & 0xffff;
     let entry_result = e.mem.f32(scratch);
     let mut line_flag = line;
     if (entry_result as f64) > zero {
@@ -9992,8 +9913,8 @@ pub fn actor_set_life_state(e: &mut Engine, this: Ptr<Actor>, state: u32) {
         e.call(HIGH_PROCESS_FADE_IN, &args![process, this, 0u32]);
     }
     if e.get(this, Actor::eLifeState) != state {
-        let mark = life_state_mark(e, this);
-        e.vcall(this.addr(), ACTOR_SLOT_48, &args![mark]);
+        // Its `push 0x400` at `0x8A19CE`.
+        e.vcall(this.addr(), ACTOR_SLOT_48, &args![0x400u32]);
     }
     let old = e.get(this, Actor::eLifeState);
     e.set(this, Actor::eLifeState, state);
@@ -12730,34 +12651,10 @@ fn limb_word(e: &Engine, hit: Ptr<HitData>) -> u32 {
     )
 }
 
-/// The ammo's script effect in [`hit_me_report_attack`] (`0x89ABDC` to `0x89AC5B`: the weapon's
-/// current ammo, its script, `005ac340`). JIP LN NVSE's G119 (`RunAmmoImpactScriptHook`, a fix)
-/// replaces that span: the seam is asked with the hit and the actor hit, and an answer means it
-/// ran JIP's (the projectile's own ammo's script). With the word's `FIXES` bit clear: one load,
-/// false (the exe's calls).
-#[inline]
-fn ammo_impact_script_seam(e: &mut Engine, hit: Ptr<HitData>, this: Ptr<Actor>) -> bool {
-    e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
-        && e.site(0x0089_abdc, &[hit.addr(), this.addr()]).is_some()
-}
-
-/// The worn armour's damage in [`actor_hit_me`] (`0x89D2FF` to `0x89D362`: the actor's virtual
-/// `0x3C8` with the item and the hit's armour damage, then the item's entry deleted). JIP LN
-/// NVSE's G99 (`DoHitArmorDamageHook`, JIP's own) replaces that span: the seam is asked with the
-/// actor, the item and the hit, and an answer means JIP's ran (the damage capped by
-/// `SetDamageToArmorMaxPercent`, the entry deleted). With the word's `INSTALLED` bit clear: one
-/// load, false (the exe's calls).
-#[inline]
-fn armor_damage_seam(e: &mut Engine, this: Ptr<Actor>, item: u32, hit: Ptr<HitData>) -> bool {
-    e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
-        && e.site(0x0089_d2ff, &[this.addr(), item, hit.addr()])
-            .is_some()
-}
-
 /// `0089d26f`..`0089d362`: the worn armour's damage. For an actor not protected (virtual `0x22C`
 /// with 0) whose hit does armour damage (more than 0) and that passes virtual `0x360`, a random
 /// worn armour (the head's first for limbs 1 and 2) takes the hit's armour damage (virtual
-/// `0x3C8`) and its entry is deleted; [`armor_damage_seam`] may do that part instead.
+/// `0x3C8`) and its entry is deleted.
 fn hit_me_armor_damage(e: &mut Engine, this: Ptr<Actor>, hit: Ptr<HitData>, zero: f64) {
     if !e.vcall(this.addr(), ACTOR_SLOT_22C, &args![0u32]).bool()
         && e.get(hit, HitData::fArmorDamage) as f64 > zero
@@ -12771,9 +12668,9 @@ fn hit_me_armor_damage(e: &mut Engine, this: Ptr<Actor>, hit: Ptr<HitData>, zero
 }
 
 /// `0089d2f6`..`0089d362`: with an armour entry, it takes the hit's armour damage (virtual
-/// `0x3C8`) and the entry is deleted, unless [`armor_damage_seam`] did that (JIP's G99).
+/// `0x3C8`) and the entry is deleted.
 fn damage_worn_armor(e: &mut Engine, this: Ptr<Actor>, item: u32, hit: Ptr<HitData>) {
-    if item != 0 && !armor_damage_seam(e, this, item, hit) {
+    if item != 0 {
         let damage = e.get(hit, HitData::fArmorDamage);
         e.vcall(
             this.addr(),
@@ -12817,12 +12714,10 @@ fn hit_me_report_attack(e: &mut Engine, s: &mut HitMe) {
                 }
             }
         }
-        let ammo = if ammo_impact_script_seam(e, hit, this) {
-            0
-        } else {
-            e.call(WEAPON_GET_CURRENT_AMMO, &args![weapon, aggressor])
-                .u32()
-        };
+        // `0x89ABDC` to `0x89AC5B`: the weapon's current ammo, its script, `005ac340`.
+        let ammo = e
+            .call(WEAPON_GET_CURRENT_AMMO, &args![weapon, aggressor])
+            .u32();
         if ammo != 0 {
             let ammo = e
                 .call(WEAPON_GET_CURRENT_AMMO, &args![weapon, aggressor])
@@ -13128,23 +13023,16 @@ fn hit_me_critical_effect(e: &mut Engine, s: &mut HitMe) {
 }
 
 /// `0089b43f`..`0089b6d0`: a kill of the player's bound weapon 0x22 can
-/// fire a projectile-like reference back at the target (the attacker's
-/// weapon with JIP LN's `uNPCPerks`, seam `0x89B455`).
+/// fire a projectile-like reference back at the target.
 fn hit_me_kill_effect(e: &mut Engine, s: &mut HitMe) {
     let this = s.this;
     let aggressor = s.aggressor(e);
     if aggressor == 0 {
         return;
     }
-    // JIP LN's O18 (`uNPCPerks`: `SAFE_WRITE_BUF(0x89B455, ...)`, 32 bytes): the answer is the
-    // attacker's current weapon in place of the player's. Words: the attacker.
-    let jip_weapon = if e.jip_patches() & engine_core::extend::jip_patches::NPC_PERKS != 0 {
-        e.site(0x0089_b455, &[aggressor])
-    } else {
-        None
-    };
-    let mut entry_form = jip_weapon.unwrap_or(0);
-    if jip_weapon.is_none() && s.player != 0 {
+    // `0x89B455`: the player's current weapon.
+    let mut entry_form = 0;
+    if s.player != 0 {
         let acquire = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, s.player));
         if acquire != 0 {
             let acquire = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, s.player));
@@ -20835,168 +20723,40 @@ mod tests {
         assert_eq!(calls_to(&e, DETECTION_FORMULA).len(), 1, "added");
     }
 
-    thread_local! {
-        /// The G53 seams asked (site, words) and the answers the test handlers give, by site.
-        static G53_SEEN: std::cell::RefCell<Vec<(u32, Vec<u32>)>> = const { std::cell::RefCell::new(Vec::new()) };
-        static G53_ANSWER: std::cell::RefCell<Vec<(u32, Option<u32>)>> = const { std::cell::RefCell::new(Vec::new()) };
-    }
-
-    fn g53_at(site: u32, a: &[u32]) -> Option<u32> {
-        G53_SEEN.with(|s| s.borrow_mut().push((site, a.to_vec())));
-        G53_ANSWER.with(|c| {
-            c.borrow()
-                .iter()
-                .find(|(s, _)| *s == site)
-                .and_then(|(_, answer)| *answer)
-        })
-    }
-
-    fn g53_answers(answers: &[(u32, Option<u32>)]) {
-        G53_ANSWER.with(|c| *c.borrow_mut() = answers.to_vec());
-    }
-
-    /// The four seams of JIP LN NVSE's detection patch (G53, step 3.9-GC) with test handlers.
-    fn g53_seams(e: &mut Engine) {
-        use engine_core::extend::{Owner, SiteSlot};
-        e.on_site(SiteSlot::new(Owner::Jip, 0x008a_0dab), |_, a| {
-            g53_at(0x008a_0dab, a)
-        });
-        e.on_site(SiteSlot::new(Owner::Jip, 0x008a_1291), |_, a| {
-            g53_at(0x008a_1291, a)
-        });
-        e.on_site(SiteSlot::new(Owner::Jip, 0x008a_131d), |_, a| {
-            g53_at(0x008a_131d, a)
-        });
-        e.on_site(SiteSlot::new(Owner::Jip, 0x008a_147c), |_, a| {
-            g53_at(0x008a_147c, a)
-        });
-    }
-
-    /// JIP LN NVSE's detection patch seams (G53: `0x8A0DAB`, `0x8A1291`, `0x8A131D`, `0x8A147C`):
-    /// with the game patch word clear (JIP not installed) or holding only other bits (JIP's row
-    /// off sets nothing else here: the seams test `INSTALLED`), none is asked even with handlers
-    /// registered, the three teammate tests call `0x566950` and the level word comes from the
-    /// detected actor's own owner, exactly as before.
+    /// The detection's three teammate tests (`0x8A0DAB`, `0x8A1291`, `0x8A131D`) call
+    /// `0x566950` with the detected actor, and its level word (`0x8A147C`) comes from the detected
+    /// actor's own owner.
     #[test]
-    fn g53_seams_do_nothing_while_jip_is_not_installed() {
-        use engine_core::extend::jip_patches;
+    fn detection_asks_the_teammate_tests_and_the_actors_own_level_word() {
         let (mut e, actor, other, _, seen, seen_line) = formula_world();
-        g53_seams(&mut e);
-        g53_answers(&[
-            (0x008a_0dab, Some(1)),
-            (0x008a_1291, Some(1)),
-            (0x008a_131d, Some(1)),
-            (0x008a_147c, Some(0x0bad_0000)),
-        ]);
-        G53_SEEN.with(|s| s.take());
-        for word in [0, jip_patches::FIXES | jip_patches::IGNORE_DTDR_FIX] {
-            e.set_jip_patches(word);
-            e.call_log = Some(vec![]);
-            assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), 55);
-            assert!(G53_SEEN.with(|s| s.borrow().is_empty()), "{word:08x}");
-            assert_eq!(
-                calls_to(&e, PROCESS_GET_FORCE_NEXT_UPDATE),
-                vec![vec![other.addr()]; 3]
-            );
-            let formula = calls_to(&e, DETECTION_FORMULA);
-            assert_eq!(formula[0][22..24], [0x2345, 7], "both level words");
-            let level = slot_target(&e, Ptr::new(other.addr() + 0xa4), 0x28);
-            assert_eq!(calls_to(&e, level), vec![vec![other.addr() + 0xa4]]);
-        }
-    }
-
-    /// With `INSTALLED`: each seam asked once with the detected actor at its place; a teammate
-    /// answer is the test's result (no call of `0x566950`), its low byte only (`0x100` is false);
-    /// no answer keeps the exe's call. The level seam's answer is the owner the function read from
-    /// the detected actor's table is called on; no answer keeps the actor's own.
-    #[test]
-    fn g53_seams_take_jips_answers_once_installed() {
-        use engine_core::extend::jip_patches;
-        let (mut e, actor, other, _, seen, seen_line) = formula_world();
-        g53_seams(&mut e);
-        e.set_jip_patches(jip_patches::INSTALLED);
-        let level_fn = slot_target(&e, Ptr::new(other.addr() + 0xa4), 0x28);
-        let source = e.mem.alloc(8);
-        let player_stealth = vec![actor.addr() + 0xa4, 0x2a];
-
-        // Teammate answers 1 at the first seam (the actor is in combat there, so -100 is not
-        // reached), at the stealth seam (the player's stealth asked) and at the flag seam.
-        g53_answers(&[
-            (0x008a_0dab, Some(1)),
-            (0x008a_1291, Some(1)),
-            (0x008a_131d, Some(1)),
-            (0x008a_147c, Some(source)),
-        ]);
-        G53_SEEN.with(|s| s.take());
         e.call_log = Some(vec![]);
         assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), 55);
-        assert_eq!(
-            G53_SEEN.with(|s| s.take()),
-            vec![
-                (0x008a_0dab, vec![other.addr()]),
-                (0x008a_1291, vec![other.addr()]),
-                (0x008a_131d, vec![other.addr()]),
-                (0x008a_147c, vec![other.addr()]),
-            ]
-        );
-        assert!(calls_to(&e, PROCESS_GET_FORCE_NEXT_UPDATE).is_empty());
-        assert!(calls_to(&e, GET_CLAMPED_ACTOR_FLOAT_VALUE).contains(&player_stealth));
-        assert_eq!(calls_to(&e, level_fn), vec![vec![source]], "on the answer");
-        assert_eq!(calls_to(&e, DETECTION_FORMULA)[0][23], 7);
-
-        // 0 and 0x100 (a low byte of 0): not a teammate, the player's stealth not asked.
-        for answer in [0, 0x100] {
-            g53_answers(&[
-                (0x008a_0dab, Some(answer)),
-                (0x008a_1291, Some(answer)),
-                (0x008a_131d, Some(answer)),
-            ]);
-            e.call_log = Some(vec![]);
-            assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), 55);
-            assert!(calls_to(&e, PROCESS_GET_FORCE_NEXT_UPDATE).is_empty());
-            assert!(!calls_to(&e, GET_CLAMPED_ACTOR_FLOAT_VALUE).contains(&player_stealth));
-            assert_eq!(calls_to(&e, level_fn), vec![vec![other.addr() + 0xa4]]);
-        }
-
-        // No answers: the exe's calls at every seam.
-        g53_answers(&[]);
-        G53_SEEN.with(|s| s.take());
-        e.call_log = Some(vec![]);
-        assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), 55);
-        assert_eq!(G53_SEEN.with(|s| s.take()).len(), 4);
         assert_eq!(
             calls_to(&e, PROCESS_GET_FORCE_NEXT_UPDATE),
             vec![vec![other.addr()]; 3]
         );
-        assert_eq!(calls_to(&e, level_fn), vec![vec![other.addr() + 0xa4]]);
+        let formula = calls_to(&e, DETECTION_FORMULA);
+        assert_eq!(formula[0][22..24], [0x2345, 7], "both level words");
+        let level = slot_target(&e, Ptr::new(other.addr() + 0xa4), 0x28);
+        assert_eq!(calls_to(&e, level), vec![vec![other.addr() + 0xa4]]);
     }
 
-    /// The first teammate seam (`0x8A0DAB`) decides the early -100 (a teammate out of combat while
-    /// the player moves out of combat): JIP's 0 there lets the detection go on.
+    /// The first teammate test (`0x8A0DAB`) decides the early -100 (a teammate out of combat while
+    /// the player moves out of combat).
     #[test]
-    fn g53_first_seam_decides_the_early_exit() {
-        use engine_core::extend::jip_patches;
+    fn detection_ends_early_for_a_teammate_out_of_combat() {
         let (mut e, actor, other, _, seen, seen_line) = formula_world();
-        g53_seams(&mut e);
         stub(&mut e, ACTOR_IN_COMBAT, 0);
         stub(&mut e, ACTOR_IS_MOVING, 1);
         stub(&mut e, PROCESS_GET_FORCE_NEXT_UPDATE, 1);
         assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), -100);
-        e.set_jip_patches(jip_patches::INSTALLED);
-        g53_answers(&[(0x008a_0dab, Some(0))]);
-        assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), 55);
-        g53_answers(&[(0x008a_0dab, Some(1))]);
-        assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), -100);
     }
 
-    /// The third teammate seam (`0x8A131D`) decides whether the player's Chameleon or
+    /// The third teammate test (`0x8A131D`) decides whether the player's Chameleon or
     /// Invisibility (the player's `+0xA4` slots `0x0C` and `0x08`) sets the formula's stealth
-    /// flag (its eighth word; the detected actor's own values are 0). Not installed: the exe's
-    /// teammate test decides. Installed: the answer's low byte (`0x80` and `0x1FE` are teammates,
-    /// `0x100` is not). The stealth seam (`0x8A1291`) with `0x80` asks the player's stealth.
+    /// flag (its eighth word; the detected actor's own values are 0).
     #[test]
-    fn g53_third_seam_decides_the_players_stealth_flag() {
-        use engine_core::extend::jip_patches;
+    fn detection_teammate_test_decides_the_players_stealth_flag() {
         let (mut e, actor, other, _, seen, seen_line) = formula_world();
         embedded_table(
             &mut e,
@@ -21007,27 +20767,15 @@ mod tests {
                 (0x28, ret(0x1_2345)),
             ],
         );
-        g53_seams(&mut e);
         let flag = |e: &mut Engine| {
             e.call_log = Some(vec![]);
             formula_level(e, actor, other, seen, seen_line);
             calls_to(e, DETECTION_FORMULA)[0][7]
         };
         stub(&mut e, PROCESS_GET_FORCE_NEXT_UPDATE, 1);
-        assert_eq!(flag(&mut e), 1, "not installed, a teammate");
+        assert_eq!(flag(&mut e), 1, "a teammate");
         stub(&mut e, PROCESS_GET_FORCE_NEXT_UPDATE, 0);
-        assert_eq!(flag(&mut e), 0, "not installed, not a teammate");
-        e.set_jip_patches(jip_patches::INSTALLED);
-        for (answer, expected) in [(1, 1), (0x80, 1), (0x1fe, 1), (0, 0), (0x100, 0)] {
-            g53_answers(&[(0x008a_131d, Some(answer))]);
-            assert_eq!(flag(&mut e), expected, "{answer:#x}");
-        }
-        g53_answers(&[(0x008a_1291, Some(0x80))]);
-        e.call_log = Some(vec![]);
-        formula_level(&mut e, actor, other, seen, seen_line);
-        assert!(
-            calls_to(&e, GET_CLAMPED_ACTOR_FLOAT_VALUE).contains(&vec![actor.addr() + 0xa4, 0x2a])
-        );
+        assert_eq!(flag(&mut e), 0, "not a teammate");
     }
 
     #[test]
@@ -23357,256 +23105,41 @@ mod tests {
             vec![vec![frame + 0xf4]]
         );
     }
-    // ---- JIP LN NVSE's game patches of group GC (step 3.9): G98, G33 and G18 run in their
-    // translated functions with the seams on.
-
-    /// A page the GC call-site handlers write what they were asked with to and read their answer
-    /// from (site handlers are plain functions).
-    const GC_PAGE: u32 = 0x0535_0000;
-    /// G98: the actor asked, the answer.
-    const GC_G98_ASKED: u32 = GC_PAGE;
-    const GC_G98_ANSWER: u32 = GC_PAGE + 4;
-    /// G33: how often and with whom each of its two seams was asked.
-    const GC_STORE_COUNT: u32 = GC_PAGE + 0x10;
-    const GC_STORE_ASKED: u32 = GC_PAGE + 0x14;
-    const GC_KEPT_COUNT: u32 = GC_PAGE + 0x18;
-    const GC_KEPT_ASKED: u32 = GC_PAGE + 0x1c;
-    /// G18: how often it was asked.
-    const GC_MARK_COUNT: u32 = GC_PAGE + 0x20;
-
-    fn gc_seams(e: &mut Engine, word: u32) {
-        use engine_core::extend::{Owner, SiteSlot};
-        if !e.mem.is_mapped(GC_PAGE) {
-            e.map(GC_PAGE, 0x1000);
-        }
-        e.set_jip_patches(word);
-        e.on_site(SiteSlot::new(Owner::Jip, 0x0089_dc0e), |e, a| {
-            e.mem.set_u32(GC_G98_ASKED, a[0]);
-            Some(e.mem.u32(GC_G98_ANSWER))
-        });
-        e.on_site(SiteSlot::new(Owner::Jip, 0x0089_e790), |e, a| {
-            e.mem.set_u32(GC_STORE_COUNT, e.mem.u32(GC_STORE_COUNT) + 1);
-            e.mem.set_u32(GC_STORE_ASKED, a[0]);
-            Some(0)
-        });
-        e.on_site(SiteSlot::new(Owner::Jip, 0x0089_f351), |e, a| {
-            e.mem.set_u32(GC_KEPT_COUNT, e.mem.u32(GC_KEPT_COUNT) + 1);
-            e.mem.set_u32(GC_KEPT_ASKED, a[0]);
-            Some(0)
-        });
-        e.on_site(SiteSlot::new(Owner::Jip, 0x008a_19cf), |e, _| {
-            e.mem.set_u32(GC_MARK_COUNT, e.mem.u32(GC_MARK_COUNT) + 1);
-            Some(0x404)
-        });
-    }
-
-    /// The player kills an NPC as in [`actor_kill_by_the_player_records_the_statistics_and_karma`]
-    /// with the row on, G98 answering `answer` and the exe's teammate test answering
-    /// `exe_teammate`; returns the kill challenge statistics calls made.
-    fn g98_kill(answer: u32, exe_teammate: u32) -> (Engine, Ptr<Actor>, usize) {
+    /// `0x89B455`: the kill effect's weapon is the player's (none here, so the effect is not
+    /// looked at).
+    #[test]
+    fn hit_me_kill_effect_takes_the_players_weapon() {
         let mut e = engine();
-        let (victim, _, player, cells) = kill_setup(&mut e);
-        let player_360 = slot_target(&e, player.cast(), ACTOR_SLOT_360);
-        e.register_double(player_360, |_, _| ret(1));
-        e.mem
-            .set_f32(cells[&KARMA_REWARD_ALIGNMENT_SETTINGS[0]], 5.0);
-        stub(&mut e, GET_ALIGNMENT_FOR_KARMA, 0);
-        stub(&mut e, ACTOR_HAS_FACTION_THAT_CARES_ABOUT_CRIME, 1);
-        stub(&mut e, PLAYER_TEST_4997B0, 1);
-        stub(&mut e, REFR_BASE_FORM, 0x9300);
-        let karma_owner = e.mem.alloc(0x200);
-        embedded_table(&mut e, karma_owner + 0x100, &[(0x0c, float_ret(10.0))]);
-        stub(&mut e, ACTOR_BASE_FORM, karma_owner);
-        stub_with(&mut e, FTOL, |_, a| {
-            ret(f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32) as i32 as u32)
-        });
-        stub(&mut e, CREATURE_GETTER_59F3A0, 0);
-        stub(&mut e, RTTI_DYNAMIC_CAST, 0x9400);
-        stub(&mut e, PROCESS_GET_FORCE_NEXT_UPDATE, exe_teammate);
-        gc_seams(
-            &mut e,
-            engine_core::extend::jip_patches::INSTALLED | engine_core::extend::jip_patches::FIXES,
-        );
-        e.mem.set_u32(GC_G98_ANSWER, answer);
-        actor_kill(&mut e, victim, player, 1.0);
-        let stats = call_count(&e, STATISTICS_WORKER_5F5950);
-        (e, victim, stats)
-    }
-
-    /// G98 at `0x89DC0E` in `Actor::Kill`: the seam, asked with the killed actor (not the
-    /// killer), decides by its answer's low byte whether the kill challenges are counted, in place
-    /// of the exe's teammate test. An NPC's death asks neither G33 seam.
-    #[test]
-    fn g98_kill_challenges_follow_the_seams_answer() {
-        let (e, victim, stats) = g98_kill(1, 0);
-        assert_eq!(e.mem.u32(GC_G98_ASKED), victim.addr());
-        assert_eq!(stats, 0, "skipped: no challenge counted");
-        let (e, victim, stats) = g98_kill(0x100, 1);
-        assert_eq!(e.mem.u32(GC_G98_ASKED), victim.addr());
-        assert_eq!(stats, 3, "counted: the answer's low byte is 0");
-        assert_eq!(
-            (e.mem.u32(GC_STORE_COUNT), e.mem.u32(GC_KEPT_COUNT)),
-            (0, 0),
-            "an NPC's death: G33 not asked"
-        );
-    }
-
-    /// The player killed as in [`actor_kill_of_the_player_ends_the_world_around_it`] with JIP
-    /// installed (G33 is JIP's own) and the progress export answering `export`.
-    fn g33_player_death(export: u32) -> (Engine, Ptr<Actor>, Ptr<Actor>) {
-        let mut e = engine();
-        let (_, _, player, _) = kill_setup(&mut e);
-        stub(&mut e, INTERFACE_IS_TOP_MENU_ID, 1);
-        stub(&mut e, AUDIO_INSTANCE, 0x9c00);
-        stub(&mut e, AUDIO_GET_SOUND_HANDLE_BY_NAME, 0x9d00);
-        stub(&mut e, SETTING_TEST_454AF0, export);
-        let attacker = big_actor(&mut e, &npc_slots());
-        e.mem.set_u32(player.addr() + 0x68, 0);
-        let process = object(&mut e, 0x800, &process_slots());
-        e.set(player, Actor::pCurrentProcess, process);
-        embedded_table(
-            &mut e,
-            player.addr() + ACTOR_VALUE_OWNER_OFFSET,
-            &[(0x00, ret(100)), (0x0c, float_ret(30.0))],
-        );
-        gc_seams(&mut e, engine_core::extend::jip_patches::INSTALLED);
-        actor_kill(&mut e, player, attacker, 1.0);
-        (e, player, attacker)
-    }
-
-    /// G33 at `0x89E790` and `0x89F351`: the player's killer is stored (the exe's jump past the
-    /// store taken away; `0087eef0` still not called for the player) and kept after the progress
-    /// export (the exe clears it).
-    #[test]
-    fn g33_the_players_killer_is_stored_and_kept() {
-        let (e, player, attacker) = g33_player_death(0);
-        assert_eq!(e.get(player, Actor::pMyKiller).addr(), attacker.addr());
-        assert_eq!(
-            (e.mem.u32(GC_STORE_COUNT), e.mem.u32(GC_STORE_ASKED)),
-            (1, player.addr())
-        );
-        assert_eq!(e.mem.u32(GC_KEPT_COUNT), 0, "no export: not asked");
-        assert!(!calls_to(&e, ACTOR_WORKER_87EEF0).contains(&vec![player.addr()]));
-        let (e, player, attacker) = g33_player_death(1);
-        assert_eq!(
-            calls_to(&e, PLAYER_EXPORT_PROGRESS_DATA),
-            vec![vec![player.addr(), 1]]
-        );
-        assert_eq!(e.get(player, Actor::pMyKiller).addr(), attacker.addr());
-        assert_eq!(
-            (e.mem.u32(GC_KEPT_COUNT), e.mem.u32(GC_KEPT_ASKED)),
-            (1, player.addr())
-        );
-        assert!(!calls_to(&e, ACTOR_WORKER_87EEF0).contains(&vec![player.addr()]));
-    }
-
-    /// G18 at `0x8A19CF`: the seam's mark is the slot `0x48` call's word on a change of state; an
-    /// unchanged state does not ask it.
-    #[test]
-    fn g18_mark_reaches_the_slot_0x48_call() {
-        let mut e = engine();
-        let actor = actor_with(&mut e, &[(ACTOR_SLOT_48, ret(0))], None);
-        stub_bool_settings(&mut e, &[(SETTING_ESSENTIAL_PROTECTION, 1)]);
-        stub(&mut e, ACTOR_GET_ESSENTIAL, 1);
-        stub(&mut e, ACTOR_CAN_KNOCK_DOWN, 1);
-        gc_seams(&mut e, engine_core::extend::jip_patches::FIXES);
-        actor_set_life_state(&mut e, actor, 2);
-        assert_eq!(e.get(actor, Actor::eLifeState), 6);
-        assert_eq!(
-            calls_to(&e, slot_target(&e, actor.cast(), ACTOR_SLOT_48)),
-            vec![vec![actor.addr(), 0x404]]
-        );
-        assert_eq!(e.mem.u32(GC_MARK_COUNT), 1);
-        actor_set_life_state(&mut e, actor, 6);
-        assert_eq!(e.get(actor, Actor::eLifeState), 6);
-        assert_eq!(e.mem.u32(GC_MARK_COUNT), 1, "same state: not asked");
-    }
-
-    thread_local! {
-        static O18_KILL_ASKED: std::cell::RefCell<Vec<Vec<u32>>> =
-            const { std::cell::RefCell::new(Vec::new()) };
-        static O18_KILL_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
-    }
-
-    fn at_kill_effect_weapon(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        O18_KILL_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
-        O18_KILL_ANSWER.with(std::cell::Cell::get)
-    }
-
-    /// JIP's O18 seam at `0x89B455`: the kill effect's weapon is the player's (none here, so the
-    /// effect is not looked at) unless the switch's bit is set and the handler answers; then the
-    /// answer is the weapon (of kind 0x22 here: the entry point 0x2E is asked for the attacker).
-    /// Asked with the attacker.
-    #[test]
-    fn hit_me_kill_effect_jip_o18_takes_the_attackers_weapon() {
-        use engine_core::extend::jip_patches;
-        let run = |word: u32, answer: Option<u32>| {
-            let mut e = engine();
-            let world = hit_world(&mut e, true);
-            stub(&mut e, WEAPON_GETTER_8D85E0, 0x22);
-            stub(&mut e, HANDLE_ENTRY_POINT, 0);
-            e.on_site_for_test(0x0089_b455, at_kill_effect_weapon);
-            O18_KILL_ASKED.with(|s| s.borrow_mut().clear());
-            O18_KILL_ANSWER.with(|c| c.set(answer));
-            e.set_jip_patches(word);
-            e.call_log = Some(vec![]);
-            let mut s = HitMe {
-                this: world.victim,
-                hit: world.hit,
-                kind: 0,
-                player: world.player.addr(),
-                ebp: 0,
-                moved: false,
-                flag_1a: false,
-                arrows: 0,
-                weapon_type: 1,
-                crippled: false,
-                kind_one: false,
-                flag_63: false,
-                flag_64: false,
-                health: 0.0,
-                fatigue: 0.0,
-                total: 0.0,
-                blocked: 0.0,
-                not_fleeing: false,
-                dead: true,
-                limb: -1,
-                cripple_roll: false,
-                torso_hit: false,
-            };
-            hit_me_kill_effect(&mut e, &mut s);
-            let asked = O18_KILL_ASKED.with(|s| s.take());
-            let forms = calls_to(&e, WEAPON_GETTER_8D85E0);
-            let entry: Vec<Vec<u32>> = calls_to(&e, HANDLE_ENTRY_POINT)
-                .iter()
-                .map(|w| w[..2].to_vec())
-                .collect();
-            (asked, forms, entry, world.player.addr())
+        let world = hit_world(&mut e, true);
+        stub(&mut e, WEAPON_GETTER_8D85E0, 0x22);
+        stub(&mut e, HANDLE_ENTRY_POINT, 0);
+        e.call_log = Some(vec![]);
+        let mut s = HitMe {
+            this: world.victim,
+            hit: world.hit,
+            kind: 0,
+            player: world.player.addr(),
+            ebp: 0,
+            moved: false,
+            flag_1a: false,
+            arrows: 0,
+            weapon_type: 1,
+            crippled: false,
+            kind_one: false,
+            flag_63: false,
+            flag_64: false,
+            health: 0.0,
+            fatigue: 0.0,
+            total: 0.0,
+            blocked: 0.0,
+            not_fleeing: false,
+            dead: true,
+            limb: -1,
+            cripple_roll: false,
+            torso_hit: false,
         };
-        let off = jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::NPC_WEAPON_MODS;
-        let (asked, forms, entry, _) = run(off, Some(0x6400));
-        assert!(
-            asked.is_empty() && forms.is_empty() && entry.is_empty(),
-            "the bit off"
-        );
-        let (asked, forms, _, player) = run(jip_patches::NPC_PERKS, None);
-        assert_eq!(asked, vec![vec![player]]);
-        assert!(forms.is_empty(), "no answer: the player's weapon (none)");
-        let (_, forms, entry, player) = run(jip_patches::NPC_PERKS, Some(0x6400));
-        assert_eq!(forms, vec![vec![0x6400]]);
-        assert_eq!(
-            entry,
-            vec![vec![0x2e, player]],
-            "entry point 0x2E for the attacker"
-        );
-        let (_, forms, entry, _) = run(jip_patches::NPC_PERKS, Some(0));
-        assert!(
-            forms.is_empty() && entry.is_empty(),
-            "an answer of no weapon"
-        );
+        hit_me_kill_effect(&mut e, &mut s);
+        assert!(calls_to(&e, WEAPON_GETTER_8D85E0).is_empty());
+        assert!(calls_to(&e, HANDLE_ENTRY_POINT).is_empty());
     }
 }
-
-#[cfg(test)]
-#[path = "actor_p3_gc_tests.rs"]
-mod gc_tests;

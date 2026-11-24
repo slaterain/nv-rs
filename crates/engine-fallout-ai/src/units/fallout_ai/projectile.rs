@@ -278,30 +278,6 @@ pub fn fn_009c3e10(e: &mut Engine, this: Ptr<Projectile>) {
     e.call(ASSIGN_NI_POINTER, &args![slot, 0u32]);
 }
 
-/// The projectile's start in the world (`009bda10`) at `0x9BDC92`: its light made (`009c3d90`, by address). JIP LN
-/// NVSE's G95 (group GK's row and handler, a fix row: the call becomes `AddProjectileLightHook`) answers the seam
-/// with the projectile and makes one of JIP's point lights instead; one load while JIP's fixes are not in.
-fn make_light(e: &mut Engine, this: Ptr<Projectile>) {
-    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
-        && e.site(0x009b_dc92, &[this.addr()]).is_some()
-    {
-        return;
-    }
-    e.call(0x009c_3d90, &args![this]);
-}
-
-/// The projectile's destructor (`009bc470`) at `0x9BC6D9`: its light removed (`009c3e10`, by address). JIP LN
-/// NVSE's G95 (group GK's row and handler, a fix row: the call becomes `RemoveProjectileLightHook`) answers the seam
-/// with the projectile and takes JIP's light off its node instead; one load while JIP's fixes are not in.
-fn remove_light(e: &mut Engine, this: Ptr<Projectile>) {
-    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
-        && e.site(0x009b_c6d9, &[this.addr()]).is_some()
-    {
-        return;
-    }
-    e.call(0x009c_3e10, &args![this]);
-}
-
 // Translated from 009c3e60 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Fades the projectile's light with its alpha (the engine map has no
 /// name): with `spLight` set and flag 0x20, the light gets (`0050dd20`)
@@ -2057,32 +2033,21 @@ pub fn fn_009bbef0(
                 }
             }
         }
-        // 009bc241..009bc293: JIP's G117 (InitProjectileSetAmmoHook, a JIP fix) replaces the
-        // projectile count, the division and the mod scale, and records the ammo, the split-beam
-        // flag and the count in the projectile. Words: the projectile, the weapon argument, the
-        // actor shooter (0 if none), the mod-0xC flag. One load while JIP is not installed.
-        if e.jip_patches() & engine_core::extend::jip_patches::FIXES == 0
-            || e.site(
-                0x009b_c241,
-                &[this.addr(), weapon, actor, u32::from(mod_active)],
-            )
-            .is_none()
-        {
-            let weapon_form = e.call(GET_WEAPON, &args![this]).u32();
-            let projectiles = e
-                .call(0x0052_5b20, &args![weapon_form, mod_active, 0u32, actor])
-                .u8();
+        // 009bc241..009bc293: the projectile count, the division and the mod scale.
+        let weapon_form = e.call(GET_WEAPON, &args![this]).u32();
+        let projectiles = e
+            .call(0x0052_5b20, &args![weapon_form, mod_active, 0u32, actor])
+            .u8();
+        let damage = e.get(this, Projectile::fDamage);
+        e.set(
+            this,
+            Projectile::fDamage,
+            (damage as f64 / projectiles as f64) as f32,
+        );
+        if mod_active {
+            let scale: f64 = e.global(MOD_DAMAGE_SCALE);
             let damage = e.get(this, Projectile::fDamage);
-            e.set(
-                this,
-                Projectile::fDamage,
-                (damage as f64 / projectiles as f64) as f32,
-            );
-            if mod_active {
-                let scale: f64 = e.global(MOD_DAMAGE_SCALE);
-                let damage = e.get(this, Projectile::fDamage);
-                e.set(this, Projectile::fDamage, (damage as f64 * scale) as f32);
-            }
+            e.set(this, Projectile::fDamage, (damage as f64 * scale) as f32);
         }
     }
 
@@ -2207,7 +2172,8 @@ pub fn fn_009bc470(e: &mut Engine, this: Ptr<Projectile>) {
             &args![base, 0u32, 1u32, 0u32, 0u32, 0u32, 0u32, 0u32, 1u32, 0u32],
         );
     }
-    remove_light(e, this);
+    // `0x9BC6D9`: its light removed (`009c3e10`, by address).
+    e.call(0x009c_3e10, &args![this]);
     let list = this.byte_add(IMPACT_LIST);
     while !typed_call!(leaf::FAMILY, 0x0082_56d0, leaf::both_words_zero(e, list)) {
         let head = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, list));
@@ -3401,7 +3367,8 @@ pub fn fn_009bda10(e: &mut Engine, this: Ptr<Projectile>) {
         let cell = e.call(0x008d_6f30, &args![this]).u32();
         e.call(0x0054_8230, &args![cell, this, 0u32]);
     }
-    make_light(e, this);
+    // `0x9BDC92`: its light made (`009c3d90`, by address).
+    e.call(0x009c_3d90, &args![this]);
     if !loaded {
         fn_009c2ff0(e, this);
     }
@@ -5939,18 +5906,8 @@ fn explode_projectile(e: &mut Engine, this: Ptr<Projectile>) {
         let owner = if test_flags(e, this, 0x400) {
             0
         } else {
-            // 009c35f7: JIP's G27 (a fix) puts `mov eax, ecx` in place of the shooter call:
-            // the explosion's source is the projectile itself. One load while JIP is not
-            // installed.
-            let source = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
-                e.site(0x009c_35f7, &[this.addr()])
-            } else {
-                None
-            };
-            match source {
-                Some(source) => source,
-                None => e.call(GET_SHOOTER, &args![this]).u32(),
-            }
+            // 009c35f7: the shooter call.
+            e.call(GET_SHOOTER, &args![this]).u32()
         };
         let base = e.call(GET_BASE_OBJECT, &args![this]).u32();
         let form = e.call(0x004f_d3c0, &args![base]).u32();
@@ -6103,8 +6060,6 @@ pub fn fn_009c39e0(e: &mut Engine, this: Ptr<Projectile>) -> bool {
     let radius_squared = (radius as f64 * radius as f64) as f32;
     let mut candidate = 0u32;
     let mut triggered = false;
-    // G127's roll triggered the mine (JIP jumps past the flag test).
-    let mut rolled = false;
     let mut owner_actor = 0u32;
     let mut faction = 0u32;
     let shooter = e.get(this, Projectile::pShooter);
@@ -6141,27 +6096,11 @@ pub fn fn_009c39e0(e: &mut Engine, this: Ptr<Projectile>) -> bool {
         if (radius_squared as f64) > distance as f64
             && projectile_get_mine_reacts_to_target(e, this, actor, owner_actor, faction)
         {
-            // 009c3bd6: JIP's G127 (a fix) rolls the actor's explode chance (entry point 4);
-            // the seam answers 1 to explode (straight on at 009c3cfa, past the flag test) or 0
-            // for the next actor (words: the mine, the actor). One load while JIP is not
-            // installed.
-            let jip = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
-                e.site(0x009c_3bd6, &[this.addr(), actor])
-            } else {
-                None
-            };
-            match jip {
-                Some(explode) if explode & 0xff == 0 => continue,
-                Some(_) => {
-                    rolled = true;
-                    triggered = true;
-                }
-                None => triggered = true,
-            }
+            triggered = true;
             break;
         }
     }
-    if !rolled && !test_flags(e, this, 0x4000) && !triggered {
+    if !test_flags(e, this, 0x4000) && !triggered {
         candidate = e.global(PLAYER);
         let distance = squared_distance_to(e, this, candidate);
         let player: u32 = e.global(PLAYER);
@@ -6883,31 +6822,12 @@ mod tests {
         assert_eq!(calls(&e, 0x0052_5b20), vec![vec![weapon, 0, 0, 0]]);
     }
 
-    thread_local! {
-        static G117_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
-        static G117_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
-    }
-
-    fn at_g117(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        G117_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
-        G117_ANSWER.with(|c| c.get())
-    }
-
     /// The launch constructor with a 30-damage weapon, an actor shooter whose held item has mod
     /// effect 0xC active (`004b_da70` answers `split`), its modified damage 24, a projectile count
-    /// of 3 from `0052_5b20` and the mod scale 1.5; G117's seam answered `answer` under `word`.
-    /// Answers the projectile, the shooter, the weapon, the seam's words and the engine.
-    fn g117_run(
-        word: u32,
-        answer: Option<u32>,
-        split: bool,
-    ) -> (Ptr<Projectile>, u32, u32, Vec<Vec<u32>>, Engine) {
-        use engine_core::extend::{Owner, SiteSlot};
+    /// of 3 from `0052_5b20` and the mod scale 1.5. Answers the projectile, the shooter, the
+    /// weapon and the engine.
+    fn split_beam_run(split: bool) -> (Ptr<Projectile>, u32, u32, Engine) {
         let mut e = engine();
-        e.on_site(SiteSlot::new(Owner::Jip, 0x009b_c241), at_g117);
-        G117_ASKED.with(|s| s.borrow_mut().clear());
-        G117_ANSWER.with(|c| c.set(answer));
-        e.set_jip_patches(word);
         e.set_global(MOD_DAMAGE_SCALE, 1.5f64);
         let this = projectile(&mut e);
         let weapon = e.mem.alloc(0x200);
@@ -6940,105 +6860,19 @@ mod tests {
             0.5,
             0.25,
         );
-        let asked = G117_ASKED.with(|s| s.take());
-        (this, shooter, weapon, asked, e)
+        (this, shooter, weapon, e)
     }
 
-    /// JIP's G117 seam at `0x9BC241`: not asked while JIP is not installed (word 0) or installed
-    /// without its fixes (INSTALLED only); the exe's count, division and mod scale run.
+    /// `0x9BC241`: the exe's count, division and mod scale run (24 / 3 * 1.5 with the mod, 24 / 3
+    /// without).
     #[test]
-    fn g117_seam_not_asked_without_jips_fixes() {
-        use engine_core::extend::jip_patches;
-        for word in [0, jip_patches::INSTALLED] {
-            let (this, shooter, weapon, asked, e) = g117_run(word, Some(0), true);
-            assert!(asked.is_empty());
-            assert_eq!(calls(&e, 0x0052_5b20), vec![vec![weapon, 1, 0, shooter]]);
-            // 24 / 3 * 1.5.
-            assert_eq!(e.get(this, Projectile::fDamage), 12.0);
-        }
-    }
-
-    /// With JIP's fixes the seam is asked with the projectile, the weapon argument, the actor
-    /// shooter and the mod-0xC flag; an answer replaces the exe's block (no count call, the
-    /// damage left as the handler leaves it), no answer lets it run.
-    #[test]
-    fn g117_seam_replaces_the_count_block_when_answered() {
-        use engine_core::extend::jip_patches;
-        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
-        for split in [false, true] {
-            let (this, shooter, weapon, asked, e) = g117_run(fixes, Some(0), split);
-            assert_eq!(
-                asked,
-                vec![vec![this.addr(), weapon, shooter, u32::from(split)]]
-            );
-            assert!(calls(&e, 0x0052_5b20).is_empty());
-            assert_eq!(e.get(this, Projectile::fDamage), 24.0);
-        }
-        let (this, shooter, weapon, asked, e) = g117_run(fixes, None, false);
-        assert_eq!(asked.len(), 1);
+    fn the_launch_divides_the_damage_and_scales_a_split_beam() {
+        let (this, shooter, weapon, e) = split_beam_run(true);
+        assert_eq!(calls(&e, 0x0052_5b20), vec![vec![weapon, 1, 0, shooter]]);
+        assert_eq!(e.get(this, Projectile::fDamage), 12.0);
+        let (this, shooter, weapon, e) = split_beam_run(false);
         assert_eq!(calls(&e, 0x0052_5b20), vec![vec![weapon, 0, 0, shooter]]);
         assert_eq!(e.get(this, Projectile::fDamage), 8.0);
-    }
-
-    /// `009bbef0` with JIP's real G117 handler (installed, row on): a split-beam shot of a weapon
-    /// with count 3 and a split-beam mod of 2.0 records its ammo, the flag and 5, and its damage
-    /// (24) becomes 24 x 1.3 / 5 in JIP's float order; the exe's count is not asked.
-    #[test]
-    fn g117_real_handler_records_the_shot() {
-        use engine_core::extend::jip_patches;
-        let mut e = engine();
-        // `CreateFileA`'s import slot (the settings file): "no file", so JIP's defaults.
-        e.register(0x00fd_f088, |_, _| Ret {
-            eax: 0xffff_ffff,
-            ..Ret::default()
-        });
-        // `TESTopic::GetOwnerTopic`, which 3.9a's fix wraps with the row on.
-        e.register(0x0061_a310, |_, _| Ret::default());
-        jip::test_support::install_into(&mut e);
-        jip::game_patches::set_row(&mut e, true);
-        assert_ne!(e.jip_patches() & jip_patches::FIXES, 0);
-        e.mem.set_f32(0x0102_2004, 1.3);
-        let this = projectile(&mut e);
-        let weapon = e.mem.alloc(0x388);
-        let component = object(&mut e, 0x10);
-        e.mem.set_u32(weapon + 0x9C, e.mem.u32(component));
-        stub(&mut e, 0x7E00_0020, 30);
-        set_slot(&mut e, weapon + 0x9C, 0x10, 0x7E00_0020);
-        let ammo = e.mem.alloc(0xdc);
-        e.mem.set_u32(weapon + 0xa8, ammo);
-        e.mem.set_u8(weapon + 0x11e, 3);
-        e.mem.set_u32(weapon + 0x180, 0xc);
-        e.mem.set_f32(weapon + 0x18c, 2.0);
-        let shooter = actor(&mut e);
-        let process = object(&mut e, 0x200);
-        e.mem.set_u32(shooter + 0x68, process);
-        e.mem.set_u8(process + 0x28, 3);
-        stub(&mut e, 0x008d_8520, process);
-        let item = e.mem.alloc(0x20);
-        stub(&mut e, 0x7E00_0030, item);
-        set_slot(&mut e, process, 0x148, 0x7E00_0030);
-        stub_float(&mut e, 0x004b_cdb0, 50.0);
-        stub(&mut e, 0x0048_73d0, 100);
-        stub_float(&mut e, 0x004b_df00, 24.0);
-        stub(&mut e, 0x004b_da70, 1);
-        stub(&mut e, 0x0052_5b20, 3);
-        fn_009bbef0(
-            &mut e,
-            this,
-            Ptr::new(0x5555),
-            shooter,
-            weapon,
-            0,
-            0,
-            0,
-            0.0,
-            0.0,
-        );
-        assert!(calls(&e, 0x0052_5b20).is_empty());
-        assert_eq!(e.mem.u32(this.addr() + 0x60), ammo);
-        assert_eq!(e.mem.u8(this.addr() + 0x149), 1);
-        assert_eq!(e.mem.u8(this.addr() + 0x14a), 5);
-        assert_eq!(e.get(this, Projectile::fDamage), 24.0f32 * 1.3f32 / 5.0);
     }
 
     #[test]
@@ -7988,58 +7822,22 @@ mod tests {
         assert_eq!(calls(&e, 0x009a_c9c0).len(), 1);
     }
 
-    thread_local! {
-        static G27_ASKED: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
-        static G27_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
-    }
-
-    fn at_g27(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        G27_ASKED.with(|s| s.borrow_mut().push(a[0]));
-        G27_ANSWER.with(|c| c.get())
-    }
-
-    /// JIP's G27 seam at `0x9C35F7` (a fix): the explosion's source. Not asked without the
-    /// FIXES bit or with flag 0x400 (source 0); asked with the projectile otherwise, its answer
-    /// replacing the shooter, no answer leaving the shooter.
+    /// `0x9C35F7`: the explosion's source is the shooter, or 0 with flag 0x400.
     #[test]
-    fn g27_seam_makes_the_projectile_the_source() {
-        use engine_core::extend::{jip_patches, Owner, SiteSlot};
-        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+    fn the_explosions_source_is_the_shooter() {
         let mut e = engine();
-        e.on_site(SiteSlot::new(Owner::Jip, 0x009c_35f7), at_g27);
         let this = projectile(&mut e);
         stub(&mut e, 0x004f_d360, 1);
         stub(&mut e, 0x004f_d3c0, 0x8800);
         stub(&mut e, 0x008d_6f30, 0x5000);
         give_position(&mut e, this.addr(), 0x7E00_0050);
         e.set(this, Projectile::pShooter, 0x3333);
-        for (word, flags, answer, asked, source) in [
-            (0, 0x100000, Some(this.addr()), false, 0x3333),
-            (
-                jip_patches::INSTALLED,
-                0x100000,
-                Some(this.addr()),
-                false,
-                0x3333,
-            ),
-            (fixes, 0x100000, Some(this.addr()), true, this.addr()),
-            (fixes, 0x100000, None, true, 0x3333),
-            (fixes, 0x100400, Some(this.addr()), false, 0),
-        ] {
-            e.set_jip_patches(word);
-            G27_ASKED.with(|s| s.borrow_mut().clear());
-            G27_ANSWER.with(|c| c.set(answer));
+        for (flags, source) in [(0x100000, 0x3333), (0x100400, 0)] {
             e.set(this, Projectile::iFlags, flags);
             e.call_log = Some(vec![]);
             projectile_check_explosion(&mut e, this, 0.1);
             let made = calls(&e, 0x009a_c9c0);
-            assert_eq!(
-                made[0][..4],
-                [0x8800, source, 0, 0x5000],
-                "{word:x} {flags:x}"
-            );
-            let seen = G27_ASKED.with(|s| s.take());
-            assert_eq!(seen, if asked { vec![this.addr()] } else { vec![] });
+            assert_eq!(made[0][..4], [0x8800, source, 0, 0x5000], "{flags:x}");
         }
     }
 
@@ -8067,16 +7865,6 @@ mod tests {
         ));
     }
 
-    thread_local! {
-        static G127_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
-        static G127_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
-    }
-
-    fn at_g127(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        G127_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
-        G127_ANSWER.with(|c| c.get())
-    }
-
     /// A mine with two actors in range that it reacts to (the process list's 0 and 1), the
     /// explosion timer setting 6.0; `flag_4000` answers the 0x4000 test (the player's roll
     /// skipped).
@@ -8099,102 +7887,22 @@ mod tests {
         (this, first, second)
     }
 
-    /// JIP's G127 seam at `0x9C3BD6` (a fix), asked once the mine reacts to an actor in range:
-    /// not asked without the FIXES bit (the first actor triggers it); asked with the mine and
-    /// the actor; an answer's low byte 1 triggers on that actor and goes straight to the timer
-    /// (no 0x4000 test, JIP's `jmp 0x9C3CFA`), 0 goes on to the next actor; no answer is the
-    /// exe's trigger.
+    /// `0x9C3BD6`: the first actor in range the mine reacts to triggers it (the 0x4000 test made
+    /// once, the timer set from the setting).
     #[test]
-    fn g127_seam_rolls_each_reacting_actor() {
-        use engine_core::extend::{jip_patches, Owner, SiteSlot};
-        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
-        // (word, answer, the 0x4000 answer, triggered, asked for both, flag tests)
-        for (word, answer, flag_4000, triggered, both, tests) in [
-            (0, Some(0), 1u32, true, false, 1usize),
-            (jip_patches::INSTALLED, Some(0), 1, true, false, 1),
-            (fixes, Some(1), 0, true, false, 0),
-            (fixes, Some(0x101), 0, true, false, 0),
-            (fixes, Some(0), 1, false, true, 1),
-            (fixes, Some(0x100), 1, false, true, 1),
-            (fixes, None, 0, true, false, 1),
-        ] {
-            let mut e = engine();
-            e.on_site(SiteSlot::new(Owner::Jip, 0x009c_3bd6), at_g127);
-            let (this, first, second) = mine_world(&mut e, flag_4000);
-            e.set_jip_patches(word);
-            G127_ASKED.with(|s| s.borrow_mut().clear());
-            G127_ANSWER.with(|c| c.set(answer));
-            assert_eq!(fn_009c39e0(&mut e, this), triggered, "{word:x} {answer:?}");
-            let seen = G127_ASKED.with(|s| s.take());
-            let expected = match (word & jip_patches::FIXES != 0, both) {
-                (false, _) => vec![],
-                (true, false) => vec![vec![this.addr(), first]],
-                (true, true) => vec![vec![this.addr(), first], vec![this.addr(), second]],
-            };
-            assert_eq!(seen, expected, "{word:x} {answer:?}");
-            assert_eq!(calls(&e, TEST_FLAGS).len(), tests, "{word:x} {answer:?}");
-            let timer = if triggered { 6.0 } else { 0.0 };
-            assert_eq!(e.get(this, Projectile::fExplosionTimer), timer);
-        }
-    }
-
-    thread_local! {
-        /// G127's answer for each actor (else 0).
-        static G127_BY_ACTOR: std::cell::RefCell<Vec<(u32, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
-    }
-
-    fn at_g127_by_actor(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        G127_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
-        G127_BY_ACTOR.with(|s| {
-            let answer = s
-                .borrow()
-                .iter()
-                .find(|(actor, _)| *actor == a[1])
-                .map(|w| w.1);
-            Some(answer.unwrap_or(0))
-        })
-    }
-
-    /// G127: the first actor fails the roll, the second (a creature, slot 0x218) passes: both
-    /// asked, the mine triggered, no 0x4000 test, and the creature timer taken from the second
-    /// (`actor value 0x23` of its `+0xA4` x `00644790(base)` / the double at `01017a40` + the
-    /// setting: 10 x 2 / 4 + 6 = 11).
-    #[test]
-    fn g127_seam_the_actor_that_passes_sets_the_timer() {
-        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+    fn the_first_reacting_actor_triggers_the_mine() {
         let mut e = engine();
-        e.on_site(SiteSlot::new(Owner::Jip, 0x009c_3bd6), at_g127_by_actor);
-        let (this, first, second) = mine_world(&mut e, 0);
-        e.set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
-        set_slot(&mut e, second, 0x218, RETURNS_TRUE);
-        stub_float(&mut e, 0x0064_4790, 2.0);
-        e.register_double(0x0066_ef20, move |_, a| {
-            assert_eq!(a, &[second + 0xa4, 0x23]);
-            10u32.into_ret()
-        });
-        e.set_global(0x0101_7a40, 4.0f64);
-        G127_ASKED.with(|s| s.borrow_mut().clear());
-        G127_BY_ACTOR.with(|s| *s.borrow_mut() = vec![(first, 0), (second, 1)]);
+        let (this, _, _) = mine_world(&mut e, 1);
         assert!(fn_009c39e0(&mut e, this));
-        assert_eq!(
-            G127_ASKED.with(|s| s.take()),
-            vec![vec![this.addr(), first], vec![this.addr(), second]]
-        );
-        assert!(calls(&e, TEST_FLAGS).is_empty());
-        assert_eq!(calls(&e, 0x0066_ef20).len(), 1);
-        assert_eq!(e.get(this, Projectile::fExplosionTimer), 11.0);
+        assert_eq!(calls(&e, TEST_FLAGS).len(), 1);
+        assert_eq!(e.get(this, Projectile::fExplosionTimer), 6.0);
     }
 
-    /// G127's seam is asked only for an actor in range that the mine reacts to.
+    /// Only an actor in range that the mine reacts to triggers it.
     #[test]
-    fn g127_seam_not_asked_out_of_range_or_unreacting() {
-        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+    fn the_mine_ignores_actors_out_of_range_or_unreacting() {
         let mut e = engine();
-        e.on_site(SiteSlot::new(Owner::Jip, 0x009c_3bd6), at_g127);
         let (this, first, _) = mine_world(&mut e, 1);
-        e.set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
-        G127_ASKED.with(|s| s.borrow_mut().clear());
-        G127_ANSWER.with(|c| c.set(Some(1)));
         stub_float(&mut e, 0x004a_7290, 200.0);
         assert!(!fn_009c39e0(&mut e, this));
         // In range, but both actors are the mine's own shooter's kind it ignores: the shooter.
@@ -8202,7 +7910,6 @@ mod tests {
         e.set(this, Projectile::pShooter, first);
         stub(&mut e, 0x0096_8670, first);
         assert!(!fn_009c39e0(&mut e, this));
-        assert_eq!(G127_ASKED.with(|s| s.take()), Vec::<Vec<u32>>::new());
     }
 
     // The functions below are doubled in `CALLEES` for the earlier tests, so
@@ -8236,138 +7943,31 @@ mod tests {
         assert!(calls(&e, GEN_DYNAMIC).is_empty());
     }
 
-    thread_local! {
-        static G95_ASKED: std::cell::RefCell<Vec<(u32, Vec<u32>)>> = const { std::cell::RefCell::new(Vec::new()) };
-        static G95_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
-    }
-
-    fn at_g95_add(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        G95_ASKED.with(|s| s.borrow_mut().push((0x009b_dc92, a.to_vec())));
-        G95_ANSWER.with(|c| c.get())
-    }
-
-    fn at_g95_remove(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        G95_ASKED.with(|s| s.borrow_mut().push((0x009b_c6d9, a.to_vec())));
-        G95_ANSWER.with(|c| c.get())
-    }
-
-    /// JIP LN NVSE's G95 seams at `0x9BDC92` and `0x9BC6D9`: not asked while JIP is not installed or installed
-    /// without its fixes (the game's light maker and remover run, by address); with its fixes asked with the
-    /// projectile, an answer taking the call's place and no answer letting the game's call run.
+    /// The game's own projectile start (`009bda10`) calls the light maker `009c3d90` at
+    /// `0x9BDC92` once, with the projectile.
     #[test]
-    fn g95_seams_replace_the_light_calls_only_with_jips_fixes() {
-        use engine_core::extend::jip_patches;
-        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
-        for (word, answer, asked, called) in [
-            (0, Some(0), false, true),
-            (jip_patches::INSTALLED, Some(0), false, true),
-            (fixes, Some(0), true, false),
-            (fixes, None, true, true),
-        ] {
-            let mut e = engine();
-            e.on_site_for_test(0x009b_dc92, at_g95_add);
-            e.on_site_for_test(0x009b_c6d9, at_g95_remove);
-            G95_ASKED.with(|s| s.borrow_mut().clear());
-            G95_ANSWER.with(|c| c.set(answer));
-            e.set_jip_patches(word);
-            let this = projectile(&mut e);
-            make_light(&mut e, this);
-            remove_light(&mut e, this);
-            let want: Vec<(u32, Vec<u32>)> = if asked {
-                vec![
-                    (0x009b_dc92, vec![this.addr()]),
-                    (0x009b_c6d9, vec![this.addr()]),
-                ]
-            } else {
-                vec![]
-            };
-            assert_eq!(G95_ASKED.with(|s| s.take()), want, "{word:x} {answer:?}");
-            let made = calls(&e, 0x009c_3d90);
-            let removed = calls(&e, 0x009c_3e10);
-            if called {
-                assert_eq!(made, vec![vec![this.addr()]], "{word:x} {answer:?}");
-                assert_eq!(removed, vec![vec![this.addr()]], "{word:x} {answer:?}");
-            } else {
-                assert!(made.is_empty() && removed.is_empty(), "{word:x}");
-            }
-        }
+    fn the_projectiles_start_makes_its_light() {
+        let mut e = engine();
+        let this = projectile(&mut e);
+        stub(&mut e, 0x0042_ce10, 1);
+        stub(&mut e, 0x004f_d400, 0x9999);
+        stub(&mut e, 0x008d_7510, 0x1234);
+        stub_float(&mut e, 0x009a_7c40, 500.0);
+        stub_float(&mut e, 0x0064_4790, 7.0);
+        fn_009bda10(&mut e, this);
+        assert_eq!(calls(&e, 0x009c_3d90), vec![vec![this.addr()]]);
     }
 
-    /// The four cases of the G95 seams' tests: the JIP word, the handler's answer, whether the seam is asked and
-    /// whether the game's own call behind it runs.
-    fn g95_cases() -> [(u32, Option<u32>, bool, bool); 4] {
-        use engine_core::extend::jip_patches;
-        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
-        [
-            (0, Some(0), false, true),
-            (jip_patches::INSTALLED, Some(0), false, true),
-            (fixes, Some(0), true, false),
-            (fixes, None, true, true),
-        ]
-    }
-
-    /// The game's own projectile start (`009bda10`) reaches the G95 add seam at `0x9BDC92`: with JIP's fixes and
-    /// an answer, the game's light maker `009c3d90` is not called; otherwise it is, once, with the projectile.
+    /// The game's own projectile destructor (`009bc470`) calls the light remover `009c3e10` at
+    /// `0x9BC6D9` once, with the projectile.
     #[test]
-    fn g95_the_projectiles_start_asks_the_add_seam() {
-        for (word, answer, asked, called) in g95_cases() {
-            let mut e = engine();
-            e.on_site_for_test(0x009b_dc92, at_g95_add);
-            e.on_site_for_test(0x009b_c6d9, at_g95_remove);
-            G95_ASKED.with(|s| s.borrow_mut().clear());
-            G95_ANSWER.with(|c| c.set(answer));
-            e.set_jip_patches(word);
-            let this = projectile(&mut e);
-            stub(&mut e, 0x0042_ce10, 1);
-            stub(&mut e, 0x004f_d400, 0x9999);
-            stub(&mut e, 0x008d_7510, 0x1234);
-            stub_float(&mut e, 0x009a_7c40, 500.0);
-            stub_float(&mut e, 0x0064_4790, 7.0);
-            fn_009bda10(&mut e, this);
-            let want = if asked {
-                vec![(0x009b_dc92, vec![this.addr()])]
-            } else {
-                vec![]
-            };
-            assert_eq!(G95_ASKED.with(|s| s.take()), want, "{word:x} {answer:?}");
-            let made = calls(&e, 0x009c_3d90);
-            if called {
-                assert_eq!(made, vec![vec![this.addr()]], "{word:x} {answer:?}");
-            } else {
-                assert!(made.is_empty(), "{word:x}");
-            }
-        }
-    }
-
-    /// The game's own projectile destructor (`009bc470`) reaches the G95 remove seam at `0x9BC6D9`: with JIP's
-    /// fixes and an answer, the game's light remover `009c3e10` is not called (JIP's light leaves its node through
-    /// the seam); otherwise it is, once, with the projectile.
-    #[test]
-    fn g95_the_projectiles_destructor_asks_the_remove_seam() {
-        for (word, answer, asked, called) in g95_cases() {
-            let mut e = engine();
-            quiet_destructor_callees(&mut e);
-            e.on_site_for_test(0x009b_dc92, at_g95_add);
-            e.on_site_for_test(0x009b_c6d9, at_g95_remove);
-            G95_ASKED.with(|s| s.borrow_mut().clear());
-            G95_ANSWER.with(|c| c.set(answer));
-            e.set_jip_patches(word);
-            let this = projectile(&mut e);
-            stub(&mut e, GET_BASE_OBJECT, 0x6000);
-            fn_009bc470(&mut e, this);
-            let want = if asked {
-                vec![(0x009b_c6d9, vec![this.addr()])]
-            } else {
-                vec![]
-            };
-            assert_eq!(G95_ASKED.with(|s| s.take()), want, "{word:x} {answer:?}");
-            let removed = calls(&e, 0x009c_3e10);
-            if called {
-                assert_eq!(removed, vec![vec![this.addr()]], "{word:x} {answer:?}");
-            } else {
-                assert!(removed.is_empty(), "{word:x}");
-            }
-        }
+    fn the_projectiles_destructor_removes_its_light() {
+        let mut e = engine();
+        quiet_destructor_callees(&mut e);
+        let this = projectile(&mut e);
+        stub(&mut e, GET_BASE_OBJECT, 0x6000);
+        fn_009bc470(&mut e, this);
+        assert_eq!(calls(&e, 0x009c_3e10), vec![vec![this.addr()]]);
     }
 
     #[test]

@@ -1414,23 +1414,17 @@ fn update_health_heartbeat(e: &mut Engine, this: Ptr<PlayerCharacter>, before: f
 }
 
 /// The part shared by `0093b3a0` and `0093b7a0`: `before` is the health
-/// fraction before the change (1.0 for other actor values); `old`, when
-/// given, is the value before the change already read (`0093b7a0` with JIP's G105).
-#[allow(clippy::too_many_arguments)]
+/// fraction before the change (1.0 for other actor values).
 fn apply_health_change(
     e: &mut Engine,
     this: Ptr<PlayerCharacter>,
     actor_value: u32,
     before: f32,
-    old: Option<f32>,
     delta: f32,
     lost: bool,
     source: Ptr,
 ) {
-    let old = match old {
-        Some(old) => old,
-        None => owner_actor_value_or_zero(e, this, actor_value),
-    };
+    let old = owner_actor_value_or_zero(e, this, actor_value);
     let flagged = e.call(0x0040_6d70, &args![actor_value, 0x200u32]).bool() as u32;
     e.call(0x0094_c4f0, &args![this, 2u32, actor_value, delta, flagged]);
     e.call(0x0070_4e10, &args![actor_value]);
@@ -1479,7 +1473,6 @@ pub fn fn_0093b3a0(
         this,
         actor_value,
         before,
-        None,
         delta as f32,
         delta < 0,
         source,
@@ -1524,54 +1517,19 @@ pub fn fn_0093b7a0(
     } else {
         1.0
     };
-    let mut delta = e
+    let delta = e
         .call(0x0088_0890, &args![this, actor_value, amount, source])
         .f32();
-    // JIP LN NVSE's G105 at `0x0093B87F` (`DamagePCFatigueMinFixHook`, a fix row): the value
-    // read before the change, then the seam with the actor value, that value and the change
-    // (`f32` bits); an answer is the change to make instead (fatigue stopped at
-    // `fMinFatigue`). JIP's hook makes the exe's read itself, so the seam sits after it. One
-    // load while the row is off: the read stays in `apply_health_change`.
-    let old = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
-        Some(read_then_fatigue_floor(e, this, actor_value, &mut delta))
-    } else {
-        None
-    };
     let zero: f64 = e.global(ZERO_DOUBLE);
     apply_health_change(
         e,
         this,
         actor_value,
         before,
-        old,
         delta,
         (delta as f64) < zero,
         source,
     );
-}
-
-/// [`owner_actor_value_or_zero`] with JIP's G105 seam (`0x0093B87F`) after the read, inside the
-/// branch that reads (JIP's jump is there): an answer replaces `delta`.
-fn read_then_fatigue_floor(
-    e: &mut Engine,
-    this: Ptr<PlayerCharacter>,
-    actor_value: u32,
-    delta: &mut f32,
-) -> f32 {
-    if !e.call(0x0066_ee10, &args![actor_value]).bool() {
-        return 0.0;
-    }
-    let old = e
-        .vcall(
-            this.addr() + ACTOR_VALUE_OWNER_BASE,
-            0xc,
-            &args![actor_value],
-        )
-        .f32();
-    if let Some(bits) = e.site(0x0093_b87f, &[actor_value, old.to_bits(), delta.to_bits()]) {
-        *delta = f32::from_bits(bits);
-    }
-    old
 }
 
 /// `TESDataHandler` singleton pointer (`011c3f2c`).
@@ -4468,21 +4426,10 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             (ammo_timer as f64 + delta as f64) as f32,
         );
         if e.call(0x00a2_4660, &args![main_state, 0x12u32, 1u32]).u32() != 0 {
-            // Seam (JIP LN NVSE's InitRockItLauncher, `PCAmmoSwitchHook` jumped to from
-            // `0x940998` in place of the weapon entry test): no words; an answer of 1 skips the
-            // ammo switch (the HUD's weapon is JIP's Rock-It Launcher), 0 goes on without the
-            // test. Asked only while JIP is installed.
-            let jip_skip = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
-                e.site(0x0094_0998, &[])
-            } else {
-                None
-            };
-            let has_weapon = match jip_skip {
-                Some(skip) => skip == 0,
-                None => {
-                    let process = process_of(e, this);
-                    e.vcall(process, 0x148, &args![]).u32() != 0
-                }
+            // `0x940998`: the weapon entry test.
+            let has_weapon = {
+                let process = process_of(e, this);
+                e.vcall(process, 0x148, &args![]).u32() != 0
             };
             if has_weapon && e.call(0x008a_16d0, &args![this]).bool() {
                 let first = e.call(0x0071_7a40, &args![1u32, 0u32]).i32();
@@ -5733,14 +5680,8 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                 e.call(0x009c_a1f0, &args![VATS_OBJECT]);
             }
         }
-        // Seam (JIP MiniMap's `UpdateCellsSeenBitsHook`, written over this call at 0x9438F6 by
-        // `InitMiniMap`): no words; an answer means JIP's own update ran in place of the game's.
-        // Asked only while JIP is installed.
-        let jip_seen_bits = e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
-            && e.site(0x0094_38f6, &[]).is_some();
-        if !jip_seen_bits {
-            e.call(0x0055_5c20, &args![]);
-        }
+        // `0x9438F6`: the cells' seen bits.
+        e.call(0x0055_5c20, &args![]);
         // ---- 009438fb: tracked cell, level up, combat updates ----
         let tracked_cell = e.global::<u32>(TRACKED_CELL_011E0BB0);
         if tracked_cell == 0 || tracked_cell != e.call(0x008d_6f30, &args![this]).u32() {
@@ -6019,18 +5960,6 @@ fn new_list(e: &mut Engine) -> u32 {
         e.call(LIST_CONSTRUCT, &args![block]).u32()
     } else {
         0
-    }
-}
-
-/// The store of `bMenuModeButtonClicked` at `0x939258` (`MOV byte ptr [ECX+0xD54], 0`). JIP LN
-/// NVSE's G49 (JIP's own; `SafeWrite32(0x939258, 0xD54A183)`, making it `AND dword ptr
-/// [ECX+0xD54], 0`) clears the three bytes after it too, among them the state byte of its sneak
-/// shape (O14, `+0xD57`): the seam is asked with the player after the exe's store. With the
-/// word's `INSTALLED` bit clear: one load, nothing asked.
-#[inline]
-fn menu_mode_byte_seam(e: &mut Engine, this: Ptr<PlayerCharacter>) {
-    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
-        e.site(0x0093_9258, &[this.addr()]);
     }
 }
 
@@ -6498,8 +6427,8 @@ pub fn player_character_construct(
         e.set(this, PlayerCharacter::iNumberofPickpocketWarnings, 0);
         e.set(this, PlayerCharacter::fPickPocketWarningTimer, timer);
         e.set(this, PlayerCharacter::pListofPercievedActors, Ptr::NULL);
+        // `0x939258`: `MOV byte ptr [ECX+0xD54], 0`.
         e.set(this, PlayerCharacter::bMenuModeButtonClicked, false);
-        menu_mode_byte_seam(e, this);
         e.set(this, PlayerCharacter::fMenuModeButtonTimer, 0.0);
         e.set(this, PlayerCharacter::fAmmoSwapButtonTimer, 0.0);
         e.set(this, PlayerCharacter::pIronsightsDOFInstance, Ptr::NULL);
@@ -7311,18 +7240,8 @@ pub fn player_character_ammo_swap_helper(
     if first_entry == 0 {
         return;
     }
-    // Seam (JIP LN NVSE's InitRockItLauncher, `RILAmmoFixHook` jumped to from `0x946310` in place
-    // of the second slot `0x148` call): words: the entry the first call gave; an answer is the
-    // entry used (0 for JIP's Rock-It Launcher: no ammo swap). Asked only while JIP is installed.
-    let jip_entry = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
-        e.site(0x0094_6310, &[first_entry])
-    } else {
-        None
-    };
-    let equipped = match jip_entry {
-        Some(entry) => entry,
-        None => e.vcall(process, 0x148, &args![]).u32(),
-    };
+    // `0x946310`: the second slot `0x148` call.
+    let equipped = e.vcall(process, 0x148, &args![]).u32();
     let weapon = if equipped != 0 {
         typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, equipped))
     } else {
@@ -7616,14 +7535,8 @@ pub fn fn_00947d80(e: &mut Engine, this: Ptr<PlayerCharacter>) {
         }
         list
     };
-    // JIP LN NVSE's G72 at `0x00947DD2` (`BuildMusicMarkerListHook`, a fix row), in the world
-    // space's branch only: the seam with the world space and its list; an answer means JIP's
-    // cache filled the player's list and the loop is skipped (JIP goes on at `0x947E79`, the
-    // list's release). One load while the row is off.
-    let jip_filled = e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
-        && world_space != 0
-        && e.site(0x0094_7dd2, &[world_space, list]).is_some();
-    let mut node = if jip_filled { 0 } else { list };
+    // `0x947DD2`: the list's loop.
+    let mut node = list;
     while node != 0 {
         let slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
         let reference = e.mem.u32(slot);
@@ -8540,14 +8453,8 @@ fn apply_look_input(
         pitch = 0;
         zoom = 0;
     }
-    // Seam (JIP's ToggleVanityWheel, `SafeWrite8(0x945A29, ..)`: the zoom test's `JNP` at
-    // `0x945A28` made a `JNS`, always taken, while the wheel is off): no words; an answer of 1
-    // skips the zoom block as if no zoom were read. Asked only while JIP is installed.
-    let wheel_off = zoom != 0
-        && e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
-        && e.site(0x0094_5a28, &[])
-            .is_some_and(|answer| answer & 0xff != 0);
-    if zoom != 0 && !wheel_off && e.call(0x0096_7ae0, &args![this]).u8() == 0 {
+    // `0x945A28`: the zoom test.
+    if zoom != 0 && e.call(0x0096_7ae0, &args![this]).u8() == 0 {
         if e.mem.u8(FREE_CAMERA_FLAG) == 0 {
             result = 1;
         }
@@ -9309,20 +9216,11 @@ const DEAD_ZONE_DOUBLE: u32 = 0x0107_18f0;
 
 /// Zeroes `value` when `|value|` (`00408820`, taking the integer as a float)
 /// is not above the dead zone 7849.0 (the double at `010718f0`).
-///
-/// JIP LN NVSE's D04 (group GB's rows and handlers): `site` is the patched `FCOMP`'s operand
-/// (`0x94A93C`, `0x94A95F` the look axes, `0x94AB59`, `0x94AB88` the move axes); with
-/// `INSTALLED` (all four, GB's rows) the seam (no arguments) may answer the guest address of
-/// the double to compare with (JIP's dead zones), else the exe's. One load while JIP is not
-/// installed.
-fn ufo_dead_zone(e: &mut Engine, value: i32, site: u32) -> i32 {
+/// The `FCOMP`s at `0x94A93C`, `0x94A95F` (the look axes), `0x94AB59` and `0x94AB88` (the move
+/// axes).
+fn ufo_dead_zone(e: &mut Engine, value: i32) -> i32 {
     let size = e.call(0x0040_8820, &args![value as f32]).f64();
-    let at = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
-        e.site(site, &[]).unwrap_or(DEAD_ZONE_DOUBLE)
-    } else {
-        DEAD_ZONE_DOUBLE
-    };
-    if size <= e.global::<f64>(at) {
+    if size <= e.global::<f64>(DEAD_ZONE_DOUBLE) {
         0
     } else {
         value
@@ -9363,8 +9261,8 @@ fn ufo_camera_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, frame: u32) {
     if e.call(0x004b_71d0, &args![]).u8() != 0 {
         look_x = e.call(0x00a2_3390, &args![input, 0u32, 9u32]).i32();
         look_y = e.call(0x00a2_3390, &args![input, 0u32, 0xau32]).i32();
-        look_x = ufo_dead_zone(e, look_x, 0x0094_a93c);
-        look_y = ufo_dead_zone(e, look_y, 0x0094_a95f);
+        look_x = ufo_dead_zone(e, look_x);
+        look_y = ufo_dead_zone(e, look_y);
     } else {
         look_x = e.call(0x00a2_39e0, &args![input, 1u32]).i32();
         look_y = e.call(0x00a2_39e0, &args![input, 2u32]).i32();
@@ -9424,10 +9322,10 @@ fn ufo_camera_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, frame: u32) {
     if e.call(0x004b_71d0, &args![]).u8() != 0 {
         let mut stick_x = e.call(0x00a2_3390, &args![input, 0u32, 7u32]).i32();
         let mut stick_y = e.call(0x00a2_3390, &args![input, 0u32, 8u32]).i32();
-        stick_x = ufo_dead_zone(e, stick_x, 0x0094_ab59);
+        stick_x = ufo_dead_zone(e, stick_x);
         let range = e.global::<f64>(0x0102_9790);
         let move_x = (stick_x as f64 / range) as f32;
-        stick_y = ufo_dead_zone(e, stick_y, 0x0094_ab88);
+        stick_y = ufo_dead_zone(e, stick_y);
         let move_y = (stick_y as f64 / range) as f32;
         let speed = e.global::<f64>(0x0101_5a38);
         let x = (move_x as f64 * speed + e.mem.f32(movement) as f64) as f32;
@@ -10808,14 +10706,8 @@ fn camera_distance_in_frame(
             )
             .u8()
             != 0;
-        // Seam (JIP's ToggleCameraCollision, `SafeWrite8(0x94A34E, ..)`: the `JZ` after the pick
-        // made a `JMP` while collision is off): no words, asked after the pick; an answer of 1
-        // leaves the camera's distance as if nothing were hit. Asked only while JIP is installed.
-        let collision_off = hit_something
-            && e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
-            && e.site(0x0094_a34e, &[])
-                .is_some_and(|answer| answer & 0xff != 0);
-        if hit_something && !collision_off {
+        // `0x94A34E`: the `JZ` after the pick.
+        if hit_something {
             e.call(0x0045_78c0, &args![pick_origin, pick_direction]);
             let hit = e.call(0x0045_7990, &args![pick_origin]).f64();
             if length as f64 - hit > e.global::<f64>(0x0101_1590) {
@@ -12777,43 +12669,16 @@ mod tests {
         (this, old.addr())
     }
 
-    /// JIP LN NVSE's G49 seam at `0x939258`: the constructor clears `bMenuModeButtonClicked` and
-    /// leaves the three bytes after it; with the word's `INSTALLED` bit the seam is asked with the
-    /// player after that store (a test handler clears the word as JIP's `AND dword` does); with
-    /// the word 0 or only `FIXES` it is not asked.
+    /// `0x939258`: the constructor clears `bMenuModeButtonClicked` and leaves the three bytes
+    /// after it.
     #[test]
-    fn g49_seam_after_the_menu_mode_byte() {
-        use engine_core::extend::{jip_patches, Owner, SiteSlot};
-        thread_local! {
-            static ASKED: std::cell::RefCell<Vec<(Vec<u32>, u8)>> = const { std::cell::RefCell::new(Vec::new()) };
-        }
-        fn handler(e: &mut Engine, a: &[u32]) -> Option<u32> {
-            ASKED.with(|s| s.borrow_mut().push((a.to_vec(), e.mem.u8(a[0] + 0xd54))));
-            e.mem.set_u32(a[0] + 0xd54, 0);
-            Some(0)
-        }
-        for (word, asked) in [
-            (0, false),
-            (jip_patches::FIXES, false),
-            (jip_patches::INSTALLED, true),
-        ] {
-            let mut e = engine();
-            let (this, _) = constructor_world(&mut e, 0x5000);
-            e.map(0x0000_5000, 0x1000);
-            e.on_site(SiteSlot::new(Owner::Jip, 0x0093_9258), handler);
-            e.set_jip_patches(word);
-            e.mem.set_u32(this.addr() + 0xd54, 0xffff_ffff);
-            ASKED.with(|s| s.borrow_mut().clear());
-            e.call(0x0093_8180, &args![this]);
-            let seen = ASKED.with(|s| s.take());
-            if asked {
-                assert_eq!(seen, vec![(vec![this.addr()], 0)], "after the store");
-                assert_eq!(e.mem.u32(this.addr() + 0xd54), 0);
-            } else {
-                assert!(seen.is_empty(), "{word:08x}");
-                assert_eq!(e.mem.u32(this.addr() + 0xd54), 0xffff_ff00, "{word:08x}");
-            }
-        }
+    fn the_constructor_clears_only_the_menu_mode_byte() {
+        let mut e = engine();
+        let (this, _) = constructor_world(&mut e, 0x5000);
+        e.map(0x0000_5000, 0x1000);
+        e.mem.set_u32(this.addr() + 0xd54, 0xffff_ffff);
+        e.call(0x0093_8180, &args![this]);
+        assert_eq!(e.mem.u32(this.addr() + 0xd54), 0xffff_ff00);
     }
 
     #[test]
@@ -13748,87 +13613,33 @@ mod tests {
         assert!(JIP_SEEN.with(|s| s.borrow().is_empty()), "not health");
     }
 
-    fn fatigue_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        JIP_SEEN.with(|s| s.borrow_mut().push((0x0093_b87f, a.to_vec())));
-        Some((-1.0f32).to_bits())
-    }
-
-    /// JIP LN NVSE's G105 seam (`0x0093B87F`, a fix row): with the word 0 or `INSTALLED` alone it
-    /// is not asked and the change is the exe's; with `FIXES` it is asked after the value's one
-    /// read, with the actor value, the value and the change, and its answer is the change
-    /// recorded; when `0066ee10` says the value is not read, not asked (JIP's jump is in the
-    /// reading branch).
+    /// `0x0093B87F`: the change recorded is the exe's, after the value's one read; when
+    /// `0066ee10` says the value is not read, it is not read.
     #[test]
-    fn fn_0093b7a0_jip_fatigue_floor_seam() {
-        use engine_core::extend::{jip_patches, Owner, SiteSlot};
-        let run = |word: u32, readable: bool| {
+    fn fn_0093b7a0_records_the_change_after_one_read() {
+        let run = |readable: bool| {
             let mut e = engine();
             let this = damage_world(&mut e, false, false, true);
             e.register_double(0x0066_ee10, move |_, _| int(u32::from(readable)));
             e.register_double(0x00b0_000c, |_, _| float(30.0));
             give_owner(&mut e, this, 0x0201_0000, &[(0xc, 0x00b0_000c)]);
-            e.on_site(SiteSlot::new(Owner::Jip, 0x0093_b87f), fatigue_handler);
-            e.set_jip_patches(word);
             e.call(0x0093_b7a0, &args![this, 0x16u32, 4.0f32, 0x6000u32]);
-            let seen = JIP_SEEN.with(|s| s.take());
             let record = f(&called(&e, 0x0094_c4f0)[0], 3);
             let reads = called(&e, 0x00b0_000c).len();
-            (seen, record, reads)
+            (record, reads)
         };
-        for word in [0, jip_patches::INSTALLED] {
-            let (seen, record, reads) = run(word, true);
-            assert!(seen.is_empty(), "{word:#x}");
-            assert_eq!((record, reads), (-2.5, 1));
-        }
-        let (seen, record, reads) = run(jip_patches::FIXES, true);
-        assert_eq!(
-            seen,
-            vec![(
-                0x0093_b87f,
-                vec![0x16, 30.0f32.to_bits(), (-2.5f32).to_bits()]
-            )]
-        );
-        assert_eq!((record, reads), (-1.0, 1), "one read; the answer recorded");
-        let (seen, record, reads) = run(jip_patches::FIXES, false);
-        assert!(seen.is_empty());
-        assert_eq!((record, reads), (-2.5, 0));
+        assert_eq!(run(true), (-2.5, 1));
+        assert_eq!(run(false), (-2.5, 0));
     }
 
-    /// JIP LN NVSE's PlayerMinHealth end to end (`0x0093B80A`, JIP's real handler): with JIP
-    /// installed answering "installed" and one user of the hook, a loss that would leave the
-    /// player below 1 health (90 health, -95) is passed on as `1 - health` (-89), so the player
-    /// keeps 1; a smaller loss (-5) and a gain (+4) pass unchanged, as does any change with no
-    /// user. The hook's only user is `ToggleImmortalMode 1` (`jip::game_patches::gp`); the user
-    /// is added directly here (`add_hook_user`), the command's own tests are in that module.
+    /// A loss that would leave the player below 1 health (90 health, -95) is passed on as given.
     #[test]
-    fn fn_0093b7a0_keeps_the_player_at_1_health_with_jip() {
-        use engine_core::extend::Hook;
-        let changes = |users: bool, amounts: &[f32]| -> Vec<f32> {
-            amounts
-                .iter()
-                .map(|&amount| {
-                    let mut e = engine();
-                    jip::test_support::install_into(&mut e);
-                    let this = health_world(&mut e, 0.9, 0.9, 0.8, 0.4);
-                    if users {
-                        e.add_hook_user(Hook::PlayerMinHealth, true);
-                    }
-                    e.call_log = Some(vec![]);
-                    e.call(0x0093_b7a0, &args![this, 0x10u32, amount, 0x6000u32]);
-                    f(&called(&e, 0x0088_0890)[0], 2)
-                })
-                .collect()
-        };
-        assert_eq!(
-            changes(true, &[-95.0, -5.0, 4.0]),
-            vec![-89.0, -5.0, 4.0],
-            "kept at 1 health"
-        );
-        assert_eq!(
-            changes(false, &[-95.0]),
-            vec![-95.0],
-            "no user: the change as given"
-        );
+    fn fn_0093b7a0_passes_a_large_loss_on_as_given() {
+        let mut e = engine();
+        let this = health_world(&mut e, 0.9, 0.9, 0.8, 0.4);
+        e.call_log = Some(vec![]);
+        e.call(0x0093_b7a0, &args![this, 0x10u32, -95.0f32, 0x6000u32]);
+        assert_eq!(f(&called(&e, 0x0088_0890)[0], 2), -95.0);
     }
 
     /// The globals of the cell-grid functions: the `TES` singleton pointer
@@ -16891,60 +16702,24 @@ mod tests {
         }
     }
 
-    /// JIP LN NVSE's InitRockItLauncher seam at the ammo switch key's weapon test (`0x940998`):
-    /// asked only while JIP is installed; an answer of 0 goes on to the drawn test (`008a16d0`)
-    /// without the exe's weapon entry test (the process's slot `0x148`, a weapon entry here, so
-    /// the exe's test reaches the drawn test too), 1 skips both as the exe does without a weapon;
-    /// none leaves the exe's test. Counted: the drawn tests and the slot's calls.
+    /// The ammo switch key's weapon test (`0x940998`, the process's slot `0x148`, a weapon entry
+    /// here) reaches the drawn test (`008a16d0`).
     #[test]
-    fn update_ammo_switch_seam() {
-        use engine_core::extend::jip_patches;
+    fn update_ammo_switch_tests_the_weapon_entry() {
         const PROCESS_VTABLE: u32 = 0x0202_0000;
-        let drawn_tests = |word: u32, answer: u32| {
-            let mut e = engine();
-            let this = update_world(&mut e);
-            let entry_slot = 0x00b0_0000 + (PROCESS_VTABLE & 0xf_ffff) / 0x10 + 0x148;
-            e.register(entry_slot, |_, _| int(0x0300_0100));
-            e.mem.set_u32(PROCESS_VTABLE + 0x148, entry_slot);
-            e.register(0x00a2_4660, |_, a| {
-                int(u32::from(a[1] == 0x12 && a[2] == 1))
-            });
-            e.set_jip_patches(word);
-            match answer {
-                0 => e.on_site_for_test(0x0094_0998, |_, _| Some(0)),
-                1 => e.on_site_for_test(0x0094_0998, |_, _| Some(1)),
-                _ => e.on_site_for_test(0x0094_0998, |_, _| None),
-            }
-            player_character_update(&mut e, this, 0.5);
-            (
-                called(&e, 0x008a_16d0).len(),
-                slot_calls(&e, PROCESS_VTABLE, 0x148).len(),
-            )
-        };
-        let exe = drawn_tests(0, 0);
+        let mut e = engine();
+        let this = update_world(&mut e);
+        let entry_slot = 0x00b0_0000 + (PROCESS_VTABLE & 0xf_ffff) / 0x10 + 0x148;
+        e.register(entry_slot, |_, _| int(0x0300_0100));
+        e.mem.set_u32(PROCESS_VTABLE + 0x148, entry_slot);
+        e.register(0x00a2_4660, |_, a| {
+            int(u32::from(a[1] == 0x12 && a[2] == 1))
+        });
+        player_character_update(&mut e, this, 0.5);
         assert!(
-            exe.0 >= 1 && exe.1 >= 1,
+            !called(&e, 0x008a_16d0).is_empty()
+                && !slot_calls(&e, PROCESS_VTABLE, 0x148).is_empty(),
             "the exe's test reaches the drawn test"
-        );
-        assert_eq!(
-            drawn_tests(jip_patches::FIXES, 0),
-            exe,
-            "not installed: not asked"
-        );
-        assert_eq!(
-            drawn_tests(jip_patches::INSTALLED, 2),
-            exe,
-            "no answer: the exe's test"
-        );
-        assert_eq!(
-            drawn_tests(jip_patches::INSTALLED, 1),
-            (exe.0 - 1, exe.1 - 1),
-            "skipped: no weapon entry test, no drawn test"
-        );
-        assert_eq!(
-            drawn_tests(jip_patches::INSTALLED, 0),
-            (exe.0, exe.1 - 1),
-            "on without the weapon entry test"
         );
     }
 
@@ -16970,28 +16745,6 @@ mod tests {
             vec![vec![this.addr(), 0.25f32.to_bits()]]
         );
         assert_eq!(called(&e, 0x0055_5c20).len(), 1);
-    }
-
-    /// JIP MiniMap's seam at the seen-bits call (0x9438F6): asked only while JIP is installed; an
-    /// answer skips the game's update, none leaves it.
-    #[test]
-    fn update_asks_jips_seen_bits_seam() {
-        use engine_core::extend::jip_patches;
-        let game_calls = |word: u32, answer: bool| {
-            let mut e = engine();
-            let this = update_world(&mut e);
-            e.set_jip_patches(word);
-            if answer {
-                e.on_site_for_test(0x0094_38f6, |_, _| Some(0));
-            } else {
-                e.on_site_for_test(0x0094_38f6, |_, _| None);
-            }
-            player_character_update(&mut e, this, 0.25);
-            called(&e, 0x0055_5c20).len()
-        };
-        assert_eq!(game_calls(0, true), 1, "not installed: not asked");
-        assert_eq!(game_calls(jip_patches::INSTALLED, true), 0);
-        assert_eq!(game_calls(jip_patches::INSTALLED, false), 1);
     }
 
     #[test]
@@ -17913,64 +17666,6 @@ mod tests {
         assert!(called(&e, 0x0058_83c0).is_empty());
     }
 
-    thread_local! {
-        static MARKER_LIST_SEEN: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
-    }
-
-    fn marker_list_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        MARKER_LIST_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
-        Some(1)
-    }
-
-    /// JIP LN NVSE's G72 seam (`0x00947DD2`, a fix row): with the word 0 or `INSTALLED` alone it
-    /// is not asked and the loop runs; with `FIXES` it is asked with the world space and its
-    /// list, and its answer skips the loop (no entry made) while the list is still released; in
-    /// the cell's branch (no world space) never asked.
-    #[test]
-    fn rebuilding_the_audio_markers_jip_seam() {
-        use engine_core::extend::{jip_patches, Owner, SiteSlot};
-        let run = |word: u32, world: u32| {
-            let mut e = engine();
-            list_world(&mut e);
-            stub(
-                &mut e,
-                &[
-                    0x0054_b8c0,
-                    0x0057_5d70,
-                    0x0058_83c0,
-                    0x005a_e3d0,
-                    0x008d_6f30,
-                ],
-            );
-            let this = player(&mut e);
-            let references = node_chain(&mut e, &[0x100, 0x200]);
-            e.register_double(0x0057_5d70, move |_, _| int(world));
-            e.register_double(0x0058_83c0, move |_, _| int(references));
-            e.register(0x008d_6f30, |_, _| int(0x4000));
-            e.register(0x0056_9080, |_, _| int(9));
-            e.on_site(SiteSlot::new(Owner::Jip, 0x0094_7dd2), marker_list_handler);
-            e.set_jip_patches(word);
-            e.call(0x0094_7d80, &args![this]);
-            let seen = MARKER_LIST_SEEN.with(|s| s.take());
-            (
-                seen,
-                called(&e, 0x005a_e3d0).len(),
-                called(&e, LIST_DELETING_DESTRUCT).len(),
-                references,
-            )
-        };
-        for word in [0, jip_patches::INSTALLED] {
-            let (seen, appended, released, _) = run(word, 0x7000);
-            assert!(seen.is_empty(), "{word:#x}");
-            assert_eq!((appended, released), (2, 1));
-        }
-        let (seen, appended, released, references) = run(jip_patches::FIXES, 0x7000);
-        assert_eq!(seen, vec![vec![0x7000, references]]);
-        assert_eq!((appended, released), (0, 1), "loop skipped, list released");
-        let (seen, _, _, _) = run(jip_patches::FIXES, 0);
-        assert!(seen.is_empty(), "the cell's branch");
-    }
-
     #[test]
     fn resetting_the_map_markers_rebuilds_them_when_the_world_space_changed() {
         let mut e = engine();
@@ -18431,48 +18126,6 @@ mod tests {
         assert_eq!(call_addresses(&e), vec![0x0094_62c0]);
     }
 
-    /// The seam at 0x946310 (JIP's InitRockItLauncher, `RILAmmoFixHook`): asked with the first
-    /// weapon entry while JIP is installed; its answer is the entry used in place of the second
-    /// call (0: no swap at all), none leaves the exe's second call.
-    #[test]
-    fn ammo_swap_seam_gives_the_weapon_entry() {
-        use engine_core::extend::jip_patches;
-        // The second call's count: the exe's (`E`), one less with an entry answered, only the
-        // first with 0 (the swap ends there).
-        let mut exe = 0;
-        for (word, answer, swaps, fewer) in [
-            (0, 0, true, 0),
-            (jip_patches::FIXES, 0, true, 0),
-            (jip_patches::INSTALLED, 0, false, usize::MAX),
-            (jip_patches::INSTALLED, 1, true, 1),
-            (jip_patches::INSTALLED, 2, true, 0),
-        ] {
-            let mut e = engine();
-            let (this, _) = ammo_world(&mut e);
-            e.set_jip_patches(word);
-            match answer {
-                0 => e.on_site_for_test(0x0094_6310, |_, a| {
-                    assert_eq!(a, &[0x5100]);
-                    Some(0)
-                }),
-                1 => e.on_site_for_test(0x0094_6310, |_, a| Some(a[0])),
-                _ => e.on_site_for_test(0x0094_6310, |_, _| None),
-            }
-            e.call(0x0094_62c0, &args![this, true, false]);
-            let calls = slot_calls(&e, 0x0268_0000, 0x148).len();
-            if word == 0 {
-                exe = calls;
-            }
-            let want = if fewer == usize::MAX { 1 } else { exe - fewer };
-            assert_eq!(calls, want, "{word:x} {answer}");
-            assert_eq!(
-                !called(&e, 0x00b0_03ec).is_empty(),
-                swaps,
-                "{word:x} {answer}"
-            );
-        }
-    }
-
     /// Every callee of `009445b0` outside this file, and of the curve
     /// helpers it uses.
     const LOOK_CALLEES: &[u32] = &[
@@ -18712,69 +18365,43 @@ mod tests {
         assert_eq!(result, 1);
     }
 
-    /// The seam at 0x945A28 (JIP's ToggleVanityWheel): asked only while JIP is installed and a
-    /// zoom was read; an answer of 1 skips the zoom block (the distance kept, `00967ae0` not
-    /// asked; the look result still 1, from the zoom read); 0, or JIP not installed, zooms as the
-    /// exe.
+    /// The zoom test at 0x945A28: a zoom read runs the zoom block (the distance from 100 to 50,
+    /// `00967ae0` asked once); the look result is 1, from the zoom read.
     #[test]
-    fn the_vanity_wheel_seam_skips_the_zoom() {
-        use engine_core::extend::jip_patches;
-        for (word, answer, zooms) in [
-            (0, 1, true),
-            (jip_patches::FIXES, 1, true),
-            (jip_patches::INSTALLED, 0, true),
-            (jip_patches::INSTALLED, 1, false),
-        ] {
-            let (mut e, this) = look_world(0);
-            e.register(0x00a2_39e0, |_, a| int(if a[1] == 3 { 120 } else { 0 }));
-            e.register(0x00ec_7d40, |_, a| int((a[0] as i32).unsigned_abs()));
-            e.register(0x0099_e040, |_, _| float(1.0));
-            e.register(0x004e_3d00, |_, _| float(1.0));
-            e.register(0x0045_c670, |_, _| int(0x6000));
-            e.set_global(0x011e_0a6c, 3.0f32);
-            e.set_global(0x0120_315c, 1.0f32);
-            e.set(this, PlayerCharacter::b3rdPerson, true);
-            e.set_global(ZOOM_DISTANCE, 100.0f32);
-            e.set_global(0x011c_dc98, 0.5f32);
-            e.set_global(0x011c_d568, 500.0f32);
-            e.set_global(0x011c_d614, 1.0f32);
-            e.set_global(0x011c_da94, 10.0f32);
-            e.register_double(0x00b0_022c, |_, _| int(1));
-            put_vtable(
-                &mut e,
-                this.addr(),
-                0x026a_0000,
-                &[
-                    (0x2bc, 0x00b0_02bc),
-                    (0x214, 0x00b0_0214),
-                    (0x2c4, 0x00b0_02c4),
-                    (0x22c, 0x00b0_022c),
-                ],
-            );
-            e.set_jip_patches(word);
-            if answer == 1 {
-                e.on_site_for_test(0x0094_5a28, |_, _| Some(1));
-            } else {
-                e.on_site_for_test(0x0094_5a28, |_, _| Some(0));
-            }
-            let flags = Ptr::<()>::new(e.mem.alloc(4));
-            let result = e
-                .call(0x0094_45b0, &args![this, 0.5f32, false, flags, 0u32])
-                .u8();
-            let distance = if zooms { 50.0 } else { 100.0 };
-            assert_eq!(
-                e.global::<f32>(ZOOM_DISTANCE),
-                distance,
-                "{word:x} {answer}"
-            );
-            assert_eq!(
-                called(&e, 0x0096_7ae0).len(),
-                usize::from(zooms),
-                "{word:x}"
-            );
-            // The look result comes from the zoom read (the end's test), the wheel on or off.
-            assert_eq!(result, 1, "{word:x} {answer}");
-        }
+    fn a_zoom_read_zooms() {
+        let (mut e, this) = look_world(0);
+        e.register(0x00a2_39e0, |_, a| int(if a[1] == 3 { 120 } else { 0 }));
+        e.register(0x00ec_7d40, |_, a| int((a[0] as i32).unsigned_abs()));
+        e.register(0x0099_e040, |_, _| float(1.0));
+        e.register(0x004e_3d00, |_, _| float(1.0));
+        e.register(0x0045_c670, |_, _| int(0x6000));
+        e.set_global(0x011e_0a6c, 3.0f32);
+        e.set_global(0x0120_315c, 1.0f32);
+        e.set(this, PlayerCharacter::b3rdPerson, true);
+        e.set_global(ZOOM_DISTANCE, 100.0f32);
+        e.set_global(0x011c_dc98, 0.5f32);
+        e.set_global(0x011c_d568, 500.0f32);
+        e.set_global(0x011c_d614, 1.0f32);
+        e.set_global(0x011c_da94, 10.0f32);
+        e.register_double(0x00b0_022c, |_, _| int(1));
+        put_vtable(
+            &mut e,
+            this.addr(),
+            0x026a_0000,
+            &[
+                (0x2bc, 0x00b0_02bc),
+                (0x214, 0x00b0_0214),
+                (0x2c4, 0x00b0_02c4),
+                (0x22c, 0x00b0_022c),
+            ],
+        );
+        let flags = Ptr::<()>::new(e.mem.alloc(4));
+        let result = e
+            .call(0x0094_45b0, &args![this, 0.5f32, false, flags, 0u32])
+            .u8();
+        assert_eq!(e.global::<f32>(ZOOM_DISTANCE), 50.0);
+        assert_eq!(called(&e, 0x0096_7ae0).len(), 1);
+        assert_eq!(result, 1);
     }
 
     /// The look's four stick tests read the engine's right dead zone (the exe's `0x21f1` at
@@ -19644,47 +19271,6 @@ mod tests {
         assert_eq!(called(&e, 0x0062_1370), vec![vec![caster, 0]]);
     }
 
-    /// The seam at 0x94A34E (JIP's ToggleCameraCollision): asked after a pick that hit, only
-    /// while JIP is installed; an answer of 1 leaves the distance as if nothing were hit (the
-    /// pick itself still made); 0, or JIP not installed, shortens it as the exe.
-    #[test]
-    fn the_camera_collision_seam_ignores_the_hit() {
-        use engine_core::extend::jip_patches;
-        for (word, answer, pulled_in) in [
-            (0, 1, true),
-            (jip_patches::FIXES, 1, true),
-            (jip_patches::INSTALLED, 0, true),
-            (jip_patches::INSTALLED, 1, false),
-        ] {
-            let (mut e, this) = camera_distance_world();
-            e.set_global(CAMERA_DISTANCE, 5.0f32);
-            e.set_global(0x011c_d288, 1000.0f32);
-            e.set_global(0x011c_d568, 100.0f32);
-            e.set_global(0x011c_da94, 1.0f32);
-            e.set_global(0x011e_0934, 1.0f32);
-            e.set_global(PLAYER_FADE, 1.0f32);
-            let caster = e.mem.alloc(0x40);
-            e.mem.set_u32(this.addr() + 0x21c, caster);
-            e.register(0x0062_0bc0, |_, _| int(1));
-            e.register(0x0045_7990, |_, _| float(3.0));
-            e.set_jip_patches(word);
-            if answer == 1 {
-                e.on_site_for_test(0x0094_a34e, |_, _| Some(1));
-            } else {
-                e.on_site_for_test(0x0094_a34e, |_, _| Some(0));
-            }
-            let position = move_camera(&mut e, this, [8.0, 0.0, 0.0], [0.0, 0.0, 0.0], false);
-            assert_eq!(called(&e, 0x0062_0bc0).len(), 1, "{word:x}: the pick made");
-            if pulled_in {
-                assert_eq!(e.mem.u8(CAMERA_BLOCKED), 1, "{word:x} {answer}");
-                assert_eq!(position, [2.5, 0.0, 0.0], "{word:x} {answer}");
-            } else {
-                assert_eq!(e.mem.u8(CAMERA_BLOCKED), 0, "not blocked");
-                assert_eq!(position, [8.0, 0.0, 0.0], "the camera where it was");
-            }
-        }
-    }
-
     #[test]
     fn the_camera_distance_zooms_out_with_the_third_person_toggle() {
         let (mut e, this) = camera_distance_world();
@@ -19737,140 +19323,17 @@ mod tests {
         (e, this)
     }
 
-    thread_local! {
-        static DEAD_ZONE_AT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-    }
-
-    fn dead_zone_answer(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        assert!(a.is_empty(), "no arguments");
-        Some(DEAD_ZONE_AT.with(|c| c.get()))
-    }
-
-    fn dead_zone_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
-        panic!("a D04 seam asked with its bit clear");
-    }
-
-    /// JIP LN NVSE's D04 seams in the free camera (group GB's rows and handlers; the format of
-    /// GROUP-GB-NOTES "D04 seam format for GP"): the look axes `0x94A93C`, `0x94A95F` and the move
-    /// axes `0x94AB59`, `0x94AB88`, all under `INSTALLED`. With it set the answer is the address
-    /// of the double compared with (20000: 10000 zeroed; 0: kept); with the word 0 or only
-    /// `FIXES` the seam is not asked and the exe's 7849 decides
-    /// (10000 kept, 5000 zeroed); no handler (the row not on main yet): the exe's.
+    /// The free camera's dead zone (the `FCOMP`s at `0x94A93C`, `0x94A95F`, `0x94AB59` and
+    /// `0x94AB88`): the exe's 7849 decides (10000 kept, -5000 and 5000 zeroed).
     #[test]
-    fn ufo_dead_zone_jip_seams() {
-        use engine_core::extend::jip_patches::{FIXES, INSTALLED};
-        for site in [0x0094_a93cu32, 0x0094_a95f, 0x0094_ab59, 0x0094_ab88] {
-            let mut e = engine();
-            map_exe_data(&mut e);
-            e.set_global(DEAD_ZONE_DOUBLE, 7849.0f64);
-            e.register(0x0040_8820, |_, a| float(f32::from_bits(a[0]).abs() as f64));
-            let double = e.mem.alloc(8);
-            DEAD_ZONE_AT.with(|c| c.set(double));
-            // No handler: the exe's double.
-            e.set_jip_patches(INSTALLED);
-            assert_eq!(ufo_dead_zone(&mut e, 10000, site), 10000);
-            assert_eq!(ufo_dead_zone(&mut e, -5000, site), 0);
-            e.on_site_for_test(site, dead_zone_never);
-            for word in [0, FIXES] {
-                e.set_jip_patches(word);
-                assert_eq!(ufo_dead_zone(&mut e, 10000, site), 10000, "{site:#x}");
-                assert_eq!(ufo_dead_zone(&mut e, 5000, site), 0);
-            }
-            let mut e2 = engine();
-            map_exe_data(&mut e2);
-            e2.set_global(DEAD_ZONE_DOUBLE, 7849.0f64);
-            e2.register(0x0040_8820, |_, a| float(f32::from_bits(a[0]).abs() as f64));
-            let double = e2.mem.alloc(8);
-            DEAD_ZONE_AT.with(|c| c.set(double));
-            e2.on_site_for_test(site, dead_zone_answer);
-            e2.set_jip_patches(INSTALLED);
-            e2.mem.set_f64(double, 20000.0);
-            assert_eq!(ufo_dead_zone(&mut e2, 10000, site), 0, "{site:#x}");
-            assert_eq!(ufo_dead_zone(&mut e2, -10000, site), 0);
-            e2.mem.set_f64(double, 0.0);
-            assert_eq!(ufo_dead_zone(&mut e2, 5000, site), 5000);
-        }
-    }
-
-    thread_local! {
-        /// The double each D04 site answers with, in the order look x `0x94A93C`, look y
-        /// `0x94A95F`, move x `0x94AB59`, move y `0x94AB88`.
-        static D04_AT: [std::cell::Cell<u32>; 4] = const {
-            [const { std::cell::Cell::new(0) }; 4]
-        };
-    }
-
-    fn d04_answer(i: usize, a: &[u32]) -> Option<u32> {
-        assert!(a.is_empty(), "no arguments");
-        Some(D04_AT.with(|c| c[i].get()))
-    }
-
-    fn d04_look_x(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        d04_answer(0, a)
-    }
-
-    fn d04_look_y(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        d04_answer(1, a)
-    }
-
-    fn d04_move_x(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        d04_answer(2, a)
-    }
-
-    fn d04_move_y(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        d04_answer(3, a)
-    }
-
-    /// D04 through the whole free camera (`0094a8c0`, analog input) with `INSTALLED`: each of the
-    /// four sites answers its own double (the exe's call sites: `0x94A93C`, `0x94A95F` look x
-    /// and y, `0x94AB59`, `0x94AB88` move x and y). In run k only site k's double is 20000 (its
-    /// axis, 10000, zeroed); each other site's is its index 0 to 3 (kept): exactly axis k is
-    /// zeroed.
-    #[test]
-    fn ufo_camera_jip_dead_zones_per_site() {
-        use engine_core::extend::jip_patches::INSTALLED;
-        let sites: [(u32, engine_core::extend::SiteFn); 4] = [
-            (0x0094_a93c, d04_look_x),
-            (0x0094_a95f, d04_look_y),
-            (0x0094_ab59, d04_move_x),
-            (0x0094_ab88, d04_move_y),
-        ];
-        for k in 0..4 {
-            let (mut e, this) = ufo_world();
-            e.register(0x004b_71d0, |_, _| int(1));
-            e.register(0x00a2_3390, |_, _| int(10000));
-            e.register(0x0040_8820, |_, a| float(f32::from_bits(a[0]).abs() as f64));
-            e.set_global(0x011e_0a6c, 0.1f32); // look speed
-            e.set_global(0x011e_090c, 2.0f32); // move speed
-            e.register(0x0045_7fe0, |_, _| int(5000));
-            e.set_global(0x011e_0bf8, 4000u32);
-            e.register(0x0040_ebd0, |_, a| {
-                float(f32::from_bits(a[0]).min(f32::from_bits(a[1])) as f64)
-            });
-            for (i, (site, handler)) in sites.iter().enumerate() {
-                let double = e.mem.alloc(8);
-                let limit = if i == k { 20000.0 } else { i as f64 };
-                e.mem.set_f64(double, limit);
-                D04_AT.with(|c| c[i].set(double));
-                e.on_site_for_test(*site, *handler);
-            }
-            e.set_jip_patches(INSTALLED);
-            e.call(0x0094_a8c0, &args![this]);
-            let heading = e.get(this, PlayerCharacter::fUFOCameraHeading);
-            let pitch = e.get(this, PlayerCharacter::fUFOCameraPitch);
-            let position = read_floats(&e, member(this, PlayerCharacter::UFOCameraPos));
-            let zeroed = [
-                heading == 0.0,
-                pitch == 0.0,
-                position[0] == 0.0,
-                position[1] == 0.0,
-            ];
-            let want: [bool; 4] = std::array::from_fn(|i| i == k);
-            assert_eq!(
-                zeroed, want,
-                "run {k}: heading {heading} pitch {pitch} {position:?}"
-            );
-        }
+    fn ufo_dead_zone_is_the_exes() {
+        let mut e = engine();
+        map_exe_data(&mut e);
+        e.set_global(DEAD_ZONE_DOUBLE, 7849.0f64);
+        e.register(0x0040_8820, |_, a| float(f32::from_bits(a[0]).abs() as f64));
+        assert_eq!(ufo_dead_zone(&mut e, 10000), 10000);
+        assert_eq!(ufo_dead_zone(&mut e, -5000), 0);
+        assert_eq!(ufo_dead_zone(&mut e, 5000), 0);
     }
 
     #[test]

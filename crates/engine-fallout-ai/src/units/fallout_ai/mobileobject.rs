@@ -1459,15 +1459,8 @@ pub fn mobile_object_init_havok(e: &mut Engine, this: Ptr<MobileObject>) {
             let motion = if special { 1u32 } else { 4u32 };
             e.call(0x00c6_a350, &args![geometry, motion, 1u32, 0u32, 0u32]);
             if actor && !e.vcall(this.addr(), 0x22c, &args![0u32]).bool() {
-                // JIP LN NVSE's InitRagdollControllerHook (step 3.9-GE, PLAN-3.9 H11) at `0x931384`
-                // skips this call for the player when the root node is the one of the last call
-                // and a ragdoll controller is there: the seam answers whether it is skipped. One
-                // load while the patches are off.
-                if e.jip_patches() & engine_core::extend::jip_patches::FIXES == 0
-                    || e.site(0x0093_1384, &[this.addr(), geometry]).is_none()
-                {
-                    e.call(0x0087_e130, &args![this, geometry, 1u32, 1u32, 0u32]);
-                }
+                // `0x931384`: the ragdoll controller is set up.
+                e.call(0x0087_e130, &args![this, geometry, 1u32, 1u32, 0u32]);
                 if this.addr() == e.global::<u32>(0x011d_ea3c) && e.mem.u32(this.addr() + 0xac) != 0
                 {
                     let ragdoll = e.mem.u32(this.addr() + 0xac);
@@ -1483,12 +1476,7 @@ pub fn mobile_object_init_havok(e: &mut Engine, this: Ptr<MobileObject>) {
         && typed_call!(leaf::FAMILY, 0x0045_cd60, leaf::word_at_28(e, process)) == 0
         && this.addr() != e.global::<u32>(0x011d_ea3c)
         && actor
-        // JIP LN NVSE's "Fix immobile creatures free-falling to the ground" (PLAN-3.9 G29, the
-        // row and handler are group GX's) replaces the rest of this test and its block
-        // (`0x9313EC` to `0x931431`): the seam (words: the actor, the character controller)
-        // answers whether it did. One load while the patches are off.
-        && (e.jip_patches() & engine_core::extend::jip_patches::FIXES == 0
-            || e.site(0x0093_13ec, &[this.addr(), controller.addr()]).is_none())
+        // `0x9313EC` to `0x931431`.
         && e.call(0x0041_81e0, &args![this]).u32() != 0
         && !e.call(0x0087_eeb0, &args![this]).bool()
     {
@@ -3328,18 +3316,8 @@ pub fn fn_009344d0(
                         .ptr::<u8>();
                     e.vcall(process.addr(), 0x2ec, &args![first_process_value]);
                 }
-                // JIP LN NVSE's `bVoiceModulationFix` (switch 13; step 3.9-GE, PLAN-3.9 O13) at
-                // `0x934AC8`: the seam answers the flags (0x80000 added unless the base form's
-                // flag 0x2000 is set). One load while the switch is off.
-                let jip = if e.jip_patches()
-                    & engine_core::extend::jip_patches::VOICE_MODULATION_FIX
-                    != 0
-                {
-                    e.site(0x0093_4ac8, &[this.addr()])
-                } else {
-                    None
-                };
-                let mut flags = jip.unwrap_or(0x104);
+                // `0x934AC8`: the flags.
+                let mut flags = 0x104u32;
                 let sound = e.call(0x005e_3fa0, &args![this]).ptr::<u8>();
                 if !sound.is_null()
                     && !typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, sound))
@@ -5590,104 +5568,42 @@ mod tests {
             .any(|call| call.0 == 0x00c6_a350 && call.1 == [0x6100, 1, 1, 0, 0]));
     }
 
-    thread_local! {
-        static HAVOK_ASKED: std::cell::RefCell<Vec<(u32, Vec<u32>)>> = const { std::cell::RefCell::new(Vec::new()) };
-        static HAVOK_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
-    }
-
-    fn at_ragdoll_init(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        HAVOK_ASKED.with(|s| s.borrow_mut().push((0x0093_1384, a.to_vec())));
-        HAVOK_ANSWER.with(std::cell::Cell::get)
-    }
-
-    fn at_no_fall(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        HAVOK_ASKED.with(|s| s.borrow_mut().push((0x0093_13ec, a.to_vec())));
-        HAVOK_ANSWER.with(std::cell::Cell::get)
-    }
-
-    /// `mobile_object_init_havok` on an actor that builds its ragdoll (`0087e130`) with JIP's
-    /// word `word` and seam handlers answering `answer` at `0x931384` (H11, this group's row) and
-    /// `0x9313EC` (G29, group GX's: a test handler): the actor, the calls of `0087e130` and
-    /// `004181e0`, and what the seams were asked.
-    fn havok_with_jip(word: u32, answer: Option<u32>) -> (u32, usize, usize, Vec<(u32, Vec<u32>)>) {
-        use engine_core::extend::{Owner, SiteSlot};
+    /// `mobile_object_init_havok` on an actor that builds its ragdoll (`0087e130`, at `0x931384`)
+    /// makes the creature test (`004181e0`, `0x9313EC` to `0x931431`) once each.
+    #[test]
+    fn init_havok_builds_the_ragdoll_and_tests_the_creature() {
         let (mut e, this) = havok_special_actor_world();
         stub(&mut e, 0x8130, 0);
         stub(&mut e, 0x0087_e130, 0);
-        e.on_site(SiteSlot::new(Owner::Jip, 0x0093_1384), at_ragdoll_init);
-        e.on_site_for_test(0x0093_13ec, at_no_fall);
-        HAVOK_ASKED.with(|s| s.borrow_mut().clear());
-        HAVOK_ANSWER.with(|c| c.set(answer));
-        e.set_jip_patches(word);
         e.call_log = Some(vec![]);
         mobile_object_init_havok(&mut e, this);
         let log = e.call_log.unwrap();
         let count = |address: u32| log.iter().filter(|call| call.0 == address).count();
-        (
-            this.addr(),
-            count(0x0087_e130),
-            count(0x0041_81e0),
-            HAVOK_ASKED.with(|s| s.take()),
-        )
+        assert_eq!((count(0x0087_e130), count(0x0041_81e0)), (1, 1));
     }
 
-    /// JIP's seams in `mobile_object_init_havok`: not asked without the fixes bit (the ragdoll
-    /// built, the creature test made as in the exe); asked with the actor and its root node
-    /// (H11), then the actor and its character controller (G29); an answer skips the ragdoll
-    /// build and the creature test, none keeps them.
+    /// For the player with a ragdoll controller, the reset after the build (`0087ea60`, then its
+    /// byte `+0x241` set) runs.
     #[test]
-    fn init_havok_jip_seams() {
-        use engine_core::extend::jip_patches;
-        for word in [0, jip_patches::INSTALLED | jip_patches::NPC_PERKS] {
-            let (_, ragdolls, tests, asked) = havok_with_jip(word, Some(0));
-            assert!(asked.is_empty(), "{word:x}");
-            assert_eq!((ragdolls, tests), (1, 1));
-        }
-        let on = jip_patches::INSTALLED | jip_patches::FIXES;
-        let (this, ragdolls, tests, asked) = havok_with_jip(on, None);
-        assert_eq!((ragdolls, tests), (1, 1));
-        assert_eq!(asked.len(), 2);
-        assert_eq!(asked[0], (0x0093_1384, vec![this, 0x6100]));
-        assert_eq!(asked[1], (0x0093_13ec, vec![this, 0x5000]));
-        let (_, ragdolls, tests, asked) = havok_with_jip(on, Some(0));
-        assert_eq!((ragdolls, tests), (0, 0));
-        assert_eq!(asked.len(), 2);
-    }
-
-    /// H11's skip keeps the rest of the exe's block (JIP's hook returns to `0x931389`, after the
-    /// call): for the player with a ragdoll controller the reset (`0087ea60`, then its byte
-    /// `+0x241` set) runs whether the build was skipped or not.
-    #[test]
-    fn init_havok_jip_ragdoll_skip_keeps_the_player_block() {
-        use engine_core::extend::{jip_patches, Owner, SiteSlot};
-        for (answer, builds) in [(Some(0), 0), (None, 1)] {
-            let (mut e, this) = havok_special_actor_world();
-            stub(&mut e, 0x8130, 0);
-            stub(&mut e, 0x0087_e130, 0);
-            stub(&mut e, 0x0087_ea60, 0);
-            e.mem.set_u32(0x011d_ea3c, this.addr());
-            e.mem.set_u32(this.addr() + 0xac, 0x4700);
-            e.on_site(SiteSlot::new(Owner::Jip, 0x0093_1384), at_ragdoll_init);
-            HAVOK_ASKED.with(|s| s.borrow_mut().clear());
-            HAVOK_ANSWER.with(|c| c.set(answer));
-            e.set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
-            e.call_log = Some(vec![]);
-            mobile_object_init_havok(&mut e, this);
-            let log = e.call_log.take().unwrap();
-            let calls = |address: u32| -> Vec<Vec<u32>> {
-                log.iter()
-                    .filter(|call| call.0 == address)
-                    .map(|call| call.1.clone())
-                    .collect()
-            };
-            assert_eq!(calls(0x0087_e130).len(), builds, "{answer:?}");
-            assert_eq!(calls(0x0087_ea60), vec![vec![0x4700, 0]], "{answer:?}");
-            assert_eq!(e.mem.u8(0x4700 + 0x241), 1, "{answer:?}");
-            assert_eq!(
-                HAVOK_ASKED.with(|s| s.take()),
-                vec![(0x0093_1384, vec![this.addr(), 0x6100])]
-            );
-        }
+    fn init_havok_resets_the_players_ragdoll_after_the_build() {
+        let (mut e, this) = havok_special_actor_world();
+        stub(&mut e, 0x8130, 0);
+        stub(&mut e, 0x0087_e130, 0);
+        stub(&mut e, 0x0087_ea60, 0);
+        e.mem.set_u32(0x011d_ea3c, this.addr());
+        e.mem.set_u32(this.addr() + 0xac, 0x4700);
+        e.call_log = Some(vec![]);
+        mobile_object_init_havok(&mut e, this);
+        let log = e.call_log.take().unwrap();
+        let calls = |address: u32| -> Vec<Vec<u32>> {
+            log.iter()
+                .filter(|call| call.0 == address)
+                .map(|call| call.1.clone())
+                .collect()
+        };
+        assert_eq!(calls(0x0087_e130).len(), 1);
+        assert_eq!(calls(0x0087_ea60), vec![vec![0x4700, 0]]);
+        assert_eq!(e.mem.u8(0x4700 + 0x241), 1);
     }
 
     #[test]
@@ -7860,20 +7776,10 @@ mod tests {
         assert_eq!(play_dialogue_audio(&mut e, this), 2.5);
     }
 
-    thread_local! {
-        static O13_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
-        static O13_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
-    }
-
-    fn at_voice_flags(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        O13_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
-        O13_ANSWER.with(std::cell::Cell::get)
-    }
-
-    /// The flags the dialogue sound is created with (`00ad7480`'s fourth word) with JIP's word
-    /// `word` and a seam handler answering `answer`, and what the seam was asked.
-    fn voice_flags_with_jip(word: u32, answer: Option<u32>) -> (u32, Vec<Vec<u32>>, u32) {
-        use engine_core::extend::{Owner, SiteSlot};
+    /// `0x934AC8`: the dialogue sound is created with the flags 0x104, + 1 played directly
+    /// (`00ad7480`'s fourth word).
+    #[test]
+    fn dialogue_audio_voice_flags() {
         let (mut e, this) = dialogue_audio_world();
         let flags = std::rc::Rc::new(std::cell::Cell::new(0));
         let seen = flags.clone();
@@ -7881,33 +7787,8 @@ mod tests {
             seen.set(a[3]);
             0x8100u32.into_ret()
         });
-        e.on_site(SiteSlot::new(Owner::Jip, 0x0093_4ac8), at_voice_flags);
-        O13_ASKED.with(|s| s.borrow_mut().clear());
-        O13_ANSWER.with(|c| c.set(answer));
-        e.set_jip_patches(word);
         assert_eq!(play_dialogue_audio(&mut e, this), 2.5);
-        (flags.get(), O13_ASKED.with(|s| s.take()), this.addr())
-    }
-
-    /// JIP's voice modulation fix at `0x934AC8` (O13): not asked without its switch (the fixes
-    /// alone, other switches), the exe's 0x104 (+ 1, played directly); asked with the
-    /// object, its answer is the flags word, no answer keeps 0x104.
-    #[test]
-    fn dialogue_audio_jip_voice_flags_seam() {
-        use engine_core::extend::jip_patches;
-        for word in [
-            0,
-            jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::IGNORE_DTDR_FIX,
-        ] {
-            let (flags, asked, _) = voice_flags_with_jip(word, Some(0x8_0104));
-            assert!(asked.is_empty(), "{word:x}");
-            assert_eq!(flags, 0x105);
-        }
-        let on = jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::VOICE_MODULATION_FIX;
-        let (flags, asked, this) = voice_flags_with_jip(on, None);
-        assert_eq!((flags, asked), (0x105, vec![vec![this]]));
-        let (flags, asked, this) = voice_flags_with_jip(on, Some(0x8_0104));
-        assert_eq!((flags, asked), (0x8_0105, vec![vec![this]]));
+        assert_eq!(flags.get(), 0x105);
     }
 
     #[test]
