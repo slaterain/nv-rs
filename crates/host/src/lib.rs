@@ -175,7 +175,7 @@ impl Host {
         // (nothing on Windows).
         save_out::prepare(data);
         let mut engine = Box::new(Engine::with_exe(&exe)?);
-        // Mods' own files (MCM's and later JIP's INI and file commands) kept beside the saves, never
+        // Mods' own files (JIP's INI and file commands) kept beside the saves, never
         // in the game's folder (`mod_files`).
         engine_platform::mod_files::set_folder(&mut engine, mod_files::folder(data));
         // The play loop's patches (`crates/play-patch`, empty on main) replace the entries with

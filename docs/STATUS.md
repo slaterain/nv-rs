@@ -107,7 +107,7 @@ console commands it re-exports are copies of the console's own.
 ## JIP LN built in
 
 🔨 JIP LN's script commands and game patches, with nothing to install. All are built, and JIP
-answers "installed" in the default fixes preset, (vanilla
+answers "installed" in the default fixes preset (vanilla
 leaves it off; `bJIPInstalled=0` in `Fallout.ini` turns JIP off). The per-patch detail is in
 [FIXES.md, "JIP LN NVSE's game patches"](FIXES.md#jip-ln-nvses-game-patches) and
 [FIXES.md, "JIP LN NVSE switched on"](FIXES.md#jip-ln-nvse-switched-on).

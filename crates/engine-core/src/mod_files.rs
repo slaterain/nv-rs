@@ -11,7 +11,7 @@
 //! (`WritePrivateProfileStringA`'s writing), both measured on scratch files.
 //!
 //! A name is given as the game passes it to Windows: relative to the game's folder
-//! (`Data\Config\MCM.ini`), or a full path inside it. The game's own profile imports
+//! (`Data\Config\<mod>.ini`), or a full path inside it. The game's own profile imports
 //! (`GetPrivateProfileStringA` and the others the exe calls) do not come here: only the
 //! extenders' commands look in the port's folder first.
 //!

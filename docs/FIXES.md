@@ -696,7 +696,7 @@ for another world space or another record type).
 
 Not a row; in every preset (2026-11-16):
 
-- **Mods' own files** (MCM's `Data\Config\<mod>.ini`, later JIP LN's INI and file commands) are
+- **Mods' own files** (JIP LN's INI and file commands, under `Data\Config\`) are
   kept in a folder of nv-rs's own beside the saves (`NV_MOD_FILES_OUT`, else `nv-rs mod files`
   beside `NV_SAVE_OUT`'s folder; docs/PLAYTESTING.md), never in the game's folder. The extenders'
   commands read a mod's own copy there first, then the game's Data. Without either variable there
@@ -936,8 +936,8 @@ With the switch on:
   goes); and a local map slot with no cell keeps its old texture, which the clean-up or a colour change
   may have deleted (the port clears it, as `InitMiniMap` leaves it).
 - JIP's INI and file commands (`ReadArrayFromFile`, `WriteStringToFile` and the others) keep a mod's files
-  in the port's own folder beside the saves, never in the game's folder; oHUD's INI option (shown in MCM
-  once oHUD finds JIP) has its commands.
+  in the port's own folder beside the saves, never in the game's folder; oHUD's INI option
+  has its commands.
 - JIP's text input menu (`ShowTextInputMenu`): JIP takes its typing and OK hooks out of the game's text
   edit menu only when its OK is clicked or `CloseActiveMenu` closes it, so after any other close (Esc,
   a load, another menu) the game's own text edit menu (naming a character, a sign) gets JIP's routines

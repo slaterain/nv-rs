@@ -36,7 +36,7 @@
 //! Not checked at all: `.vcall(this, SLOT, ..)` and `.call_next(ADDR, ..)` sites. A vtable slot's
 //! target depends on the object's class and a wrapped address's next function on what else wraps
 //! it, neither known from the text. For those, the ignored test below probes listed translations
-//! (`NV_PROBE`), and `NV_JIP_SRC` (`NV_NVSE_SRC`, `NV_JG_SRC`, ...) points a crate's test at
+//! (`NV_PROBE`), and `NV_JIP_SRC` (`NV_NVSE_SRC`, `NV_JOHNNYGUITAR_SRC`, ...) points a crate's test at
 //! another copy of its source (an open pull request's branch, exported).
 
 use engine as _;
