@@ -5105,26 +5105,6 @@ mod tests {
         assert!(calls_to(&e, REFRESH_BEFORE_QUEUE).is_empty());
     }
 
-    fn leg_change(_on: bool, previous: f32, current: f32, other: f32) -> Vec<Vec<u32>> {
-        let (mut e, actor) = condition_setup(5.0, false, 0);
-        slot(&mut e, OWNER_TABLE, 0x8, eax(0));
-        quiet(&mut e, &[REFRESH_BEFORE_QUEUE]);
-        e.register_double(GET_BODY_PART_CONDITION, move |_, a| {
-            st0(if a[1] == 0x1d { current } else { other })
-        });
-        e.call_log = Some(vec![]);
-        actor_mobility_condition_modified_callback(
-            &mut e,
-            owner(actor),
-            0x1d,
-            previous,
-            current - previous,
-            Ptr::new(0),
-        );
-        calls_to(&e, REQUEST_LOCOMOTION_CHANGE)
-    }
-
-
     fn limb_flag_setup(current: f32) -> (Engine, Ptr<Actor>) {
         let mut e = engine();
         let actor = new_actor(&mut e);

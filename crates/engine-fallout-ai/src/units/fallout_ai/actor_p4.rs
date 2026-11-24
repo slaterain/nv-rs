@@ -13006,47 +13006,6 @@ mod tests {
         assert_eq!(e.mem.u32(package_store + 0x9c), 6);
     }
 
-    fn search_package_run(_on: bool) -> (Vec<(u32, Vec<u32>)>, Engine, u32) {
-        let mut e = engine();
-        let (actor, _) = new_actor_with_process(&mut e);
-        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
-        stub(
-            &mut e,
-            &[
-                0x0067_0fc0,
-                0x0082_6b40,
-                0x0082_6b90,
-                0x0067_f3c0,
-                0x0067_1d30,
-                0x0067_0b30,
-                0x0067_a4a0,
-                0x0067_2fc0,
-                0x0098_4f60,
-                0x0068_00b0,
-                0x0068_0110,
-                0x0040_3550,
-            ],
-        );
-        e.register(0x0067_f030, |_, a| a[0].into_ret());
-        e.register(0x0067_ff70, |_, a| a[0].into_ret());
-        e.register(SETTING_VALUE_POINTER, |_, a| (a[0] + 4).into_ret());
-        e.set_global(SETTING_SEARCH_DISTANCE + 4, 12.75f32);
-        e.register(FTOL, |_, a| {
-            let value = f64::from_bits(a[0] as u64 | (a[1] as u64) << 32);
-            (value as i32).into_ret()
-        });
-        e.register(0x0043_9090, |_, _| 1.into_ret());
-        e.set_global(ZERO_POINT, 0u32);
-        let package_store = e.mem.alloc(0x200);
-        e.register_double(0x009f_66b0, move |_, _| package_store.into_ret());
-        e.register(0x0067_1d10, |_, a| (a[0] + 0x100).into_ret());
-        e.call_log = Some(vec![]);
-        e.call(0x008a_d970, &args![actor, 0x77u32, 4u32, 5u32, 6u32, 1u32]);
-        let log = calls(&mut e);
-        (log, e, package_store)
-    }
-
-
     /// Doubles for the small getters `Actor::GetPickUpSoundName` calls.
     fn pick_up_doubles(e: &mut Engine) {
         e.register(0x0072_6070, |e, a| e.mem.u32(a[0] + 4).into_ret());

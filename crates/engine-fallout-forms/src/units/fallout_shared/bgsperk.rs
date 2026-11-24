@@ -3097,49 +3097,6 @@ mod b028_description_tests {
             .collect()
     }
 
-    /// `strcat_s` as the C runtime's: the joined text, or the invalid-parameter stop (a panic here) when
-    /// it does not fit. A word outside mapped memory (the exe's own strings) reads as empty.
-    fn real_append(e: &mut Engine) {
-        e.register(STRING_APPEND, |e, a| {
-            let read = |e: &Engine, at: u32| {
-                if e.mem.is_mapped(at) {
-                    e.mem.cstr(at)
-                } else {
-                    vec![]
-                }
-            };
-            let mut joined = read(e, a[0]);
-            joined.extend(read(e, a[2]));
-            assert!(
-                joined.len() < a[1] as usize,
-                "strcat_s: the text does not fit"
-            );
-            joined.push(0);
-            e.mem.write(a[0], &joined);
-            Ret::default()
-        });
-    }
-
-    /// A perk with no requirements whose description text (`0dd00000`) is `text`, built into a buffer
-    /// of `size` bytes with the row `on`: whether it ran to the end, and the buffer's text.
-    fn description_of(text: &[u8], size: u32, _on: bool) -> (bool, Vec<u8>) {
-        let mut e = engine();
-        real_append(&mut e);
-        e.map(0x0dd0_0000, 0x1000);
-        e.mem.write(0x0dd0_0000, text);
-        e.mem.set_u8(0x0dd0_0000 + text.len() as u32, 0);
-        set_items(&mut e, vec![]);
-        let this = perk(&mut e, 1);
-        let buffer = e.mem.alloc(size);
-        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            e.call(0x005e_bac0, &args![this, buffer, size]);
-        }));
-        e.call_stack.clear();
-        (run.is_ok(), e.mem.cstr(buffer))
-    }
-
-
-
     #[test]
     fn the_description_lists_each_requirement() {
         let mut e = engine();

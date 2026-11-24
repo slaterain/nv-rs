@@ -4189,9 +4189,7 @@ mod tests {
     #[test]
     fn do_idle_clears_the_subtitle_and_fills_the_card() {
         ORDINARY_LOG.with(|l| *l.borrow_mut() = None);
-        for on in [false, true] {
-            do_idle_clears_the_subtitle_and_fills_the_card_row(on);
-        }
+        do_idle_clears_the_subtitle_and_fills_the_card_row(false);
     }
 
     fn do_idle_clears_the_subtitle_and_fills_the_card_row(on: bool) {

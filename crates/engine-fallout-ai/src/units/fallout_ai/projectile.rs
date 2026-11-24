@@ -1964,25 +1964,6 @@ pub fn projectile_ctor(e: &mut Engine, this: Ptr<Projectile>, _unused_1: u32) ->
     this
 }
 
-// Translation incomplete: 009bbef0 - C++ exception unwinding (FS:[0] frame) is not modelled.
-/// The weapon mod flags of an inventory entry (`ContChangesEntry`): the flags (+0xC) of the
-/// `ExtraWeaponModFlags` (type 0x8D, `BaseExtraList::GetByType` `00410220`) of the first extra
-/// data list in the entry's list (+0); 0 without one.
-#[cfg(test)]
-fn weapon_mod_flags(e: &mut Engine, item: u32) -> u8 {
-    let lists = e.mem.u32(item);
-    let first = if lists != 0 { e.mem.u32(lists) } else { 0 };
-    if first == 0 {
-        return 0;
-    }
-    let extra = e.call(0x0041_0220, &args![first, 0x8du32]).u32();
-    if extra == 0 {
-        0
-    } else {
-        e.mem.u8(extra + 0xc)
-    }
-}
-
 // Translated from 009bbef0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Projectile constructor from a base object, shooter, weapon, position and
 /// angles (z through `005757d0`, x through `00575770`; y is set to 0).
@@ -2621,17 +2602,6 @@ pub fn fn_009bf370(e: &mut Engine, this: Ptr<Projectile>, delta: f32, x: u32, y:
         e.call(0x009c_4e60, &args![this, dx, dy, dz, 1u32]);
     });
 }
-
-/// `bhkUtilFunctions::FindCollisionObject` (`00c802d0`, `cdecl`, one word).
-#[cfg(test)]
-const FIND_COLLISION_OBJECT: u32 = 0x00c8_02d0;
-/// `bhkWorldObject::SetLinearVelocity` (`00561690`, `thiscall`, a `hkVector4*`).
-#[cfg(test)]
-const SET_LINEAR_VELOCITY: u32 = 0x0056_1690;
-/// The character controller's `OutVelocity` (`hkVector4`, Xbox PDB: `bhkCharacterController`
-/// +0x4F0).
-#[cfg(test)]
-const CONTROLLER_OUT_VELOCITY: u32 = 0x4f0;
 
 /// Sets a debug colour (`NiColorA` constructor `00414430`: r, g, b, a) in a
 /// temporary and copies it into `color`.
@@ -7301,25 +7271,6 @@ mod tests {
         assert_eq!(calls(&e, 0x009a_52f0).len(), 1);
     }
 
-    /// A continuous beam whose shooter is `shooter` (+0xFC) with `shots` (+0x154), an age of 0.5
-    /// (+0xD8, also `00885bd0`'s answer) and a fire rate of 10 (`00821640`).
-    fn beam_hit_world(
-        e: &mut Engine,
-        shooter: u32,
-        shots: u32,
-    ) -> (Ptr<Projectile>, Ptr<ImpactData>) {
-        let this = projectile(e);
-        e.mem.set_u32(this.addr() + 0xfc, shooter);
-        e.mem.set_u32(this.addr() + 0x154, shots);
-        e.mem.set_f32(this.addr() + 0xd8, 0.5);
-        stub_float(e, 0x0088_5bd0, 0.5);
-        stub_float(e, 0x0082_1640, 10.0);
-        stub(e, 0x008a_88b0, 5);
-        (this, Ptr::new(e.mem.alloc(0x30)))
-    }
-
-
-
     #[test]
     fn moves_and_reports_the_step() {
         let mut e = engine();
@@ -7346,38 +7297,6 @@ mod tests {
             ]]
         );
     }
-
-    /// Answers the projectile, the controller and the world object.
-    fn step_with_row(e: &mut Engine, _on: bool, physics: bool) -> (Ptr<Projectile>, u32, u32) {
-        point_subtract(e);
-        let this = projectile(e);
-        let before = e.mem.alloc(0xC);
-        let after = e.mem.alloc(0xC);
-        set_point(e, before, [1.0, 1.0, 1.0]);
-        set_point(e, after, [2.0, 3.0, 4.0]);
-        sequence(e, 0x7E00_0050, vec![before, after]);
-        set_slot(e, this.addr(), 0x1F4, 0x7E00_0050);
-        e.mem.set_f32(this.addr() + 0x110, 10.0);
-        let controller = e.mem.alloc(0x600);
-        let world = object(e, 0x20);
-        if physics {
-            let process = object(e, 0x40);
-            stub(e, 0x7E00_0060, controller);
-            set_slot(e, process, 0x28c, 0x7E00_0060);
-            e.mem.set_u32(this.addr() + 0x68, process);
-            stub(e, 0x7E00_0070, 0x5000);
-            set_slot(e, this.addr(), 0x1d0, 0x7E00_0070);
-            let collision = e.mem.alloc(0x20);
-            e.mem.set_u32(collision + 0x10, world);
-            stub(e, FIND_COLLISION_OBJECT, collision);
-            stub(e, 0x7E00_0080, 0x6000);
-            set_slot(e, world, 0x40, 0x7E00_0080);
-        }
-        stub(e, SET_LINEAR_VELOCITY, 0);
-        fn_009bf370(e, this, 0.5, 7, 8, 9);
-        (this, controller, world)
-    }
-
 
     #[test]
     fn add_impact_records_the_hit_and_adds_a_water_ripple() {

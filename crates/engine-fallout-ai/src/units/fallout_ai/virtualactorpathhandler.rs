@@ -1368,29 +1368,6 @@ mod tests {
         assert_eq!(calls_to(&e, SET_LOCATION), vec![vec![actor, point]]);
     }
 
-    fn far_from_a_node_with_no_door(_on: bool) -> (bool, i32, usize) {
-        let (mut e, this, _) = engine(3);
-        e.register(DOORS_TELEPORT, |_, _| word(0));
-        e.register(SET_LOCATION, nothing);
-        e.register(NODE_DOOR, |_, _| word(0));
-        e.register(ACTIVATE, |_, _| word(1));
-        e.register(PARENT_CELL, |e, a| word(e.mem.u32(a[0] + 0x40)));
-        e.register(POINTS_DIFFER, |_, _| word(1));
-        e.register(NAME_TEST, |_, _| word(0));
-        e.register(REFERENCE_NAME, |_, _| word(0x5555));
-        e.register(DEBUG_PRINT, nothing);
-        e.set_global(DOOR_ARRIVAL_TOLERANCE, 5.0f64);
-        let point = e.mem.alloc(0xc);
-        e.call_log = Some(vec![]);
-        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            e.call(0x009e_ad90, &args![this, point]).i32()
-        }));
-        e.call_stack.clear();
-        let printed = calls_to(&e, DEBUG_PRINT).len();
-        (run.is_ok(), run.unwrap_or(0), printed)
-    }
-
-
     #[test]
     fn use_door_takes_the_actors_position_and_moves_on() {
         let (mut e, this, actor) = engine(3);

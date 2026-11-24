@@ -17345,27 +17345,6 @@ mod tests {
         next
     }
 
-    fn regenerated_round(kind: u32, _on: bool) -> Vec<(u32, Vec<u32>)> {
-        let mut e = Engine::new();
-        e.map(0x011d_e000, 0x1000);
-        e.set_global(PLAYER_SINGLETON, 0x7000_0000u32);
-        for stub in [
-            0x0048_1610,
-            0x0048_18e0,
-            0x0048_21a0,
-            0x0088_c830,
-            0x0048_1680,
-        ] {
-            e.register(stub, |_, _| Ret::default());
-        }
-        e.register_double(0x0052_5980, move |_, _| kind.into_ret());
-        e.call_log = Some(vec![]);
-        add_regenerated_round(&mut e, 0x1234);
-        e.call_log.take().unwrap()
-    }
-
-
-
     #[test]
     fn fn_00944300_returns_the_ammo_regen_tick_time() {
         let mut e = engine();
