@@ -124,8 +124,6 @@ terms, whose notice must be kept:
   that DLL does (Microsoft Corporation, Apache-2.0 WITH LLVM-exception). The copyright line,
   licence and changes are in [crates/jip/LICENSE-msvc-stl](crates/jip/LICENSE-msvc-stl), and
   the module says so in its first lines.
-- `crates/uio` translates UI Organizer 2.30 (Copyright (c) 2020 Jef, MIT licence); the notice is
-  in [crates/uio/NOTICE](crates/uio/NOTICE).
 - `crates/mcm` rebuilds the NVSE plugin of The Mod Configuration Menu 1.5 (Pelinor); see
   [crates/mcm/NOTICE](crates/mcm/NOTICE).
 - `crates/johnnyguitar` builds JohnnyGuitar NVSE 5.28 (carxt and its contributors) in,

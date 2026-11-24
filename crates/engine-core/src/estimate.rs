@@ -1,13 +1,13 @@
 //! The processor's quick estimates `RCPSS` (of `1 / x`) and `RSQRTSS` (of `1 / sqrt(x)`), in one
 //! shared place.
 //!
-//! The exe uses them (Havok's normalisers and broad phase, D3DX's maths, JIP's and UIO's code),
+//! The exe uses them (Havok's normalisers and broad phase, D3DX's maths, JIP's code),
 //! and their results are not fixed by Intel's manual: only the error bound is (relative error at
 //! most 1.5 * 2^-12). Each processor maker's table gives its own last bits (AMD's differ from
 //! Intel's), so the original game itself gives different bits on different PCs. Every copy of the
 //! port's that answers for them uses this module off x86: engine-core `x87::rsqrt_estimate`
 //! (Havok's normaliser), engine-havok's broad phase, AABB tree, ray casts, sphere shape,
-//! quaternion and ragdoll helpers, engine-platform's D3DX maths, JIP's and UIO's.
+//! quaternion and ragdoll helpers, engine-platform's D3DX maths, JIP's.
 //!
 //! On x86 ([`rcp`], [`rsqrt`]) the instruction itself runs: the player's processor answers, as it
 //! does for FalloutNV.exe on that PC. Elsewhere (Apple silicon, ARM Linux) there is no such

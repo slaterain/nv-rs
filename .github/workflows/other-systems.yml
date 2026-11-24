@@ -136,8 +136,8 @@ jobs:
         run: cargo build --locked --profile play -p nv-viewer
       # A shorter list than Linux's, for the runner's time and memory: the crates with this
       # system's own code (the memory, the clock, the files, the processor arms of the x87 helpers,
-      # Havok and D3DX, the Metal device), JIP and UIO (their quick-estimate arms: Linux's runner
-      # is x86-64, so only this job runs those arms) and the small ones. Left out for now: the
+      # Havok and D3DX, the Metal device), JIP (its quick-estimate arms: Linux's runner is
+      # x86-64, so only this job runs those arms) and the small ones. Left out for now: the
       # engine part crates (engine-gamebryo, -bs, -speedtree, -typed, the twelve engine-fallout-*),
       # engine, nvse, nvinspect, play-patch and the viewer: their test builds are the largest, and
       # Linux runs them.
@@ -148,4 +148,4 @@ jobs:
           -p engine-core -p engine-platform -p ds-mix -p engine-havok -p host
           -p d3d9-wgpu -p d3d9-stream -p d3dx-tex -p frame-model
           -p esm -p bsa -p fos -p mp3 -p vorbis -p bink -p game-folders
-          -p jip -p uio -p fomod -p mod-archive -p mod-install -p mod-chooser
+          -p jip -p fomod -p mod-archive -p mod-install -p mod-chooser

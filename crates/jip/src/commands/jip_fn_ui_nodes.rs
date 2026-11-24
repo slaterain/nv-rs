@@ -11,9 +11,8 @@
 //! - the tile: made under the HUD's own tile (`g_HUDMainMenu`, `*0x011D96C0`, its tile at +4):
 //!   `Tile::ReadFile` (`0x00A01B00`, `thiscall` (tile, path), `RET 4`; JIP's `Tile::ReadXML`) for
 //!   `AttachUIXML`, JIP's `InjectUIComponent` for `AttachUIComponent`
-//!   ([`super::jip_fn_ui::inject_component`]: the built-in UI Organizer's inject with its row
-//!   on, else the text read through the same `ReadFile` as JIP's `jip_temp.xml`, with no file
-//!   written);
+//!   ([`super::jip_fn_ui::inject_component`]: the text read through the same `ReadFile` as
+//!   JIP's `jip_temp.xml`, with no file written);
 //! - the new tile's node (`Tile::spModel`, +0x2C, engine-bs `tile.rs`), when it has one, added
 //!   to the found node with the node's `AddObject` (vtable +0xDC, `thiscall` (node, child, 1):
 //!   `00A5ED10` in `NiNode`'s and `BSFadeNode`'s vtables, `RET 8`); the result 1.
@@ -118,8 +117,8 @@ fn attach_ui_xml(e: &mut Engine, w: &[u32]) -> Ret {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h:
 // Cmd_AttachUIComponent_Execute and InjectUIComponent.
 /// The node's name and a formatted text of menu XML: the text made into a tile under the HUD's
-/// tile by the built-in UI Organizer and the tile's node added under the named node; 1 when
-/// added (the UI Organizer row on or off).
+/// tile by JIP's `InjectUIComponent` and the tile's node added under the named node; 1 when
+/// added.
 fn attach_ui_component(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let f = nvse::commands::string::format_string_args_at(e, &a, 1, ATTACH_PARAMS);
