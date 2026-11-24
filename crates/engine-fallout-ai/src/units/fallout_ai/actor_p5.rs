@@ -3305,7 +3305,7 @@ fn limb_piece(
     if parent == 0 {
         parent = limb;
     }
-    let clone: u32;
+    let mut clone: u32;
     {
         e.call(0x0047_6a80, &args![transform_b]);
         e.call(0x0047_6a80, &args![transform_a]);
