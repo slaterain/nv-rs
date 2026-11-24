@@ -35,6 +35,8 @@ const CUT_VS: u32 = 0x1560;
 const CUT_PS: u32 = 0x1570;
 const CUT_DECL: u32 = 0x1580;
 const CUT_TEX: u32 = 0x1590;
+/// [`CUT_PS`] as a character's face's pixel shader (its constant table names `FaceGenMap0`).
+const FACE_CUT_PS: u32 = 0x1760;
 /// The lit pixel shader: ambient (c1) plus the sun's light colour (c3), as the game's lit shaders add
 /// them.
 const LIT_PS: u32 = 0x1320;
@@ -162,6 +164,30 @@ fn pixel(p: [f64; 3]) -> (u32, u32) {
 /// A constant table (`CTAB` comment) naming `ModelViewProj` at c0..c3.
 fn constant_table() -> Vec<u32> {
     constant_table_for(0xFFFE_0200)
+}
+
+/// A `ps_3_0` constant table naming the sampler s0 `FaceGenMap0` (a character's face's shader).
+fn face_table() -> Vec<u32> {
+    let mut b = Vec::new();
+    for v in [28u32, 0, 0xFFFF_0300, 1, 28, 0, 0] {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    // Its name, set (sampler), first register, count, reserved, type, default.
+    b.extend_from_slice(&48u32.to_le_bytes());
+    for v in [3u16, 0, 1, 0] {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    b.extend_from_slice(&[0; 8]);
+    b.extend_from_slice(b"FaceGenMap0\0");
+    b.resize(b.len().div_ceil(4) * 4, 0);
+    let mut t = vec![u32::from_le_bytes(*b"CTAB")];
+    t.extend(
+        b.chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])),
+    );
+    let mut out = vec![0xFFFE | ((t.len() as u32) << 16)];
+    out.extend(t);
+    out
 }
 
 /// [`constant_table`] for the shader version `version`.
@@ -887,6 +913,9 @@ struct Extra {
     ribbon_round_opaque: bool,
     /// [`RIBBON_ROUND`] drawn with a texture too opaque for a cable ([`STRIP_TEX`]) and the alpha test.
     ribbon_round_textured: bool,
+    /// [`RIBBON_ROUND`] and [`MIXED_CUT`] (`ribbon_round`, `mixed_cut`) drawn through a face's pixel
+    /// shader ([`FACE_CUT_PS`]): a character's casters.
+    face_cutouts: bool,
     /// The cable of `cable` written again (the same bytes) before it is drawn.
     rewrite_cable: bool,
     /// The pipe of [`CABLES`] drawn after `cable` (another buffer of the same layout and count).
@@ -1015,7 +1044,19 @@ fn draw_cut(b: &mut WgpuBackend, buffer: u32, texture: u32, count: u32) {
 
 /// [`draw_cut`] with the alpha test on (`test`) or off.
 fn draw_textured(b: &mut WgpuBackend, buffer: u32, texture: u32, count: u32, test: bool) {
-    set_shaders(b, CUT_VS, CUT_PS, CUT_DECL);
+    draw_textured_through(b, CUT_PS, buffer, texture, count, test);
+}
+
+/// [`draw_textured`] through the pixel shader `ps`.
+fn draw_textured_through(
+    b: &mut WgpuBackend,
+    ps: u32,
+    buffer: u32,
+    texture: u32,
+    count: u32,
+    test: bool,
+) {
+    set_shaders(b, CUT_VS, ps, CUT_DECL);
     run(
         b,
         Cmd::SetTexture {
@@ -1522,7 +1563,15 @@ fn extras(b: &mut WgpuBackend) {
     ps.extend(ins(66, &[0x800F_0000, 0x90E4_0000, 0xA0E4_0800]));
     ps.extend(ins(1, &[0x800F_0800, 0x80E4_0000]));
     ps.push(END);
-    for (shader, pixel, tokens) in [(CUT_VS, false, vs), (CUT_PS, true, ps)] {
+    // The same with a table naming its sampler `FaceGenMap0` (a face's).
+    let mut face = vec![ps[0]];
+    face.extend(face_table());
+    face.extend_from_slice(&ps[1..]);
+    for (shader, pixel, tokens) in [
+        (CUT_VS, false, vs),
+        (CUT_PS, true, ps),
+        (FACE_CUT_PS, true, face),
+    ] {
         let t = words(&tokens);
         run(
             b,
@@ -1867,8 +1916,9 @@ fn lit_sequence_with(
         if e.mixed {
             draw(b, MIXED, 2 * 16 * 6 * 2);
         }
+        let cut_ps = if e.face_cutouts { FACE_CUT_PS } else { CUT_PS };
         if e.mixed_cut {
-            set_shaders(b, CUT_VS, CUT_PS, CUT_DECL);
+            set_shaders(b, CUT_VS, cut_ps, CUT_DECL);
             run(
                 b,
                 Cmd::SetTexture {
@@ -1924,7 +1974,8 @@ fn lit_sequence_with(
             draw(b, CABLE + 3, 16 * 6 * 2);
         }
         if e.ribbon_round {
-            draw_cut(b, RIBBON_ROUND, RIBBON_TEX, 32 + 16 * 6 * 2);
+            let count = 32 + 16 * 6 * 2;
+            draw_textured_through(b, cut_ps, RIBBON_ROUND, RIBBON_TEX, count, true);
         }
         if e.ribbon_round_opaque {
             draw_textured(b, RIBBON_ROUND, RIBBON_TEX, 32 + 16 * 6 * 2, false);
@@ -4236,5 +4287,55 @@ fn cables_pipelines_made_ahead_are_all_made_off_the_render_thread() {
     assert!(
         worst <= 1,
         "the shadows once all are there: {worst} apart at most"
+    );
+}
+
+/// With still casters' pipelines NOT made ahead (the switch off), a character's cut-out cable
+/// geometries (drawn through a face's pixel shader) are as before the switch: their own pipeline
+/// made on a thread of its own, their ribbons' and list's made at once on the render thread.
+#[test]
+fn switched_off_a_characters_ribbon_and_list_pipelines_are_made_at_once() {
+    use d3d9_stream::hitch::{snapshot, Count};
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    assert!(sun_shadow::characters(), "characters cast (the default)");
+    // The caster pipelines made on threads of their own and at once, the cut-outs drawn through a
+    // face's pixel shader or not.
+    let made = |face: bool| {
+        let frames = [Extra {
+            ribbon_round: true,
+            mixed_cut: true,
+            face_cutouts: face,
+            ..Extra::default()
+        }; 4];
+        sun_shadow::enable(true);
+        sun_shadow::casters_ahead_for_tests(Some(false));
+        let b = backend(1);
+        sun_shadow::enable(false);
+        sun_shadow::casters_ahead_for_tests(None);
+        let mut b = b?;
+        let before = snapshot();
+        let _ = lit_sequence(&mut b, &frames, true);
+        let now = snapshot();
+        let d = |c: Count| now[c as usize] - before[c as usize];
+        Some((d(Count::ShadowPipelinesAhead), d(Count::ShadowPipelines)))
+    };
+    let Some(still) = made(false) else {
+        return;
+    };
+    let face = made(true).expect("the adapter");
+    assert_eq!(still.0, 0, "switched off, no still caster's made ahead");
+    assert!(
+        still.1 >= 3,
+        "the cut-outs', the ribbons' and the list's: {}",
+        still.1
+    );
+    assert_eq!(
+        face.0, 1,
+        "only the face's own pipeline made on a thread of its own"
+    );
+    assert_eq!(
+        face.1,
+        still.1 - 1,
+        "the face's ribbons' and list's made at once, as a still caster's"
     );
 }

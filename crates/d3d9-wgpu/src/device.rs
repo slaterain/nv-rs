@@ -8209,7 +8209,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // it: a character moving away from the sun then does not shade its own sunlit side.
         let per_frame = skin.is_some() || (ps.face && characters);
         // A still caster's pipeline on a thread of its own too ([`sun_shadow::casters_ahead`]).
-        let ahead = per_frame || self.sun.as_ref().is_some_and(|s| s.ahead);
+        let still_ahead = self.sun.as_ref().is_some_and(|s| s.ahead);
+        let ahead = per_frame || still_ahead;
         let samplers = self.sampler_bindings(vs, ps);
         let sampler_keys: Vec<(u32, u8, bool)> =
             samplers.as_slice().iter().map(|(k, _)| *k).collect();
@@ -8544,7 +8545,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let ribbon_pipe = match ribbon_header {
             Some(_) => match self.sun.as_ref().and_then(|s| s.ribbon_pipes.get(&rkey)) {
                 Some(p) => *p,
-                None if ahead => {
+                // Ahead only with the switch on (a character's too): off, made at once as before.
+                None if still_ahead => {
                     let (topology, index32) = if ribbon_list.is_some() {
                         (wgpu::PrimitiveTopology::TriangleList, true)
                     } else {
@@ -8631,7 +8633,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         if let (Some(_), Some(rest)) = (&thin, solid_list) {
             let list_pipe = match self.sun.as_ref().and_then(|s| s.pipes.get(&lkey)) {
                 Some(p) => *p,
-                None if ahead => {
+                // As the ribbons': ahead only with the switch on.
+                None if still_ahead => {
                     let made = self.sun_pipe_ahead(SunMap::Pipes, lkey, per_frame, |d| {
                         if !per_frame {
                             let what = prepare::CasterPipe::List;
