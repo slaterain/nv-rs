@@ -4192,26 +4192,35 @@ mod n058_tests {
         assert_eq!(calls_to(&e, IDLE_STATIC_CONSTRUCT_0041A250).len(), 1);
     }
 
-    /// The stick's 20000 is past the exe's dead zone (7849), so the cursor moves 4.0.
+    /// The stick and the dead zone (the double at `010718f0`, 8689 in this rig): 20000 is past it,
+    /// so the cursor moves 4.0; 5000 is inside it, so both inputs are 0.0 and the cursor stays.
     #[test]
     fn do_idle_stick_past_the_dead_zone_moves_the_cursor() {
-        let mut e = engine();
-        let menu = world(&mut e);
-        set(&mut e, menu, RouletteMenu::eRouletteState, 4);
-        set(&mut e, menu, RouletteMenu::iChipCount, 100);
-        set(&mut e, menu, RouletteMenu::iCurrentBet, 5);
-        set(&mut e, menu, RouletteMenu::iMinBet, 5);
-        e.register(FLAG_004B71D0, |_, _| 1u32.into_ret());
-        e.register(STICK_00A23390, |_, a| {
-            (if a[2] == 7 { 20000u32 } else { 0 }).into_ret()
-        });
-        e.register(ABS_00408820, |_, a| {
-            st0(f64::from(f32::from_bits(a[0]).abs()))
-        });
-        e.register(POINT_LENGTH_00457990, |_, _| st0(100.0));
-        e.call_log = Some(vec![]);
-        e.call(0x007b_d2a0, &args![menu]);
-        assert_eq!(e.mem.u32(menu + 0x3fd4), 4.0f32.to_bits());
+        let far: AbiFn = |_, a| (if a[2] == 7 { 20000u32 } else { 0 }).into_ret();
+        let near: AbiFn = |_, a| (if a[2] == 7 { 5000u32 } else { 0 }).into_ret();
+        for (axis, moves) in [(far, true), (near, false)] {
+            let mut e = engine();
+            let menu = world(&mut e);
+            set(&mut e, menu, RouletteMenu::eRouletteState, 4);
+            set(&mut e, menu, RouletteMenu::iChipCount, 100);
+            set(&mut e, menu, RouletteMenu::iCurrentBet, 5);
+            set(&mut e, menu, RouletteMenu::iMinBet, 5);
+            e.register(FLAG_004B71D0, |_, _| 1u32.into_ret());
+            e.register(STICK_00A23390, axis);
+            e.register(ABS_00408820, |_, a| {
+                st0(f64::from(f32::from_bits(a[0]).abs()))
+            });
+            e.register(POINT_LENGTH_00457990, |_, _| st0(100.0));
+            let before = e.mem.u32(menu + 0x3fd4);
+            e.call_log = Some(vec![]);
+            e.call(0x007b_d2a0, &args![menu]);
+            let after = e.mem.u32(menu + 0x3fd4);
+            if moves {
+                assert_eq!(after, 4.0f32.to_bits());
+            } else {
+                assert_eq!(after, before);
+            }
+        }
     }
 
     #[test]

@@ -2238,4 +2238,41 @@ mod n057_tests {
         );
         assert_eq!(calls_to(&e, INTERFACE_007044C0), vec![vec![1, 0, 0]]);
     }
+
+    /// `do_click_closes_or_repairs`' repair with two items left (no closing by count): the exe's
+    /// compare with the double 99 (`0x7B5D05`) decides. The broken item at 50 sets the menu up
+    /// again (no close); at 99 the menu closes.
+    #[test]
+    fn do_click_with_items_left_closes_at_99() {
+        for (health, closes) in [(50.0, false), (99.0, true)] {
+            let mut e = engine();
+            let menu = menu(&mut e);
+            let slot = e.mem.alloc(4);
+            e.mem.set_u32(slot, 0x2900);
+            answer(&mut e, ITEM_TILE_007B5370, slot);
+            st0(&mut e, GET_FLOAT_TRAIT, 255.0);
+            answer(&mut e, TILE_IS_TRUE, 1);
+            let broken = item_change(&mut e, 0x3300, 0);
+            e.set_global(BROKEN_ITEM, broken);
+            let used = item_change(&mut e, 0x3300, 0x4400);
+            let entry = item_change(&mut e, 0x3300, 0);
+            answer(&mut e, GET_OBJECT_IN_LIST, entry);
+            answer(&mut e, LIST_BOX_CURRENT_ITEM, used);
+            answer(&mut e, ITEM_FORM, 0x3300);
+            answer(&mut e, LIST_BOX_NUM_UNFILTERED, 2);
+            st0(&mut e, GET_ITEM_HEALTH, health);
+            let player = e.mem.alloc(4);
+            e.mem.set_u32(player, 0x0e00_0000);
+            e.set_global(PLAYER, player);
+            // `InitRepairMenu` (a direct call) returns at once without the menu global.
+            e.set_global(REPAIR_MENU, 0u32);
+            e.call_log = Some(vec![]);
+            e.call(0x007b_5b40, &args![menu, 0xei32, 0x2200u32]);
+            assert_eq!(
+                calls_to(&e, 0x0000_8000).contains(&vec![menu, 0xc, 0]),
+                closes,
+                "health {health}"
+            );
+        }
+    }
 }

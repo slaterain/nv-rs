@@ -13063,33 +13063,41 @@ mod n056_tests {
     }
 
     /// The zoom axis's dead zone: an axis of 20000 (above the exe's 7849) zooms (its 20000 / 32767
-    /// measured for the zoom amount). (No map tile: the zoom itself returns at once.)
+    /// measured for the zoom amount); one of 5000, inside the zone, does not. (No map tile: the
+    /// zoom itself returns at once.)
     #[test]
     fn do_gamepad_zoom_axis_past_the_dead_zone_zooms() {
-        let mut e = engine();
-        let menu = open_menu(&mut e, 0x100);
-        gamepad_ready(&mut e);
-        returns(&mut e, FLAG_00709D40, 1);
-        e.set(menu, MapMenu::iCurrentPage, 0x21);
-        e.set(menu, MapMenu::pMapTile, 0);
-        e.set_global::<f64>(ZOOM_DEAD_ZONE_DOUBLE, 7849.0);
-        e.set_global::<f64>(PAN_DEAD_ZONE_DOUBLE, 8689.0);
-        e.set_global::<f64>(AXIS_RANGE_DOUBLE, 32767.0);
-        e.register(INPUT_AXIS_00A23390, |_, a| Ret {
+        let far: AbiFn = |_, a| Ret {
             eax: if a[2] == 8 { 20000 } else { 0 },
             ..Ret::default()
-        });
-        e.register(MAGNITUDE_00408820, |_, a| Ret {
-            st0: f64::from(f32::from_bits(a[0])).abs(),
+        };
+        let near: AbiFn = |_, a| Ret {
+            eax: if a[2] == 8 { 5000 } else { 0 },
             ..Ret::default()
-        });
-        e.call_log = Some(vec![]);
-        e.call(0x0079_9790, &args![menu, 0i32, 0u32]);
-        let scaled = ((20000.0f64 / 32767.0) as f32).to_bits();
-        let zoomed = calls_to(&e, MAGNITUDE_00408820)
-            .iter()
-            .any(|c| c[0] == scaled);
-        assert!(zoomed);
+        };
+        for (axis, stick, zooms) in [(far, 20000.0f64, true), (near, 5000.0, false)] {
+            let mut e = engine();
+            let menu = open_menu(&mut e, 0x100);
+            gamepad_ready(&mut e);
+            returns(&mut e, FLAG_00709D40, 1);
+            e.set(menu, MapMenu::iCurrentPage, 0x21);
+            e.set(menu, MapMenu::pMapTile, 0);
+            e.set_global::<f64>(ZOOM_DEAD_ZONE_DOUBLE, 7849.0);
+            e.set_global::<f64>(PAN_DEAD_ZONE_DOUBLE, 8689.0);
+            e.set_global::<f64>(AXIS_RANGE_DOUBLE, 32767.0);
+            e.register(INPUT_AXIS_00A23390, axis);
+            e.register(MAGNITUDE_00408820, |_, a| Ret {
+                st0: f64::from(f32::from_bits(a[0])).abs(),
+                ..Ret::default()
+            });
+            e.call_log = Some(vec![]);
+            e.call(0x0079_9790, &args![menu, 0i32, 0u32]);
+            let scaled = ((stick / 32767.0) as f32).to_bits();
+            let zoomed = calls_to(&e, MAGNITUDE_00408820)
+                .iter()
+                .any(|c| c[0] == scaled);
+            assert_eq!(zoomed, zooms, "axis {stick}");
+        }
     }
 
     #[test]

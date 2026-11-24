@@ -3528,30 +3528,35 @@ mod tests {
         assert!(sounds(&e).is_empty());
     }
 
-    /// The pad's turn past the exe's dead zone (7849): the stick's 20000 gives the turn formula
-    /// 20000 / 1.
+    /// The pad's turn and the exe's dead zone (the double at `0x10718F0`, 7849 here): the stick's
+    /// 20000 gives the turn formula 20000 / 1; 5000, inside the zone, gives it 0.
     #[test]
     fn rotate_lockpick_stick_past_the_dead_zone_turns() {
-        let mut e = world();
-        let this = menu(&mut e);
-        e.set_global(CONTROLLER_SCALE, 1.0f32);
-        e.register(USING_GAMEPAD, |_, _| ret(1));
-        e.register(CONTROL_AXIS, |_, a| ret(if a[2] == 7 { 20000 } else { 0 }));
-        e.register(TILE_GET_FLOAT, |_, a| {
-            float(if a[0] == 0x90e0 { 100.0 } else { 0.0 })
-        });
-        e.register(FLOAT_MAX, |_, a| float(f64::from(f32::from_bits(a[0]))));
-        e.register(FLOAT_MIN, |_, a| float(f64::from(f32::from_bits(a[0]))));
-        e.register(FLOAT_ABS, |_, a| {
-            float(f64::from(f32::from_bits(a[0]).abs()))
-        });
-        e.mem.set_f32(this + SWEET_SPOT, 50.0);
-        e.mem.set_u32(this + SWEET_SPOT_RADIUS, 10);
-        e.set_global(SPOT_SCALE, 2.0f64);
-        e.set_global(OUTSIDE_SCALE, 90.0f64);
-        e.call_log = Some(vec![]);
-        e.call(0x0079_08f0, &args![this]);
-        assert_eq!(calls(&e, TURN_FORMULA)[0][0], 20000.0f32.to_bits());
+        let far: engine_core::AbiFn = |_, a| ret(if a[2] == 7 { 20000 } else { 0 });
+        let near: engine_core::AbiFn = |_, a| ret(if a[2] == 7 { 5000 } else { 0 });
+        for (axis, ratio) in [(far, 20000.0f32), (near, 0.0)] {
+            let mut e = world();
+            let this = menu(&mut e);
+            e.set_global(CONTROLLER_SCALE, 1.0f32);
+            e.set_global(DEAD_ZONE_718F0, 7849.0f64);
+            e.register(USING_GAMEPAD, |_, _| ret(1));
+            e.register(CONTROL_AXIS, axis);
+            e.register(TILE_GET_FLOAT, |_, a| {
+                float(if a[0] == 0x90e0 { 100.0 } else { 0.0 })
+            });
+            e.register(FLOAT_MAX, |_, a| float(f64::from(f32::from_bits(a[0]))));
+            e.register(FLOAT_MIN, |_, a| float(f64::from(f32::from_bits(a[0]))));
+            e.register(FLOAT_ABS, |_, a| {
+                float(f64::from(f32::from_bits(a[0]).abs()))
+            });
+            e.mem.set_f32(this + SWEET_SPOT, 50.0);
+            e.mem.set_u32(this + SWEET_SPOT_RADIUS, 10);
+            e.set_global(SPOT_SCALE, 2.0f64);
+            e.set_global(OUTSIDE_SCALE, 90.0f64);
+            e.call_log = Some(vec![]);
+            e.call(0x0079_08f0, &args![this]);
+            assert_eq!(calls(&e, TURN_FORMULA)[0][0], ratio.to_bits(), "{ratio}");
+        }
     }
 
     #[test]

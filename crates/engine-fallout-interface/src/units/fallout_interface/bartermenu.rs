@@ -4268,6 +4268,35 @@ mod n051_tests {
         assert_eq!(e.call(0x0072_f120, &args![this, list, lone]).u32(), 0);
     }
 
+    /// InitFunc on an unselected tile whose stack has a buy-list entry (REVIEW-683): 5 held with 2
+    /// in the buy list sets `_NumBartered` to 2 and names the entry with the count shown, 3
+    /// (`NAME_COUNT_FORMAT` with the name and 3).
+    #[test]
+    fn init_func_shows_the_count_left_after_the_buy_list() {
+        let mut e = engine();
+        let this = menu(&mut e);
+        let it = item(&mut e, 0, 5, 0x8000);
+        let traded = item(&mut e, 0, 2, 0x8000);
+        e.mem.set_u32(this.addr() + ITEMS_TO_BUY, traded);
+        e.register(ITEM_GET_VALUE, |_, _| st0(0.5));
+        e.register(FLOAT_PAIR_0040EBD0, |_, a| {
+            st0(f64::from(f32::from_bits(a[0])))
+        });
+        e.register(FLOAT_PAIR_004BD510, |_, a| {
+            st0(f64::from(f32::from_bits(a[0])))
+        });
+        answer(&mut e, ITEM_FULL_NAME, 0x7500);
+        answer(&mut e, TEXT_TO_TRAIT, 0x33);
+        e.set_global(VALUE_TRAIT, 0x34u32);
+        e.call_log = Some(vec![]);
+        e.call(0x0072_f210, &args![0x6100u32, it]);
+        assert_eq!(calls_to(&e, TILE_SET_INT), vec![vec![0x6100, 0x33, 2]]);
+        assert_eq!(
+            calls_to(&e, FORMAT_TEXT)[0][1..],
+            [0x80, NAME_COUNT_FORMAT, 0x7500, 3]
+        );
+    }
+
     #[test]
     fn init_func_labels_the_tile() {
         let mut e = engine();

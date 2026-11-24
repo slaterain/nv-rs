@@ -11269,34 +11269,36 @@ mod n052_tests {
     }
 
     /// `DoIdle`'s dead zone (the exe's 7849 at `010718f0`): in the deck input a stick x of 20000
-    /// reaches the meter step as 20000 / 32767.
+    /// reaches the meter step as 20000 / 32767; one of 5000, inside the zone, is cleared first.
     #[test]
     fn do_idle_stick_x_past_the_dead_zone_steps() {
-        let (mut e, this) = idle_engine();
-        e.set(this, CaravanMenu::eActiveMenu, 1);
-        idle_at(&mut e, this, 0, 0.0);
-        e.register(KEYS_BLOCKED_004B71D0, |_, _| ret(1));
-        e.register(CONTROLS_AXIS_00A23390, |_, a| {
-            ret(if a[2] == 7 { 20000 } else { 0 })
-        });
-        e.register(FLOAT_MAGNITUDE_00408820, |_, a| {
-            ret_f(f64::from(f32::from_bits(a[0]).abs()))
-        });
-        e.register(FLOAT_MAGNITUDE_00408840, |_, a| {
-            ret_f(f64::from(f32::from_bits(a[0]).abs()))
-        });
-        e.register(GET_FLOAT_TRAIT, |_, _| ret_f(7.0));
-        let menu = this.addr();
-        let deck: Vec<u32> = (0..13).map(|_| card(&mut e, 1, 1, 0)).collect();
-        fill_array(&mut e, menu + DECK_ARRAY, &deck);
-        e.mem.set_u32(menu + SELECTION_DELAY, 0.5f32.to_bits());
-        e.mem.set_u32(menu + PENDING_KEY, KEY_UP);
-        do_idle(&mut e, this);
-        let x_bits = ((20000.0f64 / 32767.0) as f32).to_bits();
-        let stepped = calls_to(&e, FLOAT_MAGNITUDE_00408840)
-            .iter()
-            .any(|c| c[0] == x_bits);
-        assert!(stepped);
+        let far: AbiFn = |_, a| ret(if a[2] == 7 { 20000 } else { 0 });
+        let near: AbiFn = |_, a| ret(if a[2] == 7 { 5000 } else { 0 });
+        for (axis, stick, reaches) in [(far, 20000.0f64, true), (near, 5000.0, false)] {
+            let (mut e, this) = idle_engine();
+            e.set(this, CaravanMenu::eActiveMenu, 1);
+            idle_at(&mut e, this, 0, 0.0);
+            e.register(KEYS_BLOCKED_004B71D0, |_, _| ret(1));
+            e.register(CONTROLS_AXIS_00A23390, axis);
+            e.register(FLOAT_MAGNITUDE_00408820, |_, a| {
+                ret_f(f64::from(f32::from_bits(a[0]).abs()))
+            });
+            e.register(FLOAT_MAGNITUDE_00408840, |_, a| {
+                ret_f(f64::from(f32::from_bits(a[0]).abs()))
+            });
+            e.register(GET_FLOAT_TRAIT, |_, _| ret_f(7.0));
+            let menu = this.addr();
+            let deck: Vec<u32> = (0..13).map(|_| card(&mut e, 1, 1, 0)).collect();
+            fill_array(&mut e, menu + DECK_ARRAY, &deck);
+            e.mem.set_u32(menu + SELECTION_DELAY, 0.5f32.to_bits());
+            e.mem.set_u32(menu + PENDING_KEY, KEY_UP);
+            do_idle(&mut e, this);
+            let x_bits = ((stick / 32767.0) as f32).to_bits();
+            let stepped = calls_to(&e, FLOAT_MAGNITUDE_00408840)
+                .iter()
+                .any(|c| c[0] == x_bits);
+            assert_eq!(stepped, reaches, "stick {stick}");
+        }
     }
 
     /// In the game input a stick y of 20000 starts a selection step (the delay restarts at the

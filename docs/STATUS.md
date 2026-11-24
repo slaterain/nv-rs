@@ -205,8 +205,7 @@ page is checked by a test (`the_readme_counts_the_built_commands` in `crates/jip
 ### Game patches
 
 JIP's game patches changed the game's own code. They are being taken out of the port, crate by
-crate, with the rest of the built-in JIP LN: the interface, drawing-tree and typed crates' parts are
-out, and there the game's own code runs. Until the last part is out, the list below is what was
+crate, with the rest of the built-in JIP LN. Until the last part is out, the list below is what was
 built (174 of its 183, inert until JIP answers "installed"; three more were folded into other rows
 and six do nothing on this port). It included:
 
