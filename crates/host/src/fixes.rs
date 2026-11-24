@@ -45,7 +45,6 @@ pub static FIXES: &[Fix] = &[
     JIP_GAME_PATCHES,
     JG_EDITOR_IDS,
     MCM,
-    STEWIE,
     UIO,
     SCRIPT_ERROR_GUARD,
     IMOD_EVENT_FORM_CHECK,
@@ -493,14 +492,12 @@ pub const SCRIPT_NULL_GUARD: Fix = Fix {
     env: "NV_NVSE_NULL_GUARD",
     addresses: &[],
     summary:
-        "ar_Count and ar_GetNth on a missing array answer 0, and a format string's string outside the game's memory ends the text, instead of stopping the game; with lStewieAl's Tweaks' switch node bounds row a switch node whose shown child is not there takes no child's bound",
+        "ar_Count and ar_GetNth on a missing array answer 0, and a format string's string outside the game's memory ends the text, instead of stopping the game",
     install: install_script_null_guard,
 };
 
 fn install_script_null_guard(e: &mut Engine) {
     nvse::commands::array::set_fix(e, nvse::commands::array::NULL_GUARD, true);
-    // Tweaks' slips not copied (S0237's child index), the same guard.
-    e.set_stewie_slip_guard(true);
 }
 
 pub const SCRIPT_CYCLE_GUARD: Fix = Fix {
@@ -613,42 +610,6 @@ fn install_uio(e: &mut Engine) {
     uio::set_on(e, true);
 }
 
-/// lStewieAl's Tweaks built in (`crates/stewie`, docs/FIXES.md "lStewieAl's Tweaks"): its engine fixes,
-/// each a row of its own with an off key in Fallout.ini's `[nv-rs Stewie]`, with VNV's values as the
-/// defaults of its settings and the player's `nvse_stewie_tweaks.ini` over them. Mods are not told
-/// it is installed until its script commands are built (`stewie::ANSWERS_INSTALLED`); then xNVSE
-/// lists it as "lStewieAl's Tweaks" 1005. On in the fixes preset, off in vanilla. The row sets a flag;
-/// `stewie::install` (after JIP and MCM, before UIO, in `install_rows_and_extenders`) reads the
-/// settings and sets the rows' bits.
-/// JohnnyGuitar NVSE's editor-id restoration built in (`crates/johnnyguitar`), a flag the crate
-/// reads at its install: every loaded form keeps the editor id its record gives it, so text
-/// compiled while the game runs (the console, script runner files, `CompileScript`, lambdas from
-/// text) finds `PlayerRef` or `Caps001` by name, as with JohnnyGuitar installed (VNV installs it).
-/// Off (vanilla): the game's own few names, as without JohnnyGuitar.
-pub const JG_EDITOR_IDS: Fix = Fix {
-    name: "JohnnyGuitar's editor ids",
-    env: "NV_JG_EDITOR_IDS",
-    addresses: &[],
-    summary: "JohnnyGuitar NVSE's editor ids built in: every form keeps its editor id, so the console, script runner files and scripts compiled from text find forms such as PlayerRef by name, as on a VNV setup",
-    install: install_jg_editor_ids,
-};
-
-fn install_jg_editor_ids(e: &mut Engine) {
-    johnnyguitar::set_on(e, true);
-}
-
-pub const STEWIE: Fix = Fix {
-    name: "lStewieAl's Tweaks built in",
-    env: "NV_STEWIE",
-    addresses: &[],
-    summary: "lStewieAl's Tweaks built in: its engine fixes (crash fixes first), each with its own off key in [nv-rs Stewie], with VNV's settings unless the player's nvse_stewie_tweaks.ini says otherwise",
-    install: install_stewie,
-};
-
-fn install_stewie(e: &mut Engine) {
-    stewie::set_on(e, true);
-}
-
 /// The Mod Configuration Menu's NVSE plugin built in (`crates/mcm`: MCM.dll 1.5, "MCM Extensions"):
 /// its nine commands at `0x21C0` up, which MCM's scripts and the menus of the mods that use it call
 /// (`GetMCMFloat`, `SetMCMFloat`, `GetModINI`, ...). On in `fixes` (with JIP, which MCM's mods need),
@@ -685,7 +646,6 @@ const NO_ADDRESS: &[&str] = &[
     JIP_GAME_PATCHES.name,
     JG_EDITOR_IDS.name,
     MCM.name,
-    STEWIE.name,
     UIO.name,
     SCRIPT_ERROR_GUARD.name,
     IMOD_EVENT_FORM_CHECK.name,
@@ -923,9 +883,6 @@ pub struct Choice {
     /// The one log line naming `Fallout.ini` values that could not be used
     /// ([`crate::game_ini::Keys::bad_line`]): the default stood for each.
     pub ini_note: Option<String>,
-    /// Fallout.ini's `[nv-rs Stewie]` keys (a launcher's play run only): Tweaks' rows each off by
-    /// its own key, and `bMissingKeysAsTweaks` (`stewie::rows::Keys`).
-    pub stewie: stewie::rows::Keys,
 }
 
 impl Choice {
@@ -957,7 +914,6 @@ impl Choice {
             not_background: PLAY_NOT_BACKGROUND,
             not_background_by: None,
             ini_note: None,
-            stewie: stewie::rows::Keys::default(),
             draw_poison: false,
             draw_check: false,
         }
@@ -1128,7 +1084,6 @@ impl Choice {
                 .not_background
                 .map(|_| "Fallout.ini's [nv-rs Threads] bNotBackground"),
             ini_note: ini.bad_line(),
-            stewie: ini.stewie.clone(),
             draw_poison: env(DRAW_THREAD.env).as_deref().map(str::trim) == Some("poison"),
             draw_check: env(DRAW_THREAD_CHECK).as_deref().map(str::trim) == Some("1"),
         };
@@ -1482,7 +1437,6 @@ fn parse_limit(value: &str, source: &str) -> Result<u32, String> {
 /// for the whole run.
 pub fn install(e: &mut Engine, choice: &Choice) {
     crate::uncap::set_frame_limit(choice.frame_limit);
-    stewie::set_keys(e, choice.stewie.clone());
     crate::uncap::set_menu_frame_limit(choice.bound_menu_frame_limit());
     for fix in FIXES.iter().filter(|f| choice.is_on(f)) {
         (fix.install)(e);

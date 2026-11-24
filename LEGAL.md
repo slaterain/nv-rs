@@ -133,9 +133,6 @@ terms, whose notice must be kept:
 - `crates/johnnyguitar` builds JohnnyGuitar NVSE 5.28 (carxt and its contributors) in,
   piece by piece, with its authors' permission; JohnnyGuitar NVSE is under the LGPL-2.1, used here
   under the GPL-3.0 (this repository's LICENSE) as its section 3 allows; see [crates/johnnyguitar/NOTICE](crates/johnnyguitar/NOTICE).
-- `crates/stewie` builds lStewieAl's Tweaks 10.05 (lStewieAl) in with its author's permission,
-  with Viva New Vegas' INI values for it (ModdingLinked, MIT licence); see
-  [crates/stewie/NOTICE](crates/stewie/NOTICE).
 - These notices, and those above, are in every package's licenses folder, Windows', Linux's and
   macOS' (distribution/notices.txt lists them, every package script copies that list, and the
   package is refused when one is missing).
