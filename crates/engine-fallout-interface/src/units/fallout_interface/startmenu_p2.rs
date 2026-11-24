@@ -3108,18 +3108,7 @@ pub fn fn_007d6d70(e: &mut Engine) {
 /// on, `MenuFixes::StartMenuIsActionMappingOptionSelected`: while the remap waits, false the
 /// first time (its `static bool debounce` set) and true after; not waiting clears the debounce.
 fn remap_waiting(e: &mut Engine, this: Ptr<StartMenu>) -> bool {
-    return e.call(WAITING_FOR_REMAP_PRESS, &args![this]).bool();
-    let waiting = e.call(WAITING_FOR_REMAP_PRESS, &args![this]).bool();
-    let debounce = e.stewie_kept(stewie::kept::REMAP_DEBOUNCE, 1);
-    if waiting {
-        if e.mem.u8(debounce) != 0 {
-            return true;
-        }
-        e.mem.set_u8(debounce, 1);
-    } else {
-        e.mem.set_u8(debounce, 0);
-    }
-    false
+    e.call(WAITING_FOR_REMAP_PRESS, &args![this]).bool()
 }
 
 /// `IniSettingCollection::GetIniPrefs` (`*0x11F35A0`): the prefs collection, its path at +4.

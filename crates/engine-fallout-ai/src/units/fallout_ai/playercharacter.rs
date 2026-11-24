@@ -9556,18 +9556,7 @@ const MAP_MENU: u32 = 0x011d_a368;
 /// setting clear, also only when the player (`011dea3c`) is in third person (+0x64B) or its
 /// animation data (slot `0x1e4`) plays no special idle (sequence 7, +0xFC).
 fn auto_vanity_allowed(e: &mut Engine) -> bool {
-    return e.call(0x004b_9930, &args![IDLE_OBJECT_011E09E0]).bool();
-    if e.mem.u32(IDLE_OBJECT_011E09E0 + 4) != 0 {
-        return false;
-    }
-    let player = e.global::<u32>(PLAYER_SINGLETON);
-    if e.mem.u8(player + 0x64b) != 0 {
-        return true;
-    }
-    let data = e.vcall(player, 0x1e4, &args![]).u32();
-    // Tweaks reads the animation data without a null test: none counts as no idle here (a guard
-    // against a crash only).
-    data == 0 || e.mem.u32(data + 0xfc) == 0
+    e.call(0x004b_9930, &args![IDLE_OBJECT_011E09E0]).bool()
 }
 
 /// The swap control's ammunition swap of `PlayerCharacter::Update` (`0x940B10`, `009462c0`).
@@ -9625,12 +9614,7 @@ fn activate_or_workbench(
 /// `PlayerInCharGenOrTestAllCells`): also while the console's `TestAllCells` runs (TES +0x51 or
 /// +0x52).
 fn levelup_held(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
-    return e.call(0x005c_7870, &args![this]).bool();
-    if e.mem.u8(this.addr() + 0x75c) != 0 {
-        return true;
-    }
-    let tes = e.global::<u32>(TES_SINGLETON);
-    e.mem.u8(tes + 0x51) != 0 || e.mem.u8(tes + 0x52) != 0
+    e.call(0x005c_7870, &args![this]).bool()
 }
 
 /// The god mode byte (`g_bIsGodmode`, `011e07ba`).
@@ -9662,14 +9646,7 @@ fn update_levelup(e: &mut Engine, this: Ptr<PlayerCharacter>, status_slot: u32) 
 /// (`LAST_COMBAT_TIME`); out of combat, true until 3000 have passed since (unsigned); `out` is not
 /// written.
 fn levelup_combat_test(e: &mut Engine, this: Ptr<PlayerCharacter>, out: u32) -> bool {
-    return e.call(0x0095_3c50, &args![this, out]).bool();
-    let kept = e.stewie_kept(engine_core::extend::stewie::kept::LAST_COMBAT_TIME, 4);
-    let now = e.mem.u32(0x011f_6394 + 0x14);
-    if e.mem.u8(this.addr() + 0xdf0) != 0 {
-        e.mem.set_u32(kept, now);
-        return true;
-    }
-    now.wrapping_sub(e.mem.u32(kept)) < 3000
+    e.call(0x0095_3c50, &args![this, out]).bool()
 }
 
 /// A movement direction's test in `PlayerCharacter::Update` (`00a24660` on `input`: the control
@@ -9712,15 +9689,7 @@ fn has_ammo_or_godmode_automatic(e: &mut Engine, this: Ptr<PlayerCharacter>, pro
     if e.vcall(process, 0x14c, &args![]).u32() != 0 {
         return true;
     }
-    return false;
-    let process = e.mem.u32(this.addr() + 0x68);
-    let entry = if process != 0 {
-        e.vcall(process, 0x148, &args![]).u32()
-    } else {
-        0
-    };
-    let weapon = if entry != 0 { e.mem.u32(entry + 8) } else { 0 };
-    weapon != 0 && e.mem.u8(weapon + 0x100) & 0x2 != 0 && e.mem.u32(weapon + 0xa8) != 0
+    false
 }
 
 /// The free-flight push of `PlayerCharacter::Update` (around `0x942793`, collision off): the move is
@@ -9790,12 +9759,7 @@ fn bumped_actor(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
 /// `bhkCharacterController_GetContextHkState_ZeroIfSeated`): 0 (on the ground) while the player
 /// (`011dea3c`) is in a sit or sleep state (+0x1AC not 0); else the state, read directly.
 fn wait_controller_state(e: &mut Engine, controller: u32) -> u32 {
-    return e.call(0x005c_0880, &args![controller]).u32();
-    let player = e.global::<u32>(PLAYER_SINGLETON);
-    if e.mem.u32(player + 0x1ac) != 0 {
-        return 0;
-    }
-    e.mem.u32(controller + 0x3f0)
+    e.call(0x005c_0880, &args![controller]).u32()
 }
 
 /// The clip test of the player's continuous beam in `PlayerCharacter::Update` (`0x9440BB` to
@@ -9823,10 +9787,7 @@ fn beam_clip_holds(e: &mut Engine, this: Ptr<PlayerCharacter>, weapon_form: u32)
 /// +0x68, slot `0x454`; no process counts as no weapon out).
 fn beam_attack_released(e: &mut Engine, main_state: u32) -> bool {
     let released = e.call(0x00a2_4660, &args![main_state, 4u32, 2u32]).u32() != 0;
-    return released;
-    let player = e.global::<u32>(PLAYER_SINGLETON);
-    let process = e.mem.u32(player + 0x68);
-    process == 0 || !e.vcall(process, 0x454, &args![]).bool()
+    released
 }
 
 /// The player's continuous beam in `PlayerCharacter::Update` (`0x9440A3` to `0x944174`): with a
@@ -9912,23 +9873,7 @@ fn player_beam_reduce_ammo(e: &mut Engine) {
 /// toward 0; then Tweaks' own `IsControllerConnected`: the controller is not disabled (the byte
 /// `011d8c50` is not 1) and is connected (`011d8a84`).
 fn vanity_turn_gamepad_test(e: &mut Engine) -> bool {
-    return e.call(0x004b_71d0, &args![]).u8() != 0;
-    // Tweaks' `kDblPI` and `kDblPIx2` (utility.h), the `double`s of pi and 2 pi.
-    const PI: f64 = std::f64::consts::PI;
-    const TWO_PI: f64 = std::f64::consts::TAU;
-    let mut turn = e.global::<f32>(ACCUMULATED_YAW);
-    if turn as f64 > TWO_PI {
-        turn = (turn as f64 % TWO_PI) as f32;
-    } else if (turn as f64) < -TWO_PI {
-        turn = (-((-turn) as f64 % TWO_PI)) as f32;
-    }
-    if turn as f64 > PI {
-        turn = (-(TWO_PI - turn as f64)) as f32;
-    } else if (turn as f64) < -PI {
-        turn = (turn as f64 + TWO_PI) as f32;
-    }
-    e.set_global(ACCUMULATED_YAW, turn);
-    e.mem.u8(CONTROLLER_DISABLED) != 1 && e.mem.u8(CONTROLLER_CONNECTED) != 0
+    e.call(0x004b_71d0, &args![]).u8() != 0
 }
 /// `bDisableController`'s value byte (`011d8c4c` +4).
 const CONTROLLER_DISABLED: u32 = 0x011d_8c50;

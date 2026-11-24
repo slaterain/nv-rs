@@ -1053,12 +1053,7 @@ const GET_EQUIP_TYPE_ICON: u32 = 0x0047_9540;
 /// (the form's type byte 0x19) gets `kChems` (10) and ammunition (0x29) `kBigGuns` (0).
 pub(crate) fn equip_type_for_hotkey_icon(e: &mut Engine, form: u32) -> u32 {
     let equip_type = e.call(GET_EQUIP_TYPE, &args![form]).u32();
-    return equip_type;
-    match e.mem.u8(form + 4) {
-        0x19 => 10,
-        0x29 => 0,
-        _ => equip_type,
-    }
+    equip_type
 }
 /// `strcpy_s` and `strcat_s` (cdecl: buffer, size, text) and `strlen`.
 const STRCPY_S: u32 = 0x0040_6d30;

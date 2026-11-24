@@ -564,21 +564,7 @@ pub fn interface_manager_check_menu_button(e: &mut Engine, button: i32, analog: 
 /// Other states and buttons, or the row off: `state` as it is.
 fn stewie_menu_button_debounce(e: &mut Engine, button: i32, state: i32) -> i32 {
     const BUTTON_B: i32 = 0xa;
-    return state;
-    let input = e.mem.u32(0x011f_35cc);
-    if input == 0 {
-        // No input globals: Tweaks would read through a null pointer (our guard).
-        return state;
-    }
-    let flags = e.mem.u32(input + 0x1b92);
-    if state == 2 {
-        e.mem.set_u32(input + 0x1b92, flags & 0xffff_fff7);
-        2
-    } else if flags & 8 != 0 {
-        -1
-    } else {
-        1
-    }
+    state
 }
 
 // Translated from 00717de0 (decompiled, FalloutNV.exe 1.4.0.525)

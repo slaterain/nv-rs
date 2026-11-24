@@ -4900,30 +4900,7 @@ fn helmet_slot_has_no_item(
     clone: Ptr,
     index: u32,
 ) -> bool {
-    return false;
-    let slot = e.mem.u32(BIPED_SLOT_NAMES + 4 * index);
-    let character = e.mem.u32(biped.addr() + BIPED_CHARACTER);
-    let actor = if character != 0 {
-        character
-    } else {
-        e.get(this, QueuedHelmet::pRef).addr()
-    };
-    if actor != 0 {
-        let name = e.call(REFERENCE_GET_THE_NAME, &args![actor]).u32();
-        let id = e.mem.u32(actor + FORM_REF_ID);
-        engine_core::extend::stewie::console_print(
-            e,
-            b"Failed to resolve item for body part '%s' on actor %s (%08X)",
-            &[slot, name, id],
-        );
-    } else {
-        engine_core::extend::stewie::console_print(
-            e,
-            b"Failed to resolve item for body part '%s' on null actor",
-            &[slot],
-        );
-    }
-    true
+    false
 }
 
 // Translated from 0043fc10 (decompiled, FalloutNV.exe 1.4.0.525)

@@ -663,12 +663,7 @@ const TLS_CONSOLE_LINE: u32 = 0x268;
 /// Whether a print Tweaks' row S0056 gates goes out: always without the row; with it only in
 /// console mode (the console open and the running thread's console-line byte set).
 pub(crate) fn stewie_print_allowed(e: &mut Engine) -> bool {
-    return true;
-    if e.mem.u8(CONSOLE_OPEN) == 0 {
-        return false;
-    }
-    let tls = e.tls();
-    tls != 0 && e.mem.u8(tls + TLS_CONSOLE_LINE) != 0
+    true
 }
 /// `thiscall` on the `TES`: `bRunningCellTests` or `bRunningCellTests2`
 /// (`+0x51`, `+0x52`).

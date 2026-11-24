@@ -3746,34 +3746,6 @@ fn update_movement_mode(e: &mut Engine, f: &mut UpdateFrame) {
     }
 }
 
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/ContinuousBeamProjectileCrashFix.cpp):
-// OnActorUpdate_UpdateBeam.
-/// lStewieAl's Tweaks' row S0130.02: an actor other than the player (`011dea3c`) holding a
-/// continuous beam (+0x1A0) keeps it firing (the beam's slot `0x310` with 0.0, as the player's
-/// update does) while its process' current animation action (slot `0x3e4`, a signed word) is an
-/// attack one (2 to 6: attack, follow-through, latency, throw attach, throw release); otherwise the
-/// beam is set to fade (flag 0x20 at +0xC8). No process counts as no attack. Tweaks installs it
-/// with S0130.01 (the shooter's beam pointer cleared when the beam is freed); here it acts only
-/// while that row is on too, so it never follows a stale pointer (a guard against a crash).
-fn update_npc_beam(e: &mut Engine, this: Ptr<Actor>) {
-    return;
-    let beam = e.mem.u32(this.addr() + 0x1a0);
-    if beam == 0 {
-        return;
-    }
-    let process = e.mem.u32(this.addr() + 0x68);
-    let attacking = process != 0 && {
-        let action = e.vcall(process, 0x3e4, &args![]).u16() as i16;
-        (2..=6).contains(&action)
-    };
-    if attacking {
-        e.vcall(beam, 0x310, &args![0.0f32]);
-    } else {
-        let flags = e.mem.u32(beam + 0xc8);
-        e.mem.set_u32(beam + 0xc8, flags | 0x20);
-    }
-}
-
 /// The position part of `Actor::Update`: the player's 3D object is placed
 /// at the actor's position (`00440460`), any other actor goes through
 /// [`actor_update_actor_3d_position`] and the process virtual `+0x428`;
@@ -3792,7 +3764,6 @@ fn update_position(e: &mut Engine, f: &UpdateFrame) {
     }
     // lStewieAl's Tweaks' row S0130.02 (`ContinuousBeamProjectileCrashFix`, its
     // `OnActorUpdate_UpdateBeam` before the call at `0x889869`).
-    update_npc_beam(e, this);
     let link = e.call(GET_LINKED_OBJECT, &args![this]).u32();
     if link != 0 && typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, link)) != 0 {
         let word = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, link));
@@ -6255,8 +6226,7 @@ pub fn actor_equip_object(
 /// `PlayerHasPowerArmorTrainingOrGodmode`): also true in god mode (`011e07ba`) or demigod mode
 /// (`011e0898`).
 fn power_armor_training(e: &mut Engine, player: u32) -> bool {
-    return fn_0088d2d0(e, Ptr::new(player)) != 0;
-    e.mem.u8(player + 0x7c7) != 0 || e.mem.u8(0x011e_07ba) != 0 || e.mem.u8(0x011e_0898) != 0
+    fn_0088d2d0(e, Ptr::new(player)) != 0
 }
 
 // Translated from 0088d2d0 (decompiled, FalloutNV.exe 1.4.0.525)

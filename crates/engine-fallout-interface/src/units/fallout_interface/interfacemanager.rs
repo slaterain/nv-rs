@@ -3246,12 +3246,7 @@ fn idle_dispatch_key(
 /// visible menu (xNVSE's `GetTopVisibleMenuID`) is the barter (`0x41D`), container (`0x3F0`) or
 /// quantity (`0x3F8`) menu, so a rendered menu (a terminal) behind them no longer takes the mouse.
 fn paused_or_trading(e: &mut Engine, this: Ptr<InterfaceManager>) -> bool {
-    return e.call(MENU_FLAG_QUERY_004A4040, &args![]).bool();
-    let start_menu = e.global::<u32>(START_MENU_SINGLETON);
-    if start_menu != 0 && e.mem.u32(start_menu + 0x1a8) & 1 != 0 {
-        return true;
-    }
-    matches!(top_visible_menu_id(e, this), 0x41d | 0x3f0 | 0x3f8)
+    e.call(MENU_FLAG_QUERY_004A4040, &args![]).bool()
 }
 
 /// xNVSE's `InterfaceManager::GetTopVisibleMenuID`: 0 below menu mode (`cMenuMode` < 2); the
@@ -4423,10 +4418,8 @@ pub fn interface_manager_get_top_gamepad_button(
         result = 3;
     } else if pressed_11 {
         result = 0x11;
-        stewie_l3_r3_released(e, released);
     } else if pressed_12 {
         result = 0x12;
-        stewie_l3_r3_released(e, released);
     }
     let last = e.get(this, InterfaceManager::iLastGamepadEvent);
     let mut held_direction = 0;
@@ -4556,20 +4549,6 @@ fn stick_axis(e: &mut Engine, controls: u32, axis: u32) -> i32 {
 const START_MENU_SINGLETON: u32 = 0x011d_aac0;
 /// `StartMenu::IsInActionMapping` (`thiscall`): the control mapping waits for a key.
 const START_MENU_IS_IN_ACTION_MAPPING: u32 = 0x007c_e8f0;
-
-/// lStewieAl's Tweaks' S0022.53 (`L3PressedHook` at `0x7104A1`, `R3PressedHook` at `0x7104B0`):
-/// with L3 or R3 taken, `*released` = 1 unless the start menu exists and its control mapping waits
-/// for a key (then 0), so `DoGamepadEvent` hands the button to the frontmost menu's
-/// `HandleControllerInput` (slot 0x3c). Off: `*released` is not written there.
-fn stewie_l3_r3_released(e: &mut Engine, released: Ptr) {
-    return;
-    let start_menu = e.global::<u32>(START_MENU_SINGLETON);
-    let mapping = start_menu != 0
-        && e.call(START_MENU_IS_IN_ACTION_MAPPING, &args![start_menu])
-            .u8()
-            != 0;
-    e.mem.set_u8(released.addr(), u8::from(!mapping));
-}
 
 /// `uGamepadRepeatStartTime` = twice the tick count (`0x710624`, `0x71085F`); with lStewieAl's
 /// Tweaks' S0022.32 (its `mov eax, -1` over the tick's call and the shift) -1.

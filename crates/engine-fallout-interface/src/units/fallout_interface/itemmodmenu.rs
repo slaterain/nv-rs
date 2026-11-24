@@ -599,21 +599,6 @@ pub fn item_mod_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
 /// (the word its `extendData` list starts with), `QueueUnEquipObject` then `QueueEquipObject` on
 /// the player with the entry's form (+8) and count (+4), flags 1, 0, 1. Off: nothing.
 pub fn stewie_after_mod_refresh(e: &mut Engine) {
-    return;
-    let entry = mod_item(e);
-    let lists = e.mem.u32(entry);
-    let extra = if lists != 0 { e.mem.u32(lists) } else { 0 };
-    let count = e.mem.u32(entry + 4);
-    let object = e.mem.u32(entry + 8);
-    let player = e.global::<u32>(PLAYER);
-    e.call(
-        QUEUE_UNEQUIP,
-        &args![player, object, count, extra, 1u32, 0u32, 1u32],
-    );
-    e.call(
-        QUEUE_EQUIP,
-        &args![player, object, count, extra, 1u32, 0u32, 1u32],
-    );
 }
 
 // Translated from 00783af0 (decompiled, FalloutNV.exe 1.4.0.525)

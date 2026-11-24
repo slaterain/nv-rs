@@ -1127,15 +1127,10 @@ pub fn race_sex_menu_scalar_deleting_destructor(
     race_sex_menu_destructor(e, this);
     // `0x7AC53A` (lStewieAl's Tweaks' S0218 detours that call: after it, the player's last
     // exterior door is set when it has none).
-    stewie_after_free(e);
     if flags & 1 != 0 {
         e.call(FREE, &args![this]);
     }
     this
-}
-
-/// After the destructor (`0x7AC53A`): lStewieAl's Tweaks' S0218 sets the last exterior door.
-fn stewie_after_free(e: &mut Engine) {
 }
 
 /// lStewieAl's Tweaks' `WorldMapNoExteriorDoorFix::SetLastExteriorDoor` (row S0218): a new

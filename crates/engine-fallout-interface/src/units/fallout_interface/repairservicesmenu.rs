@@ -700,13 +700,6 @@ const LIST_BOX_RESTORE_POSITION: u32 = 0x0073_1360;
 /// restored after (`RestorePosition(false)`).
 fn update_keeping_scroll(e: &mut Engine, this: Ptr) {
     repair_services_menu_update(e, this);
-    return;
-    e.call(LIST_BOX_SAVE_POSITION, &args![this.addr() + REPAIR_LIST]);
-    repair_services_menu_update(e, this);
-    e.call(
-        LIST_BOX_RESTORE_POSITION,
-        &args![this.addr() + REPAIR_LIST, 0u32],
-    );
 }
 
 /// `Actor::ResetActorDTDR`'s vtable slot (xNVSE's `Actor` virtuals; Tweaks'

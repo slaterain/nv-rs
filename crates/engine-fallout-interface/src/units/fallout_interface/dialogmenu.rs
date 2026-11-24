@@ -102,10 +102,6 @@ const TOPICS_RELEASE_0083E510: u32 = 0x0083_e510;
 /// `SetInDialogueOrHolotapePlaying`): set, the radio plays quieter.
 const RADIO_QUIETER_011DCFA4: u32 = 0x011d_cfa4;
 
-/// lStewieAl's Tweaks' S0035 (`patchUnsetQuieterRadioWhenForceClosingDialogueMenu`): with the
-/// row on, `SetInDialogueOrHolotapePlaying(quieter)`; off, nothing.
-fn set_radio_quieter(e: &mut Engine, quieter: bool) {
-}
 /// `00483710` (`thiscall`): the `BSSoundHandle` destructor.
 const SOUND_HANDLE_DESTROY: u32 = 0x0048_3710;
 /// `00a1c520` (`thiscall`): the `Menu` destructor.
@@ -1048,7 +1044,6 @@ pub fn fn_00761960(e: &mut Engine, this: Ptr<DialogMenu>) {
     e.call(TOPICS_RELEASE_0083E510, &args![]);
     // `0x7619CB` (lStewieAl's Tweaks' S0035 calls `OnDialogMenuFree` there: the call, then the
     // radio's "in dialogue or holotape" byte cleared).
-    set_radio_quieter(e, false);
     e.set_global(OPEN_MENU_011D9510, 0u32);
     e.call(SOUND_HANDLE_DESTROY, &args![this.addr() + 0x74]);
     fn_007643c0(e, Ptr::new(this.addr() + 0x40));
@@ -2444,7 +2439,6 @@ pub fn dialog_menu_service_end(e: &mut Engine, topic: u32) {
     }
     let menu: u32 = e.global(OPEN_MENU_011D9510);
     // `0x7641E5` (S0035's `OnDialogSubMenuClose`: the byte set, then the call).
-    set_radio_quieter(e, true);
     e.call(MENU_START_FADE_IN, &args![menu]);
 }
 
@@ -2527,7 +2521,6 @@ pub fn dialog_menu_service_start(e: &mut Engine) {
     }
     let menu = open_menu(e);
     // `0x764090` (S0035's `OnDialogSubMenuOpen`: the byte cleared, then the call).
-    set_radio_quieter(e, false);
     e.call(MENU_START_FADE_OUT, &args![menu]);
 }
 

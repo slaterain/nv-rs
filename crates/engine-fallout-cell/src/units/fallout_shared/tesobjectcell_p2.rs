@@ -5920,13 +5920,6 @@ const FORCE_FULL_LOD_SETTING: u32 = 0x011d_5d00;
 /// missing-data guard row a missing one is passed over.
 fn restore_tree_full_lod(e: &mut Engine) {
     fn_0054f4d0(e, 0);
-    return;
-    let manager = e.global::<u32>(TREE_MANAGER_SINGLETON);
-    if manager == 0 && e.stewie_slip_guard() {
-        return;
-    }
-    let setting = e.mem.u32(FORCE_FULL_LOD_SETTING + 4);
-    e.mem.set_u8(manager.wrapping_add(0x1b), setting as u8);
 }
 
 #[cfg(test)]
