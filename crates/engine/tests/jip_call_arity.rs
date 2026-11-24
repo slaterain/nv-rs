@@ -1,5 +1,5 @@
-//! Every call a built-in extender (xNVSE `crates/nvse`, JIP LN `crates/jip`)
-//! makes to one of the game's
+//! Every call a built-in extender (xNVSE `crates/nvse`, JIP LN `crates/jip`, UI Organizer
+//! `crates/uio`) makes to one of the game's
 //! functions by a constant address passes as many argument words as that function's translation
 //! takes: a call with too few stops the game ("call has N argument words, needs more"), one with
 //! too many hands a later argument to nobody. Here because this crate registers every translation.
@@ -47,7 +47,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 /// The extender crates the test reads.
-const CRATES: [&str; 3] = ["jip", "nvse", "johnnyguitar"];
+const CRATES: [&str; 4] = ["jip", "nvse", "uio", "johnnyguitar"];
 
 /// One direct call in a crate's source.
 #[derive(Debug)]
@@ -320,6 +320,35 @@ const UNREAD: &[Row] = &[
         "execute",
         N(8),
         "a command's routine from its record: a command's words",
+    ),
+    // UI Organizer.
+    (
+        "uio",
+        "build.rs",
+        "hash",
+        N(2),
+        "the tile map's hash routine from its vtable: the map and the key",
+    ),
+    (
+        "uio",
+        "build.rs",
+        "equal",
+        N(3),
+        "the tile map's compare routine from its vtable: the map and two keys",
+    ),
+    (
+        "uio",
+        "build.rs",
+        "hash",
+        N(2),
+        "the tile map's hash routine, on insert",
+    ),
+    (
+        "uio",
+        "build.rs",
+        "equal",
+        N(3),
+        "the tile map's compare routine, on insert",
     ),
     // JohnnyGuitar NVSE.
     (
@@ -1704,6 +1733,11 @@ fn jip_passes_each_game_function_the_words_it_takes() {
 #[test]
 fn nvse_passes_each_game_function_the_words_it_takes() {
     check("nvse");
+}
+
+#[test]
+fn uio_passes_each_game_function_the_words_it_takes() {
+    check("uio");
 }
 
 /// JohnnyGuitar NVSE (its editor ids): each game function it calls by address gets the words it takes.

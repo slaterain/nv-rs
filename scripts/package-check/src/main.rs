@@ -594,8 +594,8 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("package-check-notices-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("licenses")).unwrap();
-        std::fs::write(dir.join("licenses/LICENSE-libvorbis"), b"BSD").unwrap();
-        let list = "# comment\n\ncrates/vorbis/LICENSE-libvorbis\tLICENSE-libvorbis\n\
+        std::fs::write(dir.join("licenses/NOTICE-uio"), b"MIT").unwrap();
+        let list = "# comment\n\ncrates/uio/NOTICE\tNOTICE-uio\n\
                     crates/nvse/LICENSE-algohol\tLICENSE-algohol\nno-name-here\n";
         assert_eq!(missing_notices(&dir, list), ["LICENSE-algohol", ""]);
         let parsed = parse_arguments(&args(&["pkg", "--notices", "n.txt"])).unwrap();

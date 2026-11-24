@@ -7,7 +7,7 @@
 //! category count, the VATS targets, the font files, the level-up menu with skill points, the
 //! barter offers and a menu's item list as inventory references, a menu's target and the top
 //! menu's highlighted item, a terminal's own model), a reference's place on the world map, and
-//! menu XML made into tiles (`InjectUIComponent`); HUD messages
+//! menu XML made into tiles through the built-in UI Organizer (`InjectUIComponent`); HUD messages
 //! queued with an icon and sound and the queue cleared, the system colours, the Pip-Boy light,
 //! a text's size in a font, the open menu's item list refreshed (`RefreshItemsList`), message
 //! boxes with a callback script (`MessageBoxExAlt`). 43 of the file's 64 commands here
@@ -752,7 +752,8 @@ const XML_HASH_REMOVE_AT: u32 = 0x00a1_e240;
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h: InjectUIComponent
 // (asm).
 /// JIP's `InjectUIComponent(parent, text)`: menu XML text made into tiles under `parent`; the new
-/// tile, 0 for none. Without UI Organizer loaded JIP
+/// tile, 0 for none. With the built-in UI Organizer row on, its `UIOInjectComponent`
+/// ([`uio::inject_component`]), as JIP calls UIO's export when UIO is loaded. Without it JIP
 /// writes the text to `jip_temp.xml` in the game's folder and reads that file with
 /// `Tile::ReadFile`; the port writes no file: the text is cleaned exactly as the game cleans a
 /// file it reads (`Menu::CompressAndStoreXML` given the text), entered in `Menu::XMLHash` under
@@ -760,6 +761,9 @@ const XML_HASH_REMOVE_AT: u32 = 0x00a1_e240;
 /// includes, parses and frees it, as it does a file's), and taken out of the map after it. The
 /// same tiles as JIP's file, nothing written to a disk.
 pub(crate) fn inject_component(e: &mut Engine, parent: u32, text: &[u8]) -> u32 {
+    if uio::on(e) {
+        return uio::inject_component(e, parent, text);
+    }
     let text = &text[..text.iter().position(|&c| c == 0).unwrap_or(text.len())];
     let buffer = heap_alloc(e, text.len() as u32 + 1);
     if buffer == 0 {
@@ -785,7 +789,7 @@ pub(crate) fn inject_component(e: &mut Engine, parent: u32, text: &[u8]) -> u32 
 // Cmd_InjectUIComponent_Execute.
 /// `Menu/tile...` and a formatted text of menu XML: the text made into tiles under the tile
 /// (none when the path ends at a trait) by JIP's [`inject_component`]; result 1 when a tile is
-/// made.
+/// made, with the UI Organizer row on or off.
 fn inject_ui_component(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let f = nvse::commands::string::format_string_args_at(e, &a, 1, INJECT_PARAMS);

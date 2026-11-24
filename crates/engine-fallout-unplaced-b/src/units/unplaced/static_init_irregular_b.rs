@@ -1102,7 +1102,8 @@ pub const USER_TRAIT_MAP_BUCKETS: u32 = 1021;
 /// (`Tile::Value::CalculateValue`): about 140,000 lookups in each opening and closing of MCM's start
 /// menu, each walking a chain of about 8 entries with 37 buckets (a profile of 2026-11-21). The same
 /// map, entries and answers; the exe walks it whole only to empty it (`Tile::FreeTraitList` and its
-/// exit destructor), where the order does not matter.
+/// exit destructor), where the order does not matter, and UI Organizer's inserts take the bucket
+/// count from the map.
 pub fn user_trait_map_buckets() -> u32 {
     match std::env::var("NV_MENU_REACTION_BUCKETS").as_deref() {
         Ok("0") => USER_TRAIT_MAP_GAME_BUCKETS,

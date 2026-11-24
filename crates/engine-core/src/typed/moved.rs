@@ -1085,8 +1085,8 @@ impl std::fmt::Debug for Store {
     }
 }
 
-/// Runs `f` with the engine's time-slice hook taken out, as `real_threads::fork` does around its
-/// locked calls: under the stepped host no turn ends inside (a
+/// Runs `f` with the engine's time-slice hook taken out, as `real_threads::fork` and the host's
+/// thread-races row do around their locked calls: under the stepped host no turn ends inside (a
 /// slice's end, its hard cap and the wake delay after a signal all come through that hook, at any
 /// call). The dual store runs both halves of an access in it, the guest effect (a call by address)
 /// and the mirror's, so no other thread's access comes between them. A wake asked for meanwhile sets

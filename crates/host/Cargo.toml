@@ -30,6 +30,7 @@ jip = { path = "../jip" }
 # JohnnyGuitar NVSE built in, its editor ids when their row is on: after JIP
 # (crates/johnnyguitar).
 johnnyguitar = { path = "../johnnyguitar" }
+uio = { path = "../uio" }
 # The load order the game's forms are read from (`player_move`).
 esm = { path = "../esm" }
 # zlib's inflate on the host for the game's compressed archives and records (`native_inflate`).
