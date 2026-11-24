@@ -631,7 +631,13 @@ fn finish_idle(e: &mut Engine, this: Ptr<InventoryMenu>) {
             value != e.global::<f64>(ZERO_DOUBLE)
         };
         let second = if has_dt { tile_at(e, me_addr, 0x70) } else { 0 };
-        let first = tile_at(e, me_addr, 0x6c);
+        let has_dr = current_item(e) != 0 && {
+            let item = current_item(e);
+            let object = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, item));
+            let value = e.call(OBJECT_VALUE_004BE060, &args![object]).f64();
+            value != e.global::<f64>(ZERO_DOUBLE)
+        };
+        let first = if has_dr { tile_at(e, me_addr, 0x6c) } else { 0 };
         let item = current_item(e);
         e.call(SET_ITEM_CARD, &args![first, second, 0u32, item, 0u32]);
     }
@@ -2645,7 +2651,6 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     ]
 }
 
-#[cfg(test)]
 const OBJECT_VALUE_004BE060: u32 = 0x004b_e060;
 
 #[cfg(test)]

@@ -14455,9 +14455,7 @@ mod tests {
             1
         );
         assert_eq!(
-            count(
-                "controller && (activate_clicks || e.get(this, InterfaceManager::bShowMouse) == 0);"
-            ),
+            count("controller && e.get(this, InterfaceManager::bShowMouse) == 0;"),
             1
         );
         assert_eq!(count("if !pad_branch {"), 1);

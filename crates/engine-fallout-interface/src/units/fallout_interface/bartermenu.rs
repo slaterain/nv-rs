@@ -2845,7 +2845,11 @@ pub fn barter_menu_do_idle(e: &mut Engine, this: Ptr<BarterMenu>) {
     };
     let has_dt = stat_shown(e, STAT_004BE180);
     let second = if has_dt { e.mem.u32(base + 0x70) } else { 0 };
-    let first = e.mem.u32(base + 0x6c);
+    let first = if stat_shown(e, STAT_004BE060) {
+        e.mem.u32(base + 0x6c)
+    } else {
+        0
+    };
     let item = e.global::<u32>(BARTER_CURRENT_ITEM);
     e.call(
         SHOW_ITEM_STATS_00719790,
@@ -3109,7 +3113,6 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 }
 
 /// `004be060` and `004be180` (`thiscall` on an object, `ST0`; `inventorychanges.cpp`).
-#[cfg(test)]
 const STAT_004BE060: u32 = 0x004b_e060;
 
 #[cfg(test)]
