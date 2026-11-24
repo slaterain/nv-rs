@@ -18,7 +18,6 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use engine_core::extend::stewie;
 
 /// `Tile::GetValue(id)` (unnamed in the engine map, Ghidra labels it with the
 /// `Tile` methods around it): the value of trait `id`, `float` in ST0.

@@ -3,63 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use engine_core::extend::stewie;
 
-/// lStewieAl's Tweaks' rows of the map, lockpick, casino and caravan menus (share 3's first
-/// group, `measure/stewie/PLAN.md`; Tweaks' `MenuFixes::InitHooks`, `RouletteMenuFixes::InitHooks`
-/// and `CaravanDoublePayoutFix::InitHooks`): their bits (`engine_core::extend::stewie`'s share 3
-/// file, `menus.rs`), the list of this group and the controller tests Tweaks' hooks share.
-pub mod stewie_menus {
-    use engine_core::extend::stewie::Row;
-    pub use engine_core::extend::stewie::{
-        CARAVAN_PAD_NOT_WITH_CONSOLE, CARAVAN_SINGLE_PAYOUT, LOCKPICK_DEBUG_HEALTH,
-        MAP_COMPANION_LABEL_CLIPS, MAP_COMPANION_MARKERS_RESET, MAP_DRAG_NO_UNDISCOVERED_MESSAGE,
-        MAP_PAD_MARKER_WHILE_MOVING, MAP_PAD_SELECTION_CENTRED, MAP_QUEST_KEEPS_SCROLL,
-        ROULETTE_CUT_BET_VALUE, ROULETTE_ZERO_BET_TEXT, ROULETTE_ZERO_WINS,
-    };
-    use engine_core::Engine;
-
-    /// Tweaks' rows of this group in bit order (row id, bit).
-    pub const ROWS: [(&str, Row); 12] = [
-        ("S0022.09", MAP_QUEST_KEEPS_SCROLL),
-        ("S0022.13", LOCKPICK_DEBUG_HEALTH),
-        ("S0022.19", MAP_DRAG_NO_UNDISCOVERED_MESSAGE),
-        ("S0022.25", MAP_PAD_MARKER_WHILE_MOVING),
-        ("S0022.26", MAP_COMPANION_LABEL_CLIPS),
-        ("S0022.27", ROULETTE_ZERO_BET_TEXT),
-        ("S0022.31", MAP_PAD_SELECTION_CENTRED),
-        ("S0022.41", MAP_COMPANION_MARKERS_RESET),
-        ("S0022.46", CARAVAN_PAD_NOT_WITH_CONSOLE),
-        ("S0196.04", ROULETTE_ZERO_WINS),
-        ("S0196.05", ROULETTE_CUT_BET_VALUE),
-        ("S0092", CARAVAN_SINGLE_PAYOUT),
-    ];
-
-    /// `isControllerDisabled` (`011d8c50`) and `isControllerConnected` (`011d8a84`).
-    pub const CONTROLLER_DISABLED: u32 = 0x011d_8c50;
-    pub const CONTROLLER_CONNECTED: u32 = 0x011d_8a84;
-    /// The interface manager's pointer (`011d8a80`) and its `hasMouseMoved` byte (+0xED).
-    pub const INTERFACE_MANAGER: u32 = 0x011d_8a80;
-    pub const HAS_MOUSE_MOVED: u32 = 0xed;
-    /// `g_isConsoleOpen` (`011dea2e`).
-    pub const CONSOLE_OPEN: u32 = 0x011d_ea2e;
-
-    /// xNVSE's `IsControllerConnected` as Tweaks has it (`GameUI.cpp`): not disabled (the byte
-    /// is not 1) and connected. The exe's own (`004b71d0`) tests the same two bytes.
-    pub fn controller_connected(e: &Engine) -> bool {
-        e.mem.u8(CONTROLLER_DISABLED) != 1 && e.mem.u8(CONTROLLER_CONNECTED) != 0
-    }
-
-    /// xNVSE's `IsControllerConnectedOrMouseNotMoved`: the pad, or the mouse not moved since the
-    /// keys were last used (the interface manager's `hasMouseMoved`).
-    pub fn controller_or_mouse_still(e: &Engine) -> bool {
-        controller_connected(e) || {
-            let manager = e.mem.u32(INTERFACE_MANAGER);
-            e.mem.u8(manager.wrapping_add(HAS_MOUSE_MOVED)) == 0
-        }
-    }
-
-}
 
 /// The vtable of the `BSSimpleArray` instance with RTTI name `.?AV?$BSSimpleArray@V?$BSStringT@D@@$0EAA@@` (read at the word before the vtable: its complete object locator, then the type descriptor).
 const ARRAY_VTABLE_01075530: u32 = 0x0107_5530;
@@ -14479,7 +14423,6 @@ mod n056_tests {
 
     // lStewieAl's Tweaks' rows of this file (share 3's first group, `stewie_menus`).
 
-    use super::stewie_menus as rows;
 
     /// The bytes Tweaks' controller tests read: `isControllerDisabled`, `isControllerConnected`,
     /// the interface manager's `hasMouseMoved` and the console's open byte.

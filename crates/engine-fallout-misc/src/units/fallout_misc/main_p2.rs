@@ -330,9 +330,6 @@ pub fn fn_00870610(e: &mut Engine, _this: Ptr) {
     e.call(0x0070_94f0, &args![]);
     let interface = e.call(GET_GLOBAL_011D8A80, &args![]).u32();
     fn_00870680(e, Ptr::new(interface));
-    // lStewieAl's Tweaks' print queue (its call at `0x870662`): the lines queued off the main thread are
-    // printed here (nothing when none are queued, as without Tweaks).
-    engine_core::extend::stewie::print_queued(e);
     let debug_text = e.call(0x00a0_d9e0, &args![1u32]).u32();
     e.call(0x00a0_e770, &args![debug_text]);
 }

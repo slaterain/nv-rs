@@ -3,7 +3,6 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use engine_core::extend::stewie;
 
 /// Callees: a flag test `004fd420` (`thiscall`, `(mask)`, answers a byte), the list at
 /// `this + 0x88` (`008256d0` "empty", `006815c0` its first item; `thiscall`, no arguments),

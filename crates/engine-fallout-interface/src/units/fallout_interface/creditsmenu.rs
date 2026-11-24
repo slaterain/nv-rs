@@ -4,7 +4,6 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::types::BSSimpleArray;
-use engine_core::extend::stewie;
 
 /// The handle of the empty `NiFixedString`.
 const EMPTY_FIXED_STRING: u32 = 0x0109_b220;

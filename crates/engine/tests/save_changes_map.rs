@@ -6,7 +6,6 @@
 //! so a save written with either count reads back with either.
 
 use engine as _;
-use engine_core::extend::stewie;
 use engine_core::prelude::*;
 
 fn ret(eax: u32) -> Ret {

@@ -1435,7 +1435,6 @@ const MENU_STATE_007FA8D0: u32 = 0x007f_a8d0;
 /// The Pip-Boy manager's reset (`007fa990`, `thiscall`; it clears the "reset me" byte itself), and
 /// that byte (one definition, beside row S0027).
 const PIPBOY_RESET: u32 = 0x007f_a990;
-use engine_core::extend::stewie::PIPBOY_RESET_PENDING;
 const ACTOR_IS_REFRACTIVE: u32 = 0x008c_51c0;
 /// The bytes menu open sets (`011d890a`, `011db378`; the second is
 /// cleared on close and tested by `SetTabKnobPosition`).

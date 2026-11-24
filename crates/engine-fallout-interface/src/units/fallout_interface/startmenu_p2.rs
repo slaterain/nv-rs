@@ -35,7 +35,6 @@ use super::startmenu::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::types::BSSimpleArray;
-use engine_core::extend::stewie;
 
 // ---- globals ---------------------------------------------------------------
 
@@ -9050,5 +9049,4 @@ mod tests {
 
     // ---- lStewieAl's Tweaks' rows (share 3, group 3) ----
 
-    use engine_core::extend::stewie;
 }

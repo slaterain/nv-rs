@@ -5676,7 +5676,6 @@ const GET_PIPBOY: u32 = 0x0070_5990;
 /// `ECX` = pipboy: refreshes it.
 const PIPBOY_REFRESH: u32 = 0x007f_a990;
 /// The Pip-Boy manager's "reset me" byte (one definition, beside row S0027).
-use engine_core::extend::stewie::PIPBOY_RESET_PENDING;
 /// `ECX` = save/load object: tests bit 2 of the word at +0x244.
 const SAVE_LOAD_BIT_2_TEST: u32 = 0x0042_ce10;
 /// `ECX` = sound handle storage: construct (`SOUND_HANDLE_INIT`), release

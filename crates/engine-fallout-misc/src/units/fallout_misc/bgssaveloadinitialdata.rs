@@ -18,7 +18,6 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use engine_core::extend::stewie;
 
 /// `BGSSaveLoadInitialData::InitialDataTypeData` (Xbox PDB): three bytes per
 /// kind, `cSize` at +0, `bRefType` at +1, `bCellType` at +2.

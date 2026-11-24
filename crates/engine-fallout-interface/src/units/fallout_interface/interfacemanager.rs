@@ -19,7 +19,6 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use engine_core::extend::stewie;
 
 /// The interface manager singleton (a pointer to the object).
 pub(crate) const MANAGER_SINGLETON: u32 = 0x011d_8a80;
@@ -3224,12 +3223,12 @@ fn idle_dispatch_key(
             0x8000_000a => 0x10,
             _ => 0,
         };
-        let event = if event == 4 && idle_shift_held(e, this, 0x0070_e4db) {
+        let event = if event == 4 && e.call(MODIFIER_FOUR_DOWN, &args![this]).bool() {
             0xd
         } else {
             event
         };
-        let event = if event == 3 && idle_shift_held(e, this, 0x0070_e500) {
+        let event = if event == 3 && e.call(MODIFIER_FOUR_DOWN, &args![this]).bool() {
             0xe
         } else {
             event
@@ -3290,12 +3289,6 @@ fn open_pipboy_reads_the_pad(e: &mut Engine) -> bool {
 /// The console's open byte (xNVSE's `g_isConsoleOpen`, `0x11DEA2E`).
 const CONSOLE_IS_OPEN: u32 = 0x011d_ea2e;
 
-/// The shift test of a right or left arrow key (`0070ecf0`, the interface's remembered shift) at
-/// `site` (`0x70E4DB`, `0x70E500`); with lStewieAl's Tweaks' S0022.02 its `IsShiftHeld` there:
-/// either shift key's raw state now, through the Stewie seam.
-fn idle_shift_held(e: &mut Engine, this: Ptr<InterfaceManager>, site: u32) -> bool {
-    e.call(MODIFIER_FOUR_DOWN, &args![this]).bool()
-}
 
 /// The `_PCButton_<key>` child tile of the frontmost menu: when it is
 /// enabled (`0xfa3`) it is clicked (`0xfaf` set: sound, click pulse and the

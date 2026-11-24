@@ -1108,7 +1108,6 @@ fn condition_value_as_int(e: &mut Engine, item: u32) -> i32 {
 /// (`engine_core::extend::stewie`'s `PERK_TEXT_*`, S0093.01 to .06), and cuts a description too
 /// long for the buffer (S0093.07).
 pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr, size: u32) {
-    use engine_core::extend::stewie;
     let base = this.addr();
     let buffer = buffer.addr();
     e.with_stack(0x84 + TWEAKS_TEXT, |e, work| {

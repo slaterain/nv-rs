@@ -3,7 +3,6 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_interface::mapmenu::stewie_menus;
 
 /// The vtable of the `BSSimpleArray` instance with RTTI name `.?AV?$BSSimpleArray@PAVNiAVObject@@$0EAA@@` (read at the word before the vtable: its complete object locator, then the type descriptor).
 const ARRAY_VTABLE_01071AEC: u32 = 0x0107_1aec;

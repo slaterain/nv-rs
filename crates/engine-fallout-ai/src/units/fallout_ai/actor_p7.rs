@@ -26,7 +26,6 @@
 use super::actor::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
-use engine_core::extend::stewie;
 
 /// `PlayerCharacter *`.
 const PLAYER_POINTER: u32 = 0x011d_ea3c;

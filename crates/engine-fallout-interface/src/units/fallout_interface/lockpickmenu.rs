@@ -35,7 +35,6 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_interface::mapmenu::stewie_menus;
 
 /// `LockPickMenu`'s class id (`GetClass`, `0078e080`).
 const LOCK_PICK_MENU_CLASS: u32 = 0x3f6;

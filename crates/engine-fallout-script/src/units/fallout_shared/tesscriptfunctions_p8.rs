@@ -15,7 +15,6 @@
 use super::tesscriptfunctions::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
-use engine_core::extend::stewie;
 
 // ---- Callees outside this part (by exe address) ----------------------------
 
@@ -6414,19 +6413,7 @@ mod tests {
     /// The test shared by the two commands that parse a flag and hand it to
     /// an actor method after the cast: `(command, method, invalid message)`.
     fn check_actor_flag_command(command_address: u32, method: u32, message: u32) {
-        check_actor_flag_command_with_stewie(command_address, method, message, false);
-    }
-
-    /// [`check_actor_flag_command`] with lStewieAl's Tweaks' row S0174 on when `row_on`.
-    fn check_actor_flag_command_with_stewie(
-        command_address: u32,
-        method: u32,
-        message: u32,
-        row_on: bool,
-    ) {
         let mut e = engine();
-        if row_on {
-        }
         let this_obj = object_with(&mut e, &[(0x100, V_IS_ACTOR)]);
         let a = command(&mut e, this_obj);
         e.register(V_IS_ACTOR, |_, _| true.into_ret());
@@ -6464,18 +6451,6 @@ mod tests {
         check_actor_flag_command(0x005d_fd30, ACTOR_SET_ESSENTIAL, MSG_SET_ESSENTIAL_INVALID);
     }
 
-    /// lStewieAl's Tweaks' row S0174 with a reference (ordinary input): the row changes nothing,
-    /// the same calls and answers as with it off, for an actor, a reference that is not one and a
-    /// parameter that does not parse.
-    #[test]
-    fn s0174_row_on_with_a_reference_changes_nothing() {
-        check_actor_flag_command_with_stewie(
-            0x005d_fd30,
-            ACTOR_SET_ESSENTIAL,
-            MSG_SET_ESSENTIAL_INVALID,
-            true,
-        );
-    }
 
     #[test]
     fn always_show_actor_subtitles_sets_the_flag_of_the_cast_actor() {

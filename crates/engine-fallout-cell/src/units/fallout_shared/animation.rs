@@ -2669,7 +2669,6 @@ const SEQUENCE_NAME: u32 = 0x08;
 /// accumulation root's name> - <the sequence's name>` in the console (written into 0x80 bytes, as
 /// Tweaks' `snprintf` does, then printed as `%s`).
 fn movement_interpolator(e: &mut Engine, sequence: u32) -> u32 {
-    use engine_core::extend::stewie;
     e.call(SEQUENCE_INTERPOLATOR_AT, &args![sequence, 0u32])
         .u32()
 }

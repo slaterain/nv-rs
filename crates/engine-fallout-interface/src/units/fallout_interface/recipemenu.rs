@@ -5247,7 +5247,6 @@ mod n057_tests {
 
     // ---- lStewieAl's Tweaks' rows (share 3, group 2) ----
 
-    use engine_core::extend::stewie;
 
     /// Tile 4 of `info_engine`'s twelve.
     const CONDITION_TILE: u32 = 0x2100 + 4 * 4;

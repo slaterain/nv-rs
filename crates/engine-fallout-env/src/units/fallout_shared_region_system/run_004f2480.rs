@@ -3,7 +3,6 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use engine_core::extend::stewie;
 
 // Translated from 004f2770 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (`thiscall`, no stack words): the address of

@@ -288,12 +288,8 @@ pub fn fn_0071d0a0(e: &mut Engine, this: Ptr<MenuConsole>, format: u32, argument
     // JIP LN NVSE's G35 at `0x0071D0D2` (group GA's row and handler, a fix row:
     // `SafeWrite16(0x71D0D2, 0x1BEB)`, a jump to 0x71D0EF): an answer skips both tests, so the
     // line is printed while the loading menu is up too. One load while JIP's fixes are not in.
-    // lStewieAl's Tweaks' S0031 warning sets `0x71D0DC`'s jump to always for its line (past both
-    // tests, after JIP's at `0x71D0D2`; the first test's call `00705ea0`, which only reads, is
-    // not made): `Engine::stewie_print_ungated`, false but while it prints.
-    let print_while_loading = (e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
-        && e.site(0x0071_d0d2, &[this.addr()]).is_some())
-        || e.stewie_print_ungated();
+    let print_while_loading = e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x0071_d0d2, &[this.addr()]).is_some();
     if !print_while_loading
         && e.call(0x0070_5ea0, &args![]).bool()
         && !e.call(0x0070_edf0, &args![]).bool()

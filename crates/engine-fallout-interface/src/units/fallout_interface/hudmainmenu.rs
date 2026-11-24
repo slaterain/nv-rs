@@ -3,7 +3,6 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use engine_core::extend::stewie;
 
 layout! {
     /// `HUDMainMenu` (Xbox PDB), 0x278 bytes. The offsets used here are

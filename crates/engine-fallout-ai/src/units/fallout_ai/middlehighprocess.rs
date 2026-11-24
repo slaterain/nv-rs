@@ -11,7 +11,6 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use engine_core::extend::stewie;
 
 layout! {
     /// `MiddleHighProcess` (Xbox PDB), 0x25C bytes (base classes

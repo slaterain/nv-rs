@@ -22,7 +22,6 @@ use super::interfacemanager::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::types::BSSimpleArray;
-use engine_core::extend::stewie;
 
 /// `004b7210`: the interface manager object (the word at `011d8a80`).
 const GET_MANAGER: u32 = 0x004b_7210;

@@ -30,7 +30,6 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::units::fallout_interface::startmenu::ListBox;
-use engine_core::extend::stewie;
 
 // ---------------------------------------------------------------------------
 // Layouts

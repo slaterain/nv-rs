@@ -76,7 +76,6 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use engine_core::extend::stewie;
 
 // ---------------------------------------------------------------------------
 // Callees in other units, by address.

@@ -6,7 +6,6 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use engine_core::extend::stewie;
 
 layout! {
     /// `MobileObject` (Xbox PDB), 0x88 bytes on PC after the TESForm size

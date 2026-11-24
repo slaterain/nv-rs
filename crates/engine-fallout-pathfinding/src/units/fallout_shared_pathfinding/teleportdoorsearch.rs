@@ -3,7 +3,6 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use engine_core::extend::stewie;
 
 /// The vtable of the `BSSimpleArray` instance with RTTI name `.?AV?$BSSimpleArray@PAV?$AStarNode@UParentSpaceNode@@UTeleportLink@@@@$0EAA@@` (read at the word before the vtable: its complete object locator, then the type descriptor).
 const ARRAY_VTABLE_0106D930: u32 = 0x0106_d930;

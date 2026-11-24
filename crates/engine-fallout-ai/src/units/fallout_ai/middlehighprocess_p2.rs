@@ -7,7 +7,6 @@
 use super::middlehighprocess::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
-use engine_core::extend::stewie;
 
 // ---------------------------------------------------------------------
 // Constants and helpers of this part.
@@ -6136,77 +6135,6 @@ mod tests {
         assert_eq!(calls(&e, REFERENCE_INIT_ANIMATION), vec![vec![reference]]);
     }
 
-    /// `load_game_ov2_reads_the_fields_in_order`'s load for the player (the buffer's reference is
-    /// the player), whose 3D (slot `+0x1D0`) is `model`, the saved count of loaded rounds 5. Rows
-    /// S0089.06 and S0089.01 as given. Answers whether the weapon was equipped and the kept word
-    /// of S0089.01 (the count plus one; 0 none).
-    fn s0089_player_load(model: u32, without_3d: bool, keep_count: bool) -> (bool, u32) {
-        s0089_load_of(true, model, without_3d, keep_count)
-    }
-
-    /// [`s0089_player_load`] for the player (`is_player`) or for an NPC (the player another reference).
-    fn s0089_load_of(
-        is_player: bool,
-        model: u32,
-        without_3d: bool,
-        keep_count: bool,
-    ) -> (bool, u32) {
-        let mut e = engine();
-        let p = process(&mut e);
-        let a = p.addr();
-        let buffer = thing(&mut e);
-        let reference = actor(&mut e);
-        let player = if is_player { reference } else { thing(&mut e) };
-        e.set_global(PLAYER, player);
-        let process_object = thing(&mut e);
-        slot_returns(&mut e, OBJECT_SLOTS, 0x0, 0x10);
-        slot_returns(&mut e, OBJECT_SLOTS, 0xc, reference);
-        slot_returns(&mut e, ACTOR_SLOTS, 0x1d0, model);
-        e.register(ALLOCATE, |e, a| ret(e.mem.alloc(a[0])));
-        e.register(LIST_CONSTRUCT, |_, a| ret(a[0]));
-        e.register(LOAD_VARIABLE_SIZED_VALUE, |_, _| ret(0));
-        e.register(BUFFER_SAVE_KIND, |_, a| ret(a[1]));
-        e.register(KIND_HAS_BITS, |_, _| ret(1));
-        e.register(LOAD_DATA, |e, a| {
-            if a[2] == 4 {
-                e.mem.set_u32(a[1], 5);
-            }
-            Ret::default()
-        });
-        e.register(GET_CONTAINER_CHANGES, |_, _| ret(0x500));
-        e.register(GET_WORN_ITEM, |_, _| ret(0x600));
-        e.register_double(WORD_68, move |_, _| ret(process_object));
-        e.register(ITEM_CHANGE_MOD_EFFECT_ACTIVE, |_, _| ret(1));
-        e.register(GET_INVENTORY_CHANGES, |_, _| ret(0x900));
-        e.register(INVENTORY_GET_OBJECT_COUNT, |_, _| ret(3));
-        let item = e.mem.alloc(0x20);
-        e.mem.set_u32(item + 8, 0x4444);
-        e.mem.set_u32(a + 0x114, item);
-        let held = e.mem.alloc(0x20);
-        e.mem.set_u32(a + 0x118, held);
-        middle_high_process_load_game_ov2(&mut e, p, buffer);
-        let kept = e.stewie_kept(stewie::kept::SAVED_AMMO_COUNT, 4);
-        (!calls(&e, ACTOR_EQUIP_WORN).is_empty(), e.mem.u32(kept))
-    }
-
-    /// lStewieAl's Tweaks' rows S0089.06 (`Get3D_OrIsPlayer`, `0x927591`) and S0089.01
-    /// (`InitActorAmmoCountFromSaveHook`, `0x9275EA`): the player's load on the first load of a
-    /// session, with no 3D yet. Off, the exe skips the equip; with S0089.06 the weapon is equipped
-    /// as with 3D. S0089.01 keeps the saved count (5, kept as 6) when the weapon is equipped.
-    #[test]
-    fn s0089_06_and_01_the_players_weapon_is_restored_without_3d() {
-        let model = 0x7000;
-        assert_eq!(s0089_player_load(0, false, false), (false, 0));
-        assert_eq!(s0089_player_load(0, true, false), (true, 0));
-        assert_eq!(s0089_player_load(0, true, true), (true, 6));
-        assert_eq!(s0089_player_load(0, false, true), (false, 0));
-        assert_eq!(s0089_player_load(model, false, false), (true, 0));
-        assert_eq!(s0089_player_load(model, false, true), (true, 6));
-        // Only the player: an NPC with no 3D is not equipped with the rows, and an NPC with 3D keeps
-        // no count of its own.
-        assert_eq!(s0089_load_of(false, 0, true, true), (false, 0));
-        assert_eq!(s0089_load_of(false, model, true, true), (true, 0));
-    }
 
     #[test]
     fn init_load_game_ov2_resolves_ids_and_the_furniture() {

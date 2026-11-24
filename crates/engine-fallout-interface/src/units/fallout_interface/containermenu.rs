@@ -15,7 +15,6 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use engine_core::extend::stewie;
 
 /// `ContainerMenu::pMe` (Xbox PDB static): the menu singleton.
 const CONTAINER_MENU: u32 = 0x011d_93f8;

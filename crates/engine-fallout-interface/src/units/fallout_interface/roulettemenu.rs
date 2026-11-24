@@ -3,8 +3,6 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_interface::mapmenu::stewie_menus;
-use engine_core::extend::stewie;
 
 /// The chained container's destructor body (`0046ffb0`, `thiscall`, no stack words).
 const CONTAINER_DESTRUCT: u32 = 0x0046_ffb0;

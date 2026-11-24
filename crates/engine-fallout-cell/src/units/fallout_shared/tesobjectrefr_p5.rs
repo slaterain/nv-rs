@@ -50,7 +50,6 @@
 use super::tesobjectrefr::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
-use engine_core::extend::stewie;
 
 /// `005d43c0`: the reference's embedded `ExtraDataList` (`this + 0x44`).
 const GET_EXTRA_LIST: u32 = 0x005d_43c0;
