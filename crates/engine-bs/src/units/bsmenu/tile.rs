@@ -299,15 +299,6 @@ const NI_OBJECT_GET_EXTRA_DATA: u32 = 0x00a5_bdd0;
 const TILE_EXTRA_DATA_KEY: u32 = 0x011f_34cc;
 /// `Menu::GetXML(path, flag)` (Xbox PDB, `cdecl`).
 const MENU_GET_XML: u32 = 0x00a1_c9b0;
-/// UI Organizer's patch in [`tile_read_file`] (`00A01B87`, the call of `Tile::ParseFile`): a seam
-/// of `crates/uio`, read only while [`Engine::uio`] is on.
-pub const UIO_READ_FILE_SITE: u32 = 0x00a0_1b87;
-/// UI Organizer's patch in [`tile_final_post_parse`] (`00A03923`, a text tile's trait test): a
-/// seam of `crates/uio`, read only while [`Engine::uio`] is on.
-pub const UIO_FINAL_POST_PARSE_SITE: u32 = 0x00a0_3923;
-/// UI Organizer's patch in [`value_calculate_value`] (`00A0968C`, the operation's dispatch
-/// through its own jump table): a seam of `crates/uio`, read only while [`Engine::uio`] is on.
-pub const UIO_OPERATOR_SITE: u32 = 0x00a0_968c;
 /// `Menu::GetMaxDepth()` (Xbox PDB).
 const MENU_GET_MAX_DEPTH: u32 = 0x00a1_dfb0;
 /// `(menu, template)` (no PDB name, `BSMenu/menu.cpp`): adds the template
@@ -2345,23 +2336,7 @@ pub fn tile_read_file(e: &mut Engine, this: Ptr<Tile>, path: Ptr) -> Ptr<Tile> {
     e.mem.set_u32(line_word, 0xd);
     e.set_global(XML_ERROR_FLAG, 0u8);
 
-    // UI Organizer's ResolveXMLFileHook replaces this call (00a01b87): its handler answers the
-    // parse storage, or nothing (the exe's call). For a storage it keeps in its parse cache UIO
-    // also sets the frame's "keep" byte (`[ebp-0x11]`, cleared at 00a01b7b and never set by the
-    // exe): the handler's second argument points at it.
-    let (uio, keep) = if e.uio() {
-        e.with_stack(4, |e, keep| {
-            e.mem.set_u8(keep.addr(), 0);
-            let storage = e.site(UIO_READ_FILE_SITE, &[path.addr(), keep.addr()]);
-            (storage, storage.is_some() && e.mem.u8(keep.addr()) != 0)
-        })
-    } else {
-        (None, false)
-    };
-    let storage = match uio {
-        Some(storage) => Ptr::new(storage),
-        None => tile_parse_file(e, path, Ptr::NULL, 0),
-    };
+    let storage = tile_parse_file(e, path, Ptr::NULL, 0);
     let failed = |e: &mut Engine| {
         let failed = e.global::<u8>(XML_ERROR_FLAG) != 0;
         if failed {
@@ -2391,16 +2366,17 @@ pub fn tile_read_file(e: &mut Engine, this: Ptr<Tile>, path: Ptr) -> Ptr<Tile> {
             // `bDeleteTemplates` of the menu is the "keep" byte's opposite and the storage's
             // own flag the byte (00a01cdc): with the exe's byte (never set) the menu deletes
             // the templates and the storage does not.
-            e.mem.set_u8(menu.addr() + 0x1d, (!keep) as u8);
-            e.set(storage, BuildStorage::bDeleteTemplates, keep);
+            e.mem.set_u8(menu.addr() + 0x1d, 1);
+            e.set(storage, BuildStorage::bDeleteTemplates, false);
             if failed(e) {
                 return Ptr::NULL;
             }
             node = e.mem.u32(node + 4);
         }
     }
-    // The parse storage is deleted unless the "keep" byte is set (00a01d44; only UIO sets it).
-    if !keep && !storage.is_null() {
+    // The parse storage is deleted (00a01d44: unless the "keep" byte of the frame is set, which the
+    // exe never does).
+    if !storage.is_null() {
         e.call(BUILD_STORAGE_DESTROY, &args![storage]);
         deallocate(e, storage.addr());
     }
@@ -2816,7 +2792,7 @@ pub fn tile_final_post_parse(
 
     let kind = tile_type(e, this);
     if kind == TYPE_TEXT
-        && (matches!(
+        && matches!(
             trait_id,
             TRAIT_WRAP_WIDTH
                 | TRAIT_WRAP_LIMIT
@@ -2826,9 +2802,7 @@ pub fn tile_final_post_parse(
                 | TRAIT_IS_HTML
                 | TRAIT_FONT
                 | TRAIT_JUSTIFY
-        ) || (e.uio()
-            // UI Organizer's trait test (its patch at 00a03923) also takes the zoom.
-            && e.site(UIO_FINAL_POST_PARSE_SITE, &[trait_id as u32]).is_some()))
+        )
     {
         queue(e, UPDATE_CREATE);
         return this;
@@ -5441,21 +5415,6 @@ fn run_action(e: &mut Engine, this: Ptr<TileValue>, action: u32, stack: Ptr, cha
         e.set(this, TileValue::fValue, top);
         if size != 0 {
             e.mem.set_u32(stack.addr() + 8, size - 1);
-        }
-    }
-    // UI Organizer's jump table (its patch at 00a0968c) runs the operation in place of the
-    // switch below; its answer is the "string changed" flag afterwards.
-    if e.uio() {
-        let at = [
-            this.addr(),
-            kind as u32,
-            operand.to_bits(),
-            text,
-            *changed as u32,
-        ];
-        if let Some(flag) = e.site(UIO_OPERATOR_SITE, &at) {
-            *changed = flag != 0;
-            return;
         }
     }
     let current = e.get(this, TileValue::fValue);
@@ -10290,44 +10249,6 @@ mod tests {
 
     fn no_setup(_: &mut Engine, _: Ptr<Tile>) {}
 
-    /// UI Organizer's handler at `00A03923` for the tests: the zoom is in its range.
-    fn uio_zoom_rebuilds(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        (a[0] == TRAIT_ZOOM as u32).then_some(1)
-    }
-
-    fn with_uio(on: bool) -> impl FnOnce(&mut Engine, Ptr<Tile>) {
-        use engine_core::extend::{Owner, SiteSlot};
-        const AT: SiteSlot = SiteSlot::new(Owner::Uio, UIO_FINAL_POST_PARSE_SITE);
-        move |e, _| {
-            e.on_site(AT, uio_zoom_rebuilds);
-            e.set_uio(on);
-        }
-    }
-
-    #[test]
-    fn uio_takes_the_zoom_into_a_text_tiles_rebuild_only_while_its_word_is_on() {
-        // Off (the handler registered): the zoom of a text goes on as in the game (no rebuild).
-        let game = post_parse(TYPE_TEXT, TRAIT_ZOOM, no_setup);
-        assert!(!game.0.contains(&UPDATE_CREATE));
-        assert_eq!(post_parse(TYPE_TEXT, TRAIT_ZOOM, with_uio(false)), game);
-        // On: the rebuild, the tile answered.
-        assert_eq!(
-            post_parse(TYPE_TEXT, TRAIT_ZOOM, with_uio(true)),
-            (vec![UPDATE_CREATE], true)
-        );
-        // The game's own traits are unchanged either way; another tile type is not asked.
-        for on in [false, true] {
-            assert_eq!(
-                post_parse(TYPE_TEXT, TRAIT_FONT, with_uio(on)),
-                (vec![UPDATE_CREATE], true)
-            );
-            assert_eq!(
-                post_parse(TYPE_IMAGE, TRAIT_ZOOM, with_uio(on)).0,
-                post_parse(TYPE_IMAGE, TRAIT_ZOOM, no_setup).0
-            );
-        }
-    }
-
     fn with_clip_window(e: &mut Engine, tile: Ptr<Tile>) {
         give_trait(e, tile, TRAIT_CLIP_WINDOW, 1.0);
     }
@@ -10746,110 +10667,6 @@ mod tests {
         // The error flag was cleared before and after; the line word is back.
         assert_eq!(e.global::<u8>(XML_ERROR_FLAG), 0);
         assert_eq!(e.mem.u32(line_word), 0x77);
-    }
-
-    /// UI Organizer's handler at `00A01B87` for the tests: the path is the reader's, and the
-    /// storage is a new one (whatever the file holds).
-    fn uio_storage(e: &mut Engine, a: &[u32]) -> Option<u32> {
-        assert_eq!(e.mem.bytes(a[0], 9), b"menu.xml\0");
-        let block = e.mem.alloc(0x14);
-        Some(e.call(BUILD_STORAGE_CONSTRUCT, &args![block]).u32())
-    }
-
-    fn uio_nothing(_: &mut Engine, _: &[u32]) -> Option<u32> {
-        None
-    }
-
-    /// The handler keeping its storage (UIO's parse cache): the "keep" byte set.
-    fn uio_kept(e: &mut Engine, a: &[u32]) -> Option<u32> {
-        assert_eq!(e.mem.u8(a[1]), 0, "the byte starts cleared");
-        e.mem.set_u8(a[1], 1);
-        uio_storage(e, a)
-    }
-
-    /// The handler setting the byte but answering nothing: the byte is not read.
-    fn uio_kept_nothing(e: &mut Engine, a: &[u32]) -> Option<u32> {
-        e.mem.set_u8(a[1], 1);
-        None
-    }
-
-    #[test]
-    fn a_storage_uio_keeps_is_not_deleted_and_its_menu_keeps_the_templates() {
-        use engine_core::extend::{Owner, SiteSlot};
-        const AT: SiteSlot = SiteSlot::new(Owner::Uio, UIO_READ_FILE_SITE);
-        let mut e = tile_engine();
-        let setup = read_setup(&mut e, "");
-        e.on_site(AT, uio_kept);
-        e.set_uio(true);
-        e.call_log = Some(vec![]);
-        let tile = e
-            .call(
-                0x00a0_1b00,
-                &args![setup.parent, Ptr::<()>::new(setup.path)],
-            )
-            .u32();
-        assert_ne!(tile, 0);
-        assert_eq!(
-            calls_to(&e, MENU_ADD_TEMPLATE),
-            vec![vec![setup.menu, 0xcafe]]
-        );
-        // The menu does not delete the templates; the storage's flag is set; it is not freed.
-        assert_eq!(e.mem.u8(setup.menu + 0x1d), 0);
-        assert_eq!(e.mem.u8(setup.storage.get() + 0x10), 1);
-        assert!(calls_to(&e, BUILD_STORAGE_DESTROY).is_empty());
-        assert!(e.mem.block_size(setup.storage.get()).is_some());
-        assert_eq!(calls_to(&e, TILE_UPDATE_CHILDREN), vec![vec![tile, 0]]);
-        // Answering nothing: the exe's parse, and its storage deleted as always.
-        let mut e = tile_engine();
-        let setup = read_setup(&mut e, "");
-        e.on_site(AT, uio_kept_nothing);
-        e.set_uio(true);
-        e.call_log = Some(vec![]);
-        e.call(
-            0x00a0_1b00,
-            &args![setup.parent, Ptr::<()>::new(setup.path)],
-        );
-        assert_eq!(e.mem.u8(setup.menu + 0x1d), 1);
-        assert_eq!(e.mem.u8(setup.storage.get() + 0x10), 0);
-        assert_eq!(
-            calls_to(&e, BUILD_STORAGE_DESTROY),
-            vec![vec![setup.storage.get()]]
-        );
-    }
-
-    #[test]
-    fn uio_answers_the_storage_only_while_its_word_is_on() {
-        use engine_core::extend::{Owner, SiteSlot};
-        const AT: SiteSlot = SiteSlot::new(Owner::Uio, UIO_READ_FILE_SITE);
-        // Off (the handler registered, the word not set): the exe's parse, which fails on "<>".
-        let mut e = tile_engine();
-        let setup = read_setup(&mut e, "<>");
-        e.on_site(AT, uio_storage);
-        let read = |e: &mut Engine, s: &ReadSetup| {
-            e.call(0x00a0_1b00, &args![s.parent, Ptr::<()>::new(s.path)])
-                .u32()
-        };
-        assert_eq!(read(&mut e, &setup), 0);
-        assert_eq!(e.global::<u8>(XML_ERROR_FLAG), 1);
-        // On: the handler's storage is built, the file never parsed.
-        let mut e = tile_engine();
-        let setup = read_setup(&mut e, "<>");
-        e.on_site(AT, uio_storage);
-        e.set_uio(true);
-        e.call_log = Some(vec![]);
-        assert_ne!(read(&mut e, &setup), 0);
-        assert_eq!(e.global::<u8>(XML_ERROR_FLAG), 0);
-        assert_eq!(
-            calls_to(&e, BUILD_STORAGE_DESTROY),
-            vec![vec![setup.storage.get()]]
-        );
-        // On, the handler answering nothing: the exe's parse again.
-        let mut e = tile_engine();
-        let setup = read_setup(&mut e, "<>");
-        e.on_site(AT, uio_nothing);
-        e.set_uio(true);
-        assert_eq!(read(&mut e, &setup), 0);
-        assert_eq!(e.global::<u8>(XML_ERROR_FLAG), 1);
     }
 
     #[test]
@@ -14043,212 +13860,6 @@ mod tests {
         );
     }
 
-    thread_local! {
-        /// The words UI Organizer's handler at `00A0968C` was given, per call.
-        static UIO_OPERATIONS: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
-    }
-
-    /// UI Organizer's operator handler for the tests: records its words, writes 77 and answers
-    /// "changed".
-    fn uio_operation(e: &mut Engine, a: &[u32]) -> Option<u32> {
-        UIO_OPERATIONS.with(|s| s.borrow_mut().push(a.to_vec()));
-        e.mem.set_f32(a[0] + 8, 77.0);
-        Some(1)
-    }
-
-    /// The same, answering "not changed".
-    fn uio_operation_unchanged(e: &mut Engine, a: &[u32]) -> Option<u32> {
-        UIO_OPERATIONS.with(|s| s.borrow_mut().push(a.to_vec()));
-        e.mem.set_f32(a[0] + 8, 77.0);
-        Some(0)
-    }
-
-    fn uio_no_operation(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        UIO_OPERATIONS.with(|s| s.borrow_mut().push(a.to_vec()));
-        None
-    }
-
-    #[test]
-    fn uio_runs_the_operation_in_place_of_the_switch_only_while_its_word_is_on() {
-        use engine_core::extend::{Owner, SiteSlot};
-        const AT: SiteSlot = SiteSlot::new(Owner::Uio, UIO_OPERATOR_SITE);
-        // (the float, the handler's words, the value, the change events)
-        let calculate = |on: bool, handler: engine_core::extend::SiteFn, text: bool| {
-            let mut e = tile_engine();
-            provide_constants(&mut e);
-            install_float_stack(&mut e);
-            install_double_math(&mut e);
-            let (tile, _) = updating_tile(&mut e, TYPE_RECT);
-            e.on_site(AT, handler);
-            e.set_uio(on);
-            let value = value_with(&mut e, tile, TRAIT_X, 10.0, &[(VA_ADD, 5.0)]);
-            if text {
-                let s = cstring(&mut e, "kept");
-                e.set(value, TileValue::strValue, Ptr::new(s));
-            }
-            UIO_OPERATIONS.with(|s| s.borrow_mut().clear());
-            e.call_log = Some(vec![]);
-            value_calculate_value(&mut e, value, false);
-            let seen = UIO_OPERATIONS.with(|s| s.borrow().clone());
-            let events = calls_to(&e, VALUE_CHANGE_EVENT).len();
-            (e.get(value, TileValue::fValue), seen, value.addr(), events)
-        };
-        // Off (the handler registered, the word not set): the game's add, never asked.
-        let (float, seen, _, _) = calculate(false, uio_operation, false);
-        assert_eq!(float, 15.0);
-        assert!(seen.is_empty());
-        // On: the handler alone, given (value, kind, operand, string, changed).
-        let (float, seen, value, _) = calculate(true, uio_operation, false);
-        assert_eq!(float, 77.0);
-        assert_eq!(
-            seen,
-            vec![vec![value, VA_ADD as u32, 5.0f32.to_bits(), 0, 0]]
-        );
-        // Its answer is the "string changed" flag (read when the value keeps a string).
-        assert_eq!(calculate(true, uio_operation, true).3, 1);
-        assert_eq!(calculate(true, uio_operation_unchanged, true).3, 0);
-        // On, the handler answering nothing: the game's add.
-        let (float, seen, _, _) = calculate(true, uio_no_operation, false);
-        assert_eq!(float, 15.0);
-        assert_eq!(seen.len(), 1);
-    }
-
-    /// UI Organizer's handler for the "changed" test: records its words, answers "changed" for a
-    /// copy and passes the incoming flag through for anything else (the float untouched).
-    fn uio_copy_changes(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        UIO_OPERATIONS.with(|s| s.borrow_mut().push(a.to_vec()));
-        Some(if a[1] == VA_COPY as u32 { 1 } else { a[4] })
-    }
-
-    /// UI Organizer's handler for the parentheses test: add and multiply as `v + o` and `v * o`
-    /// on the value's float, anything else (the parentheses' own kinds) left alone; answers the
-    /// incoming flag.
-    fn uio_add_and_multiply(e: &mut Engine, a: &[u32]) -> Option<u32> {
-        UIO_OPERATIONS.with(|s| s.borrow_mut().push(a.to_vec()));
-        let (v, o) = (e.mem.f32(a[0] + 8), f32::from_bits(a[2]));
-        match a[1] as i32 {
-            VA_ADD => e.mem.set_f32(a[0] + 8, v + o),
-            VA_MULT => e.mem.set_f32(a[0] + 8, v * o),
-            _ => {}
-        }
-        Some(a[4])
-    }
-
-    /// A copy action whose reference is a value holding `text`: (the action, the text's address).
-    fn copy_action(e: &mut Engine, text: &str, next: u32) -> (u32, u32) {
-        let source: Ptr<TileValue> = Ptr::new(e.mem.alloc(0x14));
-        let at = cstring(e, text);
-        e.set(source, TileValue::strValue, Ptr::new(at));
-        e.set(source, TileValue::eIndex, 5);
-        let reference = action_vtable(e, 0.0, source.addr());
-        (make_action(e, reference, VA_COPY, next), at)
-    }
-
-    /// The exe at 00a09410: an action with a reference sets `[ebp-0x34]` to the referenced value's
-    /// string (`+0xC`); UIO's jump at 00a0968c hands that word on (`DoTileOperatorCOPY` reads it).
-    #[test]
-    fn uio_is_given_the_referenced_string_of_a_copy() {
-        use engine_core::extend::{Owner, SiteSlot};
-        let mut e = tile_engine();
-        provide_constants(&mut e);
-        install_float_stack(&mut e);
-        let (tile, _) = updating_tile(&mut e, TYPE_RECT);
-        e.on_site(SiteSlot::new(Owner::Uio, UIO_OPERATOR_SITE), uio_operation);
-        e.set_uio(true);
-        let value = value_with(&mut e, tile, TRAIT_X, 0.0, &[]);
-        let (action, hello) = copy_action(&mut e, "hello", 0);
-        e.set(value, TileValue::pActionListA, Ptr::new(action));
-        UIO_OPERATIONS.with(|s| s.borrow_mut().clear());
-        value_calculate_value(&mut e, value, false);
-        let seen = UIO_OPERATIONS.with(|s| s.borrow().clone());
-        assert_ne!(hello, 0);
-        assert_eq!(
-            seen,
-            vec![vec![
-                value.addr(),
-                VA_COPY as u32,
-                0.0f32.to_bits(),
-                hello,
-                0
-            ]]
-        );
-    }
-
-    /// The exe at 00a09410: the "string changed" byte `[ebp-0x25]` is cleared once before the
-    /// action loop (00a09502) and not per action, so the flag one action leaves is the next one's
-    /// incoming flag; UIO's operators read and write that same byte.
-    #[test]
-    fn uio_carries_the_changed_flag_from_one_action_to_the_next() {
-        use engine_core::extend::{Owner, SiteSlot};
-        let mut e = tile_engine();
-        provide_constants(&mut e);
-        install_float_stack(&mut e);
-        let (tile, _) = updating_tile(&mut e, TYPE_RECT);
-        e.on_site(
-            SiteSlot::new(Owner::Uio, UIO_OPERATOR_SITE),
-            uio_copy_changes,
-        );
-        e.set_uio(true);
-        // The value keeps a string, so the flag (not the float) decides the event.
-        let value = value_with(&mut e, tile, TRAIT_X, 3.0, &[]);
-        let kept = cstring(&mut e, "kept");
-        e.set(value, TileValue::strValue, Ptr::new(kept));
-        let add = action_vtable(&mut e, 0.0, 0);
-        let second = make_action(&mut e, add, VA_ADD, 0);
-        let (first, _) = copy_action(&mut e, "hello", second);
-        e.set(value, TileValue::pActionListA, Ptr::new(first));
-        UIO_OPERATIONS.with(|s| s.borrow_mut().clear());
-        e.call_log = Some(vec![]);
-        value_calculate_value(&mut e, value, false);
-        let seen = UIO_OPERATIONS.with(|s| s.borrow().clone());
-        assert_eq!(seen.len(), 2);
-        assert_eq!((seen[0][1], seen[0][4]), (VA_COPY as u32, 0));
-        assert_eq!((seen[1][1], seen[1][4]), (VA_ADD as u32, 1));
-        assert_eq!(calls_to(&e, VALUE_CHANGE_EVENT), vec![vec![value.addr()]]);
-    }
-
-    /// The exe at 00a09410: UIO's jump sits at 00a0968c, after the parentheses' code (00a095f7,
-    /// 00a09603 and 00a0965b all jump there), and reads the kind `[ebp-0x30]` that code decoded
-    /// from a right parenthesis's float. So with UIO on the parentheses work as in the game.
-    #[test]
-    fn parentheses_with_uio_on_calculate_the_inside_first() {
-        use engine_core::extend::{Owner, SiteSlot};
-        let mut e = tile_engine();
-        provide_constants(&mut e);
-        install_float_stack(&mut e);
-        let (tile, _) = updating_tile(&mut e, TYPE_RECT);
-        e.on_site(
-            SiteSlot::new(Owner::Uio, UIO_OPERATOR_SITE),
-            uio_add_and_multiply,
-        );
-        e.set_uio(true);
-        let value = value_with(
-            &mut e,
-            tile,
-            TRAIT_X,
-            1.0,
-            &[
-                (VA_ADD, 2.0),
-                (ACTION_LEFT_PAREN, 0.0),
-                (VA_ADD, 4.0),
-                (ACTION_RIGHT_PAREN, VA_MULT as f32),
-            ],
-        );
-        UIO_OPERATIONS.with(|s| s.borrow_mut().clear());
-        value_calculate_value(&mut e, value, false);
-        assert_eq!(e.get(value, TileValue::fValue), 12.0);
-        let kinds: Vec<u32> = UIO_OPERATIONS.with(|s| s.borrow().iter().map(|a| a[1]).collect());
-        assert_eq!(
-            kinds,
-            vec![
-                VA_ADD as u32,
-                ACTION_LEFT_PAREN as u32,
-                VA_ADD as u32,
-                VA_MULT as u32
-            ]
-        );
-    }
-
     #[test]
     fn parentheses_calculate_the_inside_first_and_apply_the_operation_after() {
         let mut e = tile_engine();
@@ -16968,7 +16579,3 @@ mod tests {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "tile_uio_diff_tests.rs"]
-mod uio_diff_tests;

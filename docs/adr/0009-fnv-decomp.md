@@ -1,7 +1,6 @@
 # ADR-0009: The community's matching decompilation (fnv_decomp) may be used
 
-- **Status:** Accepted by the maintainer, 2026-11-02, with the permission of fnv_decomp's
-  authors.
+- **Status:** Accepted by the maintainer, 2026-11-02.
 - **Date:** 2026-11-02
 - **Extends:** [ADR-0003](0003-decompiled-code-in-the-project.md) (decompiled logic may be
   translated, marked with its address).
@@ -24,13 +23,7 @@ say.
 Check a name against the Xbox prototype symbols ([ADR-0002](0002-xbox-prototype-symbols.md))
 before marking it `(Xbox PDB)`.
 
-Its repository grants no licence. Its authors wrote to the maintainer on 2026-11-02
-(spelling corrected):
-
-> You are fine to use everything however you please, you don't have to credit us, that's why
-> we chose to send it out with no license.
-
-The maintainer keeps the original message.
+Its repository grants no licence.
 
 ## Decision
 
@@ -54,12 +47,12 @@ The maintainer keeps the original message.
 
   - a name, type or layout taken from it gets `(fnv_decomp)` where it first appears in a file;
     `(Xbox PDB)` instead when the name is the Xbox prototype's.
-- Scope: the permission covers the fnvdecomp contributors' own work. It does not cover
-  `third_party/` (zlib, under its own licence), and it gives no rights in the game or in the
+- Scope: only the fnvdecomp contributors' own work is used, not `third_party/` (zlib,
+  under its own licence). Nothing from it gives rights in the game or in the
   libraries linked into it (Gamebryo, Havok, SpeedTree, FaceGen, the C runtime). Material from
   it is treated like ADR-0003 material: nv-rs's GPL covers only original work, as
   [LEGAL.md](../../LEGAL.md) says.
-- Credit is not required by its authors; LEGAL.md thanks them and records the permission.
+- LEGAL.md thanks its contributors.
 
 ## Consequences
 
@@ -68,6 +61,4 @@ The maintainer keeps the original message.
   written out instead of inferred from the disassembly.
 - An audit of every translated function against it becomes possible; each difference is still
   settled in the exe.
-- Material taken from it can be found with `rg "fnv_decomp"` and removed if the permission were
-  ever withdrawn. A published statement from its authors (a licence in their repository) would
-  make the permission clear to everyone who receives nv-rs; the maintainer may ask for one.
+- Material taken from it can be found with `rg "fnv_decomp"` and removed if required.

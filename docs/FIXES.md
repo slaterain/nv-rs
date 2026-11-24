@@ -147,14 +147,13 @@ The game's own `iFPSClamp` ignores `FrameLimit`: a clamp is a fixed step with no
 | Mod fit worn question | `007838a0` | `NV_MOD_WORN` | Fitting a weapon mod asks whether the mod is worn before the mod is removed from the inventory, not after. The original asks after (a slip: it means the weapon), through the mod's extra list the removal has just deleted; it nearly always answers no, but a yes rebuilds the inventory list, which frees the weapon entry the mod menu keeps, and closing the menu then re-equips through it and the game stops. A mod is never worn, so the answer is the original's usual no, and no released memory is read. Every other click of the menu is the original's. Below |
 | Dialogue topic index | `00619820`, `0061a310`, `0061a380`, `0061a5a0`, `0045dfe0` | `NV_TOPIC_INDEX` | Finding which topic holds a dialogue info (`TESTopic::GetOwnerTopic`) no longer walks the topic list and every info in it: the original does that for each info a plugin changes (YUP and the add-ons: 5,837 times), so a dialogue mod's load grew with its size times the game's. Every topic `TESTopic::InsertInfo` links an info into (the one place an info enters a topic) is kept beside it; a search asks only those topics, with the original's own search (`00619e10`), which hold this info first by its id, and takes the first of them in the topic list's order, from a copy of the list's order that is made again whenever the list may have changed in a way that matters (its sort, the data handler's `ClearData`, an insert of a topic the copy holds, which can list it again earlier, a changed head node, or a topic inserted since that the copy doesn't hold). So the answer is the walk's, tie-breaks included (an info in two topics, a twin id, the list's order and end). `NV_TOPIC_INDEX_CHECK=1` with `NV_TOPIC_INDEX=1` (alone it is a test variable, which makes the run vanilla) runs the original's walk beside every search and stops the game at the first difference. With the fix on, the typed `topic_search` family (the walk) goes by address for the run, since the fix registers over one of its members. Below |
 | Shaders compiled ahead of first use | none (a flag the real Direct3D 9 backend reads) | `NV_SHADER_WARM` | The graphics driver compiles a shader when it is first drawn with, and the game makes all 960 of its packages' shaders at start-up but first draws some of them in play: the first shot draws 7 for the first time (`SKIN2005.vso`, `SKIN2002.pso`, `SLS2136.pso`, `SLS2148.pso`, `SM3000.pso`, `NOLIGHTTEXVCPMA.pso`; `d3d9-first-use`), and its frame took 29 ms where the others take 12.5 (46 ms without the render thread). It recurs at every launch, whatever the exe's path. With the row the real backend draws once with every shader the game makes, into a 1x1 target of its own, after a `Present`, and sets the game's bindings again with its own commands: 960 draws in 2 ms of the render thread at the first `Present`, compiled by the driver while the menus run. The first shot's frame: 28.6 and 29.2 ms without, 19.3 and 19.8 with (the shooting route, BAAB, 2026-11-09); loads not slower (Doc's house 2.26 and 2.28 s without, 2.14 and 2.10 s with); the real device's frames identical to wgpu's while it runs. The NVIDIA driver also compiles a pixel shader again for a multisampled target, so the shaders warmed into the plain 1x1 target were compiled again at the first shot, drawn into the game's 8x scene target: the warm-up now also draws each shader into a 1x1 target of each multisample type the game's render targets and back buffer use (at 8x antialiasing: 8x for the scene and 4x for its 1024x1024 targets; 2880 draws, 5-12 ms of the render thread over the first 2-4 presents in the game). Found by replaying a recording of the shooting route into a real device with one change at a time to an extra warm-up before the shot: drawing each shader also into a multisampled 1x1 target alone removed the compile (A8R8G8B8 or A16B16G16R16F, 4x or 8x, with or without depth); without multisampling, a float format, the real partner shaders, textures and render states did not; adding the real vertex layout, textures and states on top of multisampling changed nothing. Replay, the shot's two presents, ms inside Direct3D 9 (calm presents 6-7): with main's warm-up 19.5-29.3 and 19.8-33.5, with this one 6.8-8.7 and 6.9-8.5 (with no warm-up at all 28.2-42.5 and 16.4-21.5). In the game (the shooting route cut to its five shots, 2560x1440 with 8x antialiasing, 2026-11-10): without the render thread (BAAB) the first shot's two slow frames were 39.6 and 32.6, 29.3 and 30.8 ms before, 21.8 and 20.6, 23.4 and 22.2 after (the part's median 16-17; what is left is the game's own work at the shot), later shots unchanged (worst 20.5-21.5 ms both). With the render thread (play's setting; 6 runs of main, 4 of the change: too few to stand alone, the replay and the runs without the render thread carry the claim) main had frames over 18 ms in the first shot's window in 3 of 6 runs (22.3, 19.5, 19.4 ms), the change in none (worst 15.9); the later shots' worst frames 17.7-34.6 ms on main, 18.5-25.6 with the change. Start-up (38.5-38.9 s from the first frame to play) and the Goodsprings load unchanged |
-| JIP LN NVSE built in | none (a flag JIP reads before it installs) | `NV_JIP_INSTALLED` | On in `fixes` together with MCM's plugin, UI Organizer and the co-save keep row, off in vanilla. On, JIP LN NVSE answers "installed": mods find it (version 57.30), all of its 1,118 commands work with their hooks (1,116 and its two version commands, `GetLNVersion` and `GetNVSEVersionFull`), and 174 of its 183 game patches go in (three more are folded into others and six do nothing on this port; its fixes with the row `NV_JIP_GAME_PATCHES`). Not yet: `InjectUIComponent` needs `NV_UIO` on too; with real threads JIP's own data no longer makes a thread wait, but a mod's event script run from another thread still waits for the main thread a moment. Off, JIP is put in exactly as before the row. To turn it off in the fixes preset: `bJIPInstalled=0` in Fallout.ini's `[nv-rs Fixes]` (the run stays a play run: fixes preset, real threads unless `bSteppedThreads=1`); the variable is for scripted runs. Below |
+| JIP LN NVSE built in | none (a flag JIP reads before it installs) | `NV_JIP_INSTALLED` | On in `fixes` together with MCM's plugin and the co-save keep row, off in vanilla. On, JIP LN NVSE answers "installed": mods find it (version 57.30), all of its 1,118 commands work with their hooks (1,116 and its two version commands, `GetLNVersion` and `GetNVSEVersionFull`), and 174 of its 183 game patches go in (three more are folded into others and six do nothing on this port; its fixes with the row `NV_JIP_GAME_PATCHES`). Not yet: with real threads JIP's own data no longer makes a thread wait, but a mod's event script run from another thread still waits for the main thread a moment. Off, JIP is put in exactly as before the row. To turn it off in the fixes preset: `bJIPInstalled=0` in Fallout.ini's `[nv-rs Fixes]` (the run stays a play run: fixes preset, real threads unless `bSteppedThreads=1`); the variable is for scripted runs. Below |
 | Co-save keeps other plugins | none (a flag the extender reads) | `NV_COSAVE_KEEP` | A co-save's sections of plugins that are not built in (JohnnyGuitar NVSE's, ShowOff's and the others not built in yet; JIP LN NVSE reads and writes its own) are kept as they were read and written back on each save while the files loaded are the ones that co-save lists, so a save brought from a real modded installation keeps them. xNVSE writes only the plugins it has loaded, so off (vanilla) they go at the next save, as with xNVSE. Below |
 | JIP co-save fixes | none (a flag JIP reads) | `NV_JIP_COSAVE_FIX` | JIP LN NVSE's extra data record (`SetRefExtraData`'s data, `JPED`) as JohnnyGuitar NVSE corrects it (`SerializationFixes`): JIP counts 5 bytes for each mod's part of a key where it writes 9, so a load that skips a key whose reference is gone lands in the middle of the next one; with the row the record is written with the right sizes as version 2 (what VNV's co-saves hold, since VNV installs JohnnyGuitar), JIP's own version 1 is not read, and the variables JIP added to a script whose owner is not loaded are skipped 10 bytes each (JIP skips 9, one short, and reads the next owner wrong). With the row a co-save written by JIP without JohnnyGuitar (version 1) is not read, as JohnnyGuitar gives up on it, but nv-rs does not destroy it: until JIP's saved data is applied to the game, the record is carried unchanged to the next save while the same files are loaded (as is a version 2 record with the row off), so the player can still take that save back to JIP. Off (vanilla), JIP's: version 1, only version 1 read, the 9-byte skip. Below |
 | JIP vanilla commands | none (a flag JIP reads) | `NV_JIP_VANILLA_CMDS` | JIP LN NVSE's versions of seven of the game's own commands (`InitCmdPatches`): `MenuMode` (adds JIP's modes 0 to 4: menu mode, the Pip-Boy, a menu open, the console, the loading screens), `GetItemCount` (also counts a form list's forms), `GetContainer` (also for an inventory reference), `IsInList` (a temporary actor by its leveled base), `GetHitLocation` (the location JIP's hit data hook keeps), `HasPerk` (a follower's perks count on followers) and `GetNVSEVersionFull` at the game's `0x127D`; also the `Begin MenuMode` script block (JIP's modes and handler, and block type 0xE answering true: see GS below). They take effect only once JIP is built in and answers "installed" (the plan's step 3.10); until then, and off (vanilla), the game's own. Below |
 | JIP game patches | none (a flag JIP reads) | `NV_JIP_GAME_PATCHES` | JIP LN NVSE's changes to the game's own code (`InitGamePatches` and the `[GamePatches]` switches of the player's `Data\NVSE\plugins\jip_nvse.ini`, else JIP's defaults: switches 1, 4-9, 13 and 14 on), (174 of its 183 are built, three are folded into others and six do nothing on this port; "JIP LN NVSE's game patches" below lists each). On with JIP in the fixes preset, so some change play for every player, mods or not: JIP's hit damage (a hit's damage threshold and resistance from the target's actor values and the ammo fired, `bIgnoreDTDRFix`), the player taking `fVATSPlayerDamageMult` of every damage in V.A.T.S., vendors repairing up to 100% instead of 90% (`fRepairSkillMax` 10), the game's own corner messages staying up 2 seconds, and Ctrl or Shift taking one item or the whole stack without the "how many" menu (`bQttSelectShortKeys`); also each dialogue info remembers the topic its load linked it into last, and a script handler's result starts at 0 for every command. They take effect only once JIP answers "installed"; with JIP off, and off (vanilla), the game's own. With the dialogue topic index also on, JIP's answer wins (JIP's wrap goes over the index). With this row off nothing marks a hit as having got through the armour (G77 and JIP's hit damage go in with the row; JIP itself writes them with no switch), so `GetArmourPenetrated` answers 0 for every hit. Below |
 | JohnnyGuitar's editor ids | none (a flag the built-in reads; seams at `0x451CBA`, `0x4679F8`, `0x486903`, `0x48449A` and nineteen more, wraps at `00474cb0` and `00483a00`) | `NV_JG_EDITOR_IDS` | JohnnyGuitar NVSE 5.28's editor-id restoration built in (`crates/johnnyguitar`): every loaded form keeps the editor id its record gives it, as JohnnyGuitar keeps it (VNV installs JohnnyGuitar). The game keeps the names of a few form types only, so without it text compiled while the game runs (the console, script runner files, `CompileScript`, lambdas from text) finds `PlayerRef.AddItem Caps001 5`'s `PlayerRef` and `Caps001` by no name (`player.AddItem` works either way; scripts compiled in the editor hold form ids, not names). The names are kept outside the game's 32-bit memory, looked up case-blind, and copied into the game's memory only when game code asks for one as text; a name another form had moves to the newest and is logged (JohnnyGuitar's console line at the start names such conflicts). JohnnyGuitar's 408 commands are not built: a mod that checks for JohnnyGuitar is told it is absent. Off (vanilla), the game's own names only. JIP LN NVSE's light names and its by-name lookups use the same names while the row is on. |
 | The Mod Configuration Menu's plugin built in | none (a flag the built-in reads) | `NV_MCM` | On in `fixes` (with JIP, which the mods MCM lists need), off in vanilla. The Mod Configuration Menu 1.5's NVSE plugin (`MCM.dll`, "MCM Extensions" 1, Pelinor) built in from its machine code (`crates/mcm`): its nine commands at `0x21C0` up. `GetMCMFloat`, `SetMCMFloat`, `SetMCMString`, `SetMCMFloatMass`, `SetMCMStringMass`, `SetMCMModList` and `GetMCMListWidth` read and set MCM's menu traits under `StartMenu/MCM/` through the DLL's own path lookup (NVSE 2's, not xNVSE's); `GetModINISetting`/`SetModINISetting` read and write `DataConfig<mod>.ini` as the DLL does (Windows' INI rules and the VC++ 2010 runtime's `atof` and `%.4f`, measured), its writes kept in the mod files folder beside the saves, never the game's folder. Without it MCM's pause-menu button never appears (its script stops at its first `GetMCMFloat`). Off, nothing is registered. |
-| UI Organizer built in | none (a flag the built-in reads; seams at `0070a049`, `00a01b87`, `00a0968c`, `00a03923`, `00a221f8`, `0076f688` and four more) | `NV_UIO` | On in `fixes` (with JIP: UI mods need both), off in vanilla. UI Organizer 2.30 (jazzisparis) built in, parts 1 to 3: its lists (`Data\uio\supported.txt`, or UIO's own copy built in when the game folder has none, then each `Data\uio\public\*.txt`, with their conditions) put UI mods' `<include>` lines into the menu files they name, in memory, where and in the order UIO puts them, and every menu file `Tile::ReadFile` reads goes through UIO's reader (its patched texts and its own expansion of `<include>` tags), then UIO's own XML parser and parse cache; JIP's `InjectUIComponent` goes through it; its tile operators (three aliases, 17 new) and text tiles' `<zoom>`. Off (vanilla), nothing is installed and no menu file changes. Below |
 | Script error loop guard | none (a flag the extender reads) | `NV_NVSE_ERROR_GUARD` | An error raised while a script's `RuntimeScriptError` handler runs (in the handler itself, or at the call depth limit when handlers call functions that fail) is not sent to the handlers again. xNVSE sends it again, which recurses until the stack runs out and the game stops; off (vanilla), the port does the same. With it on, JIP's `RunBatchScript` and `RunScriptSnippet` also stop a script that runs itself again 64 runs deep (one log line; JIP has no cap and the stack runs out). Below |
 | Image-space event form check | none (a flag the extender reads) | `NV_NVSE_IMOD_CHECK` | When an image-space modifier instance runs out, OnRemoveIMOD is raised only for an instance of a modifier form (the game's own `AsForm` test, as its `Stop` makes it), with that form. xNVSE reads a form at the same place in every instance, and a depth-of-field or radial blur instance (iron sights, V.A.T.S., `SetGlobalRadialBlur`) has a number there: a handler then reads garbage as a form. Off (vanilla), the word is read as xNVSE reads it, and a word that is not a readable form drops the event instead of stopping the game. Below |
 | Script reference checks | none (a flag the extender reads) | `NV_NVSE_INVREF_CHECK` | (Once "Inventory reference checks": the variable and the Fallout.ini key `bNVSEInvRefCheck` keep that name, so a setting already made still works.) A reference handed to a script with parts missing, where xNVSE reads or writes through the missing part and the game stops; with the row the command gives its "nothing" answer instead (0, or nothing set). Off (vanilla), the port stops there too. **Inventory references:** an inventory reference's temporary reference is in no cell, and has no base form once released (after `RemoveMeIR`, or a loop's reference kept past its loop): `GetDoorTeleportX`, `GetDoorTeleportY`, `GetDoorTeleportZ`, `GetDoorTeleportRot`, `SetDoorTeleport`, `GetParentCellOwner` and `GetParentCellOwningFactionRequiredRank` read through the missing base form or cell. A container whose base list has an entry without a form stops the game in `ForEach` and `GetInventoryItems` (xNVSE reads the missing form's type), where the row passes over it; the commands that look an item up by its id (`PickOneOf`, `GetTokenValue` and the rest) read its id through it, where the row takes it as another item (`GetNumItems` and `GetInventoryObject` count it as xNVSE does, in both presets). **Doors:** a door whose teleport has no data or no linked door, or whose lock has no data (a mod's broken door data; the game itself makes a lock without data only when an allocation fails, and never a teleport without data): `GetLinkedDoor` reads through it, `SetDoorTeleport` and `SetOpenKey` write through it. **Owners and cell scans:** `HasOwnership` and `IsOwned` read the item's parent cell (for the cell's owner) and the asker's base form through nothing for a reference without them, where the row answers 0; the cell scans read a cell reference's base form for its type, where the row passes over a reference without one. **Scan records:** `GetNextRef` with no scan reports "GetFirstRef MUST be called before GetNextRef" and leaves a record it never builds, and a second one reads that record's uninitialised memory; a console scan that has ended stays under the console's key (xNVSE drops the script's own id instead), and the next console `GetNextRef` reads it through its missing cell. With the row both answer as the first call did: the error line again and 0. A scan whose walk finds no cell of its area in the worldspace's map reads the missing cell's list too; with the row it answers 0. **Form lists and doors** (`Commands_Misc.cpp`): `GetDoorSound` reads the id of the door's open or close sound through nothing for a door record without that sound (the game allows one), and in the console prints the id of a missing form through nothing; `GetLevCreatureRefs` and `GetLevCharacterRefs` read the id of a leveled entry's missing form; `GenericCheckForm` reads the id of an empty node's missing form in the middle of the list. With the row the door answers 0 and nothing is printed, and the entry or node is passed over. `IsRefInList` (`Commands_List.cpp`) reads the id of a reference's missing base form (an inventory reference's, once released) when the list holds a form; with the row nothing is found there. **And two of xNVSE's own slips with inventory references:** `RemoveMeIR` on an unworn stack with data of its own (a weapon with its condition) frees that data through the entry the reference holds, which for a reference from `GetInvRefsForItem`, `ForEach`, OnSell or OnRepair is the reference's own copy: the container's entry keeps the freed data and its count, so the item stays with freed memory as its data; with the row the data leaves the container's own entry too (its count with it) before it is freed, and nothing is freed when no entry of the container holds it. OnSell's item stays kept after the event when no handler ran (every handler filtered out), so a later `GetSoldItemInvRef` reads a sale that is over; with the row it goes when the event ends. Off (vanilla), all of these are xNVSE's, the stops included. Below |
@@ -169,13 +168,9 @@ The game's own `iFPSClamp` ignores `FrameLimit`: a clamp is a fixed step with no
 | Dead lights in a light list | `00bb4740`, `00c058f0` (the translated `GetRenderPasses` of the decal and `Lighting30ShaderProperty` classes and of the `010bcb60` class: the sweep first, `engine::dead_lights`), and a flag the typed light walks read (`engine_typed::lights::dead`) | `NV_DEAD_LIGHT_GUARD` | A light destroyed while an object's lighting property still lists it is taken out of that list (its node freed as `RemoveLight` `00b717a0` frees it), the object's passes are rebuilt, and the active-light walks, the counts and the pass staging skip a light whose `spLight` is 0; the first few such entries are printed (property, geometry, light, the property's fence word). The sweep runs at every lighting property's `GetRenderPasses` (the typed `00b67be0`, the two hooked) and at `ResortLights`. Not seen: a dead light's block taken again by a new light before the sweep (the entry then names a live light: no stop, at most that light on the object until its list is rebuilt). The original's own fault: a light's destructor (`00b9f0c0`, through `00b9ef30`) takes it out only of the properties of the geometries in its own list, and `RemoveLight` does nothing while the property is fenced (`FenceAllLights` to `RemoveFencedLights`), so a property can keep it; the next walk then reads through its cleared `spLight`: `ResortLights` (`00b70390`, the luminance `00b9dbe0` reads `spLight` +0x8c), the active-light getters and counts (`00b70590` to `00b707d0`), the pass staging (`00b70820`). A stop seen in the staged fight with JIP's projectile lights (2026-11-22). JIP LN NVSE guards one of these walkers only: its null check at `0xB707E0` in `GetNumberofActiveNonShadowLights` (G01). With the row off the walks are the exe's |
 | Thread heap | none (the memory's allocation path) | `NV_THREAD_HEAP` | What a player notices: the pause menu with mods opens faster (45-54 ms an opening against 65-67) and fights stutter less (the staged fight: 61.0 frames a second with 0 stutters against 53.3 with 21). The blocks of the game's memory pools (8 to 596 bytes: nearly every object, list node and string) come from runs of one pool each through each thread's own cache, with no lock and no table lookup on the common path (`engine_core` `mem/pools.rs`). The game sees the same answers: sizes, alignment, the zero fill, a freed block reused only for its own pool. Runs whose blocks are all free again give their memory back once the pool keeps 4 MB of other free blocks; the log gets a `thread heap:` line now and then. Vanilla keeps the heap's own path. `bThreadHeap` in `[nv-rs Fixes]`. |
 | Half-loaded actor's level change | `00881d30`, `00882b90`, `00883240`, `00883800`, `00932a00`, `00932b70` | `NV_HALF_LOADED_MOVE` | An actor moved to another AI level while its saved data loads (one loading thread between the two passes over a cell's saved changes, another setting its animation: running fast across cells) has its saved reference ids taken out for the move and put back where the original's copy puts them, for the second pass to resolve. The original follows the saved target id as an object (marks it, then calls through the word at the id as a vtable): its own crash. Below |
-| Thread races | `00aa42e0`, `00aa3a40`, `00a0e770`, `00a0df80`, `00a0f8b0`, `0071d0a0`, `00652140`, `00652160`, `00652190`, `004b5d10` | `NV_THREAD_RACES` | Four places where the original shares state between its threads without the lock it needs, which the port meets because it runs the game's threads side by side: a new thread's scrap heap (the first look-up on a thread inserts into an unlocked map, so two threads starting at once can lose one, and a block is later freed into the wrong heap), the debug texts and the console (printed from any thread while the main thread handles and times out the same queue), the face-gen lock's count (counted down after the release with a plain read and write, so counts are lost and the model cache is never emptied, or emptied under another thread), and the editor-marker pass every loaded model gets (its controller in a global that a pass on another thread clears between two reads, and the virtual call then goes through 0). The first three from lStewieAl's Tweaks, the fourth from Psycho. Below |
 | Texture files read before the renderer's lock | `00e6dc40`, `00a5fe30` | `NV_TEXTURE_READ_FIRST` | The loading thread makes a texture's renderer data (`00e6dc40`) under the renderer's source-data lock (`m_kSourceDataCriticalSection`, the renderer's +0x180), and the making reads the texture's file and unpacks it from its archive inside that lock (`00e68a80`: `NiFile::GetFile`, `00462d80`), so main, which takes the same lock to bind or make another texture's data, waited for the read: 6-13 ms in 5-6 frames of each run across cell borders (measure/smooth-200/BORDERS.md). Here the file is read first, on the same thread with the same calls, when the texture is loaded by its file name (the common case: each making opens its own file; a texture holding a file object of its own is made as before, its file read under the lock, unless it is the one the model loader's queued texture is making right then: `00a5fe30` (from `QueuedTexture::Run`) stores the file object in the new texture and makes its renderer data before it hands the texture out, so no other thread can make that texture's data and the file is read first too; if the making does not take that read after all, the deleted file object is cleared from the texture so later reads open the file by name), and only the rest stays under the lock in the exe's order: the renderer data's allocation and construction, the image description, the Direct3D texture's creation, the texture taking its data. The lock guards the textures' renderer data (+0x24) and the renderer's texture state; the read touches only the file and a buffer of its own. A texture another thread gives data meanwhile frees the buffer read for nothing (its file, opened for this making alone, is already deleted). The same textures with the same bytes, made and handed to the renderer in the same order; what differs with the row on is the guest heap's order of allocation (the file's buffer is taken before the renderer data's object), so heap addresses differ, not what is drawn. |
 | Cell entry waits for its own cell | `00446b50` | `NV_CELL_ENTRY_WAIT` | Crossing into a new outdoor cell, the game waits for the loads the new cell needs at once. The original waits for more: at the same crossing it queues the row of cells three cells ahead as a pre-load, at the same top priority, and the wait takes them too, one cell after another on the one loading thread: a wait of 45 to 82 ms for 1.5 ms of the entered cell's own loads, 68 to 150 ms with YUP. With the row the cells ahead that are still queued get the priority their references get (1 or 3, `TES::GetCellPriority`'s rule) before the wait, through the IO manager's own requeue, and load right after it, in the background. A cell load already running, and one for the entered cell itself, are waited for as before. Measured, one run each: the wait went from 82 to 20 ms in the base game and from 68 to 4 ms with YUP; the frame it falls in went from 122 to 55 ms and from 102 to 31 ms. The frames next to it keep the border's other work, so the crossing's longest frame went from 122 to 70 ms and from 102 to 65 ms: about half. Below |
 | Cell offsets for every plugin | `00583560`, `005854f0` | `NV_CELL_OFFSETS` | The game finds a cell of a master file by the table of cell positions the master carries (`OFST`); a plugin, and a master whose tables were stripped (YUP's, TTW's), it searches record by record each time a cell loads, on the one loading thread. With the row each such world space record gets the table its search would give, built from the plugin's own records at load on a host thread (Cell Offset Generator's idea), and a plugin's cells are found by it as a master's are. The same cells are found: where a table could not give the search's answer for every position, the world space is searched as before. Below |
-| V.A.T.S. waits only for the camera | `007f3e00` | `NV_VATS_LAG` | V.A.T.S. measures a target's body parts one by one as the camera turns to it; the parts it has not measured get the average of the measured ones only after a fixed timer: 2000 ms since the scan began (`007f4058`). With the row they also get it as soon as the camera's heading is reached (the menu's `bHeadingReached`), once at least one part is measured, so the chances show when the camera arrives instead of up to 2 seconds later. The measured parts keep their own chances; a part on screen that the scan has not measured yet when the heading is reached (the camera arrived within a few frames) gets the measured parts' average instead of the chance the original would measure for it in the following frames. lStewieAl's VATS Lag Fix, except that it does not end the wait before a part is measured (its average would be 0/0: no chance at all on the other parts). Below |
-| Causes keep no witness lists | `0066e010`, `0066e440` | `NV_ACTOR_CAUSE` | An actor's projectile or explosion carries a cause (`ActorCause`), which copied the actor's whole detection list when it was made; every saved cause wrote all of it (one 42-byte record per actor detected), so saves grew with the shots fired in company. With the row the cause copies nothing (its constructor no longer asks the actor's process for the copy) and a save's records are read and dropped, so they are not written again. Nothing in the game reads the list but the cause's own functions (freeing it, removing an actor from it, saving and loading it), and a cause made for an actor without a full process never had one. Saves stay readable both ways. lStewieAl's ActorCause Save Bloat Fix. Below |
-| Radio song lengths | `008300c0`, `00830b30` | `NV_RADIO_LENGTHS` | Two bugs of the music and radio channels, from Psycho. A file opened on a channel left that channel's last duration in place until the new file's thread ran, and a radio station asks for the new song's duration at once and keeps a positive answer: a song opened while the channel's last song still faded out (a quick change of station) got that song's length, so it was cut short or followed by silence. With the row the duration is cleared when the file opens, and a channel's thread writes its file's duration only while the channel is still that file's (the fading thread wrote its length back once more before it noticed the new song). And the music thread brings the time since a station's start into the song's length by taking the length off while it is longer: a length of 0 never ends that loop, and the music thread spins for good (silence, one core busy). With the row a length of 0 skips that seek, and the rest gets the loop's own answer in one step. Below |
 | Facial hair by race folder | `007acb60`, `007adce0`, `007b4b50` | `NV_FACIAL_HAIR_RACE` | The character menu (character creation, the barber, the plastic surgeon) offers every playable head part in its facial hair list to every race. The game has no way to say a part is for one race only, so a plugin's race with its own refitted beards shows them on every other race's head too. With the row, a race that brought its own facial hair is offered only those parts, and every other race is offered every part except those. Such a race is one whose head model, for the chosen sex, lies in a directory of its own with playable head parts under it. A part with no model of its own (the game's `BeardMix` parts) goes with the parts it combines. The list is built again when the race or sex changes in the menu, which the original never does. A worn part the new choice (or a face preset) is not offered is taken off. A race's parts are kept to it only when they sit under its head's own directory; a race that brought none keeps the original list. For the game's own data nothing changes. In the original game the plugin's parts still appear for every race. Below |
 | No distant water under the Strip | `00583560` | `NV_STRIP_LOD_WATER` | Patch data (below): The Strip's world space (`TheStripWorldNew`) gets the "No LOD Water" flag as it loads. Its distant water lies under the Strip's ground and is never seen, but the game makes it and turns its water system on for it. YUP, UPNVSE Plus and Tale of Two Wastelands 3.3.3b set the same flag; Aqua Performa's author reported about 20 frames a second on the Strip from it (not measured in nv-rs). Below |
 | Direct file access | `00aa14d0`, `00aa15f0`, `00aa16d0`, `00aa85c0`, `00aa8610`, `00aa8660`, `00aa7eb0`, `00aa81d0`, `00ec9907`, `00aff300`, `00b004e0`, `00afb2a0`, `00afa550`, `00afa750`, `00afb190`, `00afac20`, `00afac90`, `00afad00`, `0043c3b0`, `00c3d0e0`, `00c3d440` | `NV_DIRECT_FILES` | The game's files are opened, read and written by the thread that asks, as Mod Limit Fix 7 and Cell Offset Generator have them: no IO thread that every read waits for, no limit of 512 open files (about 140 plugins), and files and archives up to 4 GB: seeks and sizes past 2 GB, and an archive's files stored past 2 GB found and read, as with JohnnyGuitar NVSE (the original stops at 2 GB, where TTW's and VNV's generated LOD archives go on). Below |
@@ -339,73 +334,6 @@ then running across cells) stopped with `read of unmapped memory at 00154145 (in
 - **Not covered.** The id lists (`+0x6c`; middle-high `+0xc8`, the active effects, the queued items;
   high `+0x38c`, `+0x394`, the detection states) stay in place; the first pass still writing into the
   old process while the other thread replaces it is the original's own race.
-
-### Thread races
-
-Found by lStewieAl's Tweaks (`ThreadSafeThreadScrapHeap`, `ConsolePrintMultithreadingFix`,
-`patchFixFaceGenRaceDataRace`; none of the three depends on JIP LN or JohnnyGuitar), built here from
-the exe (`crates/host/src/thread_races.rs`). In the original these are races between the game's own
-threads on Windows; the port runs those threads side by side in play (`NV_THREADS`), so it has them
-too. None has been seen in a port run: the evidence is the exe and a test with real threads
-(`crates/host/tests/thread_races.rs`).
-
-- **A new thread's scrap heap.** `MemoryManager::GetThreadScrapHeap` (`00aa42e0`) looks the calling
-  thread's id up in a map of 37 buckets; on the first call of a thread it allocates a heap and inserts
-  it with `SetAt` (`00aa4860`): read the bucket's head, link the new node in front of it, write the head
-  back. No lock. Two threads inserting into one bucket at the same moment both read the old head, and
-  one node is lost: that thread's next call makes a second heap, so a block taken from the first heap
-  is freed into the second. In the port two ids share a bucket when they differ by a multiple of 37
-  (game threads are numbered from 1, render helpers from 65,537), so it is rare today; the original's
-  Windows ids collide more often. With the row each OS thread keeps the heap it found (for its run,
-  its game thread, and until the next install or the memory manager's teardown, `00aa3a40`). The
-  exe's own look-up and insert run under one lock, with the stepped host's time slice taken out
-  around them (as the render helpers' fork does for its caller), so no turn ends while the lock is
-  held. So the map is filled as in the original, and the teardown frees every heap. A heap looked up
-  while a teardown runs is not kept. Not fixed: the teardown's own walk of the map, racing another
-  thread's first call, is the original's race and stays.
-  After its first call a thread pays one thread-local read, where the original makes an import call
-  and a map look-up through three virtual calls.
-- **The debug texts and the console.** The debug texts' queue is handled and timed out on the main
-  thread (`DebugText::HandleQueuedPrints`, `00a0e770`; `00a0df80`), which take the critical section
-  at `011f33dc` only while the debug texts are shown; `DebugText::Print` (`00a0f8b0`) and the console
-  print (`0071d0a0`, which scripts and the script extender's commands print with) take none, from any
-  thread. With the row the four run whole inside that section (it is recursive: their own takes inside
-  stay). Two differences from the plugin: the console print is wrapped whole, its log-file write
-  included, where the plugin takes the section from the line break on; and the functions' own
-  takes, made only while the debug texts show, stay, where the plugin removes them.
-- **The face-gen lock's count.** `00652140` takes the face-gen lock and counts its depth (`011d59dc`)
-  up, `00652160` tries it and counts up when it got it, `00652190` releases it and only then counts
-  down, outside the lock. A release and a take on two threads at once lose a count. The memory-freeing
-  step (`00866a90`) empties the face-gen model cache only when the depth is exactly 1 after its own
-  take: a depth that drifted up keeps the cache full for good (the plugin's author links it to endless
-  loading on some saves), one that drifted down empties it while another thread uses it. With the row
-  the counts are locked increments and decrements at the same points. Tweaks also takes the lock out
-  of three of the model map's functions (`00650200`, `00650930`, `00650ba0`); the exe gives no reason
-  why that is safe, so that part is not built.
-- **The editor-marker pass of a loaded model** (from Psycho, `docs/model_postprocess_serialization_engine_fix.md`
-  in its repository). `InitModel` (`0043ace0`) runs `RemoveEditorMarkers` (`004b5d10`) on each model it
-  loads, at `0043afac`, the pass's only caller from outside (`004b5efb` is its recursion): on the IO
-  thread for queued models, on the main thread for models loaded at once. The pass keeps its root
-  (`011c6328`) and a controller value (`011c6324`) in globals, tests the value once and reads it again
-  before each of its four virtual calls; a pass on another thread that ends meanwhile clears it, and
-  the call goes through 0 (Psycho's crash dump, in the original: `004b5e11`). With the row the outer
-  call runs whole inside a critical section of the row's own, made the game's way at start-up
-  (`InitializeCriticalSection`; recursive, as Psycho's lock is), so the recursion is inside it and the
-  lock is taken once per model. A thread waiting for it waits as on any of the game's sections, under
-  either threads scheme.
-- **Tested.** The real-thread tests (`crates/host/tests/thread_races*.rs`) run four OS threads side
-  by side (skipped below four cores): up to 20,000 rounds of first calls into a one-bucket map, so
-  every insert meets another, and 100,000 takes and releases each of the face-gen lock. One binary
-  installs the row before the first fork; the other runs the original. In 10 runs of each on this
-  machine (2026-11-10, commit b45bc457): with the row, 0 rounds lost a heap and the depth ended at 0
-  every time. Without it, 72 to 248 of the 20,000 rounds lost a heap, and the depth ended between
-  -3,161 and 4,513 after 400,000 takes and releases. A stepped-threads test (the reviewer's) ends a
-  time slice at the map look-up; it finishes, where the first version hung. Single-thread tests
-  install the row and drive all nine addresses: 200 engines in a row each find their own heap, a
-  heap looked up during the teardown is not kept, and the debug-text section is taken first and left
-  as often as taken. The editor-marker pass: with the row its outer call enters the run's section
-  first and leaves it last, also when the pass stops; without it no section is taken. Not run with
-  real threads: the race needs two models with editor markers loading at once.
 
 ### Cell entry waits for its own cell
 
@@ -636,111 +564,6 @@ switched, default typed families, so "off" is the typed walk):
   nothing to do with the index: even in the fast runs the first main frame comes about 1.2 s after the load's
   end. So no fixed saving is claimed here.
 - Continue (save to world) 3.2-4.0 s with the fix on and off.
-
-### V.A.T.S. waits only for the camera
-
-lStewieAl's VATS Lag Fix (`VATSLagFix.dll`, read in its disassembly), built from the exe. In mode 3
-the V.A.T.S. menu's scan (`007f3e00`) measures the target's parts one by one (their place on screen,
-`00800a00`; whether each is visible, `007f06d0`); a part not measured yet stays without a chance until
-the scan gives up on it: at `007f4058` the code that gives every such part the average chance of the
-measured ones (and marks it measured and shown) runs only when more than 2000 ms (`0x7d0`) have passed
-on the interface timer (`011f6394`) since the scan began (`011db0dc`); then the menu goes to mode 2 and
-shows the chances. The plugin keeps that jump but sends it to its own test: once the menu's
-`bHeadingReached` (+0xf8, Xbox PDB; set by `007f3bd0` when the camera has turned to the target) is set,
-the give-up runs at once. The row is that test, in a copy of the scan registered at `007f3e00` (the
-menu's update calls the scan by address now); vanilla's scan is the translation as it was. One
-difference from the plugin: the heading ends the wait only once at least one part has been measured.
-With none, the give-up's average is 0/0, and every part still without a chance would get no number
-at all (shown as 0%, and V.A.T.S. takes no attack on it). The row then waits for the first measured
-part, or for the 2000 ms as the original.
-
-What a player sees: the hit chances appear as soon as the camera arrives, where the original could sit
-for up to 2 seconds first, mostly when a part is hidden or off screen. The measured parts keep their own
-chances, and the parts the original gives up on get the same average, only sooner. One more difference,
-the plugin's too: the scan shows and measures one part a frame, so when the camera arrives within a few
-frames of the scan's start, a part on screen that it has not measured yet gets the measured parts'
-average at once, where the original would measure it in the following frames and give it its own
-chance.
-
-Tested: `vatsmenu.rs`'s `the_scan_waits_2000_ms_unless_the_heading_ends_the_wait` runs the scan in mode 3
-with a measured part (40) and one without: the original gives the second the average only after 2000 ms
-whatever the heading; the row gives it at once with the heading reached, and waits as the original
-without it. `at_the_heading_the_row_averages_a_part_the_original_would_measure_next` takes a part on
-screen not yet shown when the heading is reached: the original shows it (to measure it next), the row
-gives it the measured part's 40 and marks it measured; with no part measured yet the row shows it as
-the original does.
-
-### Causes keep no witness lists
-
-lStewieAl's ActorCause Save Bloat Fix (`ActorCauseSaveBloatFix.dll`, read in its disassembly), built from
-the exe. An `ActorCause` (Xbox PDB; 0x1c bytes) is made for each projectile, explosion and other thing an
-actor causes (`0066e010`): its actor, a list at +4 (`pWitnesses`, Xbox PDB), its origin, an id. The
-constructor fills the list with what the actor's process answers at its slot +0xf4: a copy of the
-actor's detection states, one 0x24-byte record per actor it detects. Every cause on the game's cause list
-is saved (`0066e390`): each record as a form id and eight values with their spacers, 42 bytes (40 before
-the save's form version 8). The plugin skips the copy (a jump at `0066e099`), skips the save's loop
-(`0066e3de`) and, on load, reads the count and skips its records by their size (`0066e499`).
-
-The row: the constructor (`0066e010`) asks for the actor's process as before but does not call its slot
-+0xf4, so the list stays empty, as it is for a cause of an actor without a full process in the original
-too; the load (`0066e440`) reads each saved record with the original's reader (`008d7140`) into a record
-on the stack and drops it, so a save written by the original or by vanilla is read to the same byte
-(spacers and the version's extra byte included) and keeps no list. The save itself is left as it is: with
-no list made or loaded it writes a count of 0, the same bytes the plugin writes. Who reads the list:
-only the cause's own functions (`0066df40` frees it, `0066e100` removes an actor's record, `0066e200`
-resets it, `0066e390`/`0066e440` save and load it, `0066e640` resolves its form ids after a load); the
-Xbox PDB has no accessor for it. So what a player sees is smaller saves that save and load faster in long
-fights (the guides quote 15-30%; not measured in nv-rs). A save made with the row loads in vanilla and in
-the original (count 0), and one made without it loads with the row.
-
-Tested: `run_0066e010.rs`'s `without_witnesses_the_process_is_asked_but_nothing_is_copied` (the same words
-as the original's except +4, and the process's slot never called) and `actorcause.rs`'s
-`load_game_without_witnesses_reads_each_record_and_keeps_none` (three records read by `008d7140`, nothing
-allocated, no list) and `the_list_loads_each_cause_by_address`.
-
-### Radio song lengths
-
-From Psycho's radio fix (`psycho-engine-fixes/src/mods/perf/radio/music.rs` and
-`docs/radio_scan_hitch_evidence.md` in its repository), built from the exe; two of its parts.
-
-- **The duration left on a channel.** Music plays on two channels that cross-fade (`FalloutAudioMedia`).
-  Opening a file (`008300c0`) sets up the next channel and wakes its thread, which publishes the file's
-  position and duration (`011dd320` for channel A, `011dd354` for B) once it runs. Until then the channel
-  holds what its last file published: a channel is cleared only when its file's thread ends, after its
-  fade-out. A radio station asks for the duration right after opening the song (`008308c0`) and keeps a
-  positive answer as the song's length, which decides when it moves to the next song. A song opened while
-  the channel's last song still faded out (a quick change of station) got that song's length: cut short,
-  or followed by silence. With the row the opened channel's duration is cleared under the lock before its
-  thread is woken, so the station gets 0 and asks again later, as it does for any song whose thread has
-  not answered yet. The clear alone leaves a window: each channel has one thread, and the last song's
-  thread, still fading out, runs on until the end of its round (up to one update, at most 100 ms), where
-  it sees the new ID and stops. That round first writes its own length to the channel again, and the new
-  song's thread starts only after it, so a station asking meanwhile still got the old length. So the row
-  also takes Psycho's check at the four places the thread writes the duration (its start-up and each
-  round, for either channel: `00830c97`, `00830d2c`, `0083135d`, `008313d7`): the write happens only while
-  the channel's ID is still the thread's, under the same lock as the open. The duration then stays 0 from
-  the open until the new song's own thread publishes its length. Psycho also ties the station's progress
-  to the songs' ends; that part is not taken.
-- **The sync loop.** Each round the music thread (`00830b30`, the loop at `00831790`) brings the time since
-  the channel's synch start into the file's length by taking the length off while it is longer, then seeks
-  when the position is off by more than the tolerance. With a length of 0 (none known: the thread's first
-  rounds, or a failed duration query) that loop never ends: the music stops and the thread spins on one
-  core for good. With a clock behind the synch start the time wraps to about four billion milliseconds,
-  taken down one length at a time before the clamp to 0. With the row a length of 0 with time to bring in
-  skips the seek (playback goes on where it is, as Psycho does), and otherwise the time is
-  `(time - 1) % length + 1`, the loop's own answer, in one step. Where the loop ends the row's answer is
-  the loop's.
-
-The media object's open (`00830010`) and the channel thread (`0082f7b0`) call the two by address now, so the
-row applies there too. Tested: `falloutaudiomedia.rs`'s `the_radio_open_clears_the_duration_before_waking_the_thread`
-(the duration the thread sees when woken: the last file's without the row, 0 with it; the other channel
-keeps its own), `a_fading_thread_no_longer_writes_its_length_over_the_next_song` (a song opened on a
-channel while its last song's thread runs one more round: with the original's thread proc that round
-writes the old 10 s back and the station gets it; with the row's the station gets 0 until the new song's
-thread publishes its own 20 s), `bring_into_length_is_the_loops_answer` (against the loop for lengths 1 to 2^31-1),
-`the_bounded_sync_plays_as_the_original_within_the_length` (the same calls as the original's thread
-proc on the play test) and `the_bounded_sync_skips_the_seek_without_a_length` (a length of 0 ends the
-run with no seek, where the original's never ends).
 
 ### Facial hair by race folder
 
@@ -1076,17 +899,16 @@ save) should get.
 ### JIP LN NVSE switched on
 
 JIP LN NVSE 57.30 is built in (`crates/jip`) and answers "installed" in the fixes preset, together with
-MCM's plugin (`NV_MCM`), UI Organizer (`NV_UIO`) and the co-save keep row (`NV_COSAVE_KEEP`): the mods
-that need JIP find it, and most of them need the other three too (oHUD needs UIO for its patch list and
-MCM for its menu). In vanilla it answers "not installed", so a mod that needs it stops with its own
+MCM's plugin (`NV_MCM`) and the co-save keep row (`NV_COSAVE_KEEP`): the mods
+that need JIP find it, and most of them need the other two too (oHUD needs MCM for its menu). In vanilla it answers "not installed", so a mod that needs it stops with its own
 "requires JIP" message, as without the plugin. The row `NV_JIP_INSTALLED` (Fallout.ini `[nv-rs Fixes]
 bJIPInstalled`, written as 1) switches it. Turned on after the in-game pair (JIP off against on on the
 short route, with a check file run by JIP's script runner, and a staged fight: both passed).
 
 How to turn it off in the fixes preset: `bJIPInstalled=0` in `Fallout.ini`'s `[nv-rs Fixes]` (Play.exe
 writes it there for a `settings.ini` line `NV_JIP_INSTALLED=0`). The run stays a play run: the fixes
-preset, and real threads unless `[nv-rs Threads] bSteppedThreads=1` (see below); MCM and UIO keep their
-own keys (`bMCM`, `bUIO`). The variable `NV_JIP_INSTALLED=1` is for scripted and test runs only: a switch's variable makes the run a test, which alone runs the
+preset, and real threads unless `[nv-rs Threads] bSteppedThreads=1` (see below); MCM keeps its
+own key (`bMCM`). The variable `NV_JIP_INSTALLED=1` is for scripted and test runs only: a switch's variable makes the run a test, which alone runs the
 vanilla preset with stepped threads, and in vanilla the co-save does not keep other plugins' sections
 (`NV_COSAVE_KEEP` is off).
 
@@ -1491,7 +1313,7 @@ that says so itself) is not written to the save as an unloaded form, and a refer
 save when it loads (`0x484E03`, `0x8497CD`); the save's form id map (`0x846FFB`) and its map of changed forms
 (`0x845558`) get 0x7D63 buckets instead of 0x13AF: fewer collisions with many forms. The form id map's count
 changes nothing in the save; the changes map's changes only the order the changed forms are written in (the
-records are the same and a save loads either way: `crates/engine/tests/save_changes_map.rs`). A global variable
+records are the same and a save loads either way). A global variable
 whose form flags have bit 0x40 (the record's "Constant" flag, as xEdit names it) is not read again from a
 record once it has that flag (`0x5A64D7`).
 
@@ -1651,100 +1473,13 @@ x and y movement off and on, and the mouse wheel does nothing while its key is d
 wheel's up or down code) (`00a239e0`); the player's constructor clears the three bytes after
 `bMenuModeButtonClicked` too, the sneak shape's state among them (`0x939258`).
 
-### UI Organizer
-
-UI Organizer (UIO) 2.30, the NVSE plugin by jazzisparis that UI mods (HUD additions, MCM, the JIP
-companions' HUD, Stewie's tweaks menu and many more) rely on, is built in as `crates/uio`
-(`measure/uio/PLAN.md`), translated from its source (commit `426d963`, the source of the shipped
-DLL), MIT licence. It is a row: it changes how every menu file is read. Parts 1, 2 and 3 are in:
-
-- **When.** Where UIO's patch in `InterfaceManager::Initialize` (`0070a049`) runs `UIOLoad`: once,
-  right after the interface manager is made, before any menu loads.
-- **The lists.** `Data\uio\supported.txt`, then each `Data\uio\public\*.txt` in the order the folder
-  search gives them, read as UIO reads them (loose files, never the archives; a list larger than
-  UIO's 1 MiB buffer counts as unreadable here, where UIO overruns it). UIO's own `supported.txt` (its
-  list of the UI mods it knows, 35 entries, from the UIO 2.30 download, MIT) is built in unchanged
-  (`crates/uio/data/supported.txt`): a `Data\uio\supported.txt` in the game folder wins (a player's or
-  a newer UIO's list); when none opens, the built-in one is read in its place, first and the same way,
-  so UI mods that rely on UIO's list work without the file being copied in. Lines come in pairs: `path:Menu`
-  or `path:Menu:tile` or `path:@file:tile` or `path:@prefabs\file` (end of file), then a condition
-  line; `;` lines are skipped anywhere; `path` must exist as `Data\menus\prefabs\path`. Conditions are
-  UIO's: tab-separated (a public list's spaces become tabs outside file names), `true`, `darn`, `vui+`,
-  `ohud`, `#file`, `?Plugin.esp` (any line of `plugins.txt`), `!`, brackets, and `&&`/`||` read left to
-  right that skip the rest of the line (or bracket) once decided, as UIO's do.
-- **The patch.** Each target file's text (as the game reads it, from archives too) gets
-  `<include src="path"/>` before the closing tag of its tile, in UIO's order, with UIO's quirks
-  (a self-closing named tag opens a tile; text after the last tag is dropped; an `<include>` already
-  listed for that tile, or of an `includes_` file, is removed). Nothing is written to the game's
-  folder: the patched texts stay in memory, as UIO 2.30 keeps them.
-- **The reader.** `Tile::ReadFile` (`00a01b87`) reads every menu file through UIO's reader: a patched
-  file's text (a patched prefab at every read, a patched menu too, except the seven menus whose parse
-  UIO does not keep, which a later read takes from the file again, as with UIO), its `<include>` tags
-  replaced by UIO's own rules (the tag ends at the first `>` 20 bytes in, a path under 5 bytes is
-  dropped, a missing prefab inserts nothing). A file the game cannot find goes to the game's own read
-  (UIO passes no storage on there, and the game then fails).
-- **Its XML reader.** The text is parsed by UIO's own reader in place of the game's
-  (`ResolveXMLFileHook`): game setting values (`&-sName;`, `&-fName;`, `&-iName;`), trait constants
-  (`&name;`) and a mod's own `_name` traits (registered as they are met), each item typed as UIO
-  types it. Its parse cache keeps a menu's parse for every later read (all but globals, the six menus
-  the game keeps open and `jip_temp.xml`), and sets `ReadFile`'s keep byte so the game neither
-  deletes that parse nor lets the menu delete its templates.
-- **JIP's `InjectUIComponent`.** UIO's export `UIOInjectComponent`: menu XML given as text is cleaned
-  by the game, its includes expanded, and read into the tile under the name `jip_temp.xml`, from
-  memory. Without UIO, JIP writes `jip_temp.xml` into the game's folder and reads it; nv-rs never
-  writes there: with the row off the text is cleaned by the game as that file would be and handed
-  to the same `Tile::ReadFile` through the game's own menu file map (`Menu::XMLHash`), so
-  `InjectUIComponent` and `AttachUIComponent` make the same tiles with the row on or off.
-- **Where it differs from UIO on purpose.** Include loops end at 64 levels, an expansion at 64 MiB
-  (after which that read fetches no further include) and at 10,000 files read for one read's
-  includes (UIO runs out of stack or memory, or reads on without end); a path longer than UIO's
-  128-byte buffers hold (a list's path, an `@` target or `#file`, an include's `src`: over 127
-  bytes with the folder in front) names no file, where UIO overruns the buffer, and nothing longer
-  than Windows' `MAX_PATH` is handed to the game; bracket nesting is not limited to UIO's 16 levels
-  (UIO overruns its array); expanded texts are kept up to 64 MiB in all, the rest expanded again at
-  each read (the same text); its reader's items are 0x18 bytes (UIO makes 0x14 and the game's own
-  reader writes past them), a text over 65,535 bytes is copied whole, a file gives at most 1,048,576
-  items and a failed allocation ends its parse; UIO's log files and its developer settings
-  (`Data\uio\settings.ini`: `bDebugMode`, `sDoNotCache`) are left out.
-- **Its tile operators** (part 3). `UIOLoad` registers `ge`, `ne`, `le` (other names for `gte`, `neq`,
-  `lte`) and 17 new operators, `neg`, `recipr`, `land`, `lor`, `shl`, `shr`, `bt`, `sqrt`, `pow`, `sin`,
-  `cos`, `tan`, `asin`, `acos`, `atan` (degrees), `log`, `rand` (from the game's random generator). Its
-  jump table in `Tile::Value::CalculateValue` (`00a0968c`) then runs every operation, the game's 23 in
-  UIO's own single-precision code (as with UIO: an unordered comparison answers 1 for `eq`, `lt`, `lte`;
-  `floor`/`ceil` go through a 32-bit integer; `round` adds 0.01 before rounding; `or` with a text looks
-  at the value only). The new operators reach a menu with part 2's parser (the game's own refuses them).
-- **Text zoom** (part 3). A text tile's `<zoom>` scales its text (`TileText::MakeNode`, `00a221f8`): laid
-  out at its wrap width and limit divided by zoom/100, the text drawn at zoom/100, its size multiplied
-  back. As in UIO, only a text whose wrap width is under 2,048 pixels is laid out narrower: a wider
-  one (or one without a wrap width on a screen 2,048 or more wide, where the screen's width is used)
-  keeps its full width and line breaks, is drawn at zoom/100 all the same, and its size is still
-  multiplied back. A zoom change rebuilds the text (`Tile::FinalPostParse`, `00a03923`). The HUD's five hardcore
-  texts no longer set a zoom (`HUDMainMenu::Create`, `0076f688` and four more), so they keep their size.
-- **Where part 3 differs from UIO on purpose.** `mod` of -2147483648 by -1 gives 0 (UIO's division
-  faults there and the game stops).
-- **Installed.** Switched on, xNVSE lists it as "UI Organizer Plugin", version 230, as `IsPluginInstalled`
-  and `GetPluginVersion` see the DLL; built-ins ask `uio::on` where JIP and Stewie's tweaks ask for its
-  DLL.
-- **What it says in the play log** (`crates/uio/src/report.rs`; in place of UIO's own
-  `ui_organizer.log`). Once its lists are read: the list files read (and any that would not open),
-  where `supported.txt` came from ("supported.txt: built-in list (35 entries)" or "from
-  Data\uio\supported.txt"), the additions by menu file
-  and tile, a target file the game could not read or a tile not in it (or one UIO's reading opens but
-  never finds the end of), and each entry left out with the reason ("oHUDPatches.txt:
-  UIOPatches\GrenadeKey.xml not added: Prefabs\GrenadeKeyHUD.xml is not installed"; a condition line
-  starting with a space is said to be read as false, as UIO reads it). At most 40 list files, 40 added
-  paths, 40 problems and 40 entries left out are named, the rest counted. One more line when the first
-  file with additions put in is read (its count is of the additions actually put in). Off, no line.
-  The lines change nothing UIO does.
-
 ### lStewieAl's Tweaks
 
 lStewieAl's Tweaks is no longer built in; its fixes are being rebuilt as nv-rs's own.
 
 ## Credits
 
-Written with the fix plugins' knowledge, by their authors' permission (2026-11-03); no code is
-translated from them in these fixes.
+Written with the fix plugins' knowledge; no code is translated from them in these fixes.
 
 - **New Vegas Tick Fix (NVTF)**, carxt, lStewieAl and jazzisparis, LGPL-2.1: `BSTimer`'s fixed
   step from the measured frame and the survey of what goes wrong at high frame rates.
@@ -1760,9 +1495,6 @@ translated from them in these fixes.
 - **Cell Offset Generator**, WallSoGB, GPL-3.0: offset tables for every plugin and the engine's master-only
   checks (`CellOffsetGenerator.cpp`), the idea of the cell offsets row; its tables are built another way here
   and none of its code is used.
-- **lStewieAl's Tweaks, VATS Lag Fix and ActorCause Save Bloat Fix**: the thread races' first three
-  places, the V.A.T.S. wait that ends with the camera, and the causes' witness lists.
-- **Psycho** (acidpointer): the editor-marker pass's lock and the radio's two music fixes.
 - **Aqua Performa**'s author, **YUP** (Yukichigai Unofficial Patch), **UPNVSE Plus** and **Tale of Two
   Wastelands**: "No LOD Water" on the Strip, as patch data.
 

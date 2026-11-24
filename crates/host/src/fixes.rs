@@ -45,7 +45,6 @@ pub static FIXES: &[Fix] = &[
     JIP_GAME_PATCHES,
     JG_EDITOR_IDS,
     MCM,
-    UIO,
     SCRIPT_ERROR_GUARD,
     IMOD_EVENT_FORM_CHECK,
     INVENTORY_REFERENCE_CHECKS,
@@ -61,13 +60,9 @@ pub static FIXES: &[Fix] = &[
     DEAD_LIGHTS,
     THREAD_HEAP,
     crate::half_loaded_move::FIX,
-    crate::thread_races::FIX,
     TEXTURE_READ_FIRST,
     crate::cell_entry_wait::FIX,
     crate::cell_offsets::FIX,
-    VATS_LAG,
-    ACTOR_CAUSE_WITNESSES,
-    RADIO_LENGTHS,
     FACIAL_HAIR_BY_RACE_FOLDER,
     crate::patch_data::STRIP_LOD_WATER,
     crate::direct_files::FIX,
@@ -212,84 +207,6 @@ fn install_texture_read_first(e: &mut Engine) {
     e.register(at, f);
 }
 
-/// V.A.T.S. shows a target's chances once the camera has turned to it: the menu's scan
-/// (`007f3e00`) gave the parts it has not measured the average of the measured ones only after a
-/// fixed 2000 ms (`007f4058`); with the row also once the camera's heading is reached
-/// (`bHeadingReached`), as lStewieAl's VATS Lag Fix does, and a part has been measured (the
-/// plugin's average would be 0/0 before). Vanilla keeps the wait.
-pub const VATS_LAG: Fix = Fix {
-    name: "V.A.T.S. waits only for the camera",
-    env: "NV_VATS_LAG",
-    addresses: &[0x007f_3e00],
-    summary: "V.A.T.S. shows a target's chances as soon as the camera reaches it, not after a fixed 2 seconds",
-    install: install_vats_lag,
-};
-
-fn install_vats_lag(e: &mut Engine) {
-    use engine::units::fallout_interface::vatsmenu::{fn_007f3e00_heading_ends_wait, VatsMenu};
-    let (at, f) = engine::entry!(
-        0x007f_3e00,
-        fn_007f3e00_heading_ends_wait(Ptr<VatsMenu>) -> bool
-    );
-    e.register(at, f);
-}
-
-/// An `ActorCause` (made for each projectile and explosion an actor causes) copied the actor's
-/// whole detection list, and every saved cause wrote it, one record per actor detected: with the
-/// row the constructor (`0066e010`) copies nothing and the load (`0066e440`) reads the records
-/// and keeps none, as lStewieAl's ActorCause Save Bloat Fix does. Nothing reads the list but the
-/// cause's own functions. Vanilla copies, saves and loads it.
-pub const ACTOR_CAUSE_WITNESSES: Fix = Fix {
-    name: "causes keep no witness lists",
-    env: "NV_ACTOR_CAUSE",
-    addresses: &[0x0066_e010, 0x0066_e440],
-    summary: "projectiles and explosions no longer copy their actor's detection list, which every save wrote out (save bloat)",
-    install: install_actor_cause_witnesses,
-};
-
-fn install_actor_cause_witnesses(e: &mut Engine) {
-    use engine::units::fallout_shared::actorcause::{
-        actor_cause_load_game_without_witnesses, ActorCause,
-    };
-    use engine::units::fallout_shared::run_0066e010::fn_0066e010_without_witnesses;
-    let (at, f) = engine::entry!(0x0066_e010, fn_0066e010_without_witnesses(Ptr, u32) -> Ptr);
-    e.register(at, f);
-    let (at, f) = engine::entry!(
-        0x0066_e440,
-        actor_cause_load_game_without_witnesses(Ptr<ActorCause>, u32)
-    );
-    e.register(at, f);
-}
-
-/// The radio's two music bugs, from Psycho: a channel's duration cleared when a file opens on it
-/// (`008300c0`) and written by the music thread (`00830b30`) only while the channel is still its
-/// file's, so a station never takes the length of the song that channel played before (its
-/// thread, still fading out, wrote it back once more); and the music thread's sync (the loop at
-/// `00831790`) bounded, so a length of 0 no longer spins the thread for good. Vanilla keeps both.
-pub const RADIO_LENGTHS: Fix = Fix {
-    name: "radio song lengths",
-    env: "NV_RADIO_LENGTHS",
-    addresses: &[0x0083_00c0, 0x0083_0b30],
-    summary: "a radio song never takes the length of the song before last, and a song with no length no longer hangs the music thread",
-    install: install_radio_lengths,
-};
-
-fn install_radio_lengths(e: &mut Engine) {
-    use engine::units::fallout_audio::falloutaudiomedia::{
-        fallout_audio_media_thread_proc_radio_row, fn_008300c0_clearing_duration,
-    };
-    let (at, f) = engine::entry!(
-        0x0083_00c0,
-        fn_008300c0_clearing_duration(i32, Ptr, u32, u8, u8, f32, u32)
-    );
-    e.register(at, f);
-    let (at, f) = engine::entry!(
-        0x0083_0b30,
-        fallout_audio_media_thread_proc_radio_row(Ptr) -> u32
-    );
-    e.register(at, f);
-}
-
 /// The character menu's facial hair list offers every playable head part to every race
 /// (`005e7a60` tests only the playable bit), so a plugin's own race cannot keep its refitted beards
 /// to itself. With the row a race whose head model (for the chosen sex) lies in a directory of its
@@ -346,8 +263,8 @@ fn install_keep_cosave_plugins(e: &mut Engine) {
     nvse::saveload::set_keep_other_plugins(e, true);
 }
 
-/// JIP LN NVSE answers "installed" (step 3.10's switch; on in the fixes preset with [`MCM`],
-/// [`UIO`] and [`KEEP_COSAVE_PLUGINS`], off in vanilla): its identity, its place in xNVSE's list of
+/// JIP LN NVSE answers "installed" (step 3.10's switch; on in the fixes preset with [`MCM`]
+/// and [`KEEP_COSAVE_PLUGINS`], off in vanilla): its identity, its place in xNVSE's list of
 /// plugins, its built commands' names and handlers, its hooks and its own always-on patches;
 /// the JIP rows ([`JIP_VANILLA_COMMANDS`], [`JIP_GAME_PATCHES`], [`JIP_COSAVE_FIXES`]) then follow
 /// their own switches. The row sets a flag; `jip::install` (after xNVSE, in
@@ -593,23 +510,6 @@ fn install_havok_ref_counts(e: &mut Engine) {
     engine::units::havok_sdk::hkreferencedobject::lock_free_turn_on(e);
 }
 
-/// UI Organizer built in (`crates/uio`, parts 1 and 2): its lists (`Data\uio\supported.txt` and
-/// `Data\uio\public\*.txt`) put UI mods' additions into the menus, in memory, and every menu file
-/// is read through UIO's reader and parsed by its own XML parser. It changes how every menu file
-/// is read, so it is a row; on in `fixes` (with JIP, which UI mods need), off in vanilla. The row
-/// sets a flag; `uio::install` (after JIP, in [`crate::Host::start_with`]) puts its seams in.
-pub const UIO: Fix = Fix {
-    name: "UI Organizer built in",
-    env: "NV_UIO",
-    addresses: &[],
-    summary: "UI Organizer built in: UI mods' HUD and menu additions (their Data\\uio lists) are put into the menus, as with the UIO plugin",
-    install: install_uio,
-};
-
-fn install_uio(e: &mut Engine) {
-    uio::set_on(e, true);
-}
-
 /// JohnnyGuitar NVSE's editor-id restoration built in (`crates/johnnyguitar`), a flag the crate
 /// reads at its install: every loaded form keeps the editor id its record gives it, so text
 /// compiled while the game runs (the console, script runner files, `CompileScript`, lambdas from
@@ -630,8 +530,8 @@ fn install_jg_editor_ids(e: &mut Engine) {
 /// The Mod Configuration Menu's NVSE plugin built in (`crates/mcm`: MCM.dll 1.5, "MCM Extensions"):
 /// its nine commands at `0x21C0` up, which MCM's scripts and the menus of the mods that use it call
 /// (`GetMCMFloat`, `SetMCMFloat`, `GetModINI`, ...). On in `fixes` (with JIP, which MCM's mods need),
-/// off in vanilla. The row sets a flag; `mcm::install` (after JIP, before
-/// UIO, in `install_rows_and_extenders`) registers the commands.
+/// off in vanilla. The row sets a flag; `mcm::install` (after JIP, in
+/// `install_rows_and_extenders`) registers the commands.
 pub const MCM: Fix = Fix {
     name: "The Mod Configuration Menu's plugin built in",
     env: "NV_MCM",
@@ -663,7 +563,6 @@ const NO_ADDRESS: &[&str] = &[
     JIP_GAME_PATCHES.name,
     JG_EDITOR_IDS.name,
     MCM.name,
-    UIO.name,
     SCRIPT_ERROR_GUARD.name,
     IMOD_EVENT_FORM_CHECK.name,
     INVENTORY_REFERENCE_CHECKS.name,
@@ -1344,7 +1243,7 @@ pub fn is_play_run(env: impl Fn(&str) -> Option<String>) -> bool {
 /// (`crate::full_screen`). A fix's variable is set for play by its `[nv-rs Fixes]` line instead; a
 /// test's variable has no line and is unset for play. `None` for any other run, and for a run only
 /// its command line marks as a test (the viewer's `--movement-missing` and `--movement-probe`),
-/// which is no play. (2026-11-16: `NV_UIO=1` handed over from the play folder's settings.ini did
+/// which is no play. (2026-11-16: a fix's variable handed over from the play folder's settings.ini did
 /// this, and the framed window, sized in scaled pixels, spilled onto the next monitor.)
 pub fn play_run_taken_as_test(
     choice: &Choice,
@@ -2140,7 +2039,7 @@ mod tests {
     }
 
     /// A launcher's play run that a test's or a fix's variable makes a test says so at start-up
-    /// (2026-11-16: `NV_UIO=1` from the play folder took play's preset, threads and borderless
+    /// (2026-11-16: a fix's variable from the play folder took play's preset, threads and borderless
     /// window away, and that line would have named it), saying what this run got, from its own
     /// choice: Play.exe passes the file's choices on as variables for a test, and those still
     /// decide. A fix's variable is pointed at its `[nv-rs Fixes]` line, a test's at being unset.
@@ -2154,19 +2053,19 @@ mod tests {
             (play_run_taken_as_test(&choice, env_of(pairs)), choice)
         };
         let note = |pairs: &'static [(&'static str, &'static str)]| run(pairs).0;
-        // Tonight's run: the play folder's script, NV_UIO=1 and nothing else.
-        let uio = note(&[("NV_SETTINGS", "x"), ("NV_UIO", "1")]).unwrap();
+        // The play folder's script with one fix's variable and nothing else.
+        let one = note(&[("NV_SETTINGS", "x"), ("NV_LOAD_STEPS", "1")]).unwrap();
         assert_eq!(
-            uio,
-            "A launcher's play run that runs as a test because of NV_UIO: Fallout.ini's [nv-rs ...] keys are not read. \
+            one,
+            "A launcher's play run that runs as a test because of NV_LOAD_STEPS: Fallout.ini's [nv-rs ...] keys are not read. \
              This run: preset vanilla, threads stepped, render thread off, the window as the game makes it \
-             (borderless only if the game asks for full screen). For play, set bUIO=1 in Fallout.ini's \
+             (borderless only if the game asks for full screen). For play, set bLoadSteps=1 in Fallout.ini's \
              [nv-rs Fixes] instead of the variable."
         );
         // Play.exe's test run: the file's choices passed on as variables decide, and the line says so.
         let passed = note(&[
             ("NV_SETTINGS", "x"),
-            ("NV_UIO", "1"),
+            ("NV_LOAD_STEPS", "1"),
             ("NV_BORDERLESS", "1"),
             ("NV_THREADS", "real"),
             ("NV_RENDER_THREAD", "1"),
@@ -2182,7 +2081,7 @@ mod tests {
         assert!(!passed.contains("stepped") && !passed.contains("as the game makes it"));
         let off = note(&[
             ("NV_SETTINGS", "x"),
-            ("NV_UIO", "1"),
+            ("NV_LOAD_STEPS", "1"),
             ("NV_BORDERLESS", "0"),
         ])
         .unwrap();
@@ -2239,7 +2138,7 @@ mod tests {
             ]),
             None
         );
-        assert_eq!(note(&[("NV_UIO", "1")]), None);
+        assert_eq!(note(&[("NV_LOAD_STEPS", "1")]), None);
         assert_eq!(note(&[]), None);
     }
 
@@ -2944,13 +2843,13 @@ bSunShadowsCharacters=0
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// Step 3.10's switch (JIP LN NVSE answering "installed") follows the preset with MCM's plugin,
-    /// UI Organizer and the co-save keep row: on in `fixes`, off in vanilla, however the preset is
+    /// Step 3.10's switch (JIP LN NVSE answering "installed") follows the preset with MCM's plugin
+    /// and the co-save keep row: on in `fixes`, off in vanilla, however the preset is
     /// chosen: the default, the settings file, `NV_PRESET`, Fallout.ini's `sPreset`.
     #[test]
-    fn jip_mcm_and_uio_follow_the_preset() {
+    fn jip_and_mcm_follow_the_preset() {
         assert_eq!(JIP_INSTALLED.env, "NV_JIP_INSTALLED");
-        for row in [&JIP_INSTALLED, &MCM, &UIO, &KEEP_COSAVE_PLUGINS] {
+        for row in [&JIP_INSTALLED, &MCM, &KEEP_COSAVE_PLUGINS] {
             assert!(!OFF_IN_EVERY_PRESET.contains(&row.env), "{}", row.name);
         }
         let choices = [
@@ -2965,7 +2864,7 @@ bSunShadowsCharacters=0
         ];
         for choice in &choices {
             let fixes = choice.preset == Preset::Fixes;
-            for row in [&JIP_INSTALLED, &MCM, &UIO, &KEEP_COSAVE_PLUGINS] {
+            for row in [&JIP_INSTALLED, &MCM, &KEEP_COSAVE_PLUGINS] {
                 assert_eq!(choice.is_on(row), fixes, "{} {choice:?}", row.name);
             }
         }
@@ -3063,7 +2962,6 @@ bJGEditorIDs=0
         assert!(fixes.is_on(&JIP_GAME_PATCHES));
         assert!(fixes.is_on(&JIP_VANILLA_COMMANDS));
         assert!(fixes.is_on(&JIP_COSAVE_FIXES));
-        assert!(fixes.is_on(&UIO), "UIO with the fixes preset");
         assert!(fixes.is_on(&MCM), "MCM with the fixes preset");
         assert_eq!(fixes.threads, "stepped");
         assert!(fixes.describe().contains(JIP_INSTALLED.name));
@@ -3089,19 +2987,12 @@ bJGEditorIDs=0
         let off = with_ini(None, "[nv-rs Fixes]\nbJIPInstalled=0\n", &[]);
         assert!(!off.is_on(&JIP_INSTALLED));
         assert_eq!(off.preset, Preset::Fixes);
-        assert!(off.is_on(&MCM) && off.is_on(&UIO), "their own switches");
-        // MCM's plugin and UI Organizer turn off by their own keys; JIP and the preset stay.
-        for (text, row) in [
-            ("[nv-rs Fixes]\nbMCM=0\n", &MCM),
-            ("[nv-rs Fixes]\nbUIO=0\n", &UIO),
-        ] {
-            let c = with_ini(None, text, &[]);
-            assert!(!c.is_on(row), "{text}");
-            assert!(c.is_on(&JIP_INSTALLED), "{text}");
-            assert_eq!(c.preset, Preset::Fixes, "{text}");
-            let other = if row.env == MCM.env { &UIO } else { &MCM };
-            assert!(c.is_on(other), "{text}");
-        }
+        assert!(off.is_on(&MCM), "its own switch");
+        // MCM's plugin turns off by its own key; JIP and the preset stay.
+        let c = with_ini(None, "[nv-rs Fixes]\nbMCM=0\n", &[]);
+        assert!(!c.is_on(&MCM));
+        assert!(c.is_on(&JIP_INSTALLED));
+        assert_eq!(c.preset, Preset::Fixes);
         for text in [
             "[nv-rs Fixes]\n;bJIPInstalled=0\n",
             "[nv-rs Fixes]\nbJIPInstall=1\n",

@@ -540,8 +540,7 @@ const STATIC_BRIGHTNESS_TRAIT_2: u32 = 0x011d_b19c;
 const FLAG_011DB0CE: u32 = 0x011d_b0ce;
 /// the timer's milliseconds when the recalculation mode started.
 const RECALCULATION_TIME: u32 = 0x011d_b0dc;
-/// The scan of the target's parts ([`fn_007f3e00`]), called by address: the fixes preset's
-/// V.A.T.S. lag row registers over it (`crates/engine-core/data/overridable.tsv`).
+/// The scan of the target's parts ([`fn_007f3e00`]), called by address.
 const SCAN_UPDATE: u32 = 0x007f_3e00;
 /// the text `_MeterPercent`.
 const TEXT_METER_PERCENT: u32 = 0x0107_7df4;
@@ -2357,7 +2356,7 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
         }
     }
 
-    // 007ed343: by address, so the fixes preset's V.A.T.S. lag row applies here.
+    // 007ed343: by address.
     if !e.call(SCAN_UPDATE, &args![this]).bool() {
         return;
     }
@@ -5643,22 +5642,10 @@ fn scan_pick_limb(e: &mut Engine, this: Ptr<VatsMenu>, item: u32, limb_zero: u32
 /// on screen is measured the limb is picked (`scan_pick_limb`), the
 /// target's chances are marked calculated and mode 2 starts.
 pub fn fn_007f3e00(e: &mut Engine, this: Ptr<VatsMenu>) -> bool {
-    scan(e, this, false)
+    scan(e, this)
 }
 
-/// [`fn_007f3e00`] whose 2000 ms wait before the parts without a chance get the average
-/// (`007f4058`) also ends once the camera has turned to the target (`bHeadingReached`, +0xf8):
-/// the fixes preset's V.A.T.S. lag row (`crates/host`), lStewieAl's VATS Lag Fix. The wait is
-/// a fixed timer, not work: in the original V.A.T.S. shows a target's chances up to 2 s after the
-/// camera has arrived. As with the plugin, a part on screen that the scan has not measured yet
-/// when the heading is reached gets the measured parts' average instead of its own chance (the
-/// original would measure it in the frames that follow). Unlike the plugin, the heading ends the
-/// wait only once a part has been measured: with none, the average is 0/0.
-pub fn fn_007f3e00_heading_ends_wait(e: &mut Engine, this: Ptr<VatsMenu>) -> bool {
-    scan(e, this, true)
-}
-
-fn scan(e: &mut Engine, this: Ptr<VatsMenu>, heading_ends_wait: bool) -> bool {
+fn scan(e: &mut Engine, this: Ptr<VatsMenu>) -> bool {
     let m = this.addr();
     if e.global::<u32>(TARGET_REFERENCE) == 0 || e.mem.u8(m + 0xfb) != 0 {
         return false;
@@ -5734,7 +5721,7 @@ fn scan(e: &mut Engine, this: Ptr<VatsMenu>, heading_ends_wait: bool) -> bool {
     } else {
         let time = e.call(TIMER_MILLISECONDS, &args![TIMER]).u32();
         let waited = time.wrapping_sub(e.global::<u32>(RECALCULATION_TIME)) > 2000;
-        if waited || (heading_ends_wait && e.mem.u8(m + 0xf8) != 0) {
+        if waited {
             let mut count = 0i32;
             let mut sum = 0.0f32;
             let mut node = item.wrapping_add(8);
@@ -9642,12 +9629,11 @@ mod tests {
         assert_eq!(calls(&e, SCENE_0044AC20).len(), 1);
     }
 
-    /// Mode 3 with the camera at its heading, 500 ms after the scan began: a part whose chance
-    /// was measured (40) and one without. The original waits out its 2000 ms before the second
-    /// gets the average; the V.A.T.S. lag row's scan gives it at once, and only once the heading
-    /// is reached; after 2000 ms both give it. Returns the second part's chance and whether it
+    /// Mode 3 with the camera at `heading`, `elapsed` ms after the scan began: a part whose chance
+    /// was measured (40) and one without. The scan waits out its 2000 ms before the second gets
+    /// the average. Returns the second part's chance and whether it
     /// counts as calculated (+0x2d).
-    fn scan_in_mode_three(heading: u8, elapsed: u32, heading_ends_wait: bool) -> (f32, u8) {
+    fn scan_in_mode_three(heading: u8, elapsed: u32) -> (f32, u8) {
         let mut e = engine();
         let s = scene(&mut e);
         let second = part(&mut e, 2);
@@ -9670,13 +9656,8 @@ mod tests {
             std::panic::resume_unwind(Box::new("past the wait"))
         });
         let menu = Ptr::new(s.menu);
-        let scan = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            if heading_ends_wait {
-                fn_007f3e00_heading_ends_wait(&mut e, menu)
-            } else {
-                fn_007f3e00(&mut e, menu)
-            }
-        }));
+        let scan =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fn_007f3e00(&mut e, menu)));
         assert!(
             scan.is_err() && reached.get(),
             "the scan reaches the ammo update"
@@ -9690,7 +9671,7 @@ mod tests {
     /// measured yet. Followed until `stop` (a callee it panics at). Returns the second part's
     /// chance, whether it counts as measured (+0x2d) and shown (+0x2e), and whether it is the
     /// menu's current part (+0x100).
-    fn scan_at_the_heading(first_measured: bool, row: bool, stop: u32) -> (f32, u8, u8, bool) {
+    fn scan_at_the_heading(first_measured: bool, stop: u32) -> (f32, u8, u8, bool) {
         let mut e = engine();
         let s = scene(&mut e);
         let second = part(&mut e, 2);
@@ -9718,13 +9699,8 @@ mod tests {
             std::panic::resume_unwind(Box::new("stopped"))
         });
         let menu = Ptr::new(s.menu);
-        let scan = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            if row {
-                fn_007f3e00_heading_ends_wait(&mut e, menu)
-            } else {
-                fn_007f3e00(&mut e, menu)
-            }
-        }));
+        let scan =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fn_007f3e00(&mut e, menu)));
         assert!(
             scan.is_err() && reached.get(),
             "the scan reaches {stop:08x}"
@@ -9737,47 +9713,29 @@ mod tests {
         )
     }
 
-    /// A part on screen not yet shown when the camera reaches its heading: the original shows it
-    /// then (the menu's current part) and measures it in the frames that follow, where it gets
-    /// its own chance (`007f1290`); the row gives it the measured part's chance as the average at
-    /// once and marks it measured, so it is never measured. With no part measured yet the row
-    /// does not end the wait (the average would be 0/0): it shows the part as the original does.
+    /// A part on screen not yet shown when the camera reaches its heading: the scan shows it then
+    /// (the menu's current part) and measures it in the frames that follow (`007f1290`), whether or
+    /// not another part was measured already.
     #[test]
-    fn at_the_heading_the_row_averages_a_part_the_original_would_measure_next() {
+    fn at_the_heading_a_part_is_shown_and_measured_next() {
         let shown_next = (0.0, 0, 1, true);
-        // The original, followed to its first measuring (00800a00), after the part is shown.
-        assert_eq!(
-            scan_at_the_heading(true, false, SCREEN_PERCENT_00800A00),
-            shown_next
-        );
-        // The row: the average, measured and shown before the ammo update.
-        assert_eq!(
-            scan_at_the_heading(true, true, TILE_SET_INT),
-            (40.0, 1, 1, false)
-        );
-        // Nothing measured yet: the row waits as the original.
-        for row in [false, true] {
+        for first_measured in [true, false] {
             assert_eq!(
-                scan_at_the_heading(false, row, SCREEN_PERCENT_00800A00),
+                scan_at_the_heading(first_measured, SCREEN_PERCENT_00800A00),
                 shown_next,
-                "row: {row}"
+                "first measured: {first_measured}"
             );
         }
     }
 
     #[test]
-    fn the_scan_waits_2000_ms_unless_the_heading_ends_the_wait() {
+    fn the_scan_waits_2000_ms_whatever_the_heading() {
         let given = (40.0, 1);
         let waiting = (0.0, 0);
-        // The original: the wait whatever the heading.
-        assert_eq!(scan_in_mode_three(1, 500, false), waiting);
-        assert_eq!(scan_in_mode_three(0, 500, false), waiting);
-        assert_eq!(scan_in_mode_three(1, 2001, false), given);
-        // The row: the heading reached ends it; without the heading it is the original's.
-        assert_eq!(scan_in_mode_three(1, 500, true), given);
-        assert_eq!(scan_in_mode_three(0, 500, true), waiting);
-        assert_eq!(scan_in_mode_three(0, 2000, true), waiting);
-        assert_eq!(scan_in_mode_three(0, 2001, true), given);
+        assert_eq!(scan_in_mode_three(1, 500), waiting);
+        assert_eq!(scan_in_mode_three(0, 500), waiting);
+        assert_eq!(scan_in_mode_three(1, 2001), given);
+        assert_eq!(scan_in_mode_three(0, 2001), given);
     }
 
     #[test]

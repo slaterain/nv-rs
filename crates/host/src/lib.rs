@@ -41,7 +41,6 @@ pub mod save_out;
 pub mod scene_light;
 #[cfg(test)]
 mod start_up_tests;
-pub mod thread_races;
 pub mod topic_index;
 pub mod uncap;
 
@@ -117,9 +116,6 @@ pub(crate) fn install_rows_and_extenders(engine: &mut Engine, choice: &fixes::Ch
     // The Mod Configuration Menu's plugin, when its row is on: xNVSE loads MCM.dll after
     // jip_nvse.dll and before ui_organizer.dll (`crates/mcm`).
     mcm::install(engine);
-    // UI Organizer, when its row is on: after JIP, as xNVSE loads ui_organizer.dll after
-    // jip_nvse.dll (`crates/uio`).
-    uio::install(engine);
 }
 
 /// The start-up log's lines on JIP's state, after it installed (`row_on`: its row asked for it;

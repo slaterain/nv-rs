@@ -11,7 +11,7 @@ use engine_core::prelude::*;
 const ADD_OBJECT: u32 = 0x00a5_ed10;
 /// `Tile::ReadFile` `00A01B00` (`RET 4`).
 const READ_FILE: u32 = 0x00a0_1b00;
-/// `Menu::CompressAndStoreXML` (what UIO's inject calls first).
+/// `Menu::CompressAndStoreXML` (what JIP's inject calls first).
 const COMPRESS: u32 = 0x00a1_ce70;
 /// `Menu::XMLHash`'s `SetAt` and `RemoveAt`.
 const XML_SET_AT: u32 = 0x00a0_c900;
@@ -44,7 +44,7 @@ struct Scene {
     first_bip: u32,
 }
 
-/// What `ReadFile`'s stand-in makes: `good.xml` and UIO's `jip_temp.xml` a tile with a node,
+/// What `ReadFile`'s stand-in makes: `good.xml` and JIP's `jip_temp.xml` a tile with a node,
 /// `bare.xml` a tile without one, anything else none.
 const MADE_AT: u32 = AREA + 0xd_0000;
 const BARE_AT: u32 = AREA + 0xd_0100;
@@ -194,7 +194,7 @@ fn attach_ui_xml_uses_the_seen_root_and_needs_the_hud() {
 }
 
 #[test]
-fn attach_ui_component_attaches_with_the_uio_row_on_or_off() {
+fn attach_ui_component_attaches_under_the_hud_tile() {
     let (mut e, sc) = setup();
     e.register(COMPRESS, |e, w| {
         record(COMPRESS, w);
@@ -210,7 +210,7 @@ fn attach_ui_component_attaches_with_the_uio_row_on_or_off() {
     let run = |e: &mut Engine, name: &[u8], xml: &[u8]| {
         call_on(e, ATTACH_UI_COMPONENT, refr, &[s(name), s(xml)]).1
     };
-    // UIO off: JIP's own path (its `jip_temp.xml` read with `Tile::ReadFile` under the HUD's
+    // JIP's own path (its `jip_temp.xml` read with `Tile::ReadFile` under the HUD's
     // tile), the text handed over through `Menu::XMLHash`, no file: the same tile attached.
     e.register(XML_SET_AT, |_, w| {
         record(XML_SET_AT, w);
@@ -228,19 +228,10 @@ fn attach_ui_component_attaches_with_the_uio_row_on_or_off() {
     assert_eq!(calls_to(XML_SET_AT).len(), 1);
     assert_eq!(calls_to(XML_REMOVE_AT).len(), 1);
     assert_eq!(added(), vec![vec![sc.bip, sc.made_node, 1]]);
-    clear();
-    uio::set_on(&mut e, true);
-    uio::install(&mut e);
-    assert_eq!(run(&mut e, b"Bip01 Head", br#"<rect name="x"/>"#), 1.0);
-    let reads = calls_to(READ_FILE);
-    assert_eq!(reads.len(), 1);
-    assert_eq!(reads[0][0], sc.hud_tile, "made under the HUD's tile");
-    assert_eq!(added(), vec![vec![sc.bip, sc.made_node, 1]]);
-    // A geometry block or no such block: nothing made; an empty text: no tile.
+    // A geometry block or no such block: nothing made.
     clear();
     assert_eq!(run(&mut e, b"Shape", b"<rect/>"), 0.0);
     assert_eq!(run(&mut e, b"Nowhere", b"<rect/>"), 0.0);
     assert!(calls_to(COMPRESS).is_empty());
-    assert_eq!(run(&mut e, b"Bip01 Head", b""), 0.0);
     assert!(added().is_empty());
 }

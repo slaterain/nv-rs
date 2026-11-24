@@ -166,24 +166,19 @@ Each also has a `[nv-rs Fixes]` key in `Fallout.ini` (`bUncap` ... `bNVSEListGua
 | `NV_THREAD_HEAP` | Thread heap (on in the fixes preset; `bThreadHeap=0` in `[nv-rs Fixes]` turns it off) | `host/fixes.rs`, `engine-core/mem/pools.rs` |
 | `NV_HAVOK_REFS` | Havok reference counts without the global lock (off in every preset) | `host/fixes.rs` |
 | `NV_HALF_LOADED_MOVE` | Half-loaded actor's level change | `host/half_loaded_move.rs` |
-| `NV_THREAD_RACES` | Thread races | `host/thread_races.rs` |
 | `NV_TEXTURE_READ_FIRST` | Texture files read before the renderer's lock | `host/fixes.rs` |
 | `NV_CELL_ENTRY_WAIT` | Cell entry waits for its own cell | `host/cell_entry_wait.rs` |
 | `NV_CELL_OFFSETS` | Cell offsets for every plugin | `host/cell_offsets.rs` |
-| `NV_VATS_LAG` | V.A.T.S. waits only for the camera | `host/fixes.rs` |
-| `NV_ACTOR_CAUSE` | Causes keep no witness lists | `host/fixes.rs` |
-| `NV_RADIO_LENGTHS` | Radio song lengths | `host/fixes.rs` |
 | `NV_FACIAL_HAIR_RACE` | Facial hair by race folder | `host/fixes.rs` |
 | `NV_STRIP_LOD_WATER` | No distant water under the Strip (patch data) | `host/patch_data.rs` |
 | `NV_DIRECT_FILES` | Direct file access | `host/direct_files.rs` |
 | `NV_COSAVE_KEEP` | Co-save keeps other plugins | `host/fixes.rs` (flag read by `nvse`) |
-| `NV_JIP_INSTALLED` | JIP LN NVSE built in (on in the fixes preset with MCM and UIO; in play, Fallout.ini `[nv-rs Fixes] bJIPInstalled=0` turns it off; the variable makes a test run) | `host/fixes.rs` (flag read by `jip`) |
+| `NV_JIP_INSTALLED` | JIP LN NVSE built in (on in the fixes preset with MCM; in play, Fallout.ini `[nv-rs Fixes] bJIPInstalled=0` turns it off; the variable makes a test run) | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_COSAVE_FIX` | JIP co-save fixes | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_VANILLA_CMDS` | JIP vanilla commands | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_GAME_PATCHES` | JIP game patches | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JG_EDITOR_IDS` | JohnnyGuitar's editor ids | `host/fixes.rs` (flag read by `johnnyguitar`) |
 | `NV_MCM` | The Mod Configuration Menu's plugin built in (on in the fixes preset) | `host/fixes.rs` (flag read by `mcm`) |
-| `NV_UIO` | UI Organizer built in (on in the fixes preset) | `host/fixes.rs` (flag read by `uio`) |
 | `NV_NVSE_ERROR_GUARD` | Script error loop guard | `host/fixes.rs` |
 | `NV_NVSE_IMOD_CHECK` | Image-space event form check | `host/fixes.rs` |
 | `NV_NVSE_INVREF_CHECK` | Script reference checks | `host/fixes.rs` |

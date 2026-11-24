@@ -1,6 +1,6 @@
 //! xNVSE, the New Vegas Script Extender, built in (ADR-0016): its script commands, run from the
-//! exe's own command table, and what they run on. Translated from xNVSE 6.4.9 (`0ccd23a`) with
-//! its authors' permission; credits and notices in `NOTICE`.
+//! exe's own command table, and what they run on. Translated from xNVSE 6.4.9 (`0ccd23a`);
+//! credits and notices in `NOTICE`.
 //!
 //! What is here, by build step of ADR-0016:
 //! - I-2 [`table`]: the script command table in guest memory, as xNVSE builds it (the exe's 0x280

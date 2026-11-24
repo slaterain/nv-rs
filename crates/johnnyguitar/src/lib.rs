@@ -1,5 +1,5 @@
 //! JohnnyGuitar NVSE (`JohnnyGuitarNVSE.dll` 5.28), the NVSE plugin VNV installs, built in piece
-//! by piece, with its authors' permission (credits and licence in `NOTICE`). Its DLL patches the
+//! by piece (credits and licence in `NOTICE`). Its DLL patches the
 //! old 32-bit program, so it cannot load into nv-rs: its changes are rebuilt here.
 //!
 //! The first piece is its editor-id restoration (`internal/JG/EditorIDRestoration.cpp`). The game

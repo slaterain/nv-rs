@@ -144,8 +144,8 @@ For anything else, open an issue first.
    (the maintainer's decision of 2026-10-07).
    The community's matching decompilation
    [fnv_decomp](https://github.com/momusdigital/fnv_decomp) may be read
-   alongside the exe and used for names, types, layouts and logic, with its
-   authors' permission ([ADR-0009](docs/adr/0009-fnv-decomp.md)). Settle
+   alongside the exe and used for names, types, layouts and logic
+   ([ADR-0009](docs/adr/0009-fnv-decomp.md)). Settle
    any difference in the exe, mark what came from it as the ADR says, and
    never commit its C++.
 4. **Evidence of play.** Say what you checked by playing (keys, mouse or
