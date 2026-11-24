@@ -2849,6 +2849,30 @@ fn play_dry_fire_sound(e: &mut Engine, this: Ptr<Actor>, weapon_form: Ptr, playe
     });
 }
 
+// Translated from lStewieAl's Tweaks 10.05 (xNVSE's GameData.cpp): IsGodmodeNotDemigodmode.
+/// God mode (`011e07ba`) without demigod mode (`011e07bb` or the setting byte `011e0898`).
+pub(crate) fn godmode_not_demigod(e: &Engine) -> bool {
+    e.mem.u8(0x011e_07ba) != 0 && !(e.mem.u8(0x011e_07bb) != 0 || e.mem.u8(0x011e_0898) != 0)
+}
+
+/// lStewieAl's Tweaks' row S0082.01 (`NoAmmoGodmode`, its `ammoCheckGodMode` at `0x893C37`): the
+/// actor is the player (`011dea3c`) in god mode (not demigod), who attacks without ammunition.
+fn godmode_fires_without_ammo(e: &mut Engine, this: Ptr<Actor>, player: Ptr<Actor>) -> bool {
+    e.stewie(engine_core::extend::stewie::NO_AMMO_GODMODE)
+        && this == player
+        && godmode_not_demigod(e)
+}
+
+/// The player's Rock-It Launcher ammunition count in `Actor::StartAttack` (`0x893B44`, `00969040`).
+/// lStewieAl's Tweaks' row S0082.01 (`NoAmmoGodmode`, its `GetRockItAmmoOrGodmode`): 1 in god mode
+/// (not demigod).
+fn rock_it_ammo_or_godmode(e: &mut Engine, player: Ptr<Actor>) -> u32 {
+    if e.stewie(engine_core::extend::stewie::NO_AMMO_GODMODE) && godmode_not_demigod(e) {
+        return 1;
+    }
+    e.call(PLAYER_GET_NUM_ROCK_IT_AMMO, &args![player]).u32()
+}
+
 // Translated from 00893a40 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Actor::StartAttack` (Xbox PDB): starts an attack with the animation group
 /// `anim_group`. Returns true when the attack animation was started.
@@ -2900,7 +2924,7 @@ pub fn actor_start_attack(e: &mut Engine, this: Ptr<Actor>, anim_group: u32) -> 
             .bool()
         {
             out_of_ammo = true;
-            if this == player && e.call(PLAYER_GET_NUM_ROCK_IT_AMMO, &args![player]).u32() != 0 {
+            if this == player && rock_it_ammo_or_godmode(e, player) != 0 {
                 out_of_ammo = false;
             } else {
                 e.call(
@@ -2952,6 +2976,11 @@ pub fn actor_start_attack(e: &mut Engine, this: Ptr<Actor>, anim_group: u32) -> 
             && !ammo_item.is_null()
             && typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, ammo_item)) != 0
         {
+            out_of_ammo = false;
+        }
+        // lStewieAl's Tweaks' row S0082.01 (`NoAmmoGodmode`, its `ammoCheckGodMode` jumped to at
+        // `0x893C37`): the player in god mode (not demigod) attacks without ammunition.
+        if out_of_ammo && godmode_fires_without_ammo(e, this, player) {
             out_of_ammo = false;
         }
 
@@ -23471,6 +23500,85 @@ mod tests {
                 1.0f32.to_bits()
             ]
         );
+    }
+
+    /// S0082.01 (`NoAmmoGodmode`): god mode without demigod (`011e07ba` set, `011e07bb` and
+    /// `011e0898` clear) lets the player (not another actor) attack without ammunition, and counts
+    /// one Rock-It Launcher round (`00969040` answers 0 here).
+    #[test]
+    fn s0082_01_the_player_in_god_mode_needs_no_ammunition() {
+        // (row, god, demigod, the demigod setting, the player)
+        for (on, god, demigod, setting, is_player) in [
+            (false, 1u8, 0u8, 0u8, true),
+            (true, 1, 0, 0, true),
+            (true, 1, 1, 0, true),
+            (true, 1, 0, 1, true),
+            (true, 0, 0, 0, true),
+            (true, 1, 0, 0, false),
+        ] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::NO_AMMO_GODMODE, on);
+            e.map(0x011e_0000, 0x1000);
+            e.mem.set_u8(0x011e_07ba, god);
+            e.mem.set_u8(0x011e_07bb, demigod);
+            e.mem.set_u8(0x011e_0898, setting);
+            stub(&mut e, PLAYER_GET_NUM_ROCK_IT_AMMO, 0);
+            let player = Ptr::<Actor>::new(0x6000);
+            let this = if is_player { player } else { Ptr::new(0x6100) };
+            let godlike = on && god == 1 && demigod == 0 && setting == 0;
+            assert_eq!(
+                godmode_fires_without_ammo(&mut e, this, player),
+                godlike && is_player,
+                "on {on} {god} {demigod} {setting} {is_player}"
+            );
+            assert_eq!(rock_it_ammo_or_godmode(&mut e, player), u32::from(godlike));
+        }
+    }
+
+    /// S0082.01 at its call sites in `Actor::StartAttack` (`0x893C37`, `0x893B44`): the player in
+    /// god mode attacks a power attack (210) with a weapon whose ammunition is not there (no entry:
+    /// slot `0x14c` 0), or with a Rock-It Launcher and no Rock-It ammunition (`00969040` 0). Off: out
+    /// of ammunition (the forced firing cleared, slot `0x3f4` with 0; for the Rock-It Launcher also
+    /// its message queued), no attack played. On: the attack goes on (the worker plays the
+    /// group) without either.
+    #[test]
+    fn s0082_01_start_attack_in_god_mode_needs_no_ammunition() {
+        for rock_it in [false, true] {
+            for on in [false, true] {
+                let label = format!("on {on} rock-it {rock_it}");
+                let mut e = engine();
+                e.set_stewie(engine_core::extend::stewie::NO_AMMO_GODMODE, on);
+                e.map(0x011e_0000, 0x1000);
+                e.mem.set_u8(0x011e_07ba, 1);
+                let (actor, _, _) = attack_setup(&mut e);
+                set_player(&mut e, actor);
+                let process = e.get(actor, Actor::pCurrentProcess);
+                set_slot(&mut e, process, 0x148, ret(0x6800));
+                stub(&mut e, ENTRY_FORM, 0xf0f0);
+                stub(&mut e, WEAPON_GET_CURRENT_AMMO, 0xa1);
+                stub(&mut e, ANIM_GROUP_GET_TYPE, 210);
+                if rock_it {
+                    stub(&mut e, AMMO_FORM_IS_ROCK_IT_LAUNCHER, 1);
+                    stub(&mut e, PLAYER_GET_NUM_ROCK_IT_AMMO, 0);
+                }
+                assert!(!actor_start_attack(&mut e, actor, 210), "{label}");
+                assert_eq!(
+                    call_count(&e, ACTOR_PLAY_GROUP_WORKER),
+                    usize::from(on),
+                    "{label}"
+                );
+                assert_eq!(
+                    calls_to(&e, slot_target(&e, process, 0x3f4)).len(),
+                    usize::from(!on),
+                    "{label}"
+                );
+                assert_eq!(
+                    call_count(&e, INTERFACE_QUEUE_MENU_CREATE),
+                    usize::from(rock_it && !on),
+                    "{label}"
+                );
+            }
+        }
     }
 
     /// S0926 (`CombatSoundCooldownFix`, `0x89D42B`): the hit's combat line is held while the hit

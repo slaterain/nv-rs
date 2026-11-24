@@ -374,9 +374,6 @@ pub fn remove_all(e: &mut Engine, list: u32) {
 
 /// The counted global that holds the accumulator being drawn (`011f95f0`).
 pub(crate) const HELD_ACCUMULATOR: u32 = 0x011f_95f0;
-/// The interlocked imports (`00fdf1c0` increment, `00fdf1c4` decrement).
-const INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
-const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
 /// An `NiRefObject`'s delete slot (4).
 const SLOT_DELETE: u32 = 4;
 
@@ -398,16 +395,14 @@ pub fn hold_accumulator(e: &mut Engine, object: u32) {
         return;
     }
     if old != 0 {
-        let left = e
-            .call(INTERLOCKED_DECREMENT, &args![old.wrapping_add(4)])
-            .u32();
+        let left = engine_core::sync_direct::interlocked_decrement(e, old.wrapping_add(4)) as u32;
         if left == 0 {
             e.vcall(old, SLOT_DELETE, &[]);
         }
     }
     capture::set_own_at(e, HELD_ACCUMULATOR, object);
     if object != 0 {
-        e.call(INTERLOCKED_INCREMENT, &args![object.wrapping_add(4)]);
+        engine_core::sync_direct::interlocked_increment(e, object.wrapping_add(4));
     }
 }
 
@@ -415,15 +410,13 @@ pub fn hold_accumulator(e: &mut Engine, object: u32) {
 /// 0, its slot 4), the new one's up. For the join ([`capture::end`]), which moves the drawing side's held accumulator.
 pub(crate) fn move_count(e: &mut Engine, old: u32, new: u32) {
     if old != 0 {
-        let left = e
-            .call(INTERLOCKED_DECREMENT, &args![old.wrapping_add(4)])
-            .u32();
+        let left = engine_core::sync_direct::interlocked_decrement(e, old.wrapping_add(4)) as u32;
         if left == 0 {
             e.vcall(old, SLOT_DELETE, &[]);
         }
     }
     if new != 0 {
-        e.call(INTERLOCKED_INCREMENT, &args![new.wrapping_add(4)]);
+        engine_core::sync_direct::interlocked_increment(e, new.wrapping_add(4));
     }
 }
 
@@ -524,9 +517,6 @@ const FREE: u32 = 0x00aa_10f0;
 const ALLOCATE_ALIGNED: u32 = 0x00aa_10b0;
 const FREE_ALIGNED: u32 = 0x00aa_1110;
 const MEMORY_ALLOCATE: u32 = 0x00aa_3e40;
-/// `EnterCriticalSection` and `LeaveCriticalSection` (the imports' slots).
-const ENTER_CRITICAL_SECTION: u32 = 0x00fd_f05c;
-const LEAVE_CRITICAL_SECTION: u32 = 0x00fd_f100;
 /// The vertex manager's critical section (+0x80), staging block (+0x40) and its capacity (+0x44).
 const STAGING_SECTION: u32 = 0x80;
 const STAGING_BLOCK: u32 = 0x40;
@@ -637,19 +627,13 @@ pub(crate) fn release(e: &mut Engine, object: u32) {
 /// The vertex manager's critical section entered for a lock (held until [`leave_staging`]).
 #[inline(always)]
 pub(crate) fn enter_staging(e: &mut Engine, manager: u32) {
-    e.call(
-        ENTER_CRITICAL_SECTION,
-        &args![manager.wrapping_add(STAGING_SECTION)],
-    );
+    engine_core::sync_direct::enter_critical_section(e, manager.wrapping_add(STAGING_SECTION));
 }
 
 /// The vertex manager's critical section left at an unlock.
 #[inline(always)]
 pub(crate) fn leave_staging(e: &mut Engine, manager: u32) {
-    e.call(
-        LEAVE_CRITICAL_SECTION,
-        &args![manager.wrapping_add(STAGING_SECTION)],
-    );
+    engine_core::sync_direct::leave_critical_section(e, manager.wrapping_add(STAGING_SECTION));
 }
 
 /// The vertex manager's staging block made anew for `size` bytes: the old one freed, a new one taken,
@@ -781,9 +765,7 @@ pub(crate) fn assign_counted(e: &mut Engine, slot: u32, source: u32, reread: boo
         return;
     }
     if old != 0 {
-        let left = e
-            .call(INTERLOCKED_DECREMENT, &args![old.wrapping_add(4)])
-            .u32();
+        let left = engine_core::sync_direct::interlocked_decrement(e, old.wrapping_add(4)) as u32;
         if left == 0 {
             e.vcall(old, SLOT_DELETE, &[]);
         }
@@ -791,7 +773,7 @@ pub(crate) fn assign_counted(e: &mut Engine, slot: u32, source: u32, reread: boo
     let new = if reread { e.global::<u32>(source) } else { new };
     e.set_global(slot, new);
     if new != 0 {
-        e.call(INTERLOCKED_INCREMENT, &args![new.wrapping_add(4)]);
+        engine_core::sync_direct::interlocked_increment(e, new.wrapping_add(4));
     }
 }
 
@@ -984,9 +966,7 @@ pub(crate) fn set_draw_count(e: &mut Engine, data: u32, count: u16) {
 pub(crate) fn clear_counted(e: &mut Engine, slot: u32) {
     let old = e.global::<u32>(slot);
     if old != 0 {
-        let left = e
-            .call(INTERLOCKED_DECREMENT, &args![old.wrapping_add(4)])
-            .u32();
+        let left = engine_core::sync_direct::interlocked_decrement(e, old.wrapping_add(4)) as u32;
         if left == 0 {
             e.vcall(old, SLOT_DELETE, &[]);
         }

@@ -65,13 +65,16 @@ fn s0926_obeys_tweaks_combat_dialogue_cooldown_fix() {
     assert!(!rows::on(row, &keys, &off));
 }
 
-/// S0489, S0660, S0664 and S0782 follow Tweaks' own `[Tweaks]` keys (code default 0, VNV's 1): on
-/// with no file (the port's defaults are VNV's), off when the player's Tweaks INI sets the key to
-/// 0, off with no file under `bMissingKeysAsTweaks` (Tweaks' code default), and off by their own
-/// keys.
+/// S0329, S0404, S0410, S0489, S0660, S0664 and S0782 follow Tweaks' own `[Tweaks]` keys (code
+/// default 0, VNV's 1): on with no file (the port's defaults are VNV's), off when the player's
+/// Tweaks INI sets the key to 0, off with no file under `bMissingKeysAsTweaks` (Tweaks' code
+/// default), and off by their own keys.
 #[test]
 fn tweaks_keyed_rows_follow_their_tweaks_keys() {
     for (plan, key) in [
+        ("S0329", "bLeftAndRightCancelEachOther"),
+        ("S0404", "bDelayPostCombatLevelUp"),
+        ("S0410", "bGodmodePreventsLegCrippleSound"),
         ("S0489", "bSpinWeaponsSoundFix"),
         ("S0660", "bExplosionKnockbackDirectionFix"),
         ("S0664", "bFixKillChallengeSourceWeapon"),
@@ -145,6 +148,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bFixCombatMissileDepthGamesettings",
         Row::at(AI_FIXES, 19),
     ),
+    ("S0082.01", "bNoAmmoGodmodeFiring", Row::at(AI_FIXES, 71)),
     (
         "S0089.01",
         "bRememberAmmoCountOnLoadSavedCount",
@@ -181,6 +185,12 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         Row::at(AI_FIXES, 31),
     ),
     ("S0094", "bFixDisintegrationsStat", Row::at(AI_FIXES, 33)),
+    ("S0096", "bTCLMovement", Row::at(AI_FIXES, 68)),
+    (
+        "S0097",
+        "bRunAndGunDontLetAPBeNegative",
+        Row::at(AI_FIXES, 69),
+    ),
     (
         "S0111",
         "bFixLoopingReloadAmmoSwapInstantRefill",
@@ -360,6 +370,17 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0229", "bArmorUpdateFix", Row::at(AI_FIXES, 7)),
     ("S0230", "bDoubleSoundFix", Row::at(AI_FIXES, 18)),
     ("S0241", "bActorGetHeadingTargetFix", Row::at(AI_FIXES, 38)),
+    (
+        "S0329",
+        "bLeftRightMovementCancelsOut",
+        Row::at(AI_FIXES, 72),
+    ),
+    ("S0404", "bDelayLevelupAfterCombat", Row::at(AI_FIXES, 73)),
+    (
+        "S0410",
+        "bGodmodePreventsLegCrippleSound",
+        Row::at(AI_FIXES, 70),
+    ),
     (
         "S0489",
         "bSpinWeaponsAlwaysPlaySound",

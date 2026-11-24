@@ -77,9 +77,6 @@ const FILTER_MODES: u32 = 0x0126_f050;
 /// The bounds of an alpha value the alpha test is off between (`0106d508`, a `double`; `0106b9e0`).
 const ALPHA_LOW: u32 = 0x0106_d508;
 const ALPHA_HIGH: u32 = 0x0106_b9e0;
-/// `InterlockedIncrement` and `InterlockedDecrement`, their import slots.
-const INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
-const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
 /// `NiRefObject`'s deleting destructor, virtual slot 4 (no arguments).
 const SLOT_DELETE: u32 = 0x4;
 /// The null element of a pointer array (`0126f910`), made once (guard bit 0 of `0126f914`) with its
@@ -849,17 +846,14 @@ pub fn add_object_to_group(
 /// `InterlockedDecrement` of an object's count, and its deleting destructor at 0.
 #[inline(always)]
 fn release(e: &mut Engine, object: u32) {
-    if e.call(INTERLOCKED_DECREMENT, &args![object.wrapping_add(4)])
-        .u32()
-        == 0
-    {
+    if engine_core::sync_direct::interlocked_decrement(e, object.wrapping_add(4)) as u32 == 0 {
         e.vcall(object, SLOT_DELETE, &[]);
     }
 }
 
 #[inline(always)]
 fn hold(e: &mut Engine, object: u32) {
-    e.call(INTERLOCKED_INCREMENT, &args![object.wrapping_add(4)]);
+    engine_core::sync_direct::interlocked_increment(e, object.wrapping_add(4));
 }
 
 // Typed from 00e86f40

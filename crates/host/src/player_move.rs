@@ -1289,11 +1289,14 @@ impl PlayerMovement {
                 crate::save_out::copy_saves(e, status_line);
                 if status_line {
                     self.main_reported = Some(std::time::Instant::now());
-                    println!("{}", self.summary());
+                    // These lines are written off main, as the hitch lines are
+                    // ([`crate::hitch_log::print_line`]): a pipe that stops being read (the
+                    // driver compiling its pipeline cache) does not hold main's frame.
+                    crate::hitch_log::print_line(self.summary());
                     // A typed family's dual run (`NV_TYPED=<family>:dual`): words compared and
                     // differences so far.
                     if let Some(line) = engine::typed::dual_line(e) {
-                        println!("{line}");
+                        crate::hitch_log::print_line(line);
                     }
                     // `NV_MOVE_WATCH=addr,addr..`: the words at those exe addresses with it (a
                     // diagnostic of the game's state: which menus exist, flags).
@@ -1315,14 +1318,20 @@ impl PlayerMovement {
                                 Some(format!("{}={word:08x}", item.trim()))
                             })
                             .collect();
-                        println!("watch: {}", words.join(" "));
+                        crate::hitch_log::print_line(format!("watch: {}", words.join(" ")));
                     }
                     // `NV_MOVE_THREADS`: the game threads' states with it (a diagnostic: which
                     // thread sleeps, waits or has turns, `thread_host::describe`).
                     if std::env::var_os("NV_MOVE_THREADS").is_some() {
-                        println!("threads: {}", engine::thread_host::describe(e));
+                        crate::hitch_log::print_line(format!(
+                            "threads: {}",
+                            engine::thread_host::describe(e)
+                        ));
                         let order = engine::thread_host::take_order(e);
-                        println!("thread calls: {} order: {order}", e.kernel.threads.calls);
+                        crate::hitch_log::print_line(format!(
+                            "thread calls: {} order: {order}",
+                            e.kernel.threads.calls
+                        ));
                     }
                 }
                 true
@@ -1366,6 +1375,8 @@ impl PlayerMovement {
                 } else {
                     crate::save_out::flush();
                 }
+                // The lines still on their way written first, so this one ends the log.
+                crate::hitch_log::flush_lines();
                 eprintln!("{line}");
                 self.main_stop = Some(line);
                 self.main_end = Some(end);

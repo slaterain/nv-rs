@@ -53,9 +53,6 @@ const LOCK_ACQUIRE: u32 = 0x0040_fbf0;
 /// The allocation (`00aa13e0`, a size) and the `ShadowSceneLight` constructor (`00b9fda0`).
 const NEW_OBJECT: u32 = 0x00aa_13e0;
 const SHADOW_SCENE_LIGHT_CONSTRUCT: u32 = 0x00b9_fda0;
-/// The imported `InterlockedIncrement` / `InterlockedDecrement`.
-const INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
-const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
 /// The sort's limits: `low` and `high` (`double`s) and the fade time (`float`).
 const FADE_LOW: u32 = 0x0101_ffa0;
 const FADE_HIGH: u32 = 0x0106_b9e8;
@@ -77,9 +74,7 @@ fn element_of(e: &Engine, item: u32) -> u32 {
 
 /// The inlined `NiPointer` release: the count at +4 down, the object deleted (slot +4) at zero.
 fn release(e: &mut Engine, object: u32) {
-    let left = e
-        .call(INTERLOCKED_DECREMENT, &args![object.wrapping_add(4)])
-        .u32();
+    let left = engine_core::sync_direct::interlocked_decrement(e, object.wrapping_add(4)) as u32;
     if left == 0 {
         e.vcall(object, 4, &args![]);
     }
@@ -212,14 +207,14 @@ pub fn shadow_light_of(e: &mut Engine, this: Ptr, object: u32) -> u32 {
         }
         e.mem.set_u32(slot, object);
         if object != 0 {
-            e.call(INTERLOCKED_INCREMENT, &args![object.wrapping_add(4)]);
+            engine_core::sync_direct::interlocked_increment(e, object.wrapping_add(4));
         }
     }
     e.call(LIGHT_AS_CASTER, &args![light, 1u32]);
     e.with_stack(4, |e, temporary| {
         e.mem.set_u32(temporary.addr(), light);
         if light != 0 {
-            e.call(INTERLOCKED_INCREMENT, &args![light.wrapping_add(4)]);
+            engine_core::sync_direct::interlocked_increment(e, light.wrapping_add(4));
         }
         e.call(
             LIST_ADD_TAIL,
