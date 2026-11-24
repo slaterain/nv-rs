@@ -8,9 +8,9 @@
 //! The evaluator computes in `f64` as xNVSE does (SSE2); conversions to integers go through
 //! [`crate::args::f64_to_i32`] or the C++'s `SInt64` casts, never Rust `as` on a raw double.
 //!
-//! Not here yet (each a script error, as an unknown operator would be): lambdas (I-7), the `.`
-//! call syntax, array slices (`MakeSlice`), the assignable substrings of a string variable or
-//! element (`s[1] := ...`), and the override argument path (an argument count above `0x7FFF`).
+//! Not here yet (each a script error, as an unknown operator would be): lambdas (I-7),
+//! array slices (`MakeSlice`), string-variable slices and assignable array-element
+//! substrings, and the override argument path (an argument count above `0x7FFF`).
 
 use crate::args::{event_list_variable, f64_to_i32, resolve_ref_variable, script_ref};
 use crate::table::{record_of, return_type, Returns};
@@ -26,6 +26,8 @@ const DYNAMIC_CAST: u32 = 0x00ec_43fb;
 const RTTI_TES_FORM: u32 = 0x0118_3028;
 const RTTI_TES_GLOBAL: u32 = 0x0118_3ad4;
 const RTTI_TES_OBJECT_REFR: u32 = 0x0118_41cc;
+/// `TESForm::GetIsReference` in the runtime vtable (xNVSE `GameForms.h`).
+const VT_GET_IS_REFERENCE: u32 = 0xf0;
 
 /// `Token_Type` (xNVSE `ScriptTokens.h`): the codes the conversion table is indexed by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,6 +102,13 @@ pub enum Tok {
     },
     Bool(bool),
     Str(Vec<u8>),
+    /// xNVSE's AssignableSubstringStringVarToken: captured text and inclusive bounds.
+    Substring {
+        string: u32,
+        lower: u32,
+        upper: u32,
+        text: Vec<u8>,
+    },
     /// A form, by id.
     Form(u32),
     /// A `TESGlobal`'s address.
@@ -163,6 +172,7 @@ impl Tok {
             Tok::Number { .. } => Ty::Number,
             Tok::Bool(_) => Ty::Boolean,
             Tok::Str(_) => Ty::String,
+            Tok::Substring { .. } => Ty::AssignableString,
             Tok::Form(_) => Ty::Form,
             Tok::Global(_) => Ty::Global,
             Tok::Array(_) => Ty::Array,
@@ -1159,6 +1169,7 @@ impl Eval {
     pub fn get_string(&self, e: &mut Engine, t: &Tok) -> Vec<u8> {
         match t {
             Tok::Str(s) => s.clone(),
+            Tok::Substring { text, .. } => text.clone(),
             Tok::Var {
                 ty: Ty::StringVar,
                 local,
@@ -1344,6 +1355,7 @@ impl Eval {
             ],
             op::TO_NUMBER => &[(String, String, true), (Number, Number, true)],
             op::DEREFERENCE => &[(Array, Array, true)],
+            op::DOT => &[(Form, Command, true), (ArrayElement, Command, true)],
             op::BOX => &[
                 (Number, Number, true),
                 (String, String, true),
@@ -1618,6 +1630,21 @@ impl Eval {
                     }
                 }
             }
+            // Translated from xNVSE 6.4.9 (0ccd23a), ScriptUtils.cpp: Eval_DotSyntax.
+            op::DOT => {
+                let form = self.get_form(e, &lh);
+                if form == 0 {
+                    self.error("Attempting to call a command on a non-form or a NULL reference");
+                    return None;
+                }
+                if !e.vcall(form, VT_GET_IS_REFERENCE, &[]).bool() {
+                    self.error(
+                        "Attempting to call a function on a base object (this must be a reference)",
+                    );
+                    return None;
+                }
+                self.execute_command(e, &rh, form)
+            }
             op::BOX => {
                 let arr = vars::create_array(e, vars::KEY_NUMBER, true, modi);
                 let value = match rule {
@@ -1682,6 +1709,42 @@ impl Eval {
             return Some(Tok::Element { array: id, key });
         }
         match rule {
+            3 => {
+                // xNVSE 0ccd23a ScriptUtils.cpp::Eval_Subscript_StringVar_Number;
+                // ScriptTokens.cpp::AssignableSubstringStringVarToken captures its text.
+                let Tok::Var { local, .. } = lh else {
+                    self.error("Invalid variable");
+                    return None;
+                };
+                if local == 0 {
+                    self.error("Invalid variable");
+                    return None;
+                }
+                let string = f64_to_i32(e.mem.f64(local + 8)) as u32;
+                let Some(value) = vars::string(e, string) else {
+                    self.error("String var is uninitialized");
+                    return None;
+                };
+                let mut index = f64_to_i32(self.get_number(e, &rh));
+                if index < 0 {
+                    index = index.wrapping_add(value.len() as i32);
+                }
+                let lower = index as u32;
+                let upper = if lower > value.len() as u32 {
+                    (value.len() as u32).wrapping_sub(1)
+                } else {
+                    lower
+                };
+                Some(Tok::Substring {
+                    string,
+                    lower,
+                    upper,
+                    text: value
+                        .get(lower as usize)
+                        .map(|v| vec![*v])
+                        .unwrap_or_default(),
+                })
+            }
             0 => {
                 let id = self.get_array_id(e, &lh);
                 let Some(a) = vars::array(e, id) else {
@@ -1712,6 +1775,25 @@ impl Eval {
     fn assign(&mut self, e: &mut Engine, rule: usize, lh: Tok, rh: Tok) -> Option<Tok> {
         let modi = script_mod(e, self.script);
         match (rule, &lh) {
+            (
+                0,
+                Tok::Substring {
+                    string,
+                    lower,
+                    upper,
+                    ..
+                },
+            ) => {
+                // xNVSE ScriptTokens.cpp::AssignableSubstringStringVarToken::Assign.
+                let mut value = vars::string(e, *string)?;
+                if lower > upper || *upper as usize >= value.len() {
+                    return None;
+                }
+                let replacement = self.get_string(e, &rh);
+                value.splice(*lower as usize..=*upper as usize, replacement);
+                vars::set_string(e, *string, &value);
+                Some(Tok::Str(value))
+            }
             (
                 1,
                 Tok::Var {
@@ -2498,6 +2580,10 @@ pub fn report(e: &mut Engine, ev: &Eval) {
 }
 
 #[cfg(test)]
+#[path = "expr_dot_tests.rs"]
+mod dot_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -2737,6 +2823,105 @@ mod command_string_tests {
             var_idx: 0,
             string: id,
         }
+    }
+
+    /// MCM Extender tests `sFile[0] == "$"`; MenuSearch edits individual characters.
+    /// xNVSE ScriptUtils.cpp and ScriptTokens.cpp distinguish a writable string-var
+    /// substring from the plain string subscript (including negative indexing).
+    #[test]
+    fn string_var_character_lookup_comparison_and_assignment() {
+        let (mut e, mut ev) = engine_and_eval();
+        let id = vars::add_string(&mut e, 0, b"$ModName", false);
+        let local = 0x0200_3000;
+        e.mem.set_f64(local + 8, f64::from(id));
+        let variable = Tok::Var {
+            ty: Ty::StringVar,
+            local,
+            var_type: 2,
+            ref_idx: 0,
+            var_idx: 1,
+            string: id,
+        };
+        let first = ev
+            .operate(
+                &mut e,
+                op::LEFT_BRACKET,
+                variable.clone(),
+                Some(Tok::number(0.0)),
+            )
+            .unwrap();
+        assert_eq!(first.ty(), Ty::AssignableString);
+        assert_eq!(ev.get_string(&mut e, &first), b"$");
+        let equal = ev
+            .operate(
+                &mut e,
+                op::EQUALS,
+                first.clone(),
+                Some(Tok::Str(b"$".to_vec())),
+            )
+            .unwrap();
+        assert!(ev.get_bool(&mut e, &equal));
+        let last = ev
+            .operate(
+                &mut e,
+                op::LEFT_BRACKET,
+                variable.clone(),
+                Some(Tok::number(-1.0)),
+            )
+            .unwrap();
+        assert_eq!(ev.get_string(&mut e, &last), b"e");
+        let changed = ev
+            .operate(
+                &mut e,
+                op::ASSIGNMENT,
+                first.clone(),
+                Some(Tok::Str(Vec::new())),
+            )
+            .unwrap();
+        assert_eq!(ev.get_string(&mut e, &changed), b"ModName");
+        assert_eq!(vars::string(&e, id).unwrap(), b"ModName");
+        // Substring tokens capture their read value, rather than looking it up again.
+        assert_eq!(ev.get_string(&mut e, &first), b"$");
+        let beyond = ev
+            .operate(&mut e, op::LEFT_BRACKET, variable, Some(Tok::number(7.0)))
+            .unwrap();
+        assert_eq!(ev.get_string(&mut e, &beyond), b"");
+        assert!(ev
+            .operate(
+                &mut e,
+                op::ASSIGNMENT,
+                beyond,
+                Some(Tok::Str(b"x".to_vec()))
+            )
+            .is_none());
+        assert!(ev.errors.is_empty());
+    }
+
+    #[test]
+    fn string_var_character_requires_a_live_local_and_string() {
+        let (mut e, mut ev) = engine_and_eval();
+        assert!(ev
+            .operate(
+                &mut e,
+                op::LEFT_BRACKET,
+                command_string(0),
+                Some(Tok::number(0.0))
+            )
+            .is_none());
+        assert_eq!(ev.errors.last().unwrap(), "Invalid variable");
+        ev.errors.clear();
+        let variable = Tok::Var {
+            ty: Ty::StringVar,
+            local: 0x0200_3000,
+            var_type: 2,
+            ref_idx: 0,
+            var_idx: 1,
+            string: 0,
+        };
+        assert!(ev
+            .operate(&mut e, op::LEFT_BRACKET, variable, Some(Tok::number(0.0)))
+            .is_none());
+        assert_eq!(ev.errors.last().unwrap(), "String var is uninitialized");
     }
 
     /// Review item 5: a command's string result (no local) on the left of `:=`, `+=` and `<-`
