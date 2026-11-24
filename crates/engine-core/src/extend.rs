@@ -3030,7 +3030,7 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 131);
+        assert_eq!(SITES.len(), 121);
         // lStewieAl's Tweaks' (its seams in the text key event and Idle), Tweaks' alone.
         for a in [0x0070_e4db, 0x0070_e500, 0x0071_5563] {
             assert!(find(SITES, Owner::Stewie, a).is_some(), "{a:08x}");
