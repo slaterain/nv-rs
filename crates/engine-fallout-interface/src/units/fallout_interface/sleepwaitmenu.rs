@@ -45,6 +45,8 @@ const FRAME_TIMER: u32 = 0x011f_6394;
 const ELAPSED_SECONDS: u32 = 0x0084_d030;
 /// `1.0` (`double`).
 const ONE: u32 = 0x0101_2070;
+/// Game-speed multiplier read by Tweaks' optional comparison-only FDIVS hook.
+const GAME_SPEED: u32 = 0x011a_c3a0;
 /// The object in `011dea10` and its `00455490` (thiscall, no stack words).
 const OBJECT_011DEA10: u32 = 0x011d_ea10;
 const OBJECT_STEP_00455490: u32 = 0x0045_5490;
@@ -108,9 +110,22 @@ pub fn sleep_wait_menu_update_sleeping(e: &mut Engine, this: Ptr) -> bool {
     let seconds = e.call(ELAPSED_SECONDS, &args![FRAME_TIMER]).st0;
     let sum = x87_add(seconds, x87_m32(e.mem.u32(base + ELAPSED_SECS)));
     e.mem.set_u32(base + ELAPSED_SECS, x87_store32(sum));
-    let one: f64 = e.global(ONE);
+    let accumulated = x87_load32(e.mem.u32(base + ELAPSED_SECS));
+    // Tweaks 10.05: installer 1008449A replaces the comparison's double
+    // operand, and optional hook 10038410 divides the stored accumulated
+    // float by game speed here, not the individual frame increments above.
+    let (comparison_time, threshold) = if let Some(choice) = engine_core::faster_wait::settings(e) {
+        let time = if choice.dont_scale {
+            x87_div(accumulated, x87_m32(e.global::<u32>(GAME_SPEED)))
+        } else {
+            accumulated
+        };
+        (time, choice.delay_seconds)
+    } else {
+        (accumulated, e.global::<f64>(ONE))
+    };
     // FCOMP; TEST AH,1: goes on only when not below (C0 clear: ordered and >=).
-    if !(x87_load32(e.mem.u32(base + ELAPSED_SECS)) >= one) {
+    if !(comparison_time >= threshold) {
         return false;
     }
     e.mem.set_u32(base + ELAPSED_SECS, 0);
@@ -884,6 +899,106 @@ mod la1_tests {
             ]]
         );
         assert_eq!(called(&log, SET_TIME_TEXT), vec![vec![r.menu]]);
+    }
+
+    #[test]
+    fn faster_wait_disabled_retains_the_original_one_second_threshold() {
+        for enabled in [false, true] {
+            let mut r = rig(0, 0, true, false, 0.5);
+            r.e.mem.set_u8(r.menu + RESTING_ACTIVE, 1);
+            // No game-speed word is mapped: neither the disabled row nor
+            // dont_scale=false may consult it.
+            engine_core::faster_wait::configure(&mut r.e, enabled, 300.0, !enabled);
+            let (answer, log) = update(&mut r);
+            assert_eq!(answer, enabled);
+            assert_eq!(
+                called(&log, OBJECT_STEP_00455490).len(),
+                usize::from(enabled)
+            );
+            assert_eq!(
+                r.e.mem.f32(r.menu + ELAPSED_SECS),
+                if enabled { 0.0 } else { 0.5 }
+            );
+        }
+    }
+
+    #[test]
+    fn faster_wait_keeps_the_double_threshold_above_the_rounded_point_three_float() {
+        let mut r = rig(0, 0, true, false, 0.0);
+        r.e.mem.set_u8(r.menu + RESTING_ACTIVE, 1);
+        engine_core::faster_wait::configure(&mut r.e, true, 300.0, false);
+        // 300 * widened f32(3A83126F) = 0.3000000142492354, strictly
+        // above stored f32(0.3) = 0.30000001192092896.
+        r.e.mem.set_f32(r.menu + ELAPSED_SECS, 0.3);
+        let (answer, log) = update(&mut r);
+        assert!(!answer);
+        assert!(called(&log, OBJECT_STEP_00455490).is_empty());
+        r.e.mem.set_u32(r.menu + ELAPSED_SECS, 0.3f32.to_bits() + 1);
+        let (answer, log) = update(&mut r);
+        assert!(answer);
+        assert_eq!(r.e.mem.u32(r.menu + ELAPSED_SECS), 0);
+        assert_eq!(called(&log, OBJECT_STEP_00455490).len(), 1);
+        assert_eq!(
+            called(&log, PLAYER_UPDATE_HARDCORE_MODE),
+            vec![vec![0x0c10_0000]]
+        );
+        assert_eq!(called(&log, PLAYER_STEP_0094DF80), vec![vec![0x0c10_0000]]);
+        assert_eq!(called(&log, SET_TIME_TEXT), vec![vec![r.menu]]);
+    }
+
+    #[test]
+    fn faster_wait_unscales_the_accumulated_time_only_at_comparison() {
+        let mut r = rig(0, 0, true, false, 0.125);
+        r.e.map(0x011a_c000, 0x1000);
+        r.e.mem.set_u8(r.menu + RESTING_ACTIVE, 1);
+        engine_core::faster_wait::configure(&mut r.e, true, 300.0, true);
+        r.e.set_global(GAME_SPEED, 0.5f32);
+        let (answer, _) = update(&mut r);
+        assert!(!answer);
+        assert_eq!(r.e.mem.f32(r.menu + ELAPSED_SECS), 0.125);
+        // Dividing each increment would have accumulated 0.25 + 0.0625
+        // and incorrectly advanced now. The DLL divides 0.25 / 2 here.
+        r.e.set_global(GAME_SPEED, 2.0f32);
+        let (answer, log) = update(&mut r);
+        assert!(!answer);
+        assert_eq!(r.e.mem.f32(r.menu + ELAPSED_SECS), 0.25);
+        assert!(called(&log, OBJECT_STEP_00455490).is_empty());
+        r.e.set_global(GAME_SPEED, 0.5f32);
+        let (answer, log) = update(&mut r);
+        assert!(answer);
+        assert_eq!(r.e.mem.u32(r.menu + ELAPSED_SECS), 0);
+        assert_eq!(called(&log, OBJECT_STEP_00455490).len(), 1);
+    }
+
+    #[test]
+    fn faster_wait_zero_delay_still_advances_only_one_hour_per_update() {
+        let mut r = rig(0, 0, true, false, 8.0);
+        r.e.mem.set_u8(r.menu + RESTING_ACTIVE, 1);
+        engine_core::faster_wait::configure(&mut r.e, true, 0.0, false);
+        for _ in 0..2 {
+            let (answer, log) = update(&mut r);
+            assert!(answer);
+            assert_eq!(r.e.mem.u32(r.menu + ELAPSED_SECS), 0);
+            assert_eq!(called(&log, OBJECT_STEP_00455490).len(), 1);
+            assert_eq!(called(&log, PLAYER_UPDATE_HARDCORE_MODE).len(), 1);
+            assert_eq!(called(&log, SET_TIME_TEXT).len(), 1);
+        }
+    }
+
+    #[test]
+    fn faster_wait_does_not_bypass_cancel_or_inactive_resting() {
+        for cancel in [false, true] {
+            let mut r = rig(u32::from(cancel), u32::from(cancel), true, false, 8.0);
+            r.e.mem.set_u8(r.menu + RESTING_ACTIVE, u8::from(cancel));
+            r.e.mem.set_f32(r.menu + ELAPSED_SECS, 0.25);
+            engine_core::faster_wait::configure(&mut r.e, true, 0.0, true);
+            let (answer, log) = update(&mut r);
+            assert!(!answer);
+            assert!(called(&log, ELAPSED_SECONDS).is_empty());
+            assert!(called(&log, OBJECT_STEP_00455490).is_empty());
+            assert_eq!(called(&log, CLOSE_SLOT).len(), usize::from(cancel));
+            assert_eq!(r.e.mem.f32(r.menu + ELAPSED_SECS), 0.25);
+        }
     }
 
     #[test]

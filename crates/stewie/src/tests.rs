@@ -724,6 +724,55 @@ fn the_key_rules_name_keys_of_the_table() {
     }
 }
 
+#[test]
+fn double_settings_keep_the_last_valid_value_and_the_native_buffer_limit() {
+    let main = b"[Sleep Wait]\niWaitTimeMS=450.5\n";
+    for invalid in ["not a number", "150 ; note", "", "-19997"] {
+        let overlay = format!("[Sleep Wait]\niWaitTimeMS={invalid}\n");
+        let settings = Settings::new(&[("main", main), ("overlay", overlay.as_bytes())], false);
+        assert_eq!(settings.double("sleep wait", "iWaitTimeMS", 300.0), 450.5);
+    }
+    let overlay = b"[Sleep Wait]\niWaitTimeMS=125.5\n";
+    let settings = Settings::new(&[("main", main), ("overlay", overlay)], false);
+    assert_eq!(settings.double("Sleep Wait", "iWaitTimeMS", 300.0), 125.5);
+    assert_eq!(
+        Settings::new(&[], false).double("Sleep Wait", "iWaitTimeMS", -1.0),
+        300.0
+    );
+    assert_eq!(
+        Settings::new(&[], false).double("Unknown", "Number", 7.5),
+        7.5
+    );
+    for (zeros, expected) in [(62, 1.0), (63, 300.0)] {
+        let file = format!("[Sleep Wait]\niWaitTimeMS={}1\n", "0".repeat(zeros));
+        let settings = Settings::new(&[("main", file.as_bytes())], false);
+        assert_eq!(settings.double("Sleep Wait", "iWaitTimeMS", -1.0), expected);
+    }
+}
+
+#[test]
+fn faster_wait_uses_original_settings_only_when_tweaks_and_the_feature_are_on() {
+    type Case = (bool, Option<&'static [u8]>, Option<(u64, bool)>);
+    let cases: &[Case] = &[
+        (true, None, None),
+        (true, Some(b"[Tweaks]\nbFasterSleepWait=0\n[Sleep Wait]\niWaitTimeMS=0\n"), None),
+        (false, Some(b"[Tweaks]\nbFasterSleepWait=1\n"), None),
+        (true, Some(b"[Tweaks]\nbFasterSleepWait=1\n"), Some((0x3fd3_3333_4280_0000, true))),
+        (true, Some(b"[Tweaks]\nbFasterSleepWait=1\n[Sleep Wait]\niWaitTimeMS=125.5\nbDontScaleWithTimescale=0\n"), Some((0x3fc0_1062_5aa0_0000, false))),
+    ];
+    for &(on, file, expected) in cases {
+        let mut e = engine(file);
+        set_on(&mut e, on);
+        install(&mut e);
+        assert_eq!(
+            engine_core::faster_wait::settings(&e)
+                .map(|s| (s.delay_seconds.to_bits(), s.dont_scale)),
+            expected
+        );
+        assert!(nvse::commands::extender::plugin_info(&e, NAME.as_bytes()).is_none());
+    }
+}
+
 // ---- The install's overlay path, through a stand-in of the mods' files seam ----
 
 type ModFiles = (Vec<(Vec<u8>, Vec<u8>)>, Vec<engine_core::mod_files::Listed>);
@@ -816,6 +865,62 @@ fn mod_files(files: &[(&str, &str)], listing: &[(&str, bool)]) {
 }
 
 const MAIN_INI: &str = r"Data\NVSE\Plugins\nvse_stewie_tweaks.ini";
+
+#[test]
+fn faster_wait_uses_the_existing_portable_main_and_overlay_read_path() {
+    let mut files = [
+        (
+            MAIN_INI,
+            "[Tweaks]\nbFasterSleepWait=1\nbBetterAutoWalk=1\n[Sleep Wait]\niWaitTimeMS=400\n",
+        ),
+        (
+            r"Data\NVSE\Plugins\Tweaks\INIs\first.ini",
+            "[Sleep Wait]\niWaitTimeMS=150.5\nbDontScaleWithTimescale=0\n",
+        ),
+        (
+            r"Data\NVSE\Plugins\Tweaks\INIs\last.ini",
+            "[Sleep Wait]\niWaitTimeMS=invalid\n",
+        ),
+    ];
+    let listing = [("first.ini", false), ("last.ini", false)];
+    mod_files(&files, &listing);
+    let mut e = engine(None);
+    set_on(&mut e, true);
+    install(&mut e);
+    let choice = engine_core::faster_wait::settings(&e).unwrap();
+    assert_eq!(choice.delay_seconds.to_bits(), 0x3fc3_4395_9060_0000);
+    assert!(!choice.dont_scale);
+    assert_eq!(
+        e.ext::<Stewie>()
+            .settings
+            .long("Tweaks", "bBetterAutoWalk", 0),
+        1
+    );
+    assert_eq!(e.ext::<Stewie>().settings.read.len(), 3);
+
+    // The same original INI switch that disables other overlays disables
+    // these too; no second reader or alternate profile path is introduced.
+    files[0].1 =
+        "[INI]\nbMultiINISupport=0\n[Tweaks]\nbFasterSleepWait=1\n[Sleep Wait]\niWaitTimeMS=400\n";
+    mod_files(&files, &listing);
+    let mut e = engine(None);
+    set_on(&mut e, true);
+    install(&mut e);
+    let choice = engine_core::faster_wait::settings(&e).unwrap();
+    assert_eq!(choice.delay_seconds.to_bits(), 0x3fd9_9999_ae00_0000);
+    assert!(choice.dont_scale);
+    assert!(LISTED.with(|l| l.borrow().is_empty()));
+
+    // An effective overlay can also turn the optional feature off.
+    files[0].1 = "[Tweaks]\nbFasterSleepWait=1\n";
+    files[2].1 = "[Tweaks]\nbFasterSleepWait=0\n";
+    mod_files(&files, &listing);
+    let mut e = engine(None);
+    set_on(&mut e, true);
+    install(&mut e);
+    assert_eq!(engine_core::faster_wait::settings(&e), None);
+    MOD_FILES.with(|m| *m.borrow_mut() = None);
+}
 
 /// `install` itself: the main INI and then the folder's overlay files, in the listing's order (a
 /// folder and a file that is not `.ini` left out), each named in the log by its path in the folder;

@@ -193,6 +193,19 @@ pub fn install(e: &mut Engine) {
         Vec::new()
     };
     let (settings, on) = settings_and_rows(ini.as_deref(), &overlays, &keys);
+    // Tweaks 10.05's Faster Sleep Wait uses the effective original settings,
+    // including its main/overlay precedence. No separate host enable switch.
+    // Reader 10063A90 scales the numeric delay; installer 1008449A applies it
+    // only when bFasterSleepWait is set. The shared startup choice is made
+    // before real-thread engines are copied; an off feature creates no slot.
+    if settings.long("Tweaks", "bFasterSleepWait", 0) != 0 {
+        engine_core::faster_wait::configure(
+            e,
+            true,
+            settings.double("Sleep Wait", "iWaitTimeMS", 300.0),
+            settings.long("Sleep Wait", "bDontScaleWithTimescale", 1) != 0,
+        );
+    }
     e.clear_stewie();
     for row in &on {
         e.set_stewie(row.bit, true);

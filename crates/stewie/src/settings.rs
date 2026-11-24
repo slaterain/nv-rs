@@ -205,6 +205,21 @@ impl Settings {
         self.base_long(&k, default)
     }
 
+    /// A numeric setting read by Tweaks' double reader. As with `long`, an
+    /// invalid or missing value in an overlay leaves the preceding value intact.
+    /// Owned DLL 10.05: SimpleIni GetDoubleValue at 1005F7D0 accepts a nonempty
+    /// value whose text plus NUL fits 64 bytes and whose strtod ends at NUL;
+    /// ModifyTweak at 10063A90 leaves the destination unchanged for -19997.
+    pub fn double(&self, section: &str, name: &str, default: f64) -> f64 {
+        let k = key(section, name);
+        for (_, file) in self.files.iter().rev() {
+            if let Some(value) = double_value(file.get(&k).map(Vec::as_slice)) {
+                return value;
+            }
+        }
+        double_value(self.base.get(&k).map(|value| value.as_bytes())).unwrap_or(default)
+    }
+
     /// A `GET_TWEAKH` key: the main INI's value (read as `GetLongValue(.., 0)`, so one that is no
     /// number counts 0) when it has the key, else the default's; then each overlay file's value
     /// ORed in.
@@ -242,4 +257,13 @@ impl Settings {
             })
             .collect()
     }
+}
+
+fn double_value(value: Option<&[u8]>) -> Option<f64> {
+    let value = value?;
+    if value.is_empty() || value.len() >= 64 {
+        return None;
+    }
+    let (number, used, _) = nvse::cnum::strtod(value);
+    (used == value.len() && number != f64::from(MISSING)).then_some(number)
 }

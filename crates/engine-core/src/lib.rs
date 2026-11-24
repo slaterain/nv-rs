@@ -72,6 +72,7 @@ mod engine;
 pub mod estimate;
 pub mod exe;
 pub mod extend;
+pub mod faster_wait;
 pub mod hitch;
 pub mod mem;
 pub mod mod_files;
