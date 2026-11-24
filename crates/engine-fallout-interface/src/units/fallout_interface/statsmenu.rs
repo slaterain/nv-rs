@@ -1333,9 +1333,18 @@ pub fn fn_007e09b0(e: &mut Engine, this: Ptr) {
     e.call(LIST_FREE_NODES_00470470, &args![this.addr() + 4]);
 }
 
-/// `Register`'s `EffectItem::GetDuration` (`0x7E0C1F`, `CALL 0x4044D0`).
+/// `Register`'s `EffectItem::GetDuration` (`0x7E0C1F`, `CALL 0x4044D0`). JIP LN NVSE's G107 (a fix,
+/// the row `NV_JIP_GAME_PATCHES`; `WriteRelCall(0x7E0C1F, EffectItemGetModifiedDuration)`) answers
+/// it (words: the effect item; answered: the duration, a chem's after the player's
+/// `ModifyPositiveChemDuration` perks). With the word's `FIXES` bit clear: one load, then the exe's
+/// call.
 #[inline]
 fn effect_duration(e: &mut Engine, effect: u32) -> u32 {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(duration) = e.site(0x007e_0c1f, &[effect]) {
+            return duration;
+        }
+    }
     e.call(EFFECT_GET_DURATION, &args![effect]).u32()
 }
 
@@ -5024,30 +5033,49 @@ mod b069_tests {
         e.call(0x007e_0b20, &args![list, 0u32]);
     }
 
-    /// A new entry of an effect without the no-duration flag takes the exe's duration
-    /// (`GetDuration` at `0x7E0C1F`: 30).
+    /// G107's seam at `0x7E0C1F` (JIP LN NVSE's `EffectItemGetModifiedDuration`): a new entry of an
+    /// effect without the no-duration flag. With the fixes row the seam is asked with the effect
+    /// item and its answer is the entry's duration (the exe's `GetDuration` not called); JIP not
+    /// installed or installed without the row: not asked, the exe's duration (30).
     #[test]
-    fn a_new_entry_takes_the_effects_duration() {
-        let mut e = engine();
-        e.register(LIST_APPEND, |e, a| {
-            let entry = e.mem.u32(a[1]);
-            let node = e.mem.alloc(8);
-            e.mem.set_u32(node, entry);
-            e.mem.set_u32(a[0] + 4, node);
-            Ret::default()
-        });
-        e.register(EFFECT_KEY_00403EA0, |_, _| 0x99u32.into_ret());
-        e.register(EFFECT_GET_MAGNITUDE, |_, _| 7u32.into_ret());
-        e.register(EFFECT_GET_DURATION, |_, _| 30u32.into_ret());
-        e.register(ENTRY_CONSTRUCT_00403BA0, |_, a| a[0].into_ret());
-        e.register(FLAG_TEST_00403E60, |_, _| 0u32.into_ret());
-        let list = e.mem.alloc(0x10);
-        let effect = e.mem.alloc(0x20);
-        e.call_log = Some(vec![]);
-        e.call(0x007e_0b20, &args![list, effect]);
-        let entry = e.mem.u32(e.mem.u32(list + 8));
-        assert_eq!(e.mem.u32(entry + 8), 30);
-        assert_eq!(calls_to(&e, EFFECT_GET_DURATION).len(), 1);
+    fn jip_g107_duration_seam_answers_the_duration() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        fn answer(_: &mut Engine, a: &[u32]) -> Option<u32> {
+            Some(a[0] & 0xff)
+        }
+        for word in [0, jip_patches::INSTALLED, jip_patches::FIXES] {
+            let mut e = engine();
+            e.register(LIST_APPEND, |e, a| {
+                let entry = e.mem.u32(a[1]);
+                let node = e.mem.alloc(8);
+                e.mem.set_u32(node, entry);
+                e.mem.set_u32(a[0] + 4, node);
+                Ret::default()
+            });
+            e.register(EFFECT_KEY_00403EA0, |_, _| 0x99u32.into_ret());
+            e.register(EFFECT_GET_MAGNITUDE, |_, _| 7u32.into_ret());
+            e.register(EFFECT_GET_DURATION, |_, _| 30u32.into_ret());
+            e.register(ENTRY_CONSTRUCT_00403BA0, |_, a| a[0].into_ret());
+            e.register(FLAG_TEST_00403E60, |_, _| 0u32.into_ret());
+            e.set_jip_patches(word);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x007e_0c1f), answer);
+            let list = e.mem.alloc(0x10);
+            let effect = e.mem.alloc(0x20);
+            e.call_log = Some(vec![]);
+            e.call(0x007e_0b20, &args![list, effect]);
+            let entry = e.mem.u32(e.mem.u32(list + 8));
+            let (duration, exe_calls) = if word == jip_patches::FIXES {
+                (effect & 0xff, 0)
+            } else {
+                (30, 1)
+            };
+            assert_eq!(e.mem.u32(entry + 8), duration, "{word:08x}");
+            assert_eq!(
+                calls_to(&e, EFFECT_GET_DURATION).len(),
+                exe_calls,
+                "{word:08x}"
+            );
+        }
     }
 
     #[test]

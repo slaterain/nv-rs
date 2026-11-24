@@ -106,10 +106,9 @@ console commands it re-exports are copies of the console's own.
 
 ## JIP LN built in
 
-🔨 JIP LN's script commands and game patches, with nothing to install. All its commands are built
-(its game patches are being taken out: "Game patches" below), and JIP answers "installed" in the
-default fixes preset (vanilla leaves it off; `bJIPInstalled=0` in `Fallout.ini` turns JIP off). The
-per-patch detail is in
+🔨 JIP LN's script commands and game patches, with nothing to install. All are built, and JIP
+answers "installed" in the default fixes preset (vanilla
+leaves it off; `bJIPInstalled=0` in `Fallout.ini` turns JIP off). The per-patch detail is in
 [FIXES.md, "JIP LN NVSE's game patches"](FIXES.md#jip-ln-nvses-game-patches) and
 [FIXES.md, "JIP LN NVSE switched on"](FIXES.md#jip-ln-nvse-switched-on).
 
@@ -204,10 +203,9 @@ page is checked by a test (`the_readme_counts_the_built_commands` in `crates/jip
 
 ### Game patches
 
-JIP's game patches changed the game's own code. They are being taken out of the port, crate by
-crate, with the rest of the built-in JIP LN. Until the last part is out, the list below is what was
-built (174 of its 183, inert until JIP answers "installed"; three more were folded into other rows
-and six do nothing on this port). It included:
+JIP's game patches change the game's own code. 174 of its 183 are built, inert until
+JIP answers "installed"; three more are folded into other rows and six do nothing on this port
+(below; that list also names Enhanced Camera's patch, which is not one of the 183). They include:
 
 - **Framework and the player:** the patch framework, the first two fixes, the player's update 3D
   (both views, weapon and queued references), the detection patch (forced detection values and the

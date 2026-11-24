@@ -740,6 +740,9 @@ fn create_ddt_and_hardcore(e: &mut Engine, icon_size: f32) {
     }
 }
 
+/// JIP MiniMap's seam at the compass' name of a found location (its call at 0x77951E).
+pub(crate) const JIP_DISCOVER_LOCATION: u32 = 0x0077_951e;
+
 fn create_scene(e: &mut Engine, menu: u32) {
     // The PC body at 0076fbd3-0076ff9a builds the compass texture,
     // camera, and optional forward animation after the XML tiles exist.
@@ -1187,12 +1190,29 @@ fn set_info_inventory_action(
             set_info_action_setting(e, setting);
             *display_mask |= 2;
         } else {
-            // The two compares of the base form with the ash and goo pile activators.
-            let first_base = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
-            let ash_pile = first_base == e.mem.u32(0x011c_a27c) || {
-                let second_base =
-                    typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
-                second_base == e.mem.u32(0x011c_a280)
+            // JIP LN NVSE's G06 at `0x0077765A` (group GH2's row and handler; JIP's own,
+            // "Recognize custom ashpile activators"): JIP's 14 bytes there replace the two
+            // compares of the base form with the ash and goo pile activators by a test of the
+            // base's ash pile bit and jump to the `JZ` at `0x777675`. The seam with the reference
+            // answers it: a low byte of 1 (an ash pile) takes the compares' "equal" path, 0 goes
+            // on to the target type test at `0x777677`. One load while JIP is not installed.
+            let jip_ash_pile = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+            {
+                e.site(0x0077_765a, &[reference.addr()])
+            } else {
+                None
+            };
+            let ash_pile = match jip_ash_pile {
+                Some(answer) => answer & 0xff != 0,
+                None => {
+                    let first_base =
+                        typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
+                    first_base == e.mem.u32(0x011c_a27c) || {
+                        let second_base =
+                            typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
+                        second_base == e.mem.u32(0x011c_a280)
+                    }
+                }
             };
             let special =
                 ash_pile || (target_type == 2 && (form_type == 0x2a || form_type == 0x2b));
@@ -1994,7 +2014,21 @@ fn do_idle_fades(e: &mut Engine) {
         }
     }
     let player = e.mem.u32(0x011d_ea3c);
-    let sneaking = e.call(0x0049_97b0, &args![player]).u8() != 0;
+    // JIP LN NVSE's O14 at `0x770B0E` (bSneakBoundingBoxFix; group GX's row and handler, not in
+    // yet: `WriteRelCall(0x770B0E, SneakBoundingBoxFixHook)`, which answers whether the player is
+    // sneaking and changes the player's collision shape to match): the seam with the player
+    // answers in its low byte in place of the exe's `0x4997B0` call. One load while that switch
+    // is off; with no handler the exe's call runs.
+    let jip_sneaking =
+        if e.jip_patches() & engine_core::extend::jip_patches::SNEAK_BOUNDING_BOX_FIX != 0 {
+            e.site(0x0077_0b0e, &[player])
+        } else {
+            None
+        };
+    let sneaking = match jip_sneaking {
+        Some(answer) => answer & 0xff != 0,
+        None => e.call(0x0049_97b0, &args![player]).u8() != 0,
+    };
     if sneaking {
         let menu = e.mem.u32(0x011d_96c0);
         e.call(0x0077_32d0, &args![menu]);
@@ -2297,7 +2331,8 @@ fn do_idle_messages(e: &mut Engine, this: Ptr<HUDMainMenu>) {
         }
         let now = hud_time(e, this.addr() + 0x224);
         let elapsed = now.wrapping_sub(e.mem.u32(this.addr() + 0x194));
-        let time = CornerMessage::EXE.time();
+        // JIP LN NVSE's G10 at `0x007714DA` (group GA's row): the display time's place.
+        let time = CornerMessage::at(e, 0x0077_14da).time();
         let duration = seconds_to_ms(e, e.mem.u32(message + time));
         if duration <= f64::from(elapsed) {
             e.call(0x0077_56e0, &args![this]);
@@ -2320,6 +2355,13 @@ pub fn hud_main_menu_do_idle(e: &mut Engine, this: Ptr<HUDMainMenu>) {
     let b = e.mem.u32(this.addr() + 0x38);
     let c = e.mem.u32(this.addr() + 0x3c);
     e.call(0x0077_9070, &args![scene, a, b, c]);
+    // JIP LN NVSE's H21 at `0x007704AE` (group GA's row and handler, a fix row: the call
+    // becomes ClearHUDOrphanedTiles, which ends in a jump to 0x77DA60): the seam with the HUD
+    // runs JIP's walk; its answer is not read and the exe's call follows. One load while JIP's
+    // fixes are not in.
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x0077_04ae, &[this.addr()]);
+    }
     e.call(0x0077_da60, &args![this]);
     e.call(0x0077_21c0, &args![this]);
     e.call(0x0077_e750, &args![this]);
@@ -3431,7 +3473,9 @@ pub fn fn_00775230(e: &mut Engine, this: Ptr<HUDMainMenu>) -> Ptr {
 
 /// A HUD corner message record's layout: its text buffer, then the icon path and the sound name
 /// (0x104 bytes each) and the display time (`f32`). The exe's text buffer is 0x104 bytes (record
-/// 0x310).
+/// 0x310); JIP LN NVSE's G10 ("Increase corner message max text length to 0x203 characters", a
+/// fix row: 16 bytes in `fn_00775380`, `DoIdle` and `HideMessage`) makes it 0x204 (record 0x410),
+/// moving the icon, sound and time 0x100 later. The icon and sound buffers stay 0x104 bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CornerMessage {
     /// The text buffer's size (and the text copy's limit).
@@ -3442,10 +3486,27 @@ impl CornerMessage {
     /// The exe's text buffer.
     const EXE_TEXT: u32 = 0x104;
 
-    /// The exe's layout.
-    const EXE: Self = CornerMessage {
-        text: Self::EXE_TEXT,
-    };
+    /// The layout at G10's seam `site` (one per function: `0x7753B8`, `0x7714DA`, `0x7757B1`):
+    /// the exe's unless JIP's fixes are in and the seam answers the text buffer's size (words:
+    /// the exe's 0x104). One load while JIP's fixes are not in.
+    ///
+    /// One layout for a record's whole life: JIP registers G10's handler before it sets `FIXES`
+    /// (`game_patches::put_fixes_in`) and an engine made for a thread copies the handlers, so
+    /// with `FIXES` set every seam answers; a seam with no answer then is a broken invariant
+    /// (checked in debug builds), and the exe's layout is the fallback.
+    fn at(e: &mut Engine, site: u32) -> Self {
+        let text = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+            let answer = e.site(site, &[Self::EXE_TEXT]);
+            debug_assert!(
+                answer.is_some(),
+                "{site:08x}: JIP's fixes are in but G10's seam has no handler"
+            );
+            answer.unwrap_or(Self::EXE_TEXT)
+        } else {
+            Self::EXE_TEXT
+        };
+        CornerMessage { text }
+    }
 
     fn icon(self) -> u32 {
         self.text
@@ -3483,7 +3544,9 @@ pub fn fn_00775380(
     if text.is_null() {
         return false;
     }
-    let layout = CornerMessage::EXE;
+    // JIP LN NVSE's G10 at `0x007753B8` (group GA's row and handler, a fix row): the record's
+    // layout, the exe's or JIP's 0x203-character one ([`CornerMessage`]).
+    let layout = CornerMessage::at(e, 0x0077_53b8);
     let record = e.call(0x0040_1000, &args![layout.size()]).u32();
     e.call(0x0040_6d30, &args![record, layout.text, text]);
     e.mem.set_f32(record + layout.time(), quiet_f32(duration));
@@ -3620,7 +3683,9 @@ pub fn hud_main_menu_hide_message(e: &mut Engine, this: Ptr<HUDMainMenu>) {
                     let first_node =
                         typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, list));
                     let first_record = e.mem.u32(first_node);
-                    let layout = CornerMessage::EXE;
+                    // JIP LN NVSE's G10 at `0x007757B1` (group GA's row): the next record's
+                    // sound and icon places.
+                    let layout = CornerMessage::at(e, 0x0077_57b1);
                     if e.mem.u8(first_record + layout.sound()) != 0 {
                         let first_node =
                             typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, list));
@@ -4371,9 +4436,21 @@ pub fn hud_main_menu_update_status_mode_ui(
 }
 
 /// `SetInfoForRef`'s weapon test at `0x777123` (`MOV ECX,[EBP-0x9C]; CALL 0x47BCF0`: the weapon
-/// is playable, its flag byte +0x100 without 0x80).
-fn rollover_weapon_playable(e: &mut Engine, weapon: u32) -> bool {
-    e.call(0x0047_bcf0, &args![weapon]).bool()
+/// is playable, its flag byte +0x100 without 0x80). JIP LN NVSE's G80 (group GA's row and
+/// handler, a fix row: `WriteRelJump(0x777123, RolloverWeaponHook)`, back at `0x77712E` with the
+/// answer in AL) answers the same test and also appends "+" to the name at `0x11D9C48` for a
+/// modded weapon: the seam with the weapon and the reference answers in its low byte. One load
+/// while JIP's fixes are not in.
+fn rollover_weapon_playable(e: &mut Engine, weapon: u32, reference: Ptr) -> bool {
+    let jip = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x0077_7123, &[weapon, reference.addr()])
+    } else {
+        None
+    };
+    match jip {
+        Some(answer) => answer & 0xff != 0,
+        None => e.call(0x0047_bcf0, &args![weapon]).bool(),
+    }
 }
 
 // Translated from 00775a00 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4836,7 +4913,7 @@ pub fn hud_main_menu_set_info_for_ref(
                     let name_tile = hud_field(e, 0xa8);
                     hud_set_text(e, name_tile, 0x011d_9c48);
                 } else if (ammo_form == 0 || !e.call(0x004c_94d0, &args![ammo_form]).bool())
-                    && (weapon_form == 0 || !rollover_weapon_playable(e, weapon_form))
+                    && (weapon_form == 0 || !rollover_weapon_playable(e, weapon_form, reference))
                     && (weapon_form != 0 || ammo_form != 0)
                 {
                     displayed = false;
@@ -5396,7 +5473,19 @@ pub fn hud_main_menu_update_compass(
                 let map_data = e.mem.u32(record);
                 // 00779509: the five pushed words and `location` are 0076b960's;
                 // 00438eb0 and 00403df0 take only `this` (plain RET).
-                let location = e.call(0x0043_8eb0, &args![map_data]).u32();
+                // Seam (JIP MiniMap's `DiscoverLocationHook`, written over the name call at
+                // 0x77951E by `InitMiniMap`): words: the marker data, the player's marker record;
+                // an answer is the name. Asked only while JIP is installed.
+                let jip_name = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+                {
+                    e.site(JIP_DISCOVER_LOCATION, &[map_data, record])
+                } else {
+                    None
+                };
+                let location = match jip_name {
+                    Some(name) => name,
+                    None => e.call(0x0043_8eb0, &args![map_data]).u32(),
+                };
                 let title = e.call(0x0040_3df0, &args![0x011d_2208_u32]).u32();
                 e.call(
                     0x0076_b960,
@@ -8730,22 +8819,56 @@ mod tests {
         assert_eq!(mask, 2);
     }
 
+    thread_local! {
+        static SEEN_ASH_PILE: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn ash_pile_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("G06's seam at 0x77765A asked without INSTALLED");
+    }
+
+    fn ash_pile_seen(a: &[u32]) {
+        SEEN_ASH_PILE.with(|s| s.borrow_mut().push(a.to_vec()));
+    }
+
+    fn ash_pile_yes(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        ash_pile_seen(a);
+        Some(1)
+    }
+
+    fn ash_pile_no(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        ash_pile_seen(a);
+        Some(0)
+    }
+
+    fn ash_pile_high(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        ash_pile_seen(a);
+        Some(0x100)
+    }
+
     /// What one run of the action part of `SetInfoForRef` did: the settings whose text went to
     /// the action tile (`00403df0`'s words, in order), the display mask, how many times the base
     /// form was asked (`007af430`), whether the opacity after the action text was read
-    /// (`00403e20`).
+    /// (`00403e20`), and the words the G06 seam saw.
     struct AshPileRun {
         settings: Vec<u32>,
         mask: u32,
         base_asks: usize,
         opacity_read: bool,
+        seen: Vec<Vec<u32>>,
     }
 
     /// One run of `set_info_inventory_action` (the translation of `SetInfoForRef`, PC
     /// 007773fe-00777c90, which holds `0x77765A`) for the reference `0x6000` whose base form is
     /// `base`; the ash pile form is 0x1111, the goo pile form 0x2222; setting table word 1
     /// (`0x11D5164`, target type 6) is 0x011d_3b00.
-    fn ash_pile_run(base: u32, target_type: u32, form_type: u32) -> AshPileRun {
+    fn ash_pile_run(
+        word: u32,
+        base: u32,
+        handler: Option<engine_core::extend::SiteFn>,
+        target_type: u32,
+        form_type: u32,
+    ) -> AshPileRun {
         let mut e = Engine::new();
         e.map(0x011c_a000, 0x1000);
         e.map(0x011d_2000, 0xd000);
@@ -8788,6 +8911,11 @@ mod tests {
         e.register_double(0x0070_3be0, |_, _| Ret::default());
         e.register_double(0x0070_0320, |_, _| Ret::default());
         e.register_double(0x0040_37d0, |_, _| Ret::default());
+        if let Some(handler) = handler {
+            e.on_site_for_test(0x0077_765a, handler);
+        }
+        e.set_jip_patches(word);
+        SEEN_ASH_PILE.with(|s| s.borrow_mut().clear());
         let mut mask = 0x10;
         e.call_log = Some(vec![]);
         set_info_inventory_action(
@@ -8815,22 +8943,62 @@ mod tests {
                 .filter(|(address, _)| *address == 0x007a_f430)
                 .count(),
             opacity_read: calls.iter().any(|(address, _)| *address == 0x0040_3e20),
+            seen: SEEN_ASH_PILE.with(|s| s.take()),
         }
     }
 
-    /// The exe's two compares at `0x77765A` decide: the ash or goo pile form gives the "Search"
-    /// text `0x11D38DC`; another base goes on to the target type test (type 6's text).
+    /// JIP LN NVSE's G06 seam at `0x0077765A` (group GH2's row and handler; JIP's own): JIP's
+    /// bytes there (`8B 41 20 F6 40 06 20 0F 95 C0 34 01 EB 0D`) test the base's ash pile bit
+    /// and jump to the `JZ 0x77768F` at `0x777675`. Not installed (word 0) or `FIXES` alone: not
+    /// asked, the exe's two compares decide (the ash or goo pile form: the "Search" text
+    /// `0x11D38DC`); `INSTALLED` with no handler (the row not on): the exe's compares; with a
+    /// handler: asked once with the reference, the compares skipped (no base asks past the
+    /// name's), its low byte decides, and the target type tests after it still run.
     #[test]
-    fn set_info_inventory_action_ash_and_goo_piles() {
+    fn set_info_inventory_action_jip_ash_pile_seam() {
+        use engine_core::extend::jip_patches;
         const ASH: u32 = 0x011d_38dc;
         const TYPE_6: u32 = 0x011d_3b00;
-        for (base, setting, asks) in [(0x1111, ASH, 2), (0x2222, ASH, 3), (0x3333, TYPE_6, 3)] {
-            let run = ash_pile_run(base, 6, 0x15);
-            assert_eq!(run.settings, [setting], "{base:#x}");
-            assert_eq!(run.base_asks, asks, "{base:#x}");
-            assert_eq!(run.mask, 0x12);
-            assert!(run.opacity_read);
+        for word in [0, jip_patches::FIXES] {
+            for (base, setting, asks) in [(0x1111, ASH, 2), (0x2222, ASH, 3), (0x3333, TYPE_6, 3)] {
+                let run = ash_pile_run(word, base, Some(ash_pile_never), 6, 0x15);
+                assert_eq!(run.settings, [setting], "{word:#x} {base:#x}");
+                assert_eq!(run.base_asks, asks, "{word:#x} {base:#x}");
+                assert_eq!(run.mask, 0x12);
+                assert!(run.opacity_read);
+                assert!(run.seen.is_empty());
+            }
         }
+        let installed = jip_patches::INSTALLED;
+        // The row not on (no handler): the exe's compares.
+        let run = ash_pile_run(installed, 0x2222, None, 6, 0x15);
+        assert_eq!((run.settings, run.base_asks), (vec![ASH], 3));
+        let run = ash_pile_run(installed, 0x3333, None, 6, 0x15);
+        assert_eq!((run.settings, run.base_asks), (vec![TYPE_6], 3));
+        // On: a marked base that is not a vanilla pile is an ash pile; the compares are skipped.
+        let run = ash_pile_run(installed, 0x3333, Some(ash_pile_yes), 6, 0x15);
+        assert_eq!(run.seen, vec![vec![0x6000]], "all the seam's words");
+        assert_eq!(run.settings, [ASH]);
+        assert_eq!(run.base_asks, 1, "the compares skipped");
+        assert_eq!(run.mask, 0x12);
+        assert!(run.opacity_read, "the code after the action text runs");
+        // On, "not a pile" for the vanilla ash pile form: the target type 6 text instead.
+        let run = ash_pile_run(installed, 0x1111, Some(ash_pile_no), 6, 0x15);
+        assert_eq!(run.seen, vec![vec![0x6000]]);
+        assert_eq!((run.settings, run.base_asks), (vec![TYPE_6], 1));
+        assert_eq!(run.mask, 0x12);
+        assert!(run.opacity_read);
+        // Only the low byte counts (JIP's `SETNZ AL; XOR AL,1` sets ZF from AL).
+        let run = ash_pile_run(installed, 0x1111, Some(ash_pile_high), 6, 0x15);
+        assert_eq!((run.settings, run.base_asks), (vec![TYPE_6], 1));
+        // "Not a pile" goes on to 0x777677: target type 2 with a creature (0x2B) is still
+        // the "Search" text; target type 4 with a creature clears the mask's low two bits.
+        let run = ash_pile_run(installed, 0x1111, Some(ash_pile_no), 2, 0x2b);
+        assert_eq!((run.settings, run.base_asks), (vec![ASH], 1));
+        let run = ash_pile_run(installed, 0x1111, Some(ash_pile_no), 4, 0x2b);
+        assert_eq!((run.settings, run.mask), (vec![], 0x10));
+        let run = ash_pile_run(installed, 0x3333, Some(ash_pile_yes), 4, 0x2b);
+        assert_eq!((run.settings, run.mask), (vec![ASH], 0x12));
     }
 
     #[test]
@@ -11275,6 +11443,7 @@ mod tests {
     }
 
     thread_local! {
+        static G10_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
         static G10_FAILED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     }
 
@@ -11302,6 +11471,16 @@ mod tests {
         });
     }
 
+    fn g10_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("G10's seam asked without FIXES");
+    }
+
+    /// JIP's text buffer (the three seams share the handler).
+    fn g10_jip(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G10_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0x204)
+    }
+
     /// The words of every call to `addr` in the log.
     fn g10_calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
         e.call_log
@@ -11313,7 +11492,7 @@ mod tests {
             .collect()
     }
 
-    /// What one run of `fn_00775380` for these tests built: the engine, the record's block (0x450
+    /// What one run of `fn_00775380` for G10's tests built: the engine, the record's block (0x450
     /// bytes, 0xEE before the call) and the text, icon and sound passed (0 for none).
     struct G10Queue {
         e: Engine,
@@ -11321,6 +11500,7 @@ mod tests {
         text: u32,
         icon: u32,
         sound: u32,
+        seen: Vec<Vec<u32>>,
     }
 
     /// The default icon paths of kinds 0 to 3 (`00775658`'s table), each given a short text here.
@@ -11334,7 +11514,13 @@ mod tests {
     /// `fn_00775380` with a text of 0x203 letters, `icon_text` (a path, or none: the default of
     /// `kind`), `sound_text` (a name or none), `0x406D30` as `strcpy_s`, and the record block
     /// filled with 0xEE before the call.
-    fn g10_queue(icon_text: Option<&[u8]>, kind: u32, sound_text: Option<&[u8]>) -> G10Queue {
+    fn g10_queue(
+        word: u32,
+        handler: Option<engine_core::extend::SiteFn>,
+        icon_text: Option<&[u8]>,
+        kind: u32,
+        sound_text: Option<&[u8]>,
+    ) -> G10Queue {
         let mut e = Engine::new();
         e.map(0x011d_9000, 0x1000);
         for page in [0x0102_0000, 0x0103_a000, 0x0104_b000] {
@@ -11391,6 +11577,11 @@ mod tests {
         ] {
             e.register_double(address, |_, _| Ret::default());
         }
+        if let Some(handler) = handler {
+            e.on_site_for_test(0x0077_53b8, handler);
+        }
+        e.set_jip_patches(word);
+        G10_SEEN.with(|s| s.borrow_mut().clear());
         G10_FAILED.with(|f| f.set(0));
         e.call_log = Some(vec![]);
         assert!(fn_00775380(
@@ -11409,16 +11600,22 @@ mod tests {
             text,
             icon,
             sound,
+            seen: G10_SEEN.with(|s| s.take()),
         }
     }
 
-    /// `fn_00775380` with a text of 0x203 letters, an icon path and a sound name, `0x406D30` as
-    /// the exe's `strcpy_s` (a text that does not fit empties the buffer and fails: the game then
-    /// ends), the record allocated at the size asked with 0xEE bytes after it: the record is the
-    /// exe's 0x310, the text copied with size 0x104 (it fails), icon `+0x104`, sound `+0x208`,
-    /// time `+0x30C`; nothing past the record is written.
+    /// JIP LN NVSE's G10 seam in `fn_00775380` (`0x007753B8`, group GA's row, a fix row) with a
+    /// text of 0x203 letters, an icon path and a sound name, `0x406D30` as the exe's `strcpy_s`
+    /// (a text that does not fit empties the buffer and fails: the game then ends), the record
+    /// allocated at the size asked with 0xEE bytes after it. With the word 0 or `INSTALLED` alone
+    /// the seam is not asked and the record is the exe's: 0x310, the text copied with size 0x104
+    /// (it fails), icon `+0x104`, sound `+0x208`, time `+0x30C`. With JIP's answer (asked once
+    /// with exactly `[0x104]`) it is 0x410: the whole text copied with size 0x204, the icon at
+    /// `+0x204`, the sound at `+0x308`, the time at `+0x40C`, the icon and sound copies still
+    /// 0x104 long, the icon tile given `+0x204`; nothing past the record is written.
     #[test]
-    fn queue_corner_message_text_length() {
+    fn queue_corner_message_jip_text_length_seam() {
+        use engine_core::extend::jip_patches;
         let check = |q: &G10Queue, t: u32| {
             let (e, block) = (&q.e, q.block);
             assert_eq!(g10_calls(e, 0x0040_1000), vec![vec![t + 0x20c]], "the size");
@@ -11430,10 +11627,11 @@ mod tests {
                     vec![block + t + 0x104, 0x104, q.sound]
                 ]
             );
-            assert_eq!(e.mem.cstr(block).len(), 0, "the text");
+            let (len, failed) = if t == 0x204 { (0x203, 0) } else { (0, 1) };
+            assert_eq!(e.mem.cstr(block).len() as u32, len, "the text");
             assert_eq!(
                 G10_FAILED.with(std::cell::Cell::get),
-                1,
+                failed,
                 "strcpy_s failures"
             );
             assert_eq!(e.mem.cstr(block + t), b"icons\\x.dds");
@@ -11446,17 +11644,51 @@ mod tests {
         };
         let icon: Option<&[u8]> = Some(b"icons\\x.dds\0");
         let sound: Option<&[u8]> = Some(b"bell\0");
-        let q = g10_queue(icon, 0, sound);
-        check(&q, 0x104);
+        for word in [0, jip_patches::INSTALLED] {
+            let q = g10_queue(word, Some(g10_never), icon, 0, sound);
+            check(&q, 0x104);
+            assert!(q.seen.is_empty());
+        }
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        let q = g10_queue(fixes, Some(g10_jip), icon, 0, sound);
+        check(&q, 0x204);
+        assert_eq!(q.seen, vec![vec![0x104]]);
     }
 
-    /// `fn_00775380`'s other places: no icon path (each default icon, kinds 0 to 3: `0x775443`,
-    /// `0x775461`, `0x77547E`, `0x77549C`) and no sound (`0x7754D0`'s cleared byte): the default
-    /// at `+0x104`, the byte `+0x208` cleared, `+0x308` untouched.
+    /// G10 in `fn_00775380`'s other places: no icon path (each default icon, kinds 0 to 3:
+    /// `0x775443`, `0x775461`, `0x77547E`, `0x77549C`) and no sound (`0x7754D0`'s cleared byte).
+    /// JIP's layout: the default path copied to `+0x204` with 0x104, the text's letters at
+    /// `+0x104..+0x203` untouched, the sound byte `+0x308` cleared and `+0x208` (inside the icon
+    /// buffer, past the short default path) untouched. The exe's: the default at `+0x104`, the
+    /// byte `+0x208` cleared, `+0x308` untouched.
     #[test]
-    fn queue_corner_message_default_icon_and_no_sound() {
+    fn queue_corner_message_jip_default_icon_and_no_sound() {
+        use engine_core::extend::jip_patches;
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
         for (kind, (path, _)) in G10_DEFAULT_ICONS.iter().enumerate() {
-            let q = g10_queue(None, kind as u32, None);
+            let q = g10_queue(fixes, Some(g10_jip), None, kind as u32, None);
+            let (e, block) = (&q.e, q.block);
+            assert_eq!(
+                g10_calls(e, 0x0040_6d30),
+                vec![
+                    vec![block, 0x204, q.text],
+                    vec![block + 0x204, 0x104, *path]
+                ],
+                "kind {kind}"
+            );
+            for i in 0x104..0x203 {
+                assert_eq!(e.mem.u8(block + i), b'a', "text letter {i:#x}");
+            }
+            assert_eq!(e.mem.cstr(block + 0x204), format!("D{kind}").as_bytes());
+            assert_eq!(e.mem.u8(block + 0x308), 0, "no sound");
+            assert_eq!(
+                e.mem.u8(block + 0x208),
+                0xee,
+                "the exe's sound byte untouched"
+            );
+            assert_eq!(e.mem.f32(block + 0x40c), 2.5);
+
+            let q = g10_queue(0, Some(g10_never), None, kind as u32, None);
             let (e, block) = (&q.e, q.block);
             assert_eq!(
                 g10_calls(e, 0x0040_6d30),
@@ -11470,11 +11702,14 @@ mod tests {
         }
     }
 
-    /// `DoIdle`'s message part (`0x007714DA`): a record holds 0.5 s at the exe's `+0x30C` (and
-    /// 5.0 s 0x100 later), 1.1 s after it was shown: the message ends (`HideMessage`).
+    /// G10's seam in `DoIdle`'s message part (`0x007714DA`): a 0x410 record holds 0.5 s at the
+    /// exe's `+0x30C` and 5.0 s at JIP's `+0x40C`, 1.1 s after it was shown. Not installed,
+    /// `INSTALLED` alone or no handler: the exe's place, the message ends (`HideMessage`); with
+    /// JIP's answer (asked once with exactly `[0x104]`) JIP's place, it stays.
     #[test]
-    fn do_idle_messages_time_place() {
-        let ended = || {
+    fn do_idle_messages_jip_time_place_seam() {
+        use engine_core::extend::jip_patches;
+        let ended = |word: u32, handler: Option<engine_core::extend::SiteFn>| {
             let (mut e, menu) = timing_world(1101);
             e.mem.set_u32(menu.addr() + 0x194, 1);
             let message = e.mem.alloc(0x410);
@@ -11497,18 +11732,39 @@ mod tests {
                 ..Ret::default()
             });
             e.register_double(0x0077_56e0, |_, _| Ret::default());
+            if let Some(handler) = handler {
+                e.on_site_for_test(0x0077_14da, handler);
+            }
+            e.set_jip_patches(word);
+            G10_SEEN.with(|s| s.borrow_mut().clear());
             e.call_log = Some(vec![]);
             do_idle_messages(&mut e, menu);
-            (g10_calls(&e, 0x0077_56e0), menu.addr())
+            (
+                g10_calls(&e, 0x0077_56e0),
+                G10_SEEN.with(|s| s.take()),
+                menu.addr(),
+            )
         };
-        let (hides, menu) = ended();
-        assert_eq!(hides, vec![vec![menu]]);
+        for word in [0, jip_patches::INSTALLED] {
+            let (hides, seen, menu) = ended(word, Some(g10_never));
+            assert_eq!((hides, seen), (vec![vec![menu]], vec![]));
+        }
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        let (hides, seen, _) = ended(fixes, Some(g10_jip));
+        assert!(hides.is_empty(), "5.0 s at JIP's place: still shown");
+        assert_eq!(seen, vec![vec![0x104]]);
     }
 
-    /// `HideMessage` with a shown record and a 0x410 next one: an icon path at `+0x104`, the
-    /// sound names where asked ("exe-bell" at `+0x208`, "late-bell" at `+0x308`). Answers the
-    /// sounds played (their name's address), the tile calls and the next record.
-    fn hide_message_g10(exe_sound: bool, late_sound: bool) -> (Vec<u32>, Vec<Vec<u32>>, u32) {
+    /// `HideMessage` with a shown record and a 0x410 next one: the icon paths at both layouts'
+    /// places, the sound names where asked ("exe-bell" at `+0x208`, "jip-bell" at `+0x308`).
+    /// Answers the sounds played (their name's address), the tile calls, the next record, the
+    /// seam's words.
+    fn hide_message_g10(
+        word: u32,
+        handler: Option<engine_core::extend::SiteFn>,
+        exe_sound: bool,
+        jip_sound: bool,
+    ) -> (Vec<u32>, Vec<Vec<u32>>, u32, Vec<Vec<u32>>) {
         let mut e = Engine::new();
         e.map(0x011d_9000, 0x1000);
         e.map(0x011d_e000, 0x1000);
@@ -11517,13 +11773,15 @@ mod tests {
         e.mem.set_u32(0x011d_ea3c, 0x5050);
         let shown = e.mem.alloc(0x410);
         let next = e.mem.alloc(0x410);
-        // The byte +0x208 is the exe's sound's own: 0 when it is not there.
+        // JIP's icon is short ("jip" at +0x204..+0x207), so the byte +0x208 is the exe's sound's
+        // own: 0 when it is not there.
         e.mem.write(next + 0x104, b"exe-icon\0");
+        e.mem.write(next + 0x204, b"jip\0");
         if exe_sound {
             e.mem.write(next + 0x208, b"exe-bell\0");
         }
-        if late_sound {
-            e.mem.write(next + 0x308, b"late-bell\0");
+        if jip_sound {
+            e.mem.write(next + 0x308, b"jip-bell\0");
         }
         e.mem.set_u32(menu.addr() + 0x18c, shown);
         for (offset, tile) in [(0x90, 0x10), (0x8c, 0x11), (0x94, 0x12)] {
@@ -11550,6 +11808,11 @@ mod tests {
         for address in [0x0040_1030, 0x0093_3270, 0x0048_3710, 0x00a0_1350] {
             e.register_double(address, |_, _| Ret::default());
         }
+        if let Some(handler) = handler {
+            e.on_site_for_test(0x0077_57b1, handler);
+        }
+        e.set_jip_patches(word);
+        G10_SEEN.with(|s| s.borrow_mut().clear());
         e.call_log = Some(vec![]);
         hud_main_menu_hide_message(&mut e, menu);
         assert_eq!(
@@ -11559,36 +11822,74 @@ mod tests {
         );
         let played: Vec<u32> = g10_calls(&e, 0x0093_3270).iter().map(|w| w[2]).collect();
         let tiles = g10_calls(&e, 0x00a0_1350);
-        (played, tiles, next)
+        (played, tiles, next, G10_SEEN.with(|s| s.take()))
     }
 
-    /// `HideMessage` (`0x007757B1`): the shown record goes and the next one has a sound name and
-    /// an icon path at the exe's places (`+0x208` and `+0x104`) and 0x100 later: the exe's places
-    /// are played and shown. The sound's test (`0x7757B1`) and its argument (`0x7757D3`) read the
-    /// exe's place only. The duplicate test (`0x408B20`) compares the texts at `+0`.
+    /// G10's seam in `HideMessage` (`0x007757B1`): the shown record goes and the next one (0x410
+    /// bytes) has a sound name and an icon path at both layouts' places ("exe" at `+0x208` and
+    /// `+0x104`, "jip" at `+0x308` and `+0x204`). Not installed or `INSTALLED` alone: the exe's
+    /// places are played and shown; with JIP's answer (asked once with exactly `[0x104]`) JIP's;
+    /// the rest (the text tile, the shown time) the same. The sound's test (`0x7757B1`) and its
+    /// argument (`0x7757D3`) apart: with only one layout's sound name present, the sound plays
+    /// only when it is the layout's own. The duplicate test (`0x408B20`) compares the texts at
+    /// `+0`, which G10 does not move.
     #[test]
-    fn hide_message_next_record_places() {
-        let (played, tiles, next) = hide_message_g10(true, true);
-        assert_eq!(played, vec![next + 0x208]);
+    fn hide_message_jip_next_record_places_seam() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, handler: Option<engine_core::extend::SiteFn>| {
+            hide_message_g10(word, handler, true, true)
+        };
+        for word in [0, jip_patches::INSTALLED] {
+            let (played, tiles, next, seen) = run(word, Some(g10_never));
+            assert_eq!(played, vec![next + 0x208]);
+            assert_eq!(
+                tiles,
+                vec![
+                    vec![0x10, 0xfc4, next, 1],
+                    vec![0x11, 0xfcc, next + 0x104, 1]
+                ]
+            );
+            assert!(seen.is_empty());
+        }
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        let (played, tiles, next, seen) = run(fixes, Some(g10_jip));
+        assert_eq!(played, vec![next + 0x308]);
         assert_eq!(
             tiles,
             vec![
                 vec![0x10, 0xfc4, next, 1],
-                vec![0x11, 0xfcc, next + 0x104, 1]
+                vec![0x11, 0xfcc, next + 0x204, 1]
             ]
         );
-        let (played, _, next) = hide_message_g10(true, false);
-        assert_eq!(played, vec![next + 0x208], "the exe's sound alone");
-        let (played, _, _) = hide_message_g10(false, true);
-        assert!(played.is_empty(), "a sound only 0x100 later: none");
+        assert_eq!(seen, vec![vec![0x104]]);
+
+        // Only one layout's sound name present: it plays only in its own layout.
+        let (played, _, next, _) = hide_message_g10(fixes, Some(g10_jip), false, true);
+        assert_eq!(
+            played,
+            vec![next + 0x308],
+            "JIP's sound alone, JIP's layout"
+        );
+        let (played, _, _, _) = hide_message_g10(fixes, Some(g10_jip), true, false);
+        assert!(played.is_empty(), "the exe's sound alone, JIP's layout");
+        let (played, _, next, _) = hide_message_g10(0, Some(g10_never), true, false);
+        assert_eq!(
+            played,
+            vec![next + 0x208],
+            "the exe's sound alone, the exe's layout"
+        );
+        let (played, _, _, _) = hide_message_g10(0, Some(g10_never), false, true);
+        assert!(played.is_empty(), "JIP's sound alone, the exe's layout");
     }
 
-    /// The urgent path of `fn_00775380` (`0x775600`): a non-empty list, `urgent` 1, a 0x410
-    /// current record with 9.0 at `+0x30C` and `+0x40C`: 0.0 written at `+0x30C`, `+0x40C`
-    /// untouched.
+    /// G10 on the urgent path of `fn_00775380` (`0x775600`): a non-empty list, `urgent` 1, a
+    /// 0x410 current record with 9.0 at both layouts' time places. JIP's layout: 0.0 written at
+    /// `+0x40C`, `+0x30C` untouched, the incoming record's time at `+0x40C`; the exe's: 0.0 at
+    /// `+0x30C`, `+0x40C` untouched.
     #[test]
-    fn urgent_corner_message_time_place() {
-        let run = || {
+    fn urgent_corner_message_jip_time_place() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, handler: Option<engine_core::extend::SiteFn>| {
             let mut e = Engine::new();
             let menu = e.new_object::<HUDMainMenu>();
             let current = e.mem.alloc(0x410);
@@ -11617,6 +11918,10 @@ mod tests {
                 ..Ret::default()
             });
             e.register_double(0x005a_e3d0, |_, _| Ret::default());
+            if let Some(handler) = handler {
+                e.on_site_for_test(0x0077_53b8, handler);
+            }
+            e.set_jip_patches(word);
             fn_00775380(&mut e, menu, text, 3, Ptr::new(0), Ptr::new(0), 4.0, 1);
             (
                 e.mem.f32(current + 0x30c),
@@ -11624,16 +11929,35 @@ mod tests {
                 e.mem.f32(incoming + 0x40c),
             )
         };
-        assert_eq!(run(), (0.0, 9.0, 0.0));
+        assert_eq!(run(0, Some(g10_never)), (0.0, 9.0, 0.0));
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        assert_eq!(run(fixes, Some(g10_jip)), (9.0, 0.0, 4.0));
     }
 
-    /// The layout's places.
+    /// The invariant: with `FIXES` set, a G10 seam with no handler is a broken setup (JIP puts
+    /// the handlers in before it sets `FIXES`, and a thread's engine copies them); debug builds
+    /// stop there rather than build or read a record with the other layout.
+    #[cfg(debug_assertions)]
     #[test]
-    fn corner_message_layout() {
-        let exe = CornerMessage::EXE;
+    #[should_panic(expected = "G10's seam has no handler")]
+    fn corner_message_layout_wants_its_handler_with_the_fixes() {
+        let mut e = Engine::new();
+        e.set_jip_patches(engine_core::extend::jip_patches::FIXES);
+        let _ = CornerMessage::at(&mut e, 0x0077_14da);
+    }
+
+    /// The layout's places for both buffers.
+    #[test]
+    fn corner_message_layouts() {
+        let exe = CornerMessage { text: 0x104 };
         assert_eq!(
             (exe.icon(), exe.sound(), exe.time(), exe.size()),
             (0x104, 0x208, 0x30c, 0x310)
+        );
+        let jip = CornerMessage { text: 0x204 };
+        assert_eq!(
+            (jip.icon(), jip.sound(), jip.time(), jip.size()),
+            (0x204, 0x308, 0x40c, 0x410)
         );
     }
 
@@ -12246,11 +12570,30 @@ mod tests {
         );
     }
 
-    /// `DoIdle`'s HUD tiles' update (`0x77DA60`, with the HUD) after `0x779070`, and the rest
-    /// of `DoIdle` after it.
+    thread_local! {
+        static H21_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn h21_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("H21's seam asked without FIXES");
+    }
+
+    /// Stands for JIP's walk: notes the words and makes a marker call, so its place among the
+    /// exe's calls shows.
+    fn h21_walk(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        H21_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        e.call(0x00ab_0001, &args![a[0]]);
+        Some(1)
+    }
+
+    /// JIP LN NVSE's H21 seam (`0x007704AE`, group GA's row, a fix row): with the word 0 or
+    /// `INSTALLED` alone it is not asked; with `FIXES` and no handler nothing runs; with a
+    /// handler it is asked once with exactly the HUD, after `0x779070` and before the exe's
+    /// `0x77DA60` call, which still follows (with the HUD), and the rest of `DoIdle` runs.
     #[test]
-    fn do_idle_updates_the_hud_tiles() {
-        let run = || {
+    fn do_idle_jip_orphaned_tiles_seam() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, handler: Option<engine_core::extend::SiteFn>| {
             let mut e = Engine::new();
             e.map(0x011d_9000, 0x1000);
             e.map(0x011d_e000, 0x1000);
@@ -12272,15 +12615,21 @@ mod tests {
                 0x008d_8520,
                 0x0077_e750,
                 0x00a0_11b0,
+                0x00ab_0001,
             ] {
                 e.register_double(address, |_, _| Ret::default());
             }
+            if let Some(handler) = handler {
+                e.on_site_for_test(0x0077_04ae, handler);
+            }
+            e.set_jip_patches(word);
+            H21_SEEN.with(|s| s.borrow_mut().clear());
             e.call_log = Some(vec![]);
             hud_main_menu_do_idle(&mut e, menu);
             let log = e.call_log.take().unwrap();
             let order: Vec<(u32, Vec<u32>)> = log
                 .into_iter()
-                .filter(|(at, _)| [0x0077_9070, 0x0077_da60, 0x0077_e750].contains(at))
+                .filter(|(at, _)| [0x0077_9070, 0x00ab_0001, 0x0077_da60, 0x0077_e750].contains(at))
                 .collect();
             (
                 order.iter().map(|(at, _)| *at).collect::<Vec<u32>>(),
@@ -12288,23 +12637,54 @@ mod tests {
                     .iter()
                     .find(|(at, _)| *at == 0x0077_da60)
                     .map(|(_, w)| w.clone()),
+                H21_SEEN.with(|s| s.take()),
                 menu.addr(),
             )
         };
-        let (order, call, hud) = run();
-        assert_eq!(order, [0x0077_9070, 0x0077_da60, 0x0077_e750]);
-        assert_eq!(call, Some(vec![hud]));
+        let exe = vec![0x0077_9070, 0x0077_da60, 0x0077_e750];
+        for word in [0, jip_patches::INSTALLED] {
+            let (order, _, seen, _) = run(word, Some(h21_never));
+            assert_eq!((order, seen.len()), (exe.clone(), 0));
+        }
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        assert_eq!(run(fixes, None).0, exe);
+        let (order, call, seen, hud) = run(fixes, Some(h21_walk));
+        assert_eq!(order, [0x0077_9070, 0x00ab_0001, 0x0077_da60, 0x0077_e750]);
+        assert_eq!(call, Some(vec![hud]), "the exe's call follows");
+        assert_eq!(seen, vec![vec![hud]]);
     }
 
     thread_local! {
-        static SNEAK_ANSWER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        static O14_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static O14_EXE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     }
 
-    /// `DoIdle`'s fades: the exe's sneak test (`0x4997B0`, the player) decides whether the sneak
-    /// meter is updated (`0x7732D0`, whose first call is `0x953C50`).
+    fn o14_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("O14's seam asked without bSneakBoundingBoxFix");
+    }
+
+    /// Stands for JIP's `SneakBoundingBoxFixHook` answering "not sneaking" in its low byte (a
+    /// higher byte set, which the exe's `MOVZX ECX,AL` drops).
+    fn o14_standing(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        O14_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0x100)
+    }
+
+    fn o14_sneaking(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        O14_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(1)
+    }
+
+    /// JIP LN NVSE's O14 seam (`0x00770B0E` in `DoIdle`'s fades, bSneakBoundingBoxFix; group
+    /// GX's row, inert until its handler): with the word 0, `INSTALLED` or the fixes alone it is
+    /// not asked and the exe's sneak test (`0x4997B0`, the player) decides; with the switch and
+    /// no handler, the exe's test; with a handler it is asked once with exactly the player, the
+    /// exe's test is not called and the answer's low byte decides whether the sneak meter is
+    /// updated (`0x7732D0`, whose first call is `0x953C50`).
     #[test]
-    fn do_idle_fades_sneak_test() {
-        let run = |exe: u32| {
+    fn do_idle_fades_jip_sneak_bounding_box_seam() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, handler: Option<engine_core::extend::SiteFn>, exe: u32| {
             let mut e = Engine::new();
             e.map(0x011d_9000, 0x1000);
             e.map(0x011d_e000, 0x1000);
@@ -12323,11 +12703,16 @@ mod tests {
             e.register_double(0x00a0_1860, |_, _| Ret::default());
             e.register_double(0x00a0_1230, |_, _| Ret::default());
             e.register_double(0x0095_3c50, |_, _| Ret::default());
-            SNEAK_ANSWER.with(|c| c.set(exe));
+            O14_EXE.with(|c| c.set(exe));
             e.register_double(0x0049_97b0, |_, _| Ret {
-                eax: SNEAK_ANSWER.with(|c| c.get()),
+                eax: O14_EXE.with(|c| c.get()),
                 ..Ret::default()
             });
+            if let Some(handler) = handler {
+                e.on_site_for_test(0x0077_0b0e, handler);
+            }
+            e.set_jip_patches(word);
+            O14_SEEN.with(|s| s.borrow_mut().clear());
             e.call_log = Some(vec![]);
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 do_idle_fades(&mut e);
@@ -12339,17 +12724,64 @@ mod tests {
                 .map(|(_, w)| w.clone())
                 .collect();
             let meter = log.iter().any(|(at, _)| *at == 0x0095_3c50);
-            (exe_calls, meter)
+            (exe_calls, meter, O14_SEEN.with(|s| s.take()))
         };
-        for exe in [0, 1] {
-            assert_eq!(run(exe), (vec![vec![0x5050]], exe == 1));
+        let fix = jip_patches::INSTALLED | jip_patches::SNEAK_BOUNDING_BOX_FIX;
+        for word in [
+            0,
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
+            for exe in [0, 1] {
+                let (calls, meter, seen) = run(word, Some(o14_never), exe);
+                assert_eq!(
+                    (calls, meter, seen.len()),
+                    (vec![vec![0x5050]], exe == 1, 0)
+                );
+            }
         }
+        let (calls, meter, _) = run(fix, None, 1);
+        assert_eq!(
+            (calls, meter),
+            (vec![vec![0x5050]], true),
+            "no handler: the exe's"
+        );
+        let (calls, meter, seen) = run(fix, Some(o14_standing), 1);
+        assert_eq!((calls.len(), meter), (0, false), "low byte 0: not sneaking");
+        assert_eq!(seen, vec![vec![0x5050]]);
+        let (calls, meter, seen) = run(fix, Some(o14_sneaking), 0);
+        assert_eq!((calls.len(), meter), (0, true), "sneaking");
+        assert_eq!(seen, vec![vec![0x5050]]);
+    }
+
+    thread_local! {
+        static G80_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn g80_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("G80's seam asked without FIXES");
+    }
+
+    /// Stands for JIP's `RolloverWeaponHook` answering "not playable" in its low byte.
+    fn g80_hidden(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G80_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0x100)
+    }
+
+    fn g80_shown(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G80_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(1)
     }
 
     /// One run of `SetInfoForRef` for a weapon reference lying in the world (one of it, not an
-    /// actor, no lock, no target) with the weapon's flag byte +0x100 `flags`: the weapon test's
-    /// calls of the exe's `0x47BCF0` and whether the name tile got the name buffer (`0x11D9C48`).
-    fn g80_run(flags: u8) -> (usize, bool) {
+    /// actor, no lock, no target) with JIP's `word`, G80's `handler` and the weapon's flag byte
+    /// +0x100 `flags`: the weapon test's calls of the exe's `0x47BCF0`, whether the name tile got
+    /// the name buffer (`0x11D9C48`), the seam's words, and the weapon and the reference.
+    fn g80_run(
+        word: u32,
+        handler: Option<engine_core::extend::SiteFn>,
+        flags: u8,
+    ) -> (usize, bool, Vec<Vec<u32>>, u32, u32) {
         let mut e = Engine::new();
         e.map(0x011d_9000, 0x6000);
         e.map(0x0102_f000, 0x1000);
@@ -12419,6 +12851,11 @@ mod tests {
             e.mem.write(0x011d_9c48, b"Varmint Rifle\0");
             Ret::default()
         });
+        if let Some(handler) = handler {
+            e.on_site_for_test(0x0077_7123, handler);
+        }
+        e.set_jip_patches(word);
+        G80_SEEN.with(|s| s.borrow_mut().clear());
         e.call_log = Some(vec![]);
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             hud_main_menu_set_info_for_ref(&mut e, Ptr::new(reference), 0, 0)
@@ -12428,16 +12865,33 @@ mod tests {
         let named = log.iter().any(|(at, words)| {
             *at == 0x00a0_1350 && words == &args![0x5100_u32, 0xfc4_u32, 0x011d_9c48_u32, 1_u32]
         });
-        (tests, named)
+        (tests, named, G80_SEEN.with(|s| s.take()), weapon, reference)
     }
 
-    /// `SetInfoForRef`'s weapon test (`0x777123`): the exe's test (`0x47BCF0`, called twice: the
-    /// item details and this test) decides whether the name is shown.
+    /// JIP LN NVSE's G80 seam (`0x00777123`, `SetInfoForRef`'s weapon test; group GA's row, a
+    /// fix row): with the word 0 or `INSTALLED` alone it is not asked and the exe's test
+    /// (`0x47BCF0`, called twice: the item details and this test) decides whether the name is
+    /// shown; with `FIXES` and no handler, the exe's; with a handler it is asked once with
+    /// exactly the weapon and the reference, the exe's test runs only for the item details, and
+    /// the answer's low byte decides (0: the name is not shown; 1: it is).
     #[test]
-    fn set_info_for_ref_rollover_weapon_test() {
-        for (flags, shown) in [(0, true), (0x80, false)] {
-            assert_eq!(g80_run(flags), (2, shown));
+    fn set_info_for_ref_jip_rollover_weapon_seam() {
+        use engine_core::extend::jip_patches;
+        for word in [0, jip_patches::INSTALLED] {
+            for (flags, shown) in [(0, true), (0x80, false)] {
+                let (tests, named, seen, _, _) = g80_run(word, Some(g80_never), flags);
+                assert_eq!((tests, named, seen.len()), (2, shown, 0));
+            }
         }
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        let (tests, named, ..) = g80_run(fixes, None, 0x80);
+        assert_eq!((tests, named), (2, false), "no handler: the exe's");
+        let (tests, named, seen, weapon, reference) = g80_run(fixes, Some(g80_hidden), 0);
+        assert_eq!((tests, named), (1, false), "low byte 0: not shown");
+        assert_eq!(seen, vec![vec![weapon, reference]]);
+        let (tests, named, seen, weapon, reference) = g80_run(fixes, Some(g80_shown), 0x80);
+        assert_eq!((tests, named), (1, true), "low byte 1: shown");
+        assert_eq!(seen, vec![vec![weapon, reference]]);
     }
 
     #[test]
@@ -13287,8 +13741,10 @@ mod tests {
         // Twice: without and with a user of JIP LN NVSE's LocationDiscover hook, whose seam
         // (`0x77955D`, after the stat) is asked only with a user, with the marker.
         for users in [0, 1] {
-            compass_landmark_run(users);
+            compass_landmark_run(users, false);
         }
+        // And with JIP MiniMap's seam at the name call (0x77951E) answering: its name, no call.
+        compass_landmark_run(0, true);
     }
 
     thread_local! {
@@ -13300,7 +13756,16 @@ mod tests {
         None
     }
 
-    fn compass_landmark_run(users: u32) {
+    thread_local! {
+        static NAME_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn name_seam(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        NAME_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0x7300)
+    }
+
+    fn compass_landmark_run(users: u32, jip_name: bool) {
         // State+5 ([EBP-0x8f]) is written only at 00779591 (1, changed) and 007795d6
         // (0, unchanged travel marker); an unchanged non-travel marker hands 00772aa0
         // the previous marker's byte.
@@ -13311,6 +13776,11 @@ mod tests {
         );
         if users == 1 {
             e.add_hook_user(engine_core::extend::Hook::LocationDiscover, true);
+        }
+        NAME_ASKED.with(|s| s.borrow_mut().clear());
+        if jip_name {
+            e.set_jip_patches(engine_core::extend::jip_patches::INSTALLED);
+            e.on_site_for_test(JIP_DISCOVER_LOCATION, name_seam);
         }
         let marker_position = e.mem.alloc(12);
         let update = e.mem.alloc(0x324);
@@ -13409,22 +13879,29 @@ mod tests {
             .filter(|(address, _)| *address == 0x0043_8eb0)
             .count();
         // The name reaches the "location discovered" message: 0076b960 copies it to
-        // update + 0x10c (the game's from 00438eb0).
+        // update + 0x10c (JIP's name, or the game's from 00438eb0).
         let name_copy = calls
             .iter()
             .find(|(address, words)| *address == 0x0040_6d30 && words[0] == update + 0x10c)
             .expect("the name copied into the message");
-        assert_eq!(name_copy.1[2], 0x7100);
-        let location = calls
-            .iter()
-            .position(|(address, _)| *address == 0x0043_8eb0)
-            .unwrap();
-        assert_eq!(calls[location].1, args![0x100_u32].to_vec());
-        assert_eq!(
-            calls[location + 1],
-            (0x0040_3df0, args![0x011d_2208_u32].to_vec())
-        );
-        assert_eq!(named, 1);
+        assert_eq!(name_copy.1[2], if jip_name { 0x7300 } else { 0x7100 });
+        if jip_name {
+            assert_eq!(named, 0, "JIP's name: no call");
+            let record = e.mem.u32(nodes[0]);
+            assert_eq!(NAME_ASKED.with(|s| s.take()), vec![vec![0x100, record]]);
+        } else {
+            let location = calls
+                .iter()
+                .position(|(address, _)| *address == 0x0043_8eb0)
+                .unwrap();
+            assert_eq!(calls[location].1, args![0x100_u32].to_vec());
+            assert_eq!(
+                calls[location + 1],
+                (0x0040_3df0, args![0x011d_2208_u32].to_vec())
+            );
+            assert_eq!(named, 1);
+            assert!(NAME_ASKED.with(|s| s.take()).is_empty());
+        }
         // 011d9af0 after each marker.
         assert_eq!(e.mem.u32(nodes[1] + 8), references[0]);
         assert_eq!(e.mem.u32(nodes[2] + 8), references[1]);

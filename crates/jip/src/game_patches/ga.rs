@@ -50,7 +50,7 @@
 //!   and read with the same layout (the HUD's layout code checks it in debug builds). In the
 //!   game a text too long for the buffer fails the copy (`strcpy_s`) and the game ends: above
 //!   259 characters without JIP, above 515 with it. [`corner_message_text_size`] answers the
-//!   queue's 0x104 for `MessageExAlt` (the queue no longer asks G10's seams).
+//!   same buffer size for `MessageExAlt`.
 //! - **G55** (JIP's own, with `MessageBoxExAlt`; `WriteRelCall(0x7A9AEE, MaxMessageWidthHook)`,
 //!   `WriteRelCall(0x7A9C45, ..)`): while a `MessageBoxExAlt` box waits for its answer, the message
 //!   menu's `max_menu_width` (`MessageMenu::LoadNextMessage`, `007a92e0`: the room for the text and
@@ -549,10 +549,17 @@ fn corner_message_text(_: &mut Engine, _: &[u32]) -> Option<u32> {
     Some(CORNER_MESSAGE_TEXT)
 }
 
-/// The HUD queue's text buffer as the queue (`fn_00775380`) sizes it: the exe's 0x104 (the
-/// queue no longer asks G10's seam), so a caller that fits its text to this never fails the copy.
-pub fn corner_message_text_size(_: &mut Engine) -> u32 {
-    0x104
+/// The HUD queue's text buffer as the queue (`fn_00775380`) will size it: the exe's 0x104, or
+/// what G10's seam at `0x7753B8` answers while JIP's fixes are in (0x204). The same bit and the
+/// same answer the queue reads, so a caller that fits its text to this never fails the copy.
+pub fn corner_message_text_size(e: &mut Engine) -> u32 {
+    const EXE_TEXT: u32 = 0x104;
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(CORNER_MESSAGE[1].addr(), &[EXE_TEXT])
+            .unwrap_or(EXE_TEXT)
+    } else {
+        EXE_TEXT
+    }
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: RolloverWeaponHook.
