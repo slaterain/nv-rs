@@ -12,6 +12,10 @@ real-thread tests (including the pool's inlined unlock). Gameplay validation
 of the reported stops remains open; next, repeat those routes with the corrected
 build ([evidence and limits](ARM_RECURSIVE_LOCK.md)).
 
+Optional wgpu stereo: `NV_3D=anaglyph` or `crosseyed` uses the existing world-draw marker
+and depth buffer without moving the game camera. See [stereo playtesting](WGPU_STEREO.md)
+for checks and the next visual comparison.
+
 ## Direction (maintainer, 2026-11-04; [ADR-0012](adr/0012-modern-64-bit-engine.md))
 
 The game looks and plays exactly like the original; what players do not see or

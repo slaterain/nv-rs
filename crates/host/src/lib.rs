@@ -336,6 +336,13 @@ impl Host {
                 fixes::Renderer::D3d9 => Backends::Real,
             });
         }
+        if d3d9_wgpu::stereo::Mode::requested().is_some() {
+            if engine_platform::d3d9real::wgpu_draws() {
+                engine_platform::d3d9real::want_stereo(scene_light::read);
+            } else {
+                eprintln!("NV_3D: stereo requires the wgpu window (NV_D3D9=wgpu); ignored");
+            }
+        }
         // From here the run's renderer is chosen: the display part of the machine table may be
         // made ([`display_table_text`] refuses before).
         RENDERER_CHOSEN.store(true, std::sync::atomic::Ordering::Relaxed);

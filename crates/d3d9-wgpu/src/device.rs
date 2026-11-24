@@ -17,11 +17,11 @@ use crate::fxhash::Map;
 use crate::gpu_times::{self, GpuTimes, Kind};
 use crate::loading;
 use crate::prepare;
-use crate::scene_light;
 use crate::shot::{self, Shots};
 use crate::sm::{self, wgsl, Stage};
 use crate::state::{self, rs, SamplerKey};
 use crate::sun_shadow;
+use crate::{scene_light, stereo};
 use d3d9_stream::hitch;
 use d3d9_stream::{Handle, Rect};
 use std::collections::HashSet;
@@ -1408,6 +1408,8 @@ pub struct Device {
     /// The parameters last said in the log, and `NV_AO_ALTERNATE=1` (diagnostic only).
     scene_light_said: Option<scene_light::Params>,
     scene_light_alternate: bool,
+    /// The window's optional stereo compositor (never the game's back buffer).
+    stereo: Option<Box<stereo::Gpu>>,
     /// The sun shadows ([`sun_shadow`]): present only when on for this device
     /// ([`sun_shadow::enabled`] when it was made).
     sun: Option<Box<SunState>>,
@@ -2117,6 +2119,7 @@ impl Device {
             scene_light_said: None,
             scene_light_alternate: scene_light::enabled()
                 && std::env::var("NV_AO_ALTERNATE").is_ok_and(|v| v.trim() == "1"),
+            stereo: None,
             sun: None,
             sun_pending: Map::default(),
             sun_failed: HashSet::new(),
@@ -2144,6 +2147,10 @@ impl Device {
         // The frame-rate counter can show (F11 is taken) while a device draws the game's window.
         if d.surface.is_some() {
             frame_rate::window_device(true);
+            if let Some(mode) = stereo::Mode::requested() {
+                eprintln!("NV_D3D9 wgpu: NV_3D={} (depth reprojection)", mode.name());
+                d.stereo = Some(Box::new(stereo::Gpu::new(&d.device, mode)));
+            }
         }
         assert!(
             FAIL_FOR_TESTS.load(Ordering::Relaxed) & PANIC_FOR_TESTS == 0,
@@ -2346,9 +2353,11 @@ impl Device {
             // colour one by a shader that reads its samples).
             usage: if samples > 1 && gamma_resolved(format.wgpu) {
                 wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
-            } else if samples > 1 && format.depth && (self.scene_light_on || self.sun.is_some()) {
-                // The new lighting and the sun shadows read the scene's depth
-                // ([`Device::scene_light`], [`Device::sun_shadows`]).
+            } else if samples > 1
+                && format.depth
+                && (self.scene_light_on || self.sun.is_some() || self.stereo.is_some())
+            {
+                // The new lighting, sun shadows and stereo read the scene's depth.
                 wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
             } else if samples > 1 {
                 wgpu::TextureUsages::RENDER_ATTACHMENT
@@ -7858,6 +7867,54 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         pass.draw(0..3, 0..1);
     }
 
+    /// Save the completed world's depth for stereo, before the arms clear it. The explicit
+    /// world-drawn marker (not a depth-clear heuristic) lets this also use a world drawn directly
+    /// into the back buffer. A sub-target such as a water reflection has no screen-wide depth.
+    pub(crate) fn stereo_world(&mut self, words: &[u32]) {
+        if self
+            .stereo
+            .as_ref()
+            .map_or(true, |s| s.captured(self.presents))
+        {
+            return;
+        }
+        let (Some(rt), Some(ds), Some(back), Some(params)) = (
+            self.st.rt[0].as_ref(),
+            self.st.ds.as_ref(),
+            self.back_buffers.first().and_then(|&h| self.surface_of(h)),
+            scene_light::Params::from_words(words),
+        ) else {
+            return;
+        };
+        let size = (back.width, back.height);
+        if (rt.width, rt.height) != size
+            || (ds.width, ds.height) != size
+            || rt.samples != ds.samples
+        {
+            return;
+        }
+        let Some(depth) = ds.tex.clone().filter(|t| {
+            t.texture
+                .usage()
+                .contains(wgpu::TextureUsages::TEXTURE_BINDING)
+        }) else {
+            return;
+        };
+        let samples = ds.samples;
+        self.end_pass();
+        let mut stereo = self.stereo.take().expect("checked above");
+        let (device, frame) = (self.device.clone(), self.presents);
+        stereo.capture(
+            &device,
+            self.encoder(),
+            frame,
+            (&depth.view, samples, size),
+            params,
+        );
+        depth.batch.store(self.batch, Ordering::Relaxed);
+        self.stereo = Some(stereo);
+    }
+
     /// The new lighting's step ([`scene_light`]) on the bound colour target and depth surface,
     /// `words` the frame's [`scene_light::Params`]: once a frame (the first of the frame's points:
     /// where the world is drawn, then the depth-only clear before the arms), when this device has
@@ -10657,16 +10714,31 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             // the game's gamma ramp when it set one that changes the picture ([`crate::ramp`]:
             // not the original's, which shows a ramp only in exclusive full screen).
             let ramp = self.ramp.clone();
-            self.blit_into(
-                &sv,
-                size,
-                [0.0, 0.0, size.0 as f32, size.1 as f32],
-                &view,
-                (format, false),
-                [0.0, 0.0, cw as f32, ch as f32],
-                size != (cw, ch),
-                ramp.as_ref(),
-            );
+            let mut composed = false;
+            if let Some(mut stereo) = self.stereo.take() {
+                let (device, frame) = (self.device.clone(), self.presents - 1);
+                composed = stereo.compose(
+                    &device,
+                    self.encoder(),
+                    frame,
+                    (&sv, size),
+                    (&view, format),
+                    ramp.as_ref(),
+                );
+                self.stereo = Some(stereo);
+            }
+            if !composed {
+                self.blit_into(
+                    &sv,
+                    size,
+                    [0.0, 0.0, size.0 as f32, size.1 as f32],
+                    &view,
+                    (format, false),
+                    [0.0, 0.0, cw as f32, ch as f32],
+                    size != (cw, ch),
+                    ramp.as_ref(),
+                );
+            }
             // The start: the loading screen over the frame while the game has drawn nothing.
             if self.start.is_some() {
                 // The count runs over the back buffer's own texture.
@@ -11201,6 +11273,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // new present interval's mode.
         if let Some(w) = &mut self.surface {
             w.reset(pp.interval);
+        }
+        if let Some(stereo) = &mut self.stereo {
+            stereo.reset();
         }
         // Reset returns the device to its defaults: every state, binding and register; the caches
         // that hold old resources go.

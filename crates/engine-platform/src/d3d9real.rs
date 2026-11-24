@@ -844,11 +844,27 @@ pub fn want_scene_light(read: fn(&Engine) -> Option<SceneView>, strength: f32) {
     engine_core::world_drawn::install_depth_clear_skipped(depth_clear_skipped);
 }
 
-/// The frame draw's port-added point ([`engine_core::world_drawn`], installed by
-/// [`want_scene_light`]): the camera and sun recorded on the game's device.
+static STEREO_VIEW: std::sync::OnceLock<fn(&Engine) -> Option<SceneView>> =
+    std::sync::OnceLock::new();
+
+/// Give wgpu the world's camera at the draw marker, without enabling lighting or depth-clear hooks.
+pub fn want_stereo(read: fn(&Engine) -> Option<SceneView>) {
+    let _ = STEREO_VIEW.set(read);
+    engine_core::world_drawn::install(world_drawn);
+}
+
+/// The frame draw's port-added point ([`engine_core::world_drawn`]): the camera and sun recorded
+/// on the game's device. Stereo uses this point only, not the later depth clears.
 fn world_drawn(e: &mut Engine) {
-    if let Some(read) = SCENE_LIGHT.get().copied() {
-        world_drawn_lit(e, read);
+    if let Some(read) = SCENE_LIGHT
+        .get()
+        .copied()
+        .filter(|_| d3d9_wgpu::scene_light::enabled())
+    {
+        world_drawn_lit(e, read, d3d9_wgpu::scene_light::STATE);
+    }
+    if let Some(read) = STEREO_VIEW.get().copied().filter(|_| wgpu_draws()) {
+        world_drawn_lit(e, read, d3d9_wgpu::stereo::STATE);
     }
 }
 
@@ -881,7 +897,7 @@ fn depth_clear_skipped_lit(e: &mut Engine, read: fn(&Engine) -> Option<SceneView
 /// without a sun); draws after it (the first-person arms and weapon) neither cast nor take the
 /// shadows.
 fn world_drawn_marks(e: &mut Engine, this: u32, read: fn(&Engine) -> Option<SceneView>) {
-    record_scene_light(e, this, read);
+    record_scene_view(e, this, read, d3d9_wgpu::scene_light::STATE);
     let sun = read(e)
         .as_ref()
         .filter(|_| d3d9_wgpu::sun_shadow::enabled())
@@ -902,18 +918,21 @@ fn world_drawn_marks(e: &mut Engine, this: u32, read: fn(&Engine) -> Option<Scen
 
 /// [`world_drawn`] with the reader `read`, under the device lock: on the game's device (the
 /// first the backend has; none before the game makes it).
-fn world_drawn_lit(e: &mut Engine, read: fn(&Engine) -> Option<SceneView>) {
+fn world_drawn_lit(e: &mut Engine, read: fn(&Engine) -> Option<SceneView>, state: u32) {
     let _device = engine_core::real_threads::device_guard(e);
     let Some(this) = real(e).devices.first().map(|(d, _)| *d) else {
         return;
     };
-    record_scene_light(e, this, read);
+    record_scene_view(e, this, read, state);
 }
 
-/// Records the frame's camera and sun as `read` finds them, for the backend's new lighting
-/// (`SetTransform` of `d3d9_wgpu::scene_light::STATE`) on the device `this`, at the run's strength;
-/// nothing when the game has no usable camera.
-fn record_scene_light(e: &mut Engine, this: u32, read: fn(&Engine) -> Option<SceneView>) {
+/// Records the camera and sun for a wgpu-only step; nothing without a usable perspective camera.
+fn record_scene_view(
+    e: &mut Engine,
+    this: u32,
+    read: fn(&Engine) -> Option<SceneView>,
+    state: u32,
+) {
     let params = read(e)
         .as_ref()
         .and_then(d3d9_wgpu::scene_light::Params::from_game);
@@ -928,7 +947,7 @@ fn record_scene_light(e: &mut Engine, this: u32, read: fn(&Engine) -> Option<Sce
             this,
             Cmd::SetTransform {
                 device: this,
-                state: d3d9_wgpu::scene_light::STATE,
+                state,
                 matrix: Data::from_words(&m),
             },
         );
@@ -4234,13 +4253,13 @@ mod tests {
             &seen,
         )))));
         let take = || std::mem::take(&mut *seen.lock().unwrap());
+        let state = d3d9_wgpu::scene_light::STATE;
         // No device yet (the main menu's start): nothing.
-        world_drawn_lit(&mut e, stub_view);
+        world_drawn_lit(&mut e, stub_view, state);
         assert!(take().is_empty());
         real(&mut e).devices.push((DEVICE, None));
-        let state = d3d9_wgpu::scene_light::STATE;
         let strength = |e: &mut Engine| {
-            world_drawn_lit(e, stub_view);
+            world_drawn_lit(e, stub_view, state);
             let got = take();
             assert_eq!(got.len(), 1, "{got:?}");
             assert_eq!(got[0].0, state);
@@ -4255,8 +4274,22 @@ mod tests {
         let chosen = strength(&mut e);
         SCENE_LIGHT_STRENGTH.store(was, std::sync::atomic::Ordering::Relaxed);
         assert_eq!(chosen, 0.85);
+        // Stereo uses the same camera data under its own stream marker, not the AO marker.
+        let stereo = d3d9_wgpu::stereo::STATE;
+        world_drawn_lit(&mut e, stub_view, stereo);
+        let got = take();
+        assert_eq!(
+            got,
+            [(
+                stereo,
+                d3d9_wgpu::scene_light::Params::from_game(&stub_view(&e).unwrap())
+                    .unwrap()
+                    .to_words()
+                    .to_vec()
+            )]
+        );
         // No usable camera: nothing.
-        world_drawn_lit(&mut e, |_| None);
+        world_drawn_lit(&mut e, |_| None, state);
         assert!(take().is_empty());
         // Never asked for in this binary: the frame draw's point records nothing.
         assert!(SCENE_LIGHT.get().is_none());

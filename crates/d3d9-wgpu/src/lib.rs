@@ -21,6 +21,7 @@
 //!   own opaque draws, shown by a full-screen step.
 //! - `bright`: the HDR watch (a diagnostic, read only): the game's float targets checked for
 //!   pixels that are not finite, lone bright dots and jumps of the luminance targets.
+//! - `stereo`: optional red/cyan or cross-eyed stereo in the wgpu window.
 //! - `ramp`: the game's brightness (its gamma ramp) on the frames shown in the window (port-added:
 //!   Direct3D 9 shows a ramp only in exclusive full screen).
 
@@ -46,6 +47,7 @@ pub mod scene_light;
 pub mod shot;
 pub mod sm;
 pub mod state;
+pub mod stereo;
 pub mod sun_shadow;
 mod window;
 
@@ -432,6 +434,9 @@ impl Backend for WgpuBackend {
             // clear of its scene ([`scene_light`]); no Direct3D 9 transform has this number.
             Cmd::SetTransform { state, matrix, .. } if state == scene_light::STATE => {
                 d.scene_light(&matrix.to_words());
+            }
+            Cmd::SetTransform { state, matrix, .. } if state == stereo::STATE => {
+                d.stereo_world(&matrix.to_words());
             }
             // The sun shadows' frame, recorded just after the new lighting's ([`sun_shadow`]).
             Cmd::SetTransform { state, matrix, .. } if state == sun_shadow::STATE => {

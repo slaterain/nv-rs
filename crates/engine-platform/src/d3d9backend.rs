@@ -1353,6 +1353,8 @@ impl RealBackend {
                     );
                 }
             }
+            // The world's depth snapshot marker has no effect on Direct3D 9 either.
+            Cmd::SetTransform { state, .. } if state == d3d9_wgpu::stereo::STATE => {}
             // The sun shadows' frame (`d3d9_wgpu::sun_shadow`): the same.
             Cmd::SetTransform { state, .. }
                 if state == d3d9_wgpu::sun_shadow::VIEW_STATE
