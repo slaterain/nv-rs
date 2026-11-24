@@ -5953,12 +5953,6 @@ mod tests {
 
     #[test]
     fn picks_the_best_animation_when_there_is_nothing_to_reload() {
-        for on in [false, true] {
-            picks_the_best_animation_when_there_is_nothing_to_reload_row(on);
-        }
-    }
-
-    fn picks_the_best_animation_when_there_is_nothing_to_reload_row(_on: bool) {
         // Ammunition entry count 3 + 1 = 4 and 4 in the inventory: nothing to
         // reload, and the clip rounds are 4 as well.
         let (mut e, actor, _) = reload_setup(0x800 | 0x200 | 0x2, 4, 4, 3);

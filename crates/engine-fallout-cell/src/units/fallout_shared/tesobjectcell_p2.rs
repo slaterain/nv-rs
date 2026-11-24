@@ -5907,6 +5907,7 @@ pub fn fn_0054f4c0(e: &mut Engine) -> u32 {
     e.global(0x011c_a438)
 }
 
+/// The local map picture's end (`0x54F413`): the trees' full-LOD flag back to 0 (`0054f4d0`).
 fn restore_tree_full_lod(e: &mut Engine) {
     fn_0054f4d0(e, 0);
 }

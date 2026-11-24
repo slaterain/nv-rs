@@ -70,7 +70,7 @@ shows what's left. Each name links to the detail in [docs/STATUS.md](docs/STATUS
 | 🔨 | [**Built-in script extender: xNVSE**](docs/STATUS.md#xnvse-built-in) | All 654 of its script commands and both its script languages, with nothing to install. |
 | 🔨 | [**Built-in script extender: JIP LN:**](docs/STATUS.md#jip-ln-built-in) | All its script commands (JIP LN: 1,116 and its two version commands) and all of its game patches that do something on this port (174 of 183; three more are folded into others, six do nothing here); on in the default fixes preset, off in vanilla (`bJIPInstalled=0` turns it off). |
 | 🔨 | [**UI Organizer (UIO)**](docs/STATUS.md#ui-organizer-uio-built-in) | UI mods' HUD and menu additions; on in the default fixes preset (`bUIO=0` turns it off). |
-| 🔨 | [**lStewieAl's Tweaks**](docs/STATUS.md#lstewieals-tweaks) | lStewieAl's Tweaks is no longer built in; its fixes are being rebuilt as nv-rs's own. |
+| ⬜ | [**lStewieAl's Tweaks**](docs/STATUS.md#lstewieals-tweaks) | lStewieAl's Tweaks is no longer built in; its fixes are to be rebuilt as nv-rs's own. |
 | 🔨 | [**Mod installers (FOMOD)**](docs/STATUS.md#mod-installers-fomod) | Mods with an installer, from .zip or .7z, installed into nv-rs's own folder, never the game's. |
 | 🔨 | [**One launcher**](docs/STATUS.md#the-launcher) | `Play.exe` opens a window like the game's terminals to play, install mods, import saves and change settings. |
 | 🔨 | [**Modern graphics (wgpu)**](docs/STATUS.md#modern-graphics-wgpu) | The default renderer, on Vulkan; in the places compared, on one NVIDIA card, its pictures nearly match Direct3D 9's, and at 8x antialiasing it is about 8% slower. |

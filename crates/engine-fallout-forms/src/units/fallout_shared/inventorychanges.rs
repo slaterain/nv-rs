@@ -4888,9 +4888,6 @@ fn no_unequip_message(e: &mut Engine, _actor: u32) {
     );
 }
 
-#[cfg(test)]
-mod s0128_tests {}
-
 // Translated from 004c37d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Takes `count` of `form` out of the changes of `this` (the removal that
 /// drops, transfers or just discards items); returns the reference of the
@@ -9687,6 +9684,8 @@ fn heavy_weapon_adjusted(e: &mut Engine, weight: f32) -> f32 {
     weight
 }
 
+/// Whether unequipping armor with the biped model `biped` refreshes what the actor is shown
+/// wearing (`0x4C0FF1`: power armor `00480d10` or heavy armor `004c0bd0`).
 fn unequip_refreshes_worn(e: &mut Engine, biped: u32) -> bool {
     e.call(BIPED_IS_POWER_ARMOR, &args![biped]).bool() || fn_004c0bd0(e, Ptr::new(biped))
 }

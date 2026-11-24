@@ -889,7 +889,6 @@ fn sun_update_body(e: &mut Engine, base: u32, sky: u32, time: f32) {
         // instead; without it (the default) this is the exe's vector, untouched.
         let (x, y, z) = match light_from_sky(e, sky, &direction, brightness) {
             Some(way) => (way[0].to_bits(), way[1].to_bits(), way[2].to_bits()),
-            // Only on the exe's vector: the turned light above already comes from the disc.
             None => (x, y, z),
         };
         typed_call!(

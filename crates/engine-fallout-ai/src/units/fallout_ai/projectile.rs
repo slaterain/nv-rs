@@ -8067,6 +8067,26 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn mine_triggers_on_actor_in_range() {
+        let mut e = engine();
+        let this = projectile(&mut e);
+        give_position(&mut e, this.addr(), 0x7E00_0050);
+        let target = actor(&mut e);
+        give_position(&mut e, target, 0x7E00_0051);
+        stub_float(&mut e, 0x0045_cd80, 10.0);
+        stub(&mut e, 0x005b_e5c0, 1);
+        stub(&mut e, 0x0096_8670, target);
+        stub_float(&mut e, 0x004a_7290, 25.0);
+        e.mem.set_f32(0x011c_f7ac + 4, 6.0);
+        assert!(fn_009c39e0(&mut e, this));
+        assert_eq!(e.get(this, Projectile::fExplosionTimer), 6.0);
+
+        stub_float(&mut e, 0x004a_7290, 200.0);
+        e.set(this, Projectile::iFlags, 0x4000);
+        assert!(!fn_009c39e0(&mut e, this));
+    }
+
     thread_local! {
         static G127_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
         static G127_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };

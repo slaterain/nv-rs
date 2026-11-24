@@ -687,6 +687,8 @@ pub fn repair_services_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u
     }
 }
 
+/// `DoClick`'s `RepairServicesMenu::Update` after Repair (`0x7B7E86`) and Repair All
+/// (`0x7B7F4E`).
 fn update_keeping_scroll(e: &mut Engine, this: Ptr) {
     repair_services_menu_update(e, this);
 }

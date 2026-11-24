@@ -4357,6 +4357,67 @@ mod n051_tests {
     }
 
     #[test]
+    fn casino_data_builds_the_decks() {
+        let mut e = engine();
+        e.map(0x0101_2000, 0x1000);
+        e.map(0x0101_6000, 0x1000);
+        e.set_global(DEFAULT_WIN_RATIO, 1.5f32);
+        e.set_global(DEFAULT_SHUFFLE, 0.25f32);
+        let this = menu(&mut e);
+        assert!(!e.call(0x0073_1d70, &args![this]).bool());
+        let casino = e.mem.alloc(0x40);
+        e.set_global(CASINO_011D9058, casino);
+        let data = e.mem.alloc(0x40);
+        e.mem.set_f32(data + 4, 2.0);
+        e.mem.set_u32(data + 0x24, 0);
+        e.mem.set_u8(data + 0x34, 1);
+        answer(&mut e, CASINO_DATA_00504E60, data);
+        let entry = e.mem.alloc(4);
+        e.mem.set_u32(entry, VTABLE);
+        answer(&mut e, CASINO_ENTRY_00504E00, entry);
+        answer(&mut e, MODEL_LOAD_FILE, 0x6600);
+        // The deck's path: "a\b\folder\card_x".
+        e.register(COPY_TEXT, |e, a| {
+            if a[1] == 0x104 {
+                e.mem.write(a[0], b"a\\b\\folder\\card_x\0");
+            }
+            Ret::default()
+        });
+        e.register(FIND_CHARACTERS_004812F0, |e, a| {
+            let mut p = a[0];
+            while e.mem.u8(p) != b'\\' {
+                p += 1;
+            }
+            p.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0073_1d70, &args![this]).bool());
+        assert_eq!(e.mem.f32(this.addr() + 0x60), 2.0);
+        assert_eq!(e.mem.f32(this.addr() + 0x64), 0.25);
+        assert_eq!(e.mem.u32(this.addr() + 0xd9c), 1);
+        assert_eq!(e.mem.u8(this.addr() + 0xdac), 1);
+        assert_eq!(e.mem.u32(this.addr() + 0xdb4), 0x6600);
+        assert_eq!(e.mem.u32(this.addr() + 0xda0), 0x34);
+        let formats = calls_to(&e, FORMAT_TEXT);
+        assert_eq!(formats.len(), 2 + 0x34);
+        let folder = formats[0][4];
+        assert_eq!(e.mem.u8(folder), b'f');
+        assert_eq!(e.mem.u8(folder + 6), b'\\');
+        let name = formats[1][4];
+        assert_eq!(e.mem.u8(name), b'c');
+        assert_eq!(e.mem.u8(name + 4), 0);
+        // The last face: spades 13.
+        assert_eq!(
+            formats[0x35][5..],
+            [u32::from(b's'), u32::from(b'1'), u32::from(b'3')]
+        );
+        // Card 0 is the ace (rank 12) of suit 0.
+        assert_eq!(e.mem.u32(this.addr() + 0x90), 12);
+        assert_eq!(e.mem.u32(this.addr() + 0x90 + 0x10 * 0x33 + 4), 3);
+        assert_eq!(calls_to(&e, CREATE_TEXTURE_IMAGE).len(), 0x35);
+    }
+
+    #[test]
     fn tile_alpha_follows_the_flags() {
         let mut e = engine();
         e.map(0x0101_e000, 0x1000);

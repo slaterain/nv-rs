@@ -2358,12 +2358,6 @@ mod n086_tests {
 
     #[test]
     fn on_menu_open_starts_the_hum_and_the_burst() {
-        for on in [false, true] {
-            on_menu_open_starts_the_hum_and_the_burst_row(on);
-        }
-    }
-
-    fn on_menu_open_starts_the_hum_and_the_burst_row(_on: bool) {
         let mut e = Engine::new();
         world(&mut e);
         sounds(&mut e);
