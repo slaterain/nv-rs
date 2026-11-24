@@ -62,6 +62,7 @@
 pub mod abi;
 #[cfg(test)]
 pub(crate) mod alloc_count;
+pub mod call_count;
 pub mod call_trace;
 pub mod census;
 pub mod cxx_exception;

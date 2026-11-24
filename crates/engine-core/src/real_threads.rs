@@ -6351,7 +6351,7 @@ fn direct_hold(e: &Engine, world: &'static World) {
 /// threads, the switch off).
 #[inline]
 pub fn device_vcall(e: &mut Engine, this: u32, slot: u32, args: &[u32]) -> Ret {
-    if DIRECT.with(Cell::get) == 0 || e.diagnosing() {
+    if DIRECT.with(Cell::get) == 0 || e.diagnosing_direct() {
         return e.vcall(this, slot, args);
     }
     device_vcall_direct(e, this, slot, args)
@@ -6381,6 +6381,9 @@ fn device_vcall_direct(e: &mut Engine, this: u32, slot: u32, args: &[u32]) -> Re
         drop(_held);
         return e.vcall(this, slot, args);
     };
+    if e.counting_calls() {
+        crate::call_count::count_direct(e, addr);
+    }
     e.call_stack.push(addr);
     let ret = f(e, &words[..=args.len()]);
     e.call_stack.pop();
@@ -6455,7 +6458,7 @@ fn device_typed(
     pick: fn(&'static DeviceWriter) -> AbiFn,
     typed: impl FnOnce(&mut Engine, &'static DeviceWriter) -> u32,
 ) -> Ret {
-    if DIRECT.with(Cell::get) == 0 || e.diagnosing() {
+    if DIRECT.with(Cell::get) == 0 || e.diagnosing_direct() {
         return e.vcall(this, slot, args);
     }
     let Some(w) = device_writer() else {
@@ -6484,6 +6487,9 @@ fn device_typed(
         drop(_held);
         return e.vcall(this, slot, args);
     };
+    if e.counting_calls() {
+        crate::call_count::count_direct(e, addr);
+    }
     e.call_stack.push(addr);
     let ret = if crate::abi::same_fn(f, expect) {
         crate::abi::RetVal::into_ret(typed(e, w))
