@@ -9,6 +9,10 @@
 //!   strength, availability, the move toward a target and the merge (`0064f5b0`..`0064f900`, `0064eea0`).
 //! - [`morph`]: `BSFaceGenMorphDifferential::ApplyMorph` (`00660860`),
 //!   `BSFaceGenMorphStatistical::ApplyMorph` (`00660a90`) and the base copy (`00653340`).
+//! - [`head`]: making a head on a loading thread under the face generation lock: the EGM morphs moved
+//!   into a new head part's vertices (`0065a970`), the face tint summed from the EGT morphs
+//!   (`ApplyCoordinateTexturingToMesh`, `0065b410`) and packed into pixel bytes
+//!   (`BSFaceGenImage::GetCompressedImage`, `0064ceb0`).
 //! - [`apply`]: the head's morph pass (`00663050`) with its appliers, the morph data's apply and tables,
 //!   the animation data's weight getters, and the exact skip of a reshape that would change nothing.
 //!
@@ -32,6 +36,7 @@ use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 
 pub mod apply;
+pub mod head;
 pub mod keyframe;
 pub mod morph;
 
@@ -81,5 +86,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0064_9b10, apply::custom_value(Ptr, i32) -> f32),
         entry!(0x005d_d4a0, apply::modifier_value(Ptr, i32) -> f32),
         entry!(0x0065_3d70, apply::split_pair(f32, f32, u32, u32)),
+        entry!(0x0065_a970, head::apply_coordinates(Ptr, u32, u32, u8) -> bool),
+        entry!(0x0065_b410, head::apply_coordinate_texturing(Ptr, u32, u32, u32) -> bool),
+        entry!(0x0064_ceb0, head::get_compressed_image(Ptr, f32, f32, f32, u32) -> u32),
     ]
 }
