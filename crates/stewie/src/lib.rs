@@ -197,6 +197,12 @@ pub fn install(e: &mut Engine) {
     for row in &on {
         e.set_stewie(row.bit, true);
     }
+    // Tweaks 10.05 installer 10089ee6, setting cell 100fd7bc: the two
+    // TraitMenu hooks are installed only for a nonzero original setting.
+    e.set_stewie(
+        engine_core::extend::stewie::FREE_WILD_WASTELAND,
+        settings.long("Tweaks", "bFreeWildWasteland", 0) != 0,
+    );
     // Read by row S0023 (Tweaks reads it with its code default 1, not through `GET_TWEAK`).
     e.set_stewie_fade_node_prints(settings.long("Tweaks", "bInvalidBSFadeNodePrints", 1) != 0);
     // Read by row S0059 (Tweaks' `g_bExtraConsoleDetailsMeshPath`, code default 0, VNV's 1).

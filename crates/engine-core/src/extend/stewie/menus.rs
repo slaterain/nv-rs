@@ -209,3 +209,8 @@ pub const HOTKEY_GRX_AND_BOOKS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 5
 /// when it can be pickpocketed rather than when it talks, and a creature's prompt says Pickpocket,
 /// not Steal.
 pub const CREATURE_PICKPOCKET_PROMPT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 55);
+
+/// Tweaks 10.05 `bFreeWildWasteland`: DLL 10089ee6 installs the selection gate
+/// at game 007e7306 and the selected-count replacement at 007e732c. Original
+/// settings control this optional feature; it is not enabled by the fixes preset.
+pub const FREE_WILD_WASTELAND: Row = Row::share(MENUS_TWEAKS, MENUS_TWEAKS_END, 0);

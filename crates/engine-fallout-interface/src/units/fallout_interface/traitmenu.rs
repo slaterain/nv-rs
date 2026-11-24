@@ -675,6 +675,45 @@ pub fn trait_menu_update_point_counter(e: &mut Engine, this: Ptr) {
     });
 }
 
+/// Tweaks 10.05 DLL 1007ebe0/1007ec10 (installed at 007e7306): the
+/// signed points comparison is bypassed only for the exact Wild Wasteland form.
+/// The list's first node is embedded at +4; empty nodes do not end this walk.
+fn free_wild_wasteland_tile(e: &Engine, list: u32, tile: u32) -> bool {
+    let mut node = list + 4;
+    while node != 0 {
+        let item = e.mem.u32(node);
+        if item != 0 && e.mem.u32(item) == tile {
+            let perk = e.mem.u32(item + 4);
+            return perk != 0 && e.mem.u32(perk + 0xc) == 0x000e_d568;
+        }
+        node = e.mem.u32(node + 4);
+    }
+    false
+}
+
+/// Tweaks 10.05 DLL 1007eba0 (installed at 007e732c): selected Wild
+/// Wasteland rows remain selected but do not consume points. Keep the DLL's
+/// empty-node/empty-tile skips and original IsSelected call, rather than the
+/// vanilla selected-count helper's early stop on an empty node.
+fn free_wild_wasteland_count(e: &mut Engine, list: u32) -> u32 {
+    let mut node = list + 4;
+    let mut count = 0u32;
+    while node != 0 {
+        let item = e.mem.u32(node);
+        if item != 0 {
+            let tile = e.mem.u32(item);
+            if tile != 0 && e.call(LIST_BOX_IS_SELECTED, &args![list, tile]).bool() {
+                let perk = e.mem.u32(item + 4);
+                if e.mem.u32(perk + 0xc) != 0x000e_d568 {
+                    count = count.wrapping_add(1);
+                }
+            }
+        }
+        node = e.mem.u32(node + 4);
+    }
+    count
+}
+
 // Translated from 007e7280 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `TraitMenu::DoClick` (Xbox PDB): id 5 plays menu sound 1, clears the
 /// points, shows them on the menu tile, runs the list box callback
@@ -707,15 +746,20 @@ pub fn trait_menu_do_click(e: &mut Engine, this: Ptr, id: u32, tile: u32) {
                 let trait_id: u32 = e.global(USER_TRAIT_011DAF70);
                 let value = e.call(TILE_GET_FLOAT, &args![tile, trait_id]).f64();
                 if value == e.global::<f64>(CLICK_VALUE)
-                    && e.mem.i32(base + CURR_POINTS) < e.mem.i32(base + MAX_POINTS)
+                    && (e.mem.i32(base + CURR_POINTS) < e.mem.i32(base + MAX_POINTS)
+                        || (e.stewie(engine_core::extend::stewie::FREE_WILD_WASTELAND)
+                            && free_wild_wasteland_tile(e, base + PERKS_LIST, tile)))
                 {
                     e.call(LIST_BOX_SELECT, &args![base + PERKS_LIST, tile]);
                     trait_menu_apply_perk_effects(e, this, tile);
                 }
             }
-            let count = e
-                .call(LIST_BOX_SELECTED_COUNT, &args![base + PERKS_LIST])
-                .u32();
+            let count = if e.stewie(engine_core::extend::stewie::FREE_WILD_WASTELAND) {
+                free_wild_wasteland_count(e, base + PERKS_LIST)
+            } else {
+                e.call(LIST_BOX_SELECTED_COUNT, &args![base + PERKS_LIST])
+                    .u32()
+            };
             e.mem.set_u32(base + CURR_POINTS, count);
             show_points(e, base);
             trait_menu_update_point_counter(e, this);
@@ -1683,6 +1727,13 @@ mod tests {
             calls(&e, LIST_BOX_SELECT),
             vec![vec![menu + PERKS_LIST, 0x8888]]
         );
+        // With the optional tweak off, selection uses the original
+        // cap/count call (no list walk is needed or performed).
+        e.mem.set_u32(menu + CURR_POINTS, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x007e_7280, &args![menu, 0xau32, 0x8888u32]);
+        assert!(calls(&e, LIST_BOX_SELECT).is_empty());
+        assert_eq!(calls(&e, LIST_BOX_SELECTED_COUNT).len(), 1);
         e.register(LIST_BOX_IS_SELECTED, |_, _| ret(1));
         e.call_log = Some(vec![]);
         e.call(0x007e_7280, &args![menu, 0xau32, 0x8888u32]);
@@ -1694,6 +1745,107 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x007e_7280, &args![menu, 7u32, 0u32]);
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    /// Real DoClick selection/count paths with list rows and the original
+    /// select/deselect helper boundary. Wild first and last both leave two
+    /// ordinary slots; a third ordinary trait remains blocked.
+    #[test]
+    fn free_wild_wasteland_preserves_two_ordinary_slots_and_deselection() {
+        for wild_first in [false, true] {
+            let mut e = engine();
+            let menu = menu(&mut e);
+            e.set_stewie(engine_core::extend::stewie::FREE_WILD_WASTELAND, true);
+            e.set_global(CLICK_VALUE, 1.0f64);
+            e.mem.set_u32(menu + MAX_POINTS, 2);
+            quiet(
+                &mut e,
+                &[
+                    TILE_SET_VALUE,
+                    SETTING_STRING,
+                    PRINT_FORMATTED,
+                    TILE_SET_STRING,
+                    LIST_BOX_ITEM_OF_TILE,
+                    PERK_ENTRY_FOR_RANK,
+                ],
+            );
+            e.register(TILE_GET_FLOAT, |_, _| Ret {
+                st0: 1.0,
+                ..Ret::default()
+            });
+            e.register(LIST_BOX_IS_SELECTED, |e, a| ret(e.mem.u32(a[1])));
+            e.register(LIST_BOX_SELECT, |e, a| {
+                e.mem.set_u32(a[1], 1);
+                ret(0)
+            });
+            e.register(LIST_BOX_DESELECT, |e, a| {
+                e.mem.set_u32(a[1], 0);
+                ret(0)
+            });
+            let mut tiles = Vec::new();
+            let mut node = menu + PERKS_LIST + 4;
+            // An empty embedded node must not hide subsequent rows.
+            for id in [0x000e_d568, 0x010e_d568, 0x5678, 0x9abc] {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+                let tile = e.mem.alloc(4);
+                let perk = e.mem.alloc(0x10);
+                e.mem.set_u32(perk + 0xc, id);
+                let item = e.mem.alloc(8);
+                e.mem.set_u32(item, tile);
+                e.mem.set_u32(item + 4, perk);
+                e.mem.set_u32(node, item);
+                tiles.push(tile);
+            }
+            let order = if wild_first { [0, 1, 2] } else { [1, 2, 0] };
+            for i in order {
+                e.call(0x007e_7280, &args![menu, 10u32, tiles[i]]);
+                assert_eq!(e.mem.u32(tiles[i]), 1);
+            }
+            assert_eq!(e.mem.u32(menu + CURR_POINTS), 2);
+            e.call(0x007e_7280, &args![menu, 10u32, tiles[3]]);
+            assert_eq!(e.mem.u32(tiles[3]), 0, "third ordinary trait blocked");
+            // Deselecting Wild retains both ordinary traits and their count.
+            e.call(0x007e_7280, &args![menu, 10u32, tiles[0]]);
+            assert_eq!(e.mem.u32(tiles[0]), 0);
+            assert_eq!(e.mem.u32(menu + CURR_POINTS), 2);
+            // Eligibility still wins over the free-Wild exception.
+            e.register(TILE_GET_FLOAT, |_, _| Ret::default());
+            e.call(0x007e_7280, &args![menu, 10u32, tiles[0]]);
+            assert_eq!(e.mem.u32(tiles[0]), 0);
+            // Removing an ordinary trait frees exactly one slot.
+            e.call(0x007e_7280, &args![menu, 10u32, tiles[1]]);
+            assert_eq!(e.mem.u32(menu + CURR_POINTS), 1);
+            // The same genuine Wild row cannot bypass the cap with the tweak off.
+            e.set_stewie(engine_core::extend::stewie::FREE_WILD_WASTELAND, false);
+            e.mem.set_u32(menu + CURR_POINTS, 2);
+            e.register(TILE_GET_FLOAT, |_, _| Ret {
+                st0: 1.0,
+                ..Ret::default()
+            });
+            e.register(LIST_BOX_SELECTED_COUNT, |_, _| ret(2));
+            e.call(0x007e_7280, &args![menu, 10u32, tiles[0]]);
+            assert_eq!(e.mem.u32(tiles[0]), 0);
+            assert_eq!(e.mem.u32(menu + CURR_POINTS), 2);
+        }
+    }
+
+    #[test]
+    fn free_wild_wasteland_gate_matches_full_form_id_and_missing_rows() {
+        let mut e = engine();
+        let list = e.mem.alloc(0x30);
+        let item = e.mem.alloc(8);
+        let perk = e.mem.alloc(0x10);
+        e.mem.set_u32(list + 4, item);
+        e.mem.set_u32(item, 0x8888);
+        assert!(!free_wild_wasteland_tile(&e, list, 0x8888));
+        e.mem.set_u32(item + 4, perk);
+        e.mem.set_u32(perk + 0xc, 0x010e_d568);
+        assert!(!free_wild_wasteland_tile(&e, list, 0x8888));
+        e.mem.set_u32(perk + 0xc, 0x000e_d568);
+        assert!(free_wild_wasteland_tile(&e, list, 0x8888));
+        assert!(!free_wild_wasteland_tile(&e, list, 0x9999));
     }
 
     #[test]

@@ -1305,3 +1305,35 @@ fn s0097_the_virtual_call_spends_at_most_the_points_left() {
         }
     }
 }
+
+#[test]
+fn free_wild_wasteland_obeys_original_setting_and_parent_switch() {
+    for (on, ini, expected) in [
+        (true, None, false),
+        (
+            true,
+            Some(b"[Tweaks]\nbFreeWildWasteland=0\n".as_slice()),
+            false,
+        ),
+        (
+            true,
+            Some(b"[Tweaks]\nbFreeWildWasteland=1\n".as_slice()),
+            true,
+        ),
+        (
+            true,
+            Some(b"[Tweaks]\nbFreeWildWasteland=-1\n".as_slice()),
+            true,
+        ),
+        (
+            false,
+            Some(b"[Tweaks]\nbFreeWildWasteland=1\n".as_slice()),
+            false,
+        ),
+    ] {
+        let mut e = engine(ini);
+        set_on(&mut e, on);
+        install(&mut e);
+        assert_eq!(e.stewie(bits::FREE_WILD_WASTELAND), expected);
+    }
+}
