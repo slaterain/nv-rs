@@ -5646,7 +5646,6 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     ]
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6579,7 +6578,6 @@ mod tests {
         assert!(!run(&mut e, 0x005b_d5e0, script(0)));
         assert!(calls(&e, CENTER_ON_CELL).is_empty());
     }
-
 
     /// Doubles for the world space and cell functions the exterior commands
     /// use. The player is a heap object.
