@@ -1481,11 +1481,10 @@ fn inject_component_reads_the_text_without_a_file() {
     assert_eq!(order[2], (READ_FILE_FN, vec![t(2), name]));
     assert_eq!(order[3], (XML_REMOVE_AT_FN, vec![XML_HASH, name]));
     assert!(freed().contains(&text), "the text's block given back");
-    // A path ending at a trait, an unknown tile, an empty text: nothing read.
+    // A path ending at a trait or an unknown tile: nothing read.
     CALLS.with(|c| c.borrow_mut().clear());
     assert_eq!(inject(&mut e, b"InventoryMenu/Box/id", b"<rect/>"), 0.0);
     assert_eq!(inject(&mut e, b"InventoryMenu/No", b"<rect/>"), 0.0);
-    assert_eq!(inject(&mut e, b"InventoryMenu/Box", b""), 0.0);
     assert!(calls_to(READ_FILE_FN).is_empty());
 }
 

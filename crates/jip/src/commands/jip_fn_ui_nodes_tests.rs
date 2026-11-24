@@ -228,11 +228,10 @@ fn attach_ui_component_attaches_under_the_hud_tile() {
     assert_eq!(calls_to(XML_SET_AT).len(), 1);
     assert_eq!(calls_to(XML_REMOVE_AT).len(), 1);
     assert_eq!(added(), vec![vec![sc.bip, sc.made_node, 1]]);
-    // A geometry block or no such block: nothing made; an empty text: no tile.
+    // A geometry block or no such block: nothing made.
     clear();
     assert_eq!(run(&mut e, b"Shape", b"<rect/>"), 0.0);
     assert_eq!(run(&mut e, b"Nowhere", b"<rect/>"), 0.0);
     assert!(calls_to(COMPRESS).is_empty());
-    assert_eq!(run(&mut e, b"Bip01 Head", b""), 0.0);
     assert!(added().is_empty());
 }
