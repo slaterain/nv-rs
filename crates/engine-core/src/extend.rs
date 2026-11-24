@@ -122,13 +122,10 @@ pub enum Owner {
     /// lStewieAl's Tweaks built in (`crates/stewie`): xNVSE loads its plugins by DLL name, so
     /// `nvse_stewie_tweaks.dll` after `jip_nvse.dll` (and `MCM.dll`) and before `ui_organizer.dll`.
     Stewie,
-    /// UI Organizer built in (`crates/uio`): xNVSE loads its plugins by DLL name, so
-    /// `ui_organizer.dll` after `jip_nvse.dll`.
-    Uio,
 }
 
 impl Owner {
-    /// Its place in the order: rows, then `nvse`, then `jip`, `johnnyguitar`, `stewie` and `uio`
+    /// Its place in the order: rows, then `nvse`, then `jip`, `johnnyguitar` and `stewie`
     /// (the plugins' DLL names in order).
     const fn rank(self) -> u8 {
         match self {
@@ -137,7 +134,6 @@ impl Owner {
             Owner::Jip => 2,
             Owner::JohnnyGuitar => 3,
             Owner::Stewie => 4,
-            Owner::Uio => 5,
         }
     }
 
@@ -147,8 +143,7 @@ impl Owner {
             (Owner::Nvse, Owner::Nvse)
             | (Owner::Jip, Owner::Jip)
             | (Owner::JohnnyGuitar, Owner::JohnnyGuitar)
-            | (Owner::Stewie, Owner::Stewie)
-            | (Owner::Uio, Owner::Uio) => true,
+            | (Owner::Stewie, Owner::Stewie) => true,
             _ => false,
         }
     }
@@ -181,7 +176,6 @@ pub struct Entry {
 const NVSE: &[Owner] = &[Owner::Nvse];
 const JIP: &[Owner] = &[Owner::Jip];
 const NVSE_JIP: &[Owner] = &[Owner::Nvse, Owner::Jip];
-const UIO: &[Owner] = &[Owner::Uio];
 const STEWIE: &[Owner] = &[Owner::Stewie];
 
 /// Every exe address a built-in may wrap (ADR-0016 §3, "Wrappers"), by address. Each is a
@@ -627,13 +621,6 @@ pub const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.5c",
     },
-    // InterfaceManager::Initialize 00709fd0, the new manager stored: UI Organizer's UIOLoad (its
-    // lists read and the menus they name patched, once, before the first menu loads).
-    Entry {
-        addr: 0x0070_a049,
-        owners: UIO,
-        step: "UIO-1",
-    },
     // InterfaceManager::Idle 0070c4a0, the pointer's tile changed: JIP LN NVSE's MenuHandleMouseover.
     Entry {
         addr: 0x0070_d642,
@@ -692,33 +679,6 @@ pub const SITES: &[Entry] = &[
         addr: 0x0076_74b0,
         owners: NVSE,
         step: "I-9",
-    },
-    // HUDMainMenu::Create 0076bfe0, the five hardcore texts' zoom: UI Organizer's short jumps over
-    // each SetFloat(zoom).
-    Entry {
-        addr: 0x0076_f688,
-        owners: UIO,
-        step: "UIO-3",
-    },
-    Entry {
-        addr: 0x0076_f742,
-        owners: UIO,
-        step: "UIO-3",
-    },
-    Entry {
-        addr: 0x0076_f824,
-        owners: UIO,
-        step: "UIO-3",
-    },
-    Entry {
-        addr: 0x0076_f92d,
-        owners: UIO,
-        step: "UIO-3",
-    },
-    Entry {
-        addr: 0x0076_fa5e,
-        owners: UIO,
-        step: "UIO-3",
     },
     // HUDMainMenu::SetInfoForRef 00775a00: JIP LN NVSE's InteractionDisabled (SetRolloverTextHook).
     // This hook has TWO sites in JIP: the activation half is 0x943279 (PlayerCharacter::Update
@@ -1042,27 +1002,6 @@ pub const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.5b",
     },
-    // Tile::ReadFile 00a01b00, its call of Tile::ParseFile: UI Organizer's ResolveXMLFileHook (the
-    // file read through UIO's reader, its patched menus and its include expansion).
-    Entry {
-        addr: 0x00a0_1b87,
-        owners: UIO,
-        step: "UIO-1",
-    },
-    // Tile::FinalPostParse 00a037e0, a text tile's trait test: UI Organizer's rewrite (the zoom
-    // also rebuilds the text).
-    Entry {
-        addr: 0x00a0_3923,
-        owners: UIO,
-        step: "UIO-3",
-    },
-    // Tile::Value::CalculateValue 00a09410, the operation's dispatch: UI Organizer's jump table
-    // (its own operators, 17 new ones among them).
-    Entry {
-        addr: 0x00a0_968c,
-        owners: UIO,
-        step: "UIO-3",
-    },
     // Menu::~Menu 00a1c520 and TileMenu::PostParse 00a1f160, a menu's shown byte: JIP LN NVSE's MenuState.
     Entry {
         addr: 0x00a1_c573,
@@ -1074,13 +1013,6 @@ pub const SITES: &[Entry] = &[
         addr: 0x00a1_f2f9,
         owners: JIP,
         step: "3.5a",
-    },
-    // TileText::MakeNode 00a21af0, the call of Font::CreateText: UI Organizer's
-    // TileTextApplyScaleHook (the text's zoom).
-    Entry {
-        addr: 0x00a2_21f8,
-        owners: UIO,
-        step: "UIO-3",
     },
     // bhkCharacterController::SetVelocityModifier 00c6d4d0, its entry: JIP LN NVSE's
     // ApplyActorVelocity.
@@ -1518,9 +1450,6 @@ pub(crate) struct ExtendState {
     /// 0 without it ([`Engine::expression_alt_buffer`]). Set before the threads start, copied to
     /// each thread's engine.
     pub(crate) expression_alt_buffer: u32,
-    /// UI Organizer built in and switched on ([`Engine::uio`]). Set before the threads start,
-    /// copied to each thread's engine.
-    pub(crate) uio: bool,
 }
 
 /// JIP LN NVSE's on-demand hooks (`kHook_*`, `internal/hooks.h` (JIP LN NVSE)), in JIP's order.
@@ -1837,7 +1766,6 @@ impl ExtendState {
             words: Default::default(),
             pad_dead_zones: Default::default(),
             expression_alt_buffer: 0,
-            uio: false,
         }
     }
 
@@ -1870,7 +1798,6 @@ impl ExtendState {
             words: self.words.clone(),
             pad_dead_zones: self.pad_dead_zones.clone(),
             expression_alt_buffer: self.expression_alt_buffer,
-            uio: self.uio,
         }
     }
 }
@@ -2451,19 +2378,6 @@ impl Engine {
     /// start).
     pub fn set_expression_alt_buffer(&mut self, buffer: u32) {
         self.extend.expression_alt_buffer = buffer;
-    }
-
-    /// Whether UI Organizer is built in and switched on (`crates/uio`, its row): its seams (the
-    /// `SITES` rows owned by `Owner::Uio`) read this first, one load, and with false run the
-    /// exe's path untouched.
-    #[inline]
-    pub fn uio(&self) -> bool {
-        self.extend.uio
-    }
-
-    /// Sets [`Engine::uio`] (UI Organizer's install, before the threads start).
-    pub fn set_uio(&mut self, on: bool) {
-        self.extend.uio = on;
     }
 
     /// The owners with a handler at the seam `addr`, in the order they run.
@@ -3122,23 +3036,6 @@ mod tests {
             assert!(find(SITES, Owner::Stewie, a).is_some(), "{a:08x}");
             assert!(find(SITES, Owner::Jip, a).is_none(), "{a:08x}");
         }
-        // UI Organizer's ten (UIOLoad's place, ResolveXMLFileHook's, the five hardcore zooms,
-        // FinalPostParse, the operators' dispatch, the text scale), its alone.
-        for a in [
-            0x0070_a049,
-            0x0076_f688,
-            0x0076_f742,
-            0x0076_f824,
-            0x0076_f92d,
-            0x0076_fa5e,
-            0x00a0_1b87,
-            0x00a0_3923,
-            0x00a0_968c,
-            0x00a2_21f8,
-        ] {
-            assert!(find(SITES, Owner::Uio, a).is_some(), "{a:08x}");
-            assert!(find(SITES, Owner::Jip, a).is_none(), "{a:08x}");
-        }
         // The run-time compiler's (I-14), xNVSE's.
         for a in [
             0x005a_ebb1,
@@ -3436,15 +3333,5 @@ mod tests {
         assert_eq!(b.ext_get::<Counter>().map(|c| c.0), Some(5));
         assert_eq!(a.ext_get::<Other>().map(|o| o.0), Some(9));
         assert!(b.ext_get::<Other>().is_none());
-    }
-
-    #[test]
-    fn the_uio_word_is_off_until_set_and_reaches_threads() {
-        let mut e = Engine::new();
-        assert!(!e.uio());
-        assert!(!e.extend.for_thread().uio);
-        e.set_uio(true);
-        assert!(e.uio());
-        assert!(e.extend.for_thread().uio);
     }
 }

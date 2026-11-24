@@ -752,8 +752,7 @@ const XML_HASH_REMOVE_AT: u32 = 0x00a1_e240;
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h: InjectUIComponent
 // (asm).
 /// JIP's `InjectUIComponent(parent, text)`: menu XML text made into tiles under `parent`; the new
-/// tile, 0 for none. With the built-in UI Organizer row on, its `UIOInjectComponent`
-/// ([`uio::inject_component`]), as JIP calls UIO's export when UIO is loaded. Without it JIP
+/// tile, 0 for none. Without UI Organizer loaded JIP
 /// writes the text to `jip_temp.xml` in the game's folder and reads that file with
 /// `Tile::ReadFile`; the port writes no file: the text is cleaned exactly as the game cleans a
 /// file it reads (`Menu::CompressAndStoreXML` given the text), entered in `Menu::XMLHash` under
@@ -761,9 +760,6 @@ const XML_HASH_REMOVE_AT: u32 = 0x00a1_e240;
 /// includes, parses and frees it, as it does a file's), and taken out of the map after it. The
 /// same tiles as JIP's file, nothing written to a disk.
 pub(crate) fn inject_component(e: &mut Engine, parent: u32, text: &[u8]) -> u32 {
-    if uio::on(e) {
-        return uio::inject_component(e, parent, text);
-    }
     let text = &text[..text.iter().position(|&c| c == 0).unwrap_or(text.len())];
     let buffer = heap_alloc(e, text.len() as u32 + 1);
     if buffer == 0 {

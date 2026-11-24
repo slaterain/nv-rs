@@ -194,7 +194,7 @@ fn attach_ui_xml_uses_the_seen_root_and_needs_the_hud() {
 }
 
 #[test]
-fn attach_ui_component_attaches_with_the_uio_row_on_or_off() {
+fn attach_ui_component_attaches_under_the_hud_tile() {
     let (mut e, sc) = setup();
     e.register(COMPRESS, |e, w| {
         record(COMPRESS, w);
@@ -210,7 +210,7 @@ fn attach_ui_component_attaches_with_the_uio_row_on_or_off() {
     let run = |e: &mut Engine, name: &[u8], xml: &[u8]| {
         call_on(e, ATTACH_UI_COMPONENT, refr, &[s(name), s(xml)]).1
     };
-    // UIO off: JIP's own path (its `jip_temp.xml` read with `Tile::ReadFile` under the HUD's
+    // JIP's own path (its `jip_temp.xml` read with `Tile::ReadFile` under the HUD's
     // tile), the text handed over through `Menu::XMLHash`, no file: the same tile attached.
     e.register(XML_SET_AT, |_, w| {
         record(XML_SET_AT, w);
@@ -227,14 +227,6 @@ fn attach_ui_component_attaches_with_the_uio_row_on_or_off() {
     assert_eq!(calls_to(COMPRESS).len(), 1);
     assert_eq!(calls_to(XML_SET_AT).len(), 1);
     assert_eq!(calls_to(XML_REMOVE_AT).len(), 1);
-    assert_eq!(added(), vec![vec![sc.bip, sc.made_node, 1]]);
-    clear();
-    uio::set_on(&mut e, true);
-    uio::install(&mut e);
-    assert_eq!(run(&mut e, b"Bip01 Head", br#"<rect name="x"/>"#), 1.0);
-    let reads = calls_to(READ_FILE);
-    assert_eq!(reads.len(), 1);
-    assert_eq!(reads[0][0], sc.hud_tile, "made under the HUD's tile");
     assert_eq!(added(), vec![vec![sc.bip, sc.made_node, 1]]);
     // A geometry block or no such block: nothing made; an empty text: no tile.
     clear();

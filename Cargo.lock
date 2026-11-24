@@ -541,7 +541,6 @@ dependencies = [
  "esm",
  "johnnyguitar",
  "nvse",
- "uio",
 ]
 
 [[package]]
@@ -550,7 +549,6 @@ version = "0.1.0"
 dependencies = [
  "engine-core",
  "engine-gamebryo",
- "uio",
 ]
 
 [[package]]
@@ -1134,7 +1132,6 @@ dependencies = [
  "play-patch",
  "qos",
  "stewie",
- "uio",
  "zlib-rs",
 ]
 
@@ -1154,7 +1151,6 @@ version = "0.1.0"
 dependencies = [
  "engine-core",
  "nvse",
- "uio",
 ]
 
 [[package]]
@@ -2517,14 +2513,6 @@ name = "typed-path"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ce898823d8cd0f028662d2f349694b1af0a5cc9be83f1d213a00d3147445e1e"
-
-[[package]]
-name = "uio"
-version = "0.1.0"
-dependencies = [
- "engine-core",
- "nvse",
-]
 
 [[package]]
 name = "unicode-ident"

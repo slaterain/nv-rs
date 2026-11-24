@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// The rows go in before xNVSE, xNVSE before JIP, JIP before UIO: `NV_JIP_INSTALLED` is a flag
+/// The rows go in before xNVSE, xNVSE before JIP: `NV_JIP_INSTALLED` is a flag
 /// `jip::install` reads, and the extenders' wraps go over the rows; the full-screen and launcher
 /// entries (every preset) are among the rows. A textual check of
 /// [`install_rows_and_extenders`] (running it needs FalloutNV.exe's tables), and
@@ -30,7 +30,6 @@ fn the_rows_go_in_before_the_extenders() {
         at("jip::install(engine)"),
         at("johnnyguitar::install(engine)"),
         at("mcm::install(engine)"),
-        at("uio::install(engine)"),
     ];
     assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}");
     let start_with = text

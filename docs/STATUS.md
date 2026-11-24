@@ -14,7 +14,6 @@ Marks: ✅ working (not free of bugs), 🔨 started, ⬜ planned.
 - [xNVSE built in](#xnvse-built-in)
 - [JIP LN built in](#jip-ln-built-in)
 - [Mod Configuration Menu (MCM) built in](#mod-configuration-menu-mcm-built-in)
-- [UI Organizer (UIO) built in](#ui-organizer-uio-built-in)
 - [lStewieAl's Tweaks built in](#lstewieals-tweaks-built-in)
 - [Mod installers (FOMOD)](#mod-installers-fomod)
 - [The launcher](#the-launcher)
@@ -109,8 +108,8 @@ console commands it re-exports are copies of the console's own.
 ## JIP LN built in
 
 🔨 JIP LN's script commands and game patches, with nothing to install. All are built, and JIP
-answers "installed" in the default fixes preset, together with MCM's plugin and UI Organizer (vanilla
-leaves all three off; `bJIPInstalled=0` in `Fallout.ini` turns JIP off). The per-patch detail is in
+answers "installed" in the default fixes preset, together with MCM's plugin (vanilla
+leaves both off; `bJIPInstalled=0` in `Fallout.ini` turns JIP off). The per-patch detail is in
 [FIXES.md, "JIP LN NVSE's game patches"](FIXES.md#jip-ln-nvses-game-patches) and
 [FIXES.md, "JIP LN NVSE switched on"](FIXES.md#jip-ln-nvse-switched-on).
 
@@ -145,7 +144,7 @@ page is checked by a test (`the_readme_counts_the_built_commands` in `crates/jip
   idles by condition and face copies, VATS targetability, ash piles, backing away, pushes away
   from a point, dismembering, dead actors cleared, the player made to sneak.
 - **The interface:** interface tiles by path (loaded, strings, clicks, removal, gradual floats,
-  XML files, templates, menu XML through the built-in UI Organizer), the cursor, the top menu and
+  XML files, templates, menu XML), the cursor, the top menu and
   the active tile, menu buttons, messages disabled and their flags and display times, item
   filters, barter caps, prices and offers, the recipe menu, VATS targets, font files, text input
   boxes (a name or a number typed in), the level-up menu, menu item lists as inventory
@@ -279,21 +278,6 @@ Not built, because they do nothing on this port:
 🔨 The script commands MCM's menu needs, with nothing to install: its nine commands (MCM 1.5's
 `MCM.dll`, built from its machine code), its menu traits and its mods' INI settings, kept between
 sessions beside the saves. On in the fixes preset with JIP, off in vanilla (`bMCM`, `NV_MCM`).
-
-## UI Organizer (UIO) built in
-
-🔨 UI mods' HUD and menu additions, with nothing to install. On in the fixes preset with JIP,
-off in vanilla (`bUIO`, `NV_UIO`). In so far:
-
-- Its lists: UIO's own `supported.txt` of the UI mods it knows (35 entries) is built in, and a
-  copy in `Data\uio\` takes its place; the UI mods' `Data\uio\public` lists, with their
-  conditions, are read too. The mods' additions go into the menus as UIO puts them, in memory.
-- Menu files are read through its reader and its own XML parser (game setting values, user
-  traits, its parse cache), and JIP's `InjectUIComponent` goes through it.
-- Its tile operators (17 new ones) and text zoom.
-- The play log says which lists it read, what it added and why it left anything out.
-
-More in [FIXES.md, "UI Organizer"](FIXES.md#ui-organizer).
 
 ## lStewieAl's Tweaks built in
 

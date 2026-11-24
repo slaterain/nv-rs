@@ -147,14 +147,13 @@ The game's own `iFPSClamp` ignores `FrameLimit`: a clamp is a fixed step with no
 | Mod fit worn question | `007838a0` | `NV_MOD_WORN` | Fitting a weapon mod asks whether the mod is worn before the mod is removed from the inventory, not after. The original asks after (a slip: it means the weapon), through the mod's extra list the removal has just deleted; it nearly always answers no, but a yes rebuilds the inventory list, which frees the weapon entry the mod menu keeps, and closing the menu then re-equips through it and the game stops. A mod is never worn, so the answer is the original's usual no, and no released memory is read. Every other click of the menu is the original's. Below |
 | Dialogue topic index | `00619820`, `0061a310`, `0061a380`, `0061a5a0`, `0045dfe0` | `NV_TOPIC_INDEX` | Finding which topic holds a dialogue info (`TESTopic::GetOwnerTopic`) no longer walks the topic list and every info in it: the original does that for each info a plugin changes (YUP and the add-ons: 5,837 times), so a dialogue mod's load grew with its size times the game's. Every topic `TESTopic::InsertInfo` links an info into (the one place an info enters a topic) is kept beside it; a search asks only those topics, with the original's own search (`00619e10`), which hold this info first by its id, and takes the first of them in the topic list's order, from a copy of the list's order that is made again whenever the list may have changed in a way that matters (its sort, the data handler's `ClearData`, an insert of a topic the copy holds, which can list it again earlier, a changed head node, or a topic inserted since that the copy doesn't hold). So the answer is the walk's, tie-breaks included (an info in two topics, a twin id, the list's order and end). `NV_TOPIC_INDEX_CHECK=1` with `NV_TOPIC_INDEX=1` (alone it is a test variable, which makes the run vanilla) runs the original's walk beside every search and stops the game at the first difference. With the fix on, the typed `topic_search` family (the walk) goes by address for the run, since the fix registers over one of its members. Below |
 | Shaders compiled ahead of first use | none (a flag the real Direct3D 9 backend reads) | `NV_SHADER_WARM` | The graphics driver compiles a shader when it is first drawn with, and the game makes all 960 of its packages' shaders at start-up but first draws some of them in play: the first shot draws 7 for the first time (`SKIN2005.vso`, `SKIN2002.pso`, `SLS2136.pso`, `SLS2148.pso`, `SM3000.pso`, `NOLIGHTTEXVCPMA.pso`; `d3d9-first-use`), and its frame took 29 ms where the others take 12.5 (46 ms without the render thread). It recurs at every launch, whatever the exe's path. With the row the real backend draws once with every shader the game makes, into a 1x1 target of its own, after a `Present`, and sets the game's bindings again with its own commands: 960 draws in 2 ms of the render thread at the first `Present`, compiled by the driver while the menus run. The first shot's frame: 28.6 and 29.2 ms without, 19.3 and 19.8 with (the shooting route, BAAB, 2026-11-09); loads not slower (Doc's house 2.26 and 2.28 s without, 2.14 and 2.10 s with); the real device's frames identical to wgpu's while it runs. The NVIDIA driver also compiles a pixel shader again for a multisampled target, so the shaders warmed into the plain 1x1 target were compiled again at the first shot, drawn into the game's 8x scene target: the warm-up now also draws each shader into a 1x1 target of each multisample type the game's render targets and back buffer use (at 8x antialiasing: 8x for the scene and 4x for its 1024x1024 targets; 2880 draws, 5-12 ms of the render thread over the first 2-4 presents in the game). Found by replaying a recording of the shooting route into a real device with one change at a time to an extra warm-up before the shot: drawing each shader also into a multisampled 1x1 target alone removed the compile (A8R8G8B8 or A16B16G16R16F, 4x or 8x, with or without depth); without multisampling, a float format, the real partner shaders, textures and render states did not; adding the real vertex layout, textures and states on top of multisampling changed nothing. Replay, the shot's two presents, ms inside Direct3D 9 (calm presents 6-7): with main's warm-up 19.5-29.3 and 19.8-33.5, with this one 6.8-8.7 and 6.9-8.5 (with no warm-up at all 28.2-42.5 and 16.4-21.5). In the game (the shooting route cut to its five shots, 2560x1440 with 8x antialiasing, 2026-11-10): without the render thread (BAAB) the first shot's two slow frames were 39.6 and 32.6, 29.3 and 30.8 ms before, 21.8 and 20.6, 23.4 and 22.2 after (the part's median 16-17; what is left is the game's own work at the shot), later shots unchanged (worst 20.5-21.5 ms both). With the render thread (play's setting; 6 runs of main, 4 of the change: too few to stand alone, the replay and the runs without the render thread carry the claim) main had frames over 18 ms in the first shot's window in 3 of 6 runs (22.3, 19.5, 19.4 ms), the change in none (worst 15.9); the later shots' worst frames 17.7-34.6 ms on main, 18.5-25.6 with the change. Start-up (38.5-38.9 s from the first frame to play) and the Goodsprings load unchanged |
-| JIP LN NVSE built in | none (a flag JIP reads before it installs) | `NV_JIP_INSTALLED` | On in `fixes` together with MCM's plugin, UI Organizer and the co-save keep row, off in vanilla. On, JIP LN NVSE answers "installed": mods find it (version 57.30), all of its 1,118 commands work with their hooks (1,116 and its two version commands, `GetLNVersion` and `GetNVSEVersionFull`), and 174 of its 183 game patches go in (three more are folded into others and six do nothing on this port; its fixes with the row `NV_JIP_GAME_PATCHES`). Not yet: `InjectUIComponent` needs `NV_UIO` on too; with real threads JIP's own data no longer makes a thread wait, but a mod's event script run from another thread still waits for the main thread a moment. Off, JIP is put in exactly as before the row. To turn it off in the fixes preset: `bJIPInstalled=0` in Fallout.ini's `[nv-rs Fixes]` (the run stays a play run: fixes preset, real threads unless `bSteppedThreads=1`); the variable is for scripted runs. Below |
+| JIP LN NVSE built in | none (a flag JIP reads before it installs) | `NV_JIP_INSTALLED` | On in `fixes` together with MCM's plugin and the co-save keep row, off in vanilla. On, JIP LN NVSE answers "installed": mods find it (version 57.30), all of its 1,118 commands work with their hooks (1,116 and its two version commands, `GetLNVersion` and `GetNVSEVersionFull`), and 174 of its 183 game patches go in (three more are folded into others and six do nothing on this port; its fixes with the row `NV_JIP_GAME_PATCHES`). Not yet: with real threads JIP's own data no longer makes a thread wait, but a mod's event script run from another thread still waits for the main thread a moment. Off, JIP is put in exactly as before the row. To turn it off in the fixes preset: `bJIPInstalled=0` in Fallout.ini's `[nv-rs Fixes]` (the run stays a play run: fixes preset, real threads unless `bSteppedThreads=1`); the variable is for scripted runs. Below |
 | Co-save keeps other plugins | none (a flag the extender reads) | `NV_COSAVE_KEEP` | A co-save's sections of plugins that are not built in (JohnnyGuitar NVSE's, ShowOff's and the others not built in yet; JIP LN NVSE reads and writes its own) are kept as they were read and written back on each save while the files loaded are the ones that co-save lists, so a save brought from a real modded installation keeps them. xNVSE writes only the plugins it has loaded, so off (vanilla) they go at the next save, as with xNVSE. Below |
 | JIP co-save fixes | none (a flag JIP reads) | `NV_JIP_COSAVE_FIX` | JIP LN NVSE's extra data record (`SetRefExtraData`'s data, `JPED`) as JohnnyGuitar NVSE corrects it (`SerializationFixes`): JIP counts 5 bytes for each mod's part of a key where it writes 9, so a load that skips a key whose reference is gone lands in the middle of the next one; with the row the record is written with the right sizes as version 2 (what VNV's co-saves hold, since VNV installs JohnnyGuitar), JIP's own version 1 is not read, and the variables JIP added to a script whose owner is not loaded are skipped 10 bytes each (JIP skips 9, one short, and reads the next owner wrong). With the row a co-save written by JIP without JohnnyGuitar (version 1) is not read, as JohnnyGuitar gives up on it, but nv-rs does not destroy it: until JIP's saved data is applied to the game, the record is carried unchanged to the next save while the same files are loaded (as is a version 2 record with the row off), so the player can still take that save back to JIP. Off (vanilla), JIP's: version 1, only version 1 read, the 9-byte skip. Below |
 | JIP vanilla commands | none (a flag JIP reads) | `NV_JIP_VANILLA_CMDS` | JIP LN NVSE's versions of seven of the game's own commands (`InitCmdPatches`): `MenuMode` (adds JIP's modes 0 to 4: menu mode, the Pip-Boy, a menu open, the console, the loading screens), `GetItemCount` (also counts a form list's forms), `GetContainer` (also for an inventory reference), `IsInList` (a temporary actor by its leveled base), `GetHitLocation` (the location JIP's hit data hook keeps), `HasPerk` (a follower's perks count on followers) and `GetNVSEVersionFull` at the game's `0x127D`; also the `Begin MenuMode` script block (JIP's modes and handler, and block type 0xE answering true: see GS below). They take effect only once JIP is built in and answers "installed" (the plan's step 3.10); until then, and off (vanilla), the game's own. Below |
 | JIP game patches | none (a flag JIP reads) | `NV_JIP_GAME_PATCHES` | JIP LN NVSE's changes to the game's own code (`InitGamePatches` and the `[GamePatches]` switches of the player's `Data\NVSE\plugins\jip_nvse.ini`, else JIP's defaults: switches 1, 4-9, 13 and 14 on), (174 of its 183 are built, three are folded into others and six do nothing on this port; "JIP LN NVSE's game patches" below lists each). On with JIP in the fixes preset, so some change play for every player, mods or not: JIP's hit damage (a hit's damage threshold and resistance from the target's actor values and the ammo fired, `bIgnoreDTDRFix`), the player taking `fVATSPlayerDamageMult` of every damage in V.A.T.S., vendors repairing up to 100% instead of 90% (`fRepairSkillMax` 10), the game's own corner messages staying up 2 seconds, and Ctrl or Shift taking one item or the whole stack without the "how many" menu (`bQttSelectShortKeys`); also each dialogue info remembers the topic its load linked it into last, and a script handler's result starts at 0 for every command. They take effect only once JIP answers "installed"; with JIP off, and off (vanilla), the game's own. With the dialogue topic index also on, JIP's answer wins (JIP's wrap goes over the index). With this row off nothing marks a hit as having got through the armour (G77 and JIP's hit damage go in with the row; JIP itself writes them with no switch), so `GetArmourPenetrated` answers 0 for every hit. Below |
 | JohnnyGuitar's editor ids | none (a flag the built-in reads; seams at `0x451CBA`, `0x4679F8`, `0x486903`, `0x48449A` and nineteen more, wraps at `00474cb0` and `00483a00`) | `NV_JG_EDITOR_IDS` | JohnnyGuitar NVSE 5.28's editor-id restoration built in (`crates/johnnyguitar`): every loaded form keeps the editor id its record gives it, as JohnnyGuitar keeps it (VNV installs JohnnyGuitar). The game keeps the names of a few form types only, so without it text compiled while the game runs (the console, script runner files, `CompileScript`, lambdas from text) finds `PlayerRef.AddItem Caps001 5`'s `PlayerRef` and `Caps001` by no name (`player.AddItem` works either way; scripts compiled in the editor hold form ids, not names). The names are kept outside the game's 32-bit memory, looked up case-blind, and copied into the game's memory only when game code asks for one as text; a name another form had moves to the newest and is logged (JohnnyGuitar's console line at the start names such conflicts). JohnnyGuitar's 408 commands are not built: a mod that checks for JohnnyGuitar is told it is absent. Off (vanilla), the game's own names only. JIP LN NVSE's light names and its by-name lookups use the same names while the row is on. |
 | The Mod Configuration Menu's plugin built in | none (a flag the built-in reads) | `NV_MCM` | On in `fixes` (with JIP, which the mods MCM lists need), off in vanilla. The Mod Configuration Menu 1.5's NVSE plugin (`MCM.dll`, "MCM Extensions" 1, Pelinor) built in from its machine code (`crates/mcm`): its nine commands at `0x21C0` up. `GetMCMFloat`, `SetMCMFloat`, `SetMCMString`, `SetMCMFloatMass`, `SetMCMStringMass`, `SetMCMModList` and `GetMCMListWidth` read and set MCM's menu traits under `StartMenu/MCM/` through the DLL's own path lookup (NVSE 2's, not xNVSE's); `GetModINISetting`/`SetModINISetting` read and write `DataConfig<mod>.ini` as the DLL does (Windows' INI rules and the VC++ 2010 runtime's `atof` and `%.4f`, measured), its writes kept in the mod files folder beside the saves, never the game's folder. Without it MCM's pause-menu button never appears (its script stops at its first `GetMCMFloat`). Off, nothing is registered. |
-| UI Organizer built in | none (a flag the built-in reads; seams at `0070a049`, `00a01b87`, `00a0968c`, `00a03923`, `00a221f8`, `0076f688` and four more) | `NV_UIO` | On in `fixes` (with JIP: UI mods need both), off in vanilla. UI Organizer 2.30 (jazzisparis) built in, parts 1 to 3: its lists (`Data\uio\supported.txt`, or UIO's own copy built in when the game folder has none, then each `Data\uio\public\*.txt`, with their conditions) put UI mods' `<include>` lines into the menu files they name, in memory, where and in the order UIO puts them, and every menu file `Tile::ReadFile` reads goes through UIO's reader (its patched texts and its own expansion of `<include>` tags), then UIO's own XML parser and parse cache; JIP's `InjectUIComponent` goes through it; its tile operators (three aliases, 17 new) and text tiles' `<zoom>`. Off (vanilla), nothing is installed and no menu file changes. Below |
 | lStewieAl's Tweaks built in | per row (below) | `NV_STEWIE` | lStewieAl's Tweaks 10.05 built in, row by row: each of its engine fixes is a row with its own off key in Fallout.ini's `[nv-rs Stewie]`, its settings are VNV's values with the player's `nvse_stewie_tweaks.ini` read over them (a difference from Tweaks, which uses its code's defaults for keys its file lacks); mods are not told it is installed until its script commands are built. Its first rows: 72 of the crash fixes. Off (vanilla), no row is on and nothing is listed. Below |
 | Script error loop guard | none (a flag the extender reads) | `NV_NVSE_ERROR_GUARD` | An error raised while a script's `RuntimeScriptError` handler runs (in the handler itself, or at the call depth limit when handlers call functions that fail) is not sent to the handlers again. xNVSE sends it again, which recurses until the stack runs out and the game stops; off (vanilla), the port does the same. With it on, JIP's `RunBatchScript` and `RunScriptSnippet` also stop a script that runs itself again 64 runs deep (one log line; JIP has no cap and the stack runs out). Below |
 | Image-space event form check | none (a flag the extender reads) | `NV_NVSE_IMOD_CHECK` | When an image-space modifier instance runs out, OnRemoveIMOD is raised only for an instance of a modifier form (the game's own `AsForm` test, as its `Stop` makes it), with that form. xNVSE reads a form at the same place in every instance, and a depth-of-field or radial blur instance (iron sights, V.A.T.S., `SetGlobalRadialBlur`) has a number there: a handler then reads garbage as a form. Off (vanilla), the word is read as xNVSE reads it, and a word that is not a readable form drops the event instead of stopping the game. Below |
@@ -901,17 +900,16 @@ save) should get.
 ### JIP LN NVSE switched on
 
 JIP LN NVSE 57.30 is built in (`crates/jip`) and answers "installed" in the fixes preset, together with
-MCM's plugin (`NV_MCM`), UI Organizer (`NV_UIO`) and the co-save keep row (`NV_COSAVE_KEEP`): the mods
-that need JIP find it, and most of them need the other three too (oHUD needs UIO for its patch list and
-MCM for its menu). In vanilla it answers "not installed", so a mod that needs it stops with its own
+MCM's plugin (`NV_MCM`) and the co-save keep row (`NV_COSAVE_KEEP`): the mods
+that need JIP find it, and most of them need the other two too (oHUD needs MCM for its menu). In vanilla it answers "not installed", so a mod that needs it stops with its own
 "requires JIP" message, as without the plugin. The row `NV_JIP_INSTALLED` (Fallout.ini `[nv-rs Fixes]
 bJIPInstalled`, written as 1) switches it. Turned on after the in-game pair (JIP off against on on the
 short route, with a check file run by JIP's script runner, and a staged fight: both passed).
 
 How to turn it off in the fixes preset: `bJIPInstalled=0` in `Fallout.ini`'s `[nv-rs Fixes]` (Play.exe
 writes it there for a `settings.ini` line `NV_JIP_INSTALLED=0`). The run stays a play run: the fixes
-preset, and real threads unless `[nv-rs Threads] bSteppedThreads=1` (see below); MCM and UIO keep their
-own keys (`bMCM`, `bUIO`). The variable `NV_JIP_INSTALLED=1` is for scripted and test runs only: a switch's variable makes the run a test, which alone runs the
+preset, and real threads unless `[nv-rs Threads] bSteppedThreads=1` (see below); MCM keeps its
+own key (`bMCM`). The variable `NV_JIP_INSTALLED=1` is for scripted and test runs only: a switch's variable makes the run a test, which alone runs the
 vanilla preset with stepped threads, and in vanilla the co-save does not keep other plugins' sections
 (`NV_COSAVE_KEEP` is off).
 
@@ -1476,92 +1474,6 @@ Built as part of JIP (in every preset once JIP answers "installed"): `ToggleMous
 x and y movement off and on, and the mouse wheel does nothing while its key is disabled (`DisableKey` on the
 wheel's up or down code) (`00a239e0`); the player's constructor clears the three bytes after
 `bMenuModeButtonClicked` too, the sneak shape's state among them (`0x939258`).
-
-### UI Organizer
-
-UI Organizer (UIO) 2.30, the NVSE plugin by jazzisparis that UI mods (HUD additions, MCM, the JIP
-companions' HUD, Stewie's tweaks menu and many more) rely on, is built in as `crates/uio`
-(`measure/uio/PLAN.md`), translated from its source (commit `426d963`, the source of the shipped
-DLL), MIT licence. It is a row: it changes how every menu file is read. Parts 1, 2 and 3 are in:
-
-- **When.** Where UIO's patch in `InterfaceManager::Initialize` (`0070a049`) runs `UIOLoad`: once,
-  right after the interface manager is made, before any menu loads.
-- **The lists.** `Data\uio\supported.txt`, then each `Data\uio\public\*.txt` in the order the folder
-  search gives them, read as UIO reads them (loose files, never the archives; a list larger than
-  UIO's 1 MiB buffer counts as unreadable here, where UIO overruns it). UIO's own `supported.txt` (its
-  list of the UI mods it knows, 35 entries, from the UIO 2.30 download, MIT) is built in unchanged
-  (`crates/uio/data/supported.txt`): a `Data\uio\supported.txt` in the game folder wins (a player's or
-  a newer UIO's list); when none opens, the built-in one is read in its place, first and the same way,
-  so UI mods that rely on UIO's list work without the file being copied in. Lines come in pairs: `path:Menu`
-  or `path:Menu:tile` or `path:@file:tile` or `path:@prefabs\file` (end of file), then a condition
-  line; `;` lines are skipped anywhere; `path` must exist as `Data\menus\prefabs\path`. Conditions are
-  UIO's: tab-separated (a public list's spaces become tabs outside file names), `true`, `darn`, `vui+`,
-  `ohud`, `#file`, `?Plugin.esp` (any line of `plugins.txt`), `!`, brackets, and `&&`/`||` read left to
-  right that skip the rest of the line (or bracket) once decided, as UIO's do.
-- **The patch.** Each target file's text (as the game reads it, from archives too) gets
-  `<include src="path"/>` before the closing tag of its tile, in UIO's order, with UIO's quirks
-  (a self-closing named tag opens a tile; text after the last tag is dropped; an `<include>` already
-  listed for that tile, or of an `includes_` file, is removed). Nothing is written to the game's
-  folder: the patched texts stay in memory, as UIO 2.30 keeps them.
-- **The reader.** `Tile::ReadFile` (`00a01b87`) reads every menu file through UIO's reader: a patched
-  file's text (a patched prefab at every read, a patched menu too, except the seven menus whose parse
-  UIO does not keep, which a later read takes from the file again, as with UIO), its `<include>` tags
-  replaced by UIO's own rules (the tag ends at the first `>` 20 bytes in, a path under 5 bytes is
-  dropped, a missing prefab inserts nothing). A file the game cannot find goes to the game's own read
-  (UIO passes no storage on there, and the game then fails).
-- **Its XML reader.** The text is parsed by UIO's own reader in place of the game's
-  (`ResolveXMLFileHook`): game setting values (`&-sName;`, `&-fName;`, `&-iName;`), trait constants
-  (`&name;`) and a mod's own `_name` traits (registered as they are met), each item typed as UIO
-  types it. Its parse cache keeps a menu's parse for every later read (all but globals, the six menus
-  the game keeps open and `jip_temp.xml`), and sets `ReadFile`'s keep byte so the game neither
-  deletes that parse nor lets the menu delete its templates.
-- **JIP's `InjectUIComponent`.** UIO's export `UIOInjectComponent`: menu XML given as text is cleaned
-  by the game, its includes expanded, and read into the tile under the name `jip_temp.xml`, from
-  memory. Without UIO, JIP writes `jip_temp.xml` into the game's folder and reads it; nv-rs never
-  writes there: with the row off the text is cleaned by the game as that file would be and handed
-  to the same `Tile::ReadFile` through the game's own menu file map (`Menu::XMLHash`), so
-  `InjectUIComponent` and `AttachUIComponent` make the same tiles with the row on or off.
-- **Where it differs from UIO on purpose.** Include loops end at 64 levels, an expansion at 64 MiB
-  (after which that read fetches no further include) and at 10,000 files read for one read's
-  includes (UIO runs out of stack or memory, or reads on without end); a path longer than UIO's
-  128-byte buffers hold (a list's path, an `@` target or `#file`, an include's `src`: over 127
-  bytes with the folder in front) names no file, where UIO overruns the buffer, and nothing longer
-  than Windows' `MAX_PATH` is handed to the game; bracket nesting is not limited to UIO's 16 levels
-  (UIO overruns its array); expanded texts are kept up to 64 MiB in all, the rest expanded again at
-  each read (the same text); its reader's items are 0x18 bytes (UIO makes 0x14 and the game's own
-  reader writes past them), a text over 65,535 bytes is copied whole, a file gives at most 1,048,576
-  items and a failed allocation ends its parse; UIO's log files and its developer settings
-  (`Data\uio\settings.ini`: `bDebugMode`, `sDoNotCache`) are left out.
-- **Its tile operators** (part 3). `UIOLoad` registers `ge`, `ne`, `le` (other names for `gte`, `neq`,
-  `lte`) and 17 new operators, `neg`, `recipr`, `land`, `lor`, `shl`, `shr`, `bt`, `sqrt`, `pow`, `sin`,
-  `cos`, `tan`, `asin`, `acos`, `atan` (degrees), `log`, `rand` (from the game's random generator). Its
-  jump table in `Tile::Value::CalculateValue` (`00a0968c`) then runs every operation, the game's 23 in
-  UIO's own single-precision code (as with UIO: an unordered comparison answers 1 for `eq`, `lt`, `lte`;
-  `floor`/`ceil` go through a 32-bit integer; `round` adds 0.01 before rounding; `or` with a text looks
-  at the value only). The new operators reach a menu with part 2's parser (the game's own refuses them).
-- **Text zoom** (part 3). A text tile's `<zoom>` scales its text (`TileText::MakeNode`, `00a221f8`): laid
-  out at its wrap width and limit divided by zoom/100, the text drawn at zoom/100, its size multiplied
-  back. As in UIO, only a text whose wrap width is under 2,048 pixels is laid out narrower: a wider
-  one (or one without a wrap width on a screen 2,048 or more wide, where the screen's width is used)
-  keeps its full width and line breaks, is drawn at zoom/100 all the same, and its size is still
-  multiplied back. A zoom change rebuilds the text (`Tile::FinalPostParse`, `00a03923`). The HUD's five hardcore
-  texts no longer set a zoom (`HUDMainMenu::Create`, `0076f688` and four more), so they keep their size.
-- **Where part 3 differs from UIO on purpose.** `mod` of -2147483648 by -1 gives 0 (UIO's division
-  faults there and the game stops).
-- **Installed.** Switched on, xNVSE lists it as "UI Organizer Plugin", version 230, as `IsPluginInstalled`
-  and `GetPluginVersion` see the DLL; built-ins ask `uio::on` where JIP and Stewie's tweaks ask for its
-  DLL.
-- **What it says in the play log** (`crates/uio/src/report.rs`; in place of UIO's own
-  `ui_organizer.log`). Once its lists are read: the list files read (and any that would not open),
-  where `supported.txt` came from ("supported.txt: built-in list (35 entries)" or "from
-  Data\uio\supported.txt"), the additions by menu file
-  and tile, a target file the game could not read or a tile not in it (or one UIO's reading opens but
-  never finds the end of), and each entry left out with the reason ("oHUDPatches.txt:
-  UIOPatches\GrenadeKey.xml not added: Prefabs\GrenadeKeyHUD.xml is not installed"; a condition line
-  starting with a space is said to be read as false, as UIO reads it). At most 40 list files, 40 added
-  paths, 40 problems and 40 entries left out are named, the rest counted. One more line when the first
-  file with additions put in is read (its count is of the additions actually put in). Off, no line.
-  The lines change nothing UIO does.
 
 ### lStewieAl's Tweaks
 

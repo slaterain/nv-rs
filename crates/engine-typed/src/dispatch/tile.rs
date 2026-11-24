@@ -987,7 +987,6 @@ const FLOAT_STACK_DESTROY: u32 = 0x006d_b720;
 const USER_TRAIT_MAP: u32 = 0x011f_3308;
 const FIRST_USER_TEXT_ID: i32 = 10000;
 const GET_UNDERSCORE_VALUE: u32 = 0x00a0_a0b0;
-const UIO_OPERATOR_SITE: u32 = 0x00a0_968c;
 const FLOOR: u32 = 0x00ec_6940;
 const CEIL: u32 = 0x00ec_9e10;
 const FABS: u32 = 0x00ec_6cde;
@@ -1239,21 +1238,6 @@ fn run_action(e: &mut Engine, me: u32, action: u32, stack: u32, changed: &mut bo
         e.mem.set_f32(me + VALUE_FLOAT, top);
         if size != 0 {
             e.mem.set_u32(stack + 8, size - 1);
-        }
-    }
-    // UI Organizer's jump table (its patch at 00a0968c) runs the operation in place of the switch
-    // below; its answer is the "string changed" flag afterwards.
-    if e.uio() {
-        let at = [
-            me,
-            kind as u32,
-            operand.to_bits(),
-            text,
-            u32::from(*changed),
-        ];
-        if let Some(flag) = e.site(UIO_OPERATOR_SITE, &at) {
-            *changed = flag != 0;
-            return;
         }
     }
     let current = e.mem.f32(me + VALUE_FLOAT);
