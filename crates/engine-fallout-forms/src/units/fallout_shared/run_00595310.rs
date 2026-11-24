@@ -1031,6 +1031,25 @@ mod tests {
         assert_eq!(e.mem.u32(b + 0x50), first_pick);
     }
 
+    /// [`fn_00595600`] as in [`fn_00595600_counts_faction_members`] with no member counted:
+    /// `005fd3b0`'s reaction (the entry's modifier towards the default object 6) is the kind.
+    #[test]
+    fn fn_00595600_takes_the_faction_reaction_as_the_kind() {
+        let World { mut e, this, .. } = world(10.0);
+        let b = this.addr();
+        let faction = e.mem.alloc(4);
+        e.mem.set_u32(b + 0x60, faction);
+        e.register(0x0058_db10, |_, _| 0x99u32.into_ret());
+        e.register(0x005f_d3b0, |_, _| 3u32.into_ret());
+        e.register(0x008b_8e90, |_, _| false.into_ret());
+        e.register(0x0080_41a0, |_, _| 2u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0059_5600, &args![this, 1u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x005f_d3b0), vec![vec![faction, 0x99]]);
+        assert_eq!(e.mem.u32(b + 0x48), 3);
+    }
+
     #[test]
     fn fn_00595310_builds_the_object() {
         ctor_test::run(&ctor_test::Case {
