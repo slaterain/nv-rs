@@ -110,8 +110,8 @@ pub(crate) fn install_rows_and_extenders(engine: &mut Engine, choice: &fixes::Ch
     // `fixes::install` above) switched it on (`crates/jip`).
     jip::install(engine);
     // JohnnyGuitar NVSE's editor ids, when their row is on (the fixes preset): xNVSE loads
-    // johnnyguitarnvse.dll after jip_nvse.dll and before MCM.dll (`crates/johnnyguitar`); after
-    // JIP, so its light slots stay JIP's.
+    // johnnyguitarnvse.dll after jip_nvse.dll (`crates/johnnyguitar`); after JIP, so its light
+    // slots stay JIP's.
     johnnyguitar::install(engine);
     // UI Organizer, when its row is on: after JIP, as xNVSE loads ui_organizer.dll after
     // jip_nvse.dll (`crates/uio`).
