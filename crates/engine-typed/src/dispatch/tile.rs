@@ -968,7 +968,7 @@ pub fn find_by_path(e: &mut Engine, tile: Ptr, path: Ptr) -> Ptr {
 /// (`+0x30`) and their bits, the thread block's current-line word (`+0x2b4`), an action's type
 /// (`+4`) and its operand slots (vtable `+0` `QFloat`, `+4` `QRefValue`), the stack of floats the
 /// parentheses use (its vtable, constructor, push and destructor), the user-trait map (`011f3308`),
-/// `Tile::GetUnderscoreValue`, UI Organizer's operator site, the C runtime's `floor`, `ceil`,
+/// `Tile::GetUnderscoreValue`, the C runtime's `floor`, `ceil`,
 /// `fabs`, `_ftol`, `strcpy_s` and `sprintf_s`, and `Tile::FinalPostParse`.
 const TILE_FLAGS: u32 = 0x30;
 const FLAG_TILE_LOADING: u32 = 0x10000;

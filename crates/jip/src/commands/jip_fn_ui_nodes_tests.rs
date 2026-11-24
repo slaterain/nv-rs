@@ -11,7 +11,7 @@ use engine_core::prelude::*;
 const ADD_OBJECT: u32 = 0x00a5_ed10;
 /// `Tile::ReadFile` `00A01B00` (`RET 4`).
 const READ_FILE: u32 = 0x00a0_1b00;
-/// `Menu::CompressAndStoreXML` (what UIO's inject calls first).
+/// `Menu::CompressAndStoreXML` (what JIP's inject calls first).
 const COMPRESS: u32 = 0x00a1_ce70;
 /// `Menu::XMLHash`'s `SetAt` and `RemoveAt`.
 const XML_SET_AT: u32 = 0x00a0_c900;
@@ -44,7 +44,7 @@ struct Scene {
     first_bip: u32,
 }
 
-/// What `ReadFile`'s stand-in makes: `good.xml` and UIO's `jip_temp.xml` a tile with a node,
+/// What `ReadFile`'s stand-in makes: `good.xml` and JIP's `jip_temp.xml` a tile with a node,
 /// `bare.xml` a tile without one, anything else none.
 const MADE_AT: u32 = AREA + 0xd_0000;
 const BARE_AT: u32 = AREA + 0xd_0100;

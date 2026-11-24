@@ -187,7 +187,7 @@ pub fn built_ins(e: &Engine) -> Vec<BuiltIn> {
 
 /// The built-in a plugin opcode was registered under (`CommandTable::GetParentPlugin` (xNVSE)):
 /// the one with the greatest opcode base at or below it, of the listed ones when `listed_only`.
-/// A built-in with no opcode base (UI Organizer's) has no commands (`GetInfoFromBase` (xNVSE)
+/// A built-in with no opcode base has no commands (`GetInfoFromBase` (xNVSE)
 /// refuses base 0).
 pub fn parent_of(e: &Engine, opcode: u32, listed_only: bool) -> Option<BuiltIn> {
     built_ins(e)
@@ -298,7 +298,7 @@ mod tests {
     }
 
     /// A command's parent: the greatest base at or below its opcode (of the listed ones for the
-    /// documentation), never a built-in with no base (UI Organizer's).
+    /// documentation), never a built-in with no base.
     #[test]
     fn a_commands_parent_has_the_greatest_base_at_or_below_it_and_never_base_0() {
         let mut e = Engine::new();

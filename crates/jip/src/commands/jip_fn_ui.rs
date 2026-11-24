@@ -7,7 +7,7 @@
 //! category count, the VATS targets, the font files, the level-up menu with skill points, the
 //! barter offers and a menu's item list as inventory references, a menu's target and the top
 //! menu's highlighted item, a terminal's own model), a reference's place on the world map, and
-//! menu XML made into tiles through the built-in UI Organizer (`InjectUIComponent`); HUD messages
+//! menu XML made into tiles (`InjectUIComponent`); HUD messages
 //! queued with an icon and sound and the queue cleared, the system colours, the Pip-Boy light,
 //! a text's size in a font, the open menu's item list refreshed (`RefreshItemsList`), message
 //! boxes with a callback script (`MessageBoxExAlt`). 43 of the file's 64 commands here
@@ -785,7 +785,7 @@ pub(crate) fn inject_component(e: &mut Engine, parent: u32, text: &[u8]) -> u32 
 // Cmd_InjectUIComponent_Execute.
 /// `Menu/tile...` and a formatted text of menu XML: the text made into tiles under the tile
 /// (none when the path ends at a trait) by JIP's [`inject_component`]; result 1 when a tile is
-/// made, with the UI Organizer row on or off.
+/// made.
 fn inject_ui_component(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let f = nvse::commands::string::format_string_args_at(e, &a, 1, INJECT_PARAMS);
