@@ -5646,6 +5646,51 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     ]
 }
 
+/// The C runtime's `strtoul(text, nullptr, 16)`: blanks skipped, an optional sign, an optional
+/// `0x`/`0X`, then hex digits; a value past 32 bits gives `ULONG_MAX`, a `-` negates the value
+/// read (modulo 2^32); no digits give 0.
+#[cfg(test)]
+fn strtoul_hex(text: &[u8]) -> u32 {
+    let mut i = 0;
+    while i < text.len() && matches!(text[i], b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r') {
+        i += 1;
+    }
+    let negative = match text.get(i) {
+        Some(b'-') => {
+            i += 1;
+            true
+        }
+        Some(b'+') => {
+            i += 1;
+            false
+        }
+        _ => false,
+    };
+    if text.get(i) == Some(&b'0')
+        && matches!(text.get(i + 1), Some(b'x' | b'X'))
+        && text.get(i + 2).is_some_and(u8::is_ascii_hexdigit)
+    {
+        i += 2;
+    }
+    let mut value: u64 = 0;
+    let mut overflow = false;
+    while let Some(digit) = text.get(i).and_then(|c| (*c as char).to_digit(16)) {
+        value = value * 16 + u64::from(digit);
+        if value > u64::from(u32::MAX) {
+            overflow = true;
+            value = u64::from(u32::MAX);
+        }
+        i += 1;
+    }
+    if overflow {
+        u32::MAX
+    } else if negative {
+        (value as u32).wrapping_neg()
+    } else {
+        value as u32
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

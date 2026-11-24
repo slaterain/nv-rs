@@ -999,7 +999,7 @@ pub fn message_menu_load_next_message(e: &mut Engine, this: Ptr<MessageMenu>) {
                 measured
             };
             let font = e.call(FONT_MANAGER, &args![]).u32();
-            let title_tile = e.mem.u32(e.global::<u32>(MESSAGE_MENU) + 0x2c);
+            let _title_tile = e.mem.u32(e.global::<u32>(MESSAGE_MENU) + 0x2c);
             let font_id = 6;
             e.call(
                 CALCULATE_STRING_DIMENSIONS,
@@ -1169,7 +1169,7 @@ pub fn message_menu_load_next_message(e: &mut Engine, this: Ptr<MessageMenu>) {
         let room_now = get_float(e, message_tile, TRAIT_WIDTH);
         let text = c_str(e, cur.at(MessageMenuEntry::strMessageText));
         let font = e.call(FONT_MANAGER, &args![]).u32();
-        let message_text = e.mem.u32(e.global::<u32>(MESSAGE_MENU) + 0x34);
+        let _message_text = e.mem.u32(e.global::<u32>(MESSAGE_MENU) + 0x34);
         let font_id = 2;
         e.call(
             CALCULATE_STRING_DIMENSIONS,

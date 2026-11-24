@@ -437,35 +437,6 @@ pub fn fn_00c84f50(e: &mut Engine, this: u32, selector: u32, mask: u32) -> u32 {
     (mask & 0xffff_ff00) | u32::from(masked_non_zero == mask)
 }
 
-const RTTI_PACKED_TRI_STRIPS_SHAPE: u32 = 0x0126_82dc;
-/// `NiRTTI` of `bhkNiTriStripsShape`.
-const RTTI_TRI_STRIPS_SHAPE: u32 = 0x0126_82e8;
-/// `NiRTTI` of `bhkListShape`.
-const RTTI_LIST_SHAPE: u32 = 0x0126_81a8;
-/// `NiRTTI` of `bhkConvexListShape`.
-const RTTI_CONVEX_LIST_SHAPE: u32 = 0x0126_86c4;
-/// `NiObject::GetRTTI`'s virtual slot.
-const GET_RTTI_SLOT: u32 = 0x8;
-/// `bhkShape::FindShapeCollection`'s virtual slot (the link `00c84f50` and `00c84f10` follow).
-const FIND_SHAPE_COLLECTION_SLOT: u32 = 0xcc;
-/// `bhkPackedNiTriStripsShape::GetSubMaterial` (`thiscall`, a shape key): the sub-shape's whole
-/// material word, or the shape's own masked to five bits.
-const PACKED_GET_SUB_MATERIAL: u32 = 0x00ca_5540;
-/// `bhkNiTriStripsShape::GetSubMaterialVarType` (`thiscall`, a shape key and a flag).
-const TRI_STRIPS_GET_SUB_MATERIAL_VAR_TYPE: u32 = 0x00ca_6920;
-/// `bhkListShape::GetNumChildShapes` (`thiscall`).
-const LIST_GET_NUM_CHILD_SHAPES: u32 = 0x004d_8560;
-/// `bhkListShape::GetChildShape` (`thiscall`, an index): the child's `bhkShape`, or null.
-const LIST_GET_CHILD_SHAPE: u32 = 0x004d_85a0;
-/// `bhkShape::materialType`, the material word.
-const MATERIAL_WORD: u32 = 0x10;
-/// `bhkRefObject`'s Havok object.
-const HAVOK_OBJECT: u32 = 0x8;
-const CONVEX_LIST_CHILDREN: u32 = 0x44;
-const CONVEX_LIST_SIZE: u32 = 0x48;
-/// `hkpShape::m_userData`: the shape's `bhkShape`.
-const SHAPE_USER_DATA: u32 = 0x8;
-
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![

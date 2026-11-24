@@ -1562,7 +1562,6 @@ fn run_note_conversation(e: &mut Engine, this: Ptr<MapMenu>, note: u32, handle: 
 fn do_click_marker(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32) {
     let base = this.addr();
     if e.get(this, MapMenu::iCurrentPage) == 0x21 {
-        let mut dragged = false;
         let not_dragged = if e.call(FLAG_004B71D0, &args![]).bool() {
             true
         } else if e.get(this, MapMenu::pMapTile) == 0 {
@@ -1577,7 +1576,6 @@ fn do_click_marker(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32) {
                 let start_y = x87_load32(e.mem.u32(base + 0x124));
                 equal(start_y, y)
             };
-            dragged = !still;
             still
         };
         // With no map tile the exe's jump to the message stays.
@@ -3013,11 +3011,12 @@ pub fn map_menu_do_controller_switch(e: &mut Engine, this: Ptr<MapMenu>, on: u8)
     e.call(TILE_SET_FLOAT, &args![tile, 0xfa2u32, y, 1u32]);
 }
 
+#[cfg(test)]
 const TRAIT_WIDTH: u32 = 0xfb1;
+#[cfg(test)]
 const TRAIT_HEIGHT: u32 = 0xfb0;
+#[cfg(test)]
 const ACTION_COPY: u32 = 0x7d0;
-const ACTION_SUB: u32 = 0x7d2;
-const ACTION_MUL: u32 = 0x7d3;
 
 // Translated from 0079b430 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (cdecl): clears the open map menu's
@@ -5022,10 +5021,12 @@ fn gamepad_scroll(e: &mut Engine, scroll_bar: u32, axis_x: i32) -> bool {
 /// `DoGamepad`'s stick part (with `00709d40`): see [`map_menu_do_gamepad`].
 /// The pad's state this frame and last frame (`XINPUT_GAMEPAD_EX` at `011f35a8` and `011f35b8`:
 /// the event count, then the buttons word at +4) and the X button's bit.
+#[cfg(test)]
 const PAD_NOW: u32 = 0x011f_35a8;
+#[cfg(test)]
 const PAD_BEFORE: u32 = 0x011f_35b8;
-const PAD_BUTTON_X: u16 = 0x4000;
 /// Thiscall on a tile (trait): plays the sound the trait names (`00a0b110`); `clicksound` is 0xFCB.
+#[cfg(test)]
 const TILE_PLAY_SOUND_00A0B110: u32 = 0x00a0_b110;
 
 fn gamepad_sticks(e: &mut Engine, this: Ptr<MapMenu>) -> bool {
@@ -7974,9 +7975,8 @@ pub fn map_menu_add_companion_markers(e: &mut Engine, this: Ptr<MapMenu>) {
 }
 
 /// Cdecl (trait name): the trait's id, or none (`Tile::TraitNameToID`, `00a01860`).
+#[cfg(test)]
 const TRAIT_NAME_TO_ID_00A01860: u32 = 0x00a0_1860;
-/// A map marker tile's `id` (`kTile_MM_LocationMarker`).
-const LOCATION_MARKER_ID: f64 = 26.0;
 
 /// Whether `reference` shares the player's cell (`008d6f30`).
 fn in_player_cell(e: &mut Engine, reference: u32) -> bool {
@@ -14402,7 +14402,6 @@ mod n056_tests {
             }
         });
     }
-
 
     /// `UpdateQuests` with an active quest: the focus calls and the calls of `004b71d0`.
     fn update_quests_focus(e: &mut Engine) -> (Vec<Vec<u32>>, usize) {

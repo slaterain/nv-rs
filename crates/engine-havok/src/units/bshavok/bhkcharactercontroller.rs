@@ -2113,7 +2113,6 @@ pub fn fn_00c6e980(e: &mut Engine, this: Ptr<Ctl>, info: u32) {
         }
     }
     copy_words(e, this.addr() + Ctl::hkSupportVelocity.off, velocity, 4);
-    let mut on_stairs = false;
     let key = e.mem.i32(info + 0x4c);
     if key == -1 {
         let shape = e.mem.u32(body);
@@ -2121,7 +2120,6 @@ pub fn fn_00c6e980(e: &mut Engine, this: Ptr<Ctl>, info: u32) {
             let hk = e.mem.u32(shape + 8);
             if hk != 0 {
                 material = e.mem.u32(hk + 0x10) & 0x1f;
-                on_stairs = e.mem.u32(hk + 0x10) & STAIR_FLAG != 0;
             }
         }
     } else if layer != 0x11 {
@@ -6464,13 +6462,6 @@ mod tests {
         returns(&mut e, SHAPE_LAYER, 6);
         assert_eq!(fn_00c6d7e0(&mut e, shape, 1, 0, 7), 1);
         assert_eq!(calls(&e, SHAPE_LAYER), vec![vec![hk, 7]]);
-    }
-
-    fn packed_stair_shape(e: &mut Engine) -> u32 {
-        e.register(0x0900_1008, |_, _| ret(0x0126_82dc));
-        e.register(0x0900_10cc, |_, _| ret(0));
-        e.register(0x00ca_5540, |_, a| ret(if a[1] == 7 { 0x49 } else { 0x09 }));
-        with_vtable(e, &[(0x8, 0x0900_1008), (0xcc, 0x0900_10cc)])
     }
 
     type PropertyEntry = (u32, u32, u32);

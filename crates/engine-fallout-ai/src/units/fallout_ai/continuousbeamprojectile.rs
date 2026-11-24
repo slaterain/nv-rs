@@ -704,7 +704,7 @@ mod tests {
 
     /// An NPC's beam (as in `update_aims_another_shooter_from_its_node`) whose shooter has no node yet
     /// (a save just loaded): its rotation is the node's at +0x68, so 0x68.
-    fn update_without_a_node(on: bool) -> Logged {
+    fn update_without_a_node(_on: bool) -> Logged {
         let world = Beam {
             dead: false,
             player: false,

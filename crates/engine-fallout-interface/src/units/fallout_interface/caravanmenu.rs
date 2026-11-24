@@ -8781,6 +8781,54 @@ pub fn fn_00740940(e: &mut Engine, this: Ptr) -> u32 {
     e.mem.u32(this.addr() + 0x624)
 }
 
+/// A C string in guest memory, up to `limit` bytes.
+#[cfg(test)]
+fn guest_text(e: &Engine, at: u32, limit: usize) -> Vec<u8> {
+    let mut text = vec![];
+    if at == 0 {
+        return text;
+    }
+    while text.len() < limit {
+        let byte = e.mem.u8(at + text.len() as u32);
+        if byte == 0 {
+            break;
+        }
+        text.push(byte);
+    }
+    text
+}
+/// The game settings `sAddItemtoInventory` (`011d4e7c`) and `sPlural` (`011d3114`); a string
+/// setting's text pointer is at +4.
+#[cfg(test)]
+const ADD_ITEM_SETTING: u32 = 0x011d_4e7c;
+#[cfg(test)]
+const CHANGES_ITEM_COUNT_004C8F30: u32 = 0x004c_8f30;
+/// `__RTDynamicCast` (`00ec43fb`, cdecl) and the RTTI of `TESForm` (`01183028`) and `TESFullName`
+/// (`01183158`): xNVSE's `DYNAMIC_CAST(form, TESForm, TESFullName)`.
+#[cfg(test)]
+const DYNAMIC_CAST_00EC43FB: u32 = 0x00ec_43fb;
+/// `ExtraContainerChanges::EntryData`'s destroy (`004459e0`: `this`, 1): xNVSE's `Destroy`.
+#[cfg(test)]
+const ENTRY_DATA_DESTROY_004459E0: u32 = 0x0044_59e0;
+/// `BaseExtraList::GetByType` (`00410220`: the list at a reference's +0x44, the type; 0x15 the
+/// container changes) and `ExtraContainerChanges::Data`'s count of an item (`004c8f30`).
+#[cfg(test)]
+const EXTRA_GET_BY_TYPE_00410220: u32 = 0x0041_0220;
+#[cfg(test)]
+const HEAP_ALLOCATE_00AA3E40: u32 = 0x00aa_3e40;
+/// Stdcall (item, 0, 1): the item's pick-up sound name (`008adcf0`).
+#[cfg(test)]
+const PICK_UP_SOUND_008ADCF0: u32 = 0x008a_dcf0;
+#[cfg(test)]
+const PLURAL_SETTING: u32 = 0x011d_3114;
+/// `QueueUIMessage` (`007052f0`, cdecl: text, icon type, icon path, sound, seconds, instant).
+#[cfg(test)]
+const QUEUE_UI_MESSAGE_007052F0: u32 = 0x0070_52f0;
+#[cfg(test)]
+const RTTI_TES_FORM: u32 = 0x0118_3028;
+#[cfg(test)]
+const RTTI_TES_FULL_NAME: u32 = 0x0118_3158;
+
 #[cfg(test)]
 mod tests {
     use super::*;

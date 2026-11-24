@@ -379,7 +379,7 @@ fn update_moving(e: &mut Engine, this: Ptr, time_bits: u32, zero: f64) {
             e.call(SET_LOCATION_ON_REFERENCE, &args![this, hit.wrapping_add(4)]);
         }
     }
-    let mut reorient = !stopped;
+    let reorient = !stopped;
     e.call(
         SYNC_3D_WITH_REFERENCE,
         &args![this, u32::from(far_from_target), u32::from(reorient)],

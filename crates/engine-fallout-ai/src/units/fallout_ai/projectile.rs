@@ -1170,8 +1170,6 @@ pub fn projectile_load_game(e: &mut Engine, this: Ptr<Projectile>, buffer: Ptr) 
     }
 }
 
-const MINE_LIGHT_UPDATE: u32 = 0x009b_46c0;
-
 /// The form of a loaded form id word, cast to a reference: `__RTDynamicCast(
 /// 004839c0(form), 0, TESForm, TESObjectREFR, 0)`, or 0 for none.
 fn as_reference(e: &mut Engine, form: u32) -> u32 {
@@ -1970,6 +1968,7 @@ pub fn projectile_ctor(e: &mut Engine, this: Ptr<Projectile>, _unused_1: u32) ->
 /// The weapon mod flags of an inventory entry (`ContChangesEntry`): the flags (+0xC) of the
 /// `ExtraWeaponModFlags` (type 0x8D, `BaseExtraList::GetByType` `00410220`) of the first extra
 /// data list in the entry's list (+0); 0 without one.
+#[cfg(test)]
 fn weapon_mod_flags(e: &mut Engine, item: u32) -> u8 {
     let lists = e.mem.u32(item);
     let first = if lists != 0 { e.mem.u32(lists) } else { 0 };
@@ -2624,11 +2623,14 @@ pub fn fn_009bf370(e: &mut Engine, this: Ptr<Projectile>, delta: f32, x: u32, y:
 }
 
 /// `bhkUtilFunctions::FindCollisionObject` (`00c802d0`, `cdecl`, one word).
+#[cfg(test)]
 const FIND_COLLISION_OBJECT: u32 = 0x00c8_02d0;
 /// `bhkWorldObject::SetLinearVelocity` (`00561690`, `thiscall`, a `hkVector4*`).
+#[cfg(test)]
 const SET_LINEAR_VELOCITY: u32 = 0x0056_1690;
 /// The character controller's `OutVelocity` (`hkVector4`, Xbox PDB: `bhkCharacterController`
 /// +0x4F0).
+#[cfg(test)]
 const CONTROLLER_OUT_VELOCITY: u32 = 0x4f0;
 
 /// Sets a debug colour (`NiColorA` constructor `00414430`: r, g, b, a) in a
@@ -6105,9 +6107,6 @@ fn squared_distance_to(e: &mut Engine, this: Ptr<Projectile>, other: u32) -> f32
     })
 }
 
-/// The console's `ToggleDetection` byte (`011f1221`): 0 while detection is turned off.
-const DETECTION_ON: u32 = 0x011f_1221;
-
 // Translated from 009c39e0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Whether a mine is triggered: an actor of the high process list
 /// (`00717e50`, `005be5c0`, `00968670`) that is alive and active (no
@@ -7395,7 +7394,7 @@ mod tests {
     }
 
     /// Answers the projectile, the controller and the world object.
-    fn step_with_row(e: &mut Engine, on: bool, physics: bool) -> (Ptr<Projectile>, u32, u32) {
+    fn step_with_row(e: &mut Engine, _on: bool, physics: bool) -> (Ptr<Projectile>, u32, u32) {
         point_subtract(e);
         let this = projectile(e);
         let before = e.mem.alloc(0xC);

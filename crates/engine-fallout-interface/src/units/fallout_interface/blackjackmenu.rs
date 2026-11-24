@@ -364,9 +364,8 @@ pub fn fn_00739970(e: &mut Engine, this: Ptr, flag: u8) {
     e.call(SET_FLOATS_004BC1F0, &args![geometry, zero, zero, last]);
 }
 
-fn shoe_count(e: &Engine, decks: u32) -> u32 {
-    let count = decks.wrapping_mul(0x34);
-    count
+fn shoe_count(_e: &Engine, decks: u32) -> u32 {
+    decks.wrapping_mul(0x34)
 }
 
 // Translated from 007399d0 (decompiled, FalloutNV.exe 1.4.0.525)

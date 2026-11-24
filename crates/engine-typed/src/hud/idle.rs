@@ -165,8 +165,7 @@ fn visible(e: &mut Engine, offset: u32) -> bool {
 }
 
 fn prompt_hides_health_bar(e: &mut Engine) -> bool {
-    let shown = visible(e, 0x9c);
-    shown
+    visible(e, 0x9c)
 }
 
 fn alpha_of(e: &mut Engine, offset: u32) -> f32 {

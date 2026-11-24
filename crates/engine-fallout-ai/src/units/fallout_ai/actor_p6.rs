@@ -5105,7 +5105,7 @@ mod tests {
         assert!(calls_to(&e, REFRESH_BEFORE_QUEUE).is_empty());
     }
 
-    fn leg_change(on: bool, previous: f32, current: f32, other: f32) -> Vec<Vec<u32>> {
+    fn leg_change(_on: bool, previous: f32, current: f32, other: f32) -> Vec<Vec<u32>> {
         let (mut e, actor) = condition_setup(5.0, false, 0);
         slot(&mut e, OWNER_TABLE, 0x8, eax(0));
         quiet(&mut e, &[REFRESH_BEFORE_QUEUE]);
@@ -5992,7 +5992,7 @@ mod tests {
         }
     }
 
-    fn picks_the_best_animation_when_there_is_nothing_to_reload_row(on: bool) {
+    fn picks_the_best_animation_when_there_is_nothing_to_reload_row(_on: bool) {
         // Ammunition entry count 3 + 1 = 4 and 4 in the inventory: nothing to
         // reload, and the clip rounds are 4 as well.
         let (mut e, actor, _) = reload_setup(0x800 | 0x200 | 0x2, 4, 4, 3);

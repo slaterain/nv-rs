@@ -1368,7 +1368,7 @@ mod tests {
         assert_eq!(calls_to(&e, SET_LOCATION), vec![vec![actor, point]]);
     }
 
-    fn far_from_a_node_with_no_door(on: bool) -> (bool, i32, usize) {
+    fn far_from_a_node_with_no_door(_on: bool) -> (bool, i32, usize) {
         let (mut e, this, _) = engine(3);
         e.register(DOORS_TELEPORT, |_, _| word(0));
         e.register(SET_LOCATION, nothing);

@@ -8554,7 +8554,7 @@ fn condition_flash_step(e: &Engine, alpha: f32) -> f64 {
 }
 
 /// Answers the alpha and the opacity kept (row on only).
-fn compass_max_alpha(e: &mut Engine, compass: u32, opacity: f32) -> (f32, Option<f32>) {
+fn compass_max_alpha(e: &mut Engine, _compass: u32, opacity: f32) -> (f32, Option<f32>) {
     (
         (f64::from(opacity) * e.global::<f64>(0x0101_e568)) as f32,
         None,
@@ -8599,13 +8599,12 @@ fn crosshair_projectile_weapon(e: &mut Engine, reference: u32) -> u32 {
     e.call(0x0047_6c90, &args![reference]).u32()
 }
 
-fn rock_it_projectile_item(e: &mut Engine, dropped: u32, display_mask: &mut u32) -> u32 {
+fn rock_it_projectile_item(e: &mut Engine, dropped: u32, _display_mask: &mut u32) -> u32 {
     e.call(0x009d_9f00, &args![dropped]).u32()
 }
 
 fn prompt_hides_health_bar(e: &mut Engine) -> bool {
-    let shown = hud_visible(e, 0x9c);
-    shown
+    hud_visible(e, 0x9c)
 }
 
 #[cfg(test)]

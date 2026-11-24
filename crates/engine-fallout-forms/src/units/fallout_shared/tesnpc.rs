@@ -3934,7 +3934,7 @@ pub fn fn_00609220(e: &mut Engine, this: Ptr<TESNPC>, buffer: Ptr) {
     }
     if change_flag_set(e, 0x0042_8110, buffer, 0x200_0000) {
         let id = e.call(0x0086_48a0, &args![buffer]).u32();
-        let mut form = e.call(LOOKUP_FORM, &args![id]).u32();
+        let form = e.call(LOOKUP_FORM, &args![id]).u32();
         let race = e
             .call(
                 RT_DYNAMIC_CAST,

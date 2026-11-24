@@ -10721,13 +10721,13 @@ pub fn fn_008a2ed0(e: &mut Engine, this: Ptr<Actor>) -> u32 {
             if package_target != 0 {
                 // The distance is compared with the setting, but the
                 // result of the comparison is not used.
-                let distance = e
+                let _distance = e
                     .call(
                         REFR_GET_DISTANCE_FROM_REFERENCE,
                         &args![package_target, this, 0u32, 0u32],
                     )
                     .f64();
-                let limit = setting_float(e, SETTING_11CD938);
+                let _limit = setting_float(e, SETTING_11CD938);
             }
         }
     }
@@ -13718,7 +13718,7 @@ fn hit_me_reactions(e: &mut Engine, s: &mut HitMe) {
 
 /// The start point of the knockback in `HitMe` (`0x89C8E0`): the aggressor's position (slot
 /// `0x1f4`).
-fn knockback_start(e: &mut Engine, source: u32, aggressor: u32) -> u32 {
+fn knockback_start(e: &mut Engine, _source: u32, aggressor: u32) -> u32 {
     e.vcall(aggressor, ACTOR_SLOT_POSITION, &args![]).u32()
 }
 
@@ -14127,7 +14127,7 @@ fn hit_me_finish(e: &mut Engine, s: &mut HitMe) {
 /// controller.
 fn start_hit_line(e: &mut Engine, this: u32, aggressor: u32, controller: u32) {
     let manager = e.global::<u32>(COMBAT_DIALOGUE_MANAGER);
-    let said = e
+    let _said = e
         .call(
             COMBAT_DIALOGUE_START_DIALOGUE,
             &args![manager, this, aggressor, 2u32, 2u32, 1u32, controller],
@@ -16629,7 +16629,7 @@ mod tests {
         }
     }
 
-    fn walking_forward_picks_the_walk_group_and_scales_its_speed_row(on: bool) {
+    fn walking_forward_picks_the_walk_group_and_scales_its_speed_row(_on: bool) {
         let mut e = engine();
         let (actor, animation, _) = pick_setup(&mut e);
         stub(&mut e, ACTOR_ANIM_FLAGS, 0x0101);

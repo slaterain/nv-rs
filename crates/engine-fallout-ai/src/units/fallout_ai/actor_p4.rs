@@ -13006,7 +13006,7 @@ mod tests {
         assert_eq!(e.mem.u32(package_store + 0x9c), 6);
     }
 
-    fn search_package_run(on: bool) -> (Vec<(u32, Vec<u32>)>, Engine, u32) {
+    fn search_package_run(_on: bool) -> (Vec<(u32, Vec<u32>)>, Engine, u32) {
         let mut e = engine();
         let (actor, _) = new_actor_with_process(&mut e);
         e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());

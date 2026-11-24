@@ -202,7 +202,7 @@ pub fn fn_009839b0(
     controller: u32,
 ) -> bool {
     let mut now = 0u32; // -0x24
-    let said = start_dialogue(
+    start_dialogue(
         e,
         actor,
         word,
@@ -211,8 +211,7 @@ pub fn fn_009839b0(
         flag,
         controller,
         &mut now,
-    );
-    said
+    )
 }
 
 /// [`fn_009839b0`]'s body up to its answer; `now` gets the time it reads (the local at -0x24).

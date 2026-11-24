@@ -3007,6 +3007,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 }
 
 #[cfg(test)]
+const OBJECT_VALUE_004BE060: u32 = 0x004b_e060;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

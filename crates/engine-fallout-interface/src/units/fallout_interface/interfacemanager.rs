@@ -2741,7 +2741,7 @@ fn idle_release(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut IdleSta
     }
 }
 
-fn over_menu_active(e: &mut Engine, this: Ptr<InterfaceManager>, menu: u32) -> bool {
+fn over_menu_active(e: &mut Engine, _this: Ptr<InterfaceManager>, menu: u32) -> bool {
     menu_is_active(e, menu)
 }
 
@@ -3219,7 +3219,7 @@ fn idle_dispatch_key(
     }
 }
 
-fn paused_or_trading(e: &mut Engine, this: Ptr<InterfaceManager>) -> bool {
+fn paused_or_trading(e: &mut Engine, _this: Ptr<InterfaceManager>) -> bool {
     e.call(MENU_FLAG_QUERY_004A4040, &args![]).bool()
 }
 
@@ -3256,8 +3256,7 @@ fn idle_click_key_tile(e: &mut Engine, frontmost: u32, code: u32) {
             let root = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, frontmost));
             e.call(TILE_GET_CHILD_BY_NAME, &args![root, string]).u32()
         };
-        let mut found = lookup(e);
-        found
+        lookup(e)
     });
     if name != 0 && e.call(TILE_IS_TRUE, &args![name, 0xfa3u32]).bool() {
         let clickable = e.call(TILE_IS_TRUE, &args![name, 0xfafu32]).bool();
@@ -3303,7 +3302,6 @@ fn idle_console_and_hot_keys(e: &mut Engine, this: Ptr<InterfaceManager>, state:
             )
             .u32(),
     };
-    let key = key;
     if key != 0 || console_wanted {
         state.console = e.call(MENU_CONSOLE_INSTANCE, &args![1u32]).u32();
         e.call(CLEAR_KEYSTROKES, &args![state.controls]);
@@ -6903,7 +6901,7 @@ pub fn fn_007154b0(e: &mut Engine, this: Ptr<InterfaceManager>, event: i32, key:
     if event != 1 {
         return 0;
     }
-    let mut shift = e.get(this, InterfaceManager::bShiftDown) as u32;
+    let shift = e.get(this, InterfaceManager::bShiftDown) as u32;
     let controls_owner = e.global::<u32>(CONTROLS_OWNER);
     let controls = e.call(CONTROLS_GET, &args![controls_owner]).u32();
     let character = e

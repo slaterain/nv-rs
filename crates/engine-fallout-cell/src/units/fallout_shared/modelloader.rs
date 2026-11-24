@@ -4877,12 +4877,12 @@ pub fn queued_helmet_attach(e: &mut Engine, this: Ptr<QueuedHelmet>) {
 }
 
 fn helmet_slot_has_no_item(
-    e: &mut Engine,
-    this: Ptr<QueuedHelmet>,
-    biped: Ptr,
-    face_model: Ptr,
-    clone: Ptr,
-    index: u32,
+    _e: &mut Engine,
+    _this: Ptr<QueuedHelmet>,
+    _biped: Ptr,
+    _face_model: Ptr,
+    _clone: Ptr,
+    _index: u32,
 ) -> bool {
     false
 }

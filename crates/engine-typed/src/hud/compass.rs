@@ -493,7 +493,7 @@ pub fn blink_tile(e: &mut Engine, tile: Ptr, period: f32, amplitude: f32) {
 
 /// The compass's top alpha (`0x7792F9`, `FMUL [0x101E568]`): the HUD opacity times 255. With it
 /// the HUD's alpha kept to put back at [`tick_process`] (row on only).
-fn compass_max_alpha(e: &mut Engine, compass: Ptr, opacity: f32) -> (f32, Option<f32>) {
+fn compass_max_alpha(e: &mut Engine, _compass: Ptr, opacity: f32) -> (f32, Option<f32>) {
     (
         narrow(f64::from(opacity) * global_f64(e, TWO_FIFTY_FIVE)),
         None,

@@ -4879,7 +4879,7 @@ fn remove_item_hotkey(e: &mut Engine, drop_flag: u8, extra: u32, target: u32, co
 
 /// `004c37d0`'s "can't remove worn item" message (`sCantRemoveWornItem`, `004c69f0` on
 /// `0x11D31F8`, then `QueueUIMessage` at `0x4C5640`).
-fn no_unequip_message(e: &mut Engine, actor: u32) {
+fn no_unequip_message(e: &mut Engine, _actor: u32) {
     let text = fn_004c69f0(e, Ptr::new(NO_UNEQUIP_MESSAGE_OBJECT));
     let duration = e.global::<f32>(MESSAGE_DURATION);
     e.call(
@@ -4889,8 +4889,7 @@ fn no_unequip_message(e: &mut Engine, actor: u32) {
 }
 
 #[cfg(test)]
-mod s0128_tests {
-}
+mod s0128_tests {}
 
 // Translated from 004c37d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Takes `count` of `form` out of the changes of `this` (the removal that
@@ -9692,7 +9691,7 @@ fn unequip_refreshes_worn(e: &mut Engine, biped: u32) -> bool {
     e.call(BIPED_IS_POWER_ARMOR, &args![biped]).bool() || fn_004c0bd0(e, Ptr::new(biped))
 }
 
-fn stored_weight(e: &mut Engine, total: f32) -> f32 {
+fn stored_weight(_e: &mut Engine, total: f32) -> f32 {
     total
 }
 

@@ -6015,7 +6015,7 @@ pub fn actor_equip_object(
             equip_step = true;
         }
         FORM_TYPE_0X1A => equip_step = true,
-        FORM_TYPE_AMMO => 'ammo: {
+        FORM_TYPE_AMMO => {
             let process = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, this));
             let held = e.vcall(process, PROCESS_VSLOT_ITEM, &args![]).u32();
             let held_form = if held == 0 {
@@ -7554,7 +7554,7 @@ fn drop_destroyed_weapon(e: &mut Engine, this: Ptr<Actor>, entry: Ptr, weapon: u
             for word in 0..9 {
                 words.push(e.mem.u32(matrix + 4 * word));
             }
-            let launched = e.call(LAUNCH_PROJECTILE, &words).u32();
+            let _launched = e.call(LAUNCH_PROJECTILE, &words).u32();
         } else if e.call(ACTOR_IS_WEAPON_DRAWN, &args![this]).bool() {
             typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, euler));
             e.call(
@@ -13588,7 +13588,7 @@ mod tests {
         }
     }
 
-    fn ammo_is_swapped_through_an_item_change_row(on: bool) {
+    fn ammo_is_swapped_through_an_item_change_row(_on: bool) {
         let mut e = engine3();
         let (actor, item) = equip_world(&mut e, 0x29);
         let process = with_process(&mut e, actor);

@@ -8011,6 +8011,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     ]
 }
 
+/// `BaseExtraList::GetByType` (`00410220`, thiscall: the list, the type), the types
+/// `kExtraData_ContainerChanges` (0x15) and `kExtraData_Ammo` (0x6E), and `BGSListForm`'s form
+/// type (0x55).
+#[cfg(test)]
+const EXTRA_GET_BY_TYPE: u32 = 0x0041_0220;
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1929,7 +1929,7 @@ const COMPARE_00728CD0: u32 = 0x0072_8cd0;
 /// `fn_00728c10` (vtable +0x20) and sorts the category array with `fn_007278c0`.
 pub fn fn_00727680(e: &mut Engine, this: Ptr, _unused_1: u32, category: u32) {
     let owner = e.global::<u32>(OWNER_011C3F2C);
-    let previous_category = 0;
+    let _previous_category = 0;
     let mut node = e.call(RECIPE_LIST_HEAD_004077E0, &args![owner]).u32();
     while node != 0 && !typed_call!(leaf::FAMILY, 0x0082_56d0, leaf::both_words_zero(e, node)) {
         let recipe = node_item(e, node);

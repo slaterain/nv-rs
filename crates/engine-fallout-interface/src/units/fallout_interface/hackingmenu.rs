@@ -2705,8 +2705,7 @@ fn place_words(e: &mut Engine, this: Ptr<HackingMenu>, buffer: u32, garbage_coun
 }
 
 fn selection_follows_the_gamepad(e: &mut Engine) -> bool {
-    let gamepad = e.call(GAMEPAD_IN_USE, &args![]).bool();
-    gamepad
+    e.call(GAMEPAD_IN_USE, &args![]).bool()
 }
 
 /// Makes the file's terminal lines from the buffer (the tail of

@@ -2363,7 +2363,7 @@ mod n086_tests {
         }
     }
 
-    fn on_menu_open_starts_the_hum_and_the_burst_row(on: bool) {
+    fn on_menu_open_starts_the_hum_and_the_burst_row(_on: bool) {
         let mut e = Engine::new();
         world(&mut e);
         sounds(&mut e);

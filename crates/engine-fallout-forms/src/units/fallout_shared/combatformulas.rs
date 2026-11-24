@@ -853,7 +853,7 @@ pub fn combat_formulas_calc_weapon_damage(
     weapon: Ptr,
     health_ratio: f32,
     scale: f32,
-    ammo_word: u32,
+    _ammo_word: u32,
     flag_1c: bool,
     item_change: Ptr,
     owner_is_actor: bool,
@@ -3035,8 +3035,8 @@ mod tests {
     /// melee weapon (type 1) with the flag at +0x100 bit 1: the display's other `CalcWeaponDamage`
     /// call (`0x6451B6`), the flag cleared around it.
     fn s0189_shown_with(
-        one: bool,
-        two: bool,
+        _one: bool,
+        _two: bool,
         weapon_projectile: u32,
         ammo_type: u8,
         flagged: bool,
@@ -3131,7 +3131,7 @@ mod tests {
         assert_eq!(two_only, off);
     }
 
-    fn shown_damage_perk_calls(ammo_type: u8, on: bool) -> (u32, Vec<Vec<u32>>) {
+    fn shown_damage_perk_calls(ammo_type: u8, _on: bool) -> (u32, Vec<Vec<u32>>) {
         let (mut e, _) = damage_world();
         let player = object(&mut e, 0x400);
         e.mem.set_u32(player.addr() + 0xa4, FAKE_TABLE);

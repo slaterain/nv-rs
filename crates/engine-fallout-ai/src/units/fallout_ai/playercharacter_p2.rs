@@ -13014,7 +13014,7 @@ mod tests {
         }
     }
 
-    fn dropping_the_current_ammunition_empties_it_and_places_the_reference_row(on: bool) {
+    fn dropping_the_current_ammunition_empties_it_and_places_the_reference_row(_on: bool) {
         let mut e = engine();
         list_helpers(&mut e);
         let player = new_player(&mut e);

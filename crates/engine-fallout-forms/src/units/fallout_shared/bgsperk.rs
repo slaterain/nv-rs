@@ -3122,7 +3122,7 @@ mod b028_description_tests {
 
     /// A perk with no requirements whose description text (`0dd00000`) is `text`, built into a buffer
     /// of `size` bytes with the row `on`: whether it ran to the end, and the buffer's text.
-    fn description_of(text: &[u8], size: u32, on: bool) -> (bool, Vec<u8>) {
+    fn description_of(text: &[u8], size: u32, _on: bool) -> (bool, Vec<u8>) {
         let mut e = engine();
         real_append(&mut e);
         e.map(0x0dd0_0000, 0x1000);

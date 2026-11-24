@@ -6199,7 +6199,7 @@ pub fn vats_menu_get_shot_burst_count(e: &mut Engine, action: u32, long_burst: u
     let speed = e
         .call(GET_ATTACK_SPEED, &args![weapon, modded as u32])
         .f64();
-    let mut shots = fistp_truncate(speed * factor) as u8;
+    let shots = fistp_truncate(speed * factor) as u8;
     if shots == 0 {
         1
     } else {

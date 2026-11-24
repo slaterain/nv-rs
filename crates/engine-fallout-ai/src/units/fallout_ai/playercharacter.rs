@@ -9619,7 +9619,11 @@ fn held_attack_goes_on(e: &mut Engine, this: Ptr<PlayerCharacter>, main_state: u
 
 /// The ammunition test of `PlayerCharacter::Update`'s held attack (`0x941DD4`: the process' slot
 /// `0x14c`, the ammunition entry, is there).
-fn has_ammo_or_godmode_automatic(e: &mut Engine, this: Ptr<PlayerCharacter>, process: u32) -> bool {
+fn has_ammo_or_godmode_automatic(
+    e: &mut Engine,
+    _this: Ptr<PlayerCharacter>,
+    process: u32,
+) -> bool {
     if e.vcall(process, 0x14c, &args![]).u32() != 0 {
         return true;
     }
@@ -9637,7 +9641,7 @@ fn free_flight_push(
     position: u32,
     second: u32,
     delta: f32,
-    word_slot: u32,
+    _word_slot: u32,
 ) {
     let moved_by = local(frame, -0x2f0);
     e.call(0x0043_9ef0, &args![position, moved_by, second]);
@@ -9658,8 +9662,7 @@ fn free_flight_push(
 
 /// The actor the player bumped into, from `PlayerCharacter::Update` (`0x93EF1D`, `00967a00`).
 fn bumped_actor(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
-    let actor = e.call(0x0096_7a00, &args![this]).u32();
-    actor
+    e.call(0x0096_7a00, &args![this]).u32()
 }
 
 /// The second character-controller state test of the wait menu's checks in
@@ -9687,8 +9690,7 @@ fn beam_clip_holds(e: &mut Engine, this: Ptr<PlayerCharacter>, weapon_form: u32)
 /// The attack-released test of the player's continuous beam in `PlayerCharacter::Update`
 /// (`0x944127`: `00a24660` with the attack control 4 and state 2).
 fn beam_attack_released(e: &mut Engine, main_state: u32) -> bool {
-    let released = e.call(0x00a2_4660, &args![main_state, 4u32, 2u32]).u32() != 0;
-    released
+    e.call(0x00a2_4660, &args![main_state, 4u32, 2u32]).u32() != 0
 }
 
 fn update_player_beam(
@@ -9724,7 +9726,6 @@ fn vanity_turn_gamepad_test(e: &mut Engine) -> bool {
 /// The vanity camera's pitch rotation in `PlayerCharacter::UpdateCamera` (`0x94B521`,
 /// `NiMatrix3::MakeXRotation` `00524ac0`).
 fn vanity_pitch_rotation(e: &mut Engine, matrix: u32, angle: f32) {
-    let mut angle = angle;
     e.call(0x0052_4ac0, &args![matrix, angle]);
 }
 
@@ -17344,7 +17345,7 @@ mod tests {
         next
     }
 
-    fn regenerated_round(kind: u32, on: bool) -> Vec<(u32, Vec<u32>)> {
+    fn regenerated_round(kind: u32, _on: bool) -> Vec<(u32, Vec<u32>)> {
         let mut e = Engine::new();
         e.map(0x011d_e000, 0x1000);
         e.set_global(PLAYER_SINGLETON, 0x7000_0000u32);

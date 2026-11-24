@@ -3108,6 +3108,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     ]
 }
 
+/// `004be060` and `004be180` (`thiscall` on an object, `ST0`; `inventorychanges.cpp`).
+#[cfg(test)]
+const STAT_004BE060: u32 = 0x004b_e060;
+
 #[cfg(test)]
 mod tests {
     use super::*;
