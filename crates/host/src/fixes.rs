@@ -44,7 +44,6 @@ pub static FIXES: &[Fix] = &[
     JIP_VANILLA_COMMANDS,
     JIP_GAME_PATCHES,
     JG_EDITOR_IDS,
-    MCM,
     SCRIPT_ERROR_GUARD,
     IMOD_EVENT_FORM_CHECK,
     INVENTORY_REFERENCE_CHECKS,
@@ -263,8 +262,8 @@ fn install_keep_cosave_plugins(e: &mut Engine) {
     nvse::saveload::set_keep_other_plugins(e, true);
 }
 
-/// JIP LN NVSE answers "installed" (step 3.10's switch; on in the fixes preset with [`MCM`]
-/// and [`KEEP_COSAVE_PLUGINS`], off in vanilla): its identity, its place in xNVSE's list of
+/// JIP LN NVSE answers "installed" (step 3.10's switch; on in the fixes preset with
+/// [`KEEP_COSAVE_PLUGINS`], off in vanilla): its identity, its place in xNVSE's list of
 /// plugins, its built commands' names and handlers, its hooks and its own always-on patches;
 /// the JIP rows ([`JIP_VANILLA_COMMANDS`], [`JIP_GAME_PATCHES`], [`JIP_COSAVE_FIXES`]) then follow
 /// their own switches. The row sets a flag; `jip::install` (after xNVSE, in
@@ -527,23 +526,6 @@ fn install_jg_editor_ids(e: &mut Engine) {
     johnnyguitar::set_on(e, true);
 }
 
-/// The Mod Configuration Menu's NVSE plugin built in (`crates/mcm`: MCM.dll 1.5, "MCM Extensions"):
-/// its nine commands at `0x21C0` up, which MCM's scripts and the menus of the mods that use it call
-/// (`GetMCMFloat`, `SetMCMFloat`, `GetModINI`, ...). On in `fixes` (with JIP, which MCM's mods need),
-/// off in vanilla. The row sets a flag; `mcm::install` (after JIP, in
-/// `install_rows_and_extenders`) registers the commands.
-pub const MCM: Fix = Fix {
-    name: "The Mod Configuration Menu's plugin built in",
-    env: "NV_MCM",
-    addresses: &[],
-    summary: "The Mod Configuration Menu's NVSE plugin (MCM.dll) built in: its script commands, which MCM's menu needs to show",
-    install: install_mcm,
-};
-
-fn install_mcm(e: &mut Engine) {
-    mcm::set_on(e, true);
-}
-
 /// A row whose binding [`install`] makes itself, with the choice.
 fn install_nothing(_: &mut Engine) {}
 
@@ -562,7 +544,6 @@ const NO_ADDRESS: &[&str] = &[
     JIP_VANILLA_COMMANDS.name,
     JIP_GAME_PATCHES.name,
     JG_EDITOR_IDS.name,
-    MCM.name,
     SCRIPT_ERROR_GUARD.name,
     IMOD_EVENT_FORM_CHECK.name,
     INVENTORY_REFERENCE_CHECKS.name,
@@ -2843,13 +2824,13 @@ bSunShadowsCharacters=0
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// Step 3.10's switch (JIP LN NVSE answering "installed") follows the preset with MCM's plugin
-    /// and the co-save keep row: on in `fixes`, off in vanilla, however the preset is
+    /// Step 3.10's switch (JIP LN NVSE answering "installed") follows the preset with the co-save
+    /// keep row: on in `fixes`, off in vanilla, however the preset is
     /// chosen: the default, the settings file, `NV_PRESET`, Fallout.ini's `sPreset`.
     #[test]
-    fn jip_and_mcm_follow_the_preset() {
+    fn jip_and_the_cosave_keep_follow_the_preset() {
         assert_eq!(JIP_INSTALLED.env, "NV_JIP_INSTALLED");
-        for row in [&JIP_INSTALLED, &MCM, &KEEP_COSAVE_PLUGINS] {
+        for row in [&JIP_INSTALLED, &KEEP_COSAVE_PLUGINS] {
             assert!(!OFF_IN_EVERY_PRESET.contains(&row.env), "{}", row.name);
         }
         let choices = [
@@ -2864,7 +2845,7 @@ bSunShadowsCharacters=0
         ];
         for choice in &choices {
             let fixes = choice.preset == Preset::Fixes;
-            for row in [&JIP_INSTALLED, &MCM, &KEEP_COSAVE_PLUGINS] {
+            for row in [&JIP_INSTALLED, &KEEP_COSAVE_PLUGINS] {
                 assert_eq!(choice.is_on(row), fixes, "{} {choice:?}", row.name);
             }
         }
@@ -2962,7 +2943,6 @@ bJGEditorIDs=0
         assert!(fixes.is_on(&JIP_GAME_PATCHES));
         assert!(fixes.is_on(&JIP_VANILLA_COMMANDS));
         assert!(fixes.is_on(&JIP_COSAVE_FIXES));
-        assert!(fixes.is_on(&MCM), "MCM with the fixes preset");
         assert_eq!(fixes.threads, "stepped");
         assert!(fixes.describe().contains(JIP_INSTALLED.name));
         let off = Choice::from_parts(
@@ -2987,12 +2967,6 @@ bJGEditorIDs=0
         let off = with_ini(None, "[nv-rs Fixes]\nbJIPInstalled=0\n", &[]);
         assert!(!off.is_on(&JIP_INSTALLED));
         assert_eq!(off.preset, Preset::Fixes);
-        assert!(off.is_on(&MCM), "its own switch");
-        // MCM's plugin turns off by its own key; JIP and the preset stay.
-        let c = with_ini(None, "[nv-rs Fixes]\nbMCM=0\n", &[]);
-        assert!(!c.is_on(&MCM));
-        assert!(c.is_on(&JIP_INSTALLED));
-        assert_eq!(c.preset, Preset::Fixes);
         for text in [
             "[nv-rs Fixes]\n;bJIPInstalled=0\n",
             "[nv-rs Fixes]\nbJIPInstall=1\n",

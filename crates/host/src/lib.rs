@@ -113,9 +113,6 @@ pub(crate) fn install_rows_and_extenders(engine: &mut Engine, choice: &fixes::Ch
     // johnnyguitarnvse.dll after jip_nvse.dll and before MCM.dll (`crates/johnnyguitar`); after
     // JIP, so its light slots stay JIP's.
     johnnyguitar::install(engine);
-    // The Mod Configuration Menu's plugin, when its row is on: xNVSE loads MCM.dll after
-    // jip_nvse.dll and before ui_organizer.dll (`crates/mcm`).
-    mcm::install(engine);
 }
 
 /// The start-up log's lines on JIP's state, after it installed (`row_on`: its row asked for it;
@@ -178,7 +175,7 @@ impl Host {
         // (nothing on Windows).
         save_out::prepare(data);
         let mut engine = Box::new(Engine::with_exe(&exe)?);
-        // Mods' own files (MCM's and later JIP's INI and file commands) kept beside the saves, never
+        // Mods' own files (JIP's INI and file commands) kept beside the saves, never
         // in the game's folder (`mod_files`).
         engine_platform::mod_files::set_folder(&mut engine, mod_files::folder(data));
         // The play loop's patches (`crates/play-patch`, empty on main) replace the entries with
