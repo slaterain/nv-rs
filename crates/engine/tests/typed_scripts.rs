@@ -6,16 +6,14 @@
 //! from the harness's list and its float sweep), the text literals, every compiled operand kind
 //! (`s l f r G Z n z X`, quoted texts), the errors, the long tokens, parse mode, xNVSE's two
 //! changes to this code (its 0x500-byte token buffer with the moved frame, and its command call at
-//! the seam `005949d4`), and JIP LN's double precision operators (the seam `00593fbc` behind its
-//! patch bit). `real_scda_expressions` (opt-in, needs the game's data) runs every expression of
-//! `FalloutNV.esm`'s compiled scripts the same way.
+//! the seam `005949d4`). `real_scda_expressions` (opt-in, needs the game's data) runs every
+//! expression of `FalloutNV.esm`'s compiled scripts the same way.
 //!
 //! What stands in: the CRT's `atol` and `atof` (decimal parsers), `strlen`, the script log, and
 //! what the operand reader calls by address (the form lookups, the locals' owners, the inventory,
 //! the command table and a command's handler, the parameter parser).
 
 use engine as _;
-use engine_core::extend::jip_patches;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::leaf;
@@ -391,37 +389,6 @@ fn xnvse_command_call(e: &mut Engine, w: &[u32]) -> Option<u32> {
     Some(ok)
 }
 
-/// JIP LN's double precision operators, when `on`: the patch bits and its operator seam, which
-/// here does `+` and `*` itself in doubles (as JIP's handler) and leaves the rest to the exe.
-fn jip(e: &mut Engine, on: bool) {
-    if on {
-        e.set_jip_patches(
-            jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::DOUBLE_PRECISION,
-        );
-        e.on_site_for_test(0x0059_3fbc, jip_operator);
-    }
-}
-
-fn jip_operator(e: &mut Engine, w: &[u32]) -> Option<u32> {
-    let value = |kind: u32, low: u32, high: u32| {
-        if kind & 0xff != 0 {
-            f64::from_bits(u64::from(low) | u64::from(high) << 32)
-        } else {
-            f64::from(low as i32)
-        }
-    };
-    let l = value(w[1], w[2], w[3]);
-    let r = value(w[4], w[5], w[6]);
-    let result = match w[0] + 2 {
-        11 => l + r,
-        12 => l * r,
-        _ => return None,
-    };
-    e.mem.set_u8(w[7], 1);
-    e.mem.set_f64(w[7] + 8, result);
-    Some(1)
-}
-
 /// What every `Eval` comparison names: the families and the NaN payloads.
 trait Common {
     fn common(self) -> Diff;
@@ -566,7 +533,7 @@ fn scripts_eval_midpoints_and_rounding_modes() {
 }
 
 /// Texts, literals, the modulo and division cases that do not fault, the errors and the long
-/// tokens; parse mode, xNVSE and JIP on and off.
+/// tokens; parse mode, xNVSE on and off.
 const TEXTS: &[&str] = &[
     "3 4 +",
     "3 4 -",
@@ -637,13 +604,12 @@ fn scripts_eval_texts_errors_and_extenders() {
         expression::eval(Ptr<_>, Ptr<_>, u32, u32, u32, u32, i32, u8) -> f64
     ))
     .common()
-    .inputs(&[Input::Of(templates), Input::Flag, Input::Flag, Input::Flag])
+    .inputs(&[Input::Of(templates), Input::Flag, Input::Flag])
     .max_cases(512)
     .expect_stops(|case| text_stops(TEXTS[case.word(0) as usize], case.word(1) != 0))
     .setup(|e, case| {
         world(e);
         xnvse(e, case.word(2) != 0);
-        jip(e, case.word(3) != 0);
         let template = TEXTS[case.word(0) as usize];
         let mut bytes = Vec::new();
         for t in template.split(' ').filter(|t| !t.is_empty()) {
@@ -694,20 +660,13 @@ fn scripts_eval_compiled_operands_with_extenders() {
         expression::eval(Ptr<_>, Ptr<_>, u32, u32, u32, u32, i32, u8) -> f64
     ))
     .common()
-    .inputs(&[
-        Input::Of(templates),
-        Input::Flag,
-        Input::Flag,
-        Input::Flag,
-        Input::Flag,
-    ])
+    .inputs(&[Input::Of(templates), Input::Flag, Input::Flag, Input::Flag])
     .max_cases(512)
     .setup(|e, case| {
         world(e);
         xnvse(e, case.word(2) != 0);
-        jip(e, case.word(3) != 0);
         let w = script_world(e, 0);
-        e.mem.set_u32(ANSWER_HANDLER, case.word(4));
+        e.mem.set_u32(ANSWER_HANDLER, case.word(3));
         eval_words(
             e,
             COMPILED[case.word(0) as usize],
@@ -1258,8 +1217,8 @@ fn expressions_of(code: &[u8], out: &mut Vec<Vec<u8>>) {
 
 /// `NV_DATA="...\Data" cargo test -p engine --test typed_scripts -- --ignored real_scda`: every
 /// expression of `FalloutNV.esm`'s compiled scripts (up to `NV_EXPRESSIONS`, default 3000), typed
-/// against translated in the same script world, xNVSE and JIP on and off. Nothing of the game's is
-/// stored; the expressions' referenced objects and commands beyond the world's answer as missing.
+/// against translated in the same script world, xNVSE on and off. Nothing of the game's is stored;
+/// the expressions' referenced objects and commands beyond the world's answer as missing.
 #[test]
 #[ignore = "needs the player's FalloutNV.esm (set NV_DATA)"]
 fn real_scda_expressions() {
@@ -1290,12 +1249,11 @@ fn real_scda_expressions() {
         expression::eval(Ptr<_>, Ptr<_>, u32, u32, u32, u32, i32, u8) -> f64
     ))
     .common()
-    .inputs(&[Input::Of(indices), Input::Flag, Input::Flag])
-    .max_cases(count * 4)
+    .inputs(&[Input::Of(indices), Input::Flag])
+    .max_cases(count * 2)
     .setup(move |e, case| {
         world(e);
         xnvse(e, case.word(1) != 0);
-        jip(e, case.word(2) != 0);
         let w = script_world(e, 0);
         eval_words(
             e,

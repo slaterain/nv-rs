@@ -648,8 +648,6 @@ const FORM_TYPE_PROJECTILE: u32 = 0x33;
 const FORM_TYPE_EXPLOSION: u32 = 0x51;
 /// `NAVI`.
 const FORM_TYPE_NAVI: u32 = 0x38;
-/// `LIGH` (`CreateFormOfType` allocates it with `PUSH 0xC8` at `0x465487`).
-const FORM_TYPE_LIGHT: u8 = 0x1e;
 /// `CELL`, `WRLD`, `LAND`, `NAVM`.
 const FORM_TYPE_CELL: u32 = 0x39;
 const FORM_TYPE_WORLD_SPACE: u32 = 0x41;
@@ -3973,8 +3971,7 @@ fn open_file_archives(e: &mut Engine, file: u32) {
                         ],
                     );
                     if e.call(ARCHIVE_IS_OPEN, &args![path]).u32() == 0 {
-                        let is_override = archive_override_seam(e, path).unwrap_or(0);
-                        e.call(OPEN_ARCHIVE, &args![path, 0u32, is_override]);
+                        e.call(OPEN_ARCHIVE, &args![path, 0u32, 0u32]);
                     }
                 }
                 if e.call(FIND_NEXT_FILE_A, &args![handle, find_data]).u32() == 0 {
@@ -3984,20 +3981,6 @@ fn open_file_archives(e: &mut Engine, file: u32) {
             e.call(FIND_CLOSE, &args![handle]);
         }
     });
-}
-
-/// The call of `ArchiveManager::OpenArchive` (`00af4be0`) at `0x463855` in
-/// [`open_file_archives`] (its third word, "is an override", 0 in the exe). JIP LN NVSE's G130
-/// (a fix, the row `NV_JIP_GAME_PATCHES`; JIP puts it in only when `Data\*.override` files exist)
-/// calls its `LoadBSAFileHook` there, which sets that word to whether the archive has such a
-/// file: the seam at `0x463855` answers the word, asked with the archive's path. With the word's
-/// `FIXES` bit clear: one load, then none (the exe's 0).
-#[inline]
-fn archive_override_seam(e: &mut Engine, path: u32) -> Option<u32> {
-    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
-        return e.site(0x0046_3855, &[path]);
-    }
-    None
 }
 
 // Translated from 00464d30 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4223,17 +4206,6 @@ pub fn tes_data_handler_create_form_of_type(e: &mut Engine, form_type: u8) -> Pt
                 ALIGNED_NEW
             } else {
                 OPERATOR_NEW
-            };
-            // A light form (`PUSH 0xC8` at `0x465487`): JIP's H04 (group GL's row and handler;
-            // `SafeWrite8(0x465488, 0xCC)`) makes it 0xCC bytes, its editor id's word at +0xC8.
-            // The seam `0x465488` answers the size (no words). One load while JIP is not
-            // installed.
-            let size = if form_type == FORM_TYPE_LIGHT
-                && e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
-            {
-                e.site(0x0046_5488, &[]).unwrap_or(size)
-            } else {
-                size
             };
             let memory = e.call(allocator, &args![size]).u32();
             let object = if memory == 0 {
@@ -12877,49 +12849,16 @@ mod tests {
         assert_eq!(*sizes.borrow(), vec![(1, 0xa0), (1, 0x108)]);
     }
 
-    thread_local! {
-        /// The words H04's seam handler of a test was asked with.
-        static H04_ASKED: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
-    }
-
-    /// H04's seam at `0x465488` (JIP's `SafeWrite8(0x465488, 0xCC)`, group GL's handler): asked
-    /// only for a light form (0x1E) and only with JIP installed (whatever the fixes row), with
-    /// no words; the answer is the light form's size. JIP not installed: the table's 0xC8, not
-    /// asked; other forms never.
+    /// A light form (0x1E) takes the table's 0xC8 bytes (`PUSH 0xC8` at `0x465487`), another
+    /// form its own size.
     #[test]
-    fn jip_h04_seam_sizes_the_light_form() {
-        use engine_core::extend::{jip_patches, Owner, SiteSlot};
-        fn size(_: &mut Engine, a: &[u32]) -> Option<u32> {
-            H04_ASKED.with(|v| v.borrow_mut().push(a.to_vec()));
-            Some(0xcc)
-        }
-        for word in [
-            0,
-            jip_patches::FIXES,
-            jip_patches::INSTALLED,
-            jip_patches::INSTALLED | jip_patches::FIXES,
-        ] {
-            let installed = word & jip_patches::INSTALLED != 0;
-            H04_ASKED.with(|v| v.borrow_mut().clear());
-            let (mut e, _) = engine3();
-            let sizes = form_factory(&mut e);
-            e.set_jip_patches(word);
-            e.on_site(SiteSlot::new(Owner::Jip, 0x0046_5488), size);
-            let form = e.call(0x0046_5110, &args![0x1eu32]).u32();
-            assert_ne!(form, 0);
-            e.call(0x0046_5110, &args![0x15u32]);
-            assert_eq!(
-                *sizes.borrow(),
-                vec![(0, if installed { 0xcc } else { 0xc8 }), (0, 0x90)],
-                "{word:08x}"
-            );
-            let asked = H04_ASKED.with(|v| v.borrow().clone());
-            assert_eq!(
-                asked,
-                if installed { vec![vec![]] } else { vec![] },
-                "{word:08x}"
-            );
-        }
+    fn create_form_of_type_sizes_the_light_form_from_the_table() {
+        let (mut e, _) = engine3();
+        let sizes = form_factory(&mut e);
+        let form = e.call(0x0046_5110, &args![0x1eu32]).u32();
+        assert_ne!(form, 0);
+        e.call(0x0046_5110, &args![0x15u32]);
+        assert_eq!(*sizes.borrow(), vec![(0, 0xc8), (0, 0x90)]);
     }
 
     #[test]
@@ -14962,132 +14901,6 @@ mod tests {
             2,
             "the empty one is not asked"
         );
-    }
-
-    /// Where G130's test handler counts its calls, keeps the last path's first byte address and
-    /// reads its answer (`+8`: 0 none, else the word + 1).
-    const G130_ASKED: u32 = 0x0537_0000;
-
-    /// The load of [`load_opens_the_archives_of_a_file_that_has_masters`] (two archives to open:
-    /// `File0 - Textures.bsa` and `File0 - Sounds.bsa`) with G130's seam (JIP LN NVSE step 3.9
-    /// GF) handled by a test handler answering `answer` for the textures archive and 0 for the
-    /// other, and the word `word`. Answers each opened archive's name and words.
-    fn g130_run(word: u32, answer: Option<u32>) -> (Vec<(Vec<u8>, u32, u32)>, u32) {
-        use engine_core::extend::{Owner, SiteSlot};
-        let mut l = loader_setup(&[4]);
-        let file = l.files[0];
-        l.e.mem.set_u32(file + 0x3ec, 1);
-        l.e.map(G130_ASKED, 0x1000);
-        l.e.mem
-            .set_u32(G130_ASKED + 8, answer.map_or(0, |w| w.wrapping_add(1)));
-        l.e.register(STRING_COPY_S, |e, a| {
-            let text = e.mem.cstr(a[2]);
-            e.mem.set_cstr(a[0], &text);
-            ret(a[0])
-        });
-        l.e.register(STRING_RFIND_CHAR, |e, a| {
-            let text = e.mem.cstr(a[0]);
-            ret(text
-                .iter()
-                .rposition(|&c| c == a[1] as u8)
-                .map_or(0, |at| a[0] + at as u32))
-        });
-        let found = Rc::new(RefCell::new(vec![
-            ("File0 - Textures.bsa", 50u32),
-            ("File0 - Sounds.bsa", 20),
-        ]));
-        let list = found.clone();
-        l.e.register_double(FIND_FIRST_FILE_A, move |e, a| {
-            let (name, size) = list.borrow_mut().remove(0);
-            e.mem.set_u32(a[1] + FIND_DATA_SIZE_LOW, size);
-            e.mem.set_cstr(a[1] + FIND_DATA_FILE_NAME, name.as_bytes());
-            ret(7)
-        });
-        let list = found.clone();
-        l.e.register_double(FIND_NEXT_FILE_A, move |e, a| {
-            let mut list = list.borrow_mut();
-            if list.is_empty() {
-                return ret(0);
-            }
-            let (name, size) = list.remove(0);
-            e.mem.set_u32(a[1] + FIND_DATA_SIZE_LOW, size);
-            e.mem.set_cstr(a[1] + FIND_DATA_FILE_NAME, name.as_bytes());
-            ret(1)
-        });
-        l.e.register(ARCHIVE_IS_OPEN, |_, _| ret(0));
-        do_nothing(&mut l.e, &[FIND_CLOSE]);
-        // The path buffer is reused for the next archive: its name is taken as it opens.
-        let opened = Rc::new(RefCell::new(Vec::new()));
-        let log = opened.clone();
-        l.e.register_double(OPEN_ARCHIVE, move |e, a| {
-            log.borrow_mut().push((e.mem.cstr(a[0]), a[1], a[2]));
-            Ret::default()
-        });
-        l.e.on_site(SiteSlot::new(Owner::Jip, 0x0046_3855), |e, a| {
-            let n = e.mem.u32(G130_ASKED);
-            e.mem.set_u32(G130_ASKED, n + 1);
-            let answer = e.mem.u32(G130_ASKED + 8);
-            if answer == 0 {
-                return None;
-            }
-            let textures = e.mem.cstr(a[0]) == b"DATA\\File0 - Textures.bsa";
-            Some(if textures { answer - 1 } else { 0 })
-        });
-        l.e.set_jip_patches(word);
-        start_log(&mut l.e);
-        assert!(load(&mut l, 0));
-        let opened = opened.borrow().clone();
-        (opened, l.e.mem.u32(G130_ASKED))
-    }
-
-    /// The words the on-tests run with: the row's bit alone, and a player's whole word (JIP's
-    /// installed bit, the row and an optional switch), so a gate that tests for equality fails.
-    const G130_ON_WORDS: [u32; 2] = [
-        engine_core::extend::jip_patches::FIXES,
-        engine_core::extend::jip_patches::INSTALLED
-            | engine_core::extend::jip_patches::FIXES
-            | engine_core::extend::jip_patches::FO3_WPN_DEGRADATION,
-    ];
-
-    /// G130 off (JIP not installed, or installed with the row off): the seam is not asked and
-    /// both archives open with the exe's 0.
-    #[test]
-    fn g130_seam_does_nothing_while_off() {
-        use engine_core::extend::jip_patches;
-        for word in [0, jip_patches::INSTALLED] {
-            let (opened, asked) = g130_run(word, Some(1));
-            assert_eq!(asked, 0, "{word:08x}");
-            assert_eq!(
-                opened,
-                vec![
-                    (b"DATA\\File0 - Textures.bsa".to_vec(), 0, 0),
-                    (b"DATA\\File0 - Sounds.bsa".to_vec(), 0, 0)
-                ],
-                "{word:08x}"
-            );
-        }
-    }
-
-    /// G130 on: the seam is asked once per archive opened, with its path, and its answer is the
-    /// open's third word (the archive with an `.override` file opens as an override); an answer
-    /// of none keeps the exe's 0. Each with the row's bit alone and with a player's whole word.
-    #[test]
-    fn g130_seam_answer_marks_the_archive_an_override() {
-        for word in G130_ON_WORDS {
-            let (opened, asked) = g130_run(word, Some(1));
-            assert_eq!(asked, 2, "{word:08x}");
-            assert_eq!(
-                opened,
-                vec![
-                    (b"DATA\\File0 - Textures.bsa".to_vec(), 0, 1),
-                    (b"DATA\\File0 - Sounds.bsa".to_vec(), 0, 0)
-                ],
-                "{word:08x}"
-            );
-            let (opened, asked) = g130_run(word, None);
-            assert_eq!(asked, 2, "{word:08x}");
-            assert!(opened.iter().all(|o| o.2 == 0), "{word:08x}");
-        }
     }
 
     #[test]

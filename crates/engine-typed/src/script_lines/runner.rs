@@ -115,22 +115,6 @@ fn header_of(e: &mut Engine, script: Ptr) -> u32 {
     e.call(SCRIPT_HEADER_OF, &args![script]).u32()
 }
 
-/// JIP LN NVSE's `bNoFailedScriptLocks` (O7): its three jumps skip the clear of a failed script's
-/// data length. The switch's bit is tested first; true when JIP's handler at `site` takes it.
-#[inline]
-fn jip_keeps_failed_script(e: &mut Engine, site: u32) -> bool {
-    e.jip_patches() & engine_core::extend::jip_patches::NO_FAILED_SCRIPT_LOCKS != 0
-        && e.site(site, &[]).is_some()
-}
-
-/// JIP LN NVSE's G24: a busy runner's jump at `0x5E0DD1` over the two names and the script log's
-/// nested-run line. The fixes' bit is tested first; true when JIP's handler takes the jump.
-#[inline]
-fn jip_skips_nested_log(e: &mut Engine) -> bool {
-    e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
-        && e.site(0x005e_0dd1, &[]).is_some()
-}
-
 /// The address of if-stack level `depth`.
 #[inline]
 fn if_level(this: u32, depth: u32) -> u32 {
@@ -150,11 +134,11 @@ fn new_expression(e: &mut Engine, expression: Ptr) {
 // Typed from 005e0d20
 /// The runner's line loop: runs `script`'s compiled lines through `ParseLine` and `EvaluateLine`
 /// (both by address, where xNVSE wraps them) until the data ends, a parse fails (the script's data
-/// size is then cleared, unless JIP keeps it), a line fails, or a `return` (opcode 0x1e). The runner
-/// keeps the container, the reference's form and the locals (fresh ones, deleted afterwards, when
-/// none are given). A magic-effect script stores `effect_start`, `effect_finish` and `elapsed` in
-/// the locals' effect block (made when missing). Unless `keep_actions` or a line failed, the
-/// locals' action list is processed. With the debug text shown the run's time goes to the script's
+/// size is then cleared), a line fails, or a `return` (opcode 0x1e). The runner keeps the
+/// container, the reference's form and the locals (fresh ones, deleted afterwards, when none are
+/// given). A magic-effect script stores `effect_start`, `effect_finish` and `elapsed` in the
+/// locals' effect block (made when missing). Unless `keep_actions` or a line failed, the locals'
+/// action list is processed. With the debug text shown the run's time goes to the script's
 /// profiler timer. Answers the "references changed" byte, cleared on entry; a busy runner logs and
 /// runs nothing.
 #[allow(clippy::too_many_arguments)]
@@ -186,16 +170,13 @@ pub fn run_lines(
         }
         let running = e.mem.u32(me + RUNNING);
         if running != 0 {
-            // 005e0dd1: JIP LN NVSE's G24 jumps over the two names and the log.
-            if !jip_skips_nested_log(e) {
-                let requested_name = name_of(e, script.addr());
-                let running = e.mem.u32(me + RUNNING);
-                let running_name = name_of(e, running);
-                e.call(
-                    SCRIPT_LOG,
-                    &args![NESTED_RUN_MESSAGE, running_name, requested_name],
-                );
-            }
+            let requested_name = name_of(e, script.addr());
+            let running = e.mem.u32(me + RUNNING);
+            let running_name = name_of(e, running);
+            e.call(
+                SCRIPT_LOG,
+                &args![NESTED_RUN_MESSAGE, running_name, requested_name],
+            );
             return e.mem.u8(me + 0xa1) != 0;
         }
         e.mem.set_u32(me + RUNNING, script.addr());
@@ -266,11 +247,8 @@ pub fn run_lines(
                         )
                         .bool()
                     {
-                        // 005e0fbe: JIP LN NVSE's O7 seam jumps past the clear.
-                        if !jip_keeps_failed_script(e, 0x005e_0fbe) {
-                            let header = header_of(e, script);
-                            e.mem.set_u32(header + 8, 0);
-                        }
+                        let header = header_of(e, script);
+                        e.mem.set_u32(header + 8, 0);
                         break;
                     }
                     let remaining = e.mem.u32(skip);
@@ -556,8 +534,7 @@ struct Line {
 /// effects. False when the line failed (logged).
 ///
 /// Seams: `005e16c3` before the block type's handler; `005e1716` (JIP LN's script wait) in place of
-/// the block test; `005e1a23` and `005e1f0b` (JIP's kept failed scripts); `005e2329` before a
-/// command's handler.
+/// the block test; `005e2329` before a command's handler.
 #[allow(clippy::too_many_arguments)]
 pub fn run_line(
     e: &mut Engine,
@@ -856,11 +833,8 @@ fn evaluate_set(e: &mut Engine, at: &Line) -> bool {
                 SCRIPT_LOG,
                 &args![SET_EXPRESSION_ERROR, name, at.line, error_name],
             );
-            // 005e1a23: JIP LN NVSE's O7 seam jumps past the clear.
-            if !jip_keeps_failed_script(e, 0x005e_1a23) {
-                let header = header_of(e, at.script);
-                e.mem.set_u32(header + 8, 0);
-            }
+            let header = header_of(e, at.script);
+            e.mem.set_u32(header + 8, 0);
             return false;
         }
         if at.parse_only {
@@ -936,7 +910,7 @@ fn evaluate_set(e: &mut Engine, at: &Line) -> bool {
 /// then the expression. When no branch of this level was taken yet, a condition other than 0.0
 /// takes this one (bit 2); otherwise the jump count is added to `*skip`. `parse_only` reads the
 /// expression and marks the level taken. An expression error reports, stores error code 6 and the
-/// expression's code (+0x1c), clears the script's data size (unless JIP keeps it) and fails.
+/// expression's code (+0x1c), clears the script's data size and fails.
 fn evaluate_condition(e: &mut Engine, at: &Line) -> bool {
     let data = at.data;
     let count = e.mem.i16(data.wrapping_add(at.position));
@@ -990,11 +964,8 @@ fn evaluate_condition(e: &mut Engine, at: &Line) -> bool {
                 e.call(SET_ERROR_CODE, &args![this, at.script, 6u32]);
                 let name = name_of(e, at.script.addr());
                 e.call(SCRIPT_LOG, &args![CONDITION_ERROR, name, at.line]);
-                // 005e1f0b: JIP LN NVSE's O7 seam jumps past the clear.
-                if !jip_keeps_failed_script(e, 0x005e_1f0b) {
-                    let header = header_of(e, at.script);
-                    e.mem.set_u32(header + 8, 0);
-                }
+                let header = header_of(e, at.script);
+                e.mem.set_u32(header + 8, 0);
                 let code = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, expression));
                 e.mem.set_u32(this + 0x1c, code);
                 false
