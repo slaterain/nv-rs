@@ -3138,6 +3138,8 @@ impl Gpu {
             topology,
             wgpu::PrimitiveTopology::TriangleStrip | wgpu::PrimitiveTopology::LineStrip
         );
+        // The hitch log's counts (`d3d9_stream::hitch`): a caster pipeline made and its time, on whichever thread.
+        let started = std::time::Instant::now();
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("sun shadow caster"),
@@ -3187,10 +3189,15 @@ impl Gpu {
             multiview_mask: None,
             cache,
         });
-        match crate::device::block_on(scope.pop()) {
+        let made = match crate::device::block_on(scope.pop()) {
             None => Ok(pipeline),
             Some(e) => Err(e.to_string()),
-        }
+        };
+        let took = started.elapsed();
+        d3d9_stream::hitch::add(d3d9_stream::hitch::Count::ShadowPipelines, 1);
+        d3d9_stream::hitch::add_time(d3d9_stream::hitch::Count::ShadowPipelineNs, took);
+        d3d9_stream::hitch::note(d3d9_stream::hitch::Call::ShadowPipeline, took);
+        made
     }
 
     /// Draws the maps: the still casters' map of each cascade `redraw` names, from the casters in

@@ -231,6 +231,9 @@ pub struct Frame {
     pub hibernating: u32,
     /// The longest completed load task main ran (ns, its vtable).
     pub longest_task: (u64, u32),
+    /// The render thread's and the queue thread's longest blocking call of the frame, with its time (ns)
+    /// (`engine_platform::stream_hitch::take_longest`).
+    pub longest_calls: [Option<(engine_platform::stream_hitch::Call, u64)>; 2],
     /// The game's frame tail split at its marks (`engine_core::stage_time::take_tail`): printed when the tail is
     /// [`TAIL_SPLIT_MS`] or more.
     pub tail: Option<engine_core::stage_time::Tail>,
@@ -615,26 +618,165 @@ impl Frame {
         self.s(S::PresentWaitNs) + self.s(S::ReplyWaitNs) + self.s(S::QueueFullNs)
     }
 
-    /// What the render thread's presents of the frame waited on, the largest first, when one is 1 ms or more: the
-    /// queue thread's last frame (`sync`, its present call included) and the window's next frame (with the Fifo present
-    /// mode, the display's refresh).
+    /// Where the render thread's time went while main waited for it, each part said when it is 1 ms or more, the largest
+    /// first: what it waited for (the window's next frame: with the Fifo present mode the display's refresh; the queue
+    /// thread's last frame at its present, its present call included; the queue thread within the frame; the GPU; the
+    /// drawing side at a cut), what kept it busy (its own work on the game's commands, and its blocking calls by part),
+    /// and the longest single call on it and on the queue thread.
     fn render_reason(&self) -> String {
-        use engine_platform::stream_hitch::Count as S;
-        let mut parts = [
+        use engine_platform::stream_hitch::{Count as S, Part};
+        let render = |p: Part| self.render_part(p);
+        let mut waits = [
             (self.s(S::AcquireNs), "the window's next frame"),
             (self.s(S::RenderSyncNs), "the queue thread's last frame"),
+            (render(Part::ThreadWait), "the queue thread"),
+            (render(Part::GpuWait), "the GPU"),
+            (self.s(S::SlotWaitNs), "the drawing side"),
         ];
-        parts.sort_by_key(|a| std::cmp::Reverse(a.0));
-        let said: Vec<String> = parts
-            .iter()
-            .filter(|(ns, _)| *ns >= 1_000_000)
-            .map(|(ns, w)| format!("{w} {:.0} ms", ms(*ns)))
-            .collect();
-        if said.is_empty() {
+        let mut busy = [
+            (self.render_own(), "the game's commands"),
+            (render(Part::Poll), "polls"),
+            (render(Part::Submit), "submits"),
+            (render(Part::Upload), "uploads"),
+            (render(Part::Create), "resources made"),
+            (render(Part::Finish), "encoders finished"),
+            (self.s(S::RenderIdleNs), "idle work"),
+        ];
+        let said = |parts: &mut [(u64, &str)]| -> Vec<String> {
+            parts.sort_by_key(|a| std::cmp::Reverse(a.0));
+            parts
+                .iter()
+                .filter(|(ns, _)| *ns >= 1_000_000)
+                .map(|(ns, w)| format!("{w} {:.0} ms", ms(*ns)))
+                .collect()
+        };
+        let mut out = Vec::new();
+        let waited = said(&mut waits);
+        if !waited.is_empty() {
+            out.push(format!("it waited for {}", waited.join(", ")));
+        }
+        let worked = said(&mut busy);
+        if !worked.is_empty() {
+            out.push(format!("busy with {}", worked.join(", ")));
+        }
+        let longest = self.longest_calls_words(1_000_000);
+        if !longest.is_empty() {
+            out.push(format!("the longest call: {longest}"));
+        }
+        if out.is_empty() {
             String::new()
         } else {
-            format!(" (it waited for {})", said.join(", "))
+            format!(" ({})", out.join("; "))
         }
+    }
+
+    /// The render thread's blocking calls of part `p` (ns).
+    fn render_part(&self, p: engine_platform::stream_hitch::Part) -> u64 {
+        use engine_platform::stream_hitch::Count as S;
+        self.stream
+            .get(S::RenderSubmitNs as usize + p as usize)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// The queue thread's blocking calls of part `p` (ns).
+    fn queue_part(&self, p: engine_platform::stream_hitch::Part) -> u64 {
+        use engine_platform::stream_hitch::Count as S;
+        self.stream
+            .get(S::QueueSubmitNs as usize + p as usize)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// The render thread's own work on the game's commands (ns): its time on them less its blocking calls and its
+    /// present's waits, which are counted apart.
+    fn render_own(&self) -> u64 {
+        use engine_platform::stream_hitch::{Count as S, PARTS};
+        let calls: u64 = (0..PARTS)
+            .map(|i| {
+                self.stream
+                    .get(S::RenderSubmitNs as usize + i)
+                    .copied()
+                    .unwrap_or(0)
+            })
+            .sum();
+        self.s(S::RenderBusyNs)
+            .saturating_sub(calls + self.s(S::RenderSyncNs) + self.s(S::AcquireNs))
+    }
+
+    /// The two threads' longest blocking calls of `at_least` ns or more, in words.
+    fn longest_calls_words(&self, at_least: u64) -> String {
+        let said: Vec<String> = self
+            .longest_calls
+            .iter()
+            .zip(["on the render thread", "on the queue thread"])
+            .filter_map(|(c, on)| {
+                c.filter(|&(_, ns)| ns >= at_least)
+                    .map(|(call, ns)| format!("{} {on} {:.1} ms", call.name(), ms(ns)))
+            })
+            .collect();
+        said.join(", ")
+    }
+
+    /// The render and queue threads' frame in the work list (main waited 1 ms or more for the render thread): the
+    /// render thread's time on the game's commands split into its own work and its blocking calls, its idle work and
+    /// its waits for the drawing side; the queue thread's time on its jobs split the same way; the longest calls.
+    fn render_frame_words(&self) -> Option<String> {
+        use engine_platform::stream_hitch::{Count as S, Part, PARTS, PART_NAMES};
+        if self.render_wait() < 1_000_000 {
+            return None;
+        }
+        let parts = |of: &dyn Fn(Part) -> u64, first: Option<(u64, &str)>| -> String {
+            let all = [
+                Part::Submit,
+                Part::Upload,
+                Part::Create,
+                Part::Poll,
+                Part::GpuWait,
+                Part::ThreadWait,
+                Part::Finish,
+            ];
+            debug_assert_eq!(all.len(), PARTS);
+            let said: Vec<String> = first
+                .into_iter()
+                .chain(all.iter().map(|&p| (of(p), PART_NAMES[p as usize])))
+                .filter(|(ns, _)| *ns >= TENTH_MS)
+                .map(|(ns, w)| format!("{w} {:.1}", ms(ns)))
+                .collect();
+            if said.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", said.join(", "))
+            }
+        };
+        let mut l = format!(
+            "the render thread on the game's commands {:.1} ms{}",
+            ms(self.s(S::RenderBusyNs)),
+            parts(
+                &|p| self.render_part(p),
+                Some((self.render_own(), "its own work"))
+            )
+        );
+        for (c, w) in [
+            (S::RenderIdleNs, "idle work"),
+            (S::SlotWaitNs, "waiting for the drawing side"),
+        ] {
+            if self.s(c) >= TENTH_MS {
+                l += &format!(", {w} {:.1} ms", ms(self.s(c)));
+            }
+        }
+        if self.s(S::QueueBusyNs) >= TENTH_MS {
+            l += &format!(
+                ", the queue thread on its jobs {:.1} ms{}",
+                ms(self.s(S::QueueBusyNs)),
+                parts(&|p| self.queue_part(p), None)
+            );
+        }
+        let longest = self.longest_calls_words(TENTH_MS);
+        if !longest.is_empty() {
+            l += &format!(", the longest call {longest}");
+        }
+        Some(l)
     }
 
     /// The plain-word guess of the frame's main cause, by simple rules over its counts.
@@ -721,13 +863,21 @@ impl Frame {
                 ),
             ));
         }
-        let made = self.s(S::PipelineNs) + self.s(S::ModuleNs);
+        let made = self.s(S::PipelineNs) + self.s(S::ModuleNs) + self.s(S::ShadowPipelineNs);
         if made > 0 {
             // Made on the render thread or a helper: main feels it through its wait for the render thread.
+            let casters = if self.s(S::ShadowPipelines) > 0 {
+                format!(
+                    ", {} sun-shadow caster pipelines",
+                    self.s(S::ShadowPipelines)
+                )
+            } else {
+                String::new()
+            };
             said.push((
                 ms(made).min(ms(render).max(ms(made) / 2.0)),
                 format!(
-                    "made {} pipelines and {} shader modules ({:.0} ms)",
+                    "made {} pipelines{casters} and {} shader modules ({:.0} ms)",
                     self.s(S::Pipelines),
                     self.s(S::Modules),
                     ms(made)
@@ -1043,6 +1193,9 @@ impl Frame {
                 ms(self.s(S::SwapNs))
             ),
         );
+        if let Some(w) = self.render_frame_words() {
+            put(1, w);
+        }
         put(
             self.s(S::ReplyWaitNs) / TENTH_MS,
             format!(
@@ -1072,6 +1225,14 @@ impl Frame {
                 "{} shader modules made ({:.1} ms)",
                 self.s(S::Modules),
                 ms(self.s(S::ModuleNs))
+            ),
+        );
+        put(
+            self.s(S::ShadowPipelines),
+            format!(
+                "{} sun-shadow caster pipelines made ({:.1} ms)",
+                self.s(S::ShadowPipelines),
+                ms(self.s(S::ShadowPipelineNs))
             ),
         );
         put(
@@ -1446,6 +1607,8 @@ impl HitchLog {
         let off = std::env::var("NV_HITCH_LOG").is_ok_and(|v| v.trim() == "0");
         engine_core::hitch::set_on(!off);
         engine_core::stage_time::set_points(!off);
+        // The render and queue threads' blocking calls are timed with the log on.
+        engine_platform::stream_hitch::set_on(!off);
         if off {
             engine_platform::d3d9real::set_report_hitch_totals(None);
             return None;
@@ -1502,6 +1665,7 @@ impl HitchLog {
             0
         };
         let longest_task = engine_core::hitch::take_longest_task();
+        let longest_calls = engine_platform::stream_hitch::take_longest();
         // Taken every frame (its drains are the frame's), after `take_stages` passed the host's mark.
         let tail = engine_core::stage_time::take_tail();
         // The host's time that ended at this frame's `OnIdle`, taken every frame too.
@@ -1566,6 +1730,7 @@ impl HitchLog {
             section_holder,
             hibernating,
             longest_task,
+            longest_calls,
             tail,
             host_gap,
             left_out,
@@ -2135,6 +2300,93 @@ mod tests {
             "{}",
             f.line()
         );
+
+        // The maintainer's 181 ms wait in Present with the render thread's own waits near nothing: where its frame
+        // went (a poll held behind the queue thread's submit, in this made-up split) and the longest calls by name.
+        let mut f = frame();
+        f.ms = 194.1;
+        f.typical = 10.6;
+        f.stages = Some([2.0, 0.1, 2.5, 3.2, 0.6, 180.8, 3.3, 1.6, 0.0]);
+        {
+            use engine_platform::stream_hitch::{Call, Count as S};
+            f.stream[S::PresentWaitNs as usize] = 180_600_000;
+            f.stream[S::RenderBusyNs as usize] = 182_000_000;
+            f.stream[S::RenderPollNs as usize] = 150_000_000;
+            f.stream[S::RenderCreateNs as usize] = 40_000;
+            f.stream[S::QueueBusyNs as usize] = 152_000_000;
+            f.stream[S::QueueSubmitNs as usize] = 149_800_000;
+            f.stream[S::QueueUploadNs as usize] = 400_000;
+            f.longest_calls = [
+                Some((Call::Poll, 150_100_000)),
+                Some((Call::Submit, 149_800_000)),
+            ];
+        }
+        assert_eq!(
+            f.cause(),
+            "waited 181 ms for the render thread (busy with polls 150 ms, the game's commands 32 ms; the longest \
+             call: a poll on the render thread 150.1 ms, a submit on the queue thread 149.8 ms)"
+        );
+        assert!(
+            f.line().contains(
+                "the render thread on the game's commands 182.0 ms (its own work 32.0, polls 150.0), the queue \
+                 thread on its jobs 152.0 ms (submits 149.8, uploads 0.4), the longest call a poll on the render \
+                 thread 150.1 ms, a submit on the queue thread 149.8 ms"
+            ),
+            "{}",
+            f.line()
+        );
+        // Its present's waits are not its own work: counted apart, as before.
+        {
+            use engine_platform::stream_hitch::Count as S;
+            f.stream[S::AcquireNs as usize] = 20_000_000;
+            f.stream[S::RenderSyncNs as usize] = 2_000_000;
+        }
+        assert_eq!(f.render_own(), 9_960_000);
+        assert!(
+            f.cause().starts_with(
+                "waited 181 ms for the render thread (it waited for the window's next frame 20 ms, the queue \
+                 thread's last frame 2 ms; busy with polls 150 ms, the game's commands 10 ms;"
+            ),
+            "{}",
+            f.cause()
+        );
+        // The sun shadows' caster pipelines made on the render thread: counted and named apart from the game's.
+        {
+            use engine_platform::stream_hitch::{Call, Count as S};
+            f.stream[S::ShadowPipelines as usize] = 24;
+            f.stream[S::ShadowPipelineNs as usize] = 160_000_000;
+            f.longest_calls[0] = Some((Call::ShadowPipeline, 31_000_000));
+        }
+        assert!(
+            f.cause().contains(
+                "made 0 pipelines, 24 sun-shadow caster pipelines and 0 shader modules (160 ms)"
+            ),
+            "{}",
+            f.cause()
+        );
+        assert!(
+            f.line()
+                .contains("24 sun-shadow caster pipelines made (160.0 ms)"),
+            "{}",
+            f.line()
+        );
+        assert!(
+            f.line().contains(
+                "the longest call a sun-shadow caster pipeline made on the render thread 31.0 ms"
+            ),
+            "{}",
+            f.line()
+        );
+        // Main hardly waited for the render thread: its frame is not written out.
+        let mut f = frame();
+        {
+            use engine_platform::stream_hitch::Count as S;
+            f.stream[S::PresentWaitNs as usize] = 900_000;
+            f.stream[S::RenderBusyNs as usize] = 8_000_000;
+            f.stream[S::QueueBusyNs as usize] = 3_000_000;
+        }
+        assert!(f.render_frame_words().is_none());
+        assert!(!f.line().contains("on the game's commands"), "{}", f.line());
 
         // The pause menu's open: the heap's measured time instead of the estimate, and the tiles made.
         let mut f = frame();

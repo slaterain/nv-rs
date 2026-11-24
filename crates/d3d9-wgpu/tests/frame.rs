@@ -4915,6 +4915,67 @@ impl Drop for Slow {
     }
 }
 
+/// The hitch log's timing of the backend's blocking calls (`d3d9_stream::hitch`): on the queue
+/// thread its jobs and its submits, handed over once each job is done; on the render thread (here
+/// the test's own thread, timed as the render thread) its wait for the queue thread holding a batch
+/// 60 ms and the read-back's wait for the GPU, with the longest call named. A thread that is
+/// neither times nothing.
+#[test]
+fn the_backends_blocking_calls_are_timed_on_its_two_threads() {
+    use d3d9_stream::hitch::{self, Call, Count, Side};
+    let Some(mut g) = Gpu::with_threads(4, 1, true) else {
+        return;
+    };
+    hitch::set_on(true);
+    let d = |a: &[u64], b: &[u64], c: Count| b[c as usize] - a[c as usize];
+    let before = hitch::snapshot();
+    g.clear(3, 0, 1.0);
+    let _ = g.pixels();
+    hitch::publish();
+    let mid = hitch::snapshot();
+    assert_eq!(
+        d(&before, &mid, Count::RenderThreadWaitNs),
+        0,
+        "not a timed thread"
+    );
+    assert_eq!(
+        d(&before, &mid, Count::RenderGpuWaitNs),
+        0,
+        "not a timed thread"
+    );
+    assert!(
+        d(&before, &mid, Count::QueueSubmitNs) > 0,
+        "the queue thread's submits"
+    );
+    assert!(d(&before, &mid, Count::QueueBusyNs) >= d(&before, &mid, Count::QueueSubmitNs));
+    let _ = hitch::take_longest();
+    hitch::set_side(Side::Render);
+    {
+        let _slow = Slow::hold(60);
+        g.clear(3, 0, 1.0);
+        let _ = g.pixels();
+    }
+    hitch::publish();
+    let after = hitch::snapshot();
+    let waited = d(&mid, &after, Count::RenderThreadWaitNs);
+    assert!(
+        waited >= 50_000_000,
+        "the wait for the queue thread: {waited}"
+    );
+    assert!(
+        d(&mid, &after, Count::RenderGpuWaitNs) > 0,
+        "the read-back's wait"
+    );
+    assert!(
+        d(&mid, &after, Count::QueueBusyNs) >= 50_000_000,
+        "the held job"
+    );
+    let [render, queue] = hitch::take_longest();
+    assert_eq!(render.map(|(c, _)| c), Some(Call::QueueWait), "{render:?}");
+    assert!(queue.is_some());
+    assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+}
+
 /// `GetData` with `D3DGETDATA_FLUSH` once around one draw: the batch handed over (to the queue
 /// thread, held there; or submitted at once without one), not waited for.
 fn hand_over(g: &mut Gpu, query: u32, draw: impl FnOnce(&mut Gpu)) {
