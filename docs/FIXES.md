@@ -1779,8 +1779,8 @@ and tweaks every VNV player runs, is being built in as `crates/stewie` (`measure
   long name only starts its extension with `ini` (`a.ini_old`, by its 8.3 short name `A~1.INI`, on a
   drive that keeps short names); nv-rs
   has no short names and reads only names ending in `.ini`.
-- **Not reported as installed yet.** Its eight script commands (`StewieGetValue` and the rest) are
-  not built, so mods are not told it is there: `IsPluginInstalled "lStewieAl's Tweaks"` answers 0 and
+- **Not reported as installed yet.** `StewieGetValue` (`StewVal`) is built; the other seven script commands
+  remain unbuilt, so mods are not told the full plugin is there: `IsPluginInstalled "lStewieAl's Tweaks"` answers 0 and
   `GetPluginVersion` -1, as for a plugin not loaded (nothing half-working is offered to a script). Its
   fixes work all the same. The commands come next, and with them it answers "installed", version
   1005. Its co-save section (bobby-pin health, inventory

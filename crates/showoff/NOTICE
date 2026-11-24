@@ -1,0 +1,6 @@
+ShowOff NVSE by Demorome and contributors, https://github.com/Demorome/ShowOff-NVSE,
+source f45d069d5357968f01246d87bbdcdee4b030dc90, SHOWOFF-NVSE/functions/SO_fn_Files.cpp,
+SO_fn_Files.h, NVSEParamInfoList.h, and SimpleINILibrary/SimpleIni.h.
+Rebuilt in Rust with the mod authors' permission recorded by the maintainer
+(2026-11-03, docs/adr/0016-script-extenders-built-in.md). No C++, DLL or mod assets
+are included. The source's credits and license apply; see the upstream repository.

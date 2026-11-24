@@ -397,6 +397,8 @@ fn ret(eax: u32) -> Ret {
 fn engine(file: Option<&[u8]>) -> Engine {
     FILE.with(|f| *f.borrow_mut() = file.map(<[u8]>::to_vec));
     let mut e = Engine::new();
+    e.map(0x0118_e000, 0x9000);
+    nvse::table::install(&mut e);
     e.register(CREATE_FILE_A, |e, w| {
         assert_eq!(e.mem.cstr(w[0]), INI, "Tweaks' path, beside its DLL");
         AT.with(|a| a.set(0));

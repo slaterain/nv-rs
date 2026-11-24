@@ -121,6 +121,8 @@ pub(crate) fn install_rows_and_extenders(engine: &mut Engine, choice: &fixes::Ch
     // nvse_stewie_tweaks.dll after MCM.dll and before ui_organizer.dll (`crates/stewie`): its
     // settings read, its rows' bits set (each row off by its own `[nv-rs Stewie]` key).
     stewie::install(engine);
+    // ShowOff: individual cached INI commands; the incomplete plugin stays unlisted.
+    showoff::install(engine);
     // UI Organizer, when its row is on: after JIP, as xNVSE loads ui_organizer.dll after
     // jip_nvse.dll (`crates/uio`).
     uio::install(engine);
@@ -335,7 +337,10 @@ impl Host {
             // default), in place of the game's own actor shadows: set before the device is made.
             d3d9_wgpu::sun_shadow::enable_characters(choice.sun_shadow_characters);
             engine_platform::d3d9real::want_sun_shadows(reader);
-            eprintln!("nv-rs: sun shadows on (Vulkan only; in the game's lighting, or the engineers' overlay with NV_SUN_SHADOWS=debug); characters cast: {} (bSunShadowsCharacters)", choice.sun_shadow_characters);
+            eprintln!(
+                "nv-rs: sun shadows on (Vulkan only; in the game's lighting, or the engineers' overlay with NV_SUN_SHADOWS=debug); characters cast: {} (bSunShadowsCharacters)",
+                choice.sun_shadow_characters
+            );
         }
         // Who draws (`fixes::Choice::renderer`: in a launcher's play run, Fallout.ini's
         // `[nv-rs Display] sRenderer`, Vulkan by default); `NV_D3D9`, when it names a backend,

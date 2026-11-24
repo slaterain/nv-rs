@@ -1,0 +1,11 @@
+[package]
+name = "showoff"
+version = "0.1.0"
+description = "ShowOff NVSE compatibility, beginning with cached numeric INI reads"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+engine-core = { path = "../engine-core" }
+nvse = { path = "../nvse" }

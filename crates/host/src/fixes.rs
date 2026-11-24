@@ -1540,6 +1540,18 @@ fn candidates(beside: &Path) -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    /// Mirror the host's xNVSE-before-plugins registration order. These configuration
+    /// fixtures have no input host; the import exists only so xNVSE can wrap it.
+    fn install_nvse_for_plugin_fixture(e: &mut Engine) {
+        // xNVSE copies the executable's vanilla script/console table region. These
+        // install-only tests execute no vanilla commands, so its records are empty.
+        e.map(0x0118_e000, 0x9000);
+        e.register(0x00fd_f02c, |_, _| {
+            panic!("the configuration fixture must not create a DirectInput device")
+        });
+        nvse::install(e);
+    }
+
     use super::*;
 
     fn no_env(_: &str) -> Option<String> {
@@ -3083,6 +3095,7 @@ bJGEditorIDs=0
         ] {
             let mut e = Engine::new();
             install(&mut e, &choice);
+            install_nvse_for_plugin_fixture(&mut e);
             johnnyguitar::install(&mut e);
             assert_eq!(johnnyguitar::on(&e), choice.is_on(&JG_EDITOR_IDS));
         }
@@ -3135,6 +3148,7 @@ bJGEditorIDs=0
             // files seam) finds none.
             e.register(0x00fd_f088, |_, _| 0xffff_ffffu32.into_ret());
             install(&mut e, &choice);
+            install_nvse_for_plugin_fixture(&mut e);
             stewie::install(&mut e);
             assert_eq!(
                 e.stewie(engine_core::extend::stewie::DIALOG_SPEECH_NULL_CHECK),

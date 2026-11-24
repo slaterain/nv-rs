@@ -4,6 +4,78 @@
 use super::*;
 use std::cell::RefCell;
 
+/// JG fn_form.cpp:329: real registration/argument decoding, unsigned flags,
+/// IS_ID rejection and Script::GetConsoleOuput independent of console-open.
+#[test]
+fn get_faction_flags_registration_arguments_and_console_output() {
+    let mut e = engine(false);
+    const OP: u32 = 0x31e0;
+    let rec = nvse::table::record_of(&e, OP);
+    assert_eq!(
+        nvse::table::opcode_by_name(&e, b"GetFactionFlags"),
+        Some(OP)
+    );
+    assert_eq!(
+        nvse::table::return_type(&e, OP),
+        nvse::table::Returns::Default
+    );
+    assert_eq!(e.mem.u16(rec + 0x10), 0); // no calling reference
+    assert_eq!(e.mem.u16(rec + 0x12), 1);
+    let param = e.mem.u32(rec + 0x14);
+    assert_eq!(e.mem.u32(param + 4), 0x3d); // kParams_OneForm
+    assert_eq!(e.mem.u32(param + 8), 0); // required
+
+    let code = alloc(0x100);
+    let result = alloc(8);
+    let offset = alloc(4);
+    let script = alloc(0x80);
+    let refvar = alloc(0x10);
+    let faction = form(&mut e, 0, 8, 0x1234);
+    e.mem.set_u32(script + 0x44, refvar);
+    e.mem.set_u32(refvar + 8, faction);
+    e.register(0x005e_23f0, |_, _| ret(0));
+    let run = |e: &mut Engine, count: u16, encoded: &[u8]| {
+        e.mem.set_u16(code, OP as u16);
+        e.mem.set_u16(code + 2, encoded.len() as u16 + 2);
+        e.mem.set_u16(code + 4, count);
+        e.mem.write(code + 6, encoded);
+        e.mem.set_u32(offset, 4);
+        e.mem.set_f64(result, -1234.0);
+        let words = [e.mem.u32(rec + 0x14), code, 0, 0, script, 0, result, offset];
+        assert_eq!(e.call(e.mem.u32(rec + 0x18), &words).eax & 0xff, 1);
+        e.mem.f64(result)
+    };
+    for flags in [0, 0x101, 0x8000_0000, u32::MAX] {
+        e.mem.set_u32(faction + 0x34, flags);
+        assert_eq!(run(&mut e, 1, &[b'r', 1, 0]), f64::from(flags));
+    }
+    assert_eq!(run(&mut e, 0, &[]), 0.0);
+    assert_eq!(run(&mut e, 1, &[b'n', 1, 0, 0, 0]), 0.0);
+    e.mem.set_u32(refvar + 8, 0);
+    assert_eq!(run(&mut e, 1, &[b'r', 1, 0]), 0.0);
+    e.mem.set_u32(refvar + 8, faction);
+    e.mem.set_u8(faction + 4, 7);
+    assert_eq!(run(&mut e, 1, &[b'r', 1, 0]), 0.0);
+    assert!(calls_to(CONSOLE_PRINT).is_empty());
+
+    e.mem.set_u8(faction + 4, 8);
+    e.mem.set_u32(faction + 0x34, u32::MAX);
+    e.map(0x011d_e000, 0x1000);
+    e.mem.set_u8(0x011d_ea2e, 0); // console closed; TLS echo still controls JG
+    e.register(0x005e_23f0, |_, _| ret(1));
+    e.register(CONSOLE_PRINT, |e, words| {
+        assert_eq!(e.mem.cstr(words[1]), b"GetFactionFlags >> %.f");
+        assert_eq!(e.mem.f64(words[2]), f64::from(u32::MAX));
+        record(CONSOLE_PRINT, words);
+        ret(0)
+    });
+    assert_eq!(run(&mut e, 1, &[b'r', 1, 0]), f64::from(u32::MAX));
+    assert_eq!(calls_to(CONSOLE_PRINT).len(), 1);
+    e.mem.set_u8(faction + 4, 7);
+    assert_eq!(run(&mut e, 1, &[b'r', 1, 0]), 0.0);
+    assert_eq!(calls_to(CONSOLE_PRINT).len(), 1);
+}
+
 const AREA: u32 = 0x0600_0000;
 /// The exe's vtables' pages (0x0101_0000 to 0x010A_0000) and the empty text's.
 const VTABLES: u32 = 0x0101_0000;
@@ -140,6 +212,8 @@ fn engine_with(on: bool, jip_light_setter: bool) -> Engine {
         st0: 0.5,
         ..Ret::default()
     });
+    e.map(0x0118_e000, 0x9000);
+    nvse::table::install(&mut e);
     set_on(&mut e, on);
     install(&mut e);
     e

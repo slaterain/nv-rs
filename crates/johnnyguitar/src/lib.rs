@@ -26,9 +26,11 @@
 //!
 //! It is a fixes row ("JohnnyGuitar's editor ids", `NV_JG_EDITOR_IDS`, on in the fixes preset,
 //! off in vanilla). Off, nothing here is installed and every site runs the exe's path.
-//! JohnnyGuitar is not listed as installed (its 408 commands are not built): a mod that checks
+//! Four gameplay commands are available in `commands`; the remaining 404 are not built.
+//! JohnnyGuitar is not listed as installed: a mod that checks
 //! for it is told it is absent.
 
+pub mod commands;
 pub mod vtables;
 
 // The unit tests' own program: no other crate's functions are linked in.
@@ -173,9 +175,11 @@ fn plugin() -> nvse::plugins::BuiltIn {
 // InitHooks.
 /// With the row on: the store answers; JG's getter and setter in each listed class's slots that
 /// are still the stubs; the nine storing classes' setters wrapped; the seams and the two wraps;
-/// JG's record in xNVSE's list (not listed). Off: nothing (the exe's path everywhere). After JIP
+/// JG's record in xNVSE's list (not listed). Off: no editor-id hooks; individual script
+/// commands remain available. After JIP
 /// (its light slots stay its own, as JG finds them not stubs), before lStewieAl's Tweaks.
 pub fn install(e: &mut Engine) {
+    commands::install(e);
     // Made before the threads start, row on or off, so every thread's engine shares them (xNVSE's
     // removal and JIP's two readers ask the store whether it is on from any thread).
     editor_ids::store(e);

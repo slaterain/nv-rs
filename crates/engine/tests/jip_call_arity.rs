@@ -374,6 +374,11 @@ fn crate_src(name: &str) -> PathBuf {
         })
 }
 
+/// Conventional unit-test modules and their fixture helper, excluded like `#[cfg(test)]` items.
+fn is_test_source_name(name: &str) -> bool {
+    name == "tests.rs" || name.ends_with("_tests.rs") || name == "test_support.rs"
+}
+
 /// A crate's source files, without its test files.
 fn sources(root: &Path) -> Vec<PathBuf> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -383,7 +388,7 @@ fn sources(root: &Path) -> Vec<PathBuf> {
                 walk(&path, out);
             } else if path.extension().is_some_and(|x| x == "rs") {
                 let name = path.file_name().unwrap().to_string_lossy().into_owned();
-                if !name.ends_with("_tests.rs") && name != "test_support.rs" {
+                if !is_test_source_name(&name) {
                     out.push(path);
                 }
             }
@@ -1843,6 +1848,11 @@ fn extenders_virtual_calls_with_a_fixed_target_pass_its_words() {
 /// The reader's own rules, on made-up source.
 #[test]
 fn the_reader_counts_words_by_type_and_lists_what_it_cannot_read() {
+    assert!(is_test_source_name("tests.rs"));
+    assert!(is_test_source_name("ui_hooks_tests.rs"));
+    assert!(is_test_source_name("test_support.rs"));
+    assert!(!is_test_source_name("process_events.rs"));
+    assert!(!is_test_source_name("latest_tests_support.rs"));
     let types = Types::of(&[(
         "a.rs".to_string(),
         code_of(

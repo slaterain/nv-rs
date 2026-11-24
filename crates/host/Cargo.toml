@@ -35,6 +35,7 @@ stewie = { path = "../stewie" }
 uio = { path = "../uio" }
 # The Mod Configuration Menu's plugin (MCM.dll) built in, when its row is on: after JIP, before UIO.
 mcm = { path = "../mcm" }
+showoff = { path = "../showoff" }
 # The load order the game's forms are read from (`player_move`).
 esm = { path = "../esm" }
 # zlib's inflate on the host for the game's compressed archives and records (`native_inflate`).

@@ -12,6 +12,10 @@ real-thread tests (including the pool's inlined unlock). Gameplay validation
 of the reported stops remains open; next, repeat those routes with the corrected
 build ([evidence and limits](ARM_RECURSIVE_LOCK.md)).
 
+Config/form API candidate (2026-11-22): six commands used directly by Agua Fria
+plus GetFactionFlags implemented with focused registered-handler tests; MCM Extender and full mod runtime validation
+remain open ([scope and evidence](AGUA_FRIA.md)).
+
 ## Direction (maintainer, 2026-11-04; [ADR-0012](adr/0012-modern-64-bit-engine.md))
 
 The game looks and plays exactly like the original; what players do not see or

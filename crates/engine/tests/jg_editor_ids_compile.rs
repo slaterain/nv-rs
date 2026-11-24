@@ -100,6 +100,9 @@ fn engine(on: bool) -> Engine {
     }
     nvse::line_reader::install(&mut e);
     nvse::args::install(&mut e);
+    // Plugin commands extend the xNVSE table, as in host startup. The mapped
+    // executable table region above is empty for this compiler fixture.
+    nvse::table::install(&mut e);
     // The exe's bytes (Ghidra, `0118cdd4`): an inventory object is no variable and an object; an
     // integer may be a variable.
     e.mem.write(PARAMETER_TYPES + INVENTORY_OBJECT * 8, &[0, 1]);

@@ -22,10 +22,12 @@
 //! project's rule: nothing half-working is offered to a script). The fixes work either way. Off, no
 //! bit is set and no translation changes.
 //!
-//! Not yet: Tweaks' eight script commands (opcodes `0x2132` up), its co-save records other than `AMID` (kept
+//! `StewieGetValue` (`StewVal`, opcode `0x2139`) is built, querying the port's loaded settings.
+//! Not yet: Tweaks' seven other script commands (opcodes `0x2132` up), its co-save records other than `AMID` (kept
 //! as they were, [`cosave`]) and every row not in
 //! [`rows::all`].
 
+pub mod commands;
 pub mod cosave;
 pub mod ini;
 pub mod rows;
@@ -218,6 +220,7 @@ pub fn install(e: &mut Engine) {
     state.installed = true;
     state.settings = settings;
     state.log = log;
+    commands::install(e);
     nvse::plugins::register(e, plugin());
     // The game's state, not one engine's: real threads' engines share it.
     e.share_ext::<Stewie>();
