@@ -31,7 +31,7 @@ pub fn fn_00e6e8a0(e: &mut Engine, _unused_this: Ptr, item: Ptr) {
     e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
     e.mem.set_u32(NODE_POOL_FREE_LIST, item);
     if count == 0 {
-        e.mem.set_u32(NODE_POOL_LOCK, 0);
+        e.mem.set_u32_release(NODE_POOL_LOCK, 0);
     }
 }
 

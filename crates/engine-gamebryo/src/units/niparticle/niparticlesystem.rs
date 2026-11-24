@@ -67,7 +67,7 @@ pub fn ni_t_pointer_list_base_remove_all(e: &mut Engine, this: Ptr<NiTPointerLis
         e.set_global(COUNTER_011C5F84, counter);
         e.set_global(FREE_NODES_011C5F58, item.addr());
         if counter == 0 {
-            e.set_global(FREE_LIST_STATE_011C5F80, 0u32);
+            e.mem.set_u32_release(FREE_LIST_STATE_011C5F80, 0);
         }
         item = Ptr::new(next);
     }

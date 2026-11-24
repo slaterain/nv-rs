@@ -9,8 +9,9 @@ status in [LEDGER.md](LEDGER.md), and the full list of systems in
 Local ARM crash investigation (2026-11-21): a recursive-lock publication failure
 and duplicate scrap-buffer ownership were reproduced and corrected in focused
 real-thread tests (including the pool's inlined unlock). Gameplay validation
-of the reported stops remains open; next, repeat those routes with the corrected
-build ([evidence and limits](ARM_RECURSIVE_LOCK.md)).
+of the reported stops remains open. The shared list-node pool also has inline
+owner clears that now publish with Release ordering. Next, repeat the reported
+play routes with the corrected build ([evidence and limits](ARM_RECURSIVE_LOCK.md)).
 
 ## Direction (maintainer, 2026-11-04; [ADR-0012](adr/0012-modern-64-bit-engine.md))
 

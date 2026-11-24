@@ -90,3 +90,49 @@ it does not prove that it caused the captured `0000001b` fault. Gameplay was
 not relaunched after the user requested that it stay closed. Retesting that
 route remains the next validation step. Temporary cutter instrumentation is
 excluded from the fix.
+
+## Inline node-pool releases (2026-11-22)
+
+The generic unlock is not the pool's only release path. The shared 12-byte
+list-node pool (`011c5f58`, owner `011c5f80`, recursion count `011c5f84`) also
+has inline final-owner clears in the renderer, scene objects and list helpers.
+Those copies still used ordinary stores after the generic unlock was fixed.
+For example, the owned 1.4.0.525 executable publishes the returned free head
+at `00b65035` before clearing its owner at `00b6503d`; its second geometry-list
+branch does the same at `00b65094` and `00b6509c`. `00b63e90` has nested node
+returns and a final outer release.
+
+The 33 inline final-owner stores for this pool now use
+`Mem::set_u32_release`. This preserves the original recursion tests and write
+order, supplies Release ordering with shared host memory, and keeps ordinary
+tracked memory writes in stepped execution. The refresh covers five more clears of the same owner word in
+BSBatchRenderer, BSShaderAccumulator and NiXenonRenderer.
+
+A subsequent gameplay diagnostic captured a dirty UI queue node changing from
+a live TileImage to a node containing a NiTriStrips geometry, without an
+intervening UI pop. This establishes list-node corruption; it does not identify
+the exact writer or prove missing publication was its only cause. Generic
+allocator/free stress passed before this change and did not exercise these
+inline renderer releases. Bounded four-thread stress of actual renderer spare-list returns
+also passed before the change, including 400,000 returns each through typed and
+translated paths with play-profile optimizations: this is a source-proven ordering correction,
+not a reproduced red-to-green gameplay fix. Gameplay validation remains open.
+
+The synthetic-data integration test `node_pool_publication.rs` covers four
+production return paths: typed and translated `00b63e90` spare-chain releases,
+translated `00b602d0` single-node removal, and typed `00b64f90` accumulator
+cleanup. Each case uses four host threads and 400,000 allocation/return pairs.
+It checks exclusive node ownership, payload integrity, publication of 16
+protected words, the final free chain, and empty owner/count state. It excludes
+refill and actual rendering; unrelated batch-end work is a no-op test double.
+
+On Apple M1 Max the original 28-site patch passed all four cases (1.6
+million allocation/return pairs), and both existing recursive-lock publication
+tests passed. Four focused shader differential tests passed: `release_spare`,
+`draw_sorted`, `accumulator_finish`, and `accumulator_draw`. The three memory
+helper tests, affected-crate Clippy with warnings denied, explicit
+`aarch64-apple-darwin` test compilation, and the combined local play build
+passed. Its headless check against the local mod profile exited successfully.
+The full workspace suite and Windows/Linux runs were not performed for this
+batch; the full shader suite was interrupted in favor of the focused checks.
+The game has not been reopened for gameplay validation.

@@ -212,7 +212,7 @@ pub fn fn_00e75000(e: &mut Engine, this: Ptr) -> bool {
         e.mem.set_u32(POOL_LOCK_COUNT, count);
         e.mem.set_u32(POOL_FREE_LIST, node);
         if count == 0 {
-            e.mem.set_u32(POOL_LOCK, 0);
+            e.mem.set_u32_release(POOL_LOCK, 0);
         }
         let remaining = e.mem.u32(field(this, RECREATE_COUNT)).wrapping_sub(1);
         e.mem.set_u32(field(this, RECREATE_COUNT), remaining);
