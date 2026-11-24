@@ -3573,13 +3573,10 @@ fn update_weapon_sound(e: &mut Engine, f: &UpdateFrame) {
     if e.call(ANIMATION_ENTRY_KIND, &args![entry]).u32() != 1 {
         return;
     }
-    // lStewieAl's Tweaks' row S0489 (`patchSpinWeaponsAlwaysPlaySound`, `JGE` to `JG` at
-    // `0x8893F7`): with the row a count of exactly 1 goes on too.
-    let spin_row = e.stewie(engine_core::extend::stewie::SPIN_WEAPON_SOUND);
     let count = e
         .call(ANIMATION_FIELD_0X70F490, &args![animation, 4u32])
         .i32();
-    let stop = if spin_row { count > 1 } else { count >= 1 };
+    let stop = count >= 1;
     if stop {
         return;
     }
@@ -3587,47 +3584,11 @@ fn update_weapon_sound(e: &mut Engine, f: &UpdateFrame) {
     e.call(EXTRA_GET_WEAPON_ATTACK_SOUND, &args![lists, sound]);
     if !e.call(SOUND_HANDLE_IS_VALID, &args![sound]).bool() {
         start_weapon_attack_sound(e, f);
-    } else if spin_row {
-        // S0489: the jump at `0x889420` lands on the play (`0x8895A3`, the byte at `0x889422`),
-        // skipping the playing test, and the play's call at `0x8895A8` is Tweaks'.
-        spin_weapon_play(e, sound, weapon);
     } else if !e.call(SOUND_HANDLE_IS_PLAYING, &args![sound]).bool() {
         e.call(SOUND_HANDLE_PLAY, &args![sound, 0u32]);
     }
     let lists = e.call(GET_EXTRA_DATA_LIST_ADDRESS, &args![this]).u32();
     e.call(EXTRA_SET_WEAPON_ATTACK_SOUND, &args![lists, sound]);
-}
-
-// Translated from lStewieAl's Tweaks 10.05 (main.h): PlaySoundSkipIsPlayingIfNotSprtlWood and
-// PlaySoundSkipIsPlaying.
-/// lStewieAl's Tweaks' row S0489's play of the weapon attack sound (`weapon` the actor's weapon,
-/// the exe's local at -0x3C): for any weapon but Sprtl Wood's unique gatling laser (form id
-/// `05000803` as Tweaks names it) a sound with a key (+0, not -1) is marked playing (+8 = 1) and a
-/// play message (1) with its key is queued on the audio manager (`011f6ef0`, `00adb1a0`) without
-/// asking whether it already plays; that weapon's sound plays as the exe's (`00ad8830` with 0).
-fn spin_weapon_play(e: &mut Engine, sound: u32, weapon: u32) {
-    if e.mem.u32(weapon + 0xc) == 0x0500_0803 {
-        e.call(SOUND_HANDLE_PLAY, &args![sound, 0u32]);
-        return;
-    }
-    let key = e.mem.u32(sound);
-    if key != u32::MAX {
-        e.mem.set_u32(sound + 8, 1);
-        e.call(
-            0x00ad_b1a0,
-            &args![
-                0x011f_6ef0u32,
-                1u32,
-                key,
-                0u32,
-                0u32,
-                0u32,
-                0.0f32,
-                0.0f32,
-                0.0f32
-            ],
-        );
-    }
 }
 
 /// Creates the sound handle for the weapon attack sound of `Actor::Update`
@@ -3753,39 +3714,6 @@ fn update_movement_mode(e: &mut Engine, f: &mut UpdateFrame) {
     }
 }
 
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/ContinuousBeamProjectileCrashFix.cpp):
-// OnActorUpdate_UpdateBeam.
-/// lStewieAl's Tweaks' row S0130.02: an actor other than the player (`011dea3c`) holding a
-/// continuous beam (+0x1A0) keeps it firing (the beam's slot `0x310` with 0.0, as the player's
-/// update does) while its process' current animation action (slot `0x3e4`, a signed word) is an
-/// attack one (2 to 6: attack, follow-through, latency, throw attach, throw release); otherwise the
-/// beam is set to fade (flag 0x20 at +0xC8). No process counts as no attack. Tweaks installs it
-/// with S0130.01 (the shooter's beam pointer cleared when the beam is freed); here it acts only
-/// while that row is on too, so it never follows a stale pointer (a guard against a crash).
-fn update_npc_beam(e: &mut Engine, this: Ptr<Actor>) {
-    if !e.stewie(engine_core::extend::stewie::NPC_CONTINUOUS_BEAM)
-        || !e.stewie(engine_core::extend::stewie::BEAM_SHOOTER_POINTER)
-        || this.addr() == e.global::<u32>(PLAYER_CHARACTER)
-    {
-        return;
-    }
-    let beam = e.mem.u32(this.addr() + 0x1a0);
-    if beam == 0 {
-        return;
-    }
-    let process = e.mem.u32(this.addr() + 0x68);
-    let attacking = process != 0 && {
-        let action = e.vcall(process, 0x3e4, &args![]).u16() as i16;
-        (2..=6).contains(&action)
-    };
-    if attacking {
-        e.vcall(beam, 0x310, &args![0.0f32]);
-    } else {
-        let flags = e.mem.u32(beam + 0xc8);
-        e.mem.set_u32(beam + 0xc8, flags | 0x20);
-    }
-}
-
 /// The position part of `Actor::Update`: the player's 3D object is placed
 /// at the actor's position (`00440460`), any other actor goes through
 /// [`actor_update_actor_3d_position`] and the process virtual `+0x428`;
@@ -3802,9 +3730,6 @@ fn update_position(e: &mut Engine, f: &UpdateFrame) {
         let process = e.get(this, Actor::pCurrentProcess);
         e.vcall(process.addr(), PROCESS_VSLOT_0X428, &args![this]);
     }
-    // lStewieAl's Tweaks' row S0130.02 (`ContinuousBeamProjectileCrashFix`, its
-    // `OnActorUpdate_UpdateBeam` before the call at `0x889869`).
-    update_npc_beam(e, this);
     let link = e.call(GET_LINKED_OBJECT, &args![this]).u32();
     if link != 0 && typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, link)) != 0 {
         let word = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, link));
@@ -4821,8 +4746,6 @@ pub fn actor_restore_fatigue(e: &mut Engine, this: Ptr<Actor>, amount: f32) {
 /// (with the item the process virtual `+0x148` yields, if any) and
 /// multiplied by the owner's value for actor value `0x0c`.
 pub fn actor_restore_action_points(e: &mut Engine, this: Ptr<Actor>, amount: f32) {
-    /// The game's fists weapon (`TESObjectWEAP*` at `011ca278`, Tweaks' `g_fistsWeapon`).
-    const FISTS_WEAPON: u32 = 0x011c_a278;
     if !e
         .vcall(this.addr(), VSLOT_ACTOR_FLAG_0X360, &args![])
         .bool()
@@ -4839,14 +4762,7 @@ pub fn actor_restore_action_points(e: &mut Engine, this: Ptr<Actor>, amount: f32
     }
     let rate = e.call(ACTION_POINT_REGENERATION_FORMULA, &args![]).f32();
     let scaled = (rate as f64 * amount as f64) as f32;
-    // lStewieAl's Tweaks' row S0019 (`patchAllowAPRegenModifiersWithNoEquippedWeapon`, the bytes
-    // at `0x88B6A1`): the weapon starts as the fists (`011ca278`) instead of none, so with no weapon
-    // equipped the entry point is asked with the fists.
-    let mut item = if e.stewie(engine_core::extend::stewie::AP_REGEN_NO_WEAPON_FISTS) {
-        e.global::<u32>(FISTS_WEAPON)
-    } else {
-        0u32
-    };
+    let mut item = 0u32;
     let process = e.get(this, Actor::pCurrentProcess);
     if !process.is_null() && e.vcall(process.addr(), PROCESS_VSLOT_ITEM, &args![]).u32() != 0 {
         let held = e.vcall(process.addr(), PROCESS_VSLOT_ITEM, &args![]).u32();
@@ -5755,8 +5671,6 @@ const PLAYER_POISON_CHOICE: u32 = 0x0095_e6f0;
 const GET_PIPBOY: u32 = 0x0070_5990;
 /// `ECX` = pipboy: refreshes it.
 const PIPBOY_REFRESH: u32 = 0x007f_a990;
-/// The Pip-Boy manager's "reset me" byte (one definition, beside row S0027).
-use engine_core::extend::stewie::PIPBOY_RESET_PENDING;
 /// `ECX` = save/load object: tests bit 2 of the word at +0x244.
 const SAVE_LOAD_BIT_2_TEST: u32 = 0x0042_ce10;
 /// `ECX` = sound handle storage: construct (`SOUND_HANDLE_INIT`), release
@@ -6101,13 +6015,8 @@ pub fn actor_equip_object(
             equip_step = true;
         }
         FORM_TYPE_0X1A => equip_step = true,
-        FORM_TYPE_AMMO => 'ammo: {
+        FORM_TYPE_AMMO => {
             let process = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, this));
-            // lStewieAl's Tweaks' row S0202 (`patchEquipAmmoOnNullBaseProcessCrashFix` at
-            // `0x88CDE7`): an actor with no process equips no ammunition (the switch's end).
-            if process == 0 && e.stewie(engine_core::extend::stewie::EQUIP_AMMO_NULL_PROCESS) {
-                break 'ammo;
-            }
             let held = e.vcall(process, PROCESS_VSLOT_ITEM, &args![]).u32();
             let held_form = if held == 0 {
                 0
@@ -6236,15 +6145,7 @@ pub fn actor_equip_object(
                 {
                     let pipboy = e.call(GET_PIPBOY, &args![]).u32();
                     if pipboy != 0 {
-                        if e.stewie(engine_core::extend::stewie::PIPBOY_EQUIP_CRASH) {
-                            // lStewieAl's Tweaks' row S0027 (`SetPipboyManagerShouldReset` at
-                            // `0x88CDA3`): not now, inside the equip; the reset byte asks for it,
-                            // and the main loop's AI tasks (`0086f77f`) or the Pip-Boy's opening
-                            // (`FOPipboyManager::OnMenuOpen`) reset it, whichever comes first.
-                            e.mem.set_u8(pipboy + PIPBOY_RESET_PENDING, 1);
-                        } else {
-                            e.call(PIPBOY_REFRESH, &args![pipboy]);
-                        }
+                        e.call(PIPBOY_REFRESH, &args![pipboy]);
                     }
                 }
             }
@@ -6280,15 +6181,10 @@ pub fn actor_equip_object(
     }
 }
 
-/// The player's power armour training test in `Actor::EquipObject` (`0x88C8DA`, `0088d2d0`: the byte
-/// +0x7C7). lStewieAl's Tweaks' row S0179 (`GodmodeSkipsPowerArmorTraining`, its
-/// `PlayerHasPowerArmorTrainingOrGodmode`): also true in god mode (`011e07ba`) or demigod mode
-/// (`011e0898`).
+/// The player's power armour training test in `Actor::EquipObject` (`0x88C8DA`, `0088d2d0`: the
+/// byte +0x7C7).
 fn power_armor_training(e: &mut Engine, player: u32) -> bool {
-    if !e.stewie(engine_core::extend::stewie::GODMODE_POWER_ARMOR) {
-        return fn_0088d2d0(e, Ptr::new(player)) != 0;
-    }
-    e.mem.u8(player + 0x7c7) != 0 || e.mem.u8(0x011e_07ba) != 0 || e.mem.u8(0x011e_0898) != 0
+    fn_0088d2d0(e, Ptr::new(player)) != 0
 }
 
 // Translated from 0088d2d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -7443,14 +7339,7 @@ pub fn actor_damage_equipment(
             return 0;
         }
     }
-    // lStewieAl's Tweaks' row S0782 (`ShootableNonPlayableExplosives`, its
-    // `WeaponIsPlayableOrValidExplosion` called at `0x891483`): an unplayable weapon is also
-    // damaged when it is an explosive ([`hidden_frag_explosive`]).
-    let hidden_frags = e.stewie(engine_core::extend::stewie::HIDDEN_FRAGS);
-    if weapon != 0
-        && !e.call(WEAPON_FLAG_NOT_80, &args![weapon]).bool()
-        && !(hidden_frags && hidden_frag_explosive(e, weapon))
-    {
+    if weapon != 0 && !e.call(WEAPON_FLAG_NOT_80, &args![weapon]).bool() {
         return 0;
     }
     let mut damage = e.with_stack(4, |e, local| {
@@ -7546,11 +7435,7 @@ pub fn actor_damage_equipment(
     let destroyed_at_once = e
         .vcall(this.addr(), VSLOT_ACTOR_FLAG_0X360, &args![])
         .bool()
-        // S0782's other half (`WeaponIsDropableEmbeddedOrValidExplosion`, called at `0x891759`): a
-        // can't-drop (embedded) weapon that is an explosive is not removed at once, so it is
-        // dropped and, being an explosive, set off.
-        || (fn_00891b70(e, Ptr::new(weapon))
-            && !(hidden_frags && hidden_frag_explosive(e, weapon)))
+        || fn_00891b70(e, Ptr::new(weapon))
         || {
             let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, entry));
             e.vcall(form, FORM_VSLOT_0X94, &args![]).bool()
@@ -7562,17 +7447,6 @@ pub fn actor_damage_equipment(
     }
     drop_destroyed_weapon(e, this, entry, weapon, armor);
     1
-}
-
-/// Row S0782's test, Tweaks' `IsValidExplosionWeapon` (`Features/ShootableNonPlayableExplosives`):
-/// the weapon is not a quest item (its form's slot `0x94`) and has a projectile (+0x118) whose flags
-/// (+0x60) have Explosion (0x2).
-fn hidden_frag_explosive(e: &mut Engine, weapon: u32) -> bool {
-    if e.vcall(weapon, FORM_VSLOT_0X94, &args![]).bool() {
-        return false;
-    }
-    let projectile = e.mem.u32(weapon + 0x118);
-    projectile != 0 && e.mem.u16(projectile + 0x60) & 0x2 != 0
 }
 
 /// The end of `DamageEquipment` for a weapon that is gone and must vanish:
@@ -7680,14 +7554,7 @@ fn drop_destroyed_weapon(e: &mut Engine, this: Ptr<Actor>, entry: Ptr, weapon: u
             for word in 0..9 {
                 words.push(e.mem.u32(matrix + 4 * word));
             }
-            let launched = e.call(LAUNCH_PROJECTILE, &words).u32();
-            // lStewieAl's Tweaks' row S0188 (`ShotProjectileResistanceFix`, its
-            // `OnCreateDamagedWeaponExplosionHook` jumped to at `0x891951`): the projectile made
-            // names the destroyed weapon as its source (+0xE0), so the damage it does is resisted
-            // as that weapon's.
-            if launched != 0 && e.stewie(engine_core::extend::stewie::SHOT_PROJECTILE_RESISTANCE) {
-                e.mem.set_u32(launched + 0xe0, weapon);
-            }
+            let _launched = e.call(LAUNCH_PROJECTILE, &words).u32();
         } else if e.call(ACTOR_IS_WEAPON_DRAWN, &args![this]).bool() {
             typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, euler));
             e.call(
@@ -11880,230 +11747,6 @@ mod tests {
         );
     }
 
-    /// S0130.02 (`ContinuousBeamProjectileCrashFix`, `OnActorUpdate_UpdateBeam`): an NPC's beam
-    /// (+0x1A0) is fired on (slot `0x310` with 0.0) while its process' animation action (slot
-    /// `0x3e4`) is 2 to 6 and set to fade (0x20 at +0xC8) for any other (-1 included); the
-    /// player's beam, the row off and S0130.01 (the beam pointer's guard) off are left alone.
-    #[test]
-    fn s0130_02_an_npcs_beam_follows_its_attack() {
-        // (row, S0130.01, the player, action, fired, fading)
-        for (on, pointer, is_player, action, fired, fading) in [
-            (false, true, false, 2u32, 0usize, false),
-            (true, true, false, 2, 1, false),
-            (true, true, false, 6, 1, false),
-            (true, true, false, 7, 0, true),
-            (true, true, false, 1, 0, true),
-            (true, true, false, 0xffff, 0, true),
-            (true, true, true, 7, 0, false),
-            (true, false, false, 2, 0, false),
-            (true, false, false, 7, 0, false),
-        ] {
-            let mut e = engine2();
-            e.set_stewie(engine_core::extend::stewie::NPC_CONTINUOUS_BEAM, on);
-            e.set_stewie(engine_core::extend::stewie::BEAM_SHOOTER_POINTER, pointer);
-            let actor = actor2(&mut e);
-            let other = actor2(&mut e);
-            set_player(&mut e, if is_player { actor } else { other });
-            with_process(&mut e, actor);
-            slot(&mut e, PROCESS_TABLE, 0x3e4, eax(0xabcd_0000 | action));
-            slot(&mut e, OTHER_TABLE, 0x310, eax(0));
-            let beam = e.mem.alloc(0x160);
-            e.mem.set_u32(beam, OTHER_TABLE);
-            e.mem.set_u32(beam + 0xc8, 0x4);
-            e.mem.set_u32(actor.addr() + 0x1a0, beam);
-            e.call_log = Some(vec![]);
-            update_npc_beam(&mut e, actor);
-            let fires: Vec<_> = logged(&e)
-                .into_iter()
-                .filter(|entry| entry.0 == slot_target(OTHER_TABLE, 0x310))
-                .collect();
-            assert_eq!(
-                fires.len(),
-                fired,
-                "on {on} player {is_player} action {action}"
-            );
-            if fired == 1 {
-                assert_eq!(fires[0].1, vec![beam, 0]);
-            }
-            let flags = if fading { 0x24 } else { 0x4 };
-            assert_eq!(e.mem.u32(beam + 0xc8), flags, "on {on} action {action}");
-        }
-    }
-
-    /// S0130.02 reached through `Actor::Update`'s position part ([`update_position`], before the
-    /// call at `0x889869`): an NPC's beam is fired on (slot `0x310` with 0.0) during its attack
-    /// (action 2) and set to fade after it (action 7) with the rows on; off, `Actor::Update`
-    /// leaves it alone.
-    #[test]
-    fn s0130_02_actor_update_moves_an_npcs_beam() {
-        // (rows, action, fired, fading)
-        for (on, action, fired, fading) in [
-            (false, 2u32, 0usize, false),
-            (false, 7, 0, false),
-            (true, 2, 1, false),
-            (true, 7, 0, true),
-        ] {
-            let mut e = engine2();
-            e.set_stewie(engine_core::extend::stewie::NPC_CONTINUOUS_BEAM, on);
-            e.set_stewie(engine_core::extend::stewie::BEAM_SHOOTER_POINTER, on);
-            let actor = actor2(&mut e);
-            let other = actor2(&mut e);
-            set_player(&mut e, other);
-            with_process(&mut e, actor);
-            slot(&mut e, PROCESS_TABLE, 0x3e4, eax(action));
-            slot(&mut e, OTHER_TABLE, 0x310, eax(0));
-            let beam = e.mem.alloc(0x160);
-            e.mem.set_u32(beam, OTHER_TABLE);
-            e.mem.set_u32(beam + 0xc8, 0x4);
-            e.mem.set_u32(actor.addr() + 0x1a0, beam);
-            e.mem.set_u8(GLOBAL_FLAG_011F3E60, 1);
-            e.call_log = Some(vec![]);
-            update_position(&mut e, &update_frame(actor, 0, 0, 0));
-            let fires: Vec<_> = logged(&e)
-                .into_iter()
-                .filter(|entry| entry.0 == slot_target(OTHER_TABLE, 0x310))
-                .collect();
-            assert_eq!(fires.len(), fired, "on {on} action {action}");
-            if fired == 1 {
-                assert_eq!(fires[0].1, vec![beam, 0]);
-            }
-            let flags = if fading { 0x24 } else { 0x4 };
-            assert_eq!(e.mem.u32(beam + 0xc8), flags, "on {on} action {action}");
-            assert_eq!(
-                e.mem.u8(GLOBAL_FLAG_011F3E60),
-                0,
-                "the position part ran to its end"
-            );
-        }
-    }
-
-    /// S0489 (`PlaySoundSkipIsPlayingIfNotSprtlWood`): a sound with a key (+0) is marked playing
-    /// (+8) and a play message (1, its key) goes to the audio manager without asking whether it
-    /// plays; no key (-1) does nothing; Sprtl Wood's Gatling laser (`05000803`) plays as the exe.
-    #[test]
-    fn s0489_the_spin_sound_is_started_without_the_playing_test() {
-        for (key, id, message, played) in [
-            (0x55u32, 0x0001_2345u32, true, false),
-            (u32::MAX, 0x0001_2345, false, false),
-            (0x55, 0x0500_0803, false, true),
-        ] {
-            let mut e = engine2();
-            double(&mut e, 0x00ad_b1a0, eax(0));
-            double(&mut e, SOUND_HANDLE_PLAY, eax(0));
-            let weapon = e.mem.alloc(0x40);
-            e.mem.set_u32(weapon + 0xc, id);
-            let sound = e.mem.alloc(0xc);
-            e.mem.set_u32(sound, key);
-            e.call_log = Some(vec![]);
-            spin_weapon_play(&mut e, sound, weapon);
-            assert_eq!(
-                was_called(&e, 0x00ad_b1a0),
-                message,
-                "key {key:#x} id {id:#x}"
-            );
-            assert_eq!(was_called(&e, SOUND_HANDLE_PLAY), played, "id {id:#x}");
-            if message {
-                assert_eq!(
-                    args_of(&e, 0x00ad_b1a0),
-                    vec![0x011f_6ef0, 1, 0x55, 0, 0, 0, 0, 0, 0]
-                );
-                assert_eq!(e.mem.u32(sound + 8), 1);
-            } else {
-                assert_eq!(e.mem.u32(sound + 8), 0);
-            }
-            if played {
-                assert_eq!(args_of(&e, SOUND_HANDLE_PLAY), vec![sound, 0]);
-            }
-        }
-    }
-
-    /// S0489 in `Actor::Update`'s weapon sound (`0x8893F7`, `0x889420`): a looping attack whose
-    /// count (`0070f490` with 4) is 1 gets its sound with the row (the exe needs 0), and a valid
-    /// sound that still plays is started again through Tweaks' play; a count of 2 stops both ways.
-    #[test]
-    fn s0489_a_looping_attack_sound_restarts_after_a_short_stop() {
-        // (row, count, the sound asked, the spin play)
-        for (on, count, asked, restarted) in [
-            (false, 1u32, false, false),
-            (true, 1, true, true),
-            (true, 2, false, false),
-            (false, 0, true, false),
-        ] {
-            let mut e = engine2();
-            e.set_stewie(engine_core::extend::stewie::SPIN_WEAPON_SOUND, on);
-            let actor = actor2(&mut e);
-            for (address, answer) in [
-                (WEAPON_OBJECT_OF, 0x4400),
-                (WEAPON_OBJECT_TEST, 1),
-                (ACTOR_RANGE_TEST, 1),
-                (ANIMATION_FIELD_0X70F490, count),
-                (ANIMATION_LOOKUP, 0x4500),
-                (IS_ATTACK_ACTION, 1),
-                (ANIMATION_ENTRY_KIND, 1),
-                (SOUND_HANDLE_IS_VALID, 1),
-                (SOUND_HANDLE_IS_PLAYING, 1),
-                (0x00ad_b1a0, 0),
-                (GET_LAST_BOUND_WEAPON, 0),
-                (ANIMATION_GROUP_FIELD, 0),
-                (GET_EXTRA_DATA_LIST_ADDRESS, 0),
-                (EXTRA_GET_WEAPON_ATTACK_SOUND, 0),
-                (EXTRA_SET_WEAPON_ATTACK_SOUND, 0),
-                (SOUND_HANDLE_STOP, 0),
-                (WEAPON_TEST_0X524B40, 0),
-                (SOUND_HANDLE_PLAY, 0),
-            ] {
-                double(&mut e, address, eax(answer));
-            }
-            let weapon = e.mem.alloc(0x40);
-            e.mem.set_u32(weapon + 0xc, 0x0001_2345);
-            let sound = e.mem.alloc(0xc);
-            e.mem.set_u32(sound, 0x77);
-            let mut frame = update_frame(actor, 0, weapon, sound);
-            frame.animation = 0x4600;
-            e.call_log = Some(vec![]);
-            update_weapon_sound(&mut e, &frame);
-            assert_eq!(
-                was_called(&e, SOUND_HANDLE_IS_VALID),
-                asked,
-                "on {on} count {count}"
-            );
-            assert_eq!(
-                was_called(&e, 0x00ad_b1a0),
-                restarted,
-                "on {on} count {count}"
-            );
-            assert!(!was_called(&e, SOUND_HANDLE_PLAY), "on {on} count {count}");
-        }
-    }
-
-    /// S0179 (`PlayerHasPowerArmorTrainingOrGodmode`, `0x88C8DA`): the training byte (+0x7C7)
-    /// passes the test; with the row god mode (`011e07ba`) or demigod mode (`011e0898`) too.
-    #[test]
-    fn s0179_god_mode_passes_the_power_armor_training() {
-        // (row, trained, god, demigod, passes)
-        for (on, trained, god, demigod, passes) in [
-            (false, 0u8, 1u8, 1u8, false),
-            (false, 1, 0, 0, true),
-            (true, 0, 1, 0, true),
-            (true, 0, 0, 1, true),
-            (true, 0, 0, 0, false),
-            (true, 1, 0, 0, true),
-        ] {
-            let mut e = engine2();
-            e.set_stewie(engine_core::extend::stewie::GODMODE_POWER_ARMOR, on);
-            e.map(0x011e_0000, 0x1000);
-            e.mem.set_u8(0x011e_07ba, god);
-            e.mem.set_u8(0x011e_0898, demigod);
-            let player = actor2(&mut e);
-            e.mem.set_u8(player.addr() + 0x7c7, trained);
-            assert_eq!(
-                power_armor_training(&mut e, player.addr()),
-                passes,
-                "on {on} trained {trained} god {god} demigod {demigod}"
-            );
-        }
-    }
-
     #[test]
     fn character_update_clears_the_dead_flag_and_kicks_the_ragdoll() {
         let mut e = engine2();
@@ -12490,39 +12133,6 @@ mod tests {
         let entry = record(&mut e, HANDLE_ENTRY_POINT, Ret::default());
         actor_restore_action_points(&mut e, actor, 0.5);
         assert_eq!(entry.borrow()[0][..3], [0x27, actor.addr(), 0]);
-    }
-
-    /// S0019 (`patchAllowAPRegenModifiersWithNoEquippedWeapon`): with no weapon (no process, or a
-    /// process without a weapon entry) the regeneration entry point (0x27) gets the fists
-    /// (`011ca278`) with the row on and none with it off; a weapon held is passed either way.
-    #[test]
-    fn s0019_no_weapon_regenerates_with_the_fists() {
-        for (on, process, held, passed) in [
-            (false, false, 0, 0),
-            (true, false, 0, 0x7700),
-            (true, true, 0, 0x7700),
-            (false, true, 0x5000, 0x5001),
-            (true, true, 0x5000, 0x5001),
-        ] {
-            let mut e = engine3();
-            e.set_stewie(engine_core::extend::stewie::AP_REGEN_NO_WEAPON_FISTS, on);
-            if !e.mem.is_mapped(0x011c_a000) {
-                e.map(0x011c_a000, 0x1000);
-            }
-            e.mem.set_u32(0x011c_a278, 0x7700);
-            let (actor, _) = action_point_setup(&mut e, true, 0);
-            if process {
-                with_process(&mut e, actor);
-                record_slot(&mut e, PROCESS_TABLE, PROCESS_VSLOT_ITEM, eax(held));
-            }
-            let entry = record(&mut e, HANDLE_ENTRY_POINT, Ret::default());
-            actor_restore_action_points(&mut e, actor, 0.5);
-            assert_eq!(
-                entry.borrow()[0][..3],
-                [0x27, actor.addr(), passed],
-                "on {on} process {process} held {held:#x}"
-            );
-        }
     }
 
     #[test]
@@ -13747,72 +13357,6 @@ mod tests {
         assert_eq!(*refreshed.borrow(), vec![vec![0x3030]]);
     }
 
-    /// lStewieAl's Tweaks' row S0202 (`0x88CDE7`): ammunition equipped on an actor with no
-    /// process: the exe asks the missing process for its weapon (the null page holds no vtable)
-    /// and stops; with the row on nothing is equipped and the equip ends as for any other item.
-    #[test]
-    fn s0202_ammunition_on_an_actor_with_no_process() {
-        for on in [false, true] {
-            let mut e = engine3();
-            let (actor, item) = equip_world(&mut e, 0x29);
-            assert_eq!(e.mem.u32(actor.addr() + 0x68), 0);
-            let notified = record(&mut e, AMMO_NOTIFY, Ret::default());
-            let built = record(&mut e, ITEM_CHANGE_CONSTRUCT, eax(0x8808));
-            let flags = record(&mut e, SET_ACTION_FLAG, Ret::default());
-            double(&mut e, AMMO_NOTIFY_LEVEL, eax(1));
-            e.set_stewie(engine_core::extend::stewie::EQUIP_AMMO_NULL_PROCESS, on);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                equip(&mut e, actor, item, 2, 0, [0, 0, 0]);
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                assert!(notified.borrow().is_empty());
-                assert!(built.borrow().is_empty());
-                // The switch's common end (`0x88D1D6`): the use flags of the actor (with the
-                // equip's extra list, none here) and of the item (with the actor's list).
-                assert_eq!(
-                    *flags.borrow(),
-                    vec![
-                        vec![actor.addr(), 0, 2],
-                        vec![item.addr(), actor.addr() + 0x44, 2]
-                    ]
-                );
-            }
-        }
-    }
-
-    /// lStewieAl's Tweaks' row S0027 (`0x88CDA3`): armour filling the Pip-Boy slot does not reset
-    /// the Pip-Boy manager in the middle of the equip; with the row on it sets the manager's reset
-    /// byte (+0x16C) for the main loop's AI tasks or the Pip-Boy's opening to act on. Off: the
-    /// reset now, the byte untouched.
-    #[test]
-    fn s0027_the_pipboy_reset_is_asked_for_not_done() {
-        // FOPipboyManager +0x16C: the byte the script command (`005db4c0`) sets and the main
-        // loop's AI tasks (`0086f840`) read; one definition, beside the row.
-        assert_eq!(PIPBOY_RESET_PENDING, 0x16c);
-        for on in [false, true] {
-            let mut e = engine3();
-            let (actor, item) = equip_world(&mut e, 0x18);
-            double(&mut e, BIPED_MODEL_OF, eax(0x4040));
-            e.register(BIPED_FILLS_SLOT, |_, a| {
-                eax((a[0] == 0x4040 && a[1] == 6) as u32)
-            });
-            let pipboy = e.mem.alloc(0x170);
-            double(&mut e, GET_PIPBOY, eax(pipboy));
-            let refreshed = record(&mut e, PIPBOY_REFRESH, Ret::default());
-            e.set_stewie(engine_core::extend::stewie::PIPBOY_EQUIP_CRASH, on);
-            equip(&mut e, actor, item, 1, 0, [0, 0, 0]);
-            if on {
-                assert!(refreshed.borrow().is_empty());
-                assert_eq!(e.mem.u8(pipboy + 0x16c), 1);
-            } else {
-                assert_eq!(*refreshed.borrow(), vec![vec![pipboy]]);
-                assert_eq!(e.mem.u8(pipboy + 0x16c), 0);
-            }
-        }
-    }
-
     #[test]
     fn broken_armor_is_refused_and_leaves_the_use_flag_alone() {
         let mut e = engine3();
@@ -14037,8 +13581,6 @@ mod tests {
         assert_eq!(flags.borrow().len(), 2);
     }
 
-    /// lStewieAl's Tweaks' row S0202 with ordinary input: run with the row off, then on; the row
-    /// changes nothing (the same calls and answers).
     #[test]
     fn ammo_is_swapped_through_an_item_change() {
         for on in [false, true] {
@@ -14046,9 +13588,8 @@ mod tests {
         }
     }
 
-    fn ammo_is_swapped_through_an_item_change_row(on: bool) {
+    fn ammo_is_swapped_through_an_item_change_row(_on: bool) {
         let mut e = engine3();
-        e.set_stewie(engine_core::extend::stewie::EQUIP_AMMO_NULL_PROCESS, on);
         let (actor, item) = equip_world(&mut e, 0x29);
         let process = with_process(&mut e, actor);
         let held = e.mem.alloc(0x20);
@@ -15523,97 +15064,6 @@ mod tests {
         let result = damage(&mut e, actor, entry, 10.0);
         assert_eq!(health.get(), 0.0);
         assert_eq!(result, 1);
-    }
-
-    /// S0782 (`ShootableNonPlayableExplosives`): an unplayable weapon (flag 0x80, here the
-    /// `0047bcf0` test false) is left alone off; on, it is damaged when it is an explosive: not a
-    /// quest item (slot `0x94`) and its projectile (+0x118) has the Explosion flag (2 in +0x60).
-    #[test]
-    fn s0782_an_unplayable_explosive_can_be_damaged() {
-        for (on, quest, flags, damaged) in [
-            (false, false, 0x2u16, false),
-            (true, false, 0x2, true),
-            (true, true, 0x2, false),
-            (true, false, 0x800, false),
-        ] {
-            let mut e = engine3();
-            e.set_stewie(engine_core::extend::stewie::HIDDEN_FRAGS, on);
-            let (actor, item, entry, health) = damage_world(&mut e, 0x28, 40.0);
-            double(&mut e, WEAPON_FLAG_NOT_80, eax(0));
-            slot_at(&mut e, FORM_TABLE, FORM_VSLOT_0X94, eax(quest as u32));
-            let projectile = e.mem.alloc(0x80);
-            e.mem.set_u16(projectile + 0x60, flags);
-            e.mem.set_u32(item.addr() + 0x118, projectile);
-            assert_eq!(damage(&mut e, actor, entry, 10.0), 0);
-            let expected = if damaged { 30.0 } else { 40.0 };
-            assert_eq!(
-                health.get(),
-                expected,
-                "on {on} quest {quest} flags {flags:#x}"
-            );
-        }
-    }
-
-    /// S0782's second half: a destroyed can't-drop (embedded, +0x100 flag 8) weapon is removed
-    /// at once (the moving sounds stopped) off, and also on when it is no explosive; on, an
-    /// explosive one goes the drop way instead (`DamageEquipment`'s end for a weapon that stays).
-    #[test]
-    fn s0782_an_embedded_explosive_is_dropped_not_removed() {
-        for (on, flags, removed) in [(false, 0x2u16, true), (true, 0x2, false), (true, 0, true)] {
-            let mut e = engine3();
-            e.set_stewie(engine_core::extend::stewie::HIDDEN_FRAGS, on);
-            let (actor, item, entry, _) = damage_world(&mut e, 0x28, 5.0);
-            with_process(&mut e, actor);
-            let position = e.mem.alloc(0x10);
-            slot(&mut e, ACTOR_TABLE, VSLOT_POSITION_0X1F4, eax(position));
-            e.mem.set_u8(item.addr() + 0x100, 0x08);
-            let projectile = e.mem.alloc(0x80);
-            e.mem.set_u16(projectile + 0x60, flags);
-            e.mem.set_u32(item.addr() + 0x118, projectile);
-            let stopped = record(&mut e, AUDIO_STOP_MOVING_SOUNDS, Ret::default());
-            assert_eq!(damage(&mut e, actor, entry, 10.0), 1);
-            assert_eq!(
-                !stopped.borrow().is_empty(),
-                removed,
-                "on {on} flags {flags:#x}"
-            );
-        }
-    }
-
-    /// S0188 (`ShotProjectileResistanceFix`): a destroyed explosive weapon launches its
-    /// ammunition's projectile; on, the projectile made gets the weapon as its source (+0xE0);
-    /// off, that word is left alone. No projectile made: nothing is written.
-    #[test]
-    fn s0188_a_shot_off_explosive_names_its_weapon() {
-        for (on, made) in [(false, true), (true, true), (true, false)] {
-            let mut e = engine3();
-            e.set_stewie(engine_core::extend::stewie::SHOT_PROJECTILE_RESISTANCE, on);
-            let (actor, item, entry, _) = damage_world(&mut e, 0x28, 5.0);
-            with_process(&mut e, actor);
-            double(&mut e, FORM_FLAG_TEST_4C0BF0, eax(1));
-            double(&mut e, WEAPON_AMMO_FOR_ACTOR, eax(0x4400));
-            double(&mut e, AMMO_FLAG_TEST, eax(1));
-            double(&mut e, AMMO_PROJECTILE, eax(0x4500));
-            slot(&mut e, ACTOR_TABLE, VSLOT_GET_BIPED, eax(0x9900));
-            record_slot(
-                &mut e,
-                PROCESS_TABLE,
-                PROCESS_VSLOT_DROP_SOURCE_WEAPON,
-                eax(0),
-            );
-            let position = e.mem.alloc(0x10);
-            slot(&mut e, ACTOR_TABLE, VSLOT_POSITION_0X1F4, eax(position));
-            let launched = e.mem.alloc(0x100);
-            e.mem.set_u32(launched + 0xe0, 0x1234);
-            double(
-                &mut e,
-                LAUNCH_PROJECTILE,
-                eax(if made { launched } else { 0 }),
-            );
-            assert_eq!(damage(&mut e, actor, entry, 10.0), 1);
-            let source = if on && made { item.addr() } else { 0x1234 };
-            assert_eq!(e.mem.u32(launched + 0xe0), source, "on {on} made {made}");
-        }
     }
 
     #[test]

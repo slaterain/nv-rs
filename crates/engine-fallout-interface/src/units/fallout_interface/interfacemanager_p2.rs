@@ -22,7 +22,6 @@ use super::interfacemanager::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::types::BSSimpleArray;
-use engine_core::extend::stewie;
 
 /// `004b7210`: the interface manager object (the word at `011d8a80`).
 const GET_MANAGER: u32 = 0x004b_7210;
@@ -544,46 +543,13 @@ pub fn interface_manager_check_menu_button(e: &mut Engine, button: i32, analog: 
         }
     }
     if old_pushed || new_pushed {
-        // The code returns 0 for both, 2 for only the second, 1 for only
-        // the first.
-        // `0x717C6B` and `0x717C85`: lStewieAl's Tweaks' S0022.47 (below).
-        return stewie_menu_button_debounce(e, button, button_state(new_pushed, old_pushed));
+        // The code returns 0 for both, 2 for only the second, 1 for only the first.
+        return button_state(new_pushed, old_pushed);
     }
 
     let down_now = u32::from(e.mem.u16(PAD_BUTTONS_NEW)) & mask != 0;
     let down_before = u32::from(e.mem.u16(PAD_BUTTONS_OLD)) & mask != 0;
-    // `0x717CB0` and `0x717CC8`: lStewieAl's Tweaks' S0022.47 (below).
-    stewie_menu_button_debounce(e, button, button_state(down_now, down_before))
-}
-
-/// lStewieAl's Tweaks' S0022.47 (`MenuFixes::OnControllerInputPressed` at `0x717C6B` and `0x717CB0`,
-/// `OnControllerInputDePressed` at `0x717C85` and `0x717CC8`, in place of `MOV EAX,2` and
-/// `MOV EAX,1`): for the pad's B button (10), a press clears the input globals' (`[011f35cc]`)
-/// menu mode debounce bit (bit 3 of the word at +0x1B92), and a release while that bit is set
-/// answers -1 (not held), so B closing the console does not also close the menu under it.
-/// Other states and buttons, or the row off: `state` as it is.
-fn stewie_menu_button_debounce(e: &mut Engine, button: i32, state: i32) -> i32 {
-    const BUTTON_B: i32 = 0xa;
-    if button != BUTTON_B
-        || !(state == 1 || state == 2)
-        || !e.stewie(engine_core::extend::stewie::PAD_B_MENU_DEBOUNCE)
-    {
-        return state;
-    }
-    let input = e.mem.u32(0x011f_35cc);
-    if input == 0 {
-        // No input globals: Tweaks would read through a null pointer (our guard).
-        return state;
-    }
-    let flags = e.mem.u32(input + 0x1b92);
-    if state == 2 {
-        e.mem.set_u32(input + 0x1b92, flags & 0xffff_fff7);
-        2
-    } else if flags & 8 != 0 {
-        -1
-    } else {
-        1
-    }
+    button_state(down_now, down_before)
 }
 
 // Translated from 00717de0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -769,33 +735,7 @@ pub fn interface_manager_do_wheel_move(
         }
         node = list_next(e, node);
     }
-    // `0x10704B4`, `RecipeMenu`'s vtable slot +0x28 (lStewieAl's Tweaks' S0022.08 writes
-    // `MenuFixes::RecipeMenuHandleMousewheel` there; the exe's is the do-nothing `008d0600`).
-    if e.stewie(engine_core::extend::stewie::RECIPE_WHEEL_CHANGES_CATEGORY)
-        && e.mem.u32(target) == RECIPE_MENU_VTABLE
-    {
-        stewie_recipe_menu_wheel(e, target, arg_1);
-        return 0;
-    }
     e.vcall(target, 0x28, &args![arg_1, arg_2]).u32()
-}
-
-/// `RecipeMenu`'s vtable (`0107048c`).
-const RECIPE_MENU_VTABLE: u32 = 0x0107_048c;
-
-/// lStewieAl's Tweaks' `MenuFixes::RecipeMenuHandleMousewheel` (row S0022.08): over tile id 1 (the
-/// category title) the menu clicks (vtable +0xC, `HandleClick`) id 2 for the wheel up (the
-/// interface manager's `mouseWheel`, +0x44, above 0; Tweaks'
-/// `bInvertContainerTitleScrollwheelDirection` is 0 in VNV and not built) and id 0 otherwise.
-/// Its answer (a `void` function's) is taken as 0.
-fn stewie_recipe_menu_wheel(e: &mut Engine, menu: u32, tile_id: u32) {
-    if tile_id != 1 {
-        return;
-    }
-    let manager = e.mem.u32(0x011d_8a80);
-    let up = e.mem.f32(manager + 0x44) > 0.0;
-    let id = if up { 2u32 } else { 0 };
-    e.vcall(menu, 0xc, &args![id, 0u32]);
 }
 
 // Translated from 007181d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1743,25 +1683,14 @@ pub fn fn_00719580(e: &mut Engine, tile: Ptr) {
         }
     });
 
-    // 007195d1, 007195eb: lStewieAl's Tweaks' row S0022.56 (`BeginsWithNonNull`, "fix missing
-    // null checks for some tile text labels"): a tile with no name matches neither (the compare
-    // answers -1), where the exe compares through the null name.
-    let null_checked = e.stewie(stewie::TILE_LABEL_NULL_NAME);
     let name = e.call(TILE_NAME, &args![tile]).u32();
-    let mut matches = if null_checked && name == 0 {
-        false
-    } else {
-        e.call(COMPARE_STRINGS, &args![name, TILE_NAME_FIRST]).u32() == 0
-    };
+    let mut matches = e.call(COMPARE_STRINGS, &args![name, TILE_NAME_FIRST]).u32() == 0;
     if !matches {
         let name = e.call(TILE_NAME, &args![tile]).u32();
-        matches = if null_checked && name == 0 {
-            false
-        } else {
-            e.call(COMPARE_STRINGS, &args![name, TILE_NAME_SECOND])
-                .u32()
-                == 0
-        };
+        matches = e
+            .call(COMPARE_STRINGS, &args![name, TILE_NAME_SECOND])
+            .u32()
+            == 0;
     }
     if matches {
         e.call(GET_MANAGER, &args![]);
@@ -1873,16 +1802,6 @@ pub fn fn_00719790(
     let level = clamp_float(e, stored, 0.0, maximum);
     let inverse = (e.global::<f64>(COLOR_CHANNEL_SCALE) - level as f64) as f32;
     let inverse = clamp_float(e, inverse, 0.0, maximum);
-
-    // `0x7197FB` (lStewieAl's Tweaks' S0105 jumps to `OnInventoryTileMultiAlpha` there, main.h's
-    // `HandleInventoryMultiAlphas`): when only one of the two tiles is given, it is shown at full
-    // alpha (`Tile::SetFloat` 0xFA9, 255), so a lone DAM or DR line does not keep a faded alpha.
-    if e.stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS)
-        && tile_a.is_null() != tile_b.is_null()
-    {
-        let alone = if tile_a.is_null() { tile_b } else { tile_a };
-        e.call(TILE_SET_FLOAT, &args![alone, TRAIT_FADE, 255.0f32, 1u32]);
-    }
 
     if !tile_a.is_null() && !tile_b.is_null() {
         e.call(TILE_SET_FLOAT, &args![tile_a, TRAIT_FADE, inverse, 1u32]);
@@ -2693,42 +2612,6 @@ mod tests {
         assert_eq!(e.call(0x0071_7a40, &args![1u32, 0u32]).i32(), -1);
     }
 
-    /// Row S0022.47 (lStewieAl's Tweaks, `0x717CB0`, `0x717CC8`): for B (10) a press clears the
-    /// input globals' (`[011f35cc]`) debounce bit 3 at +0x1B92 and still answers 2; a release
-    /// answers -1 while that bit is set, 1 once it is clear. Other buttons, the held states, or
-    /// the row off: the exe's answers, the word untouched.
-    #[test]
-    fn s0022_47_the_pad_b_button_is_debounced() {
-        // (row, button, new, old, word before, answer, word after)
-        for (on, button, new, old, before, answer, after) in [
-            (true, 10u32, 0x2000u16, 0u16, 0x0fu32, 2i32, 0x07u32),
-            (true, 10, 0, 0x2000, 0x08, -1, 0x08),
-            (true, 10, 0, 0x2000, 0x07, 1, 0x07),
-            (true, 10, 0x2000, 0x2000, 0x08, 0, 0x08),
-            (false, 10, 0x2000, 0, 0x0f, 2, 0x0f),
-            (false, 10, 0, 0x2000, 0x08, 1, 0x08),
-            (true, 9, 0, 0x1000, 0x08, 1, 0x08),
-            (true, 9, 0x1000, 0, 0x0f, 2, 0x0f),
-        ] {
-            let mut e = button_engine(false);
-            if !e.mem.is_mapped(0x011f_35cc) {
-                e.map(0x011f_3000, 0x1000);
-            }
-            let input = e.mem.alloc(0x2000);
-            e.mem.set_u32(0x011f_35cc, input);
-            e.mem.set_u32(input + 0x1b92, before);
-            e.mem.set_u16(PAD_BUTTONS_NEW, new);
-            e.mem.set_u16(PAD_BUTTONS_OLD, old);
-            e.set_stewie(engine_core::extend::stewie::PAD_B_MENU_DEBOUNCE, on);
-            assert_eq!(
-                e.call(0x0071_7a40, &args![button, 0u32]).i32(),
-                answer,
-                "row {on} button {button} new {new:x} old {old:x}"
-            );
-            assert_eq!(e.mem.u32(input + 0x1b92), after);
-        }
-    }
-
     #[test]
     fn check_menu_button_compares_old_and_new_button_masks() {
         let mut e = button_engine(false);
@@ -3099,56 +2982,6 @@ mod tests {
         e.call(0x0071_8080, &args![this, target, 0u32, 0u32]);
         assert!(logged(&e, 0x7000_0000).is_empty());
         assert_eq!(logged(&e, 0x7300_0028).len(), 1);
-    }
-
-    /// Row S0022.08 (lStewieAl's Tweaks' `RecipeMenuHandleMousewheel` in `RecipeMenu`'s vtable
-    /// slot +0x28): for a recipe menu the wheel over tile id 1 clicks (+0xC) id 2 when the
-    /// manager's `mouseWheel` (+0x44) is above 0 and id 0 otherwise, any other id nothing; the
-    /// exe's slot is never called and the answer is 0. Off, or another menu: the slot, as before.
-    #[test]
-    fn s0022_08_the_wheel_changes_the_recipe_category() {
-        for (on, recipe, id, wheel, click) in [
-            (true, true, 1u32, 120.0f32, Some(2u32)),
-            (true, true, 1, -120.0, Some(0)),
-            (true, true, 3, 120.0, None),
-            (false, true, 1, 120.0, None),
-            (true, false, 1, 120.0, None),
-        ] {
-            let (mut e, this, _, target) = wheel_engine([0.0, 4.0], [1.0, 2.0], false);
-            e.set_stewie(
-                engine_core::extend::stewie::RECIPE_WHEEL_CHANGES_CATEGORY,
-                on,
-            );
-            if !e.mem.is_mapped(0x011d_8a80) {
-                e.map(0x011d_8000, 0x1000);
-            }
-            e.mem.set_u32(0x011d_8a80, this);
-            e.mem.set_f32(this + 0x44, wheel);
-            if recipe {
-                if !e.mem.is_mapped(RECIPE_MENU_VTABLE) {
-                    e.map(RECIPE_MENU_VTABLE & !0xfff, 0x1000);
-                }
-                e.mem.set_u32(RECIPE_MENU_VTABLE + 0xc, 0x7400_000c);
-                e.mem.set_u32(RECIPE_MENU_VTABLE + 0x28, 0x7300_0028);
-                e.mem.set_u32(target, RECIPE_MENU_VTABLE);
-            }
-            nothing(&mut e, &[0x7400_000c]);
-            let result = e.call(0x0071_8080, &args![this, target, id, 12u32]).u32();
-            let slot = logged(&e, 0x7300_0028);
-            let clicks = logged(&e, 0x7400_000c);
-            if on && recipe {
-                assert!(slot.is_empty(), "the exe's slot is not called");
-                assert_eq!(result, 0);
-                match click {
-                    Some(clicked) => assert_eq!(clicks, vec![vec![target, clicked, 0]]),
-                    None => assert!(clicks.is_empty()),
-                }
-            } else {
-                assert_eq!(slot, vec![vec![target, id, 12]]);
-                assert_eq!(result, 0x99);
-                assert!(clicks.is_empty());
-            }
-        }
     }
 
     #[test]
@@ -4234,40 +4067,6 @@ mod tests {
         assert_eq!(words, vec![0x11, 0x22, 0x33, 0x44]);
     }
 
-    /// lStewieAl's Tweaks' row S0022.56: a tile with no name. The exe compares through the null
-    /// name (`_stricmp` reads it, as the stand-in here does) and stops; with the row on it matches
-    /// neither name and is left alone.
-    #[test]
-    fn s0022_56_a_tile_without_a_name() {
-        for on in [false, true] {
-            let mut e = base_engine();
-            e.mem.unmap(0, 0x1000);
-            e.register(0x0055_9450, |e, a| ret(e.mem.u32(a[0])));
-            e.register(TILE_NAME, |e, a| ret(e.mem.u32(a[0] + 0x20)));
-            e.register(COMPARE_STRINGS, |e, a| {
-                ret(u32::from(e.mem.u8(a[0]) != e.mem.u8(a[1])))
-            });
-            nothing(
-                &mut e,
-                &[TILE_SET_VALUE, TILE_SET_NEEDS_UPDATE, GET_MANAGER],
-            );
-            let tile = e.mem.alloc(0x30);
-            e.set_stewie(stewie::TILE_LABEL_NULL_NAME, on);
-            e.call_log = Some(vec![]);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                e.call(0x0071_9580, &args![tile]);
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                assert!(logged(&e, TILE_SET_VALUE).is_empty());
-                assert!(logged(&e, COMPARE_STRINGS).is_empty());
-            }
-        }
-    }
-
-    /// lStewieAl's Tweaks' row S0022.56 with ordinary input: run with the row off, then on; the row
-    /// changes nothing (the same calls and answers).
     #[test]
     fn fn_00719580_refreshes_children_before_the_matching_tile() {
         for on in [false, true] {
@@ -4275,9 +4074,8 @@ mod tests {
         }
     }
 
-    fn fn_00719580_refreshes_children_before_the_matching_tile_row(on: bool) {
+    fn fn_00719580_refreshes_children_before_the_matching_tile_row(_on: bool) {
         let mut e = base_engine();
-        e.set_stewie(stewie::TILE_LABEL_NULL_NAME, on);
         e.register(0x0055_9450, |e, a| ret(e.mem.u32(a[0])));
         e.register(0x0057_cbe0, |e, a| {
             let node = e.mem.u32(a[1]);
@@ -4498,43 +4296,6 @@ mod tests {
         assert_eq!(e.global::<f32>(FADE_LEVEL), 350.0);
         assert_eq!(e.global::<u32>(FADE_LAST_TIME), 5000);
         assert_eq!(e.global::<u8>(FADE_FALLING), 0);
-    }
-
-    /// Row S0105 (lStewieAl's Tweaks' `HandleInventoryMultiAlphas`, `0x7197FB`): a lone first or
-    /// second tile gets alpha 255 with the row on; both, neither, or the row off: no such set.
-    #[test]
-    fn s0105_a_lone_stat_tile_is_fully_shown() {
-        for (on, first, second, wanted) in [
-            (true, true, false, Some(0)),
-            (true, false, true, Some(1)),
-            (true, false, false, None),
-            (false, true, false, None),
-        ] {
-            let (mut e, _) = fade_engine(100.0, false, 5000, 4000);
-            let (a, b, _, _) = fade_tiles(&mut e);
-            let a = if first { a } else { 0 };
-            let b = if second { b } else { 0 };
-            e.set_stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS, on);
-            e.call(0x0071_9790, &args![a, b, 0u32, 0u32, 0u32]);
-            let sets = logged(&e, TILE_SET_FLOAT);
-            let full: Vec<_> = sets
-                .iter()
-                .filter(|w| w[2] == 255.0f32.to_bits())
-                .cloned()
-                .collect();
-            let lone = match wanted {
-                Some(0) => vec![vec![a, TRAIT_FADE, 255.0f32.to_bits(), 1]],
-                Some(_) => vec![vec![b, TRAIT_FADE, 255.0f32.to_bits(), 1]],
-                None => vec![],
-            };
-            assert_eq!(full, lone, "row {on} {first} {second}");
-        }
-        // Both tiles: the exe's fade only.
-        let (mut e, _) = fade_engine(100.0, false, 5000, 4000);
-        let (a, b, _, _) = fade_tiles(&mut e);
-        e.set_stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS, true);
-        e.call(0x0071_9790, &args![a, b, 0u32, 0u32, 0u32]);
-        assert_eq!(logged(&e, TILE_SET_FLOAT).len(), 2);
     }
 
     #[test]

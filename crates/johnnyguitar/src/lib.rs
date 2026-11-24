@@ -171,10 +171,9 @@ fn plugin() -> nvse::plugins::BuiltIn {
 
 // Translated from JohnnyGuitar NVSE 5.28 (c87905e), internal/JG/EditorIDRestoration.cpp:
 // InitHooks.
-/// With the row on: the store answers; JG's getter and setter in each listed class's slots that
-/// are still the stubs; the nine storing classes' setters wrapped; the seams and the two wraps;
-/// JG's record in xNVSE's list (not listed). Off: nothing (the exe's path everywhere). After JIP
-/// (its light slots stay its own, as JG finds them not stubs), before lStewieAl's Tweaks.
+/// With the row on: the store answers; JG's getter and setter in each listed class's slots that are
+/// still the stubs; the nine storing classes' setters wrapped; the seams and the two wraps; JG's
+/// record in xNVSE's list (not listed). Off: nothing (the exe's path everywhere).
 pub fn install(e: &mut Engine) {
     // Made before the threads start, row on or off, so every thread's engine shares them (xNVSE's
     // removal and JIP's two readers ask the store whether it is on from any thread).

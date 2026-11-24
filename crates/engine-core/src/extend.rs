@@ -117,15 +117,12 @@ pub enum Owner {
     /// JIP LN NVSE built in (`crates/jip`); it runs after xNVSE, as JIP is xNVSE's plugin.
     Jip,
     /// JohnnyGuitar NVSE built in (`crates/johnnyguitar`): xNVSE loads its plugins by DLL name, so
-    /// `johnnyguitarnvse.dll` after `jip_nvse.dll` and before `nvse_stewie_tweaks.dll`.
+    /// `johnnyguitarnvse.dll` after `jip_nvse.dll`.
     JohnnyGuitar,
-    /// lStewieAl's Tweaks built in (`crates/stewie`): xNVSE loads its plugins by DLL name, so
-    /// `nvse_stewie_tweaks.dll` after `jip_nvse.dll` (and `MCM.dll`) and before `ui_organizer.dll`.
-    Stewie,
 }
 
 impl Owner {
-    /// Its place in the order: rows, then `nvse`, then `jip`, `johnnyguitar` and `stewie`
+    /// Its place in the order: rows, then `nvse`, then `jip` and `johnnyguitar`
     /// (the plugins' DLL names in order).
     const fn rank(self) -> u8 {
         match self {
@@ -133,7 +130,6 @@ impl Owner {
             Owner::Nvse => 1,
             Owner::Jip => 2,
             Owner::JohnnyGuitar => 3,
-            Owner::Stewie => 4,
         }
     }
 
@@ -142,8 +138,7 @@ impl Owner {
             (Owner::Row(a), Owner::Row(b)) => same_str(a, b),
             (Owner::Nvse, Owner::Nvse)
             | (Owner::Jip, Owner::Jip)
-            | (Owner::JohnnyGuitar, Owner::JohnnyGuitar)
-            | (Owner::Stewie, Owner::Stewie) => true,
+            | (Owner::JohnnyGuitar, Owner::JohnnyGuitar) => true,
             _ => false,
         }
     }
@@ -176,7 +171,6 @@ pub struct Entry {
 const NVSE: &[Owner] = &[Owner::Nvse];
 const JIP: &[Owner] = &[Owner::Jip];
 const NVSE_JIP: &[Owner] = &[Owner::Nvse, Owner::Jip];
-const STEWIE: &[Owner] = &[Owner::Stewie];
 
 /// Every exe address a built-in may wrap (ADR-0016 §3, "Wrappers"), by address. Each is a
 /// function entry registered by a translation (or a fix row's copy of it) and reached by
@@ -627,30 +621,11 @@ pub const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.5a",
     },
-    // InterfaceManager::Idle 0070c4a0, the shift tests of the right and left arrow keys (0070ecf0):
-    // lStewieAl's Tweaks' S0022.02 (`IsShiftHeld`, xNVSE's raw key state of either shift key).
-    Entry {
-        addr: 0x0070_e4db,
-        owners: STEWIE,
-        step: "stewie-L",
-    },
-    Entry {
-        addr: 0x0070_e500,
-        owners: STEWIE,
-        step: "stewie-L",
-    },
     // The loading screen's present in 00713fb0: the present notification.
     Entry {
         addr: 0x0071_47c4,
         owners: NVSE,
         step: "I-8",
-    },
-    // The text key event 007154b0, the shift state pushed for the character lookup: lStewieAl's
-    // Tweaks' S0022.03 (`IsShiftHeld`, xNVSE's raw key state of either shift key).
-    Entry {
-        addr: 0x0071_5563,
-        owners: STEWIE,
-        step: "stewie-K",
     },
     // RecipeMenu's craft 007284f0: JIP LN NVSE's ItemCrafted (OnCrafting).
     Entry {
@@ -1083,7 +1058,6 @@ const fn no_row_wraps(table: &[Entry]) {
 const _: () = no_row_wraps(WRAPS);
 
 mod patch_rows;
-pub mod stewie;
 
 /// The seams of JIP LN NVSE's game patches (step 3.9), one table per area of the game
 /// (`extend/patch_rows/`), beside [`SITES`]: each checked as [`SITES`] is, JIP's alone, and no
@@ -1430,12 +1404,6 @@ pub(crate) struct ExtendState {
     /// Which of JIP LN NVSE's game patches are on ([`jip_patches`], [`Engine::jip_patches`]), one word
     /// for the whole game, shared like [`ExtendState::controls_alt`].
     pub(crate) jip_patches: std::sync::Arc<std::sync::atomic::AtomicU32>,
-    /// Which of lStewieAl's Tweaks' rows are on ([`stewie`], [`Engine::stewie`]): one bit a row,
-    /// one table for the whole game, shared like [`ExtendState::jip_patches`].
-    pub(crate) stewie: std::sync::Arc<stewie::Bits>,
-    /// This engine's console print passes over its loading-screen test for one line (lStewieAl's
-    /// Tweaks' S0031 warning, [`Engine::stewie_print_ungated`]); false but while it prints.
-    pub(crate) stewie_print_ungated: bool,
     /// JIP LN NVSE's hooks' user counts ([`Hook`]), one table every engine of a game shares.
     pub(crate) hooks: std::sync::Arc<HookUsers>,
     /// The caller marks set around the calls whose hooks read their return address
@@ -1759,8 +1727,6 @@ impl ExtendState {
             tables: ScriptTables::default(),
             controls_alt: Default::default(),
             jip_patches: Default::default(),
-            stewie: Default::default(),
-            stewie_print_ungated: false,
             hooks: Default::default(),
             marks: Default::default(),
             words: Default::default(),
@@ -1791,8 +1757,6 @@ impl ExtendState {
             tables: self.tables,
             controls_alt: self.controls_alt.clone(),
             jip_patches: self.jip_patches.clone(),
-            stewie: self.stewie.clone(),
-            stewie_print_ungated: false,
             hooks: self.hooks.clone(),
             marks: self.marks.clone(),
             words: self.words.clone(),
@@ -3030,12 +2994,7 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 121);
-        // lStewieAl's Tweaks' (its seams in the text key event and Idle), Tweaks' alone.
-        for a in [0x0070_e4db, 0x0070_e500, 0x0071_5563] {
-            assert!(find(SITES, Owner::Stewie, a).is_some(), "{a:08x}");
-            assert!(find(SITES, Owner::Jip, a).is_none(), "{a:08x}");
-        }
+        assert_eq!(SITES.len(), 118);
         // The run-time compiler's (I-14), xNVSE's.
         for a in [
             0x005a_ebb1,

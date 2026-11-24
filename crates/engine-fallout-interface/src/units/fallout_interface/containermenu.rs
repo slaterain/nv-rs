@@ -15,7 +15,6 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use engine_core::extend::stewie;
 
 /// `ContainerMenu::pMe` (Xbox PDB static): the menu singleton.
 const CONTAINER_MENU: u32 = 0x011d_93f8;
@@ -277,7 +276,6 @@ const LIST_ITEM_TILE_INIT: u32 = 0x0073_ac90;
 const SET_ITEM_CARD: u32 = 0x0071_9790;
 /// Two float getters on an object (`this` only; ST0).
 const OBJECT_VALUE_004BE180: u32 = 0x004b_e180;
-const OBJECT_VALUE_004BE060: u32 = 0x004b_e060;
 /// `GetTickCount` behind a wrapper (no arguments).
 const CURRENT_TIME: u32 = 0x0045_7fe0;
 /// The message box shower (cdecl, six words).
@@ -2276,20 +2274,8 @@ pub fn container_menu_do_idle(e: &mut Engine, this: Ptr<ContainerMenu>) {
     {
         return;
     }
-    // 0075eb5c: lStewieAl's Tweaks' row S0022.17 (`MenuFixes`, "add a null check when mousing over
-    // keys in the Container menu"): an entry with no form ends the call (at `0075ec4e`), where the
-    // exe reads the null form's type. With the row on an entry's form is read once more, for this test
-    // (`0044ddc0`, a getter; the type test below reads it again, as the exe does).
-    if e.stewie(stewie::CONTAINER_MOUSEOVER_NO_FORM)
-        && current_item(e) != 0
-        && typed_call!(
-            leaf::FAMILY,
-            0x0044_ddc0,
-            leaf::word_at_8(e, current_item(e))
-        ) == 0
-    {
-        return;
-    }
+    // With the row on an entry's form is read once more, for this test (`0044ddc0`, a getter; the
+    // type test below reads it again, as the exe does).
     if current_item(e) != 0 && item_type(e, current_item(e)) == 0x28 {
         let first = tile_at(e, me_addr, 0x60);
         let second = tile_at(e, me_addr, 0x64);
@@ -2307,21 +2293,15 @@ pub fn container_menu_do_idle(e: &mut Engine, this: Ptr<ContainerMenu>) {
             e.call(OBJECT_VALUE_004BE180, &args![object]).f64() != zero
         };
         let second = if has_dt { tile_at(e, me_addr, 0x70) } else { 0 };
-        // `0x75EBF3` (lStewieAl's Tweaks' S0105 writes `XOR EAX,EAX; MOV [EBP-0xC],EAX; JMP` over
-        // the zero DT's store): without a DT the DR tile is passed without its own test.
-        let first = if (!has_dt && e.stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS))
-            || (current_item(e) != 0 && {
-                let object = typed_call!(
-                    leaf::FAMILY,
-                    0x0044_ddc0,
-                    leaf::word_at_8(e, current_item(e))
-                );
-                e.call(OBJECT_VALUE_004BE060, &args![object]).f64() != zero
-            }) {
-            tile_at(e, me_addr, 0x6c)
-        } else {
-            0
+        let has_dr = current_item(e) != 0 && {
+            let object = typed_call!(
+                leaf::FAMILY,
+                0x0044_ddc0,
+                leaf::word_at_8(e, current_item(e))
+            );
+            e.call(OBJECT_VALUE_004BE060, &args![object]).f64() != zero
         };
+        let first = if has_dr { tile_at(e, me_addr, 0x6c) } else { 0 };
         let item = current_item(e);
         e.call(SET_ITEM_CARD, &args![first, second, 0u32, item, 0u32]);
     }
@@ -3033,6 +3013,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0075_eac0, container_menu_do_idle(Ptr<ContainerMenu>)),
     ]
 }
+
+const OBJECT_VALUE_004BE060: u32 = 0x004b_e060;
 
 #[cfg(test)]
 mod tests {
@@ -4204,19 +4186,14 @@ mod tests {
         assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![buffer]]);
     }
 
-    /// lStewieAl's Tweaks' row S0022.17 with ordinary input: run with the row off, then on; the row
-    /// changes nothing (the same calls and answers).
     #[test]
     fn do_idle_clears_the_subtitle_and_fills_the_card() {
         ORDINARY_LOG.with(|l| *l.borrow_mut() = None);
-        for on in [false, true] {
-            do_idle_clears_the_subtitle_and_fills_the_card_row(on);
-        }
+        do_idle_clears_the_subtitle_and_fills_the_card_row(false);
     }
 
     fn do_idle_clears_the_subtitle_and_fills_the_card_row(on: bool) {
         let mut e = Engine::new();
-        e.set_stewie(stewie::CONTAINER_MOUSEOVER_NO_FORM, on);
         let this = container(&mut e);
         e.set(this, ContainerMenu::m_nTimeToClearSubtitle, 100);
         e.set_global(ITEM_ENTERED, 1u8);
@@ -4268,42 +4245,6 @@ mod tests {
         );
     }
 
-    /// Row S0105 (lStewieAl's Tweaks, `0x75EBF3`): armour with DT 0 passes the DR tile (+0x6C)
-    /// with the row on, without asking the DR (`004be060`); off, the exe's DR test (0 here: no
-    /// tile). With a DT the exe's DR test stays.
-    #[test]
-    fn s0105_no_dt_passes_the_dr_tile() {
-        for (on, dt, wanted, dr_asked) in [
-            (false, 0.0f64, [0u32, 0], 1usize),
-            (true, 0.0, [tile(0x6c), 0], 0),
-            (true, 1.0, [0, tile(0x70)], 1),
-        ] {
-            let mut e = Engine::new();
-            let this = container(&mut e);
-            e.set(this, ContainerMenu::m_nTimeToClearSubtitle, 100);
-            e.set_global(ITEM_ENTERED, 1u8);
-            e.set_global(CURRENT_ITEM, 0x7000u32);
-            answer(&mut e, CURRENT_TIME, 101);
-            answer(&mut e, WORD_AT_FOUR, 0x900);
-            answer(&mut e, TILE_FIND_CHILD, 0x950);
-            answer(&mut e, LIST_COUNT, 2);
-            item_form(&mut e, 0x7000, 0x7100);
-            answer(&mut e, FORM_TYPE, 0x18);
-            answer_st0(&mut e, OBJECT_VALUE_004BE180, dt);
-            answer_st0(&mut e, OBJECT_VALUE_004BE060, 0.0);
-            stub(&mut e, &[SET_STRING_TRAIT, SET_ITEM_CARD]);
-            e.set_stewie(stewie::INVENTORY_STAT_ALPHAS, on);
-            e.call_log = Some(vec![]);
-            e.call(0x0075_eac0, &args![this]);
-            assert_eq!(
-                calls_to(&e, SET_ITEM_CARD),
-                vec![vec![wanted[0], wanted[1], 0, 0x7000, 0]],
-                "row {on} dt {dt}"
-            );
-            assert_eq!(calls_to(&e, OBJECT_VALUE_004BE060).len(), dr_asked);
-        }
-    }
-
     thread_local! {
         /// The row-off run's calls of [`do_idle_clears_the_subtitle_and_fills_the_card_row`].
         static ORDINARY_LOG: std::cell::RefCell<Option<Vec<(u32, Vec<u32>)>>> =
@@ -4317,34 +4258,6 @@ mod tests {
             assert_eq!(a[0], item, "the form of the current item");
             form.into_ret()
         });
-    }
-
-    /// lStewieAl's Tweaks' row S0022.17: the pointer on an entry whose item has no form (keys).
-    /// The exe reads the null form's type (`00401170` reads `+4`, as its stand-in here does) and
-    /// stops; with the row on the call ends and no card is filled.
-    #[test]
-    fn s0022_17_an_entry_with_no_form() {
-        for on in [false, true] {
-            let mut e = Engine::new();
-            let this = container(&mut e);
-            e.mem.unmap(0, 0x1000);
-            e.set_global(ITEM_ENTERED, 1u8);
-            e.set_global(CURRENT_ITEM, 0x7000u32);
-            answer(&mut e, LIST_COUNT, 2);
-            item_form(&mut e, 0x7000, 0);
-            e.register_double(FORM_TYPE, |e, a| u32::from(e.mem.u8(a[0] + 4)).into_ret());
-            stub(&mut e, &[SET_STRING_TRAIT, SET_ITEM_CARD]);
-            e.set_stewie(stewie::CONTAINER_MOUSEOVER_NO_FORM, on);
-            e.call_log = Some(vec![]);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                e.call(0x0075_eac0, &args![this]);
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                assert!(calls_to(&e, SET_ITEM_CARD).is_empty());
-            }
-        }
     }
 }
 

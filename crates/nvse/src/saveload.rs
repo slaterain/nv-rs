@@ -558,7 +558,7 @@ fn read_plugins(e: &mut Engine, r: &mut Reader, pass: Pass) -> Result<(), OutOfR
     let mut core_had_data = false;
     while let Some(plugin) = r.next_plugin()? {
         let start = r.offset();
-        // A built-in that reads no section of its own yet (lStewieAl's Tweaks, whose records are
+        // A built-in that reads no section of its own yet (one whose records are
         // not built) leaves its section to the keep row, as a plugin not built in: xNVSE would
         // skip it and the next save would lose what the real plugin wrote there.
         let built_in = built_ins.iter().position(|p| {

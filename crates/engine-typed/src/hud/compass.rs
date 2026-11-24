@@ -493,32 +493,14 @@ pub fn blink_tile(e: &mut Engine, tile: Ptr, period: f32, amplitude: f32) {
 
 /// The compass's top alpha (`0x7792F9`, `FMUL [0x101E568]`): the HUD opacity times 255. With it
 /// the HUD's alpha kept to put back at [`tick_process`] (row on only).
-///
-/// lStewieAl's Tweaks' S0022.35 (`HUD_COMPASS_FOLLOWS_ITS_ALPHA`): with the row on, Tweaks' hook
-/// keeps the HUD's alpha (`011d979c`), sets it to the compass tile's `alpha` (0xFA9, `00a011b0`)
-/// and answers the opacity times that alpha; the kept value goes back at `0x779F1F`
-/// ([`tick_process`]), as in the translation's `hud_main_menu_update_compass`.
-fn compass_max_alpha(e: &mut Engine, compass: Ptr, opacity: f32) -> (f32, Option<f32>) {
-    if e.stewie(engine_core::extend::stewie::HUD_COMPASS_FOLLOWS_ITS_ALPHA) {
-        let kept = e.mem.f32(HUD_ALPHA);
-        let compass_alpha = get_float(e, compass.addr(), 0xfa9);
-        e.mem.set_f32(HUD_ALPHA, compass_alpha);
-        (
-            narrow(f64::from(opacity) * f64::from(compass_alpha)),
-            Some(kept),
-        )
-    } else {
-        (
-            narrow(f64::from(opacity) * global_f64(e, TWO_FIFTY_FIVE)),
-            None,
-        )
-    }
+fn compass_max_alpha(e: &mut Engine, _compass: Ptr, opacity: f32) -> (f32, Option<f32>) {
+    (
+        narrow(f64::from(opacity) * global_f64(e, TWO_FIFTY_FIVE)),
+        None,
+    )
 }
 
 /// The player's process for the actors' ticks (`0x779F1F`, `008d6f30`).
-///
-/// Seam for S0022.35's second place (see [`compass_max_alpha`]): with the row on, Tweaks puts the
-/// kept HUD alpha back and reads the player's word +0x40 raw in place of the call.
 fn tick_process(e: &mut Engine, me: u32, kept_opacity: Option<f32>) -> u32 {
     match kept_opacity {
         Some(opacity) => {

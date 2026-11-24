@@ -14,7 +14,7 @@ Marks: ✅ working (not free of bugs), 🔨 started, ⬜ planned.
 - [xNVSE built in](#xnvse-built-in)
 - [JIP LN built in](#jip-ln-built-in)
 - [Mod Configuration Menu (MCM) built in](#mod-configuration-menu-mcm-built-in)
-- [lStewieAl's Tweaks built in](#lstewieals-tweaks-built-in)
+- [lStewieAl's Tweaks](#lstewieals-tweaks)
 - [Mod installers (FOMOD)](#mod-installers-fomod)
 - [The launcher](#the-launcher)
 - [Modern graphics (wgpu)](#modern-graphics-wgpu)
@@ -279,47 +279,9 @@ Not built, because they do nothing on this port:
 `MCM.dll`, built from its machine code), its menu traits and its mods' INI settings, kept between
 sessions beside the saves. On in the fixes preset with JIP, off in vanilla (`bMCM`, `NV_MCM`).
 
-## lStewieAl's Tweaks built in
+## lStewieAl's Tweaks
 
-🔨 Its engine fixes and tweaks, with nothing to install. 225 of its changes are built:
-
-- 72 of its crash and leak fixes;
-- Engine Optimizations' first change (a save's changed-forms map);
-- 152 other fixes and tweaks (a few of them crash fixes too): 52 to AI, actors and the player; 55 to
-  menus and the HUD; 45 to the engines and the world, menus' keyboard and pad input, the perk
-  menu's requirement line, console commands and scripts.
-
-- Each change is on with the fixes preset and has its own off key in `Fallout.ini`'s
-  `[nv-rs Stewie]`.
-- Its settings are VNV's, with the player's `nvse_stewie_tweaks.ini` read over them.
-- One of the crash fixes, a leak, the port had already fixed.
-- The engines (seven fixes): the sun's light comes from the side of the sky its disc
-  is on; blood and impact marks on bodies show the variant picked for them; things that are not
-  doors no longer count as doors for NPCs' paths; and four crashes are gone (a tree whose distant
-  LOD a plugin disabled, with Tweaks' console line naming it; a place whose navigation mesh cannot
-  be worked out; a path through a door with no way back; a switch or LOD node that updates only its
-  shown part). One Tweaks slip is not copied, under the missing-data guard row.
-- Stairs: collision marked as stairs (123 of the game's own meshes, among them the Hoover Dam
-  towers' stairs and the vault, utility and basement stairs) counts every riser as a step, so the
-  player and NPCs walk up and down them without catching on a riser or being pushed back. Two
-  Tweaks slips are not copied, under the missing-data guard row.
-- Menus' input: the inventory keeps its scroll place when the Pip-Boy closes; typed text uses
-  shift as it is now; arrow keys keep a menu's selection from the mouse; the pad's key repeat no
-  longer carries over; the left thumbstick moves the console's pointer; menus get L3 and R3; the
-  Pip-Boy light fades when it should; the console shows the selected reference's model path.
-- Pad and keyboard in menus and the console: the pad's activate button clicks and B closes the
-  console, the D-pad, A and right stick work the console, RB (not E) picks in the console,
-  shift-arrows read shift as it is now, closing a book no longer closes the Pip-Boy, F1 to F3 wait
-  while typing, menus' keyboard buttons answer number keys, Tab, Caps Lock, Alt and F-keys, and a
-  terminal behind a trade menu leaves the mouse alone. All work with JIP's console key fix on or
-  off.
-- More small fixes: Escape, the console key and Print Screen work with a pad connected;
-  backslash can be bound; NPCs' grenades no longer show the player a "can't remove" message; a
-  plugin's map marker shows its own faction's reputation; opening the map keeps forced
-  full-detail trees; the TestAllCells console command no longer re-reads settings per cell.
-- The remaining crash fixes and tweaks come next.
-
-More in [FIXES.md, "lStewieAl's Tweaks"](FIXES.md#lstewieals-tweaks).
+lStewieAl's Tweaks is no longer built in; its fixes are being rebuilt as nv-rs's own.
 
 ## Mod installers (FOMOD)
 

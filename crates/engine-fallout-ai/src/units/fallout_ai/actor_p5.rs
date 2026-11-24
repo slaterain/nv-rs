@@ -2471,7 +2471,7 @@ pub fn fn_008b3fe0(
             let scratch = first_transform + 0x80;
             let cloning = first_transform + 0xc0;
             e.call(0x004a_d050, &args![cloning, 1.0f32]);
-            let clone = e.call(0x00a5_d2c0, &args![model, cloning]).u32();
+            clone = e.call(0x00a5_d2c0, &args![model, cloning]).u32();
             e.call(0x0047_6a80, &args![first_transform]);
             e.call(0x0047_6a80, &args![second_transform]);
             let owner = e.vcall(this.addr(), 0x1d0, &args![]).u32();
@@ -2666,14 +2666,7 @@ pub fn fn_008b43a0(
     {
         let part = e.call(0x005e_50f0, &args![body_parts, hit_part]).u32();
         e.vcall(magic_target, 8, &args![0x1au32]);
-        // lStewieAl's Tweaks' row S0112 (`patchFixBloodyMessPreventingExplosionGibbing`, the jump
-        // at `0x8B457E` retargeted to `0x8B4973`): with no body part, the parts are taken as for
-        // an attacker without it (the source's explosion list, else the hit's body part).
-        if part == 0 && e.stewie(engine_core::extend::stewie::BLOODY_MESS_EXPLOSION_GIBBING) {
-            None
-        } else {
-            Some(part)
-        }
+        Some(part)
     } else {
         None
     };
@@ -3312,12 +3305,8 @@ fn limb_piece(
     if parent == 0 {
         parent = limb;
     }
-    // lStewieAl's Tweaks' S0199.02 (`MiscCrashFixes`, `OnDismemberHook` at `0x8B558C`): with no limb node
-    // the part's transform, the clone and its effects are passed over (the jump to `0x8B5A82`):
-    // the piece is a plain node.
-    let null_limb = limb == 0 && e.stewie(engine_core::extend::stewie::DISMEMBER_NULL_LIMB);
-    let mut clone: u32 = 0;
-    if !null_limb {
+    let mut clone: u32;
+    {
         e.call(0x0047_6a80, &args![transform_b]);
         e.call(0x0047_6a80, &args![transform_a]);
         // The part's offset and rotation (degrees) from the body part data.
@@ -3455,13 +3444,7 @@ fn limb_piece(
         let process = e.get(this, Actor::pCurrentProcess).addr();
         e.vcall(process, 0x6cc, &args![part_index, handle]);
     }
-    // S0199.02 at `0x8B5B13` (Tweaks' `GetCollisionObjectNullChecked`): no limb has no collision object.
-    let limb_collision = if limb == 0 && e.stewie(engine_core::extend::stewie::DISMEMBER_NULL_LIMB)
-    {
-        0
-    } else {
-        e.call(0x0068_38b0, &args![limb]).u32()
-    };
+    let limb_collision = e.call(0x0068_38b0, &args![limb]).u32();
     if limb_collision != 0 && e.call(0x0045_3470, &args![limb]).u32() != 0 {
         let mut child_index = 0;
         while child_index < e.call(0x0043_b480, &args![limb]).u32() {
@@ -3557,10 +3540,7 @@ fn limb_piece(
             }
         }
     }
-    // S0199.02 at `0x8B606B` (Tweaks' `SetAppCulledNullChecked`): no limb is not hidden.
-    if !(limb == 0 && e.stewie(engine_core::extend::stewie::DISMEMBER_NULL_LIMB)) {
-        e.call(0x0045_0f90, &args![limb, 1u32]);
-    }
+    e.call(0x0045_0f90, &args![limb, 1u32]);
     let process = e.get(this, Actor::pCurrentProcess).addr();
     if hide_only != 0 && process != 0 && flag_1c == 0 {
         e.vcall(
@@ -9039,56 +9019,6 @@ mod tests {
         );
     }
 
-    /// S0112 (`patchFixBloodyMessPreventingExplosionGibbing`): an attacker whose actor value 0x37
-    /// is positive (Bloody Mess) hits with no body part (an explosion), and the hit's source has a
-    /// part list. Off, the exe looks for the actor's other parts only (none here) and dismembers
-    /// nothing specific; on, the source's list is used as for any other attacker (part 0x1234,
-    /// actor value 7).
-    #[test]
-    fn s0112_bloody_mess_gibs_from_the_explosions_list() {
-        for on in [false, true] {
-            let mut w = dismember_world();
-            w.s.e.set_stewie(
-                engine_core::extend::stewie::BLOODY_MESS_EXPLOSION_GIBBING,
-                on,
-            );
-            let attacker = w.s.object(0x100);
-            w.s.answer(attacker + 0xa4, 8, 5);
-            let vtable = w.s.vtable;
-            w.s.e.mem.set_u32(attacker + 0xa4, vtable);
-            w.s.e.mem.set_u32(w.hit, attacker);
-            // The hit names part key 3, which the body part data does not have.
-            w.s.e.mem.set_u32(w.hit + 0x10, 3);
-            let owner = w.s.object(0x40);
-            w.s.answer(owner, 0x220, 1);
-            w.s.e.mem.set_u32(w.hit + 8, owner);
-            let part = w.part(7, 0x71, 0, 0);
-            w.parts.borrow_mut().insert(0x1234, part);
-            let entry = w.s.e.mem.alloc(4);
-            w.s.e.mem.set_u32(entry, 0x1234);
-            let slot = w.s.e.mem.alloc(4);
-            w.s.e.mem.set_u32(slot, entry);
-            w.s.e.register(0x009b_1720, |_, _| int(0xa1));
-            w.s.e.register(0x0082_56d0, |_, _| int(0));
-            w.s.e.register_double(0x0068_15c0, move |_, _| int(slot));
-            w.s.e.register(0x0072_6070, |_, _| int(0));
-            let log = w.run();
-            let (value, part) = if on {
-                (7, 0x1234)
-            } else {
-                (u32::MAX, u32::MAX)
-            };
-            assert_eq!(
-                dismember_calls(&log),
-                vec![(
-                    ACTOR_DISMEMBER,
-                    vec![w.actor.addr(), w.hit, value, part, 0xaa, 0xbb, 0, 0, 0]
-                )],
-                "on {on}"
-            );
-        }
-    }
-
     // ---- 008b4cf0 .. 008b6df0: dismemberment ----------------------------
 
     /// Registers doubles that answer 0 at every address in `addresses`.
@@ -9637,48 +9567,6 @@ mod tests {
             );
         })
         .1
-    }
-
-    /// lStewieAl's Tweaks' row S0199.02: a part whose limb node the process does not have. Row
-    /// off, the exe clones the missing node, asks its collision object and hides it (each a read
-    /// through 0 in the game); row on, the transform, the clone and its effects are passed over and
-    /// the piece is a plain node (`00aa13e0` a second time), with no collision asked of the limb
-    /// and no hide call for it. With the limb there, row on makes the calls of row off.
-    #[test]
-    fn s0199_02_a_part_with_no_limb_node() {
-        let mut ordinary = vec![];
-        for on in [false, true] {
-            let mut w = limb_stage();
-            w.s.e
-                .set_stewie(engine_core::extend::stewie::DISMEMBER_NULL_LIMB, on);
-            ordinary.push(limb_piece_run(&mut w, 0, 0, 1, 0));
-            let mut w = limb_stage();
-            w.s.e
-                .set_stewie(engine_core::extend::stewie::DISMEMBER_NULL_LIMB, on);
-            w.s.answer(w.process, 0x6d0, 0);
-            let log = limb_piece_run(&mut w, 0, 0, 1, 0);
-            let cloned = args_of(&log, 0x00a5_d2c0);
-            let collision = args_of(&log, 0x0068_38b0);
-            let hidden = args_of(&log, 0x0045_0f90);
-            if on {
-                assert!(cloned.is_empty(), "no clone");
-                assert!(args_of(&log, 0x0047_6a80).is_empty(), "no transform built");
-                assert!(args_of(&log, 0x004f_b070).is_empty(), "no part effects");
-                assert_eq!(
-                    args_of(&log, 0x00aa_13e0).len(),
-                    2,
-                    "the group and a plain node"
-                );
-                assert!(collision.is_empty());
-                assert!(!hidden.contains(&vec![0, 1]));
-                assert!(w.slot_calls_on(w.group).contains(&(0xdc, vec![w.group, 1])));
-            } else {
-                assert_eq!(cloned, vec![vec![0, cloned[0][1]]]);
-                assert_eq!(collision, vec![vec![0]]);
-                assert!(hidden.contains(&vec![0, 1]));
-            }
-        }
-        assert_eq!(ordinary[0], ordinary[1], "row on: the calls of the row off");
     }
 
     #[test]

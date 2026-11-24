@@ -1061,74 +1061,6 @@ mod b070_tests {
         assert_eq!(calls_to(&e, UPDATE_PROPERTIES), vec![vec![0x950]]);
     }
 
-    /// lStewieAl's Tweaks' S0046: the screen's light effect counts as lit when the first child's
-    /// tri-strips have a material alpha (or, with no material property, a shader alpha) not 0;
-    /// `stewie_set_light_effect` then fades the light though `b1stPersonLightOn` is clear. A node
-    /// with no children data answers no only with the missing-data guard.
-    #[test]
-    fn s0046_a_lit_screen_light_effect_fades_too() {
-        let world = |material_alpha: Option<f32>, shader_alpha: f32| {
-            let mut e = Engine::new();
-            let this = e.new_object::<FOPipboyManager>();
-            let root = object_with_vtable(&mut e, 0x10, 0x00c1_0000);
-            e.mem.set_u32(this.addr() + 0xd8, root);
-            stub(&mut e, &[FIXED_STRING_CONSTRUCT, FIXED_STRING_DESTRUCT]);
-            let light = object_with_vtable(&mut e, 0x10, 0x00c2_0000);
-            let node = e.mem.alloc(0x100);
-            let children = e.mem.alloc(8);
-            let child = object_with_vtable(&mut e, 0x10, 0x00c3_0000);
-            e.mem.set_u32(node + 0xa0, children);
-            e.mem.set_u32(children, child);
-            answer(&mut e, 0x00c1_009c, light);
-            answer(&mut e, 0x00c2_000c, node);
-            answer(&mut e, 0x00c3_0018, 0x950);
-            let material = e.mem.alloc(0x40);
-            let shader = e.mem.alloc(0x40);
-            e.mem
-                .set_f32(material + 0x3c, material_alpha.unwrap_or(0.0));
-            e.mem.set_f32(shader + 0x28, shader_alpha);
-            let has_material = material_alpha.is_some();
-            e.register_double(GET_PROPERTY, move |_, a| Ret {
-                eax: match a[1] {
-                    2 if has_material => material,
-                    3 => shader,
-                    _ => 0,
-                },
-                ..Ret::default()
-            });
-            e.map(TIMER_011F6394 & !0xfff, 0x1000);
-            e.mem.set_u32(TIMER_011F6394 + 0x14, 77);
-            (e, this, node)
-        };
-        let (mut e, this, _) = world(Some(0.5), 0.0);
-        assert!(stewie_screen_light_lit(&mut e, this));
-        stewie_set_light_effect(&mut e, this);
-        assert_eq!(e.mem.u8(this.addr() + LIGHT_EFFECT_ON), 1);
-        assert_eq!(e.mem.f32(this.addr() + LIGHT_EFFECT_START), 77.0);
-        assert_eq!(e.mem.f32(this.addr() + LIGHT_EFFECT_END), 0.0);
-        // A material property with alpha 0 answers no, whatever the shader's.
-        let (mut e, this, _) = world(Some(0.0), 1.0);
-        assert!(!stewie_screen_light_lit(&mut e, this));
-        stewie_set_light_effect(&mut e, this);
-        assert_eq!(e.mem.u8(this.addr() + LIGHT_EFFECT_ON), 0);
-        // No material property: the shader's alpha.
-        let (mut e, this, _) = world(None, 1.0);
-        assert!(stewie_screen_light_lit(&mut e, this));
-        let (mut e, this, _) = world(None, 0.0);
-        assert!(!stewie_screen_light_lit(&mut e, this));
-        // The light on: the fade starts whatever the screen shows.
-        e.set(this, FOPipboyManager::b1stPersonLightOn, 1);
-        stewie_set_light_effect(&mut e, this);
-        assert_eq!(e.mem.u8(this.addr() + LIGHT_EFFECT_ON), 1);
-        // No root: no.
-        let (mut e, this, node) = world(Some(1.0), 0.0);
-        e.mem.set_u32(node + 0xa0, 0);
-        e.set_stewie_slip_guard(true);
-        assert!(!stewie_screen_light_lit(&mut e, this));
-        e.mem.set_u32(this.addr() + 0xd8, 0);
-        assert!(!stewie_screen_light_lit(&mut e, this));
-    }
-
     #[test]
     fn init_buttons_takes_buttons_and_glows() {
         let mut e = Engine::new();
@@ -1500,10 +1432,6 @@ mod la1_tests {
 /// `007fa8d0` (`thiscall`, one word) runs first on menu open (with 0) and
 /// close (with the player's `Actor::IsRefractive`, `008c51c0`).
 const MENU_STATE_007FA8D0: u32 = 0x007f_a8d0;
-/// The Pip-Boy manager's reset (`007fa990`, `thiscall`; it clears the "reset me" byte itself), and
-/// that byte (one definition, beside row S0027).
-const PIPBOY_RESET: u32 = 0x007f_a990;
-use engine_core::extend::stewie::PIPBOY_RESET_PENDING;
 const ACTOR_IS_REFRACTIVE: u32 = 0x008c_51c0;
 /// The bytes menu open sets (`011d890a`, `011db378`; the second is
 /// cleared on close and tested by `SetTabKnobPosition`).
@@ -1714,15 +1642,6 @@ pub fn fo_pipboy_manager_on_menu_open(e: &mut Engine, this: Ptr<FOPipboyManager>
         return;
     }
     e.call(MENU_STATE_007FA8D0, &args![this, 0u32]);
-    if e.stewie(engine_core::extend::stewie::PIPBOY_EQUIP_CRASH) {
-        // lStewieAl's Tweaks' row S0027 (`PipboyManagerOnMenuOpenCheckReset` at `0x7F8059`): a
-        // reset an equip asked for (the byte at +0x16C) is done now, before the colours.
-        let pending = this.addr() + PIPBOY_RESET_PENDING;
-        if e.mem.u8(pending) != 0 {
-            e.call(PIPBOY_RESET, &args![this]);
-            e.mem.set_u8(pending, 0);
-        }
-    }
     fo_pipboy_manager_reset_colors(e, this);
     e.set_global(MENU_OPEN_BYTE_011D890A, 1u8);
     e.set_global(PIPBOY_OPEN_011DB378, 1u8);
@@ -2305,66 +2224,6 @@ pub fn fo_pipboy_manager_fade_light_effect(
     e.mem.set_u32(base + LIGHT_EFFECT_END, end.to_bits());
 }
 
-/// lStewieAl's Tweaks' S0046 `PipboyManager__SetLightEffect` (its call at `0x70EFCD` in
-/// `UpdatePipboy`'s raise, in place of `FadeLightEffect(1)`): when the first-person light is on
-/// (`+0x160`) or the screen's light effect is still lit ([`stewie_screen_light_lit`]), the effect
-/// starts now (`timeGlobals->msPassed`, the word `00825c00` reads, as a float at `+0x164`; `+0x162`
-/// set) toward 0.0 (`+0x168`).
-pub fn stewie_set_light_effect(e: &mut Engine, this: Ptr<FOPipboyManager>) {
-    if e.get(this, FOPipboyManager::b1stPersonLightOn) == 0 && !stewie_screen_light_lit(e, this) {
-        return;
-    }
-    let base = this.addr();
-    let time = e.mem.u32(TIMER_011F6394 + 0x14);
-    e.mem
-        .set_u32(base + LIGHT_EFFECT_START, (time as f32).to_bits());
-    e.mem.set_u8(base + LIGHT_EFFECT_ON, 1);
-    e.mem.set_u32(base + LIGHT_EFFECT_END, 0.0f32.to_bits());
-}
-
-/// Tweaks' `IsPipboyScreenLightEffectActive`: under the first-person Pip-Boy root, the node
-/// `PipboyLightEffect` (or `PipboyLightEffect:0`, the names the exe's own code looks up), its node
-/// (`GetNiNode`), the first child's tri-strips (`GetTriStrips`), and the alpha of their material
-/// property (`+0x3C`) or else their shader property (`+0x28`) not 0. Tweaks takes the node and its
-/// first child without testing them: with the missing-data guard row a missing one answers no.
-pub fn stewie_screen_light_lit(e: &mut Engine, this: Ptr<FOPipboyManager>) -> bool {
-    let root = e.mem.u32(this.addr() + PIPBOY_ROOT);
-    if root == 0 {
-        return false;
-    }
-    let mut light = find_under(e, root, LIGHT_NAME_ONE);
-    if light == 0 {
-        light = find_under(e, root, LIGHT_NAME_TWO);
-    }
-    if light == 0 {
-        return false;
-    }
-    let node = e.vcall(light, 0xc, &args![]).u32();
-    let guard = e.stewie_slip_guard();
-    if node == 0 && guard {
-        return false;
-    }
-    // `GetAt(0)`: the first entry of `m_children` (data at `+0xA0`), its `NiPointer`'s object.
-    let children = e.mem.u32(node.wrapping_add(0xa0));
-    if children == 0 && guard {
-        return false;
-    }
-    let child = e.mem.u32(children);
-    if child == 0 {
-        return false;
-    }
-    let strips = e.vcall(child, 0x18, &args![]).u32();
-    if strips == 0 {
-        return false;
-    }
-    let material = e.call(GET_PROPERTY, &args![strips, 2u32]).u32();
-    if material != 0 {
-        return e.mem.f32(material + 0x3c) != 0.0;
-    }
-    let shader = e.call(GET_PROPERTY, &args![strips, 3u32]).u32();
-    shader != 0 && e.mem.f32(shader + 0x28) != 0.0
-}
-
 // Translated from 007fa810 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `FOPipboyManager::FadeLight` (engine map; `thiscall`, `RET 4`: the
 /// time): the fade value (as in `UpdateLightEffect`, over the setting
@@ -2497,8 +2356,6 @@ mod n086_tests {
         });
     }
 
-    /// lStewieAl's Tweaks' row S0027 with ordinary input: run with the row off, then on; the row
-    /// changes nothing (the same calls and answers).
     #[test]
     fn on_menu_open_starts_the_hum_and_the_burst() {
         for on in [false, true] {
@@ -2506,9 +2363,8 @@ mod n086_tests {
         }
     }
 
-    fn on_menu_open_starts_the_hum_and_the_burst_row(on: bool) {
+    fn on_menu_open_starts_the_hum_and_the_burst_row(_on: bool) {
         let mut e = Engine::new();
-        e.set_stewie(engine_core::extend::stewie::PIPBOY_EQUIP_CRASH, on);
         world(&mut e);
         sounds(&mut e);
         quiet(
@@ -2565,62 +2421,6 @@ mod n086_tests {
         assert_eq!(calls(&e, MODIFIER_STOP), vec![vec![0x3131]]);
         assert_eq!(e.global::<u8>(OPEN_STATE_0118ABB1), 0);
         assert_eq!(calls(&e, AFTER_OPEN_004DE8C0), vec![vec![0]]);
-    }
-
-    /// lStewieAl's Tweaks' row S0027 (`0x7F8059`): a reset an equip asked for (the manager's byte
-    /// at +0x16C) is done when the Pip-Boy opens, before its colours, and the byte cleared; with no
-    /// reset asked for, or the row off, the opening does not reset.
-    #[test]
-    fn s0027_the_pipboy_opening_does_the_reset_an_equip_asked_for() {
-        // FOPipboyManager +0x16C (the script command `005db4c0` sets it, the main loop's AI tasks
-        // `0086f840` read it): the AI's equip sets the same byte.
-        assert_eq!(PIPBOY_RESET_PENDING, 0x16c);
-        for (on, pending) in [(false, 1u8), (true, 0), (true, 1)] {
-            let mut e = Engine::new();
-            world(&mut e);
-            sounds(&mut e);
-            quiet(
-                &mut e,
-                &[
-                    MENU_STATE_007FA8D0,
-                    COLOR_CONSTRUCT,
-                    ISOLATE_MENU_ELEMENTS,
-                    TRIGGER_BURST,
-                    RENDERED_MENU_ON_MENU_OPEN,
-                    MODIFIER_STOP,
-                    AFTER_OPEN_004DE8C0,
-                    PIPBOY_RESET,
-                ],
-            );
-            e.register(SYSTEM_COLORS, |_, _| 0u32.into_ret());
-            e.register(SYSTEM_COLOR, |_, _| 0u32.into_ret());
-            e.register(GET_HIT_MODIFIER, |_, _| 0x3131u32.into_ret());
-            e.register(PIPBOY_STATE, |_, _| 1u32.into_ret());
-            let this = manager(&mut e);
-            e.mem.set_u8(this + 0x16c, pending);
-            e.set_stewie(engine_core::extend::stewie::PIPBOY_EQUIP_CRASH, on);
-            e.call_log = Some(vec![]);
-            e.call(0x007f_8010, &args![this]);
-            let resets = on && pending == 1;
-            assert_eq!(
-                calls(&e, PIPBOY_RESET).len(),
-                usize::from(resets),
-                "row {on}"
-            );
-            assert_eq!(e.mem.u8(this + 0x16c), if resets { 0 } else { pending });
-            if resets {
-                let order: Vec<u32> = e
-                    .call_log
-                    .as_ref()
-                    .unwrap()
-                    .iter()
-                    .map(|(a, _)| *a)
-                    .filter(|a| [MENU_STATE_007FA8D0, PIPBOY_RESET, COLOR_CONSTRUCT].contains(a))
-                    .collect();
-                assert_eq!(order[..2], [MENU_STATE_007FA8D0, PIPBOY_RESET]);
-                assert_eq!(calls(&e, PIPBOY_RESET), vec![vec![this]]);
-            }
-        }
     }
 
     #[test]

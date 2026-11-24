@@ -252,12 +252,8 @@ fn queue_cell(
     });
 }
 
-/// The report's call of `004a8fe0` at `0x4A8BE6`; lStewieAl's Tweaks' S0080
-/// (`patchTestAllCellsNeedlessINIChecks`, `SafeNopCall`) takes it out.
 fn report_reads_budgets(e: &mut Engine) {
-    if !e.stewie(engine_core::extend::stewie::TEST_ALL_CELLS_NO_INI_REREAD) {
-        fn_004a8fe0(e);
-    }
+    fn_004a8fe0(e);
 }
 
 // Translated from 004a8bb0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -540,35 +536,6 @@ mod tests {
             e.call(0x004a_8f70, &args![scene_info, 12]).f32(),
             u32::MAX as f64 as f32
         );
-    }
-
-    /// lStewieAl's Tweaks' S0080: off, the report walks the budget table (`004a8fe0`, 32
-    /// receiver calls); on, not at all.
-    #[test]
-    fn s0080_the_report_no_longer_rereads_the_budgets() {
-        let calls = |row: bool| {
-            let mut e = engine_with_memory();
-            fill_table(&mut e);
-            let receiver = e.mem.alloc(8);
-            e.mem.set_u32(receiver, FAKE_RECEIVER_VTABLE);
-            e.register_double(TABLE_WORDS_RECEIVER, move |_, _| Ret {
-                eax: receiver,
-                ..Ret::default()
-            });
-            e.register(FAKE_RECEIVER_METHOD, |_, _| Ret::default());
-            e.set_stewie(
-                engine_core::extend::stewie::TEST_ALL_CELLS_NO_INI_REREAD,
-                row,
-            );
-            e.call_log = Some(vec![]);
-            report_reads_budgets(&mut e);
-            let log = e.call_log.take().unwrap();
-            log.iter()
-                .filter(|(addr, _)| *addr == FAKE_RECEIVER_METHOD)
-                .count()
-        };
-        assert_eq!(calls(false), 32);
-        assert_eq!(calls(true), 0);
     }
 
     #[test]

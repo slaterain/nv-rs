@@ -30,8 +30,6 @@ jip = { path = "../jip" }
 # JohnnyGuitar NVSE built in, its editor ids when their row is on: after JIP, before MCM
 # (crates/johnnyguitar).
 johnnyguitar = { path = "../johnnyguitar" }
-# lStewieAl's Tweaks built in, when its row is on: after JIP and MCM (crates/stewie).
-stewie = { path = "../stewie" }
 # The Mod Configuration Menu's plugin (MCM.dll) built in, when its row is on: after JIP.
 mcm = { path = "../mcm" }
 # The load order the game's forms are read from (`player_move`).

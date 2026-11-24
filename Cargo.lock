@@ -1131,7 +1131,6 @@ dependencies = [
  "nvse",
  "play-patch",
  "qos",
- "stewie",
  "zlib-rs",
 ]
 
@@ -2365,14 +2364,6 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
-
-[[package]]
-name = "stewie"
-version = "0.1.0"
-dependencies = [
- "engine-core",
- "nvse",
-]
 
 [[package]]
 name = "syn"

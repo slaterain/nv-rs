@@ -1103,38 +1103,19 @@ fn condition_value_as_int(e: &mut Engine, item: u32) -> i32 {
 /// The location branch appends the 0x80-byte work buffer even when the
 /// condition has no location, so its previous contents are appended again,
 /// as in the exe.
-///
-/// lStewieAl's Tweaks' `PerkMenuDescriptionTypoFix` changes the text, each part a row of its own
-/// (`engine_core::extend::stewie`'s `PERK_TEXT_*`, S0093.01 to .06), and cuts a description too
-/// long for the buffer (S0093.07).
 pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr, size: u32) {
-    use engine_core::extend::stewie;
     let base = this.addr();
     let buffer = buffer.addr();
-    // lStewieAl's Tweaks' `PerkMenuDescriptionTypoFix` text rows (S0093.01 to .06), each at its own
-    // patched instructions below.
-    let no_dashes = e.stewie(stewie::PERK_TEXT_NO_DASHES);
-    let no_empty_comma = e.stewie(stewie::PERK_TEXT_NO_EMPTY_COMMA);
-    let by_one = e.stewie(stewie::PERK_TEXT_INDEX_BY_ONE);
-    let skip_other = e.stewie(stewie::PERK_TEXT_SKIP_OTHER);
-    let commas = e.stewie(stewie::PERK_TEXT_COMMAS);
-    let perk_not_or = e.stewie(stewie::PERK_TEXT_PERK_NOT_OR);
     e.with_stack(0x84 + TWEAKS_TEXT, |e, work| {
         let work = work.addr();
-        // The row S0093.06's formats (Tweaks' own strings), after the exe's 0x80-byte work buffer.
-        let tweaks_text = work + 0x84;
+        let _tweaks_text = work + 0x84;
         let mut short_heading = false;
         let mut item = e.call(GET_CONDITION_ITEM, &args![base + 0x40, 0u32]).u32();
         let ranks = u32::from(e.mem.u8(base + 0x39));
         if ranks > 1 {
             let ranks_label = e.call(SETTING_STRING, &args![0x011d_3b2cu32]).u32();
             let perk_label = e.call(SETTING_STRING, &args![0x011d_4678u32]).u32();
-            // S0093.06 (`0x5EBB27`): "%s: %s %d, ", the ranks followed by a comma.
-            let heading = if perk_not_or {
-                put_text(e, tweaks_text, b"%s: %s %d, ")
-            } else {
-                0x0104_7040
-            };
+            let heading = 0x0104_7040;
             e.call(
                 STRING_FORMAT,
                 &args![buffer, size, heading, perk_label, ranks_label, ranks],
@@ -1147,32 +1128,18 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
             );
             short_heading = true;
         }
-        // S0093.05 (`0x5EBCCE`, `0x5EBE61`, `0x5EBF4D`): the first separator only where the text does
-        // not end with ", " already (Tweaks' `AddCommaIfMissing`).
         let first_separator = |e: &mut Engine, index: u32| {
             if index == 0 && !short_heading {
-                if commas {
-                    add_comma_if_missing(e, buffer, size, 0x0101_2630);
-                } else {
-                    e.call(STRING_APPEND, &args![buffer, size, 0x0101_2630u32]);
-                }
+                e.call(STRING_APPEND, &args![buffer, size, 0x0101_2630u32]);
             }
         };
-        // The item after `index` (`index + 1`) as the actor-value branch asks for it; with S0093.05
-        // (`0x5EBCFB`, `0x5EBD6E`) only when a shown condition is left from there on.
         let next_item = |e: &mut Engine, index: u32| {
-            if commas {
-                nth_condition_if_one_shown_follows(e, base + 0x40, index.wrapping_add(1))
-            } else {
-                e.call(
-                    GET_CONDITION_ITEM,
-                    &args![base + 0x40, index.wrapping_add(1)],
-                )
-                .u32()
-            }
+            e.call(
+                GET_CONDITION_ITEM,
+                &args![base + 0x40, index.wrapping_add(1)],
+            )
+            .u32()
         };
-        // The step to the next item (`0x5EBC77`, `0x5EBF55`, then `0x5EBB77`): the exe's index goes
-        // up twice a step (it reads the item at the first); with S0093.03 once.
         let step = |e: &mut Engine, index: &mut u32| {
             let item = e
                 .call(
@@ -1180,7 +1147,7 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
                     &args![base + 0x40, index.wrapping_add(1)],
                 )
                 .u32();
-            *index = index.wrapping_add(if by_one { 1 } else { 2 });
+            *index = index.wrapping_add(2);
             item
         };
         let mut listed = false;
@@ -1214,13 +1181,7 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
                         let joiner = e.call(SETTING_STRING, &args![0x011d_324cu32]).u32();
                         let value = condition_value_as_int(e, item).wrapping_add(adjustment);
                         let label = e.call(0x0066_eb00, &args![actor_value]).u32();
-                        // S0093.06 (`0x5EBD3E`): the format one byte on, "%s%s%d %s " without the
-                        // leading space (no double space before the "OR").
-                        let format = if perk_not_or {
-                            0x0104_7029u32
-                        } else {
-                            0x0104_7028
-                        };
+                        let format = 0x0104_7028;
                         e.call(
                             STRING_FORMAT,
                             &args![
@@ -1253,58 +1214,23 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
                 let number = e.mem.u32(data + 8);
                 if location != 0 && number > 0 {
                     let name = e.call(0x0040_8da0, &args![location + 0x18]).u32();
-                    // S0093.06 (`0x5EBEC1`, `0x5EBED1`): "%s %d, " through Tweaks'
-                    // `OnFormatPerkHandleConditions`.
-                    if perk_not_or {
-                        let format = put_text(e, tweaks_text, b"%s %d, ");
-                        format_perk_condition(
-                            e,
-                            [item, base, index],
-                            [work, 0x80, format, name, number],
-                            tweaks_text + 0x10,
-                        );
-                    } else {
-                        e.call(
-                            STRING_FORMAT,
-                            &args![work, 0x80u32, 0x0104_700cu32, name, number],
-                        );
-                    }
+                    e.call(
+                        STRING_FORMAT,
+                        &args![work, 0x80u32, 0x0104_700cu32, name, number],
+                    );
                 } else if location != 0 {
                     let name = e.call(0x0040_8da0, &args![location + 0x18]).u32();
-                    // S0093.06 (`0x5EBEF4`, `0x5EBF04`): "%s, " the same way. The hook passes the
-                    // word above the name as the rank; "%s, " does not read it.
-                    if perk_not_or {
-                        let format = put_text(e, tweaks_text, b"%s, ");
-                        format_perk_condition(
-                            e,
-                            [item, base, index],
-                            [work, 0x80, format, name, 0],
-                            tweaks_text + 0x10,
-                        );
-                    } else {
-                        e.call(STRING_FORMAT, &args![work, 0x80u32, 0x0101_9f08u32, name]);
-                    }
+                    e.call(STRING_FORMAT, &args![work, 0x80u32, 0x0101_9f08u32, name]);
                 }
                 e.call(STRING_APPEND, &args![buffer, size, work]);
-            } else if !skip_other {
-                // S0093.04 (`0x5EBE35`): with the row such a condition goes straight to the step
-                // (`0x5EBF55`), neither listed nor separated.
+            } else {
                 listed = true;
-                // S0093.02 (`0x5EBF3E`): with the row no separator here.
-                if !no_empty_comma {
-                    first_separator(e, index);
-                }
+                first_separator(e, index);
             }
             item = step(e, &mut index);
         }
-        // S0093.01 (`0x5EBF8D`): with the row no "--" for an empty list.
-        if !listed && !no_dashes {
+        if !listed {
             e.call(STRING_APPEND, &args![buffer, size, 0x0104_7008u32]);
-        }
-        // S0093.05 (`0x5EBFB1`): a ", " or "," left at the end goes before the "\n\n" (Tweaks'
-        // `StripTrailingCommasHook`).
-        if commas {
-            strip_trailing_commas(e, buffer);
         }
         e.call(STRING_APPEND, &args![buffer, size, 0x0101_2648u32]);
         let level_label = e.call(SETTING_STRING, &args![0x011d_40e4u32]).u32();
@@ -1317,217 +1243,11 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
         let text = e
             .vcall(base + 0x24, 0x10, &args![0u32, 0x4353_4544u32])
             .u32();
-        // lStewieAl's Tweaks' row S0093.07 (`PerkMenuDescriptionTypoFix`, the call at `0x5EC026`):
-        // `snprintf(buffer, size, "%s%s", buffer, text)` in place of `strcat_s`, so a description too
-        // long for the buffer is cut to fit instead of stopping the game.
-        if e.stewie(stewie::PERK_DESCRIPTION_TOO_LONG) {
-            append_cut_to_fit(e, buffer, size, text);
-        } else {
-            e.call(STRING_APPEND, &args![buffer, size, text]);
-        }
+        e.call(STRING_APPEND, &args![buffer, size, text]);
     });
 }
 
-/// Room on the stack for row S0093.06's texts: one format (0x10 bytes) and the format
-/// `OnFormatPerkHandleConditions` makes (Tweaks' 0x20 bytes, with room for its unbounded appends).
 const TWEAKS_TEXT: u32 = 0x60;
-
-/// `text` and its end at `at`; returns `at`.
-fn put_text(e: &mut Engine, at: u32, text: &[u8]) -> u32 {
-    e.mem.write(at, text);
-    e.mem.set_u8(at + text.len() as u32, 0);
-    at
-}
-
-/// The actor values' infos (`ActorValueInfo *` by code; `avName` a `String` at `+0x3C`, its length
-/// a `u16` at `+0x40`) and the karma's code, as Tweaks reads them.
-const ACTOR_VALUE_INFOS: u32 = 0x011d_61c8;
-const ACTOR_VALUE_KARMA: u32 = 0x17;
-
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/PerkMenuDescriptionTypoFix.cpp):
-// IsDisplayableCondition.
-/// Whether the perk menu shows `condition`: a `GetPermanentActorValue` (its opcode `| 0x1000` is
-/// `0x11EF`) of a value other than karma whose info has a name, or a `HasPerk` (`0x11C1`).
-fn is_shown_condition(e: &mut Engine, condition: u32) -> bool {
-    if condition == 0 {
-        return false;
-    }
-    match e.mem.u32(condition + 8) | 0x1000 {
-        0x11ef => {
-            let code = e.mem.u32(condition + 0xc);
-            if code == ACTOR_VALUE_KARMA {
-                return false;
-            }
-            let info = e
-                .mem
-                .u32(ACTOR_VALUE_INFOS.wrapping_add(code.wrapping_mul(4)));
-            info != 0 && e.mem.u16(info + 0x40) != 0
-        }
-        0x11c1 => true,
-        _ => false,
-    }
-}
-
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/PerkMenuDescriptionTypoFix.cpp):
-// GetNthConditionReturnNullIfNoValidItemsInRestOfList (with xNVSE's `tList::GetNthNode`).
-/// The condition at node `n` of the list `conditions` (a `tList`: the data word, the next node at
-/// `+4`), or 0 when no condition the menu shows is at that node or after it.
-fn nth_condition_if_one_shown_follows(e: &mut Engine, conditions: u32, n: u32) -> u32 {
-    if (n as i32) < 0 {
-        return 0;
-    }
-    let mut node = conditions;
-    for _ in 0..n {
-        node = e.mem.u32(node + 4);
-        if node == 0 {
-            return 0;
-        }
-    }
-    let mut rest = node;
-    while rest != 0 {
-        if is_shown_condition(e, e.mem.u32(rest)) {
-            return e.mem.u32(node);
-        }
-        rest = e.mem.u32(rest + 4);
-    }
-    0
-}
-
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/PerkMenuDescriptionTypoFix.cpp): AddCommaIfMissing.
-/// `comma` appended (`strcat_s`, `00406d50`) unless the text ends with ", " (and is longer than two).
-fn add_comma_if_missing(e: &mut Engine, buffer: u32, size: u32, comma: u32) {
-    let text = e.mem.cstr(buffer);
-    let len = text.len();
-    if len <= 2 || text[len - 1] != b' ' || text[len - 2] != b',' {
-        e.call(STRING_APPEND, &args![buffer, size, comma]);
-    }
-}
-
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/PerkMenuDescriptionTypoFix.cpp): StripTrailingCommas.
-/// A text longer than two that ends with "," or ", " loses them.
-fn strip_trailing_commas(e: &mut Engine, at: u32) {
-    let text = e.mem.cstr(at);
-    let len = text.len();
-    if len > 2 {
-        if text[len - 1] == b',' {
-            e.mem.set_u8(at + len as u32 - 1, 0);
-        } else if text[len - 1] == b' ' && text[len - 2] == b',' {
-            e.mem.set_u8(at + len as u32 - 2, 0);
-        }
-    }
-}
-
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/PerkMenuDescriptionTypoFix.cpp):
-// OnFormatPerkHandleConditions (IsConditionNot, IsConditionOR).
-/// A perk requirement formatted (`[condition, perk, n]`, `[buffer, size, format, name, rank]`): a
-/// condition that the perk must be missing (`== 0`, or `!= ` a nonzero value) gets "NOT " before
-/// it, and one joined by OR to a shown condition after it loses its trailing comma and gets
-/// " OR " (the setting `sOr`, `0x11D324C`). The new format is made at `scratch`: Tweaks' 0x20-byte
-/// buffer, the format cut to fit it, its appends not bounded (`strncat`).
-fn format_perk_condition(
-    e: &mut Engine,
-    [condition, perk, n]: [u32; 3],
-    words: [u32; 5],
-    scratch: u32,
-) {
-    let [buffer, size, format, name, rank] = words;
-    let operator = (e.mem.u8(condition) & 0xe0) >> 5;
-    let value = e.call(0x0068_1490, &args![condition]).f64() as f32;
-    let not = if operator == 1 {
-        value != 0.0
-    } else {
-        value == 0.0
-    };
-    let or = e.mem.u8(condition) & 1 != 0
-        && nth_condition_if_one_shown_follows(e, perk + 0x40, n.wrapping_add(1)) != 0;
-    let mut format = format;
-    if not || or {
-        let mut text = Vec::new();
-        let mut room = 0x20usize;
-        if not {
-            text.extend_from_slice(b"NOT ");
-            room -= 4;
-        }
-        let mut copied = e.mem.cstr(format);
-        copied.truncate(room - 1);
-        let start = text.len();
-        text.extend(copied);
-        if or {
-            let mut own = text.split_off(start);
-            let len = own.len();
-            if len > 2 {
-                if own[len - 1] == b',' {
-                    own.truncate(len - 1);
-                } else if own[len - 1] == b' ' && own[len - 2] == b',' {
-                    own.truncate(len - 2);
-                }
-            }
-            text.extend(own);
-            let setting = e.call(SETTING_STRING, &args![0x011d_324cu32]).u32();
-            text.push(b' ');
-            text.extend(e.mem.cstr(setting));
-            text.push(b' ');
-        }
-        // Tweaks' appends can run past its 0x20 bytes (a very long `sOr`); here the stack room
-        // (`TWEAKS_TEXT - 0x10`) bounds them.
-        text.truncate((TWEAKS_TEXT - 0x11) as usize);
-        format = put_text(e, scratch, &text);
-    }
-    // Tweaks formats with `snprintf`, which cuts the text to fit (the exe's `vsprintf_s` would
-    // stop the game on a text too long for the work buffer, a mod's long perk name).
-    snprintf_cut(e, buffer, size, format, name, rank);
-}
-
-/// `snprintf(buffer, size, format, name, rank)` as the C runtime does it for the formats this line
-/// has: `%s` takes `name`, `%d` takes `rank` (signed), `%%` is a `%`; the text is cut to `size - 1`
-/// bytes and ended with a 0. Any other conversion is copied as it stands.
-fn snprintf_cut(e: &mut Engine, buffer: u32, size: u32, format: u32, name: u32, rank: u32) {
-    if size == 0 {
-        return;
-    }
-    let mut text = Vec::new();
-    let mut chars = e.mem.cstr(format).into_iter().peekable();
-    let mut words = [name, rank].into_iter();
-    while let Some(c) = chars.next() {
-        if c != b'%' {
-            text.push(c);
-            continue;
-        }
-        match chars.peek().copied() {
-            Some(b's') => {
-                chars.next();
-                let word = words.next().unwrap_or(0);
-                text.extend(e.mem.cstr(word));
-            }
-            Some(b'd') => {
-                chars.next();
-                let word = words.next().unwrap_or(0);
-                text.extend((word as i32).to_string().into_bytes());
-            }
-            Some(b'%') => {
-                chars.next();
-                text.push(b'%');
-            }
-            _ => text.push(c),
-        }
-    }
-    text.truncate((size - 1) as usize);
-    text.push(0);
-    e.mem.write(buffer, &text);
-}
-
-/// What lStewieAl's Tweaks' `_strncat` does (`snprintf(buffer, size, "%s%s", buffer, text)`): the
-/// buffer's text and `text` joined, cut to `size - 1` bytes and ended with a 0.
-fn append_cut_to_fit(e: &mut Engine, buffer: u32, size: u32, text: u32) {
-    if size == 0 {
-        return;
-    }
-    let mut joined = e.mem.cstr(buffer);
-    joined.extend(e.mem.cstr(text));
-    joined.truncate((size - 1) as usize);
-    joined.push(0);
-    e.mem.write(buffer, &joined);
-}
 
 /// Chunk writers (cdecl): data (`TESForm::__AddChunkData`, `00485990`:
 /// signature, data, size), a word (`00485910`), a byte (`004858f0`, the
@@ -3375,67 +3095,6 @@ mod b028_description_tests {
             .into_iter()
             .filter(|c| c.0 == STRING_FORMAT || c.0 == STRING_APPEND)
             .collect()
-    }
-
-    /// `strcat_s` as the C runtime's: the joined text, or the invalid-parameter stop (a panic here) when
-    /// it does not fit. A word outside mapped memory (the exe's own strings) reads as empty.
-    fn real_append(e: &mut Engine) {
-        e.register(STRING_APPEND, |e, a| {
-            let read = |e: &Engine, at: u32| {
-                if e.mem.is_mapped(at) {
-                    e.mem.cstr(at)
-                } else {
-                    vec![]
-                }
-            };
-            let mut joined = read(e, a[0]);
-            joined.extend(read(e, a[2]));
-            assert!(
-                joined.len() < a[1] as usize,
-                "strcat_s: the text does not fit"
-            );
-            joined.push(0);
-            e.mem.write(a[0], &joined);
-            Ret::default()
-        });
-    }
-
-    /// A perk with no requirements whose description text (`0dd00000`) is `text`, built into a buffer
-    /// of `size` bytes with the row `on`: whether it ran to the end, and the buffer's text.
-    fn description_of(text: &[u8], size: u32, on: bool) -> (bool, Vec<u8>) {
-        let mut e = engine();
-        real_append(&mut e);
-        e.map(0x0dd0_0000, 0x1000);
-        e.mem.write(0x0dd0_0000, text);
-        e.mem.set_u8(0x0dd0_0000 + text.len() as u32, 0);
-        set_items(&mut e, vec![]);
-        let this = perk(&mut e, 1);
-        let buffer = e.mem.alloc(size);
-        e.set_stewie(engine_core::extend::stewie::PERK_DESCRIPTION_TOO_LONG, on);
-        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            e.call(0x005e_bac0, &args![this, buffer, size]);
-        }));
-        e.call_stack.clear();
-        (run.is_ok(), e.mem.cstr(buffer))
-    }
-
-    /// lStewieAl's Tweaks' row S0093.07 (`PerkMenuDescriptionTypoFix`, the call at `0x5EC026`): a
-    /// description longer than the buffer: the exe's `strcat_s` stops; with the row it is cut to fit
-    /// (`size - 1` bytes and the end).
-    #[test]
-    fn s0093_07_a_description_too_long_for_the_buffer() {
-        let text = [b'x'; 0x40];
-        assert!(!description_of(&text, 0x20, false).0);
-        assert_eq!(description_of(&text, 0x20, true), (true, vec![b'x'; 0x1f]));
-    }
-
-    /// Row S0093.07 with a description that fits (ordinary input): the same text with the row off and
-    /// on.
-    #[test]
-    fn s0093_07_row_on_with_a_description_that_fits_changes_nothing() {
-        let text = b"Ammunition weighs nothing.";
-        assert_eq!(description_of(text, 0x40, false), (true, text.to_vec()));
-        assert_eq!(description_of(text, 0x40, true), (true, text.to_vec()));
     }
 
     #[test]

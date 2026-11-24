@@ -1538,19 +1538,12 @@ pub fn nav_mesh_obstacle_manager_remove_obstacle_for_reference(
     });
 }
 
-/// The test `006c0dc0`, `006c0f10` and `006c1060` open with: true for a
-/// reference whose base form is a door that is not a sliding door (the form
-/// type is `0x1c` and `IsSlidingDoor` is false). `None` when the handler
-/// stops there: lStewieAl's Tweaks' S0242 (its jumps at `0x6C0DFE`,
-/// `0x6C0F4E` and `0x6C107F`) sends a reference whose base form is not a
-/// door to the handler's end, where the exe goes on to the door queues.
+/// The test `006c0dc0`, `006c0f10` and `006c1060` open with: true for a reference whose base form
+/// is a door that is not a sliding door (the form type is `0x1c` and `IsSlidingDoor` is false).
 fn is_ordinary_door(e: &mut Engine, reference: u32) -> Option<bool> {
     let form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
     if e.call(FORM_TYPE, &args![form]).u32() == DOOR_FORM_TYPE {
         return Some(!e.call(IS_SLIDING_DOOR, &args![form]).bool());
-    }
-    if e.stewie(engine_core::extend::stewie::NAV_MESH_OBSTACLE_DOORS_ONLY) {
-        return None;
     }
     Some(false)
 }
@@ -6899,43 +6892,6 @@ mod tests {
         let mut s = door_scene(0x1b, false, false, false, &[0xf8]);
         fn_006c1060(&mut s.e, s.this, s.reference);
         assert!(s.added.borrow().is_empty());
-    }
-
-    /// lStewieAl's Tweaks' row S0242 (`0x6C0DFE`, `0x6C0F4E`, `0x6C107F`):
-    /// with the row a reference that is not a door leaves each door handler
-    /// at once (no queue or map touched); a sliding door still goes through
-    /// the queues as before. Row off, the non-door goes through them (the
-    /// tests above).
-    #[test]
-    fn s0242_the_door_handlers_pass_over_references_that_are_not_doors() {
-        type Handler = fn(&mut Engine, Ptr<NavMeshObstacleManager>, u32);
-        let handlers: [(Handler, &[u32]); 3] = [
-            (fn_006c0dc0, &[0xf0]),
-            (nav_mesh_obstacle_manager_on_door_close, &[0xf8]),
-            (fn_006c1060, &[0xf0]),
-        ];
-        for (handler, queued) in handlers {
-            for on in [false, true] {
-                let mut s = door_scene(0x1b, false, false, false, queued);
-                s.e.set_stewie(
-                    engine_core::extend::stewie::NAV_MESH_OBSTACLE_DOORS_ONLY,
-                    on,
-                );
-                handler(&mut s.e, s.this, s.reference);
-                assert!(s.setting_reads.borrow().is_empty());
-                let touched = !s.removed.borrow().is_empty() || !s.added.borrow().is_empty();
-                assert_eq!(touched, !on, "row {on}");
-            }
-            // A sliding door is a door: the queues change with the row too.
-            let mut s = door_scene(0x1c, true, false, false, queued);
-            s.e.set_stewie(
-                engine_core::extend::stewie::NAV_MESH_OBSTACLE_DOORS_ONLY,
-                true,
-            );
-            handler(&mut s.e, s.this, s.reference);
-            assert!(s.setting_reads.borrow().is_empty());
-            assert!(!s.removed.borrow().is_empty() || !s.added.borrow().is_empty());
-        }
     }
 
     /// A manager with every callee of the obstacle (re)registration

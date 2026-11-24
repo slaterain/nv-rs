@@ -1282,13 +1282,7 @@ pub fn item_change_set_item_health(
             ],
         )
         .u32();
-    let form_health = if e.stewie(engine_core::extend::stewie::WEAPON_MOD_HEALTH_KEPT) {
-        // lStewieAl's Tweaks' S0151 (bytes at `0x4BD07C`, `GetContChangeMaxHealth` called at
-        // `0x4BD07F` with the entry in place of `GetFormHealth(form)`).
-        modded_max_health(e, this, form)
-    } else {
-        e.call(GET_FORM_HEALTH, &args![form]).i32()
-    };
+    let form_health = e.call(GET_FORM_HEALTH, &args![form]).i32();
     let current = item_change_get_item_health(e, this, false);
     let current = float_to_int(e, current as f64);
     // InventoryChanges::pRef (Xbox PDB) +4.
@@ -1421,23 +1415,13 @@ pub fn item_change_get_item_value(e: &mut Engine, this: Ptr<ItemChange>) -> f32 
             for bit in [1u32, 2, 4] {
                 if slots & bit != 0 {
                     let mod_object = fn_004bd570(e, Ptr::new(weapon), bit);
-                    // TESObjectIMOD value word.
-                    // lStewieAl's Tweaks' row S0045 (`patchFixGetItemValueCrashForModdedWeapons`, at
-                    // `0x4BD48D`, `0x4BD4B5`, `0x4BD4DD`): a mod flag whose mod the weapon no longer has
-                    // adds 0.
-                    let word = if mod_object == 0
-                        && e.stewie(engine_core::extend::stewie::ITEM_VALUE_NULL_WEAPON_MOD)
-                    {
-                        0
-                    } else {
-                        typed_call!(
-                            leaf::FAMILY,
-                            0x0072_6070,
-                            leaf::word_at_4(e, mod_object + MOD_OBJECT_VALUE)
-                        )
-                        .into_ret()
-                        .i32()
-                    };
+                    let word = typed_call!(
+                        leaf::FAMILY,
+                        0x0072_6070,
+                        leaf::word_at_4(e, mod_object + MOD_OBJECT_VALUE)
+                    )
+                    .into_ret()
+                    .i32();
                     price = (word as f64 + price as f64) as f32;
                 }
             }
@@ -3430,10 +3414,7 @@ pub fn fn_004c0cf0(
             continue;
         }
         e.call(GET_FORM_AS_BIPED_MODEL, &args![form]);
-        // lStewieAl's Tweaks' row S0199.06 (`MiscCrashFixes`, `0x4C0DD4`): with no actor the
-        // actor's answer is not asked and the removal goes on.
         if e.call(EXTRA_GET_CAN_NOT_WEAR, &args![worn_extra]).bool()
-            && !(actor == 0 && e.stewie(engine_core::extend::stewie::REMOVE_WORN_NULL_ACTOR))
             && !e.vcall(actor, 0x22c, &args![0u32]).bool()
         {
             e.mem.set_u8(removed, 0);
@@ -4897,165 +4878,18 @@ fn remove_item_hotkey(e: &mut Engine, drop_flag: u8, extra: u32, target: u32, co
 }
 
 /// `004c37d0`'s "can't remove worn item" message (`sCantRemoveWornItem`, `004c69f0` on
-/// `0x11D31F8`, then `QueueUIMessage` at `0x4C5640`); with lStewieAl's Tweaks' S0128
-/// (`OnRemoveWornItemMessageHook`) the message is queued only when `actor` is the player.
-fn no_unequip_message(e: &mut Engine, actor: u32) {
+/// `0x11D31F8`, then `QueueUIMessage` at `0x4C5640`).
+fn no_unequip_message(e: &mut Engine, _actor: u32) {
     let text = fn_004c69f0(e, Ptr::new(NO_UNEQUIP_MESSAGE_OBJECT));
     let duration = e.global::<f32>(MESSAGE_DURATION);
-    let shown = !e.stewie(engine_core::extend::stewie::NO_UNEQUIP_MESSAGE_PLAYER_ONLY)
-        || actor == e.global::<u32>(PLAYER_GLOBAL);
-    if shown {
-        e.call(
-            SHOW_MESSAGE,
-            &args![text, 0u32, MESSAGE_ICON, 0u32, duration, 0u32],
-        );
-    }
+    e.call(
+        SHOW_MESSAGE,
+        &args![text, 0u32, MESSAGE_ICON, 0u32, duration, 0u32],
+    );
 }
 
 #[cfg(test)]
-mod s0128_tests {
-    use super::*;
-
-    /// lStewieAl's Tweaks' S0128: off, the message for anyone; on, only for the player.
-    #[test]
-    fn s0128_the_no_unequip_message_is_the_player_s_only() {
-        let run = |row: bool, actor: u32| {
-            let mut e = Engine::new();
-            e.map(0x0101_6000, 0x1000);
-            e.map(0x011d_e000, 0x1000);
-            e.set_global(PLAYER_GLOBAL, 0x7000u32);
-            e.set_global(MESSAGE_DURATION, 2.0f32);
-            e.register(STRING_OBJECT_TO_CHARS, |_, _| Ret {
-                eax: 0x5150,
-                ..Ret::default()
-            });
-            e.register(SHOW_MESSAGE, |_, _| Ret::default());
-            e.set_stewie(
-                engine_core::extend::stewie::NO_UNEQUIP_MESSAGE_PLAYER_ONLY,
-                row,
-            );
-            e.call_log = Some(vec![]);
-            no_unequip_message(&mut e, actor);
-            e.call_log
-                .take()
-                .unwrap()
-                .iter()
-                .filter(|c| c.0 == SHOW_MESSAGE)
-                .map(|c| c.1.clone())
-                .collect::<Vec<_>>()
-        };
-        let shown = vec![vec![0x5150, 0, MESSAGE_ICON, 0, 2.0f32.to_bits(), 0]];
-        assert_eq!(run(false, 0x8000), shown);
-        assert_eq!(run(true, 0x7000), shown);
-        assert!(run(true, 0x8000).is_empty());
-    }
-
-    /// lStewieAl's Tweaks' S0151 `GetContChangeMaxHealth`: a weapon whose mod flags include a slot
-    /// with "increase max condition" (10) adds every slot's value for that effect; without such
-    /// an active slot, or for armor, the form's health; other forms 0.
-    #[test]
-    fn s0151_the_max_health_counts_the_condition_mod() {
-        let run = |kind: u8, flags: u32| {
-            let mut e = Engine::new();
-            let form = e.mem.alloc(0x200);
-            e.mem.set_u8(form + 4, kind);
-            for (slot, (effect, value)) in [(10u32, 25.5f32), (1, 99.0), (10, 4.0)]
-                .into_iter()
-                .enumerate()
-            {
-                e.mem.set_u32(form + 0x180 + 4 * slot as u32, effect);
-                e.mem.set_f32(form + 0x18c + 4 * slot as u32, value);
-            }
-            let this: Ptr<ItemChange> = e.new_object();
-            let node = e.mem.alloc(8);
-            e.mem.set_u32(node, 0x5000);
-            e.set(this, ItemChange::pExtraObjectList, Ptr::new(node));
-            e.register(GET_FORM_HEALTH, |_, _| Ret {
-                eax: 100,
-                ..Ret::default()
-            });
-            e.register(EXTRA_HAS_WEAPON_MODS, |_, _| Ret {
-                eax: 1,
-                ..Ret::default()
-            });
-            e.register_double(EXTRA_GET_WEAPON_MOD_FLAGS, move |_, _| Ret {
-                eax: flags,
-                ..Ret::default()
-            });
-            modded_max_health(&mut e, this, form)
-        };
-        assert_eq!(run(0x28, 0b001), 129);
-        assert_eq!(run(0x28, 0b100), 129);
-        assert_eq!(run(0x28, 0b010), 100);
-        assert_eq!(run(0x28, 0), 100);
-        assert_eq!(run(0x18, 0b001), 100);
-        assert_eq!(run(0x2f, 0b001), 0);
-    }
-
-    /// lStewieAl's Tweaks' S0152: with the row the biped flags decide (backpack 0x4, heavy 0x20,
-    /// power 0x80 refresh; others do not) and the exe's two tests are not asked.
-    #[test]
-    fn s0152_unequipping_a_backpack_refreshes() {
-        let mut e = Engine::new();
-        let biped = e.mem.alloc(0x10);
-        e.register(BIPED_IS_POWER_ARMOR, |_, _| Ret {
-            eax: 0,
-            ..Ret::default()
-        });
-        e.set_stewie(engine_core::extend::stewie::NPC_BACKPACK_UPDATE, true);
-        e.call_log = Some(vec![]);
-        for (flags, refresh) in [
-            (4u8, true),
-            (0x20, true),
-            (0x80, true),
-            (0x43, false),
-            (0, false),
-        ] {
-            e.mem.set_u8(biped + 8, flags);
-            assert_eq!(unequip_refreshes_worn(&mut e, biped), refresh, "{flags:#x}");
-        }
-        assert!(e
-            .call_log
-            .as_ref()
-            .unwrap()
-            .iter()
-            .all(|c| c.0 != BIPED_IS_POWER_ARMOR));
-        // Off (the exe): a backpack (0x4) or heavy armor (0x20) alone does not refresh; power armor
-        // is asked (`00480d10`), then the biped's bit 7.
-        e.set_stewie(engine_core::extend::stewie::NPC_BACKPACK_UPDATE, false);
-        for (flags, refresh) in [(4u8, false), (0x24, false), (0x80, true)] {
-            e.call_log = Some(vec![]);
-            e.mem.set_u8(biped + 8, flags);
-            assert_eq!(unequip_refreshes_worn(&mut e, biped), refresh, "{flags:#x}");
-            assert_eq!(
-                e.call_log
-                    .as_ref()
-                    .unwrap()
-                    .iter()
-                    .filter(|c| c.0 == BIPED_IS_POWER_ARMOR)
-                    .count(),
-                1
-            );
-        }
-    }
-
-    /// lStewieAl's Tweaks' S0156: a total of exactly -1.0 is cached as 0 with the row, kept off;
-    /// other totals (also -1.0 plus a little, -0.0) are cached as they are.
-    #[test]
-    fn s0156_a_minus_one_weight_is_cached_as_zero() {
-        let mut e = Engine::new();
-        assert_eq!(stored_weight(&mut e, -1.0).to_bits(), (-1.0f32).to_bits());
-        e.set_stewie(
-            engine_core::extend::stewie::INVENTORY_WEIGHT_NOT_MINUS_ONE,
-            true,
-        );
-        assert_eq!(stored_weight(&mut e, -1.0).to_bits(), 0);
-        let near = f32::from_bits(0xbf80_0001);
-        assert_eq!(stored_weight(&mut e, near).to_bits(), 0xbf80_0001);
-        assert_eq!(stored_weight(&mut e, -0.0).to_bits(), (-0.0f32).to_bits());
-        assert_eq!(stored_weight(&mut e, 12.5), 12.5);
-    }
-}
+mod s0128_tests {}
 
 // Translated from 004c37d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Takes `count` of `form` out of the changes of `this` (the removal that
@@ -9853,68 +9687,12 @@ fn heavy_weapon_adjusted(e: &mut Engine, weight: f32) -> f32 {
     weight
 }
 
-/// lStewieAl's Tweaks' `GetContChangeMaxHealth(entry)` (S0151): a weapon's (form type 0x28)
-/// health plus, when one of its three mods in the entry's first extra list's mod flags is "increase
-/// max condition" (effect 10), the sum of the weapon's mod values for that effect (`effectMods`
-/// `+0x180`, `value1Mod` `+0x18C`), truncated; an armor's (0x18) health; else 0. The health is the
-/// form's (`TESHealthForm`, the value `GetFormHealth` answers).
-fn modded_max_health(e: &mut Engine, this: Ptr<ItemChange>, form: u32) -> i32 {
-    const INCREASE_MAX_CONDITION: u32 = 10;
-    // Ours: an entry without a form, which the exe copes with (Tweaks would read through it).
-    if form == 0 {
-        return 0;
-    }
-    let kind = e.mem.u8(form.wrapping_add(4));
-    if kind != 0x28 && kind != 0x18 {
-        return 0;
-    }
-    let health = e.call(GET_FORM_HEALTH, &args![form]).i32();
-    if kind == 0x18 {
-        return health;
-    }
-    let extra = first_item(e, this);
-    let flags = if extra != 0 && e.call(EXTRA_HAS_WEAPON_MODS, &args![extra]).bool() {
-        e.call(EXTRA_GET_WEAPON_MOD_FLAGS, &args![extra]).u8()
-    } else {
-        0
-    };
-    let modded = (0..3u32).rev().any(|slot| {
-        flags & (1 << slot) != 0
-            && e.mem.u32(form.wrapping_add(0x180 + 4 * slot)) == INCREASE_MAX_CONDITION
-    });
-    if !modded {
-        return health;
-    }
-    let mut bonus = 0.0f32;
-    for slot in 0..3u32 {
-        if e.mem.u32(form.wrapping_add(0x180 + 4 * slot)) == INCREASE_MAX_CONDITION {
-            bonus += e.mem.f32(form.wrapping_add(0x18c + 4 * slot));
-        }
-    }
-    (health as f32 + bonus) as i32
-}
-
-/// Whether unequipping armor with the biped model `biped` refreshes what the actor is shown
-/// wearing (`0x4C0FF1`: power armor `00480d10` or heavy armor `004c0bd0`); with lStewieAl's Tweaks'
-/// S0152 the biped flags' backpack, heavy and power armor bits (`test byte [ecx+8], 0xA4`).
 fn unequip_refreshes_worn(e: &mut Engine, biped: u32) -> bool {
-    if e.stewie(engine_core::extend::stewie::NPC_BACKPACK_UPDATE) {
-        return e.mem.u8(biped + 8) & 0xa4 != 0;
-    }
     e.call(BIPED_IS_POWER_ARMOR, &args![biped]).bool() || fn_004c0bd0(e, Ptr::new(biped))
 }
 
-/// The weight `004d0900` caches (`FLD`/`FSTP` at `0x4D0EDA`); with lStewieAl's Tweaks' S0156
-/// (`OnUpdateInventoryWeightHook`) a total of exactly -1.0 (the "recompute" mark) is cached as 0
-/// (its bits compared, `0xBF800000`).
-fn stored_weight(e: &mut Engine, total: f32) -> f32 {
-    if e.stewie(engine_core::extend::stewie::INVENTORY_WEIGHT_NOT_MINUS_ONE)
-        && total.to_bits() == 0xbf80_0000
-    {
-        0.0
-    } else {
-        total
-    }
+fn stored_weight(_e: &mut Engine, total: f32) -> f32 {
+    total
 }
 
 // Translated from 004d0900 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -13050,40 +12828,6 @@ mod tests {
         assert_eq!(calls(&e, DESTRUCTOR), vec![vec![x, 1]]);
     }
 
-    /// lStewieAl's Tweaks' S0151 in `SetItemHealth` (`0x4BD07F`): a weapon of health 100 whose
-    /// fitted first mod is "increase max condition" (+25), set to 100.0. Off: 100 is the full
-    /// health, so the health extra is removed; on: the full health is 125, so 100.0 is stored.
-    #[test]
-    fn s0151_set_item_health_counts_the_condition_mod() {
-        let run = |row: bool| {
-            let mut e = logged();
-            let weapon = form(&mut e, 0x28, 0, 100);
-            set(&mut e, weapon, 0x180, 10);
-            e.mem.set_f32(weapon + 0x18c, 25.0);
-            casts(&mut e, 0, 0, weapon);
-            let inventory = e.mem.alloc(0x10);
-            let x = extra(&mut e);
-            set(&mut e, x, 4, 1);
-            set(&mut e, x, X_HAS_MODS, 1);
-            set(&mut e, x, X_MOD_FLAGS, 1);
-            let head = list(&mut e, &[x]);
-            let this = change(&mut e, head, weapon);
-            e.set_stewie(engine_core::extend::stewie::WEAPON_MOD_HEALTH_KEPT, row);
-            e.call(0x004bd030, &args![this, 100.0f32, inventory, x, true]);
-            (
-                calls(&e, EXTRA_SET_HEALTH),
-                calls(&e, EXTRA_REMOVE_HEALTH),
-                x,
-            )
-        };
-        let (stored, removed, x) = run(false);
-        assert!(stored.is_empty());
-        assert_eq!(removed, vec![vec![x]]);
-        let (stored, removed, x) = run(true);
-        assert_eq!(stored, vec![vec![x, 100.0f32.to_bits()]]);
-        assert!(removed.is_empty());
-    }
-
     #[test]
     fn fn_004bd350_prefers_the_float_extra() {
         let mut e = engine();
@@ -13130,58 +12874,6 @@ mod tests {
         set(&mut e, x, X_MOD_FLAGS, 5);
         let this = change(&mut e, head, weapon);
         assert_eq!(e.call(0x004bd400, &args![this]).f32(), 130.0);
-    }
-
-    /// A weapon whose extra data says mods 1 and 4 while its form has only mod 4 (`value` 20), at full
-    /// health (200): the item change and the weapon.
-    fn weapon_missing_its_first_mod(e: &mut Engine) -> (Ptr<ItemChange>, u32) {
-        let weapon = form(e, 0x28, 200, 100);
-        set(e, weapon, 0x98, 100);
-        casts(e, weapon, 0, 0);
-        let second = e.mem.alloc(0x100);
-        set(e, second, MOD_OBJECT_VALUE + 4, 20);
-        set(e, weapon, WEAPON_MOD_OBJECT, 0);
-        set(e, weapon, WEAPON_MOD_OBJECT + 8, second);
-        let x = extra(e);
-        e.mem.set_f32(x + X_HEALTH, 100.0);
-        set(e, x, X_HAS_MODS, 1);
-        set(e, x, X_MOD_FLAGS, 5);
-        let head = list(e, &[x]);
-        (change(e, head, weapon), weapon)
-    }
-
-    /// lStewieAl's Tweaks' row S0045 (`patchFixGetItemValueCrashForModdedWeapons`, `0x4BD48D`): the exe
-    /// reads the missing first mod's value and stops; with the row it adds 0 for it and 20 for the
-    /// other.
-    #[test]
-    fn s0045_a_mod_flag_whose_mod_is_gone() {
-        for on in [false, true] {
-            let mut e = engine();
-            let (this, _) = weapon_missing_its_first_mod(&mut e);
-            e.set_stewie(engine_core::extend::stewie::ITEM_VALUE_NULL_WEAPON_MOD, on);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                e.call(0x004bd400, &args![this]).f32()
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                assert_eq!(run.unwrap(), 220.0);
-            }
-        }
-    }
-
-    /// Row S0045 with both mods there (ordinary input): the same value with the row off and on.
-    #[test]
-    fn s0045_row_on_with_the_mods_there_changes_nothing() {
-        for on in [false, true] {
-            let mut e = engine();
-            let (this, weapon) = weapon_missing_its_first_mod(&mut e);
-            let first = e.mem.alloc(0x100);
-            set(&mut e, first, MOD_OBJECT_VALUE + 4, 10);
-            set(&mut e, weapon, WEAPON_MOD_OBJECT, first);
-            e.set_stewie(engine_core::extend::stewie::ITEM_VALUE_NULL_WEAPON_MOD, on);
-            assert_eq!(e.call(0x004bd400, &args![this]).f32(), 230.0, "row {on}");
-        }
     }
 
     #[test]
@@ -15271,68 +14963,6 @@ mod tests {
         assert_eq!(e.mem.u32(player + 0x1f0), 7);
         e.call(0x004c0cd0, &args![player, 0u32]);
         assert_eq!(e.mem.u32(player + 0x1f0), 0);
-    }
-
-    /// A worn armour that may not be taken off (`GetCanNotWear` answers 1) in the changes of
-    /// `equip_setup`: the changes, the armour and the actor.
-    fn can_not_wear_world(e: &mut Engine) -> (Ptr<InventoryChanges>, u32, u32) {
-        e.register(GET_DISMEMBERMENT_EXTRA, |_, _| returns(0));
-        e.register(COMPARE_LIST_FOR_CONTAINER, |_, _| returns(0));
-        e.register(EXTRA_GET_CAN_NOT_WEAR, |_, _| returns(1));
-        let (this, armor, actor, _) = equip_setup(e, 0x18);
-        let worn = worn_plain_extra(e);
-        let change = entry(e, armor, &[worn], 1);
-        put_entry(e, this, change);
-        (this, armor, actor)
-    }
-
-    /// lStewieAl's Tweaks' row S0199.06 (`MiscCrashFixes`, `0x4C0DD4`): a worn item that may not be
-    /// taken off, with no actor given: the exe asks the missing actor whether it may and stops; with
-    /// the row the removal goes on (the flag stays set).
-    #[test]
-    fn s0199_06_a_can_not_wear_item_with_no_actor() {
-        for on in [false, true] {
-            let mut e = equip_engine();
-            let (this, armor, _) = can_not_wear_world(&mut e);
-            e.set_stewie(engine_core::extend::stewie::REMOVE_WORN_NULL_ACTOR, on);
-            let removed = e.mem.alloc(4);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                e.call(
-                    0x004c0cf0,
-                    &args![this, removed, armor, 1i32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32],
-                )
-                .bool()
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                assert_eq!(e.mem.u8(removed), 1);
-            }
-        }
-    }
-
-    /// Row S0199.06 with an actor that refuses (ordinary input): the flag is cleared and the same calls
-    /// made with the row off and on.
-    #[test]
-    fn s0199_06_row_on_with_an_actor_changes_nothing() {
-        let mut runs = vec![];
-        for on in [false, true] {
-            let mut e = equip_engine();
-            let (this, armor, actor) = can_not_wear_world(&mut e);
-            e.register(vcall_address(0x22c), |_, _| returns(0));
-            e.set_stewie(engine_core::extend::stewie::REMOVE_WORN_NULL_ACTOR, on);
-            let removed = e.mem.alloc(4);
-            e.call_log = Some(vec![]);
-            let done = e
-                .call(
-                    0x004c0cf0,
-                    &args![this, removed, armor, 1i32, actor, 0u32, 0u32, 0u32, 0u32, 0u32],
-                )
-                .bool();
-            runs.push((done, e.mem.u8(removed), e.call_log.take().unwrap()));
-        }
-        assert_eq!(runs[0], runs[1]);
-        assert_eq!(runs[0].1, 0);
     }
 
     #[test]
@@ -17781,33 +17411,6 @@ mod tests {
         set_float(&mut e, light, F_WEIGHT, 50.0);
         assert_eq!(e.call(0x004d0900, &args![this, 0u32]).f32(), 16.0);
         assert!(calls(&e, ACTOR_WEIGHT_CHANGED).is_empty());
-    }
-
-    /// lStewieAl's Tweaks' S0156 at the store `0x4D0EDA`: a container whose two items weigh -2.0 (a
-    /// mod's negative weight) and 1.0 totals exactly -1.0, the "weigh again" mark (an item of exactly
-    /// -1.0 counts as 0). Off: -1.0 is stored
-    /// and answered; on: 0.0.
-    #[test]
-    fn s0156_an_inventory_weighing_minus_one_stores_zero() {
-        let run = |row: bool| {
-            let mut e = fx();
-            let owner = object(&mut e);
-            let this = inventory(&mut e, &[], owner);
-            e.set(this, InventoryChanges::fcontainerweight, -1.0f32);
-            let negative = weighted_form(&mut e, 0x20, -2.0);
-            let light = weighted_form(&mut e, 0x20, 1.0);
-            give_container(&mut e, owner, &[(1, negative), (1, light)]);
-            e.set_stewie(
-                engine_core::extend::stewie::INVENTORY_WEIGHT_NOT_MINUS_ONE,
-                row,
-            );
-            let answer = e.call(0x004d0900, &args![this, 0u32]).f32();
-            let stored = e.get(this, InventoryChanges::fcontainerweight);
-            (answer.to_bits(), stored.to_bits())
-        };
-        let minus_one = (-1.0f32).to_bits();
-        assert_eq!(run(false), (minus_one, minus_one));
-        assert_eq!(run(true), (0, 0));
     }
 
     #[test]
