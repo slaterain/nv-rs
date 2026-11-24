@@ -3345,7 +3345,7 @@ fn limb_piece(
         if hide_only == 0 {
             e.call(0x004a_d050, &args![cloning, 1.0f32]);
             e.call(0x004a_d240, &args![cloning, 1.0f32]);
-            let clone = e.call(0x00a5_d2c0, &args![limb, cloning]).u32();
+            clone = e.call(0x00a5_d2c0, &args![limb, cloning]).u32();
             let reference = e.call(0x0089_1350, &args![]).u32();
             let other = e.call(0x004a_de00, &args![clone, reference]).u32();
             let mut matched: u8 = 0;
