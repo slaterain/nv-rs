@@ -1057,13 +1057,16 @@ type StartFn = fn(
 ) -> Result<super::sound_out::Output, super::sound_out::Refused>;
 
 /// How [`follow_device`] asks for the default device's mix format and opens a stream there:
-/// `super::sound_out`'s own, on a helper thread (the tests give stand-ins, run in place).
+/// `super::sound_out`'s own, on a helper thread (the tests give stand-ins, run in place); and how
+/// [`direct_sound_create8`] has that format asked ahead (the unit tests' default asks nothing).
 #[derive(Clone, Copy)]
 struct DeviceSeam {
     mix_now: fn() -> Option<(u32, Layout)>,
     start: StartFn,
     /// Run the try on the calling thread (the tests) instead of a helper thread.
     in_place: bool,
+    /// `super::sound_out::ask_device_mix_ahead`.
+    ask_ahead: fn(),
 }
 
 impl Default for DeviceSeam {
@@ -1072,6 +1075,11 @@ impl Default for DeviceSeam {
             mix_now: super::sound_out::device_mix_again,
             start: super::sound_out::start,
             in_place: false,
+            // The unit tests answer the device's rate without asking ([`device_rate`]).
+            #[cfg(not(test))]
+            ask_ahead: super::sound_out::ask_device_mix_ahead,
+            #[cfg(test)]
+            ask_ahead: || {},
         }
     }
 }
@@ -2681,6 +2689,13 @@ pub fn direct_sound_create8(e: &mut Engine, device: u32, out: Ptr, outer: u32) -
         e.mem.set_u32(out.addr(), 0);
         return result;
     }
+    // The default device's mix format, asked now on a thread of its own: the rate DirectSound
+    // mixes at ([`device_rate`]). A run without the output needs it first at the game's first
+    // sounds, and asking only then held main 410 to 500 ms (the main menu's first sound, every
+    // test run without sound); `start_output` takes the answer at once. The same answer, asked
+    // when the device is made.
+    let ask_ahead = state!(e).sound.device_seam.ask_ahead;
+    ask_ahead();
     if state!(e).sound.sound_vtable == 0 {
         register_code(e);
         state!(e).sound.sound_vtable = vtable(e, SOUND_CODE, SOUND_SLOTS.len() as u32);
@@ -3807,7 +3822,8 @@ fn part_after(part: u32, n: u64, frequency: u32) -> u32 {
 }
 
 /// The rate DirectSound mixes at: the output's when it runs, else the default device's
-/// (`super::sound_out::device_rate`; the measured device's 48000 when Windows names none, where
+/// (`super::sound_out::device_rate`, asked ahead when the game makes its device,
+/// [`direct_sound_create8`]; the measured device's 48000 when Windows names none, where
 /// DirectSound would make no device); the tests' 48000.
 fn device_rate(e: &Engine) -> u32 {
     if let Some(m) = &state_ref!(e).sound.mix {
@@ -5050,6 +5066,39 @@ mod tests {
         e.mem.map(0x1000, 0x1000);
         assert_eq!(direct_sound_create8(&mut e, 0, Ptr::new(0x1000), 0), DS_OK);
         assert_ne!(e.mem.u32(0x1000), 0);
+    }
+
+    /// The game's device made, the default device's mix format is asked ahead (once a device);
+    /// a `DirectSoundCreate8` that makes none asks nothing.
+    #[test]
+    fn making_the_device_asks_its_format_ahead() {
+        thread_local! {
+            static ASKED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        }
+        fn ask() {
+            ASKED.with(|a| a.set(a.get() + 1));
+        }
+        let seam = |e: &mut Engine| {
+            state!(e).sound.device_seam = DeviceSeam {
+                ask_ahead: ask,
+                ..DeviceSeam::default()
+            };
+        };
+        let mut e = Engine::new();
+        load_table(&mut e, &fixed_table(false));
+        e.mem.map(0x1000, 0x1000);
+        seam(&mut e);
+        assert_eq!(
+            direct_sound_create8(&mut e, 0, Ptr::new(0x1000), 0),
+            DSERR_NODRIVER
+        );
+        assert_eq!(ASKED.with(|a| a.get()), 0);
+        let mut e = engine();
+        seam(&mut e);
+        assert_ne!(start_up(&mut e), 0);
+        assert_eq!(ASKED.with(|a| a.get()), 1);
+        assert_eq!(direct_sound_create8(&mut e, 0, Ptr::new(0x1100), 0), DS_OK);
+        assert_eq!(ASKED.with(|a| a.get()), 2);
     }
 
     /// `BSXenonAudio::Init`'s calls in its order; the device; answers 0x1000.. scratch.
@@ -7820,6 +7869,7 @@ mod tests {
             mix_now: stand_in_mix,
             start: stand_in_start,
             in_place: true,
+            ..DeviceSeam::default()
         };
     }
 
