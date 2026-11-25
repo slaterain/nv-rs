@@ -23,8 +23,10 @@
 //!   the per-geometry updates (`00b5b260`, `00b5b410`), reaching the typed bound test and add
 //!   directly.
 //!
-//! What stays by address: the objects' `IsNode` and `IsTriBasedGeom` slots, the light's RTTI slot,
-//! the geometry and lighting property tests, the property's light add and the list moves and adds.
+//! The objects' `IsNode` and `IsTriBasedGeom` slots and the lights' RTTI slot are answered in place
+//! when they hold the exe's constant bodies (`walk::slot_word`), through the vtable otherwise.
+//! What stays by address: the geometry and lighting property tests, the property's light add and
+//! the list moves and adds.
 //!
 //! Stage 1: the objects stay in guest memory; each function stays registered at its exe address.
 //! **Floats.** The bound tests' distances, on the main thread only ([`Threads::Main`]): native `f32`,
