@@ -12,20 +12,22 @@
 //! - [`body`]: `bhkCollisionObject::NitohkTransform`, `NiQuaternion::FromRotation` and the body's
 //!   linear velocity.
 //! - [`islands`]: `TESHavokUtilities::ConsolidateSimIslands`, the merge of a reference's bodies'
-//!   simulation islands after the actors' ragdoll step.
+//!   simulation islands. Not part of the world-data update: only the after-draw stage's ragdoll step
+//!   (`009781d0`) and the player's animation-movement update (`008885e0`) call it.
 //!
 //! What stays by address: `bhkCollisionObject::hktoNiTransform` (`00c65a80`, replaced by the fixes
 //! preset's smooth physics drawing, overridable.tsv), the Havok calls (motion type, hard keyframe,
 //! velocities' set-up, the blend's quaternion and transform helpers), the Havok world.
 //!
-//! Stage 1: the objects stay in guest memory. **Floats.** These run inside the scene graph's update, so
-//! wherever the scene family's pass runs (the main thread, and the AI threads for the actors' animated
-//! scenes): [`Threads::Both`]. The x87 parts are native maths (ADR-0014's float rule): the quaternion
-//! of a rotation at the running thread's precision over `native::Real` (`f32` on the main thread, `f64`
-//! rounded at the float stores on the others), its square roots `FSQRT` in place of the CRT's
-//! `_CIsqrt`; the blend's reciprocal and scaled position, one operation of floats each, plain `f32`;
-//! floats the exe only moves through the x87 copied plain (no NaN quieting); the SSE parts (Havok's vectors) compute in `f32` lane by lane in the exe's operand order
-//! ([`engine_core::sse`]).
+//! Stage 1: the objects stay in guest memory. **Floats.** The world-data members run inside the scene
+//! graph's update, so wherever the scene family's pass runs (the main thread, and the AI threads for
+//! the actors' animated scenes): [`Threads::Both`]. The x87 parts are native maths (ADR-0014's float
+//! rule): the quaternion of a rotation at the running thread's precision over `native::Real` (`f32` on
+//! the main thread, `f64` rounded at the float stores on the others), its square roots `FSQRT` in
+//! place of the CRT's `_CIsqrt`; the blend's reciprocal and scaled position, one operation of floats
+//! each, plain `f32`; floats the exe only moves through the x87 copied plain (no NaN quieting); the
+//! SSE parts (Havok's vectors) compute in `f32` lane by lane in the exe's operand order
+//! ([`engine_core::sse`]). [`islands`] has no float maths.
 
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
@@ -40,7 +42,8 @@ pub const FAMILY: FamilyId = FamilyId::new(21);
 
 /// `NV_TYPED=collision`. Proved by its differential tests (each planted mutant caught) and the
 /// byte-identical recorded street run in both presets (on against `NV_TYPED=collision:off`), so on
-/// unless `NV_TYPED` says otherwise.
+/// unless `NV_TYPED` says otherwise. `ConsolidateSimIslands` (`0062c430`) joined later and never ran
+/// in that recording: its differential tests and planted faults are its proof.
 pub static COLLISION: Family = Family {
     name: "collision",
     id: FAMILY,

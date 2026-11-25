@@ -3373,11 +3373,8 @@ mod tests_direct {
         );
     }
 
-    /// Each import called directly gives the memory and the answer of the call by address, over
-    /// matrices, vectors and planes with zeros, NaNs, infinities, denormals and ordinary values; all
-    /// but each slot's first call go direct.
-    #[test]
-    fn each_import_called_directly_answers_as_by_address() {
+    /// An engine with the nine imports at their exe slots, as the game's import table has them.
+    fn engine_with_imports() -> Engine {
         let mut e = Engine::new();
         let imports: Vec<engine_core::exe::Import> = named()
             .iter()
@@ -3388,6 +3385,15 @@ mod tests_direct {
             })
             .collect();
         assert_eq!(e.register_imports(&imports), 9);
+        e
+    }
+
+    /// Each import called directly gives the memory and the answer of the call by address, over
+    /// matrices, vectors and planes with zeros, NaNs, infinities, denormals and ordinary values; all
+    /// but each slot's first call go direct.
+    #[test]
+    fn each_import_called_directly_answers_as_by_address() {
+        let mut e = engine_with_imports();
         let special = [
             0u32,
             0x8000_0000,
@@ -3452,5 +3458,46 @@ mod tests_direct {
             }
         }
         assert_eq!(direct::direct_calls() - before, u64::from(rounds) * 9);
+    }
+
+    /// A double registered over each slot (a test's, or a hook's) is what the calls reach from then
+    /// on, by address with the words given: nothing goes direct past it.
+    #[test]
+    fn a_double_over_a_slot_is_called_by_address() {
+        let mut e = engine_with_imports();
+        let out = e.mem.alloc(16);
+        let (a, b) = (Ptr::new(e.mem.alloc(64)), Ptr::new(e.mem.alloc(64)));
+        for (_, slot, _) in named() {
+            // Each import once by address, so the call cache holds the slot's registration.
+            e.call(slot, &[out, a.addr(), b.addr()]);
+            e.register(slot, |e, w| {
+                e.mem.set_u32(w[0], 0x600d);
+                e.mem.set_u32(w[0] + 4, w[1]);
+                crate::Ret {
+                    eax: 0x1234,
+                    ..crate::Ret::default()
+                }
+            });
+        }
+        let before = direct::direct_calls();
+        let o = Ptr::new(out);
+        for k in 0..9 {
+            e.mem.set_u32(out, 0);
+            let answer = match k {
+                0 => direct::matrix_multiply_transpose(&mut e, o, a, b),
+                1 => direct::vec3_transform_coord(&mut e, o, a, b),
+                2 => direct::plane_transform(&mut e, o, a, b),
+                3 => direct::vec3_normalize(&mut e, o, a),
+                4 => direct::vec3_transform_normal(&mut e, o, a, b),
+                5 => direct::matrix_multiply(&mut e, o, a, b),
+                6 => direct::matrix_inverse(&mut e, o, a, b),
+                7 => direct::matrix_transpose(&mut e, o, a),
+                _ => direct::plane_normalize(&mut e, o, a),
+            };
+            assert_eq!(answer.addr(), 0x1234, "import {k}: the double's answer");
+            assert_eq!(e.mem.u32(out), 0x600d, "import {k}: the double ran");
+            assert_eq!(e.mem.u32(out + 4), a.addr(), "import {k}: its words");
+        }
+        assert_eq!(direct::direct_calls(), before, "none went direct");
     }
 }
