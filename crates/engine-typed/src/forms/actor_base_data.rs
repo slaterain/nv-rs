@@ -97,18 +97,22 @@ const SAVE_LOAD_VERSION: u32 = 0x80;
 const FATIGUE_DEFAULT_SETTING: u32 = 0x011c_4fa4;
 const KARMA_DEFAULT_SETTING: u32 = 0x011c_5074;
 const DISPOSITION_DEFAULT_SETTING: u32 = 0x011c_50d8;
-/// The four karma alignment thresholds `GetAlignmentForKarma` compares with.
-const KARMA_THRESHOLD_011C5144: u32 = 0x011c_5144;
-const KARMA_THRESHOLD_011C4F64: u32 = 0x011c_4f64;
-const KARMA_THRESHOLD_011C4E54: u32 = 0x011c_4e54;
-const KARMA_THRESHOLD_011C5090: u32 = 0x011c_5090;
+/// The four karma alignment thresholds (settings) `GetAlignmentForKarma` compares with: at or below
+/// the evil one evil (very evil at or below its own), at or above the good one good (very good at
+/// or above its own), else neutral.
+const KARMA_EVIL: u32 = 0x011c_5144;
+const KARMA_VERY_EVIL: u32 = 0x011c_4f64;
+const KARMA_GOOD: u32 = 0x011c_4e54;
+const KARMA_VERY_GOOD: u32 = 0x011c_5090;
 const KARMA_MAX_SETTING: u32 = 0x011c_5108;
 const KARMA_MIN_SETTING: u32 = 0x011c_5160;
 const DEFAULT_ALIGNMENT_VALUES: u32 = 0x0118_6d08;
 const ALIGNMENT_TABLE_STATE: u32 = 0x0118_6f78;
-const ALIGN_DIFF_011C52A4: u32 = 0x011c_52a4;
-const ALIGN_DIFF_011C52A0: u32 = 0x011c_52a0;
-const ALIGN_DIFF_011C529C: u32 = 0x011c_529c;
+/// `InitItem`'s gaps between the thresholds (floats it computes once): very good less good, good
+/// less evil, very evil less evil.
+const GAP_GOOD_TO_VERY_GOOD: u32 = 0x011c_52a4;
+const GAP_EVIL_TO_GOOD: u32 = 0x011c_52a0;
+const GAP_EVIL_TO_VERY_EVIL: u32 = 0x011c_529c;
 const KARMA_TOLERANCE: u32 = 0x0101_7d00;
 const HALF: u32 = 0x0101_1588;
 const HUNDRED: u32 = 0x0101_7a40;
@@ -1043,12 +1047,12 @@ pub fn init_item(e: &mut Engine, this: u32, form: u32) {
             let value = e.mem.f32(DEFAULT_ALIGNMENT_VALUES + 4 * index);
             if typed_call!(FAMILY, 0x0047_e040, alignment_for_karma(e, value)) != index as i32 {
                 e.mem.set_i32(ALIGNMENT_TABLE_STATE, 1);
-                let gap = setting_difference(e, KARMA_THRESHOLD_011C5090, KARMA_THRESHOLD_011C4E54);
-                e.mem.set_f32(ALIGN_DIFF_011C52A4, gap);
-                let gap = setting_difference(e, KARMA_THRESHOLD_011C4E54, KARMA_THRESHOLD_011C5144);
-                e.mem.set_f32(ALIGN_DIFF_011C52A0, gap);
-                let gap = setting_difference(e, KARMA_THRESHOLD_011C4F64, KARMA_THRESHOLD_011C5144);
-                e.mem.set_f32(ALIGN_DIFF_011C529C, gap);
+                let gap = setting_difference(e, KARMA_VERY_GOOD, KARMA_GOOD);
+                e.mem.set_f32(GAP_GOOD_TO_VERY_GOOD, gap);
+                let gap = setting_difference(e, KARMA_GOOD, KARMA_EVIL);
+                e.mem.set_f32(GAP_EVIL_TO_GOOD, gap);
+                let gap = setting_difference(e, KARMA_VERY_EVIL, KARMA_EVIL);
+                e.mem.set_f32(GAP_EVIL_TO_VERY_EVIL, gap);
                 break;
             }
         }
@@ -1069,22 +1073,22 @@ pub fn init_item(e: &mut Engine, this: u32, form: u32) {
             .bool()
     };
     let new_karma = if near_default(e, 1) {
-        let base = setting_float(e, KARMA_THRESHOLD_011C4E54);
-        let gap = e.mem.f32(ALIGN_DIFF_011C52A0);
+        let base = setting_float(e, KARMA_GOOD);
+        let gap = e.mem.f32(GAP_EVIL_TO_GOOD);
         Some(f64::from(base) - f64::from(gap) * half)
     } else if near_default(e, 0) {
-        let base = setting_float(e, KARMA_THRESHOLD_011C4E54);
-        let gap = e.mem.f32(ALIGN_DIFF_011C52A4);
+        let base = setting_float(e, KARMA_GOOD);
+        let gap = e.mem.f32(GAP_GOOD_TO_VERY_GOOD);
         Some(f64::from(gap) * half + f64::from(base))
     } else if near_default(e, 2) {
-        let base = setting_float(e, KARMA_THRESHOLD_011C5144);
-        let gap = e.mem.f32(ALIGN_DIFF_011C529C);
+        let base = setting_float(e, KARMA_EVIL);
+        let gap = e.mem.f32(GAP_EVIL_TO_VERY_EVIL);
         Some(f64::from(gap) * half + f64::from(base))
     } else if near_default(e, 3) {
-        let base = setting_float(e, KARMA_THRESHOLD_011C5090);
+        let base = setting_float(e, KARMA_VERY_GOOD);
         Some(f64::from(base) + hundred)
     } else if near_default(e, 4) {
-        let base = setting_float(e, KARMA_THRESHOLD_011C4F64);
+        let base = setting_float(e, KARMA_VERY_EVIL);
         Some(f64::from(base) - hundred)
     } else {
         e.call(MESSAGE_LOG, &args![TEXT_INVALID_KARMA]);
@@ -1218,15 +1222,15 @@ pub fn set_fatigue(e: &mut Engine, this: u32, value: u16) {
 /// NaN), 0 when below `011c5090` (or NaN), else 3.
 pub fn alignment_for_karma(e: &mut Engine, karma: f32) -> i32 {
     let karma = f64::from(karma);
-    let first = f64::from(setting_float(e, KARMA_THRESHOLD_011C5144));
+    let first = f64::from(setting_float(e, KARMA_EVIL));
     if karma <= first {
-        let second = f64::from(setting_float(e, KARMA_THRESHOLD_011C4F64));
+        let second = f64::from(setting_float(e, KARMA_VERY_EVIL));
         return if karma <= second { 4 } else { 2 };
     }
     // `threshold <= karma` is false for a NaN on either side, as the exe's compare.
-    let third = f64::from(setting_float(e, KARMA_THRESHOLD_011C4E54));
+    let third = f64::from(setting_float(e, KARMA_GOOD));
     if third <= karma {
-        let fourth = f64::from(setting_float(e, KARMA_THRESHOLD_011C5090));
+        let fourth = f64::from(setting_float(e, KARMA_VERY_GOOD));
         if fourth <= karma {
             3
         } else {
@@ -1253,7 +1257,7 @@ pub fn karmic_title(e: &mut Engine, actor: u32) -> u32 {
         let karma = karma as f32;
         let alignment = typed_call!(FAMILY, 0x0047_e040, alignment_for_karma(e, karma));
         let row = match alignment {
-            0..=2 => alignment as u32,
+            0..=2 => alignment.unsigned_abs(),
             3 => 0,
             _ => 2,
         };
