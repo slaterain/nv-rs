@@ -680,12 +680,6 @@ const QUEUE_INLINED: &[u32] = &[
     0x0052_8cb0, // the task pointer's set-up
     0x0055_9450, // the task the pointer holds
     0x0043_cc60, // the task's priority
-    0x006f_74f0, // the task pointer's assignment
-    0x0092_c870, // the task counted
-    0x0044_cbf0, // the task pointer's release
-    0x0044_4cc0, // the cell's two counters
-    0x0044_4ce0,
-    0x0057_2350, // TESObjectREFR::Is3DCritical
 ];
 
 /// The queue against its translation, over the seeds' worlds and both values of `later`.
@@ -810,4 +804,137 @@ fn the_queue_seeds_reach_every_branch() {
             "no seed reaches {name}: {reached:?}"
         );
     }
+}
+
+/// A task of the queue's doubles, its count `count`.
+fn counted_task(e: &mut Engine, count: u32) -> u32 {
+    let t = e.mem.alloc(0x48);
+    new_task(e, t, 4, 0, 0x32);
+    e.mem.set_u32(t + 8, count);
+    t
+}
+
+/// The task pointer's assignment against its translation: the held task none, one or another, the
+/// new one none, the same or another, the first task's count 1 (released to its deletion) or 2.
+#[test]
+fn task_pointer_assign() {
+    Diff::new(entry!(
+        0x006f_74f0,
+        cell_refs::queue::task_pointer_assign(u32, u32) -> u32
+    ))
+    .family(&CELL_REFS)
+    .goes_by_address(&[0x0040_b460])
+    .inputs(&[
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[1, 2]),
+    ])
+    .setup(|e, case| {
+        queue_stand_ins(e);
+        let first = counted_task(e, case.word(2));
+        let second = counted_task(e, 1);
+        let pick = |k: u32| [0, first, second][k as usize];
+        let holder = e.mem.alloc(4);
+        e.mem.set_u32(holder, pick(case.word(0)));
+        vec![holder, pick(case.word(1))]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The task pointer's release against its translation: empty, or a task of count 1 (deleted) or 2.
+#[test]
+fn task_pointer_release() {
+    Diff::new(entry!(
+        0x0044_cbf0,
+        cell_refs::queue::task_pointer_release(u32)
+    ))
+    .family(&CELL_REFS)
+    .inputs(&[Input::Of(&[0, 1, 2])])
+    .setup(|e, case| {
+        queue_stand_ins(e);
+        let task = match case.word(0) {
+            0 => 0,
+            n => counted_task(e, n),
+        };
+        let holder = e.mem.alloc(4);
+        e.mem.set_u32(holder, task);
+        vec![holder]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The count taken against its translation.
+#[test]
+fn add_ref() {
+    Diff::new(entry!(0x0092_c870, cell_refs::queue::add_ref(u32)))
+        .family(&CELL_REFS)
+        .goes_by_address(&[0x0040_b460])
+        .inputs(&[Input::Of(&[0, 1, 0xffff_ffff])])
+        .setup(|e, case| {
+            queue_stand_ins(e);
+            vec![counted_task(e, case.word(0))]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The cell's two counters against their translations.
+#[test]
+fn count_queued() {
+    Diff::new(entry!(0x0044_4cc0, cell_refs::queue::count_queued(u32)))
+        .family(&CELL_REFS)
+        .goes_by_address(&[0x0040_b460])
+        .inputs(&[Input::Of(&[0, 5])])
+        .setup(|e, case| {
+            queue_stand_ins(e);
+            let cell = e.mem.alloc(0x100);
+            e.mem.set_u32(cell + 0xa0, case.word(0));
+            e.mem.set_u32(cell + 0xa4, case.word(0) + 1);
+            vec![cell]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn count_critical() {
+    Diff::new(entry!(0x0044_4ce0, cell_refs::queue::count_critical(u32)))
+        .family(&CELL_REFS)
+        .goes_by_address(&[0x0040_b460])
+        .inputs(&[Input::Of(&[0, 5])])
+        .setup(|e, case| {
+            queue_stand_ins(e);
+            let cell = e.mem.alloc(0x100);
+            e.mem.set_u32(cell + 0xa0, case.word(0));
+            e.mem.set_u32(cell + 0xa4, case.word(0) + 1);
+            vec![cell]
+        })
+        .run()
+        .assert_same();
+}
+
+/// `TESObjectREFR::Is3DCritical` against its translation: the class's own slot 0x100 (the false
+/// body), or a stand-in answering no or yes.
+#[test]
+fn is_3d_critical() {
+    Diff::new(entry!(
+        0x0057_2350,
+        cell_refs::queue::is_3d_critical(u32) -> bool
+    ))
+    .family(&CELL_REFS)
+    .goes_by_address(&[0x0047_c850])
+    .inputs(&[Input::Of(&[0, 1, 2])])
+    .setup(|e, case| {
+        queue_stand_ins(e);
+        let r = e.mem.alloc(0x120);
+        let vt = vtable(e, case.word(0) == 0);
+        e.mem.set_u32(r, vt);
+        e.mem
+            .set_u32(r + ANSWER_IS_ACTOR, u32::from(case.word(0) == 2));
+        vec![r]
+    })
+    .run()
+    .assert_same();
 }

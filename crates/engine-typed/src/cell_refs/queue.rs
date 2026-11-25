@@ -28,16 +28,19 @@
 //!
 //! **Native.** The game loader's two flags (`0042ce10`, `00444d20`), the base form's type
 //! (`00401170`), the reference's flag word (`00444d00`), the task's priority (`0043cc60`: byte 2 of
-//! its key at +0x10), the task pointer's set-up, assignment and release (`00528cb0`, `006f74f0`,
-//! `0044cbf0`), its count taken (`0092c870`), the cell's two counters (`00444cc0`, `00444ce0`) and
-//! `TESObjectREFR::Is3DCritical` (`00572350`, the reference's slot 0x100 negated) are done in
-//! place. The maps' find (`0044bd60`) and add (`00528b60`) are the lock-free family's typed calls
-//! when the map's slot holds them; the current thread (`0040fc90`), the interlocked increments
-//! (`0040b460`), the owner's thread word (`0044edb0`) and the reference's cell (`008d6f30`) are
-//! their families' typed calls. Called by address: the memory manager and its contexts, the task
-//! constructors, the task's slots, the release that may delete, menu mode (`00702360`).
+//! its key at +0x10), the task pointer's set-up with no task (`00528cb0`) and the task it holds
+//! (`00559450`) are done in place. The task pointer's assignment (`006f74f0`,
+//! `NiPointer<QueuedFile>`'s `operator=`) and release (`0044cbf0`), the count taken (`0092c870`),
+//! the cell's two counters (`00444cc0`, `00444ce0`) and `TESObjectREFR::Is3DCritical` (`00572350`)
+//! are typed here and registered at their addresses (the first three are the counted-pointer bodies
+//! every caller of those addresses shares). The maps' find (`0044bd60`) and add (`00528b60`) are
+//! the lock-free family's typed calls when the map's slot holds them; the current thread
+//! (`0040fc90`), the interlocked increments (`0040b460`), the owner's thread word (`0044edb0`) and
+//! the reference's cell (`008d6f30`) are their families' typed calls. Called by address: the memory
+//! manager and its contexts, the task constructors, the task's slots, the release that may delete,
+//! menu mode (`00702360`).
 
-use super::{base_form, is_actor, kind_test};
+use super::{base_form, is_actor, kind_test, FAMILY};
 use crate::{ai_queries, dispatch, facegen, lockfree, slot_target};
 use engine_core::ptr::Ptr;
 use engine_core::{args, typed_call, Engine};
@@ -153,20 +156,66 @@ fn count(e: &mut Engine, at: u32) {
     );
 }
 
-/// `NiPointer<QueuedFile>::operator=` (`006f74f0`) on the task pointer at `holder`: when `object`
-/// differs from the held task, the held one released, `object` stored and counted (`0092c870`).
+/// The task pointer at `holder` given `object` ([`task_pointer_assign`]).
+#[inline]
 fn assign(e: &mut Engine, holder: u32, object: u32) {
-    let held = e.mem.u32(holder);
-    if held == object {
-        return;
+    typed_call!(FAMILY, 0x006f_74f0, task_pointer_assign(e, holder, object));
+}
+
+// Typed from 006f74f0
+/// `NiPointer<QueuedFile>::operator=` from an object (Xbox PDB, `thiscall(holder, object)`): when
+/// the holder holds another object, the held one is released (`0044dd60`), `object` stored and,
+/// read back not null, counted (`0092c870`). Answers `this`.
+pub fn task_pointer_assign(e: &mut Engine, this: u32, object: u32) -> u32 {
+    let held = e.mem.u32(this);
+    if held != object {
+        if held != 0 {
+            e.call(RELEASE, &args![held]);
+        }
+        e.mem.set_u32(this, object);
+        let taken = e.mem.u32(this);
+        if taken != 0 {
+            typed_call!(FAMILY, 0x0092_c870, add_ref(e, taken));
+        }
     }
+    this
+}
+
+// Typed from 0092c870
+/// A counted object's count taken (`thiscall`): the interlocked increment of its count at +8.
+pub fn add_ref(e: &mut Engine, this: u32) {
+    count(e, this.wrapping_add(TASK_COUNT));
+}
+
+// Typed from 0044cbf0
+/// A counted pointer's release (`thiscall(holder)`): the held object, if any, released (`0044dd60`,
+/// which deletes it through its slot 0 at the last count).
+pub fn task_pointer_release(e: &mut Engine, this: u32) {
+    let held = e.mem.u32(this);
     if held != 0 {
         e.call(RELEASE, &args![held]);
     }
-    e.mem.set_u32(holder, object);
-    if object != 0 {
-        count(e, object.wrapping_add(TASK_COUNT));
-    }
+}
+
+// Typed from 00444cc0
+/// The cell's count of queued references (`iQueuedRefCount`, Xbox PDB, +0xa4) one more
+/// (`thiscall(cell)`, an interlocked increment).
+pub fn count_queued(e: &mut Engine, this: u32) {
+    count(e, this.wrapping_add(CELL_QUEUED_COUNT));
+}
+
+// Typed from 00444ce0
+/// The cell's count of critical queued references (`iCriticalQueuedRefCount`, Xbox PDB, +0xa0) one
+/// more (`thiscall(cell)`, an interlocked increment).
+pub fn count_critical(e: &mut Engine, this: u32) {
+    count(e, this.wrapping_add(CELL_CRITICAL_COUNT));
+}
+
+// Typed from 00572350
+/// `TESObjectREFR::Is3DCritical` (Xbox PDB, `thiscall(reference)`): whether the reference's slot
+/// 0x100 (whether it is an actor) says no.
+pub fn is_3d_critical(e: &mut Engine, this: u32) -> bool {
+    !is_actor(e, this)
 }
 
 /// `body` inside the memory context `context` (named by the model loader's source file and `line`),
@@ -304,17 +353,14 @@ pub fn queue_reference(e: &mut Engine, this: u32, reference: u32, priority: u32,
                 }
                 if parent_cell(e, reference) != 0 {
                     let cell = parent_cell(e, reference);
-                    count(e, cell.wrapping_add(CELL_QUEUED_COUNT));
-                    if !is_actor(e, reference) {
+                    typed_call!(FAMILY, 0x0044_4cc0, count_queued(e, cell));
+                    if typed_call!(FAMILY, 0x0057_2350, is_3d_critical(e, reference)) {
                         let cell = parent_cell(e, reference);
-                        count(e, cell.wrapping_add(CELL_CRITICAL_COUNT));
+                        typed_call!(FAMILY, 0x0044_4ce0, count_critical(e, cell));
                     }
                 }
             });
         }
-        let held = e.mem.u32(holder);
-        if held != 0 {
-            e.call(RELEASE, &args![held]);
-        }
+        typed_call!(FAMILY, 0x0044_cbf0, task_pointer_release(e, holder));
     });
 }
