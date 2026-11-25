@@ -15,8 +15,10 @@
 //! the heap compare. The cases: a new vector (no storage), storage empty, part full, full, and
 //! larger than needed; a vector whose proxy word is 0 (the iterators' compare calls
 //! `_invalid_parameter_noinfo`); counts of none, within the storage, exactly it, one past it, past
-//! half again, a face's 256 by 256 tint, and past `max_size`; and a value that is a colour of its
-//! own or one of the vector's own elements (copied before they are erased and freed). The erase's
+//! half again, more than two writes' worth (the typed side writes 4,096 copies at a time; a face's
+//! 65,536 would cost the translation that many calls a case), and past `max_size`; and a value that
+//! is a colour of its own or one of the vector's own elements (copied before they are erased and
+//! freed). The erase's
 //! own cases: everything (the image's clear), the middle, the tail, the head, nothing, and
 //! iterators outside the elements (their checks call `_invalid_parameter_noinfo`).
 
@@ -103,9 +105,9 @@ fn facegen_colours_assign() {
         .ignore_calls(&IGNORED)
         .inputs(&[
             Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7]),
-            // The count: none, within, exactly, one past, past half again, a face's tint, past
-            // `max_size`.
-            Input::Of(&[3, 0, 1, 4, 5, 9, 0x1_0000, 0x1000_0000]),
+            // The count: none, within, exactly, one past, past half again, more than two writes of
+            // copies, past `max_size`.
+            Input::Of(&[3, 0, 1, 4, 5, 9, 0x2345, 0x1000_0000]),
             // The value: a colour of its own, the vector's first element, its last.
             Input::Of(&[0, 1, 2]),
         ])
