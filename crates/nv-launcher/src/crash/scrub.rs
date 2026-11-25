@@ -310,6 +310,7 @@ impl Scrubber {
             }
         }
         units = runs(units, save_names);
+        units = runs(units, character_folders);
         units = runs(units, other_paths);
         units = runs(units, addresses);
         units = runs(units, |text, in_path, _| {
@@ -330,11 +331,14 @@ impl Scrubber {
         let mut i = 0;
         while i < text.len() {
             let starts = i == 0 || !is_name_char(text[i - 1]);
-            // OneDrive's folder only as a whole part: `OneDrive - Contoso Ltd2` is not `OneDrive`.
+            // OneDrive's folder only as a whole name: `OneDrive - Contoso Ltd2` is a work folder,
+            // not the personal `OneDrive` (but `OneDrive (synced)` and `... Ltd (in ...)` are).
             let found = if starts {
                 self.roots.iter().find_map(|r| {
                     r.matches(text, i)
-                        .filter(|&end| r.mark != "<onedrive>" || text.get(end) != Some(&' '))
+                        .filter(|&end| {
+                            r.mark != "<onedrive>" || !text[end..].starts_with(&[' ', '-', ' '])
+                        })
                         .map(|end| (end, r.mark))
                 })
             } else {
@@ -348,20 +352,16 @@ impl Scrubber {
             out.push(Unit::Mark(mark));
             let home = mark == "<home>" || mark == "<onedrive>";
             // The part below, a path's rest: kept (below the home folder, its last two parts).
-            // Below home a part named `OneDrive - <a company>` runs to its separator whatever it
-            // holds (commas, many words), so the company always goes.
+            // Below home a part named `OneDrive - <a company>` runs on whatever its name holds
+            // (commas, many words), so the company always goes ([`onedrive_part`]).
             let below = if text.get(end).is_some_and(|&c| is_separator(c)) {
                 let body = if home { onedrive_part(text, end) } else { end };
                 extent(text, end, body, None)
             } else {
                 end
             };
-            let part = &text[end..below];
-            let part = if home {
-                last_two(&character_folder_in(part))
-            } else {
-                part.to_vec()
-            };
+            let part = character_folder_in(&text[end..below]);
+            let part = if home { last_two(&part) } else { part };
             out.extend(part.into_iter().map(|c| Unit::Char(c, true)));
             i = below;
         }
@@ -544,20 +544,46 @@ fn extent(text: &[char], start: usize, body: usize, sep: Option<char>) -> usize 
 }
 
 /// Where a home folder's rest goes on from, its separators at `at`: past a part named
-/// `OneDrive <...>` (a work OneDrive, `OneDrive - Contoso, Ltd`), to its next separator or the
-/// line's end whatever it holds; else at `at`.
+/// `OneDrive - <...>` (a work OneDrive, `OneDrive - Contoso, Ltd`) whatever its name holds, up to
+/// its next separator, `: `, another path or address ([`starts_other`]) or the line's end; else
+/// at `at`.
 fn onedrive_part(text: &[char], at: usize) -> usize {
     let name = at + text[at..].iter().take_while(|&&c| is_separator(c)).count();
-    let word: Vec<char> = "OneDrive ".chars().collect();
+    let word: Vec<char> = "OneDrive - ".chars().collect();
     let named = text.len() - name >= word.len()
         && word.iter().zip(&text[name..]).all(|(&a, &b)| same(a, b));
     if !named {
         return at;
     }
-    name + text[name..]
-        .iter()
-        .take_while(|&&c| !is_separator(c) && c != '\n' && c != '"')
-        .count()
+    let mut k = name + word.len();
+    while k < text.len() {
+        let c = text[k];
+        if is_separator(c)
+            || matches!(c, '\n' | '"')
+            || (c == ':' && text.get(k + 1) == Some(&' '))
+            || (c == ' ' && starts_other(text, k + 1))
+        {
+            break;
+        }
+        k += 1;
+    }
+    k
+}
+
+/// Whether the word at `text[i..]` starts something other than a folder's name: a path (a drive,
+/// a separator, a share), an address (`smb://`, `https://`, an e-mail, an IPv4 address) or a
+/// stop's call path (`(in A < B)`).
+fn starts_other(text: &[char], i: usize) -> bool {
+    let word = &text[i..i + text[i..].iter().take_while(|c| !c.is_whitespace()).count()];
+    let at = |d: usize| word.get(d).copied();
+    at(0).is_some_and(is_separator)
+        || (at(0).is_some_and(|c| c.is_ascii_alphabetic())
+            && at(1) == Some(':')
+            && at(2).is_some_and(is_separator))
+        || word.windows(3).any(|w| w == [':', '/', '/'])
+        || word.contains(&'@')
+        || word == ['(', 'i', 'n']
+        || ipv4_from(text, i).is_some()
 }
 
 /// A path's rest below the home folder (or OneDrive's): never the part directly below it (a
@@ -621,8 +647,12 @@ fn save_start(text: &[char], ext: usize, from: usize) -> usize {
             .count(),
     );
     if let Some(&q) = closing.filter(|&&q| q == '"' || q == '\'') {
-        // The quote that opens it starts a word (an apostrophe inside the name does not).
-        let opens = |p: usize| text[p] == q && (p == from || !text[p - 1].is_alphanumeric());
+        // The quote that opens it starts a word (an apostrophe inside the name does not), and is
+        // not escaped (`{:?}` prints a name's own `"` as `\"`).
+        let opens = |p: usize| {
+            text[p] == q
+                && (p == from || !(text[p - 1].is_alphanumeric() || text[p - 1] == BACKSLASH))
+        };
         if let Some(open) = (from..ext).rev().find(|&p| opens(p)) {
             return open + 1;
         }
@@ -641,9 +671,16 @@ fn save_start(text: &[char], ext: usize, from: usize) -> usize {
         }
         s -= 1;
     }
-    // Spaces before the name are the line's.
-    while s < ext && text[s] == ' ' {
-        s += 1;
+    // Spaces before the name are the line's, and so are a list's comma and a bracket the name
+    // does not close (`(Save 3   Jo Hero.fos, SAVE 3   JO HERO.fos)`).
+    loop {
+        let unclosed = matches!(text.get(s), Some('(' | '['))
+            && !text[s..ext].iter().any(|&c| c == ')' || c == ']');
+        if s < ext && (matches!(text[s], ' ' | ',' | ';') || unclosed) {
+            s += 1;
+        } else {
+            break;
+        }
     }
     s
 }
@@ -705,8 +742,9 @@ fn character_folder(text: &[char], from: usize, start: usize) -> Option<(usize, 
     (parent.eq_ignore_ascii_case("saves") && begin < end).then_some((begin, end))
 }
 
-/// A path's rest with a character's own save folder (`Saves\<character>\...`) as `<save>`:
-/// below the home folder, before its rest is cut to its last two parts.
+/// A known folder's rest with a character's own save folder (`Saves\<character>\...`) as
+/// `<save>`: below the home folder, before its rest is cut to its last two parts (the folder at
+/// the rest's end is [`character_folders`]').
 fn character_folder_in(part: &[char]) -> Vec<char> {
     let mut parts: Vec<(usize, usize)> = Vec::new();
     let mut i = 0;
@@ -724,11 +762,7 @@ fn character_folder_in(part: &[char]) -> Vec<char> {
     }
     let saves = (0..parts.len()).find(|&k| {
         let (s, e) = parts[k];
-        k + 2 < parts.len()
-            && part[s..e]
-                .iter()
-                .collect::<String>()
-                .eq_ignore_ascii_case("saves")
+        k + 2 < parts.len() && is_saves(&part[s..e])
     });
     let Some(k) = saves else {
         return part.to_vec();
@@ -737,6 +771,60 @@ fn character_folder_in(part: &[char]) -> Vec<char> {
     let mut out = part[..s].to_vec();
     out.extend("<save>".chars());
     out.extend_from_slice(&part[e..]);
+    out
+}
+
+/// Whether a path's part is the game's `Saves` folder (any case).
+fn is_saves(part: &[char]) -> bool {
+    part.iter()
+        .collect::<String>()
+        .eq_ignore_ascii_case("saves")
+}
+
+/// A character's own save folder right after a path's `Saves` that no save follows (saves are
+/// `<save>` already: [`save_names`]), as the host's `files: <folder> holds ...` lines print it on
+/// Linux and macOS: `<save>`, up to ` holds ` where the line says that (a name with spaces), else
+/// to the next separator or the path's end.
+fn character_folders(text: &[char], in_path: &[bool], before: Option<char>) -> Vec<Unit> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < text.len() {
+        let after_separator = if i == 0 {
+            before.is_some_and(is_separator)
+        } else {
+            is_separator(text[i - 1])
+        };
+        let saves = after_separator
+            && text.len() - i > 5
+            && is_saves(&text[i..i + 5])
+            && is_separator(text[i + 5]);
+        if !saves {
+            out.push(Unit::Char(text[i], in_path[i]));
+            i += 1;
+            continue;
+        }
+        let mut s = i + 5;
+        while s < text.len() && is_separator(text[s]) {
+            s += 1;
+        }
+        let holds: Vec<char> = " holds ".chars().collect();
+        let mut end = s;
+        while end < text.len()
+            && !is_separator(text[end])
+            && !matches!(text[end], '"' | '\n')
+            && !text[end..].starts_with(&holds)
+        {
+            end += 1;
+        }
+        if !text[end..].starts_with(&holds) {
+            end = extent(text, s, s, None).min(end);
+        }
+        out.extend((i..s).map(|k| Unit::Char(text[k], in_path[k])));
+        if end > s {
+            out.push(Unit::Mark("<save>"));
+        }
+        i = end.max(s);
+    }
     out
 }
 
@@ -840,8 +928,8 @@ fn other_paths(text: &[char], in_path: &[bool], before: Option<char>) -> Vec<Uni
             .filter(|_| !share || past_host);
         if let Some(last) = last {
             out.push(Unit::Char(sep, true));
-            // A Steam account's number (`userdata\123456789`).
             if last.len() >= 6 && last.iter().all(char::is_ascii_digit) {
+                // A Steam account's number (`userdata\123456789`).
                 out.push(Unit::Mark("<id>"));
             } else {
                 out.extend(last.iter().map(|&c| Unit::Char(c, true)));
@@ -1508,5 +1596,141 @@ mod tests {
             deck.file_name("User Interface Tweaks.esp"),
             "User Interface Tweaks.esp"
         );
+    }
+
+    /// REVIEW-1042-delta's examples: a work OneDrive's name ends before what the line says
+    /// next, OneDrive's own folders are found with words after them, and a character's save
+    /// folder goes where the host's `files:` lines print it alone.
+    #[test]
+    fn the_second_review_of_1042s_examples() {
+        let s = player();
+        // Without OneDrive's variables: the company's part ends at `: `, before another path, an
+        // address or a call path; what follows stays.
+        assert_eq!(
+            s.text("could not write D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd: access denied (in 00a1b2c3 < 00400000)"),
+            "could not write <home>\\...: access denied (in 00a1b2c3 < 00400000)"
+        );
+        assert_eq!(
+            s.text("D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd and G:\\Private\\Tax 2026\\Smith family\\return.pdf"),
+            "<home>\\... <path>\\return.pdf"
+        );
+        assert_eq!(
+            s.text("copied D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd to D:\\Backup\\Jo Tester\\x.zip"),
+            "copied <home>\\... <path>\\x.zip"
+        );
+        assert_eq!(
+            s.text("D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd and /srv/private/smith/y.pdf"),
+            "<home>\\... <path>/y.pdf"
+        );
+        assert_eq!(
+            s.text("mail jo.tester@example.com about D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd, ip 192.168.1.20"),
+            "mail <e-mail> about <home>\\... <ip>"
+        );
+        assert_eq!(
+            s.text("D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd see https://example.com/x"),
+            "<home>\\... https://example.com/x"
+        );
+        assert_eq!(
+            s.text(
+                "D:\\Profiles\\Jo Tester\\OneDrive is full; see G:\\Private\\Smith\\notes\\x.txt"
+            ),
+            "<home>\\... is full; see <path>\\x.txt"
+        );
+        // With OneDrive's variables: its folders are whole names with words after them.
+        let od = Scrubber::new(&Known {
+            roots: vec![
+                (
+                    "D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd".into(),
+                    "<onedrive>",
+                ),
+                ("D:\\Profiles\\Jo Tester\\OneDrive".into(), "<onedrive>"),
+                ("D:\\Profiles\\Jo Tester".into(), "<home>"),
+            ],
+            words: Vec::new(),
+        });
+        for (text, want) in [
+            (
+                "could not read D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd (in 00a1b2c3 < 00400000)",
+                "could not read <onedrive> (in 00a1b2c3 < 00400000)",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd and G:\\Private\\Tax 2026\\Smith family\\return.pdf",
+                "<onedrive> and <path>\\return.pdf",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd: access denied",
+                "<onedrive>: access denied",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\OneDrive is full; see G:\\Private\\Smith\\notes\\x.txt",
+                "<onedrive> is full; see <path>\\x.txt",
+            ),
+            (
+                "Documents are in D:\\Profiles\\Jo Tester\\OneDrive (synced), 3 GB free; see G:\\Private\\Smith\\notes\\x.txt",
+                "Documents are in <onedrive> (synced), 3 GB free; see <path>\\x.txt",
+            ),
+            (
+                "could not read D:\\Profiles\\Jo Tester\\OneDrive (in 00a1b2c3 < 00400000)",
+                "could not read <onedrive> (in 00a1b2c3 < 00400000)",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd2\\x",
+                "<home>\\...\\x",
+            ),
+        ] {
+            assert_eq!(od.text(text), want, "{text}");
+        }
+        // A character's save folder at a path's end: the host's `files:` lines (Linux, macOS),
+        // below home, in nv-rs's folder and in other paths; a save right after `Saves` stays one.
+        assert_eq!(
+            s.text("files: /home/jtest/.local/share/nv-rs/game/Documents/My Games/FalloutNV/Saves/Alexxander holds 2 names for the game's \"save 3   jo hero.fos\" (Save 3   Jo Hero.fos, SAVE 3   JO HERO.fos); \"Save 3   Jo Hero.fos\" is taken"),
+            "files: <nv-rs-data>/game/Documents/My Games/FalloutNV/Saves/<save> holds 2 names for the game's \"<save>.fos\" (<save>.fos, <save>.fos); \"<save>.fos\" is taken"
+        );
+        assert_eq!(
+            s.text("files: /home/jtest/.local/share/nv-rs/game/Documents/My Games/FalloutNV/Saves/Alexxander holds \"Jo Hero: run.fos\", a name Windows cannot hold in a folder"),
+            "files: <nv-rs-data>/game/Documents/My Games/FalloutNV/Saves/<save> holds \"<save>.fos\", a name Windows cannot hold in a folder"
+        );
+        // `{:?}` escapes a name's own quotes.
+        assert_eq!(
+            s.text("files: /home/jtest/.local/share/nv-rs/game/Documents/My Games/FalloutNV/Saves holds \"Jo \\\"Ace\\\" run.fos\", a name Windows cannot hold in a folder"),
+            "files: <nv-rs-data>/game/Documents/My Games/FalloutNV/Saves holds \"<save>.fos\", a name Windows cannot hold in a folder"
+        );
+        for (text, want) in [
+            (
+                "D:\\Profiles\\Jo Tester\\Documents\\My Games\\FalloutNV\\Saves\\Alexxander",
+                "<home>\\...\\Saves\\<save>",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\Documents\\My Games\\FalloutNV\\Saves\\Alexxander\\",
+                "<home>\\...\\Saves\\<save>\\",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\Documents\\My Games\\FalloutNV\\Saves\\Save 1.fos",
+                "<home>\\...\\Saves\\<save>.fos",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\Documents\\My Games\\FalloutNV\\Saves\\Save 1.fos -> backup\\x",
+                "<home>\\...\\Saves\\<save>.fos -> backup\\x",
+            ),
+            (
+                "F:\\Games\\nv-rs\\userdata\\game\\Documents\\My Games\\FalloutNV\\Saves\\Alexxander holds 2 names",
+                "<nv-rs>\\userdata\\game\\Documents\\My Games\\FalloutNV\\Saves\\<save> holds 2 names",
+            ),
+            ("G:\\x\\Saves\\Alexxander", "<path>\\Saves\\<save>"),
+            (
+                "G:\\x\\Saves\\Jo Hero holds 2 names",
+                "<path>\\Saves\\<save> holds 2 names",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\Documents\\My Games\\FalloutNV\\Saves\\Jo Hero\\x.txt",
+                "<home>\\...\\<save>\\x.txt",
+            ),
+            (
+                "/srv/nv/Saves/Alexxander holds 2 names",
+                "<path>/Saves/<save> holds 2 names",
+            ),
+        ] {
+            assert_eq!(s.text(text), want, "{text}");
+        }
     }
 }

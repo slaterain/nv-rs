@@ -199,6 +199,15 @@ fn is_address(word: &str) -> bool {
     word.len() == 8 && word.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// Whether a stop line's last `(in ` opens its call path: an exe address right after it
+/// (`(in 00412345 < 0040cafe)`), not words (`Mods (in progress)`).
+fn has_call_path(line: &str) -> bool {
+    line.rfind("(in ").is_some_and(|at| {
+        let rest = &line[at + 4..];
+        is_address(rest.split([' ', ')']).next().unwrap_or(""))
+    })
+}
+
 /// What makes crashes the same crash, so a crash service puts them in one group: a stop's kind
 /// (its text with every word holding a digit as `#`) and the exe addresses of its call path
 /// (the last `(in A < B)`; without one, the addresses in its text); a panic's place in the code;
@@ -583,9 +592,10 @@ fn build(
         // path's exe addresses from the line as it was (scrubbing never reaches into them then).
         fingerprint: match raw {
             Ending::Panic(_) => fingerprint(raw).iter().map(|p| s.text(p)).collect(),
-            // Only a call path's addresses, `(in A < B)`: without one, the eight-hex words of
-            // the text could be a user's number, so those come from the scrubbed line.
-            Ending::Stop(line) if line.contains("(in ") => {
+            // Only a call path's addresses, `(in A < B)`: without one (`Mods (in progress)`
+            // is none), the eight-hex words of the text could be a user's number, so those come
+            // from the scrubbed line.
+            Ending::Stop(line) if has_call_path(line) => {
                 let mut f = fingerprint(&ending);
                 f.truncate(2);
                 f.extend(fingerprint(raw).into_iter().skip(2));
@@ -1209,6 +1219,26 @@ mod tests {
             report.fingerprint,
             ["stop", "no save for <user> at #", "00412345"]
         );
+        // Words in brackets are no call path: `(in progress)`, `(in a script)`.
+        for (line, want) in [
+            (
+                "Game's main stopped in frame 3: could not read G:\\Backups\\20231234\\Mods (in progress)\\x.esp",
+                "could not read <path>\\x.esp",
+            ),
+            (
+                "Game's main stopped in frame 3: could not read G:\\Steam\\userdata\\87654321\\x.vdf (in a script)",
+                "could not read <path>\\x.vdf",
+            ),
+        ] {
+            let report = build(
+                &run,
+                &Ending::Stop(line.into()),
+                &facts,
+                &num,
+                SystemTime::now(),
+            );
+            assert_eq!(report.fingerprint, ["stop", want], "{line}");
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
