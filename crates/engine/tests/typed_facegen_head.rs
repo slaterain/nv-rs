@@ -708,6 +708,9 @@ fn facegen_head_get_compressed_image() {
             for word in 0..4 {
                 let bits = match (k * 4 + word + pattern) % 5 {
                     0 => value(k, word, pattern),
+                    // A NaN in every image of two pixels or more with the third pattern, signalling
+                    // and quiet in turn: the clamp's unordered side, `min`'s byte.
+                    1 if pattern == 2 => [0x7fc0_0000, 0xff80_0001][(k % 2) as usize],
                     // Ordinary colour values around the range.
                     _ => (((k * 53 + word * 29 + pattern * 7) % 600) as f32 / 2.0 - 20.0).to_bits(),
                 };
