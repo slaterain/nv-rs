@@ -340,21 +340,21 @@ fn set_sound_extra(
     let extra = find_extra(e, list, extra_type);
     if !extra.is_null() {
         let is_empty = e.with_stack(0x0c, |e, empty| {
-            fn_0041a250(e, empty);
-            let equal = fn_0041a1f0(e, sound.cast(), empty);
+            e.call(0x0041_a250, &args![empty]);
+            let equal = e.call(0x0041_a1f0, &args![sound, empty]).bool();
             e.call(SOUND_HANDLE_DESTRUCTOR, &args![empty]);
             equal
         });
         if is_empty {
             remove_extra(e, list, extra);
         } else {
-            fn_00418900(e, Ptr::new(extra.addr() + 0x0c), sound.cast());
+            e.call(0x0041_8900, &args![extra.addr() + 0x0c, sound]);
         }
         return;
     }
     let differs = e.with_stack(0x0c, |e, empty| {
-        fn_0041a250(e, empty);
-        let differs = fn_0041a220(e, sound.cast(), empty);
+        e.call(0x0041_a250, &args![empty]);
+        let differs = e.call(0x0041_a220, &args![sound, empty]).bool();
         e.call(SOUND_HANDLE_DESTRUCTOR, &args![empty]);
         differs
     });
@@ -367,7 +367,7 @@ fn set_sound_extra(
     } else {
         // The handle is passed by value: a copy on the stack, three words.
         let words = e.with_stack(0x0c, |e, copy| {
-            fn_00418900(e, copy, sound.cast());
+            e.call(0x0041_8900, &args![copy, sound]);
             [
                 e.mem.u32(copy.addr()),
                 e.mem.u32(copy.addr() + 4),
