@@ -274,7 +274,7 @@ pub const JIP_INSTALLED: Fix = Fix {
     name: "JIP LN NVSE built in",
     env: "NV_JIP_INSTALLED",
     addresses: &[],
-    summary: "JIP LN NVSE answers \"installed\" to mods (MCM, oHUD and others that need it), with all its commands, its hooks and the game patches built so far (the README and docs/FIXES.md give the counts)",
+    summary: "JIP LN NVSE answers \"installed\" to mods (MCM, oHUD and others that need it), with all its commands, its hooks and the game patches built so far (the README gives the counts)",
     install: install_jip_installed,
 };
 
@@ -326,7 +326,7 @@ pub const JIP_GAME_PATCHES: Fix = Fix {
     env: "NV_JIP_GAME_PATCHES",
     addresses: &[],
     summary:
-        "JIP LN NVSE's changes to the game's own code, on with JIP; some change play for every player (JIP's hit damage, the V.A.T.S. damage multiplier on the player, vendors' repair up to 100%, 2-second corner messages, Ctrl/Shift quantity keys; docs/FIXES.md lists them all)",
+        "JIP LN NVSE's changes to the game's own code, on with JIP; some change play for every player (JIP's hit damage, the V.A.T.S. damage multiplier on the player, vendors' repair up to 100%, 2-second corner messages, Ctrl/Shift quantity keys)",
     install: install_jip_game_patches,
 };
 
