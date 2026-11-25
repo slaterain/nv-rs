@@ -30,7 +30,6 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::units::fallout_interface::startmenu::ListBox;
-use engine_core::extend::stewie;
 
 // ---------------------------------------------------------------------------
 // Layouts
@@ -541,8 +540,7 @@ const STATIC_BRIGHTNESS_TRAIT_2: u32 = 0x011d_b19c;
 const FLAG_011DB0CE: u32 = 0x011d_b0ce;
 /// the timer's milliseconds when the recalculation mode started.
 const RECALCULATION_TIME: u32 = 0x011d_b0dc;
-/// The scan of the target's parts ([`fn_007f3e00`]), called by address: the fixes preset's
-/// V.A.T.S. lag row registers over it (`crates/engine-core/data/overridable.tsv`).
+/// The scan of the target's parts ([`fn_007f3e00`]), called by address.
 const SCAN_UPDATE: u32 = 0x007f_3e00;
 /// the text `_MeterPercent`.
 const TEXT_METER_PERCENT: u32 = 0x0107_7df4;
@@ -2006,6 +2004,71 @@ fn target_part_percent(e: &mut Engine, menu: Ptr<VatsMenu>) -> Option<i32> {
     Some(ftol(e, chance * hundred))
 }
 
+/// The VATS ammunition test at `0x7EDD04`: no ammunition entry (`ammo_list`, the process' slot
+/// `0x14c`), or its count (+4) not above 0.
+fn vats_out_of_ammo(e: &mut Engine, ammo_list: u32) -> bool {
+    ammo_list == 0
+        || typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, ammo_list))
+            .into_ret()
+            .i32()
+            <= 0
+}
+
+/// The queued shot's tests in `DoIdle` (`0x7EDC3D` to `0x7EDD04`), true when the shot fails: a
+/// throwable (kind 0xA or 0xD) without `enough`, a Rock-It Launcher whose queued ammunition is not
+/// above 0.0, the attack action 0x16, a cost above the menu's action points (+0xE0) or unordered, a
+/// weapon with ammunition (`GET_CURRENT_AMMO`) whose queued ammunition is not above 0.0, or one out
+/// of ammunition ([`vats_out_of_ammo`]).
+#[allow(clippy::too_many_arguments)]
+fn queued_shot_fails(
+    e: &mut Engine,
+    m: u32,
+    weapon: u32,
+    enough: bool,
+    rock_it: bool,
+    action: u32,
+    cost: f32,
+    ammo_list: u32,
+) -> bool {
+    let thrown = weapon != 0
+        && (e.call(WEAPON_KIND, &args![weapon]).u32() == 0xa
+            || e.call(WEAPON_KIND, &args![weapon]).u32() == 0xd);
+    let mut fail = thrown && !enough;
+    // `TEST AH,0x41; JNZ`: fails when the queued ammo is not above 0.0.
+    if !fail && rock_it && !above(queued_ammo(e, m), double_zero(e)) {
+        fail = true;
+    }
+    if !fail && action == 0x16 {
+        fail = true;
+    }
+    // `FCOMPP; TEST AH,0x41; JP`: fails when the cost is above the points
+    // or unordered.
+    if !fail && !at_most(cost as f64, load_f32(e, m + 0xe0) as f64) {
+        fail = true;
+    }
+    if !fail
+        && weapon != 0
+        && {
+            let player = e.global::<u32>(PLAYER);
+            e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0
+        }
+        && !above(queued_ammo(e, m), double_zero(e))
+    {
+        fail = true;
+    }
+    if !fail
+        && weapon != 0
+        && {
+            let player = e.global::<u32>(PLAYER);
+            e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0
+        }
+        && vats_out_of_ammo(e, ammo_list)
+    {
+        fail = true;
+    }
+    fail
+}
+
 /// `[+0xF4] + [+0xF0]` of the menu (queued total and clip ammo) as x87
 /// adds them.
 fn queued_ammo(e: &Engine, menu: u32) -> f64 {
@@ -2232,13 +2295,7 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
         ratio = (health as f64 / ratio as f64) as f32;
     }
     let meter = e.mem.u32(m + 0x70);
-    // `0x7ED119` (lStewieAl's Tweaks' S0022.55 writes 1 over the `PUSH 0`: the meter's
-    // fourth word, its least number of ticks).
-    let least_ticks = u32::from(e.stewie(stewie::VATS_HEALTH_AT_LEAST_ONE_TICK));
-    e.call(
-        HUD_UPDATE_METER,
-        &args![meter, ratio, 0u32, least_ticks, 0u32],
-    );
+    e.call(HUD_UPDATE_METER, &args![meter, ratio, 0u32, 0u32, 0u32]);
     let (compass, general, markers, npcs) = (
         e.mem.u32(m + 0x84),
         e.mem.u32(m + 0x78),
@@ -2299,7 +2356,7 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
         }
     }
 
-    // 007ed343: by address, so the fixes preset's V.A.T.S. lag row applies here.
+    // 007ed343: by address.
     if !e.call(SCAN_UPDATE, &args![this]).bool() {
         return;
     }
@@ -2541,8 +2598,7 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
         && weapon != 0
         && {
             let player = e.global::<u32>(PLAYER);
-            // `0x7EDB33` (lStewieAl's Tweaks' S0144 calls `VATSReloadAPGetEquippedAmmo` there).
-            stewie_reload_ammo(e, weapon, player) != 0
+            e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0
         }
         && e.call(GET_FORM_CLIP_ROUNDS, &args![weapon, 0u32]).i32() > 1
     {
@@ -2569,46 +2625,7 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
     } else {
         true
     };
-    let thrown = weapon != 0
-        && (e.call(WEAPON_KIND, &args![weapon]).u32() == 0xa
-            || e.call(WEAPON_KIND, &args![weapon]).u32() == 0xd);
-    let mut fail = thrown && !enough;
-    // `TEST AH,0x41; JNZ`: fails when the queued ammo is not above 0.0.
-    if !fail && rock_it && !above(queued_ammo(e, m), double_zero(e)) {
-        fail = true;
-    }
-    if !fail && action == 0x16 {
-        fail = true;
-    }
-    // `FCOMPP; TEST AH,0x41; JP`: fails when the cost is above the points
-    // or unordered.
-    if !fail && !at_most(cost as f64, load_f32(e, m + 0xe0) as f64) {
-        fail = true;
-    }
-    if !fail
-        && weapon != 0
-        && {
-            let player = e.global::<u32>(PLAYER);
-            e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0
-        }
-        && !above(queued_ammo(e, m), double_zero(e))
-    {
-        fail = true;
-    }
-    if !fail
-        && weapon != 0
-        && {
-            let player = e.global::<u32>(PLAYER);
-            e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0
-        }
-        && (ammo_list == 0
-            || typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, ammo_list))
-                .into_ret()
-                .i32()
-                <= 0)
-    {
-        fail = true;
-    }
+    let mut fail = queued_shot_fails(e, m, weapon, enough, rock_it, action, cost, ammo_list);
     if !fail && matches!(target_part_percent(e, this), Some(percent) if percent <= 0) {
         fail = true;
     }
@@ -5064,20 +5081,12 @@ pub fn vats_menu_update_ammo(e: &mut Engine, this: Ptr<VatsMenu>) -> bool {
             node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
         }
         let player = e.global::<u32>(PLAYER);
-        // `0x7F2DCE` (lStewieAl's Tweaks' S0022.24 writes `JMP 0x7F2DE5` there): the current ammo
-        // is not asked and the condition and ammo labels are always shown.
-        if e.stewie(stewie::VATS_CONDITION_WITHOUT_AMMO)
-            || e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0
-        {
+        if e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0 {
             set_tile_int(e, m, 0x60, 0xfa3, 1);
             set_tile_int(e, m, 0x64, 0xfc4, 1);
             set_tile_int(e, m, 0x68, 0xfc4, 1);
             set_tile_int(e, m, 0x68, 0xfa3, 1);
-            // `0x7F2E30` (lStewieAl's Tweaks' S0022.23 jumps to `GetContChangeMaxWeaponHealthHook`
-            // there, which goes on at `0x7F2E53`): the entry's largest health with its mods.
-            let maximum = if e.stewie(stewie::VATS_CONDITION_WITH_HEALTH_MODS) {
-                stewie_entry_max_health(e, equipped)
-            } else {
+            let maximum = {
                 let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, equipped));
                 if e.call(GET_FORM_HEALTH, &args![form]).u32() != 0 {
                     let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, equipped));
@@ -5633,22 +5642,10 @@ fn scan_pick_limb(e: &mut Engine, this: Ptr<VatsMenu>, item: u32, limb_zero: u32
 /// on screen is measured the limb is picked (`scan_pick_limb`), the
 /// target's chances are marked calculated and mode 2 starts.
 pub fn fn_007f3e00(e: &mut Engine, this: Ptr<VatsMenu>) -> bool {
-    scan(e, this, false)
+    scan(e, this)
 }
 
-/// [`fn_007f3e00`] whose 2000 ms wait before the parts without a chance get the average
-/// (`007f4058`) also ends once the camera has turned to the target (`bHeadingReached`, +0xf8):
-/// the fixes preset's V.A.T.S. lag row (`crates/host`), lStewieAl's VATS Lag Fix. The wait is
-/// a fixed timer, not work: in the original V.A.T.S. shows a target's chances up to 2 s after the
-/// camera has arrived. As with the plugin, a part on screen that the scan has not measured yet
-/// when the heading is reached gets the measured parts' average instead of its own chance (the
-/// original would measure it in the frames that follow). Unlike the plugin, the heading ends the
-/// wait only once a part has been measured: with none, the average is 0/0.
-pub fn fn_007f3e00_heading_ends_wait(e: &mut Engine, this: Ptr<VatsMenu>) -> bool {
-    scan(e, this, true)
-}
-
-fn scan(e: &mut Engine, this: Ptr<VatsMenu>, heading_ends_wait: bool) -> bool {
+fn scan(e: &mut Engine, this: Ptr<VatsMenu>) -> bool {
     let m = this.addr();
     if e.global::<u32>(TARGET_REFERENCE) == 0 || e.mem.u8(m + 0xfb) != 0 {
         return false;
@@ -5724,7 +5721,7 @@ fn scan(e: &mut Engine, this: Ptr<VatsMenu>, heading_ends_wait: bool) -> bool {
     } else {
         let time = e.call(TIMER_MILLISECONDS, &args![TIMER]).u32();
         let waited = time.wrapping_sub(e.global::<u32>(RECALCULATION_TIME)) > 2000;
-        if waited || (heading_ends_wait && e.mem.u8(m + 0xf8) != 0) {
+        if waited {
             let mut count = 0i32;
             let mut sum = 0.0f32;
             let mut node = item.wrapping_add(8);
@@ -6149,77 +6146,6 @@ fn fistp_truncate(value: f64) -> i32 {
     }
 }
 
-/// lStewieAl's Tweaks' `GetContChangeMaxHealth` (row S0022.23, main.h) for an inventory entry: a
-/// weapon (form type 0x28) gives its health (+0x98) plus, when one of its fitted mods (the first
-/// extra list's `ExtraWeaponModFlags`, `0042e560`'s bits 0..2) has the effect
-/// `IncreaseMaxCondition` (10, `effectMods` +0x180), the values (`value1Mod` +0x18C) of every
-/// mod slot with that effect, summed as floats and cut to a whole number; armour (0x18) its
-/// health (+0x6C); anything else 0.
-fn stewie_entry_max_health(e: &mut Engine, entry: u32) -> u32 {
-    const INCREASE_MAX_CONDITION: u32 = 10;
-    let form = e.mem.u32(entry + 8);
-    if form == 0 {
-        // No form: Tweaks would read through a null pointer (our guard).
-        return 0;
-    }
-    match e.mem.u8(form + 4) {
-        0x28 => {
-            let lists = e.mem.u32(entry);
-            let extra = if lists != 0 { e.mem.u32(lists) } else { 0 };
-            let flags = if extra != 0 {
-                e.call(0x0042_e560, &args![extra]).u8()
-            } else {
-                0
-            };
-            let effect = |e: &Engine, slot: u32| e.mem.u32(form + 0x180 + 4 * slot);
-            let modded = (0..3)
-                .any(|slot| flags & (1 << slot) != 0 && effect(e, slot) == INCREASE_MAX_CONDITION);
-            let mut bonus = 0.0f32;
-            if modded {
-                for slot in 0..3 {
-                    if effect(e, slot) == INCREASE_MAX_CONDITION {
-                        bonus += e.mem.f32(form + 0x18c + 4 * slot);
-                    }
-                }
-            }
-            let health = e.mem.u32(form + 0x98) as f32;
-            float_to_int_trunc(health + bonus) as u32
-        }
-        0x18 => e.mem.u32(form + 0x6c),
-        _ => 0,
-    }
-}
-
-/// `cvttss2si`: toward zero, `0x80000000` out of range.
-fn float_to_int_trunc(value: f32) -> i32 {
-    if (-2_147_483_648.0..2_147_483_648.0).contains(&value) {
-        value as i32
-    } else {
-        i32::MIN
-    }
-}
-
-/// The weapon's current ammo at `0x7EDB33` (`TESObjectWEAP::GetEquippedAmmo`, `00525980`); with
-/// lStewieAl's Tweaks' S0144 (`VATSReloadAPGetEquippedAmmo`, main.h) none while the VATS menu's
-/// (`011db0d4`) reserve ammo (+0xF4) is 0 or less or god mode is on (`011e07ba`, xNVSE's
-/// `g_bIsGodmode`, or `011e0898`, `bSetDemigodMode`), so no reload's points are charged.
-fn stewie_reload_ammo(e: &mut Engine, weapon: u32, player: u32) -> u32 {
-    let ammo = e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32();
-    if ammo != 0 && e.stewie(stewie::VATS_NO_RELOAD_COST_WITHOUT_AMMO) {
-        let menu = e.global::<u32>(VATS_MENU);
-        if menu == 0 {
-            // No menu: Tweaks would read through a null pointer (our guard).
-            return ammo;
-        }
-        let reserve = e.mem.f32(menu + 0xf4);
-        let god = e.mem.u8(0x011e_07ba) != 0 || e.mem.u8(0x011e_0898) != 0;
-        if reserve <= 0.0 || god {
-            return 0;
-        }
-    }
-    ammo
-}
-
 // Translated from 007f5050 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `VATSMenu::GetShotBurstCount` (Xbox PDB), cdecl (action, long burst):
 /// the number of shots of one attack: the weapon's `+0x102` byte (at least
@@ -6260,14 +6186,7 @@ pub fn vats_menu_get_shot_burst_count(e: &mut Engine, action: u32, long_burst: u
     let speed = e
         .call(GET_ATTACK_SPEED, &args![weapon, modded as u32])
         .f64();
-    let mut shots = fistp_truncate(speed * factor) as u8;
-    // `0x7F5177` (lStewieAl's Tweaks' S0047, `patchFixVATSAutoWeaponMultiAmmoUseBug`, writes
-    // `MOV ECX,[EBP-0x10]; MUL BYTE [ECX+0x102]; TEST AL,AL; JNZ; MOV AL,1` there): the shots'
-    // low byte times the weapon's ammo use (+0x102, read raw), its low byte, 1 when that is 0.
-    // No weapon: Tweaks would read through a null pointer; the exe's count stays (our guard).
-    if weapon != 0 && e.stewie(stewie::VATS_BURST_TIMES_AMMO_USE) {
-        shots = shots.wrapping_mul(e.mem.u8(weapon + 0x102));
-    }
+    let shots = fistp_truncate(speed * factor) as u8;
     if shots == 0 {
         1
     } else {
@@ -9710,12 +9629,11 @@ mod tests {
         assert_eq!(calls(&e, SCENE_0044AC20).len(), 1);
     }
 
-    /// Mode 3 with the camera at its heading, 500 ms after the scan began: a part whose chance
-    /// was measured (40) and one without. The original waits out its 2000 ms before the second
-    /// gets the average; the V.A.T.S. lag row's scan gives it at once, and only once the heading
-    /// is reached; after 2000 ms both give it. Returns the second part's chance and whether it
+    /// Mode 3 with the camera at `heading`, `elapsed` ms after the scan began: a part whose chance
+    /// was measured (40) and one without. The scan waits out its 2000 ms before the second gets
+    /// the average. Returns the second part's chance and whether it
     /// counts as calculated (+0x2d).
-    fn scan_in_mode_three(heading: u8, elapsed: u32, heading_ends_wait: bool) -> (f32, u8) {
+    fn scan_in_mode_three(heading: u8, elapsed: u32) -> (f32, u8) {
         let mut e = engine();
         let s = scene(&mut e);
         let second = part(&mut e, 2);
@@ -9738,13 +9656,8 @@ mod tests {
             std::panic::resume_unwind(Box::new("past the wait"))
         });
         let menu = Ptr::new(s.menu);
-        let scan = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            if heading_ends_wait {
-                fn_007f3e00_heading_ends_wait(&mut e, menu)
-            } else {
-                fn_007f3e00(&mut e, menu)
-            }
-        }));
+        let scan =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fn_007f3e00(&mut e, menu)));
         assert!(
             scan.is_err() && reached.get(),
             "the scan reaches the ammo update"
@@ -9758,7 +9671,7 @@ mod tests {
     /// measured yet. Followed until `stop` (a callee it panics at). Returns the second part's
     /// chance, whether it counts as measured (+0x2d) and shown (+0x2e), and whether it is the
     /// menu's current part (+0x100).
-    fn scan_at_the_heading(first_measured: bool, row: bool, stop: u32) -> (f32, u8, u8, bool) {
+    fn scan_at_the_heading(first_measured: bool, stop: u32) -> (f32, u8, u8, bool) {
         let mut e = engine();
         let s = scene(&mut e);
         let second = part(&mut e, 2);
@@ -9786,13 +9699,8 @@ mod tests {
             std::panic::resume_unwind(Box::new("stopped"))
         });
         let menu = Ptr::new(s.menu);
-        let scan = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            if row {
-                fn_007f3e00_heading_ends_wait(&mut e, menu)
-            } else {
-                fn_007f3e00(&mut e, menu)
-            }
-        }));
+        let scan =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fn_007f3e00(&mut e, menu)));
         assert!(
             scan.is_err() && reached.get(),
             "the scan reaches {stop:08x}"
@@ -9805,47 +9713,29 @@ mod tests {
         )
     }
 
-    /// A part on screen not yet shown when the camera reaches its heading: the original shows it
-    /// then (the menu's current part) and measures it in the frames that follow, where it gets
-    /// its own chance (`007f1290`); the row gives it the measured part's chance as the average at
-    /// once and marks it measured, so it is never measured. With no part measured yet the row
-    /// does not end the wait (the average would be 0/0): it shows the part as the original does.
+    /// A part on screen not yet shown when the camera reaches its heading: the scan shows it then
+    /// (the menu's current part) and measures it in the frames that follow (`007f1290`), whether or
+    /// not another part was measured already.
     #[test]
-    fn at_the_heading_the_row_averages_a_part_the_original_would_measure_next() {
+    fn at_the_heading_a_part_is_shown_and_measured_next() {
         let shown_next = (0.0, 0, 1, true);
-        // The original, followed to its first measuring (00800a00), after the part is shown.
-        assert_eq!(
-            scan_at_the_heading(true, false, SCREEN_PERCENT_00800A00),
-            shown_next
-        );
-        // The row: the average, measured and shown before the ammo update.
-        assert_eq!(
-            scan_at_the_heading(true, true, TILE_SET_INT),
-            (40.0, 1, 1, false)
-        );
-        // Nothing measured yet: the row waits as the original.
-        for row in [false, true] {
+        for first_measured in [true, false] {
             assert_eq!(
-                scan_at_the_heading(false, row, SCREEN_PERCENT_00800A00),
+                scan_at_the_heading(first_measured, SCREEN_PERCENT_00800A00),
                 shown_next,
-                "row: {row}"
+                "first measured: {first_measured}"
             );
         }
     }
 
     #[test]
-    fn the_scan_waits_2000_ms_unless_the_heading_ends_the_wait() {
+    fn the_scan_waits_2000_ms_whatever_the_heading() {
         let given = (40.0, 1);
         let waiting = (0.0, 0);
-        // The original: the wait whatever the heading.
-        assert_eq!(scan_in_mode_three(1, 500, false), waiting);
-        assert_eq!(scan_in_mode_three(0, 500, false), waiting);
-        assert_eq!(scan_in_mode_three(1, 2001, false), given);
-        // The row: the heading reached ends it; without the heading it is the original's.
-        assert_eq!(scan_in_mode_three(1, 500, true), given);
-        assert_eq!(scan_in_mode_three(0, 500, true), waiting);
-        assert_eq!(scan_in_mode_three(0, 2000, true), waiting);
-        assert_eq!(scan_in_mode_three(0, 2001, true), given);
+        assert_eq!(scan_in_mode_three(1, 500), waiting);
+        assert_eq!(scan_in_mode_three(0, 500), waiting);
+        assert_eq!(scan_in_mode_three(1, 2001), given);
+        assert_eq!(scan_in_mode_three(0, 2001), given);
     }
 
     #[test]
@@ -10358,226 +10248,5 @@ mod tests {
                 vec![list_box, 0, third],
             ]
         );
-    }
-
-    // ---- lStewieAl's Tweaks' rows (share 3, group 5): VATS ----
-
-    /// The shot_bursts weapon (ammo use `+0x102` = `use`) equipped, an attack action whose
-    /// truncated product is 5 shots.
-    fn burst_engine(ammo_use: u8) -> Engine {
-        let mut e = engine();
-        let player = player(&mut e);
-        let weapon = e.mem.alloc(0x200);
-        e.mem.set_u8(weapon + 0x102, ammo_use);
-        e.register(
-            WEAPON_102_524B60,
-            |e, a| word(e.mem.u8(a[0] + 0x102) as u32),
-        );
-        let equipped = e.mem.alloc(0x10);
-        e.mem.set_u32(equipped + 8, weapon);
-        e.register_double(0x0150_0050, move |_, _| word(equipped));
-        let process = e.mem.u32(player + 0x68);
-        let table = vtable(&mut e, &[(0x148, 0x0150_0050)]);
-        e.mem.set_u32(process, table);
-        e.register(WEAPON_FLAG_100_BIT_2, |_, _| word(1));
-        e.register(GET_ATTACK_SPEED, |_, _| float(2.0));
-        e.register(WEAPON_VALUE_821640, |_, _| float(1.0));
-        e.mem.set_f32(SETTING_SHOT_BURST_TIME + 4, 2.5);
-        e
-    }
-
-    /// Row S0047 (`0x7F5177`): the burst's 5 shots times the weapon's ammo use, its low byte, 1
-    /// when that is 0; off, 5 whatever the ammo use. The plain (non-attack) count is untouched.
-    #[test]
-    fn s0047_the_burst_counts_the_ammo_use() {
-        for (on, ammo_use, wanted) in [
-            (false, 3u8, 5u8),
-            (true, 3, 15),
-            (true, 1, 5),
-            (true, 0, 1),
-            (true, 100, 244),
-            (true, 0x33, 255),
-        ] {
-            let mut e = burst_engine(ammo_use);
-            e.set_stewie(stewie::VATS_BURST_TIMES_AMMO_USE, on);
-            assert_eq!(
-                vats_menu_get_shot_burst_count(&mut e, 5, 0),
-                wanted,
-                "row {on} ammo use {ammo_use}"
-            );
-        }
-        let mut e = burst_engine(3);
-        e.set_stewie(stewie::VATS_BURST_TIMES_AMMO_USE, true);
-        assert_eq!(vats_menu_get_shot_burst_count(&mut e, 0, 0), 3);
-    }
-
-    /// Row S0022.23's entry health (`GetContChangeMaxHealth`): a weapon's health (+0x98) plus
-    /// the values of every mod slot with `IncreaseMaxCondition` (10) when a fitted one has it
-    /// (the first extra list's `00042e560` flags); armour its +0x6C; other forms 0.
-    #[test]
-    fn s0022_23_the_entry_health_counts_condition_mods() {
-        let mut e = engine();
-        let weapon = e.mem.alloc(0x200);
-        e.mem.set_u8(weapon + 4, 0x28);
-        e.mem.set_u32(weapon + 0x98, 200);
-        for (slot, effect, value) in [(0u32, 10u32, 25.5f32), (1, 3, 99.0), (2, 10, 10.0)] {
-            e.mem.set_u32(weapon + 0x180 + 4 * slot, effect);
-            e.mem.set_f32(weapon + 0x18c + 4 * slot, value);
-        }
-        let extra = e.mem.alloc(0x10);
-        let lists = e.mem.alloc(8);
-        e.mem.set_u32(lists, extra);
-        let entry = e.mem.alloc(0x10);
-        e.mem.set_u32(entry, lists);
-        e.mem.set_u32(entry + 8, weapon);
-        for (flags, wanted) in [(0u8, 200u32), (1, 235), (2, 200), (4, 235), (7, 235)] {
-            e.register_double(0x0042_e560, move |_, _| word(u32::from(flags)));
-            assert_eq!(
-                stewie_entry_max_health(&mut e, entry),
-                wanted,
-                "flags {flags}"
-            );
-        }
-        // No extra list: no flags asked.
-        e.mem.set_u32(entry, 0);
-        e.call_log = Some(vec![]);
-        assert_eq!(stewie_entry_max_health(&mut e, entry), 200);
-        assert!(calls(&e, 0x0042_e560).is_empty());
-        let armour = e.mem.alloc(0x100);
-        e.mem.set_u8(armour + 4, 0x18);
-        e.mem.set_u32(armour + 0x6c, 150);
-        e.mem.set_u32(entry + 8, armour);
-        assert_eq!(stewie_entry_max_health(&mut e, entry), 150);
-        e.mem.set_u8(armour + 4, 0x1f);
-        assert_eq!(stewie_entry_max_health(&mut e, entry), 0);
-    }
-
-    /// Row S0144 (`0x7EDB33`): the current ammo is asked either way; with the row on it counts as
-    /// none while the VATS menu's reserve ammo (+0xF4) is 0 or less or god mode (`011e07ba`,
-    /// `011e0898`) is on.
-    #[test]
-    fn s0144_no_reload_ammo_without_a_reserve() {
-        for (on, reserve, god, demigod, wanted) in [
-            (false, 0.0f32, 0u8, 0u8, 0x7700u32),
-            (true, 0.0, 0, 0, 0),
-            (true, -1.0, 0, 0, 0),
-            (true, 5.0, 0, 0, 0x7700),
-            (true, 5.0, 1, 0, 0),
-            (true, 5.0, 0, 1, 0),
-            (false, 5.0, 1, 1, 0x7700),
-        ] {
-            let mut e = engine();
-            let menu = open_menu(&mut e);
-            e.mem.set_f32(menu + 0xf4, reserve);
-            e.mem.set_u8(0x011e_07ba, god);
-            e.mem.set_u8(0x011e_0898, demigod);
-            e.register_double(GET_CURRENT_AMMO, |_, _| word(0x7700));
-            e.set_stewie(stewie::VATS_NO_RELOAD_COST_WITHOUT_AMMO, on);
-            assert_eq!(
-                stewie_reload_ammo(&mut e, 0x6000, 0x6100),
-                wanted,
-                "row {on} reserve {reserve} god {god} {demigod}"
-            );
-            assert_eq!(calls(&e, GET_CURRENT_AMMO), vec![vec![0x6000, 0x6100]]);
-        }
-        // Without ammo: none, the menu not read.
-        let mut e = engine();
-        e.register_double(GET_CURRENT_AMMO, |_, _| word(0));
-        e.set_stewie(stewie::VATS_NO_RELOAD_COST_WITHOUT_AMMO, true);
-        assert_eq!(stewie_reload_ammo(&mut e, 0x6000, 0x6100), 0);
-    }
-
-    /// Row S0022.55 (`0x7ED119`): `DoIdle` updates the player health meter (+0x70) with the
-    /// least number of ticks 1 with the row on, the exe's 0 off.
-    #[test]
-    fn s0022_55_the_health_meter_keeps_one_tick() {
-        for on in [false, true] {
-            let mut e = engine();
-            let s = scene(&mut e);
-            e.mem.set_u32(VATS + 8, 1);
-            e.register(IS_TOP_MENU_ID, |_, _| word(1));
-            e.set_stewie(stewie::VATS_HEALTH_AT_LEAST_ONE_TICK, on);
-            e.call_log = Some(vec![]);
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                vats_menu_do_idle(&mut e, Ptr::new(s.menu));
-            }));
-            let meter = e.mem.u32(s.menu + 0x70);
-            let updates: Vec<_> = calls(&e, HUD_UPDATE_METER)
-                .into_iter()
-                .filter(|w| w[0] == meter)
-                .collect();
-            assert_eq!(updates.len(), 1, "row {on}");
-            assert_eq!(updates[0][2..], [0, u32::from(on), 0], "row {on}");
-        }
-    }
-
-    /// An equipped weapon (form type 0x28, health +0x98 200, one condition mod of 50 fitted)
-    /// for `UpdateAmmo`, the entry's health 100, the form's health 100.
-    fn ammo_engine(current_ammo: u32) -> (Engine, u32) {
-        let mut e = engine();
-        let player = player(&mut e);
-        let menu = open_menu(&mut e);
-        let weapon = e.mem.alloc(0x200);
-        e.mem.set_u8(weapon + 4, 0x28);
-        e.mem.set_u32(weapon + 0x98, 200);
-        e.mem.set_u32(weapon + 0x180, 10);
-        e.mem.set_f32(weapon + 0x18c, 50.0);
-        let extra = e.mem.alloc(0x10);
-        let lists = e.mem.alloc(8);
-        e.mem.set_u32(lists, extra);
-        let equipped = e.mem.alloc(0x10);
-        e.mem.set_u32(equipped, lists);
-        e.mem.set_u32(equipped + 8, weapon);
-        e.register_double(0x0042_e560, |_, _| word(1));
-        e.register_double(0x0150_0050, move |_, _| word(equipped));
-        let process = e.mem.u32(player + 0x68);
-        let table = vtable(&mut e, &[(0x148, 0x0150_0050)]);
-        e.mem.set_u32(process, table);
-        e.register_double(GET_CURRENT_AMMO, move |_, _| word(current_ammo));
-        e.register_double(GET_FORM_HEALTH, |_, _| word(100));
-        e.register_double(GET_ITEM_HEALTH, |_, _| float(100.0));
-        (e, menu)
-    }
-
-    /// Rows S0022.24 (`0x7F2DCE`) and S0022.23 (`0x7F2E30`) in `UpdateAmmo`: without current
-    /// ammo the condition label (+0x60) shows only with S0022.24, whose path does not ask the
-    /// ammo; the condition meter (+0x64) is 100 / 100 with the form's health, 100 / 250 with
-    /// S0022.23's entry health.
-    #[test]
-    fn s0022_23_24_the_vats_condition_label_and_meter() {
-        for (s23, s24, ammo, shown, value) in [
-            (false, false, 0x7000u32, true, 1.0f32),
-            (false, false, 0, false, 0.0),
-            (false, true, 0, true, 1.0),
-            (true, false, 0x7000, true, 0.4),
-            (true, true, 0, true, 0.4),
-        ] {
-            let (mut e, menu) = ammo_engine(ammo);
-            e.set_stewie(stewie::VATS_CONDITION_WITH_HEALTH_MODS, s23);
-            e.set_stewie(stewie::VATS_CONDITION_WITHOUT_AMMO, s24);
-            e.call_log = Some(vec![]);
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                vats_menu_update_ammo(&mut e, Ptr::new(menu));
-            }));
-            let label = e.mem.u32(menu + 0x60);
-            let ints = calls(&e, TILE_SET_INT);
-            let last_label = ints.iter().rev().find(|w| w[0] == label && w[1] == 0xfa3);
-            assert_eq!(
-                last_label.map(|w| w[2]),
-                Some(u32::from(shown)),
-                "s23 {s23} s24 {s24} ammo {ammo:x}"
-            );
-            let meter = e.mem.u32(menu + 0x64);
-            let updates: Vec<_> = calls(&e, HUD_UPDATE_METER)
-                .into_iter()
-                .filter(|w| w[0] == meter)
-                .collect();
-            if shown {
-                assert_eq!(updates.len(), 1, "s23 {s23} s24 {s24}");
-                assert_eq!(f32::from_bits(updates[0][1]), value, "s23 {s23}");
-            } else {
-                assert!(updates.is_empty());
-            }
-        }
     }
 }

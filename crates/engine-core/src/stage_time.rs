@@ -260,7 +260,7 @@ pub enum TailMark {
     /// Main's input to it begun again (`0087a6f0`) returned.
     QueueBeginInput,
     /// `00870610` returned: the queued menu open (`Interface::HandleQueuedMenuOpen`, `007094f0`), the support menus
-    /// closed when flagged (`00870680`), Tweaks' and `DebugText`'s queued prints.
+    /// closed when flagged (`00870680`), `DebugText`'s queued prints.
     PostThreads,
     /// Every frame, at the 256-step tick's test: the other steps done (`0070ed10`'s menu check, `00a29680`,
     /// `005ae270`, `005a9d60`, the test itself).

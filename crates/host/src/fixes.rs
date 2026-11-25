@@ -44,8 +44,6 @@ pub static FIXES: &[Fix] = &[
     JIP_VANILLA_COMMANDS,
     JIP_GAME_PATCHES,
     JG_EDITOR_IDS,
-    MCM,
-    STEWIE,
     UIO,
     SCRIPT_ERROR_GUARD,
     IMOD_EVENT_FORM_CHECK,
@@ -62,13 +60,9 @@ pub static FIXES: &[Fix] = &[
     DEAD_LIGHTS,
     THREAD_HEAP,
     crate::half_loaded_move::FIX,
-    crate::thread_races::FIX,
     TEXTURE_READ_FIRST,
     crate::cell_entry_wait::FIX,
     crate::cell_offsets::FIX,
-    VATS_LAG,
-    ACTOR_CAUSE_WITNESSES,
-    RADIO_LENGTHS,
     FACIAL_HAIR_BY_RACE_FOLDER,
     crate::patch_data::STRIP_LOD_WATER,
     crate::direct_files::FIX,
@@ -191,96 +185,25 @@ fn install_load_steps(e: &mut Engine) {
 /// lock (+0x180) and read and inflated the texture's file inside it, so main, binding another
 /// texture, waited for that read (6-13 ms in border frames). With the row the file is read first,
 /// with the same calls, and only the making stays under the lock, in the same order
-/// (`engine::units::unplaced::run_00e673f0::read_first`). Vanilla reads it under the lock.
+/// (`engine::units::unplaced::run_00e673f0::read_first`). A texture the model loader's queued
+/// texture makes with a file object of its own (`00a5fe30`, from `QueuedTexture::Run`) is read
+/// first too: that call makes the texture's renderer data before it hands the texture out, so its
+/// file is that making's alone. Vanilla reads both under the lock.
 pub const TEXTURE_READ_FIRST: Fix = Fix {
     name: "texture files read before the renderer's lock",
     env: "NV_TEXTURE_READ_FIRST",
-    addresses: &[0x00e6_dc40],
+    addresses: &[0x00e6_dc40, 0x00a5_fe30],
     summary: "a texture file is read and unpacked before the renderer's lock is taken, so drawing does not wait for it",
     install: install_texture_read_first,
 };
 
 fn install_texture_read_first(e: &mut Engine) {
-    use engine::units::unplaced::run_00e673f0::read_first::fn_00e6dc40_reading_first;
+    use engine::units::unplaced::run_00e673f0::read_first::{
+        fn_00a5fe30_reading_first, fn_00e6dc40_reading_first,
+    };
     let (at, f) = engine::entry!(0x00e6_dc40, fn_00e6dc40_reading_first(Ptr, Ptr) -> bool);
     e.register(at, f);
-}
-
-/// V.A.T.S. shows a target's chances once the camera has turned to it: the menu's scan
-/// (`007f3e00`) gave the parts it has not measured the average of the measured ones only after a
-/// fixed 2000 ms (`007f4058`); with the row also once the camera's heading is reached
-/// (`bHeadingReached`), as lStewieAl's VATS Lag Fix does, and a part has been measured (the
-/// plugin's average would be 0/0 before). Vanilla keeps the wait.
-pub const VATS_LAG: Fix = Fix {
-    name: "V.A.T.S. waits only for the camera",
-    env: "NV_VATS_LAG",
-    addresses: &[0x007f_3e00],
-    summary: "V.A.T.S. shows a target's chances as soon as the camera reaches it, not after a fixed 2 seconds",
-    install: install_vats_lag,
-};
-
-fn install_vats_lag(e: &mut Engine) {
-    use engine::units::fallout_interface::vatsmenu::{fn_007f3e00_heading_ends_wait, VatsMenu};
-    let (at, f) = engine::entry!(
-        0x007f_3e00,
-        fn_007f3e00_heading_ends_wait(Ptr<VatsMenu>) -> bool
-    );
-    e.register(at, f);
-}
-
-/// An `ActorCause` (made for each projectile and explosion an actor causes) copied the actor's
-/// whole detection list, and every saved cause wrote it, one record per actor detected: with the
-/// row the constructor (`0066e010`) copies nothing and the load (`0066e440`) reads the records
-/// and keeps none, as lStewieAl's ActorCause Save Bloat Fix does. Nothing reads the list but the
-/// cause's own functions. Vanilla copies, saves and loads it.
-pub const ACTOR_CAUSE_WITNESSES: Fix = Fix {
-    name: "causes keep no witness lists",
-    env: "NV_ACTOR_CAUSE",
-    addresses: &[0x0066_e010, 0x0066_e440],
-    summary: "projectiles and explosions no longer copy their actor's detection list, which every save wrote out (save bloat)",
-    install: install_actor_cause_witnesses,
-};
-
-fn install_actor_cause_witnesses(e: &mut Engine) {
-    use engine::units::fallout_shared::actorcause::{
-        actor_cause_load_game_without_witnesses, ActorCause,
-    };
-    use engine::units::fallout_shared::run_0066e010::fn_0066e010_without_witnesses;
-    let (at, f) = engine::entry!(0x0066_e010, fn_0066e010_without_witnesses(Ptr, u32) -> Ptr);
-    e.register(at, f);
-    let (at, f) = engine::entry!(
-        0x0066_e440,
-        actor_cause_load_game_without_witnesses(Ptr<ActorCause>, u32)
-    );
-    e.register(at, f);
-}
-
-/// The radio's two music bugs, from Psycho: a channel's duration cleared when a file opens on it
-/// (`008300c0`) and written by the music thread (`00830b30`) only while the channel is still its
-/// file's, so a station never takes the length of the song that channel played before (its
-/// thread, still fading out, wrote it back once more); and the music thread's sync (the loop at
-/// `00831790`) bounded, so a length of 0 no longer spins the thread for good. Vanilla keeps both.
-pub const RADIO_LENGTHS: Fix = Fix {
-    name: "radio song lengths",
-    env: "NV_RADIO_LENGTHS",
-    addresses: &[0x0083_00c0, 0x0083_0b30],
-    summary: "a radio song never takes the length of the song before last, and a song with no length no longer hangs the music thread",
-    install: install_radio_lengths,
-};
-
-fn install_radio_lengths(e: &mut Engine) {
-    use engine::units::fallout_audio::falloutaudiomedia::{
-        fallout_audio_media_thread_proc_radio_row, fn_008300c0_clearing_duration,
-    };
-    let (at, f) = engine::entry!(
-        0x0083_00c0,
-        fn_008300c0_clearing_duration(i32, Ptr, u32, u8, u8, f32, u32)
-    );
-    e.register(at, f);
-    let (at, f) = engine::entry!(
-        0x0083_0b30,
-        fallout_audio_media_thread_proc_radio_row(Ptr) -> u32
-    );
+    let (at, f) = engine::entry!(0x00a5_fe30, fn_00a5fe30_reading_first(u32, Ptr, Ptr, u8) -> Ptr);
     e.register(at, f);
 }
 
@@ -340,8 +263,8 @@ fn install_keep_cosave_plugins(e: &mut Engine) {
     nvse::saveload::set_keep_other_plugins(e, true);
 }
 
-/// JIP LN NVSE answers "installed" (step 3.10's switch; on in the fixes preset with [`MCM`],
-/// [`UIO`] and [`KEEP_COSAVE_PLUGINS`], off in vanilla): its identity, its place in xNVSE's list of
+/// JIP LN NVSE answers "installed" (step 3.10's switch; on in the fixes preset with [`UIO`] and
+/// [`KEEP_COSAVE_PLUGINS`], off in vanilla): its identity, its place in xNVSE's list of
 /// plugins, its built commands' names and handlers, its hooks and its own always-on patches;
 /// the JIP rows ([`JIP_VANILLA_COMMANDS`], [`JIP_GAME_PATCHES`], [`JIP_COSAVE_FIXES`]) then follow
 /// their own switches. The row sets a flag; `jip::install` (after xNVSE, in
@@ -351,7 +274,7 @@ pub const JIP_INSTALLED: Fix = Fix {
     name: "JIP LN NVSE built in",
     env: "NV_JIP_INSTALLED",
     addresses: &[],
-    summary: "JIP LN NVSE answers \"installed\" to mods (MCM, oHUD and others that need it), with all its commands, its hooks and the game patches built so far (the README and docs/FIXES.md give the counts)",
+    summary: "JIP LN NVSE answers \"installed\" to mods (MCM, oHUD and others that need it), with all its commands, its hooks and the game patches built so far (the README gives the counts)",
     install: install_jip_installed,
 };
 
@@ -403,7 +326,7 @@ pub const JIP_GAME_PATCHES: Fix = Fix {
     env: "NV_JIP_GAME_PATCHES",
     addresses: &[],
     summary:
-        "JIP LN NVSE's changes to the game's own code, on with JIP; some change play for every player (JIP's hit damage, the V.A.T.S. damage multiplier on the player, vendors' repair up to 100%, 2-second corner messages, Ctrl/Shift quantity keys; docs/FIXES.md lists them all)",
+        "JIP LN NVSE's changes to the game's own code, on with JIP; some change play for every player (JIP's hit damage, the V.A.T.S. damage multiplier on the player, vendors' repair up to 100%, 2-second corner messages, Ctrl/Shift quantity keys)",
     install: install_jip_game_patches,
 };
 
@@ -486,14 +409,12 @@ pub const SCRIPT_NULL_GUARD: Fix = Fix {
     env: "NV_NVSE_NULL_GUARD",
     addresses: &[],
     summary:
-        "ar_Count and ar_GetNth on a missing array answer 0, and a format string's string outside the game's memory ends the text, instead of stopping the game; with lStewieAl's Tweaks' switch node bounds row a switch node whose shown child is not there takes no child's bound",
+        "ar_Count and ar_GetNth on a missing array answer 0, and a format string's string outside the game's memory ends the text, instead of stopping the game",
     install: install_script_null_guard,
 };
 
 fn install_script_null_guard(e: &mut Engine) {
     nvse::commands::array::set_fix(e, nvse::commands::array::NULL_GUARD, true);
-    // Tweaks' slips not copied (S0237's child index), the same guard.
-    e.set_stewie_slip_guard(true);
 }
 
 pub const SCRIPT_CYCLE_GUARD: Fix = Fix {
@@ -606,13 +527,6 @@ fn install_uio(e: &mut Engine) {
     uio::set_on(e, true);
 }
 
-/// lStewieAl's Tweaks built in (`crates/stewie`, docs/FIXES.md "lStewieAl's Tweaks"): its engine fixes,
-/// each a row of its own with an off key in Fallout.ini's `[nv-rs Stewie]`, with VNV's values as the
-/// defaults of its settings and the player's `nvse_stewie_tweaks.ini` over them. Mods are not told
-/// it is installed until its script commands are built (`stewie::ANSWERS_INSTALLED`); then xNVSE
-/// lists it as "lStewieAl's Tweaks" 1005. On in the fixes preset, off in vanilla. The row sets a flag;
-/// `stewie::install` (after JIP and MCM, before UIO, in `install_rows_and_extenders`) reads the
-/// settings and sets the rows' bits.
 /// JohnnyGuitar NVSE's editor-id restoration built in (`crates/johnnyguitar`), a flag the crate
 /// reads at its install: every loaded form keeps the editor id its record gives it, so text
 /// compiled while the game runs (the console, script runner files, `CompileScript`, lambdas from
@@ -628,35 +542,6 @@ pub const JG_EDITOR_IDS: Fix = Fix {
 
 fn install_jg_editor_ids(e: &mut Engine) {
     johnnyguitar::set_on(e, true);
-}
-
-pub const STEWIE: Fix = Fix {
-    name: "lStewieAl's Tweaks built in",
-    env: "NV_STEWIE",
-    addresses: &[],
-    summary: "lStewieAl's Tweaks built in: its engine fixes (crash fixes first), each with its own off key in [nv-rs Stewie], with VNV's settings unless the player's nvse_stewie_tweaks.ini says otherwise",
-    install: install_stewie,
-};
-
-fn install_stewie(e: &mut Engine) {
-    stewie::set_on(e, true);
-}
-
-/// The Mod Configuration Menu's NVSE plugin built in (`crates/mcm`: MCM.dll 1.5, "MCM Extensions"):
-/// its nine commands at `0x21C0` up, which MCM's scripts and the menus of the mods that use it call
-/// (`GetMCMFloat`, `SetMCMFloat`, `GetModINI`, ...). On in `fixes` (with JIP, which MCM's mods need),
-/// off in vanilla. The row sets a flag; `mcm::install` (after JIP, before
-/// UIO, in `install_rows_and_extenders`) registers the commands.
-pub const MCM: Fix = Fix {
-    name: "The Mod Configuration Menu's plugin built in",
-    env: "NV_MCM",
-    addresses: &[],
-    summary: "The Mod Configuration Menu's NVSE plugin (MCM.dll) built in: its script commands, which MCM's menu needs to show",
-    install: install_mcm,
-};
-
-fn install_mcm(e: &mut Engine) {
-    mcm::set_on(e, true);
 }
 
 /// A row whose binding [`install`] makes itself, with the choice.
@@ -677,8 +562,6 @@ const NO_ADDRESS: &[&str] = &[
     JIP_VANILLA_COMMANDS.name,
     JIP_GAME_PATCHES.name,
     JG_EDITOR_IDS.name,
-    MCM.name,
-    STEWIE.name,
     UIO.name,
     SCRIPT_ERROR_GUARD.name,
     IMOD_EVENT_FORM_CHECK.name,
@@ -916,9 +799,6 @@ pub struct Choice {
     /// The one log line naming `Fallout.ini` values that could not be used
     /// ([`crate::game_ini::Keys::bad_line`]): the default stood for each.
     pub ini_note: Option<String>,
-    /// Fallout.ini's `[nv-rs Stewie]` keys (a launcher's play run only): Tweaks' rows each off by
-    /// its own key, and `bMissingKeysAsTweaks` (`stewie::rows::Keys`).
-    pub stewie: stewie::rows::Keys,
 }
 
 impl Choice {
@@ -950,7 +830,6 @@ impl Choice {
             not_background: PLAY_NOT_BACKGROUND,
             not_background_by: None,
             ini_note: None,
-            stewie: stewie::rows::Keys::default(),
             draw_poison: false,
             draw_check: false,
         }
@@ -1121,7 +1000,6 @@ impl Choice {
                 .not_background
                 .map(|_| "Fallout.ini's [nv-rs Threads] bNotBackground"),
             ini_note: ini.bad_line(),
-            stewie: ini.stewie.clone(),
             draw_poison: env(DRAW_THREAD.env).as_deref().map(str::trim) == Some("poison"),
             draw_check: env(DRAW_THREAD_CHECK).as_deref().map(str::trim) == Some("1"),
         };
@@ -1475,7 +1353,6 @@ fn parse_limit(value: &str, source: &str) -> Result<u32, String> {
 /// for the whole run.
 pub fn install(e: &mut Engine, choice: &Choice) {
     crate::uncap::set_frame_limit(choice.frame_limit);
-    stewie::set_keys(e, choice.stewie.clone());
     crate::uncap::set_menu_frame_limit(choice.bound_menu_frame_limit());
     for fix in FIXES.iter().filter(|f| choice.is_on(f)) {
         (fix.install)(e);
@@ -2043,20 +1920,6 @@ mod tests {
         assert!(!nvse::args::game_inline(&mut e));
         (XNVSE_EXTRACT_ARGS.install)(&mut e);
         assert!(nvse::args::game_inline(&mut e));
-    }
-
-    /// The missing-data guard row also turns on the guard of lStewieAl's Tweaks' slips not copied
-    /// (S0237's child index): off until it runs.
-    #[test]
-    fn the_missing_data_guard_row_turns_on_the_tweaks_slip_guard() {
-        let mut e = Engine::new();
-        assert!(!e.stewie_slip_guard());
-        (SCRIPT_NULL_GUARD.install)(&mut e);
-        assert!(e.stewie_slip_guard());
-        assert!(nvse::commands::array::fix_on(
-            &e,
-            nvse::commands::array::NULL_GUARD
-        ));
     }
 
     /// EXTENDER-HOOKS R2 and docs/ENGINE_CRATE.md, "Typed code": what a fix overrides is listed, so
@@ -2980,13 +2843,13 @@ bSunShadowsCharacters=0
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// Step 3.10's switch (JIP LN NVSE answering "installed") follows the preset with MCM's plugin,
-    /// UI Organizer and the co-save keep row: on in `fixes`, off in vanilla, however the preset is
+    /// Step 3.10's switch (JIP LN NVSE answering "installed") follows the preset with UI Organizer
+    /// and the co-save keep row: on in `fixes`, off in vanilla, however the preset is
     /// chosen: the default, the settings file, `NV_PRESET`, Fallout.ini's `sPreset`.
     #[test]
-    fn jip_mcm_and_uio_follow_the_preset() {
+    fn jip_and_uio_follow_the_preset() {
         assert_eq!(JIP_INSTALLED.env, "NV_JIP_INSTALLED");
-        for row in [&JIP_INSTALLED, &MCM, &UIO, &KEEP_COSAVE_PLUGINS] {
+        for row in [&JIP_INSTALLED, &UIO, &KEEP_COSAVE_PLUGINS] {
             assert!(!OFF_IN_EVERY_PRESET.contains(&row.env), "{}", row.name);
         }
         let choices = [
@@ -3001,7 +2864,7 @@ bSunShadowsCharacters=0
         ];
         for choice in &choices {
             let fixes = choice.preset == Preset::Fixes;
-            for row in [&JIP_INSTALLED, &MCM, &UIO, &KEEP_COSAVE_PLUGINS] {
+            for row in [&JIP_INSTALLED, &UIO, &KEEP_COSAVE_PLUGINS] {
                 assert_eq!(choice.is_on(row), fixes, "{} {choice:?}", row.name);
             }
         }
@@ -3081,65 +2944,6 @@ bJGEditorIDs=0
         }
     }
 
-    /// lStewieAl's Tweaks: on in the fixes preset, off in vanilla, its own line or variable over
-    /// both; `[nv-rs Stewie]`'s keys reach the choice (a play run only) and the install, and a value
-    /// other than 0 or 1 is named in the line for unusable keys.
-    #[test]
-    fn stewie_follows_the_preset_and_its_keys_reach_the_install() {
-        assert!(!Choice::vanilla().is_on(&STEWIE));
-        assert!(Choice::from_parts(None, no_env).unwrap().is_on(&STEWIE));
-        let off = with_ini(None, "[nv-rs Fixes]\nbStewieTweaks=0\n", &[]);
-        assert!(!off.is_on(&STEWIE));
-        let on = Choice::from_parts(
-            None,
-            env_of(&[("NV_STEWIE", "1"), ("NV_PRESET", "vanilla")]),
-        )
-        .unwrap();
-        assert!(on.is_on(&STEWIE));
-        let keyed = with_ini(
-            None,
-            "[nv-rs Stewie]\nbDialogSpeechNullCheck=0\nbMissingKeysAsTweaks=yes\n",
-            &[],
-        );
-        assert_eq!(keyed.stewie.rows, [("bDialogSpeechNullCheck", false)]);
-        assert!(!keyed.stewie.as_tweaks);
-        assert_eq!(
-            keyed.ini_note.as_deref(),
-            Some(
-                "Fallout.ini's nv-rs settings: not used, the default instead: bMissingKeysAsTweaks=yes"
-            )
-        );
-        // Not a play run: the keys are not read.
-        let script = Choice::from_texts(
-            None,
-            Some("[nv-rs Stewie]\nbDialogSpeechNullCheck=0\n"),
-            no_env,
-        )
-        .unwrap();
-        assert!(script.stewie.rows.is_empty());
-        // The install: the row on, its bit set unless its key is 0.
-        for (choice, bit) in [
-            (Choice::from_parts(None, no_env).unwrap(), true),
-            (keyed, false),
-            (Choice::vanilla(), false),
-        ] {
-            let mut e = Engine::new();
-            // No Tweaks INI: the game's CreateFileA (the read when no platform answers the mods'
-            // files seam) finds none.
-            e.register(0x00fd_f088, |_, _| 0xffff_ffffu32.into_ret());
-            install(&mut e, &choice);
-            stewie::install(&mut e);
-            assert_eq!(
-                e.stewie(engine_core::extend::stewie::DIALOG_SPEECH_NULL_CHECK),
-                bit
-            );
-            assert_eq!(stewie::on(&e), choice.is_on(&STEWIE));
-            // Not reported as installed in any preset while its script commands are not built:
-            // IsPluginInstalled "lStewieAl's Tweaks" answers 0.
-            assert!(nvse::commands::extender::plugin_info(&e, stewie::NAME.as_bytes()).is_none());
-        }
-    }
-
     /// The switch from its variable: `1` on, `0` off, anything else a stop. Alone it makes the run
     /// a test (vanilla, so the other JIP rows are off); with `NV_PRESET=fixes` the fixes preset's
     /// JIP rows are on with it, and the threads stepped, as a test's are.
@@ -3159,7 +2963,6 @@ bJGEditorIDs=0
         assert!(fixes.is_on(&JIP_VANILLA_COMMANDS));
         assert!(fixes.is_on(&JIP_COSAVE_FIXES));
         assert!(fixes.is_on(&UIO), "UIO with the fixes preset");
-        assert!(fixes.is_on(&MCM), "MCM with the fixes preset");
         assert_eq!(fixes.threads, "stepped");
         assert!(fixes.describe().contains(JIP_INSTALLED.name));
         let off = Choice::from_parts(
@@ -3184,19 +2987,12 @@ bJGEditorIDs=0
         let off = with_ini(None, "[nv-rs Fixes]\nbJIPInstalled=0\n", &[]);
         assert!(!off.is_on(&JIP_INSTALLED));
         assert_eq!(off.preset, Preset::Fixes);
-        assert!(off.is_on(&MCM) && off.is_on(&UIO), "their own switches");
-        // MCM's plugin and UI Organizer turn off by their own keys; JIP and the preset stay.
-        for (text, row) in [
-            ("[nv-rs Fixes]\nbMCM=0\n", &MCM),
-            ("[nv-rs Fixes]\nbUIO=0\n", &UIO),
-        ] {
-            let c = with_ini(None, text, &[]);
-            assert!(!c.is_on(row), "{text}");
-            assert!(c.is_on(&JIP_INSTALLED), "{text}");
-            assert_eq!(c.preset, Preset::Fixes, "{text}");
-            let other = if row.env == MCM.env { &UIO } else { &MCM };
-            assert!(c.is_on(other), "{text}");
-        }
+        assert!(off.is_on(&UIO), "its own switch");
+        // UI Organizer turns off by its own key; JIP and the preset stay.
+        let c = with_ini(None, "[nv-rs Fixes]\nbUIO=0\n", &[]);
+        assert!(!c.is_on(&UIO));
+        assert!(c.is_on(&JIP_INSTALLED));
+        assert_eq!(c.preset, Preset::Fixes);
         for text in [
             "[nv-rs Fixes]\n;bJIPInstalled=0\n",
             "[nv-rs Fixes]\nbJIPInstall=1\n",

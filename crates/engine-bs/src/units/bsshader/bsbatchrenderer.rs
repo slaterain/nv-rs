@@ -1981,7 +1981,7 @@ fn pool_node(e: &mut Engine) -> u32 {
     let count = e.mem.u32(NODE_POOL_LOCK_COUNT).wrapping_sub(1);
     e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
     if count == 0 {
-        e.mem.set_u32(NODE_POOL_LOCK, 0);
+        e.mem.set_u32_release(NODE_POOL_LOCK, 0);
     }
     node
 }
@@ -2294,7 +2294,7 @@ pub fn bs_batch_renderer_render_next_alpha(
             e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
             e.mem.set_u32(NODE_POOL_FREE_LIST, node);
             if count == 0 {
-                e.mem.set_u32(NODE_POOL_LOCK, 0);
+                e.mem.set_u32_release(NODE_POOL_LOCK, 0);
             }
             let remaining = e.mem.u32(list + 8).wrapping_sub(1);
             e.mem.set_u32(list + 8, remaining);

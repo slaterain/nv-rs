@@ -41,7 +41,6 @@ pub mod save_out;
 pub mod scene_light;
 #[cfg(test)]
 mod start_up_tests;
-pub mod thread_races;
 pub mod topic_index;
 pub mod uncap;
 
@@ -111,16 +110,9 @@ pub(crate) fn install_rows_and_extenders(engine: &mut Engine, choice: &fixes::Ch
     // `fixes::install` above) switched it on (`crates/jip`).
     jip::install(engine);
     // JohnnyGuitar NVSE's editor ids, when their row is on (the fixes preset): xNVSE loads
-    // johnnyguitarnvse.dll after jip_nvse.dll and before MCM.dll (`crates/johnnyguitar`); after
-    // JIP, so its light slots stay JIP's.
+    // johnnyguitarnvse.dll after jip_nvse.dll (`crates/johnnyguitar`); after JIP, so its light
+    // slots stay JIP's.
     johnnyguitar::install(engine);
-    // The Mod Configuration Menu's plugin, when its row is on: xNVSE loads MCM.dll after
-    // jip_nvse.dll and before ui_organizer.dll (`crates/mcm`).
-    mcm::install(engine);
-    // lStewieAl's Tweaks, when its row is on (the fixes preset): xNVSE loads
-    // nvse_stewie_tweaks.dll after MCM.dll and before ui_organizer.dll (`crates/stewie`): its
-    // settings read, its rows' bits set (each row off by its own `[nv-rs Stewie]` key).
-    stewie::install(engine);
     // UI Organizer, when its row is on: after JIP, as xNVSE loads ui_organizer.dll after
     // jip_nvse.dll (`crates/uio`).
     uio::install(engine);
@@ -186,7 +178,7 @@ impl Host {
         // (nothing on Windows).
         save_out::prepare(data);
         let mut engine = Box::new(Engine::with_exe(&exe)?);
-        // Mods' own files (MCM's and later JIP's INI and file commands) kept beside the saves, never
+        // Mods' own files (JIP's INI and file commands) kept beside the saves, never
         // in the game's folder (`mod_files`).
         engine_platform::mod_files::set_folder(&mut engine, mod_files::folder(data));
         // The play loop's patches (`crates/play-patch`, empty on main) replace the entries with
@@ -805,8 +797,6 @@ pub fn run_exit_hooks() {
 /// flight when the process ends (one left the thread ending the process suspended, and the
 /// process never ended, 2026-11-11).
 pub fn end_process(code: i32) -> ! {
-    // The hitch lines still on their way to the log written first.
-    hitch_log::flush_lines();
     engine_platform::end_process(code)
 }
 
@@ -842,14 +832,10 @@ fn load_adapter_table(e: &mut Engine, data: &Path) -> Result<(), String> {
             Some(display) => {
                 let text = text + &display;
                 if fixes::is_play_run(|name| std::env::var(name).ok()) {
-                    match (own_folder(), data.parent()) {
-                        (Ok(own), Some(game)) => {
-                            let [documents, _, _] =
-                                engine_platform::machine_table::game_folders(&own);
-                            first_profile::first_start(&documents, game, &text)?;
-                        }
-                        (Err(why), _) => eprintln!("first start: no profile files: {why}"),
-                        (_, None) => {}
+                    if let (Some(documents), Some(game)) =
+                        (first_profile::documents_from_table(&text)?, data.parent())
+                    {
+                        first_profile::first_start(&documents, game, &text)?;
                     }
                 }
                 text

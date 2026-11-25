@@ -7,7 +7,6 @@
 use super::middlehighprocess::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
-use engine_core::extend::stewie;
 
 // ---------------------------------------------------------------------
 // Constants and helpers of this part.
@@ -1500,33 +1499,12 @@ pub fn middle_high_process_load_game_ov2(
             // the "Lily" creature; otherwise (and for a missing item
             // change or model) look at the "Lily" case below.
             let mut equipped = false;
-            // lStewieAl's Tweaks' row S0089.06 (`RememberAmmoCountOnLoad`, the call at `0x927591` and
-            // the jump at `0x927596`): Tweaks' `Get3D_OrIsPlayer` answers 1 for the player, whose 3D
-            // is not there yet on the first load, so its weapon is equipped (the 3D slot `+0x1D0`
-            // is not asked).
-            let has_3d = if item != 0
-                && e.stewie(engine_core::extend::stewie::LOAD_GAME_PLAYER_WEAPON_WITHOUT_3D)
-                && actor == e.global::<u32>(PLAYER)
-            {
-                true
-            } else {
-                item != 0 && e.vcall(actor, 0x1d0, &[]).u32() != 0
-            };
+            let has_3d = item != 0 && e.vcall(actor, 0x1d0, &[]).u32() != 0;
             if has_3d {
                 let skip = e.vcall(actor, 0x21c, &[]).bool() && name_has_lily(e, actor);
                 if !skip {
                     equipped = true;
                     e.call(ACTOR_EQUIP_WORN, &args![actor, form]);
-                    // lStewieAl's Tweaks' row S0089.01 (the call at `0x9275EA`): Tweaks'
-                    // `InitActorAmmoCountFromSaveHook` keeps the player's saved count of loaded
-                    // rounds for S0089.07 (the count plus one; 0 is Tweaks' -1, none).
-                    if e.stewie(engine_core::extend::stewie::AMMO_COUNT_FROM_SAVE)
-                        && actor == e.global::<u32>(PLAYER)
-                    {
-                        let kept =
-                            e.stewie_kept(engine_core::extend::stewie::kept::SAVED_AMMO_COUNT, 4);
-                        e.mem.set_u32(kept, remembered.wrapping_add(1));
-                    }
                     let process =
                         typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, actor));
                     e.vcall(process, 0x168, &args![0u32]);
@@ -3860,12 +3838,6 @@ pub fn middle_high_process_process_patrol_traveling_to_next_ref(
         return;
     }
     let reference = e.call(PATROL_GET_CURRENT_REFERENCE, &args![data]).u32();
-    // 0092b074: lStewieAl's Tweaks' row S0140 (`patchFixPatrolMissingNullCheck`): with no patrol
-    // reference the call ends (Tweaks moves the jump's target to the function's end, `0092b430`),
-    // where the exe goes on to measure the offset to the null reference.
-    if e.stewie(stewie::PATROL_MISSING_NULL_CHECK) && reference == 0 {
-        return;
-    }
     if reference != 0 {
         let mut mode = 0x101u32;
         let package = e.vcall(p, 0x27c, &[]).u32();
@@ -6157,80 +6129,6 @@ mod tests {
         assert_eq!(calls(&e, REFERENCE_INIT_ANIMATION), vec![vec![reference]]);
     }
 
-    /// `load_game_ov2_reads_the_fields_in_order`'s load for the player (the buffer's reference is
-    /// the player), whose 3D (slot `+0x1D0`) is `model`, the saved count of loaded rounds 5. Rows
-    /// S0089.06 and S0089.01 as given. Answers whether the weapon was equipped and the kept word
-    /// of S0089.01 (the count plus one; 0 none).
-    fn s0089_player_load(model: u32, without_3d: bool, keep_count: bool) -> (bool, u32) {
-        s0089_load_of(true, model, without_3d, keep_count)
-    }
-
-    /// [`s0089_player_load`] for the player (`is_player`) or for an NPC (the player another reference).
-    fn s0089_load_of(
-        is_player: bool,
-        model: u32,
-        without_3d: bool,
-        keep_count: bool,
-    ) -> (bool, u32) {
-        let mut e = engine();
-        let p = process(&mut e);
-        let a = p.addr();
-        let buffer = thing(&mut e);
-        let reference = actor(&mut e);
-        let player = if is_player { reference } else { thing(&mut e) };
-        e.set_global(PLAYER, player);
-        let process_object = thing(&mut e);
-        slot_returns(&mut e, OBJECT_SLOTS, 0x0, 0x10);
-        slot_returns(&mut e, OBJECT_SLOTS, 0xc, reference);
-        slot_returns(&mut e, ACTOR_SLOTS, 0x1d0, model);
-        e.register(ALLOCATE, |e, a| ret(e.mem.alloc(a[0])));
-        e.register(LIST_CONSTRUCT, |_, a| ret(a[0]));
-        e.register(LOAD_VARIABLE_SIZED_VALUE, |_, _| ret(0));
-        e.register(BUFFER_SAVE_KIND, |_, a| ret(a[1]));
-        e.register(KIND_HAS_BITS, |_, _| ret(1));
-        e.register(LOAD_DATA, |e, a| {
-            if a[2] == 4 {
-                e.mem.set_u32(a[1], 5);
-            }
-            Ret::default()
-        });
-        e.register(GET_CONTAINER_CHANGES, |_, _| ret(0x500));
-        e.register(GET_WORN_ITEM, |_, _| ret(0x600));
-        e.register_double(WORD_68, move |_, _| ret(process_object));
-        e.register(ITEM_CHANGE_MOD_EFFECT_ACTIVE, |_, _| ret(1));
-        e.register(GET_INVENTORY_CHANGES, |_, _| ret(0x900));
-        e.register(INVENTORY_GET_OBJECT_COUNT, |_, _| ret(3));
-        let item = e.mem.alloc(0x20);
-        e.mem.set_u32(item + 8, 0x4444);
-        e.mem.set_u32(a + 0x114, item);
-        let held = e.mem.alloc(0x20);
-        e.mem.set_u32(a + 0x118, held);
-        e.set_stewie(stewie::LOAD_GAME_PLAYER_WEAPON_WITHOUT_3D, without_3d);
-        e.set_stewie(stewie::AMMO_COUNT_FROM_SAVE, keep_count);
-        middle_high_process_load_game_ov2(&mut e, p, buffer);
-        let kept = e.stewie_kept(stewie::kept::SAVED_AMMO_COUNT, 4);
-        (!calls(&e, ACTOR_EQUIP_WORN).is_empty(), e.mem.u32(kept))
-    }
-
-    /// lStewieAl's Tweaks' rows S0089.06 (`Get3D_OrIsPlayer`, `0x927591`) and S0089.01
-    /// (`InitActorAmmoCountFromSaveHook`, `0x9275EA`): the player's load on the first load of a
-    /// session, with no 3D yet. Off, the exe skips the equip; with S0089.06 the weapon is equipped
-    /// as with 3D. S0089.01 keeps the saved count (5, kept as 6) when the weapon is equipped.
-    #[test]
-    fn s0089_06_and_01_the_players_weapon_is_restored_without_3d() {
-        let model = 0x7000;
-        assert_eq!(s0089_player_load(0, false, false), (false, 0));
-        assert_eq!(s0089_player_load(0, true, false), (true, 0));
-        assert_eq!(s0089_player_load(0, true, true), (true, 6));
-        assert_eq!(s0089_player_load(0, false, true), (false, 0));
-        assert_eq!(s0089_player_load(model, false, false), (true, 0));
-        assert_eq!(s0089_player_load(model, false, true), (true, 6));
-        // Only the player: an NPC with no 3D is not equipped with the rows, and an NPC with 3D keeps
-        // no count of its own.
-        assert_eq!(s0089_load_of(false, 0, true, true), (false, 0));
-        assert_eq!(s0089_load_of(false, model, true, true), (true, 0));
-    }
-
     #[test]
     fn init_load_game_ov2_resolves_ids_and_the_furniture() {
         let mut e = engine();
@@ -7661,49 +7559,6 @@ mod tests {
         e.register_double(VECTOR_LENGTH_2D_SQUARED, move |_, _| {
             ret_f(f64::from(length))
         });
-    }
-
-    /// lStewieAl's Tweaks' row S0140: with no current patrol reference and the path complete, the
-    /// exe measures the offset to the null reference (its position slot) and stops; with the row on
-    /// the step ends there and nothing is called.
-    #[test]
-    fn s0140_patrol_without_a_reference() {
-        for on in [false, true] {
-            let mut e = engine();
-            let (p, target, _, _, data) = patrol_scene(&mut e);
-            e.register_double(PATROL_GET_CURRENT_REFERENCE, |_, _| ret(0));
-            e.register(ACTOR_IS_PATHING_COMPLETE, |_, _| ret(1));
-            e.set_stewie(stewie::PATROL_MISSING_NULL_CHECK, on);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                middle_high_process_process_patrol_traveling_to_next_ref(&mut e, p, target, data);
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                assert!(calls(&e, PROCESS_SLOTS + 0x858).is_empty());
-                assert!(calls(&e, PROCESS_SLOTS + 0x860).is_empty());
-                assert!(calls(&e, PROCESS_SLOTS + 0x350).is_empty());
-            }
-        }
-    }
-
-    /// lStewieAl's Tweaks' row S0140 with a patrol reference (ordinary input): the row changes
-    /// nothing, the same calls as with it off (the move mode set, then the arrival).
-    #[test]
-    fn s0140_row_on_with_a_reference_changes_nothing() {
-        let run = |on: bool| {
-            let mut e = engine();
-            let (p, target, _, _, data) = patrol_scene(&mut e);
-            e.register(ACTOR_IS_PATHING_COMPLETE, |_, _| ret(1));
-            patrol_offset_is(&mut e, 100.0, 0.0);
-            e.set_stewie(stewie::PATROL_MISSING_NULL_CHECK, on);
-            middle_high_process_process_patrol_traveling_to_next_ref(&mut e, p, target, data);
-            e
-        };
-        let (off, on) = (run(false), run(true));
-        assert_eq!(on.call_log, off.call_log);
-        assert_eq!(calls(&on, PROCESS_SLOTS + 0x350).len(), 1);
-        assert_eq!(calls(&on, PROCESS_SLOTS + 0x860).len(), 1);
     }
 
     #[test]

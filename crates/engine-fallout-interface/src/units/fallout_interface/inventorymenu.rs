@@ -11,7 +11,6 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use engine_core::extend::stewie;
 
 /// `InventoryMenu::pMe` (Xbox PDB static): the menu singleton.
 const INVENTORY_MENU: u32 = 0x011d_9ea4;
@@ -130,7 +129,6 @@ const ITEM_OBJECT: u32 = 0x0044_ddc0;
 const FORM_TYPE: u32 = 0x0040_1170;
 /// Two float getters on the item's object (`this` only; ST0).
 const OBJECT_VALUE_004BE180: u32 = 0x004b_e180;
-const OBJECT_VALUE_004BE060: u32 = 0x004b_e060;
 /// The message box shower (cdecl, six words).
 const SHOW_MESSAGE: u32 = 0x0070_52f0;
 /// Adds the object to a list (`this`, address of the object).
@@ -496,12 +494,6 @@ fn show_message(e: &mut Engine, setting: u32) {
     );
 }
 
-/// Whether a book (type 0x19) is refused a hotkey (`0x78054D`, `0x781CD0`): the exe's yes; with
-/// lStewieAl's Tweaks' S0069 (`patchAllowHotkeyGRXAndBooks`) the book test is jumped over.
-fn hotkey_refuses_books(e: &Engine) -> bool {
-    !e.stewie(engine_core::extend::stewie::HOTKEY_GRX_AND_BOOKS)
-}
-
 /// [`inventory_menu_do_idle`] with a gamepad and the hot-key wheel shown.
 fn gamepad_wheel_shown(e: &mut Engine, this: Ptr<InventoryMenu>) {
     let me_addr = this.addr();
@@ -525,9 +517,8 @@ fn gamepad_wheel_shown(e: &mut Engine, this: Ptr<InventoryMenu>) {
     } else {
         let keyring_trait = e.global::<u32>(TRAIT_FROM_NAME_01073974);
         let tile = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, this));
-        // `0x781CD0` (lStewieAl's Tweaks' S0069 makes the `JZ` a `JMP`): books are not refused.
         let refused = !e.call(TILE_IS_TRUE, &args![tile, keyring_trait]).bool()
-            || (hotkey_refuses_books(e) && current_item(e) != 0 && current_item_type(e) == 0x19);
+            || (current_item(e) != 0 && current_item_type(e) == 0x19);
         if refused {
             show_message(e, NO_HOTKEY_SETTING);
         } else {
@@ -640,19 +631,13 @@ fn finish_idle(e: &mut Engine, this: Ptr<InventoryMenu>) {
             value != e.global::<f64>(ZERO_DOUBLE)
         };
         let second = if has_dt { tile_at(e, me_addr, 0x70) } else { 0 };
-        // `0x7820BB` (lStewieAl's Tweaks' S0105 writes `XOR EAX,EAX; MOV [EBP-0x1C],EAX; JMP` over
-        // the zero DT's store): without a DT the DR tile is passed without its own test.
-        let first = if (!has_dt && e.stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS))
-            || (current_item(e) != 0 && {
-                let item = current_item(e);
-                let object = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, item));
-                let value = e.call(OBJECT_VALUE_004BE060, &args![object]).f64();
-                value != e.global::<f64>(ZERO_DOUBLE)
-            }) {
-            tile_at(e, me_addr, 0x6c)
-        } else {
-            0
+        let has_dr = current_item(e) != 0 && {
+            let item = current_item(e);
+            let object = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, item));
+            let value = e.call(OBJECT_VALUE_004BE060, &args![object]).f64();
+            value != e.global::<f64>(ZERO_DOUBLE)
         };
+        let first = if has_dr { tile_at(e, me_addr, 0x6c) } else { 0 };
         let item = current_item(e);
         e.call(SET_ITEM_CARD, &args![first, second, 0u32, item, 0u32]);
     }
@@ -903,12 +888,6 @@ pub fn inventory_menu_drop_current_item(e: &mut Engine, count: i32) {
             let word = e.mem.u32(DROP_POSITION + 4 * i);
             e.mem.set_u32(position.addr() + 4 * i, word);
         }
-        // 00780c76: lStewieAl's Tweaks' row S0022.15 (`QuantityMenuCloseNullInventorySelectionCheck`):
-        // with no item selected (the quantity menu closed after the item went) nothing is dropped,
-        // where the exe reads the null item's form.
-        if e.stewie(stewie::QUANTITY_MENU_CLOSE_NO_ITEM) && current_item(e) == 0 {
-            return;
-        }
         let object = typed_call!(
             leaf::FAMILY,
             0x0044_ddc0,
@@ -971,12 +950,6 @@ fn player_value(e: &mut Engine, slot: u32, id: u32) -> i32 {
 /// item. Updates the menu.
 pub fn inventory_menu_select_current_item(e: &mut Engine, this: Ptr<InventoryMenu>) {
     let base = this.addr();
-    // 00780d70: lStewieAl's Tweaks' row S0022.16 (`MenuFixes`, "add a null check for the selected
-    // inventory item in InventoryMenu::HandleEquipOrUnEquip"): with no item selected the call ends
-    // (at `00780f5d`, the menu not updated), where the exe reads the null item's form.
-    if e.stewie(stewie::INVENTORY_SELECT_NO_ITEM) && current_item(e) == 0 {
-        return;
-    }
     let object = typed_call!(
         leaf::FAMILY,
         0x0044_ddc0,
@@ -1072,20 +1045,9 @@ const WEAPON_TYPE_BADGE: u32 = 0x0066_ea20;
 const GET_EQUIP_TYPE: u32 = 0x0047_9430;
 const GET_EQUIP_TYPE_ICON: u32 = 0x0047_9540;
 
-/// The hotkey icon's equip type for `form`: `BGSEquipType::GetEquipType`'s answer, or with
-/// lStewieAl's Tweaks' S0070 on (`patchFixBookAndAmmoHotkeyIcons`'s `GetEquipTypeIconAidForBooks`,
-/// called at `0x78149C` here and at `0x701861` in the hotkey wheel), for `kNone` (-1) a book
-/// (the form's type byte 0x19) gets `kChems` (10) and ammunition (0x29) `kBigGuns` (0).
+/// The hotkey icon's equip type for `form`: `BGSEquipType::GetEquipType`'s answer.
 pub(crate) fn equip_type_for_hotkey_icon(e: &mut Engine, form: u32) -> u32 {
-    let equip_type = e.call(GET_EQUIP_TYPE, &args![form]).u32();
-    if equip_type != u32::MAX || !e.stewie(stewie::BOOK_AND_AMMO_HOTKEY_ICONS) {
-        return equip_type;
-    }
-    match e.mem.u8(form + 4) {
-        0x19 => 10,
-        0x29 => 0,
-        _ => equip_type,
-    }
+    e.call(GET_EQUIP_TYPE, &args![form]).u32()
 }
 /// `strcpy_s` and `strcat_s` (cdecl: buffer, size, text) and `strlen`.
 const STRCPY_S: u32 = 0x0040_6d30;
@@ -1272,7 +1234,6 @@ fn enter_item(e: &mut Engine, this: Ptr<InventoryMenu>) {
             0x0044_ddc0,
             leaf::word_at_8(e, current_item(e))
         );
-        // `0x78149C` (lStewieAl's Tweaks' S0070 calls `GetEquipTypeIconAidForBooks` there).
         let equip_type = equip_type_for_hotkey_icon(e, object);
         let icon = e.call(GET_EQUIP_TYPE_ICON, &args![equip_type]).u32();
         e.call(STRCAT_S, &args![path, 0x104u32, icon]);
@@ -1578,17 +1539,6 @@ pub fn inventory_menu_do_gamepad(
             handled = true;
         }
         0xf => {
-            // The switch's slot at `0x7823B0` (lStewieAl's Tweaks' S0022.34 points it at
-            // `OnWeaponModMenuOpenMenuKeyPress`): with the mod button's (+0x74) `target`
-            // (0xFAF) equal to 0.0 (`FLDZ; FCOMPP; TEST AH,0x44; JNP`), nothing is clicked and
-            // the answer is 1 (`0x78239D`).
-            if e.stewie(stewie::WEAPON_MOD_MENU_NEEDS_TARGET) {
-                let button = tile_at(e, base, 0x74);
-                let target = e.call(GET_FLOAT_TRAIT, &args![button, 0xfafu32]).f64();
-                if target == 0.0 {
-                    return true;
-                }
-            }
             e.vcall(base, 0xc, &args![0x13u32, 0u32]);
             handled = true;
         }
@@ -2434,10 +2384,8 @@ fn click_use(e: &mut Engine, this: Ptr<InventoryMenu>) {
                 } else {
                     let keyring = e.global::<u32>(TRAIT_FROM_NAME_01073974);
                     let tile = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, this));
-                    // `0x78054D` (lStewieAl's Tweaks' S0069 writes `JMP 0x78058E` there): books are
-                    // not refused.
                     let refused = !e.call(TILE_IS_TRUE, &args![tile, keyring]).bool()
-                        || (hotkey_refuses_books(e) && current_item_type(e) == 0x19);
+                        || current_item_type(e) == 0x19;
                     if refused {
                         message_box(e, NO_HOTKEY_SETTING, [2, 0, MESSAGE_TEXT_TWO]);
                     } else {
@@ -2456,13 +2404,6 @@ fn click_use(e: &mut Engine, this: Ptr<InventoryMenu>) {
         if selected {
             refresh_player(e);
         }
-        return;
-    }
-    // 00780472: lStewieAl's Tweaks' row S0022.14 (`MenuFixes`, "replace an incorrect jump target
-    // after a null check"): with no item selected the click ends (Tweaks points the jump at the
-    // function's end, `00780b8e`), where the exe goes on to the ammunition case and reads the null
-    // item's form.
-    if e.stewie(stewie::INVENTORY_USE_NO_ITEM_JUMP) && current_item(e) == 0 {
         return;
     }
     if current_item_type(e) != 0x29 {
@@ -2710,6 +2651,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
     ]
 }
+
+const OBJECT_VALUE_004BE060: u32 = 0x004b_e060;
 
 #[cfg(test)]
 mod tests {
@@ -3153,96 +3096,6 @@ mod tests {
         assert_eq!(cards[0], vec![0, 0x148, 0, 0x7000, 0]);
     }
 
-    /// Row S0105 (lStewieAl's Tweaks, `0x7820BB`): on the apparel tab, armour with DT 0 passes the
-    /// DR tile (+0x6C) with the row on, without asking the DR (`004be060`); off, the exe's DR test
-    /// (0 here: no tile). With a DT the exe's DR test stays.
-    #[test]
-    fn s0105_no_dt_passes_the_dr_tile() {
-        for (on, dt, wanted, dr_asked) in [
-            (false, 0.0f64, [0u32, 0], 1usize),
-            (true, 0.0, [0x144, 0], 0),
-            (true, 1.0, [0, 0x148], 1),
-        ] {
-            let mut e = Engine::new();
-            let this = idle_menu(&mut e);
-            e.set(this, InventoryMenu::iCurrTab, 1);
-            answer(&mut e, GAMEPAD_IN_USE, 0);
-            answer(&mut e, WORD_AT_FOUR, 0x900);
-            answer(&mut e, TILE_IS_TRUE, 0);
-            answer(&mut e, WHEEL_COUNT, 8);
-            answer(&mut e, INPUT_CONTROLS, 0x6000);
-            // The fixture of `do_idle_number_key_opens_the_wheel_on_its_slot`: key 0x11 + 2 held.
-            e.register(CONTROL_STATE, |_, a| Ret {
-                eax: u32::from(a[1] == 0x13 && a[2] == 0),
-                ..Ret::default()
-            });
-            answer(&mut e, WHEEL_GET_VISIBLE, 0);
-            answer(&mut e, ITEM_OBJECT, 0x7100);
-            answer_st0(&mut e, OBJECT_VALUE_004BE180, dt);
-            answer_st0(&mut e, OBJECT_VALUE_004BE060, 0.0);
-            e.set_global(CURRENT_ITEM, 0x7000u32);
-            answer(&mut e, FORM_TYPE, 0x1f);
-            stub(&mut e, &[WHEEL_SET_VISIBLE, WHEEL_MOVE_HIGHLIGHT]);
-            e.set_stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS, on);
-            e.call_log = Some(vec![]);
-            e.call(0x0078_1ba0, &args![this]);
-            let cards = calls_to(&e, SET_ITEM_CARD);
-            assert_eq!(
-                cards[0],
-                vec![wanted[0], wanted[1], 0, 0x7000, 0],
-                "row {on} dt {dt}"
-            );
-            assert_eq!(calls_to(&e, OBJECT_VALUE_004BE060).len(), dr_asked);
-        }
-    }
-
-    /// Row S0069 (lStewieAl's Tweaks, `0x781CD0`): a book (type 0x19) at the end of the pad's
-    /// wheel highlight is refused with the "can't hotkey" message with the row off; with it on it
-    /// is put on the wheel.
-    #[test]
-    fn s0069_the_wheel_takes_a_book() {
-        for on in [false, true] {
-            let mut e = Engine::new();
-            let this = idle_menu(&mut e);
-            e.set_global(CURRENT_ITEM, 0x7000u32);
-            e.set_global(WHEEL_HIGHLIGHTED, 1u8);
-            e.set_global(MESSAGE_TIME, 2.0f32.to_bits());
-            e.set(this, InventoryMenu::iCurrTab, 5);
-            answer(&mut e, GAMEPAD_IN_USE, 1);
-            answer(&mut e, WHEEL_GET_VISIBLE, 1);
-            answer(&mut e, WHEEL_MOVE_HIGHLIGHT, u32::MAX);
-            answer_st0(&mut e, ITEM_GET_HEALTH, 0.5);
-            answer(&mut e, WORD_AT_FOUR, 0x900);
-            answer(&mut e, TILE_IS_TRUE, 1);
-            answer(&mut e, ITEM_OBJECT, 0x7100);
-            answer(&mut e, FORM_TYPE, 0x19);
-            answer(&mut e, SETTING_STRING, 0x5100);
-            stub(
-                &mut e,
-                &[
-                    WHEEL_ASSIGN,
-                    UPDATE_INVENTORY_MENU,
-                    WHEEL_SET_VISIBLE,
-                    LIST_ADD_OBJECT,
-                    SHOW_MESSAGE,
-                ],
-            );
-            e.set_stewie(engine_core::extend::stewie::HOTKEY_GRX_AND_BOOKS, on);
-            e.call_log = Some(vec![]);
-            e.call(0x0078_1ba0, &args![this]);
-            assert_eq!(
-                calls_to(&e, WHEEL_ASSIGN).len(),
-                usize::from(on),
-                "row {on}"
-            );
-            assert_eq!(
-                calls_to(&e, SETTING_STRING).contains(&vec![NO_HOTKEY_SETTING]),
-                !on,
-                "row {on}"
-            );
-        }
-    }
-
     #[test]
     fn do_idle_closes_the_wheel_without_a_key_and_clicks_on_control_1() {
         let mut e = Engine::new();
@@ -3448,18 +3301,9 @@ mod n054_tests {
         assert!(calls_to(&e, SET_TAB_KNOB_POSITION).is_empty());
     }
 
-    /// lStewieAl's Tweaks' row S0022.15 with ordinary input: run with the row off, then on; the row
-    /// changes nothing (the same calls and answers).
     #[test]
     fn drop_uses_the_extra_list_only_when_it_holds_enough() {
-        for on in [false, true] {
-            drop_uses_the_extra_list_only_when_it_holds_enough_row(on);
-        }
-    }
-
-    fn drop_uses_the_extra_list_only_when_it_holds_enough_row(on: bool) {
         let mut e = Engine::new();
-        e.set_stewie(stewie::QUANTITY_MENU_CLOSE_NO_ITEM, on);
         let this = menu(&mut e);
         e.set_global(CURRENT_ITEM, 0x7000u32);
         answer(&mut e, ITEM_OBJECT, 0x7100);
@@ -3496,18 +3340,9 @@ mod n054_tests {
         assert!(calls_to(&e, 0x00c3_03cc).is_empty());
     }
 
-    /// lStewieAl's Tweaks' row S0022.16 with ordinary input: run with the row off, then on; the row
-    /// changes nothing (the same calls and answers).
     #[test]
     fn select_equips_or_unequips() {
-        for on in [false, true] {
-            select_equips_or_unequips_row(on);
-        }
-    }
-
-    fn select_equips_or_unequips_row(on: bool) {
         let mut e = Engine::new();
-        e.set_stewie(stewie::INVENTORY_SELECT_NO_ITEM, on);
         let this = menu(&mut e);
         e.set_global(CURRENT_ITEM, 0x7000u32);
         answer(&mut e, ITEM_OBJECT, 0x7100);
@@ -3863,122 +3698,6 @@ mod n054_tests {
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
     }
 
-    /// lStewieAl's Tweaks' row S0022.14 with an item (ordinary input): Use clicked on ammunition
-    /// goes past the row's test to the ammunition case (its form read, the keyring trait asked a
-    /// second time, here false: the click ends), row on or off, with the same calls.
-    #[test]
-    fn s0022_14_row_on_with_an_item_changes_nothing() {
-        let run = |on: bool| {
-            let mut e = Engine::new();
-            let this = menu(&mut e);
-            e.set_global(CURRENT_ITEM, 0x7000u32);
-            answer(&mut e, ITEM_OBJECT, 0x7100);
-            answer(&mut e, FORM_TYPE, 0x29);
-            answer(&mut e, WORD_AT_FOUR, 0x4000);
-            answer(&mut e, TILE_IS_TRUE, 0);
-            e.set_stewie(stewie::INVENTORY_USE_NO_ITEM_JUMP, on);
-            e.call_log = Some(vec![]);
-            e.call(0x0078_0140, &args![this, 0x1di32, 0u32]);
-            e
-        };
-        let (off, on) = (run(false), run(true));
-        assert_eq!(on.call_log, off.call_log);
-        assert_eq!(calls_to(&on, TILE_IS_TRUE).len(), 2);
-    }
-
-    /// lStewieAl's Tweaks' rows S0022.14, S0022.15 and S0022.16: Use clicked, a drop after the
-    /// quantity menu, and equipping, each with no item selected. The exe reads the null item's
-    /// form (`0044ddc0` reads `+8`, as its stand-in here does) and stops; with each row on the call
-    /// ends there.
-    fn inventory_action_with_no_item(
-        row: engine_core::extend::stewie::Row,
-        action: fn(&mut Engine, Ptr<InventoryMenu>),
-    ) {
-        for on in [false, true] {
-            let mut e = Engine::new();
-            let this = menu(&mut e);
-            e.mem.unmap(0, 0x1000);
-            e.set_global(CURRENT_ITEM, 0u32);
-            e.register_double(ITEM_OBJECT, |e, a| e.mem.u32(a[0] + 8).into_ret());
-            answer(&mut e, WHEEL_GET_VISIBLE, 0);
-            e.set_stewie(row, on);
-            e.call_log = Some(vec![]);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                action(&mut e, this);
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "{row:?} {on}");
-        }
-    }
-
-    /// Row S0069 (lStewieAl's Tweaks, `0x78054D`): Use clicked on a book while the hot-key wheel
-    /// is open (no pad) is refused with the "can't hotkey" message with the row off; with it on
-    /// the book is put on the wheel.
-    #[test]
-    fn s0069_use_puts_a_book_on_the_wheel() {
-        for on in [false, true] {
-            let mut e = Engine::new();
-            let this = menu(&mut e);
-            pages(&mut e, &[TRAIT_FROM_NAME_01073974]);
-            e.set_global(CURRENT_ITEM, 0x7000u32);
-            e.set_global(MESSAGE_TIME, 2.0f32.to_bits());
-            e.set_global(TRAIT_FROM_NAME_01073974, 0x4e01u32);
-            e.set_global(TRAIT_FROM_NAME_01073984, 0x4e02u32);
-            answer(&mut e, ITEM_OBJECT, 0x7100);
-            answer(&mut e, FORM_TYPE, 0x19);
-            answer(&mut e, WORD_AT_FOUR, 0x4000);
-            // The hot-key trait true, the keyring's false.
-            e.register(TILE_IS_TRUE, |_, a| Ret {
-                eax: u32::from(a[1] == 0x4e01),
-                ..Ret::default()
-            });
-            answer(&mut e, WHEEL_GET_VISIBLE, 1);
-            answer(&mut e, GAMEPAD_IN_USE, 0);
-            answer_st0(&mut e, ITEM_GET_HEALTH, 0.5);
-            answer(&mut e, SETTING_STRING, 0x5100);
-            stub(&mut e, &[SHOW_MESSAGE, WHEEL_ASSIGN_ITEM, LIST_ADD_OBJECT]);
-            e.set_stewie(stewie::HOTKEY_GRX_AND_BOOKS, on);
-            e.call_log = Some(vec![]);
-            // With the row on the click goes on into the menu's update, which this fixture does
-            // not hold up: only the calls up to there are read.
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                e.call(0x0078_0140, &args![this, 0x1di32, 0u32]);
-            }));
-            e.call_stack.clear();
-            assert_eq!(
-                calls_to(&e, WHEEL_ASSIGN_ITEM).len(),
-                usize::from(on),
-                "row {on}"
-            );
-            assert_eq!(
-                calls_to(&e, SETTING_STRING).contains(&vec![NO_HOTKEY_SETTING]),
-                !on,
-                "row {on}"
-            );
-        }
-    }
-
-    #[test]
-    fn s0022_14_use_with_no_item() {
-        inventory_action_with_no_item(stewie::INVENTORY_USE_NO_ITEM_JUMP, |e, this| {
-            e.call(0x0078_0140, &args![this, 0x1di32, 0u32]);
-        });
-    }
-
-    #[test]
-    fn s0022_15_drop_with_no_item() {
-        inventory_action_with_no_item(stewie::QUANTITY_MENU_CLOSE_NO_ITEM, |e, _| {
-            e.call(0x0078_0c50, &args![3i32]);
-        });
-    }
-
-    #[test]
-    fn s0022_16_equip_with_no_item() {
-        inventory_action_with_no_item(stewie::INVENTORY_SELECT_NO_ITEM, |e, this| {
-            e.call(0x0078_0d60, &args![this]);
-        });
-    }
-
     #[test]
     fn enter_and_leave_the_list() {
         let mut e = Engine::new();
@@ -4207,213 +3926,5 @@ mod n054_tests {
         assert!(calls_to(&e, FORM_TYPE).is_empty(), "nothing further");
         let (_, ok) = repairable(on, o2_allow, 99.9);
         assert!(ok, "the exe's further tests: below 100, a stack of 2");
-    }
-
-    /// Row S0022.34: the pad's button 15 (Page Up's too) clicks the mod menu button (`DoClick`
-    /// 0x13, vtable +0xc) and answers handled. With the row on and the mod button's (+0x74)
-    /// `target` (0xFAF) at 0.0 (or -0.0) nothing is clicked and it still answers handled; any
-    /// other value (a NaN too: `FCOMPP` unordered) clicks. Off: always the click, `target` never
-    /// read.
-    #[test]
-    fn s0022_34_the_mod_menu_needs_a_usable_button() {
-        for (on, target, clicks) in [
-            (false, 0.0f64, true),
-            (true, 0.0, false),
-            (true, -0.0, false),
-            (true, 1.0, true),
-            (true, f64::NAN, true),
-        ] {
-            let mut e = Engine::new();
-            let this = menu(&mut e);
-            e.set_stewie(stewie::WEAPON_MOD_MENU_NEEDS_TARGET, on);
-            answer(&mut e, IS_TOP_MENU_ID, 1);
-            stub(&mut e, &[GET_PIPBOY, 0x00c0_000c]);
-            answer(&mut e, PIPBOY_READY, 1);
-            answer(&mut e, MENU_TEST_00709D40, 0);
-            answer_st0(&mut e, GET_FLOAT_TRAIT, target);
-            e.call_log = Some(vec![]);
-            assert!(e.call(0x0078_2190, &args![this, 0xfi32, 0u32]).bool());
-            let clicked = calls_to(&e, 0x00c0_000c);
-            if clicks {
-                assert_eq!(clicked, [vec![this.addr(), 0x13, 0]], "row {on} {target}");
-            } else {
-                assert!(clicked.is_empty(), "row {on} {target}");
-            }
-            let read = calls_to(&e, GET_FLOAT_TRAIT);
-            if on {
-                assert_eq!(read, [vec![0x100 + 0x74 - 0x28, 0xfaf]]);
-            } else {
-                assert!(read.is_empty());
-            }
-        }
-    }
-
-    /// Row S0022.34 with the buttons as the item part leaves them (`00781680` on a selected
-    /// item sets the mod button's, +0x74 = tile 0x14C, `target` 0xFAF to 1): button 15 still
-    /// clicks the mod menu (0x13) with the row on. The tiles' traits are kept in a table the
-    /// stand-ins of `SET_TRAIT_FROM_INT` and `GET_FLOAT_TRAIT` share.
-    #[test]
-    fn s0022_34_the_mod_button_set_by_the_item_part_opens_the_menu() {
-        use std::cell::RefCell;
-        use std::collections::HashMap;
-        use std::rc::Rc;
-        let mut e = Engine::new();
-        let this = menu(&mut e);
-        e.set_stewie(stewie::WEAPON_MOD_MENU_NEEDS_TARGET, true);
-        e.set_global(CURRENT_ITEM, 0x7000u32);
-        answer(&mut e, ITEM_OBJECT, 0x7100);
-        answer(&mut e, FORM_TYPE, 0x29);
-        answer(&mut e, ITEM_GET_WORN, 1);
-        answer(&mut e, SETTING_STRING, 0x5100);
-        answer(&mut e, WORD_AT_FOUR, 0x4000);
-        pages(&mut e, &[FULL_HEALTH]);
-        e.mem.set_f64(FULL_HEALTH, 100.0);
-        answer_st0(&mut e, ITEM_GET_HEALTH, 100.0);
-        e.register(HEALTH_ROUND, |_, a| Ret {
-            st0: f64::from(f32::from_bits(a[0])),
-            ..Ret::default()
-        });
-        let traits: Rc<RefCell<HashMap<(u32, u32), f64>>> = Rc::default();
-        let set = traits.clone();
-        e.register_double(SET_TRAIT_FROM_INT, move |_, a| {
-            set.borrow_mut()
-                .insert((a[0], a[1]), f64::from(a[2] as i32));
-            Ret::default()
-        });
-        let read = traits.clone();
-        e.register_double(GET_FLOAT_TRAIT, move |_, a| Ret {
-            st0: read.borrow().get(&(a[0], a[1])).copied().unwrap_or(0.0),
-            ..Ret::default()
-        });
-        stub(&mut e, &[SET_STRING_TRAIT, SET_FLOAT_TRAIT]);
-        e.call(0x0078_1680, &args![this]);
-        assert_eq!(traits.borrow().get(&(0x14c, 0xfaf)), Some(&1.0));
-        answer(&mut e, IS_TOP_MENU_ID, 1);
-        stub(&mut e, &[GET_PIPBOY, 0x00c0_000c]);
-        answer(&mut e, PIPBOY_READY, 1);
-        answer(&mut e, MENU_TEST_00709D40, 0);
-        e.call_log = Some(vec![]);
-        assert!(e.call(0x0078_2190, &args![this, 0xfi32, 0u32]).bool());
-        assert_eq!(calls_to(&e, 0x00c0_000c), [vec![this.addr(), 0x13, 0]]);
-    }
-
-    /// Row S0070 at the inventory's own call (`0x78149C`, `DoEnter`'s item part): a hotkeyed book
-    /// (form type 0x19) with no equip type asks the icon of `kChems` (10) with the row on and of
-    /// -1 with it off.
-    #[test]
-    fn s0070_the_inventory_asks_the_book_icon() {
-        for (on, wanted) in [(false, u32::MAX), (true, 10u32)] {
-            let mut e = Engine::new();
-            let this = menu(&mut e);
-            pages(
-                &mut e,
-                &[
-                    LAST_ROW,
-                    HEALTH_THRESHOLD,
-                    HEALTH_THRESHOLD_ARMOR,
-                    IMAGE_X,
-                    IMAGE_SIZE,
-                    DROP_LABEL_SETTING_POINTER,
-                    FULL_HEALTH,
-                ],
-            );
-            // The item part's button update (`00781680`) runs too: full health 100.
-            e.mem.set_f64(FULL_HEALTH, 100.0);
-            e.register(HEALTH_ROUND, |_, a| Ret {
-                st0: f64::from(f32::from_bits(a[0])),
-                ..Ret::default()
-            });
-            e.set_stewie(stewie::BOOK_AND_AMMO_HOTKEY_ICONS, on);
-            let form = e.mem.alloc(0x40);
-            e.mem.set_u8(form + 4, 0x19);
-            let setting = e.mem.alloc(4);
-            e.mem.set_u32(setting, 1.0f32.to_bits());
-            answer(&mut e, LIST_SELECTED_ITEM, 0x7000);
-            answer(&mut e, 0x00c1_0004, 0x900);
-            answer(&mut e, ITEM_OBJECT, form);
-            answer(&mut e, FORM_TYPE, 0x19);
-            answer(&mut e, SETTING_FLOAT, setting);
-            answer(&mut e, GET_EQUIP_TYPE, u32::MAX);
-            answer(&mut e, STRLEN, 0);
-            let slot = e.mem.alloc(4);
-            e.mem.set_u32(slot, 0x5200);
-            answer(&mut e, WORD_AT_ZERO_0073AC90, slot);
-            real_ftol(&mut e);
-            stub(
-                &mut e,
-                &[
-                    GET_FLOAT_TRAIT,
-                    INTERFACE_SINGLETON,
-                    PIPBOY_MANAGER,
-                    MOVE_KNOB,
-                    ITEM_GET_HEALTH,
-                    SETTING_STRING,
-                    SET_STRING_TRAIT,
-                    SET_FLOAT_TRAIT,
-                    SET_TRAIT_FROM_INT,
-                    POPULATE_ITEM_STATS,
-                    PLAYER_CAN_USE,
-                    WORD_AT_FOUR,
-                    ITEM_GET_ICON_ONE,
-                    TILE_GET_STRING,
-                    STRING_COMPARE,
-                    TILE_ADD_NEEDS_UPDATE,
-                    STRCPY_S,
-                    STRCAT_S,
-                    GET_EQUIP_TYPE_ICON,
-                    WHEEL_GET_VISIBLE,
-                    0x0078_1680,
-                ],
-            );
-            e.call_log = Some(vec![]);
-            e.call(0x0078_0ff0, &args![this, 0x1di32, 0u32]);
-            assert_eq!(calls_to(&e, GET_EQUIP_TYPE), [vec![form]], "row {on}");
-            assert_eq!(
-                calls_to(&e, GET_EQUIP_TYPE_ICON),
-                [vec![wanted]],
-                "row {on}"
-            );
-        }
-    }
-
-    /// Row S0070 (the inventory's `0x78149C` and the wheel's `0x701861` share it): with no equip
-    /// type (-1) and the row on, a book (type 0x19) is `kChems` (10) and ammunition (0x29)
-    /// `kBigGuns` (0); anything else, a form with an equip type, or the row off: `GetEquipType`'s
-    /// answer, asked once.
-    #[test]
-    fn s0070_equip_type_for_books_and_ammo() {
-        for (on, equip_type, kind, wanted) in [
-            (false, u32::MAX, 0x19u8, u32::MAX),
-            (false, u32::MAX, 0x29, u32::MAX),
-            (true, u32::MAX, 0x19, 10),
-            (true, u32::MAX, 0x29, 0),
-            (true, u32::MAX, 0x1f, u32::MAX),
-            (true, 3, 0x19, 3),
-            (true, 3, 0x29, 3),
-        ] {
-            let mut e = Engine::new();
-            e.set_stewie(stewie::BOOK_AND_AMMO_HOTKEY_ICONS, on);
-            answer(&mut e, GET_EQUIP_TYPE, equip_type);
-            let form = e.mem.alloc(0x10);
-            e.mem.set_u8(form + 4, kind);
-            e.call_log = Some(vec![]);
-            assert_eq!(equip_type_for_hotkey_icon(&mut e, form), wanted);
-            assert_eq!(calls_to(&e, GET_EQUIP_TYPE), [vec![form]]);
-        }
-    }
-}
-
-#[cfg(test)]
-mod stewie_menus6_tests {
-    use super::*;
-
-    /// Row S0069 (`0x78054D`, `0x781CD0`): books are refused a hotkey with the row off, not on.
-    #[test]
-    fn s0069_books_can_be_hotkeyed() {
-        for on in [false, true] {
-            let e = Engine::new();
-            e.set_stewie(engine_core::extend::stewie::HOTKEY_GRX_AND_BOOKS, on);
-            assert_eq!(hotkey_refuses_books(&e), !on);
-        }
     }
 }

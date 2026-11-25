@@ -453,7 +453,7 @@ fn free_node(e: &mut Engine, node: u32) {
     e.set_global(NODE_POOL_LOCK_COUNT, count);
     e.set_global(NODE_POOL_FREE_LIST, node);
     if count == 0 {
-        e.set_global(NODE_POOL_LOCK, 0u32);
+        e.mem.set_u32_release(NODE_POOL_LOCK, 0);
     }
 }
 

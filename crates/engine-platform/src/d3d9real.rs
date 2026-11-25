@@ -115,6 +115,8 @@ fn window_closed() -> ! {
             std::thread::park();
         }
     }
+    // The log lines still on their way written first, so this line ends the log.
+    crate::run_end_hooks();
     eprintln!(
         "NV_D3D9={}: the game's window was closed: the run ends",
         tag()
@@ -2750,6 +2752,12 @@ pub fn note_report_hitch(line: String) {
 /// none when the log is off (`NV_HITCH_LOG=0`).
 pub fn set_report_hitch_totals(totals: Option<(u64, u64, u64)>) {
     shot::set_hitch_totals(totals);
+}
+
+/// Tests (the host's): the F12 report's `hitches.txt` as it would be written now.
+#[doc(hidden)]
+pub fn report_hitches_for_test() -> String {
+    shot::hitches_text()
 }
 
 /// The Presents submitted so far (the hitch log's loading-screen test, each frame): the stream's own count, read

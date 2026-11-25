@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/media/logo-ranger-2.png" alt="nv-rs logo: an NCR Ranger with a revolver in front of a Mojave sunset, inside a gear" width="260">
+  <img src=".github/media/logo-ranger-2.png" alt="nv-rs logo: an NCR Ranger with a revolver in front of a Mojave sunset, inside a gear" width="260">
 </p>
 
 <h1 align="center">nv-rs</h1>
@@ -7,7 +7,7 @@
 [![Download](https://img.shields.io/badge/Download-Windows_preview-brightgreen.svg)](https://github.com/slaterain/nv-rs/releases)
 [![Rust](https://img.shields.io/badge/Rust-2021_edition-orange.svg)](https://www.rust-lang.org/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Windows-purple.svg)](docs/PLAYTESTING.md)
+[![Platform](https://img.shields.io/badge/Platform-Windows-purple.svg)](#play-the-preview)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2.svg?logo=discord&logoColor=white)](https://discord.gg/pn5kjZJJxx)
 
 **Fallout: New Vegas, rebuilt in Rust, aiming to play exactly like the original.**
@@ -29,7 +29,7 @@ rates, fast loading, far fewer crashes, built-in modding and more platforms.
 **[Download the Windows preview](https://github.com/slaterain/nv-rs/releases)**. You need
 Fallout: New Vegas (version 1.4.0.525; only the Steam version has been tested so far) on a Windows PC.
 
-Builds from source (not yet the preview) also recognize one GOG build: the en-US offline installer 1.4.0.525(a), build 55068 (see [GOG compatibility](docs/GOG_55068.md)).
+Builds from source (not yet the preview) also recognize one GOG build: the en-US offline installer 1.4.0.525(a), build 55068.
 
 1. Extract the ZIP to a folder of its own, for example `C:\Games\nv-rs`.
 2. Double-click `Play.exe`. The launcher opens, in the look of the game's terminals; `> Play` finds
@@ -55,31 +55,29 @@ brings the speed, and finishing the built-in mod tools. After that: more platfor
 ## Progress
 
 <p align="center">
-  <img src="docs/media/progress.svg" alt="Engine port progress: 100% of the game's code translated" width="100%">
+  <img src=".github/media/progress.svg" alt="Engine port progress: 100% of the game's code translated" width="100%">
 </p>
 
 The bar counts how much of the original game's code is translated. That part is done; the table
-shows what's left. Each name links to the detail in [docs/STATUS.md](docs/STATUS.md).
+shows what's left.
 
 | | System | What you get today |
 | :---: | --- | --- |
-| ✅ | [**The whole game**](docs/STATUS.md#the-whole-game) | Combat, AI, quests, dialogue, menus, saves, the open world and the DLCs, checked against the original and playable. |
-| ✅ | [**Fixes**](docs/STATUS.md#fixes) | Bug fixes on by default, each with its own setting; the original's behaviour is one setting away. |
-| ✅ | [**Windows preview**](docs/STATUS.md#windows-preview) | [Released](https://github.com/slaterain/nv-rs/releases); run on one PC so far. |
-| 🔨 | [**Native 64-bit code**](docs/STATUS.md#native-64-bit-code) | Started: threads on their own cores, textures and sounds kept outside the 32-bit memory, and the first hot paths as native code (the script evaluator, the world draw's device calls, the actors' per-frame loops). |
-| 🔨 | [**Built-in script extender: xNVSE**](docs/STATUS.md#xnvse-built-in) | All 654 of its script commands and both its script languages, with nothing to install. |
-| 🔨 | [**Built-in script extender: JIP LN:**](docs/STATUS.md#jip-ln-built-in) | All its script commands (JIP LN: 1,116 and its two version commands) and all of its game patches that do something on this port (174 of 183; three more are folded into others, six do nothing here); on in the default fixes preset, off in vanilla (`bJIPInstalled=0` turns it off). |
-| 🔨 | [**Mod Configuration Menu (MCM)**](docs/STATUS.md#mod-configuration-menu-mcm-built-in) | The commands MCM's menu needs; on in the default fixes preset (`bMCM=0` turns it off). |
-| 🔨 | [**UI Organizer (UIO)**](docs/STATUS.md#ui-organizer-uio-built-in) | UI mods' HUD and menu additions; on in the default fixes preset (`bUIO=0` turns it off). |
-| 🔨 | [**lStewieAl's Tweaks**](docs/STATUS.md#lstewieals-tweaks-built-in) | 225 of its changes, on by default: its 72 listed crash and leak fixes and 153 more fixes and tweaks; the remaining crash fixes and tweaks come next. |
-| 🔨 | [**Mod installers (FOMOD)**](docs/STATUS.md#mod-installers-fomod) | Mods with an installer, from .zip or .7z, installed into nv-rs's own folder, never the game's. |
-| 🔨 | [**One launcher**](docs/STATUS.md#the-launcher) | `Play.exe` opens a window like the game's terminals to play, install mods, import saves and change settings. |
-| 🔨 | [**Modern graphics (wgpu)**](docs/STATUS.md#modern-graphics-wgpu) | The default renderer, on Vulkan; in the places compared, on one NVIDIA card, its pictures nearly match Direct3D 9's, and at 8x antialiasing it is about 8% slower. |
-| 🔨 | [**Game pads**](docs/STATUS.md#game-pads) | Xbox-style pads on Windows as in the original; other pads, and Linux, not yet tried with a real pad. |
-| ⬜ | [**More platforms, co-op, VR**](docs/STATUS.md#more-platforms-co-op-vr) | Planned; co-op has no design yet. |
+| ✅ | **The whole game** | Combat, AI, quests, dialogue, menus, saves, the open world and the DLCs, checked against the original and playable. |
+| ✅ | **Fixes** | Bug fixes on by default, each with its own setting; the original's behaviour is one setting away. |
+| ✅ | **Windows preview** | [Released](https://github.com/slaterain/nv-rs/releases); run on one PC so far. |
+| 🔨 | **Native 64-bit code** | Started: threads on their own cores, textures and sounds kept outside the 32-bit memory, and the first hot paths as native code (the script evaluator, the world draw's device calls, the actors' per-frame loops). |
+| 🔨 | **Built-in script extender: xNVSE** | All 654 of its script commands and both its script languages, with nothing to install. |
+| 🔨 | **Built-in script extender: JIP LN:** | All its script commands (JIP LN: 1,116 and its two version commands) and all of its game patches that do something on this port (174 of 183; three more are folded into others, six do nothing here); on in the default fixes preset, off in vanilla (`bJIPInstalled=0` turns it off). |
+| 🔨 | **UI Organizer (UIO)** | UI mods' HUD and menu additions; on in the default fixes preset (`bUIO=0` turns it off). |
+| ⬜ | **lStewieAl's Tweaks** | lStewieAl's Tweaks is no longer built in; its fixes are to be rebuilt as nv-rs's own. |
+| 🔨 | **Mod installers (FOMOD)** | Mods with an installer, from .zip or .7z, installed into nv-rs's own folder, never the game's. |
+| 🔨 | **One launcher** | `Play.exe` opens a window like the game's terminals to play, install mods, import saves and change settings. |
+| 🔨 | **Modern graphics (wgpu)** | The default renderer, on Vulkan; in the places compared, on one NVIDIA card, its pictures nearly match Direct3D 9's, and at 8x antialiasing it is about 8% slower. |
+| 🔨 | **Game pads** | Xbox-style pads on Windows as in the original; other pads, and Linux, not yet tried with a real pad. |
+| ⬜ | **More platforms, co-op, VR** | Planned; co-op has no design yet. |
 
-✅ means working, not free of bugs. Each fix is described in [docs/FIXES.md](docs/FIXES.md); the
-plan is in [docs/MILESTONES.md](docs/MILESTONES.md).
+✅ means working, not free of bugs.
 
 ## Why it's different
 
@@ -107,15 +105,16 @@ the original's own code and recordings of the original game. Judge it by how it 
 
 - **Play and report:** try the preview and [open an issue](https://github.com/slaterain/nv-rs/issues)
   for anything that differs from the original.
-- **Contribute:** read [CONTRIBUTING.md](CONTRIBUTING.md) (and give [AGENTS.md](AGENTS.md) to your
-  agent), say in an issue what you'd like to work on, then open a small pull request.
+- **Contribute:** read [CONTRIBUTING.md](CONTRIBUTING.md) (and point your agent at it), say
+  in an issue what you'd like to work on, then open a small pull request.
 - **Chat** on the project's [Discord](https://discord.gg/pn5kjZJJxx).
 - **Support** the project on [Ko-fi](https://ko-fi.com/slater41n). It pays for the AI time the
   work runs on. It's a voluntary gift: it buys nothing and promises no release date.
-- **Build from source:** see [docs/PLAYTESTING.md](docs/PLAYTESTING.md); every document is linked
-  from [docs/README.md](docs/README.md).
+- **Build from source:** with Rust installed (the version is pinned in `rust-toolchain.toml`),
+  `cargo build --release -p nv-viewer`; [Build and run](CONTRIBUTING.md#build-and-run) says how to
+  start it.
 
-Final decisions rest with the maintainer, **slaterain** ([docs/GOVERNANCE.md](docs/GOVERNANCE.md)).
+Final decisions rest with the maintainer, **slaterain**.
 
 ## Legal and license
 

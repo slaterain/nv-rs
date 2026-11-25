@@ -11,7 +11,7 @@
 #                        nv-rs-preview-<system>-test.tar.gz and BUILD.txt says the program was not
 #                        checked against the game where it was built, and that a published package
 #                        is checked first, its result in CHECKED.txt beside it (made on Windows by
-#                        scripts/check-unix-package.ps1, docs/MAINTAINING.md). Without
+#                        scripts/check-unix-package.ps1). Without
 #                        it (a release package) the script refuses unless --game is given, HEAD is on
 #                        origin's main. Every package, a test build too, is refused unless the
 #                        licence notices match Cargo.lock and every dependency's licence is in

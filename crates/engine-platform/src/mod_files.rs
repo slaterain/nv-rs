@@ -1,5 +1,5 @@
-//! Mods' own files: the files a script extender's commands read and write for a mod (MCM's
-//! `Data\Config\<mod>.ini`, later JIP LN's INI and file commands), kept between sessions in a
+//! Mods' own files: the files a script extender's commands read and write for a mod (JIP LN's INI
+//! and file commands), kept between sessions in a
 //! folder of the port's own beside the saves (the maintainer, 2026-11-16), never in the game's
 //! folder. The extender crates reach these through the core's seam (`engine_core::mod_files`,
 //! installed with the layer: [`CALLS`]), which also holds the profile text rules (`ini_value`,

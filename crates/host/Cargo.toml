@@ -27,14 +27,10 @@ play-patch = { path = "../play-patch" }
 nvse = { path = "../nvse" }
 # JIP LN NVSE built in (ADR-0016), xNVSE's plugin: installed right after it.
 jip = { path = "../jip" }
-# JohnnyGuitar NVSE built in, its editor ids when their row is on: after JIP, before MCM
+# JohnnyGuitar NVSE built in, its editor ids when their row is on: after JIP
 # (crates/johnnyguitar).
 johnnyguitar = { path = "../johnnyguitar" }
-# lStewieAl's Tweaks built in, when its row is on: after JIP and MCM, before UIO (crates/stewie).
-stewie = { path = "../stewie" }
 uio = { path = "../uio" }
-# The Mod Configuration Menu's plugin (MCM.dll) built in, when its row is on: after JIP, before UIO.
-mcm = { path = "../mcm" }
 # The load order the game's forms are read from (`player_move`).
 esm = { path = "../esm" }
 # zlib's inflate on the host for the game's compressed archives and records (`native_inflate`).

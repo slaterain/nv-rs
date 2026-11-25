@@ -43,7 +43,7 @@ const UNHANDLED_OPERATOR: u32 = 0x0103_3fd0;
 const SCRIPT_LOG: u32 = 0x005b_5e40;
 
 const STRLEN: u32 = 0x0044_a670;
-/// The tokenizer, by address: lStewieAl's Tweaks' script inlines replace it (`overridable.tsv`).
+/// The tokenizer, by address (`overridable.tsv`).
 const NEXT_TOKEN: u32 = 0x0059_3870;
 /// The operand reader, by address (`overridable.tsv`).
 const READ_OPERAND: u32 = 0x005a_c7a0;

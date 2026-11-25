@@ -231,6 +231,9 @@ pub struct Frame {
     pub hibernating: u32,
     /// The longest completed load task main ran (ns, its vtable).
     pub longest_task: (u64, u32),
+    /// The render thread's and the queue thread's longest blocking call of the frame, with its time (ns)
+    /// (`engine_platform::stream_hitch::take_longest`).
+    pub longest_calls: [Option<(engine_platform::stream_hitch::Call, u64)>; 2],
     /// The game's frame tail split at its marks (`engine_core::stage_time::take_tail`): printed when the tail is
     /// [`TAIL_SPLIT_MS`] or more.
     pub tail: Option<engine_core::stage_time::Tail>,
@@ -615,26 +618,165 @@ impl Frame {
         self.s(S::PresentWaitNs) + self.s(S::ReplyWaitNs) + self.s(S::QueueFullNs)
     }
 
-    /// What the render thread's presents of the frame waited on, the largest first, when one is 1 ms or more: the
-    /// queue thread's last frame (`sync`, its present call included) and the window's next frame (with the Fifo present
-    /// mode, the display's refresh).
+    /// Where the render thread's time went while main waited for it, each part said when it is 1 ms or more, the largest
+    /// first: what it waited for (the window's next frame: with the Fifo present mode the display's refresh; the queue
+    /// thread's last frame at its present, its present call included; the queue thread within the frame; the GPU; the
+    /// drawing side at a cut), what kept it busy (its own work on the game's commands, and its blocking calls by part),
+    /// and the longest single call on it and on the queue thread.
     fn render_reason(&self) -> String {
-        use engine_platform::stream_hitch::Count as S;
-        let mut parts = [
+        use engine_platform::stream_hitch::{Count as S, Part};
+        let render = |p: Part| self.render_part(p);
+        let mut waits = [
             (self.s(S::AcquireNs), "the window's next frame"),
             (self.s(S::RenderSyncNs), "the queue thread's last frame"),
+            (render(Part::ThreadWait), "the queue thread"),
+            (render(Part::GpuWait), "the GPU"),
+            (self.s(S::SlotWaitNs), "the drawing side"),
         ];
-        parts.sort_by_key(|a| std::cmp::Reverse(a.0));
-        let said: Vec<String> = parts
-            .iter()
-            .filter(|(ns, _)| *ns >= 1_000_000)
-            .map(|(ns, w)| format!("{w} {:.0} ms", ms(*ns)))
-            .collect();
-        if said.is_empty() {
+        let mut busy = [
+            (self.render_own(), "the game's commands"),
+            (render(Part::Poll), "polls"),
+            (render(Part::Submit), "submits"),
+            (render(Part::Upload), "uploads"),
+            (render(Part::Create), "resources made"),
+            (render(Part::Finish), "encoders finished"),
+            (self.s(S::RenderIdleNs), "idle work"),
+        ];
+        let said = |parts: &mut [(u64, &str)]| -> Vec<String> {
+            parts.sort_by_key(|a| std::cmp::Reverse(a.0));
+            parts
+                .iter()
+                .filter(|(ns, _)| *ns >= 1_000_000)
+                .map(|(ns, w)| format!("{w} {:.0} ms", ms(*ns)))
+                .collect()
+        };
+        let mut out = Vec::new();
+        let waited = said(&mut waits);
+        if !waited.is_empty() {
+            out.push(format!("it waited for {}", waited.join(", ")));
+        }
+        let worked = said(&mut busy);
+        if !worked.is_empty() {
+            out.push(format!("busy with {}", worked.join(", ")));
+        }
+        let longest = self.longest_calls_words(1_000_000);
+        if !longest.is_empty() {
+            out.push(format!("the longest call: {longest}"));
+        }
+        if out.is_empty() {
             String::new()
         } else {
-            format!(" (it waited for {})", said.join(", "))
+            format!(" ({})", out.join("; "))
         }
+    }
+
+    /// The render thread's blocking calls of part `p` (ns).
+    fn render_part(&self, p: engine_platform::stream_hitch::Part) -> u64 {
+        use engine_platform::stream_hitch::Count as S;
+        self.stream
+            .get(S::RenderSubmitNs as usize + p as usize)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// The queue thread's blocking calls of part `p` (ns).
+    fn queue_part(&self, p: engine_platform::stream_hitch::Part) -> u64 {
+        use engine_platform::stream_hitch::Count as S;
+        self.stream
+            .get(S::QueueSubmitNs as usize + p as usize)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// The render thread's own work on the game's commands (ns): its time on them less its blocking calls and its
+    /// present's waits, which are counted apart.
+    fn render_own(&self) -> u64 {
+        use engine_platform::stream_hitch::{Count as S, PARTS};
+        let calls: u64 = (0..PARTS)
+            .map(|i| {
+                self.stream
+                    .get(S::RenderSubmitNs as usize + i)
+                    .copied()
+                    .unwrap_or(0)
+            })
+            .sum();
+        self.s(S::RenderBusyNs)
+            .saturating_sub(calls + self.s(S::RenderSyncNs) + self.s(S::AcquireNs))
+    }
+
+    /// The two threads' longest blocking calls of `at_least` ns or more, in words.
+    fn longest_calls_words(&self, at_least: u64) -> String {
+        let said: Vec<String> = self
+            .longest_calls
+            .iter()
+            .zip(["on the render thread", "on the queue thread"])
+            .filter_map(|(c, on)| {
+                c.filter(|&(_, ns)| ns >= at_least)
+                    .map(|(call, ns)| format!("{} {on} {:.1} ms", call.name(), ms(ns)))
+            })
+            .collect();
+        said.join(", ")
+    }
+
+    /// The render and queue threads' frame in the work list (main waited 1 ms or more for the render thread): the
+    /// render thread's time on the game's commands split into its own work and its blocking calls, its idle work and
+    /// its waits for the drawing side; the queue thread's time on its jobs split the same way; the longest calls.
+    fn render_frame_words(&self) -> Option<String> {
+        use engine_platform::stream_hitch::{Count as S, Part, PARTS, PART_NAMES};
+        if self.render_wait() < 1_000_000 {
+            return None;
+        }
+        let parts = |of: &dyn Fn(Part) -> u64, first: Option<(u64, &str)>| -> String {
+            let all = [
+                Part::Submit,
+                Part::Upload,
+                Part::Create,
+                Part::Poll,
+                Part::GpuWait,
+                Part::ThreadWait,
+                Part::Finish,
+            ];
+            debug_assert_eq!(all.len(), PARTS);
+            let said: Vec<String> = first
+                .into_iter()
+                .chain(all.iter().map(|&p| (of(p), PART_NAMES[p as usize])))
+                .filter(|(ns, _)| *ns >= TENTH_MS)
+                .map(|(ns, w)| format!("{w} {:.1}", ms(ns)))
+                .collect();
+            if said.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", said.join(", "))
+            }
+        };
+        let mut l = format!(
+            "the render thread on the game's commands {:.1} ms{}",
+            ms(self.s(S::RenderBusyNs)),
+            parts(
+                &|p| self.render_part(p),
+                Some((self.render_own(), "its own work"))
+            )
+        );
+        for (c, w) in [
+            (S::RenderIdleNs, "idle work"),
+            (S::SlotWaitNs, "waiting for the drawing side"),
+        ] {
+            if self.s(c) >= TENTH_MS {
+                l += &format!(", {w} {:.1} ms", ms(self.s(c)));
+            }
+        }
+        if self.s(S::QueueBusyNs) >= TENTH_MS {
+            l += &format!(
+                ", the queue thread on its jobs {:.1} ms{}",
+                ms(self.s(S::QueueBusyNs)),
+                parts(&|p| self.queue_part(p), None)
+            );
+        }
+        let longest = self.longest_calls_words(TENTH_MS);
+        if !longest.is_empty() {
+            l += &format!(", the longest call {longest}");
+        }
+        Some(l)
     }
 
     /// The plain-word guess of the frame's main cause, by simple rules over its counts.
@@ -721,13 +863,21 @@ impl Frame {
                 ),
             ));
         }
-        let made = self.s(S::PipelineNs) + self.s(S::ModuleNs);
+        let made = self.s(S::PipelineNs) + self.s(S::ModuleNs) + self.s(S::ShadowPipelineNs);
         if made > 0 {
             // Made on the render thread or a helper: main feels it through its wait for the render thread.
+            let casters = if self.s(S::ShadowPipelines) > 0 {
+                format!(
+                    ", {} sun-shadow caster pipelines",
+                    self.s(S::ShadowPipelines)
+                )
+            } else {
+                String::new()
+            };
             said.push((
                 ms(made).min(ms(render).max(ms(made) / 2.0)),
                 format!(
-                    "made {} pipelines and {} shader modules ({:.0} ms)",
+                    "made {} pipelines{casters} and {} shader modules ({:.0} ms)",
                     self.s(S::Pipelines),
                     self.s(S::Modules),
                     ms(made)
@@ -1043,6 +1193,9 @@ impl Frame {
                 ms(self.s(S::SwapNs))
             ),
         );
+        if let Some(w) = self.render_frame_words() {
+            put(1, w);
+        }
         put(
             self.s(S::ReplyWaitNs) / TENTH_MS,
             format!(
@@ -1072,6 +1225,14 @@ impl Frame {
                 "{} shader modules made ({:.1} ms)",
                 self.s(S::Modules),
                 ms(self.s(S::ModuleNs))
+            ),
+        );
+        put(
+            self.s(S::ShadowPipelines),
+            format!(
+                "{} sun-shadow caster pipelines made ({:.1} ms)",
+                self.s(S::ShadowPipelines),
+                ms(self.s(S::ShadowPipelineNs))
             ),
         );
         put(
@@ -1317,12 +1478,12 @@ impl Frame {
     }
 }
 
-/// Where the log's lines leave main: main formats a line and hands it over ([`Lines::send`], a channel push that
-/// never waits); a thread of the log's own keeps it for the F12 report and then writes it. The write can block for as
-/// long as the file, pipe or console behind the standard error stream makes it wait (a pipe whose reader a busy
-/// machine starves, a disk flushing other writes): in the lead's route run with mods on 2026-11-23, while the
-/// Vulkan driver compiled a cold pipeline cache, main spent 360 ms writing one hitch line, a stutter of the log's own
-/// making. Every other input of the line is a counter or a record only main and the counting touch.
+/// Where the log's lines leave main: main formats a line, keeps the F12 report's copy of it and hands it over
+/// ([`Lines::send`], a channel push that never waits); a thread of the log's own writes it. The write can block for as
+/// long as the file, pipe or console behind the stream makes it wait (a pipe whose reader a busy machine starves, a
+/// disk flushing other writes): in the lead's route run with mods on 2026-11-23, while the Vulkan driver compiled a
+/// cold pipeline cache, main spent 360 ms writing one hitch line, a stutter of the log's own making. Every other input
+/// of the line is a counter or a record only main and the counting touch.
 pub struct Lines {
     /// The writer thread's channel (none when the thread could not be started: main writes, as before).
     tx: Option<Sender<String>>,
@@ -1330,13 +1491,15 @@ pub struct Lines {
     sent: AtomicU64,
     /// Lines written, and the condition variable [`Lines::flush`] waits on.
     written: Arc<(Mutex<u64>, Condvar)>,
-    /// What a line goes through (keeping it, writing it).
-    out: fn(&mut dyn Write, String),
+    /// What keeps a line on main before the hand-over (the F12 report's copy), so a report built after
+    /// [`Lines::send`] has it whatever the writer thread is doing.
+    keep: fn(String),
 }
 
 impl Lines {
-    /// A writer thread over `sink`: each line goes through `out`, in the order sent.
-    pub fn new(mut sink: Box<dyn Write + Send>, out: fn(&mut dyn Write, String)) -> Lines {
+    /// A writer thread over `sink`: each line written whole ([`write_line`]), in the order sent; `keep` takes each
+    /// line on the caller's thread first.
+    pub fn new(mut sink: Box<dyn Write + Send>, keep: fn(String)) -> Lines {
         let written = Arc::new((Mutex::new(0u64), Condvar::new()));
         let (tx, rx) = std::sync::mpsc::channel::<String>();
         let done = written.clone();
@@ -1344,7 +1507,7 @@ impl Lines {
             .name("hitch log".into())
             .spawn(move || {
                 for line in rx {
-                    out(&mut *sink, line);
+                    write_line(&mut *sink, line);
                     count_written(&done);
                 }
             });
@@ -1352,12 +1515,13 @@ impl Lines {
             tx: thread.is_ok().then_some(tx),
             sent: AtomicU64::new(0),
             written,
-            out,
+            keep,
         }
     }
 
-    /// Hands `line` to the writer thread; never waits for its write.
+    /// Keeps `line` (on this thread) and hands it to the writer thread; never waits for its write.
     pub fn send(&self, line: String) {
+        (self.keep)(line.clone());
         self.sent.fetch_add(1, SeqCst);
         let line = match &self.tx {
             Some(tx) => match tx.send(line) {
@@ -1367,7 +1531,7 @@ impl Lines {
             None => line,
         };
         // No writer thread: written here, as before.
-        (self.out)(&mut std::io::stderr(), line);
+        write_line(&mut std::io::stderr(), line);
         count_written(&self.written);
     }
 
@@ -1398,27 +1562,100 @@ fn count_written(written: &(Mutex<u64>, Condvar)) {
     wake.notify_all();
 }
 
-/// A line of the run's log: kept for the F12 report's `hitches.txt` first (so a write that blocks does not keep it
-/// from the report), then written to the standard error stream.
-fn keep_and_write(sink: &mut dyn Write, line: String) {
-    engine_platform::d3d9real::note_report_hitch(line.clone());
-    let _ = writeln!(sink, "{line}");
+/// A line written with one call, its text and its newline together, so another thread's write to the same stream (the
+/// viewer's 5-second summary, a panic's message) cannot land between them.
+fn write_line(sink: &mut dyn Write, line: String) {
+    let mut line = line;
+    line.push('\n');
+    let _ = sink.write_all(line.as_bytes());
+}
+
+/// The standard error stream as the run's line writer writes it ([`lines`]): each line in one `write_all` under the
+/// stream's lock. (Tests can hold its writes: [`tests::hold_point`].)
+struct ErrStream;
+
+impl Write for ErrStream {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.write_all(bytes).map(|()| bytes.len())
+    }
+
+    fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        #[cfg(test)]
+        tests::hold_point();
+        std::io::stderr().write_all(bytes)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::stderr().flush()
+    }
+}
+
+/// The standard output stream for [`print_line`].
+struct OutStream;
+
+impl Write for OutStream {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.write_all(bytes).map(|()| bytes.len())
+    }
+
+    fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        let mut out = std::io::stdout().lock();
+        out.write_all(bytes)?;
+        out.flush()
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::stdout().flush()
+    }
 }
 
 static LINES: OnceLock<Lines> = OnceLock::new();
+static OUT_LINES: OnceLock<Lines> = OnceLock::new();
 
-/// The run's line writer, started at the first line; its lines are written out before the process ends.
+/// How long a panic on the host's main thread waits for the lines on their way ([`lines`]' panic hook).
+const PANIC_FLUSH: Duration = Duration::from_millis(250);
+
+/// The run's line writer, started at the first line. Its lines are written out before the process ends: every end
+/// goes through the platform layer's `end_process`, which runs [`flush_lines`] first (`engine_platform::on_end`); and
+/// a panic on the host's main thread (the one that started it) waits a moment for them before its own message (a game
+/// thread's panic is the game's, caught and kept quiet on purpose: nothing is waited for there).
 fn lines() -> &'static Lines {
     LINES.get_or_init(|| {
-        engine_platform::on_exit(flush_lines);
-        Lines::new(Box::new(std::io::stderr()), keep_and_write)
+        engine_platform::on_end(flush_lines);
+        let host = std::thread::current().id();
+        let before = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if std::thread::current().id() == host {
+                for lines in [&LINES, &OUT_LINES] {
+                    if let Some(lines) = lines.get() {
+                        lines.flush(PANIC_FLUSH);
+                    }
+                }
+            }
+            before(info)
+        }));
+        Lines::new(
+            Box::new(ErrStream),
+            engine_platform::d3d9real::note_report_hitch,
+        )
     })
 }
 
-/// Waits (at most a second) until every hitch line handed over is written: before the process ends.
+/// A line for the standard output, written off main as the hitch lines are (the viewer's 5-second summary).
+pub fn print_line(line: String) {
+    // Started with the hitch lines' writer, whose end flush and panic hook cover both.
+    let _ = lines();
+    OUT_LINES
+        .get_or_init(|| Lines::new(Box::new(OutStream), |_| {}))
+        .send(line);
+}
+
+/// Waits (at most a second each) until every line handed over is written: before the process ends.
 pub fn flush_lines() {
-    if let Some(lines) = LINES.get() {
-        lines.flush(Duration::from_secs(1));
+    for lines in [&LINES, &OUT_LINES] {
+        if let Some(lines) = lines.get() {
+            lines.flush(Duration::from_secs(1));
+        }
     }
 }
 
@@ -1446,6 +1683,8 @@ impl HitchLog {
         let off = std::env::var("NV_HITCH_LOG").is_ok_and(|v| v.trim() == "0");
         engine_core::hitch::set_on(!off);
         engine_core::stage_time::set_points(!off);
+        // The render and queue threads' blocking calls are timed with the log on.
+        engine_platform::stream_hitch::set_on(!off);
         if off {
             engine_platform::d3d9real::set_report_hitch_totals(None);
             return None;
@@ -1502,6 +1741,7 @@ impl HitchLog {
             0
         };
         let longest_task = engine_core::hitch::take_longest_task();
+        let longest_calls = engine_platform::stream_hitch::take_longest();
         // Taken every frame (its drains are the frame's), after `take_stages` passed the host's mark.
         let tail = engine_core::stage_time::take_tail();
         // The host's time that ended at this frame's `OnIdle`, taken every frame too.
@@ -1566,6 +1806,7 @@ impl HitchLog {
             section_holder,
             hibernating,
             longest_task,
+            longest_calls,
             tail,
             host_gap,
             left_out,
@@ -2136,6 +2377,93 @@ mod tests {
             f.line()
         );
 
+        // The maintainer's 181 ms wait in Present with the render thread's own waits near nothing: where its frame
+        // went (a poll held behind the queue thread's submit, in this made-up split) and the longest calls by name.
+        let mut f = frame();
+        f.ms = 194.1;
+        f.typical = 10.6;
+        f.stages = Some([2.0, 0.1, 2.5, 3.2, 0.6, 180.8, 3.3, 1.6, 0.0]);
+        {
+            use engine_platform::stream_hitch::{Call, Count as S};
+            f.stream[S::PresentWaitNs as usize] = 180_600_000;
+            f.stream[S::RenderBusyNs as usize] = 182_000_000;
+            f.stream[S::RenderPollNs as usize] = 150_000_000;
+            f.stream[S::RenderCreateNs as usize] = 40_000;
+            f.stream[S::QueueBusyNs as usize] = 152_000_000;
+            f.stream[S::QueueSubmitNs as usize] = 149_800_000;
+            f.stream[S::QueueUploadNs as usize] = 400_000;
+            f.longest_calls = [
+                Some((Call::Poll, 150_100_000)),
+                Some((Call::Submit, 149_800_000)),
+            ];
+        }
+        assert_eq!(
+            f.cause(),
+            "waited 181 ms for the render thread (busy with polls 150 ms, the game's commands 32 ms; the longest \
+             call: a poll on the render thread 150.1 ms, a submit on the queue thread 149.8 ms)"
+        );
+        assert!(
+            f.line().contains(
+                "the render thread on the game's commands 182.0 ms (its own work 32.0, polls 150.0), the queue \
+                 thread on its jobs 152.0 ms (submits 149.8, uploads 0.4), the longest call a poll on the render \
+                 thread 150.1 ms, a submit on the queue thread 149.8 ms"
+            ),
+            "{}",
+            f.line()
+        );
+        // Its present's waits are not its own work: counted apart, as before.
+        {
+            use engine_platform::stream_hitch::Count as S;
+            f.stream[S::AcquireNs as usize] = 20_000_000;
+            f.stream[S::RenderSyncNs as usize] = 2_000_000;
+        }
+        assert_eq!(f.render_own(), 9_960_000);
+        assert!(
+            f.cause().starts_with(
+                "waited 181 ms for the render thread (it waited for the window's next frame 20 ms, the queue \
+                 thread's last frame 2 ms; busy with polls 150 ms, the game's commands 10 ms;"
+            ),
+            "{}",
+            f.cause()
+        );
+        // The sun shadows' caster pipelines made on the render thread: counted and named apart from the game's.
+        {
+            use engine_platform::stream_hitch::{Call, Count as S};
+            f.stream[S::ShadowPipelines as usize] = 24;
+            f.stream[S::ShadowPipelineNs as usize] = 160_000_000;
+            f.longest_calls[0] = Some((Call::ShadowPipeline, 31_000_000));
+        }
+        assert!(
+            f.cause().contains(
+                "made 0 pipelines, 24 sun-shadow caster pipelines and 0 shader modules (160 ms)"
+            ),
+            "{}",
+            f.cause()
+        );
+        assert!(
+            f.line()
+                .contains("24 sun-shadow caster pipelines made (160.0 ms)"),
+            "{}",
+            f.line()
+        );
+        assert!(
+            f.line().contains(
+                "the longest call a sun-shadow caster pipeline made on the render thread 31.0 ms"
+            ),
+            "{}",
+            f.line()
+        );
+        // Main hardly waited for the render thread: its frame is not written out.
+        let mut f = frame();
+        {
+            use engine_platform::stream_hitch::Count as S;
+            f.stream[S::PresentWaitNs as usize] = 900_000;
+            f.stream[S::RenderBusyNs as usize] = 8_000_000;
+            f.stream[S::QueueBusyNs as usize] = 3_000_000;
+        }
+        assert!(f.render_frame_words().is_none());
+        assert!(!f.line().contains("on the game's commands"), "{}", f.line());
+
         // The pause menu's open: the heap's measured time instead of the estimate, and the tiles made.
         let mut f = frame();
         f.stages = Some([1.8, 0.1, 2.2, 3.2, 0.5, 0.2, 1.8, 104.3, 0.0]);
@@ -2432,10 +2760,10 @@ mod tests {
     }
 
     /// A stream whose writes wait until the test opens it (a pipe whose reader a busy machine starves, a console or
-    /// file that holds the write): what it took, in order.
+    /// file that holds the write): each write call it took, in order.
     struct HeldStream {
         open: Arc<(Mutex<bool>, Condvar)>,
-        took: Arc<Mutex<String>>,
+        took: Arc<Mutex<Vec<String>>>,
     }
 
     impl Write for HeldStream {
@@ -2448,7 +2776,7 @@ mod tests {
             self.took
                 .lock()
                 .unwrap()
-                .push_str(&String::from_utf8_lossy(bytes));
+                .push(String::from_utf8_lossy(bytes).into_owned());
             Ok(bytes.len())
         }
 
@@ -2457,23 +2785,27 @@ mod tests {
         }
     }
 
-    fn write_only(sink: &mut dyn Write, line: String) {
-        let _ = writeln!(sink, "{line}");
+    /// The lines [`keep_for_test`] kept.
+    static KEPT: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    fn keep_for_test(line: String) {
+        KEPT.lock().unwrap().push(line);
     }
 
     /// A write that blocks (one hitch line's write took 360 ms in a route run) does not hold up main: each line is
-    /// handed over at once while the stream holds every write, nothing is written meanwhile, and once the stream takes
-    /// writes again the lines are written whole and in order, and a flush waits for them.
+    /// kept (the report's copy) and handed over at once while the stream holds every write, nothing is written
+    /// meanwhile, and once the stream takes writes again each line is written in one call, text and newline together,
+    /// in order, and a flush waits for them.
     #[test]
     fn a_write_that_blocks_does_not_hold_up_main() {
         let open = Arc::new((Mutex::new(false), Condvar::new()));
-        let took = Arc::new(Mutex::new(String::new()));
+        let took = Arc::new(Mutex::new(Vec::new()));
         let lines = Lines::new(
             Box::new(HeldStream {
                 open: open.clone(),
                 took: took.clone(),
             }),
-            write_only,
+            keep_for_test,
         );
         // The stream opens by itself after 5 s, so a send that waited for the write would show as a slow send
         // (not a test that never ends).
@@ -2495,16 +2827,67 @@ mod tests {
             sent_in < Duration::from_secs(2),
             "the sends waited for the write: {sent_in:?}"
         );
+        assert_eq!(
+            *KEPT.lock().unwrap(),
+            ["hitch 0", "hitch 1", "hitch 2"],
+            "kept on the sending thread before any write"
+        );
         assert!(
             !lines.flush(Duration::from_millis(100)),
             "nothing written while the stream holds its writes"
         );
-        assert_eq!(*took.lock().unwrap(), "");
+        assert!(took.lock().unwrap().is_empty());
         *open.0.lock().unwrap() = true;
         open.1.notify_all();
         let _ = done.send(());
         assert!(lines.flush(Duration::from_secs(30)), "all written");
-        assert_eq!(*took.lock().unwrap(), "hitch 0\nhitch 1\nhitch 2\n");
+        assert_eq!(
+            *took.lock().unwrap(),
+            ["hitch 0\n", "hitch 1\n", "hitch 2\n"],
+            "one write a line"
+        );
+        opener.join().unwrap();
+    }
+
+    /// The run's writer's stream held ([`hold_point`]; the global writer's test sets it).
+    static HOLD: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+
+    /// [`ErrStream`]'s writes wait here while [`HOLD`] is set.
+    pub(super) fn hold_point() {
+        let mut held = HOLD.0.lock().unwrap_or_else(PoisonError::into_inner);
+        while *held {
+            held = HOLD.1.wait(held).unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    /// The run's own writer ([`lines`]): a line sent is in the F12 report's hitch lines at once, while its write to the
+    /// standard error stream is still held; and the platform layer's end of the process (its end hooks, which
+    /// `end_process` runs first) waits for the held write before it goes on.
+    #[test]
+    fn the_run_s_lines_are_in_the_report_at_once_and_written_at_the_end() {
+        engine_platform::d3d9real::set_report_hitch_totals(Some((0, 0, 0)));
+        let line = format!("hitch log test line {}", std::process::id());
+        *HOLD.0.lock().unwrap() = true;
+        lines().send(line.clone());
+        assert!(
+            engine_platform::d3d9real::report_hitches_for_test().contains(&line),
+            "in the report while its write is held"
+        );
+        let writer = LINES.get().expect("the run's writer");
+        assert!(!writer.flush(Duration::ZERO), "its write is held");
+        // The stream lets the write go 300 ms from now; the end hooks wait for it.
+        let opener = std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(300));
+            *HOLD.0.lock().unwrap() = false;
+            HOLD.1.notify_all();
+        });
+        let t = Instant::now();
+        engine_platform::run_end_hooks();
+        assert!(
+            writer.flush(Duration::ZERO),
+            "written when the end hooks return (after {:?})",
+            t.elapsed()
+        );
         opener.join().unwrap();
     }
 }

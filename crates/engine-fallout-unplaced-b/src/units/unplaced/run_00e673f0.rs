@@ -2298,6 +2298,64 @@ pub mod read_first {
 
     thread_local! {
         static AHEAD: RefCell<Option<Ahead>> = const { RefCell::new(None) };
+        /// The file object handed to this thread's running `00a5fe30` (0 outside one): the
+        /// texture that holds it is the one that call is making, which no other thread has yet.
+        static OWN_FILE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    /// The file object of the texture this thread's `00a5fe30` is making, 0 outside one.
+    pub fn own_file() -> u32 {
+        OWN_FILE.with(std::cell::Cell::get)
+    }
+
+    /// Tests: [`own_file`] answers `file` until the guard drops, then the outer one again.
+    #[cfg(test)]
+    pub(crate) struct OwnFileForTests {
+        _outer: OwnFile,
+    }
+
+    #[cfg(test)]
+    impl OwnFileForTests {
+        pub(crate) fn set(file: u32) -> OwnFileForTests {
+            OwnFileForTests {
+                _outer: OwnFile(OWN_FILE.with(|f| f.replace(file))),
+            }
+        }
+    }
+
+    /// Puts back the outer call's file object when a `00a5fe30` ends, however it ends.
+    struct OwnFile(u32);
+
+    impl Drop for OwnFile {
+        fn drop(&mut self) {
+            OWN_FILE.with(|f| f.set(self.0));
+        }
+    }
+
+    /// `00a5fe30` (`NiSourceTexture::Create` with a file object: the engine map names it
+    /// `NiSourceCubeMap::Create`) with the row: the exe's body
+    /// (`engine_gamebryo::units::nimain::nisourcecubemap::ni_source_cube_map_create`), with
+    /// [`own_file`] answering its file object while it runs. The body stores that file object in
+    /// the new texture (+0x44) and, when textures load at once (`011a9594`), makes the texture's
+    /// renderer data (its virtual +0xac, which reaches `00e6dc40`) before it returns the
+    /// texture: so that making is the only one that can use the file, and
+    /// [`fn_00e6dc40_reading_first`] may read it before the renderer's lock as it reads a file it
+    /// opens by name. `QueuedTexture::Run` (`0043c150`) makes its textures so.
+    pub fn fn_00a5fe30_reading_first(
+        e: &mut Engine,
+        file: u32,
+        name: Ptr,
+        preferences: Ptr,
+        flag: u8,
+    ) -> Ptr {
+        let _outer = OwnFile(OWN_FILE.with(|f| f.replace(file)));
+        engine_gamebryo::units::nimain::nisourcecubemap::ni_source_cube_map_create(
+            e,
+            file,
+            name,
+            preferences,
+            flag,
+        )
     }
 
     /// The read kept for (`name`, `file`) on this thread, taken.
@@ -2395,33 +2453,32 @@ pub mod read_first {
 
     /// `00e6dc40` with the row: the file read first ([`read_file`]) when the texture has no
     /// renderer data yet, its making would read it, the texture holds no file object of its own
-    /// (a file object stays the making's alone: under the lock, as in the exe) and this thread
-    /// keeps no read already (a making nested in another); then the exe's body: under the lock
-    /// at +0x180, the renderer data made (`00e68ef0`) unless the texture has some. A read the
-    /// making did not take (another thread made the data meanwhile, or the device or the hint
-    /// changed before the lock) has its buffer freed (`00aa10f0`); its file, opened by name for
-    /// this call alone, is already deleted.
+    /// or holds the one this thread's running `00a5fe30` is making it with ([`own_file`]; any
+    /// other file object stays the making's alone: under the lock, as in the exe) and this
+    /// thread keeps no read already (a making nested in another); then the exe's body: under the
+    /// lock at +0x180, the renderer data made (`00e68ef0`) unless the texture has some. A read
+    /// the making did not take (another thread made the data meanwhile, or the device or the
+    /// hint changed before the lock) has its buffer freed (`00aa10f0`); its file, opened by name
+    /// for this call alone or the texture's own, is already deleted, so a texture's own file
+    /// object is cleared from it (+0x44): what reads the texture later then opens it by name.
     pub fn fn_00e6dc40_reading_first(e: &mut Engine, this: Ptr, texture: Ptr) -> bool {
         let renderer = this.addr();
         let texture = texture.addr();
         let mut kept = None;
+        let file = e.mem.u32(texture.wrapping_add(SOURCE_FILE));
         if e.mem.u32(texture.wrapping_add(TEXTURE_RENDERER_DATA)) == 0
-            && e.mem.u32(texture.wrapping_add(SOURCE_FILE)) == 0
+            && (file == 0 || file == own_file())
             && AHEAD.with(|a| a.borrow().is_none())
             && reaches_the_read(e, texture, renderer)
         {
             let name = e.mem.u32(texture + SOURCE_PLATFORM_FILENAME);
-            if let Some(read) = read_file(e, name, 0) {
+            if let Some(read) = read_file(e, name, file) {
                 // The D3DX translation of the file worked out now too, before the lock (`engine_core::texture_ahead`).
                 if let Read::Bytes { buffer, size } = read {
                     let device = e.mem.u32(renderer + RENDERER_DEVICE);
                     engine_core::texture_ahead::prepare(e, buffer, size, device);
                 }
-                keep(Some(Ahead {
-                    name,
-                    file: 0,
-                    read,
-                }));
+                keep(Some(Ahead { name, file, read }));
                 kept = Some(Kept);
             }
         }
@@ -2433,12 +2490,14 @@ pub mod read_first {
         }
         e.call(LEAVE_CRITICAL_SECTION, &args![lock]);
         if kept.is_some() {
-            if let Some(Ahead {
-                read: Read::Bytes { buffer, .. },
-                ..
-            }) = AHEAD.with(|a| a.borrow_mut().take())
-            {
-                e.call(FREE, &args![buffer]);
+            if let Some(ahead) = AHEAD.with(|a| a.borrow_mut().take()) {
+                if let Read::Bytes { buffer, .. } = ahead.read {
+                    e.call(FREE, &args![buffer]);
+                }
+                if ahead.file != 0 {
+                    // The texture's own file object, deleted by the read: nothing may use it.
+                    e.mem.set_u32(texture.wrapping_add(SOURCE_FILE), 0);
+                }
             }
         }
         if kept.is_some() {
@@ -3609,6 +3668,122 @@ mod tests {
         e.call_log = Some(vec![]);
         read_first::fn_00e6dc40_reading_first(&mut e, Ptr::new(renderer), Ptr::new(texture));
         assert!(calls_to(&e, FILE_GET_FILE).is_empty());
+    }
+
+    /// With the row, a texture holding the file object this thread's `00a5fe30` is making it
+    /// with reads that file before the lock (no name split, no open: the file is the texture's)
+    /// and makes the same data with the same calls and words as the exe, which reads it under the
+    /// lock; the file is deleted once, by the read, and the texture keeps the word as the exe's
+    /// making leaves it.
+    #[test]
+    fn reading_first_reads_the_making_s_own_file_before_the_lock() {
+        let mut runs = Vec::new();
+        for row in [false, true] {
+            let mut e = Engine::new();
+            let (texture, renderer, file, object) = read_first_setup(&mut e);
+            e.mem.set_u32(texture + SOURCE_FILE, file);
+            e.call_log = Some(vec![]);
+            let made = if row {
+                let _own = read_first::OwnFileForTests::set(file);
+                read_first::fn_00e6dc40_reading_first(&mut e, Ptr::new(renderer), Ptr::new(texture))
+            } else {
+                engine_gamebryo::units::nixenonrenderer::nixenonrenderer::fn_00e6dc40(
+                    &mut e,
+                    Ptr::new(renderer),
+                    Ptr::new(texture),
+                )
+            };
+            assert!(made);
+            assert_eq!(e.mem.u32(texture + TEXTURE_RENDERER_DATA), object);
+            assert_eq!(e.mem.u32(texture + SOURCE_FILE), file);
+            let (enter, leave) = (position(&e, ENTER_SECTION), position(&e, LEAVE_SECTION));
+            let read = position(&e, FILE_READ);
+            if row {
+                assert!(read < enter, "the own file read before the lock");
+            } else {
+                assert!(enter < read && read < leave);
+            }
+            assert!(calls_to(&e, FILE_GET_FILE).is_empty());
+            assert_eq!(calls_to(&e, FILE_DELETE), vec![vec![file, 1]]);
+            assert_eq!(calls_to(&e, INIT_FROM_D3D), vec![vec![object, 0x7e70]]);
+            assert_eq!(read_first::take(NAME, file), None);
+            runs.push((split(&e, false), split(&e, true)));
+        }
+        assert_eq!(runs[0], runs[1]);
+        assert_eq!(read_first::own_file(), 0);
+    }
+
+    /// With the row, a read of the making's own file that the making did not take (here another
+    /// thread's data, seen under the lock) frees its bytes and clears the deleted file object from
+    /// the texture.
+    #[test]
+    fn reading_first_clears_an_own_file_the_making_did_not_take() {
+        let mut e = Engine::new();
+        let (texture, renderer, file, _) = read_first_setup(&mut e);
+        e.mem.set_u32(texture + SOURCE_FILE, file);
+        e.register_double(ENTER_SECTION, move |e, _| {
+            e.mem.set_u32(texture + TEXTURE_RENDERER_DATA, 0x5ad0);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        {
+            let _own = read_first::OwnFileForTests::set(file);
+            assert!(read_first::fn_00e6dc40_reading_first(
+                &mut e,
+                Ptr::new(renderer),
+                Ptr::new(texture)
+            ));
+        }
+        let buffer = calls_to(&e, FILE_READ)[0][1];
+        assert_eq!(calls_to(&e, FREE), vec![vec![buffer]]);
+        assert_eq!(calls_to(&e, FILE_DELETE), vec![vec![file, 1]]);
+        assert_eq!(e.mem.u32(texture + SOURCE_FILE), 0);
+        assert_eq!(read_first::take(NAME, file), None);
+    }
+
+    /// `00a5fe30` with the row answers the made file object to [`read_first::own_file`] while its
+    /// body runs (seen from the texture's renderer-data call, slot +0xac) and puts back the outer
+    /// one after; the texture is made as the body makes it.
+    #[test]
+    fn the_texture_maker_names_its_file_while_it_runs() {
+        const ALLOCATE_TEXTURE: u32 = 0x00aa_13e0;
+        const TEXTURE_CONSTRUCTOR: u32 = 0x00a5_fc10;
+        const LOAD_AT_ONCE: u32 = 0x011a_9594;
+        const VTABLE: u32 = 0x0200_0000;
+        const MAKE_RENDERER_DATA: u32 = 0x0200_0800;
+        const SEEN: u32 = 0x0200_0900;
+        let mut e = Engine::new();
+        e.map(VTABLE, 0x1000);
+        e.map(0x011a_9000, 0x1000);
+        e.mem.set_u8(LOAD_AT_ONCE, 1);
+        e.mem.set_u32(VTABLE + 0xac, MAKE_RENDERER_DATA);
+        e.register(ALLOCATE_TEXTURE, |e, _| word(e.mem.alloc(0x48)));
+        e.register(TEXTURE_CONSTRUCTOR, |e, a| {
+            e.mem.set_u32(a[0], VTABLE);
+            word(a[0])
+        });
+        e.register(MAKE_RENDERER_DATA, |e, a| {
+            e.mem.set_u32(SEEN, read_first::own_file());
+            e.mem.set_u32(SEEN + 4, e.mem.u32(a[0] + SOURCE_FILE));
+            word(1)
+        });
+        let preferences = e.mem.alloc(0xc);
+        let made = {
+            let _outer = read_first::OwnFileForTests::set(0x0f0f);
+            let made = read_first::fn_00a5fe30_reading_first(
+                &mut e,
+                0x7171,
+                Ptr::NULL,
+                Ptr::new(preferences),
+                1,
+            );
+            assert_eq!(read_first::own_file(), 0x0f0f);
+            made
+        };
+        assert_eq!(read_first::own_file(), 0);
+        assert_eq!(e.mem.u32(SEEN), 0x7171);
+        assert_eq!(e.mem.u32(SEEN + 4), 0x7171);
+        assert_eq!(e.mem.u32(made.addr() + SOURCE_FILE), 0x7171);
     }
 
     /// With the row, a texture with its own file object is made as the exe makes it: its file

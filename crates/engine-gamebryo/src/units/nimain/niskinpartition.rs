@@ -864,7 +864,7 @@ pub fn ni_t_pointer_map_delete_item(e: &mut Engine, _unused_0: Ptr, item: Ptr) {
     e.mem.set_u32(ALLOCATOR_LOCK_COUNT, count);
     e.mem.set_u32(ALLOCATOR_FREE_LIST, item);
     if count == 0 {
-        e.mem.set_u32(ALLOCATOR_LOCK, 0);
+        e.mem.set_u32_release(ALLOCATOR_LOCK, 0);
     }
 }
 
