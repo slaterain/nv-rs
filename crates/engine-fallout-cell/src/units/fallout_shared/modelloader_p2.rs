@@ -2618,6 +2618,9 @@ const QUEUE_REFERENCE_SOURCE_LINE: u32 = 0xc4e;
 const QUEUE_REFERENCE_PLAYER_SOURCE_LINE: u32 = 0xc53;
 const QUEUE_REFERENCE_CREATURE_SOURCE_LINE: u32 = 0xc6b;
 const QUEUE_REFERENCE_ACTOR_SOURCE_LINE: u32 = 0xc72;
+/// The cell's two counters `QueueReference` adds to (`00444cc0`, `00444ce0`, `thiscall(cell)`).
+const CELL_COUNT_QUEUED: u32 = 0x0044_4cc0;
+const CELL_COUNT_CRITICAL: u32 = 0x0044_4ce0;
 /// The visual distance `00444dc0` passes for a reference that `00564f00`
 /// accepts (a float at `01016970`), and the size of the path buffer.
 const VISUAL_DISTANCE_LIMIT: u32 = 0x0101_6970;
@@ -3614,10 +3617,11 @@ pub fn model_loader_queue_reference(
                 let cell = e.call(REFERENCE_CELL, &args![reference]).u32();
                 if cell != 0 {
                     let cell = e.call(REFERENCE_CELL, &args![reference]).u32();
-                    fn_00444cc0(e, Ptr::new(cell));
+                    // By address, as the exe calls them (typed in `cell_refs`).
+                    e.call(CELL_COUNT_QUEUED, &args![cell]);
                     if e.call(REFERENCE_IS_3D_CRITICAL, &args![reference]).bool() {
                         let cell = e.call(REFERENCE_CELL, &args![reference]).u32();
-                        fn_00444ce0(e, Ptr::new(cell));
+                        e.call(CELL_COUNT_CRITICAL, &args![cell]);
                     }
                 }
             }
