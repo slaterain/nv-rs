@@ -3151,6 +3151,25 @@ fn get_render_target_data(e: &mut Engine, this: Ptr, source: u32, destination: u
     if !ok {
         return D3DERR_INVALIDCALL;
     }
+    // Port-added (`NV_SAVE_PICTURE_LATER`, `engine_core::save_picture`): a save's picture's copy, its
+    // rows taken by the save after its body, when they are packed (the picture converts them as one
+    // run of pixels) and the destination is the game's own memory.
+    if engine_core::save_picture::allowed()
+        && to.pixels.is_none()
+        && to.bits != 0
+        && to.pitch == to.desc[6].wrapping_mul(4)
+        && super::d3d9real::get_render_target_data_later(
+            e,
+            this.addr(),
+            source,
+            destination,
+            to.pitch,
+        )
+    {
+        engine_core::save_picture::install(super::d3d9real::take_rows_later);
+        engine_core::save_picture::deferred(to.pitch);
+        return D3D_OK;
+    }
     if super::d3d9real::get_render_target_data(
         e,
         this.addr(),
@@ -5365,6 +5384,66 @@ pub(crate) mod tests {
             e.vcall(device, 0x80, &[system, system]).u32(),
             D3DERR_INVALIDCALL
         );
+    }
+
+    /// `NV_SAVE_PICTURE_LATER`: a save's picture's copy (`GetRenderTargetData`, +0x80) asked for later
+    /// leaves the destination's memory as it is; its rows come at the take, once. Not allowed, the copy
+    /// reads back at once as before.
+    #[test]
+    fn a_save_pictures_copy_asked_for_later_gives_its_rows_at_the_take() {
+        use d3d9_stream::{Backend, Cmd, Data, Reply, Rows};
+        use engine_core::save_picture as later;
+        // A backend whose copies answer two rows of 7s.
+        struct Sevens;
+        impl Backend for Sevens {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                match cmd {
+                    Cmd::GetRenderTargetData { pitch, .. } => Reply::Rows(Some(Rows {
+                        row: pitch,
+                        bytes: vec![7; 2 * pitch as usize],
+                    })),
+                    _ => Reply::None,
+                }
+            }
+        }
+        let (mut e, device) = extra_device();
+        let out = e.mem.alloc(4);
+        let (target, system) = {
+            let mut make = |slot: u32, args: &[u32]| {
+                assert_eq!(e.vcall(device, slot, args).u32(), D3D_OK, "{slot:#x}");
+                e.mem.u32(out)
+            };
+            (
+                make(0x70, &[4, 2, 0x16, 0, 0, 0, out, 0]),
+                make(0x90, &[4, 2, 0x16, 2, out, 0]),
+            )
+        };
+        super::super::d3d9real::test_stream(
+            &mut e,
+            device,
+            d3d9_stream::Stream::direct(Box::new(Sevens)),
+        );
+        let locked = e.mem.alloc(8);
+        assert_eq!(e.vcall(system, 4 * 13, &[locked, 0, 0]).u32(), D3D_OK);
+        let (pitch, bits) = (e.mem.u32(locked), e.mem.u32(locked + 4));
+        assert_eq!(e.vcall(system, 4 * 14, &[]).u32(), D3D_OK);
+        assert_eq!(pitch, 16);
+        later::on_for_tests(Some(true));
+        later::begin();
+        later::allow(true);
+        assert_eq!(e.vcall(device, 0x80, &[target, system]).u32(), D3D_OK);
+        assert!(later::is_deferred());
+        assert_eq!(e.mem.bytes(bits, 32), vec![0; 32], "the memory as it was");
+        assert_eq!(
+            super::super::d3d9real::take_rows_later(&mut e),
+            Some((16, vec![7; 32]))
+        );
+        assert_eq!(super::super::d3d9real::take_rows_later(&mut e), None);
+        // Not a save's picture: read back at once.
+        assert!(!later::end());
+        assert_eq!(e.vcall(device, 0x80, &[target, system]).u32(), D3D_OK);
+        assert_eq!(e.mem.bytes(bits, 32), vec![7; 32]);
+        later::on_for_tests(None);
     }
 
     /// `CreateQuery` (+0x1D8) and the event query's life as the retail runtime answered
