@@ -1364,13 +1364,18 @@ pub fn fn_0047ded0(e: &mut Engine, this: Ptr<TESActorBaseData>) -> u16 {
     let mut level = e.call(0x0047_d370, &args![this]).u16();
     if e.call(FLAG_WORD_HAS_BIT_80, &args![this]).bool() {
         let divisor: f64 = e.global(THOUSAND);
-        let scale = (level as f64 / divisor) as f32;
+        let scale = f32::from_bits(crate::x87::x87_store32(crate::x87::x87_div(
+            f64::from(level),
+            divisor,
+        )));
         let source = e.mem.u32(LEVEL_SOURCE_OBJECT);
         let form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, source));
         let component = if form != 0 { form + 0x30 } else { 0 };
         if component != 0 {
             let other = e.call(0x0047_d370, &args![component]).u16();
-            level = float_to_int_truncated(other as f64 * scale as f64) as u16;
+            // FMUL then FISTP with no store between: the product at the control word's precision.
+            level = float_to_int_truncated(crate::x87::x87_mul(f64::from(other), f64::from(scale)))
+                as u16;
         }
         if e.call(0x0047_d390, &args![this]).u16() != 0
             && level < e.call(0x0047_d390, &args![this]).u16()
@@ -1474,7 +1479,8 @@ pub fn tes_actor_base_data_get_karmic_title(e: &mut Engine, actor: Ptr) -> u32 {
 /// the lower one (`011c5160`), and marks the form changed (`2`). Unnamed in
 /// the map.
 pub fn fn_0047e1c0(e: &mut Engine, this: Ptr<TESActorBaseData>, karma: f32) {
-    e.set(this, TESActorBaseData::fKarma, karma);
+    // FLD/FSTP of the argument: a signalling NaN is stored quiet.
+    e.set(this, TESActorBaseData::fKarma, crate::x87::x87_quiet(karma));
     let upper = setting_float(e, KARMA_MAX_SETTING);
     let current = e.get(this, TESActorBaseData::fKarma);
     if upper < current {
@@ -3633,6 +3639,35 @@ mod tests {
         e.call(0x0047e1c0, &args![this, f32::NAN]);
         assert!(e.get(this, TESActorBaseData::fKarma).is_nan());
         assert_eq!(*seen.borrow(), vec![vec![0x48, 2]; 5]);
+    }
+
+    #[test]
+    fn set_karma_stores_a_signalling_nan_quiet() {
+        let mut e = engine();
+        e.mem.set_f32(KARMA_MAX_SETTING + 4, 1000.0);
+        e.mem.set_f32(KARMA_MIN_SETTING + 4, -1000.0);
+        let (this, _) = component_in_form(&mut e, 16);
+        e.call(0x0047e1c0, &args![this, 0x7f80_0001u32]);
+        assert_eq!(e.mem.u32(this.addr() + 0x14), 0x7fc0_0001);
+    }
+
+    #[test]
+    fn level_multiplier_product_rounds_to_the_threads_precision_before_the_chop() {
+        // 900 / 1000 is the float 0.89999997615814; times 10 it is 2^-22 below 9. The exe's FMUL
+        // feeds the FISTP directly: rounded to 24 bits on main it is 9.0, at 53 bits it chops to 8.
+        let saved = crate::x87::control_word();
+        let mut answers = Vec::new();
+        for word in [0x007fu16, 0x027f] {
+            let mut e = engine();
+            let (this, player) = level_fixture(&mut e);
+            e.set(this, TESActorBaseData::iActorBaseFlags, 0x80);
+            e.set(this, TESActorBaseData::sLevel, 900);
+            e.set(player, TESActorBaseData::sLevel, 10);
+            crate::x87::set_control_word(word);
+            answers.push(e.call(0x0047ded0, &args![this]).u16());
+            crate::x87::set_control_word(saved);
+        }
+        assert_eq!(answers, vec![9, 8]);
     }
 
     #[test]
