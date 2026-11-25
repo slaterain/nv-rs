@@ -1236,6 +1236,14 @@ impl Frame {
             ),
         );
         put(
+            self.s(S::ShadowPipelinesAhead),
+            format!(
+                "{} sun-shadow caster pipelines made on threads of their own ({:.1} ms)",
+                self.s(S::ShadowPipelinesAhead),
+                ms(self.s(S::ShadowPipelineAheadNs))
+            ),
+        );
+        put(
             g(Count::AllocsMain) + g(Count::FreesMain),
             format!(
                 "main's memory blocks {} allocated, {} freed",
@@ -2445,6 +2453,24 @@ mod tests {
                 .contains("24 sun-shadow caster pipelines made (160.0 ms)"),
             "{}",
             f.line()
+        );
+        // Those made on threads of their own while play goes on: named apart, no part of the wait.
+        {
+            use engine_platform::stream_hitch::Count as S;
+            f.stream[S::ShadowPipelinesAhead as usize] = 3;
+            f.stream[S::ShadowPipelineAheadNs as usize] = 21_000_000;
+        }
+        assert!(
+            f.line()
+                .contains("3 sun-shadow caster pipelines made on threads of their own (21.0 ms)"),
+            "{}",
+            f.line()
+        );
+        assert!(
+            f.cause()
+                .contains("24 sun-shadow caster pipelines and 0 shader modules (160 ms)"),
+            "{}",
+            f.cause()
         );
         assert!(
             f.line().contains(
