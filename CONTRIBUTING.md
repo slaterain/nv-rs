@@ -28,8 +28,8 @@ list of rules it must not break.
 3. **Speed and stutters.** Rewriting hot code as native Rust, proven to give the same results as
    the translation it replaces (see [Native code](#native-code)).
 4. **Linux and macOS.** Builds exist but have barely been played. Reports and fixes are welcome.
-5. **Mod and script-extender compatibility.** xNVSE, JIP LN NVSE, JohnnyGuitar NVSE and UI
-   Organizer are built in. Fixes to them, and ports of other open-source plugins whose licence
+5. **Mod and script-extender compatibility.** xNVSE, JIP LN NVSE and UI Organizer are built in,
+   and JohnnyGuitar NVSE's editor ids. Fixes to them, and ports of other open-source plugins whose licence
    allows it, are welcome (see [What can and can't be accepted](#what-can-and-cant-be-accepted)).
 
 ## Build and run
@@ -43,15 +43,24 @@ cargo build --profile play -p nv-viewer      # quick play build: target/play/nv-
 cargo build --release -p nv-viewer           # the build the packages use
 ```
 
-Run it with the game's `Data` folder (or the installation folder above it):
+Run it with the game's `Data` folder (or the installation folder above it). Started without the
+launcher, it needs two variables: which renderer draws, and sound on.
 
 ```powershell
+$env:NV_D3D9 = 'wgpu'; $env:NV_SOUND = 'out'
 .\target\play\nv-viewer.exe 'C:\Games\Steam\steamapps\common\Fallout New Vegas\Data'
 ```
 
+`NV_D3D9=wgpu` draws with wgpu (Vulkan, Direct3D 12 or Metal); on Windows, `real` uses the
+system's Direct3D 9 instead. On Windows the game also reads a table of this machine's graphics
+adapter, which the launcher makes at every start. Without the launcher, make it once with
+`cargo run --release --manifest-path scripts/d3d9-capture/Cargo.toml > d3d9_adapter.tsv` and point
+`NV_D3D9_ADAPTER` at the file (or put it at `%LOCALAPPDATA%\nv-rs\d3d9_adapter.tsv`). If a table
+the run needs is missing, it stops and its last line says how to make it.
+
 nv-rs never changes the game's folder, your saves or your settings. On Linux and macOS,
-`distribution/unix/play.sh` finds the game and starts it (`./play.sh --check` checks your game's
-version first).
+`distribution/unix/play.sh` finds the game and starts it (`--check` checks your game's version
+first); for a source build, point it at your program with `NV_RS_PROGRAM=target/play/nv-viewer`.
 
 ## Checks
 
@@ -69,8 +78,10 @@ cargo test -p nvinspect --test repo_hygiene
   leave the rest to CI.
 - The hygiene test rejects game files and other binaries, absolute paths with user names, and
   Ghidra's automatic names (`FUN_…`, `DAT_…`): write the address instead.
-- Code must build on Windows, Linux and macOS. Check a crate for another system with
-  `cargo check --target x86_64-unknown-linux-gnu --tests -p <crate>` (or `aarch64-apple-darwin`).
+- Code must build on Windows, Linux and macOS. Check a crate for macOS with
+  `rustup target add aarch64-apple-darwin` (once), then
+  `cargo check --target aarch64-apple-darwin --tests -p <crate>`. A Linux check from Windows needs a
+  Linux system's libraries for the sound crates; GitHub's Linux job runs on every pull request.
   A pull request that touches files, windows, input, sound, drawing, the launcher or packaging gets
   the `other-systems` label so the macOS job runs too (ask in the pull request if you can't set it).
 - If you change `Cargo.lock`, update `distribution/DEPENDENCY-LOCK.sha256`: the SHA-256 of the
@@ -127,7 +138,10 @@ checked.
 
 ### Native code
 
-Native rewrites in `crates/engine-typed` replace a translated function at the same address. Each
+Native rewrites in `crates/engine-typed` (and `crates/engine-core/src/typed`) replace a translated
+function at the same address. Mark each one `// Typed from 00a6db50` directly above the function
+(`, read against fnv_decomp` may follow). Call a function that a fix or built-in may replace (the
+addresses in `crates/engine-core/data/overridable.tsv`) with `e.call`, not `typed_call!`. Each
 one needs a differential test that runs it against the translation it replaces and gets the same
 results. Logic, integers and pointers must match exactly. For floating-point maths: plain `f32` in
 code only the main thread runs; in code other threads run, `f64` rounded to `f32` wherever the

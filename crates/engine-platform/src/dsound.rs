@@ -2152,7 +2152,7 @@ fn note_with(e: &mut Engine, what: impl FnOnce(&mut Engine) -> String) {
 /// `RESAMPLEDMO.DLL` is another build than the one `super::resampler` reads.
 fn unheard(e: &mut Engine, example: &str) {
     if state!(e).sound.noted.insert("resampling") {
-        eprintln!("sound: not exact: this Windows' RESAMPLEDMO.DLL tables were not found, so sound at another rate goes through DirectSound's second converter (first: {example}); see docs/SOUND.md");
+        eprintln!("sound: not exact: this Windows' RESAMPLEDMO.DLL tables were not found, so sound at another rate goes through DirectSound's second converter (first: {example})");
     }
 }
 

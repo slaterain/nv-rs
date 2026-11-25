@@ -76,12 +76,8 @@ Ghidra project (private copy)         Xbox PDB + PowerPC image
    section 2). On 2026-10-09: 17,405 applied, 191 left as conflicts with
    existing Function ID names (not forced), 4 unchanged.
 
-All seven steps run with one command, `.\scripts\engine-map.ps1` (69 s on the
-maintainer's machine; `-FreshProject` copies the source project again and
-redoes step 1, which is needed whenever the matcher's names change, because
-the import does not overwrite names it set before). After Rust changes only
-the ledger needs to run:
-`cargo run --release --manifest-path scripts/ledger/Cargo.toml`.
+The script that ran all seven steps (`scripts/engine-map.ps1`) and the ledger
+are in the repository's history; they are no longer in the repository.
 
 ## Frame table
 

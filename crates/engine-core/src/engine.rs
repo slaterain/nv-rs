@@ -1264,7 +1264,7 @@ impl Engine {
                     return ret;
                 }
             }
-            panic!("open function {addr:08x}: not translated yet (FalloutNV.exe 1.4.0.525, docs/LEDGER.md)")
+            panic!("open function {addr:08x}: not translated yet (FalloutNV.exe 1.4.0.525)")
         };
         if let Callable::Abi(plain) = f {
             self.cache(addr, plain);

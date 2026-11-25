@@ -23,7 +23,7 @@ What it checks, each one a refusal (status 1, nothing written) when it fails:
    the game (no data of the game's program in it).
 Then it writes <archive name without .tar.gz>.CHECKED.txt beside the archive: which run built it, from
 which commit, the check's date and result lines. That file is published beside the archive and its
-.sha256, and its text goes into the release notes (docs/MAINTAINING.md).
+.sha256, and its text goes into the release notes.
 
 -Checker: a built package-check.exe (default: built here with cargo, release profile).
 The game's file is only read; nothing of it is written anywhere.
