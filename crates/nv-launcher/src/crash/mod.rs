@@ -1743,6 +1743,10 @@ mod tests {
             ),
             ("hitch: a form this does not know, in Goodsprings", None),
             (
+                "hitch: 5.0 ms (typical 2.0) frame 3 at 0.5 s in Goodsprings",
+                None,
+            ),
+            (
                 "NV_D3D9=wgpu: drawing with Some Card (Vulkan)",
                 Some("NV_D3D9=wgpu: drawing with Some Card (Vulkan)"),
             ),
