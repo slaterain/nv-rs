@@ -220,13 +220,6 @@ pub fn empty_name(_e: &mut Engine, _this: Ptr) -> u32 {
     EMPTY_STRING
 }
 
-// Typed from 00717e50
-/// `this + 4`: a process's embedded current package (its slot 0x278), and the same field's address
-/// on the other classes that share the body.
-pub fn address_4(_e: &mut Engine, this: Ptr) -> u32 {
-    package_of(this)
-}
-
 // Typed from 008d02d0
 /// `BaseProcess::GetLastTimeDetected` (Xbox PDB): the float at `01085df0` (`FLT_MAX`) loaded
 /// (`FLD`, which quiets a signalling NaN) and negated (`FCHS`: the sign bit alone); both words
