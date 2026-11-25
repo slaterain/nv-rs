@@ -51,11 +51,18 @@
 //! form's script (`004826d0`) and the base form's container (`0055d310`); all four are registered
 //! at their addresses.
 //!
+//! The list of extra data every reference, cell and inventory entry carries (`BaseExtraList` and
+//! `ExtraDataList`, Xbox PDB) is typed in [`extra_list`]: its constructors and destructors, its
+//! operations under the extra data lock (`AddExtra`, both `RemoveExtra`s, `RemoveAll`,
+//! `RemoveAllDefault`, `ItemsInList`, `GetPrevExtraData`), the type bitmap, the thread's cache of
+//! the last lookup and the small extra data classes of the unit, each registered at its address.
+//!
 //! Stage 1: the objects stay in guest memory where the game made them. The row is
 //! [`Threads::Both`]: the code is integers (the origin's 0.0 for the vector constructor is a constant
 //! word) but for one product in [`scene`], which keeps the x87's exact helpers.
 
 pub mod attach;
+pub mod extra_list;
 pub mod lighting;
 pub mod queue;
 pub mod scene;
@@ -115,6 +122,48 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0048_26d0, script::form_script(u32) -> u32),
         entry!(0x0055_d310, script::has_container(u32) -> u32),
         entry!(0x008a_e600, script::actor_form_148(u32) -> u32),
+        entry!(0x0040_ec80, extra_list::extra_data_new(u32, u8) -> u32),
+        entry!(0x0040_ecb0, extra_list::extra_data_drop(u32)),
+        entry!(0x0040_3550, extra_list::set_next(u32, u32)),
+        entry!(0x0040_f680, extra_list::north_rotation_new(u32) -> u32),
+        entry!(0x0040_f6b0, extra_list::detach_time_new(u32) -> u32),
+        entry!(0x0040_f700, extra_list::extra_compare(u32, u32) -> bool),
+        entry!(0x0040_f740, extra_list::base_list_new(u32) -> u32),
+        entry!(0x0040_f780, extra_list::base_list_delete(u32, u32) -> u32),
+        entry!(0x0040_f7b0, extra_list::base_list_drop(u32)),
+        entry!(0x0040_f7d0, extra_list::clear_last_extra(u32, i32)),
+        entry!(0x0040_f860, extra_list::clear_last_extra_all(u32)),
+        entry!(0x0040_f900, extra_list::drop_stale_cache()),
+        entry!(0x0040_f980, extra_list::added_at_head(u32) -> bool),
+        entry!(0x0040_f9e0, extra_list::cached_extra(u32, i32) -> u32),
+        entry!(0x0040_fa40, extra_list::cache_extra(u32, u32)),
+        entry!(0x0040_fae0, extra_list::remove_all(u32, bool)),
+        entry!(0x0040_fcb0, extra_list::remove_all_default(u32, bool)),
+        entry!(0x0040_fe20, extra_list::items_in_list(u32) -> i32),
+        entry!(0x0040_fe80, extra_list::has_extra_type(u32, u8) -> bool),
+        entry!(0x0040_fee0, extra_list::set_extra_flag(u32, u8, bool)),
+        entry!(0x0040_ff60, extra_list::add_extra(u32, u32) -> u32),
+        entry!(0x0041_0020, extra_list::remove_extra(u32, u32, bool)),
+        entry!(0x0041_0140, extra_list::remove_extra_of_type(u32, u8)),
+        entry!(0x0041_02d0, extra_list::get_prev_extra_data(u32, u8) -> u32),
+        entry!(0x0041_0360, extra_list::data_list_new(u32) -> u32),
+        entry!(0x0041_0380, extra_list::data_list_delete(u32, u32) -> u32),
+        entry!(0x0041_03b0, extra_list::data_list_drop(u32)),
+        entry!(0x0041_1b00, extra_list::lock_data_new(u32) -> u32),
+        entry!(0x0041_1b40, extra_list::reflected_refs_new(u32) -> u32),
+        entry!(0x0041_1bb0, extra_list::reflected_refs_delete(u32, u32) -> u32),
+        entry!(0x0041_1be0, extra_list::reflector_refs_new(u32) -> u32),
+        entry!(0x0041_1c50, extra_list::reflector_refs_delete(u32, u32) -> u32),
+        entry!(0x0041_1c80, extra_list::water_light_refs_new(u32) -> u32),
+        entry!(0x0041_1cf0, extra_list::water_light_refs_delete(u32, u32) -> u32),
+        entry!(0x0041_1d20, extra_list::lit_water_refs_new(u32) -> u32),
+        entry!(0x0041_1d90, extra_list::lit_water_refs_delete(u32, u32) -> u32),
+        entry!(0x0041_1dc0, extra_list::four_words_new(u32) -> u32),
+        entry!(0x0041_1e00, extra_list::word_16_new(u32) -> u32),
+        entry!(0x0041_1e20, extra_list::weapon_mod_flags_any(u32, u8) -> bool),
+        entry!(0x0041_1e40, extra_list::type_92_new(u32) -> u32),
+        entry!(0x0041_1e70, extra_list::type_92_delete(u32, u32) -> u32),
+        entry!(0x0041_1ea0, extra_list::type_92_drop(u32)),
     ]
 }
 
