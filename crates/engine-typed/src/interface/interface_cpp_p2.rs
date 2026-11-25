@@ -53,8 +53,6 @@ pub const IN_PLACE: &[u32] = &[
 const LIST_REMOVE: u32 = 0x0057_c730;
 /// `Tile::GetMenu` (Xbox PDB): the menu a tile belongs to.
 const TILE_GET_MENU: u32 = 0x00a0_3c90;
-/// Tile trait getter (`00a011b0`, value in ST0): tile, trait id.
-const TILE_GET_VALUE: u32 = 0x00a0_11b0;
 /// Trait id (`0x1771`) of the menus root tile that is saved and restored
 /// with the game.
 const TRAIT_SAVED_VALUE: u32 = 0x1771;
@@ -336,9 +334,7 @@ pub fn fn_00705d90(e: &mut Engine) -> i32 {
 /// truncated to an integer.
 pub fn fn_00705dd0(e: &mut Engine, this: u32) -> i32 {
     let root = in_place::menus_root(e, this);
-    let value = e
-        .call(TILE_GET_VALUE, &args![root, TRAIT_SAVED_VALUE])
-        .f32();
+    let value = tile_float(e, root, TRAIT_SAVED_VALUE);
     float_to_int(e, value)
 }
 
@@ -618,9 +614,7 @@ pub fn fn_007066d0(e: &mut Engine, stream: u32) {
 
         let current = manager(e);
         let root = in_place::menus_root(e, current);
-        let value = e
-            .call(TILE_GET_VALUE, &args![root, TRAIT_SAVED_VALUE])
-            .f32();
+        let value = tile_float(e, root, TRAIT_SAVED_VALUE);
         let truncated = float_to_int(e, value);
         e.mem.set_i32(trait_value, truncated);
         let byte = e.call(STATS_PAGE_GET, &[]).u8();
@@ -1061,11 +1055,13 @@ pub fn fn_00706e90(e: &mut Engine) -> f32 {
     let object = e.mem.u32(0x011f_4748);
     let first = e.vcall(object, 0xc8, &[]).u32();
     let second = e.vcall(object, 0xc8, &[]).u32();
-    let divisor = e.vcall(second, 0x8c, &args![0u32]).u32() as f64;
-    let dividend = e.vcall(first, 0x90, &args![0u32]).u32() as f64;
-    let ratio = dividend / divisor;
-    let base = typed_call!(super::FAMILY, 0x0070_6e80, fn_00706e80(e)) as f64;
-    super::narrow(base * ratio)
+    let divisor = f64::from(e.vcall(second, 0x8c, &args![0u32]).u32());
+    let dividend = f64::from(e.vcall(first, 0x90, &args![0u32]).u32());
+    // The exe's two 24-bit steps: the `FDIV` rounded to a float, then the `FMUL` by the float
+    // (exact in an `f64`) rounded once.
+    let ratio = super::narrow(dividend / divisor);
+    let base = typed_call!(super::FAMILY, 0x0070_6e80, fn_00706e80(e));
+    super::narrow(f64::from(base) * f64::from(ratio))
 }
 
 // Typed from 00706f20
@@ -1521,10 +1517,6 @@ const STRING_DESTROY: u32 = 0x0040_37d0;
 const STRING_ASSIGN: u32 = 0x0043_8390;
 /// `Tile::TextToTrait` (Xbox PDB), `cdecl`: the trait id of a name.
 const TILE_TEXT_TO_TRAIT: u32 = 0x00a0_1860;
-/// `Tile::GetChildByName` (Xbox PDB): tile, name.
-const TILE_GET_CHILD_BY_NAME: u32 = 0x00a0_3da0;
-/// `00a08b20`, `cdecl`: finds a (nested) child of a tile by name.
-const TILE_FIND_CHILD: u32 = 0x00a0_8b20;
 /// `Menu::RenderTemplate` (Xbox PDB), on the menu: parent tile, template
 /// name, a word stored in the menu.
 const MENU_RENDER_TEMPLATE: u32 = 0x00a1_ddb0;
@@ -1687,7 +1679,6 @@ const WEAPON_GET_AMMO_REGEN_RATE: u32 = 0x0070_9430;
 /// `InventoryChanges::GetInventoryChanges` (Xbox PDB), `cdecl`: the player;
 /// `InventoryChanges::GetObjectCount` (Xbox PDB), on it: a form.
 const GET_INVENTORY_CHANGES: u32 = 0x004b_f220;
-const INVENTORY_GET_COUNT: u32 = 0x004c_8f30;
 /// `TESAmmo::BuildMenuString` (Xbox PDB) and `EffectItemList::BuildMenuString`
 /// (Xbox PDB): buffer, size.
 const AMMO_BUILD_MENU_STRING: u32 = 0x0050_3a70;
@@ -1764,9 +1755,23 @@ const VISIBILITY_BITS: [(u32, usize); 12] = [
     (0x200, 9),
 ];
 
-/// A tile trait read (`00a011b0`) as a `float`.
+/// A tile trait read as a `float` (`Tile::GetFloat`, `00a011b0`, the dispatch family's).
 fn tile_float(e: &mut Engine, tile: u32, trait_id: u32) -> f32 {
-    e.call(TILE_GET_VALUE, &args![tile, trait_id]).f32()
+    typed_call!(
+        dispatch::FAMILY,
+        0x00a0_11b0,
+        dispatch::tile::get_float(e, Ptr::new(tile), trait_id as i32)
+    )
+}
+
+/// The tile the path `path` names from `tile` (`00a08b20`, the dispatch family's).
+fn find_tile(e: &mut Engine, tile: u32, path: u32) -> u32 {
+    typed_call!(
+        dispatch::FAMILY,
+        0x00a0_8b20,
+        dispatch::tile::find_by_path(e, Ptr::new(tile), Ptr::new(path))
+    )
+    .addr()
 }
 
 /// The float trait setter (`00a012d0`, the dispatch family's), with the flag 1 every caller here
@@ -1998,9 +2003,13 @@ pub fn initialize_tabline(
             count += 1;
             e.call(STRING_ASSIGN, &args![string, name_at(count as usize)]);
         }
-        let line_size = tile_float(e, tile, TRAIT_0FB1) as f64;
-        let share = (line_size - total as f64) / (count as f64 + 1.0);
-        let left_line_length = double_to_int(e, share);
+        // The exe's `FISUB` and `FIDIV` (the count plus one as a signed word), each a 24-bit
+        // step, then `_ftol2`.
+        let line_size = tile_float(e, tile, TRAIT_0FB1);
+        let difference = super::narrow(f64::from(line_size) - f64::from(total));
+        let divisor = count.wrapping_add(1) as i32;
+        let share = super::narrow(f64::from(difference) / f64::from(divisor));
+        let left_line_length = double_to_int(e, f64::from(share));
         let trait_id = e
             .call(TILE_TEXT_TO_TRAIT, &args![LEFT_LINE_LENGTH_NAME])
             .u32();
@@ -2013,9 +2022,13 @@ pub fn initialize_tabline(
         let mut index = 0usize;
         while e.call(STRING_LENGTH, &args![string]).u32() != 0 {
             let characters = e.mem.u32(string);
-            let child = e
-                .call(TILE_GET_CHILD_BY_NAME, &args![tile, characters])
-                .u32();
+            // `Tile::GetChildByName` (`00a03da0`, the dispatch family's).
+            let child = typed_call!(
+                dispatch::FAMILY,
+                0x00a0_3da0,
+                dispatch::tile::child_by_name(e, Ptr::new(tile), Ptr::new(characters))
+            )
+            .addr();
             let trait_id = e.call(TILE_TEXT_TO_TRAIT, &args![X_NAME]).u32();
             tile_set_int(e, child, trait_id, super::bits(position));
             let size = tile_float(e, child, TRAIT_0FB1);
@@ -2193,12 +2206,9 @@ fn populate_item_stats(e: &mut Engine, frame: u32, item: u32, display: u32) {
         filled += 1;
     }
 
-    let arrows = e
-        .call(TILE_FIND_CHILD, &args![display, CONDITION_ARROWS_NAME])
-        .u32();
-    let meter = e
-        .call(TILE_FIND_CHILD, &args![display, CONDITION_METER_NAME])
-        .u32();
+    // The tiles the paths name (`00a08b20`, the dispatch family's).
+    let arrows = find_tile(e, display, CONDITION_ARROWS_NAME);
+    let meter = find_tile(e, display, CONDITION_METER_NAME);
     let value = tile_float(e, meter, TRAIT_0FB0);
     tile_set_float(e, arrows, TRAIT_0FB0, value);
     let value = tile_float(e, meter, TRAIT_0FA2);
@@ -2418,7 +2428,12 @@ fn populate_item_stats(e: &mut Engine, frame: u32, item: u32, display: u32) {
                     .u32();
                 let player = e.global::<u32>(PLAYER);
                 let changes = e.call(GET_INVENTORY_CHANGES, &args![player]).u32();
-                let total = e.call(INVENTORY_GET_COUNT, &args![changes, ammo]).u32();
+                // `InventoryChanges::GetObjectCount` (`004c8f30`, the dispatch family's).
+                let total = super::bits(typed_call!(
+                    dispatch::FAMILY,
+                    0x004c_8f30,
+                    dispatch::refs::item_count(e, Ptr::new(changes), ammo)
+                ));
                 let mut loaded: u32 = 0;
                 if name == 0 || e.mem.u8(name) == 0 {
                     let ammo = e
@@ -3186,4 +3201,41 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00709b30, fn_00709b30()),
         entry!(0x00709b40, fn_00709b40()),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `00706e90` at the main thread's 24-bit precision: the quotient is a float before the
+    /// product, so 1280 * (768 / 1366) is 719.64856, where one rounding of the product kept in a
+    /// double gives 719.648621.
+    #[test]
+    fn the_screen_ratio_rounds_the_quotient_then_the_product() {
+        let mut e = Engine::new();
+        e.map(0x0106_e000, 0x1000);
+        e.map(0x011f_4000, 0x1000);
+        e.mem.set_f32(0x0106_ec38, 1280.0);
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, 0x0200_2000);
+        e.put_vtable(0x0200_2000, &[0u32; 0x40]);
+        e.mem.set_u32(0x0200_2000 + 0xc8, 0x0200_0001);
+        e.mem.set_u32(0x0200_2000 + 0x8c, 0x0200_0002);
+        e.mem.set_u32(0x0200_2000 + 0x90, 0x0200_0003);
+        e.mem.set_u32(0x011f_4748, object);
+        for (at, answer) in [
+            (0x0200_0001, object),
+            (0x0200_0002, 1366),
+            (0x0200_0003, 768),
+        ] {
+            e.register(at, move |_, _| Ret {
+                eax: answer,
+                ..Ret::default()
+            });
+        }
+        let value = fn_00706e90(&mut e);
+        assert_eq!(value.to_bits(), 0x4433_e982, "{value}");
+        let once = super::super::narrow(1280.0 * (768.0 / 1366.0));
+        assert_ne!(once, value, "the case tells the two roundings apart");
+    }
 }

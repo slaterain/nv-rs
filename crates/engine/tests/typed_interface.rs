@@ -2691,13 +2691,35 @@ fn interface_queue_menu_create_diff() {
     .assert_same();
 }
 
+/// The queued opens `007094f0` takes, the extra input of its Diff: the first slot's kind (1 to 9),
+/// plus `0x100` for a manager whose mode word (`+0x4bc`) is set (only kinds 6 and 7 go on then),
+/// plus the message slot's kind times `0x1_0000`.
+const QUEUED: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 0x101, 0x106, 0x7_0000, 0x7_0004];
+
+/// Writes a [`QUEUED`] value into the world: the two slots' kinds, the manager's mode word, and
+/// each slot word an object of its own (so an argument swapped between two of them shows).
+fn put_queued(e: &mut Engine, queued: u32) {
+    let manager = e.mem.u32(0x011d_8a80);
+    if manager != 0 {
+        e.mem.set_u32(manager + 0x4bc, queued >> 8 & 1);
+    }
+    e.mem.set_u32(0x011d_8950, queued & 0xff);
+    e.mem.set_u32(0x011d_8998, queued >> 16);
+    for (k, at) in (0x011d_8954..0x011d_8968).step_by(4).enumerate() {
+        e.mem.set_u32(at, arena::object(60 + k as u32));
+    }
+    for (k, at) in (0x011d_899c..0x011d_89b0).step_by(4).enumerate() {
+        e.mem.set_u32(at, arena::object(70 + k as u32));
+    }
+}
+
 #[test]
 fn interface_handle_queued_menu_open_diff() {
     Diff::new(engine_core::entry!(
         0x0070_94f0,
         interface::interface_cpp_p2::interface_handle_queued_menu_open()
     ))
-    .in_arena(
+    .in_arena_and(
         &[],
         CALLEES,
         &[
@@ -2708,6 +2730,8 @@ fn interface_handle_queued_menu_open_diff() {
             0x0070_6130,
             0x0070_5ec0,
         ],
+        QUEUED,
+        put_queued,
     )
     .run()
     .assert_same();
@@ -2928,11 +2952,228 @@ fn fn_00709b40_diff() {
     .assert_same();
 }
 
+/// Every family the program has: the core's and the ones each crate provides when the engine is put
+/// together (`engine_core::typed::provide`, run by `Engine::new`).
+fn every_family() -> Vec<&'static engine_core::typed::Family> {
+    drop(Engine::new_untyped_for_test());
+    engine_core::typed::all_families()
+}
+
+/// The families built around xNVSE's wraps (`script_lines`: the script runner's functions xNVSE
+/// wraps, also rows of `overridable.tsv`), whose doc says the family goes by address once they are
+/// wrapped: its value is the typed bodies the wraps call into.
+const BUILT_AROUND_WRAPS: &[&str] = &["script_lines"];
+
+/// Members that something built in wraps or registers over, so their family goes by address while
+/// that runs, as the family's or the built-in's doc says. Each is known and left to its family's
+/// lane; a new one fails the checks below. `topic_search`'s `0061a310` (`TESTopic::GetOwnerTopic`):
+/// the host's dialogue topic index registers over it (`crates/host/src/topic_index.rs` says the
+/// family then goes by address), JIP LN's dialogue patch wraps it (`patch_rows/dialogue.rs`).
+const KNOWN_TO_GO_BY_ADDRESS: &[(&str, u32)] = &[("topic_search", 0x0061_a310)];
+
+/// A wrap an extender registers over a member of a family (its WRAPS rows, the game patches'
+/// rows) clears the whole family's direct bit for the run, so every `typed_call!` of the family
+/// goes by address from then on. So no family on by default, in any crate, holds a wrapped address,
+/// except one whose doc says it is built around that and the known ones above.
+#[test]
+fn no_family_past_its_gate_holds_a_wrapped_address() {
+    let wrapped: Vec<u32> = engine_core::extend::WRAPS
+        .iter()
+        .chain(engine_core::extend::PATCH_WRAPS.iter().copied().flatten())
+        .map(|w| w.addr)
+        .collect();
+    let mut held = Vec::new();
+    for family in every_family() {
+        if !family.past_gate || BUILT_AROUND_WRAPS.contains(&family.name) {
+            continue;
+        }
+        for (addr, _) in (family.funcs)() {
+            if wrapped.contains(&addr) && !KNOWN_TO_GO_BY_ADDRESS.contains(&(family.name, addr)) {
+                held.push((family.name, addr));
+            }
+        }
+    }
+    assert!(
+        held.is_empty(),
+        "families on by default hold addresses an extender wraps (family, address): {held:x?}; \
+         a wrap turns the family's direct calls off for the run"
+    );
+}
+
+/// A plain registration over a member (a fix row, an nv-rs built-in, a plugin's override: the
+/// addresses of `overridable.tsv`) clears the family's direct bit too, for the run, once it is
+/// registered. So no family on by default, in any crate, holds one, except the rows below, each
+/// overridden only by a plugin that is not built in (kNVSE, ITR) or by a script or frame function, so
+/// the family goes by address only while that one runs; the families built around the wraps; and
+/// the known ones above.
+#[test]
+fn no_family_past_its_gate_holds_an_overridable_address() {
+    const ONLY_WHILE_A_PLUGIN_RUNS: &[(&str, u32)] = &[
+        ("dispatch", 0x00a0_9330),
+        ("dispatch", 0x00a0_9410),
+        ("animation", 0x004f_0380),
+        ("animation", 0x00a4_1110),
+        ("scripts", 0x0059_3870),
+        ("scripts", 0x005a_c1e0),
+        ("scripts", 0x005a_c7a0),
+    ];
+    let rows: Vec<(u32, &str)> = include_str!("../../engine-core/data/overridable.tsv")
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.is_empty())
+        .map(|l| {
+            let mut columns = l.split('\t');
+            let addr = u32::from_str_radix(columns.next().unwrap_or_default(), 16)
+                .unwrap_or_else(|_| panic!("overridable.tsv: no address in {l:?}"));
+            (addr, columns.nth(1).unwrap_or_default())
+        })
+        .collect();
+    let mut allowed_seen = Vec::new();
+    let mut held = Vec::new();
+    for family in every_family() {
+        if !family.past_gate || BUILT_AROUND_WRAPS.contains(&family.name) {
+            continue;
+        }
+        for (addr, _) in (family.funcs)() {
+            let Some((_, by)) = rows.iter().find(|(a, _)| *a == addr) else {
+                continue;
+            };
+            if KNOWN_TO_GO_BY_ADDRESS.contains(&(family.name, addr)) {
+                allowed_seen.push((family.name, addr));
+            } else if ONLY_WHILE_A_PLUGIN_RUNS.contains(&(family.name, addr)) {
+                assert!(
+                    by.contains("kNVSE") || by.contains("ITR") || by.contains("script or frame"),
+                    "{addr:08x} is allowed in `{}` as a plugin's, but overridable.tsv now says {by}",
+                    family.name
+                );
+                allowed_seen.push((family.name, addr));
+            } else {
+                held.push((family.name, addr, *by));
+            }
+        }
+    }
+    assert!(
+        held.is_empty(),
+        "families on by default hold addresses overridable.tsv lists (family, address, by): \
+         {held:x?}; a registration turns the family's direct calls off for the run"
+    );
+    for row in ONLY_WHILE_A_PLUGIN_RUNS
+        .iter()
+        .chain(KNOWN_TO_GO_BY_ADDRESS)
+    {
+        assert!(
+            allowed_seen.contains(row),
+            "{row:x?} is in no family any more: drop it from the list"
+        );
+    }
+}
+
+/// The text of a family's sources: `engine-typed`'s module of that name, or a crate's
+/// `<family>.rs` (the forms crate's families, the core's leaves).
+fn family_sources(name: &str) -> Vec<String> {
+    fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for path in entries.flatten().map(|entry| entry.path()) {
+            if path.is_dir() {
+                rust_files(&path, out);
+            } else if path.extension().is_some_and(|x| x == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut files = Vec::new();
+    for root in [
+        "engine-typed/src",
+        "engine-fallout-forms/src",
+        "engine-core/src/typed",
+    ] {
+        rust_files(&crates.join(root).join(name), &mut files);
+        let file = crates.join(root).join(format!("{name}.rs"));
+        if file.is_file() {
+            files.push(file);
+        }
+    }
+    files
+        .iter()
+        .map(|f| std::fs::read_to_string(f).unwrap_or_else(|why| panic!("{f:?}: {why}")))
+        .collect()
+}
+
+/// Whether the typed body of `start` (its text from its `Typed from` mark to the next mark) calls
+/// `e.site` at `seam`: with the address or a constant holding it, or through a function of the
+/// family's sources that calls `e.site` and is given the address or holds it.
+fn body_calls_site(sources: &[String], start: u32, seam: u32) -> bool {
+    let bare = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    let mut names = vec![
+        format!("0x{:04x}_{:04x}", seam >> 16, seam & 0xffff),
+        format!("0x{seam:08x}"),
+    ];
+    for line in sources.iter().flat_map(|text| text.lines()).map(bare) {
+        if let (Some(at), Some(eq)) = (line.find("const"), line.find(":u32=")) {
+            if at + 5 <= eq && names[..2].iter().any(|n| line[eq + 5..] == format!("{n};")) {
+                names.push(line[at + 5..eq].to_string());
+            }
+        }
+    }
+    let calls_site = |text: &str| {
+        names
+            .iter()
+            .any(|n| text.contains(&format!(".site({n},")) || text.contains(&format!(".site({n})")))
+    };
+    let mark = format!("Typed from {start:08x}");
+    let Some(body) = sources.iter().find_map(|text| {
+        let rest = &text[text.find(&mark)? + mark.len()..];
+        Some(bare(
+            &rest[..rest.find("Typed from ").unwrap_or(rest.len())],
+        ))
+    }) else {
+        return false;
+    };
+    if calls_site(&body) {
+        return true;
+    }
+    for text in sources {
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            let Some(at) = line.find("fn ") else {
+                continue;
+            };
+            let Some(open) = line[at..].find('(') else {
+                continue;
+            };
+            let name = &line[at + 3..at + open];
+            if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                continue;
+            }
+            let close = format!("{}}}", &line[..line.len() - line.trim_start().len()]);
+            let end = lines[i..]
+                .iter()
+                .position(|l| *l == close)
+                .map_or(lines.len(), |n| i + n);
+            let helper = bare(&lines[i..end].join("\n"));
+            if helper.contains(".site(")
+                && body.contains(&format!("{name}("))
+                && (calls_site(&helper)
+                    || names
+                        .iter()
+                        .any(|n| body.contains(&format!("{name}(e,{n}"))))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// A seam (`extend.rs`'s SITES and the game patches' rows: an instruction inside a translated
 /// function where a built-in takes part through `e.site`) inside a member of a family on by default
-/// is skipped unless the typed body keeps its `e.site` call there. So no such member holds a seam,
-/// except the ones listed, whose typed bodies call `e.site` at it. The function holding a seam is
-/// the translated function that starts nearest below it.
+/// is skipped unless the typed body keeps its `e.site` call there. So no such member, in any crate's
+/// family, holds a seam, except the ones listed, whose typed bodies still call `e.site` at it
+/// (read in their sources: the address or its constant in an `e.site` call of the body, or of a
+/// function of the family the body calls). The function holding a seam is the translated function
+/// that starts nearest below it.
 #[test]
 fn no_member_of_a_family_on_by_default_holds_a_seam() {
     // Each checked in its typed body (2026-11-25): the `e.site` call at the seam, behind the
@@ -2965,10 +3206,7 @@ fn no_member_of_a_family_on_by_default_holds_a_seam() {
     ];
     let e = Engine::new_untyped_for_test();
     let mut members = std::collections::HashMap::new();
-    for family in engine_typed::families()
-        .into_iter()
-        .chain([&engine_core::typed::leaf::LEAVES])
-    {
+    for family in engine_core::typed::all_families() {
         if family.past_gate {
             for (addr, _) in (family.funcs)() {
                 members.insert(addr, family.name);
@@ -2980,19 +3218,31 @@ fn no_member_of_a_family_on_by_default_holds_a_seam() {
         let holder = (0..0x4000u32)
             .map(|back| site.addr.wrapping_sub(back))
             .find(|&start| e.is_translated(start));
-        if let Some(family) = holder.and_then(|start| members.get(&start)) {
-            found.push((site.addr, *family));
+        if let Some(start) = holder.filter(|start| members.contains_key(start)) {
+            found.push((site.addr, members[&start], start));
         }
     }
-    let unkept: Vec<_> = found.iter().filter(|f| !KEPT.contains(f)).collect();
+    let unkept: Vec<_> = found
+        .iter()
+        .filter(|(seam, family, _)| !KEPT.contains(&(*seam, *family)))
+        .collect();
     assert!(
         unkept.is_empty(),
-        "seams inside members of families on by default (seam, family): {unkept:x?}"
+        "seams inside members of families on by default (seam, family, member): {unkept:x?}"
     );
-    for kept in KEPT {
+    for &(seam, family) in KEPT {
+        let Some(&(_, _, start)) = found.iter().find(|f| (f.0, f.1) == (seam, family)) else {
+            panic!("{seam:08x} in `{family}` is no member's seam any more");
+        };
+        let sources = family_sources(family);
         assert!(
-            found.contains(kept),
-            "{kept:x?} is no member's seam any more"
+            !sources.is_empty(),
+            "no sources found for the family `{family}`"
+        );
+        assert!(
+            body_calls_site(&sources, start, seam),
+            "`{family}`'s typed {start:08x} holds the seam {seam:08x}, but its body no longer \
+             calls `e.site` there"
         );
     }
 }
