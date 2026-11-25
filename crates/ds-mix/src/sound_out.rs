@@ -174,32 +174,86 @@ pub fn device_rate() -> Option<u32> {
 }
 
 /// The default output device's mix rate and layout (its shared-mode format; off Windows
-/// [`mix_of`] its default stream), asked on a thread of its own the first time and kept until
-/// [`device_mix_again`]; `None` when there is no device (off Windows also when its stream is not
-/// provided: the reason is said).
+/// [`mix_of`] its default stream), asked on a thread of its own the first time (or ahead,
+/// [`ask_device_mix_ahead`]) and kept until [`device_mix_again`]; `None` when there is no device
+/// (off Windows also when its stream is not provided: the reason is said).
 pub fn device_mix() -> Option<(u32, Layout)> {
-    let kept = *MIX.lock().unwrap_or_else(|e| e.into_inner());
-    match kept {
-        Some(mix) => mix,
-        None => device_mix_again(),
+    mix_from(&MIX, ask_system)
+}
+
+/// Starts asking the system for [`device_mix`]'s answer on a thread of its own and returns at
+/// once: the first [`device_mix`] after takes that thread's answer, waiting only for what is left
+/// of the ask. Nothing when it is being asked or known. The game's DirectSound device asks ahead
+/// when the game makes it, at the start: a run without the sound output first needs the device's
+/// rate at the game's first sounds, and asking only then held the game's main thread for 410 to
+/// 500 ms (the main menu's first sound, in every test run without the output, 2026-11-22 to 25).
+pub fn ask_device_mix_ahead() {
+    ask_ahead(&MIX, ask_system);
+}
+
+/// [`device_mix`] asked of the system again (the default device changed) and kept; an answer
+/// asked ahead and not taken yet is let go (its thread ends by itself).
+pub fn device_mix_again() -> Option<(u32, Layout)> {
+    again(&MIX, ask_system)
+}
+
+/// [`device_mix`]'s answer: a device's rate and layout, or none.
+type Mix = Option<(u32, Layout)>;
+
+/// Where [`device_mix`]'s answer is: not asked yet, being asked on a thread of its own
+/// ([`ask_device_mix_ahead`]), or known.
+enum Answer {
+    Unasked,
+    Asking(std::thread::JoinHandle<Mix>),
+    Known(Mix),
+}
+
+/// [`device_mix`]'s answer.
+static MIX: Mutex<Answer> = Mutex::new(Answer::Unasked);
+
+/// One ask of the system (on the thread that runs it: always one of its own, so the asker's COM
+/// apartment plays no part).
+fn ask_system() -> Mix {
+    #[cfg(windows)]
+    {
+        unsafe { wasapi::mix_format() }
+    }
+    #[cfg(not(windows))]
+    {
+        device::mix()
     }
 }
 
-/// [`device_mix`] asked of the system again (the default device changed) and kept.
-pub fn device_mix_again() -> Option<(u32, Layout)> {
-    #[cfg(windows)]
-    let mix = std::thread::spawn(|| unsafe { wasapi::mix_format() })
-        .join()
-        .ok()
-        .flatten();
-    #[cfg(not(windows))]
-    let mix = std::thread::spawn(device::mix).join().ok().flatten();
-    *MIX.lock().unwrap_or_else(|e| e.into_inner()) = Some(mix);
+/// [`device_mix`] by `ask` with its answer in `state`: the known answer; else the answer of the
+/// ask running ahead, waited for; else `ask` on a thread of its own, waited for. Kept. Callers at
+/// the same time wait for the one answer (the lock is held through the wait; the asking thread
+/// never takes it). A thread that panicked answers no device.
+fn mix_from(state: &Mutex<Answer>, ask: fn() -> Mix) -> Mix {
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mix = match std::mem::replace(&mut *s, Answer::Unasked) {
+        Answer::Known(mix) => mix,
+        Answer::Asking(t) => t.join().ok().flatten(),
+        Answer::Unasked => std::thread::spawn(ask).join().ok().flatten(),
+    };
+    *s = Answer::Known(mix);
     mix
 }
 
-/// [`device_mix`]'s answer, once asked.
-static MIX: Mutex<Option<Option<(u32, Layout)>>> = Mutex::new(None);
+/// [`ask_device_mix_ahead`] by `ask` with its answer in `state`.
+fn ask_ahead(state: &Mutex<Answer>, ask: fn() -> Mix) {
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    if matches!(*s, Answer::Unasked) {
+        *s = Answer::Asking(std::thread::spawn(ask));
+    }
+}
+
+/// [`device_mix_again`] by `ask` with its answer in `state` (asked with the lock not held, as
+/// before).
+fn again(state: &Mutex<Answer>, ask: fn() -> Mix) -> Mix {
+    let mix = std::thread::spawn(ask).join().ok().flatten();
+    *state.lock().unwrap_or_else(|e| e.into_inner()) = Answer::Known(mix);
+    mix
+}
 
 /// The system off Windows whose rules the stream follows (cpal's backend there).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1474,6 +1528,127 @@ mod tests {
 
     fn offer(rate: u32, channels: u16) -> Offer {
         Offer { rate, channels }
+    }
+
+    /// The device's answer asked ahead: the ask runs on a thread of its own, once however often it
+    /// is asked ahead or needed, and every need after gets its answer.
+    #[test]
+    fn an_answer_asked_ahead_is_taken_once_and_kept() {
+        static ASKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        static ASKER: Mutex<Option<std::thread::ThreadId>> = Mutex::new(None);
+        fn ask() -> Mix {
+            ASKS.fetch_add(1, Ordering::SeqCst);
+            *ASKER.lock().unwrap() = Some(std::thread::current().id());
+            Some((44100, Layout::STEREO))
+        }
+        let state = Mutex::new(Answer::Unasked);
+        ask_ahead(&state, ask);
+        ask_ahead(&state, ask);
+        assert_eq!(mix_from(&state, ask), Some((44100, Layout::STEREO)));
+        assert_eq!(mix_from(&state, ask), Some((44100, Layout::STEREO)));
+        ask_ahead(&state, ask);
+        assert_eq!(mix_from(&state, ask), Some((44100, Layout::STEREO)));
+        assert_eq!(ASKS.load(Ordering::SeqCst), 1);
+        let asker = *ASKER.lock().unwrap();
+        assert!(asker.is_some());
+        assert_ne!(asker, Some(std::thread::current().id()));
+    }
+
+    /// Nothing asked ahead: the first need asks (on a thread of its own, once) and gets the same
+    /// answer an ask ahead would have given; asking ahead after that asks nothing.
+    #[test]
+    fn the_first_need_asks_when_nothing_was_asked_ahead() {
+        static ASKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        static ASKER: Mutex<Option<std::thread::ThreadId>> = Mutex::new(None);
+        const EIGHT: Layout = Layout {
+            channels: 8,
+            mask: 0x63f,
+        };
+        fn ask() -> Mix {
+            ASKS.fetch_add(1, Ordering::SeqCst);
+            *ASKER.lock().unwrap() = Some(std::thread::current().id());
+            Some((48000, EIGHT))
+        }
+        let state = Mutex::new(Answer::Unasked);
+        assert_eq!(mix_from(&state, ask), Some((48000, EIGHT)));
+        assert_eq!(ASKS.load(Ordering::SeqCst), 1);
+        let asker = *ASKER.lock().unwrap();
+        assert!(asker.is_some());
+        assert_ne!(asker, Some(std::thread::current().id()));
+        ask_ahead(&state, ask);
+        assert_eq!(mix_from(&state, ask), Some((48000, EIGHT)));
+        assert_eq!(ASKS.load(Ordering::SeqCst), 1);
+    }
+
+    /// Asking ahead returns while the system has not answered yet; the first need then waits for
+    /// that answer (and asks nothing of its own).
+    #[test]
+    fn asking_ahead_does_not_wait_for_the_answer() {
+        static GO: AtomicBool = AtomicBool::new(false);
+        static ASKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        fn ask() -> Mix {
+            ASKS.fetch_add(1, Ordering::SeqCst);
+            while !GO.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Some((22050, Layout::MONO))
+        }
+        let state = Mutex::new(Answer::Unasked);
+        ask_ahead(&state, ask);
+        assert!(matches!(*state.lock().unwrap(), Answer::Asking(_)));
+        GO.store(true, Ordering::SeqCst);
+        assert_eq!(mix_from(&state, ask), Some((22050, Layout::MONO)));
+        assert!(matches!(
+            *state.lock().unwrap(),
+            Answer::Known(Some((22050, _)))
+        ));
+        assert_eq!(ASKS.load(Ordering::SeqCst), 1);
+    }
+
+    /// No device is an answer kept like any other (asked once), ahead or at the first need.
+    #[test]
+    fn no_device_is_kept_too() {
+        static ASKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        fn ask() -> Mix {
+            ASKS.fetch_add(1, Ordering::SeqCst);
+            None
+        }
+        let ahead = Mutex::new(Answer::Unasked);
+        ask_ahead(&ahead, ask);
+        assert_eq!(mix_from(&ahead, ask), None);
+        assert_eq!(mix_from(&ahead, ask), None);
+        let first = Mutex::new(Answer::Unasked);
+        assert_eq!(mix_from(&first, ask), None);
+        assert_eq!(mix_from(&first, ask), None);
+        ask_ahead(&first, ask);
+        assert_eq!(mix_from(&first, ask), None);
+        assert_eq!(ASKS.load(Ordering::SeqCst), 2);
+    }
+
+    /// Asking again (the default device changed) replaces the answer, also one asked ahead and
+    /// not taken yet, whose late answer is then not used.
+    #[test]
+    fn asking_again_replaces_the_answer() {
+        static GO: AtomicBool = AtomicBool::new(false);
+        fn held() -> Mix {
+            while !GO.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Some((44100, Layout::STEREO))
+        }
+        fn changed() -> Mix {
+            Some((48000, Layout::STEREO))
+        }
+        fn gone() -> Mix {
+            None
+        }
+        let state = Mutex::new(Answer::Unasked);
+        ask_ahead(&state, held);
+        assert_eq!(again(&state, changed), Some((48000, Layout::STEREO)));
+        GO.store(true, Ordering::SeqCst);
+        assert_eq!(mix_from(&state, held), Some((48000, Layout::STEREO)));
+        assert_eq!(again(&state, gone), None);
+        assert_eq!(mix_from(&state, changed), None);
     }
 
     /// A stream is lost only when marked (its thread's, or a stand-in's), and stays so.

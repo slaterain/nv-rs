@@ -2681,6 +2681,13 @@ pub fn direct_sound_create8(e: &mut Engine, device: u32, out: Ptr, outer: u32) -
         e.mem.set_u32(out.addr(), 0);
         return result;
     }
+    // The default device's mix format, asked now on a thread of its own: the rate DirectSound
+    // mixes at ([`device_rate`]). A run without the output needs it first at the game's first
+    // sounds, and asking only then held main 410 to 500 ms (the main menu's first sound, every
+    // test run without sound); `start_output` takes the answer at once. The same answer, asked
+    // when the device is made (not in the unit tests: they answer 48000 Hz without asking).
+    #[cfg(not(test))]
+    super::sound_out::ask_device_mix_ahead();
     if state!(e).sound.sound_vtable == 0 {
         register_code(e);
         state!(e).sound.sound_vtable = vtable(e, SOUND_CODE, SOUND_SLOTS.len() as u32);
@@ -3807,7 +3814,8 @@ fn part_after(part: u32, n: u64, frequency: u32) -> u32 {
 }
 
 /// The rate DirectSound mixes at: the output's when it runs, else the default device's
-/// (`super::sound_out::device_rate`; the measured device's 48000 when Windows names none, where
+/// (`super::sound_out::device_rate`, asked ahead when the game makes its device,
+/// [`direct_sound_create8`]; the measured device's 48000 when Windows names none, where
 /// DirectSound would make no device); the tests' 48000.
 fn device_rate(e: &Engine) -> u32 {
     if let Some(m) = &state_ref!(e).sound.mix {
