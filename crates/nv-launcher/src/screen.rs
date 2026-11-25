@@ -215,6 +215,16 @@ pub fn rows_of(look: &Look, screen: &Screen) -> Rows {
     layout(look, screen).rows
 }
 
+/// Whether every line of `screen`'s text and every entry show at once, nothing to scroll (the
+/// tests of screens that must be read whole).
+#[cfg(test)]
+pub fn shows_whole(look: &Look, screen: &Screen) -> bool {
+    let l = layout(look, screen);
+    l.text.len() == welcome_lines(look, screen).len()
+        && l.rows.first == 0
+        && l.rows.shown == screen.entries.len()
+}
+
 fn layout(look: &Look, screen: &Screen) -> Layout {
     let lh = look.font.line_height() as i32;
     let welcome_y = 60 + lh * 3 + 20;
