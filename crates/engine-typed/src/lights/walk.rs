@@ -2,9 +2,12 @@
 //! light that casts shadows), the radius walk and a plain geometry add; the walks test each object's
 //! bound against the light, recurse into a node's children and add the tri-based geometries they
 //! reach to the light's list (`AddTriGeom`), which also hands the light to the geometry's lighting
-//! property. The exe's calls within this group are plain calls, and so are these.
+//! property. The exe's calls within this group are plain calls, and so are these. The objects'
+//! `IsNode` and `IsTriBasedGeom` slots and the light's RTTI slot are answered in place when they hold
+//! the exe's constant bodies ([`slot_word`]).
 
 use super::ShadowSceneLight;
+use crate::slot_target;
 use engine_core::ptr::{Field, Ptr};
 use engine_core::types::NiTListItem;
 use engine_core::{args, Engine};
@@ -43,6 +46,33 @@ const PROPERTY_TEST: u32 = 0x004a_2020;
 const PROPERTY_ADD_LIGHT: u32 = 0x00b7_1560;
 const LIST_ADD: u32 = 0x00c1_b4a0;
 const LIST_MOVE: u32 = 0x00b7_02e0;
+/// The exe's bodies the walk finds in those slots, each `thiscall` with no stack words: the object
+/// itself (`006815c0`, `NiNode`'s `IsNode`; `00e68810`, the tri-based geometries' `IsTriBasedGeom`),
+/// 0 (`00acbb70`, the other classes' answer in both), and the lights' `GetRTTI`, each a constant
+/// record: `00a7d790` (`NiPointLight`, `011f4a98`), `00a75c70` (`NiDirectionalLight`, `011f4a68`,
+/// the record the radius test accepts outright) and `00a9b390` (`NiAmbientLight`, `011f5f6c`).
+const ANSWERS_ITSELF: u32 = 0x0068_15c0;
+const GEOMETRY_ANSWERS_ITSELF: u32 = 0x00e6_8810;
+const ANSWERS_ZERO: u32 = 0x00ac_bb70;
+const RTTI_BODIES: [(u32, u32); 3] = [
+    (0x00a7_d790, 0x011f_4a98),
+    (0x00a7_5c70, RADIUS_FREE_RTTI),
+    (0x00a9_b390, 0x011f_5f6c),
+];
+
+/// The word the object's `slot` answers (no stack words): one of the exe's constant bodies above
+/// answered in place, any other target through the vtable.
+#[inline]
+pub(super) fn slot_word(e: &mut Engine, object: u32, slot: u32) -> u32 {
+    match slot_target(e, object, slot) {
+        ANSWERS_ITSELF | GEOMETRY_ANSWERS_ITSELF => object,
+        ANSWERS_ZERO => 0,
+        target => match RTTI_BODIES.iter().find(|(body, _)| *body == target) {
+            Some(&(_, record)) => record,
+            None => e.vcall(object, slot, &args![]).u32(),
+        },
+    }
+}
 
 /// The bound of an object, or the null bound.
 fn bound_or_null(e: &Engine, object: u32) -> u32 {
@@ -127,7 +157,7 @@ pub fn bound_within_radius(
     } else {
         ni_light
     };
-    if e.vcall(light, SLOT_RTTI, &args![]).u32() == RADIUS_FREE_RTTI {
+    if slot_word(e, light, SLOT_RTTI) == RADIUS_FREE_RTTI {
         return 1;
     }
     let node = e.global::<u32>(SCENE_NODE);
@@ -251,10 +281,10 @@ fn parse_frustum_body(e: &mut Engine, this: Ptr<ShadowSceneLight>, object: u32, 
     {
         return;
     }
-    let node = e.vcall(object, SLOT_IS_NODE, &args![]).u32();
+    let node = slot_word(e, object, SLOT_IS_NODE);
     if node != 0 {
         each_child(e, node, |e, child| parse_frustum(e, this, child));
-    } else if e.vcall(object, SLOT_IS_TRI_BASED_GEOM, &args![]).u32() != 0 {
+    } else if slot_word(e, object, SLOT_IS_TRI_BASED_GEOM) != 0 {
         add_tri_geom(e, this, object);
     }
 }
@@ -280,11 +310,11 @@ fn parse_radius_body(e: &mut Engine, this: Ptr<ShadowSceneLight>, object: u32) {
             return;
         }
     }
-    let node = e.vcall(object, SLOT_IS_NODE, &args![]).u32();
+    let node = slot_word(e, object, SLOT_IS_NODE);
     if node != 0 {
         each_child(e, node, |e, child| parse_radius(e, this, child));
-    } else if e.vcall(object, SLOT_IS_TRI_BASED_GEOM, &args![]).u32() != 0 {
-        let geometry = e.vcall(object, SLOT_IS_TRI_BASED_GEOM, &args![]).u32();
+    } else if slot_word(e, object, SLOT_IS_TRI_BASED_GEOM) != 0 {
+        let geometry = slot_word(e, object, SLOT_IS_TRI_BASED_GEOM);
         add_tri_geom(e, this, geometry);
     }
 }
@@ -298,7 +328,7 @@ pub fn add_object(e: &mut Engine, this: Ptr<ShadowSceneLight>, object: u32) {
     if object == 0 {
         return;
     }
-    let node = e.vcall(object, SLOT_IS_NODE, &args![]).u32();
+    let node = slot_word(e, object, SLOT_IS_NODE);
     let flags = e.mem.u32(object.wrapping_add(FLAGS));
     let parse = node != 0 && flags & 1 == 0 && {
         let bound = e.mem.u32(node.wrapping_add(WORLD_BOUND));
@@ -317,7 +347,7 @@ pub fn add_object(e: &mut Engine, this: Ptr<ShadowSceneLight>, object: u32) {
             return;
         }
     }
-    if e.vcall(object, SLOT_IS_TRI_BASED_GEOM, &args![]).u32() != 0 {
+    if slot_word(e, object, SLOT_IS_TRI_BASED_GEOM) != 0 {
         add_tri_geom(e, this, object);
     }
 }

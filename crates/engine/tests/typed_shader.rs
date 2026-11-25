@@ -809,7 +809,8 @@ fn shared(d: Diff) -> Diff {
         // draw_f's helpers: off until its gate, so by address, as in play; run in typed_draw.
         .goes_by_address(DRAW_F_HELPERS)
         // The draw family's shadow-pass test and a lighting property's fade, the dispatch family's node pool
-        // lock and the CRT's `_isnan`: by address (to the stand-ins here) unless a test names their family.
+        // lock and the CRT's `_isnan`: by address (the stand-ins or translations here) unless a test names their
+        // family.
         .goes_by_address(&[0x00b6_30f0, 0x00b6_6b80, 0x0040_fbf0, 0x00ec_75b1])
         .max_calls(MAX_CALLS)
         .max_cases(160)
