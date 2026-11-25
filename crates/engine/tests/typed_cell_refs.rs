@@ -22,6 +22,10 @@
 //!
 //! `TES`'s load of a reference into the scene (`00451ef0`) runs on a reference, its base form, its
 //! cell and the source task from a seed, the work it hands on standing in.
+//!
+//! The reference ID's walk of the scene graph (`004b6dc0`) runs on a tree from a seed (the exe's
+//! node and geometry slots and stand-ins), and `NiAVObject::GetProperty` (`00a59d30`) on a
+//! geometry's list of properties from a seed.
 
 use engine as _;
 use engine_core::prelude::*;
@@ -1386,9 +1390,11 @@ fn cell_critical_count_goes_down() {
 // not; cast or not), its loaded data (none, or one with a 3D or none, a count from -1 to 2, flags),
 // the 3D's parent; the cell's state and its count of references seen from a distance (0xffff too:
 // it wraps); the source task (none, with a node or not, its slot 0x40 the empty body or a
-// stand-in); the game loader's flag, the player, the large cell's byte, the cast's sizes, its
-// radius and the reference's scale (the product just below 5 that 24 bits round to 5, one past
-// 2^63, a NaN); JIP's patches and its handler's answer; now and then a null reference.
+// stand-in); the game loader's word (its flag, and bit 3 beside it), the player, the large cell's
+// byte, the cast's sizes, its radius and the reference's scale (the product just below 5 that 24
+// bits round to 5, one past 2^63, which two seeds always take, a NaN); JIP's patches and its
+// handler's answer; now and then a null reference. The reference ID's walk runs on a small scene
+// graph ([`scene_graph`]).
 
 /// A reference's words the load's stand-ins answer from (past the pass's): its scale (a float's
 /// bits), its slot 0x220, its own `Load3D`, JIP's handler.
@@ -1406,8 +1412,10 @@ const SHADOW_SCENE_NODES: u32 = 0x011f_91c8;
 const LARGE_STEP_ON: u32 = 0x0119_b8c8;
 const LARGE_LIMIT: u32 = 0x0101_79e0;
 
-/// The work the load hands on, standing in (the call log holds each call with its words).
-const SCENE_DOUBLES: [u32; 11] = [
+/// The work the load hands on, standing in (the call log holds each call with its words). The
+/// reference ID's walk of the scene graph (`004b6dc0`) is this family's and runs as itself on
+/// [`scene_graph`]'s objects.
+const SCENE_DOUBLES: [u32; 10] = [
     0x0056_5210, // TESActorBase::SetStartsDead
     0x00b5_eeb0, // ShadowSceneNode::AddObject
     0x00b5_cbd0, // its actors' add
@@ -1418,8 +1426,38 @@ const SCENE_DOUBLES: [u32; 11] = [
     0x0056_5730, // TESObjectREFR::InitScript
     0x008c_4640, // Actor::UpdateAlpha
     0x0054_7ad0, // the large cell's step
-    0x004b_6dc0, // SetReferenceIDOnScenegraph
 ];
+
+/// The scene graph the load's walk (`004b6dc0`) meets, on JIP's node's page: JIP's node is a node
+/// (the exe's `NiNode` slots 0xc and 0x18) with one child, a geometry (the exe's geometry slots)
+/// whose list holds one shade property (its slot 0x8c the exe's `3`) with a word at +0x1c the walk
+/// accepts, so the ID is stored at its +0x70. The world's other nodes are geometries holding the
+/// same list.
+const NODE_VTABLE: u32 = JIP_NODE + 0x800;
+const GEOMETRY_VTABLE: u32 = JIP_NODE + 0x900;
+const PROPERTY_VTABLE: u32 = JIP_NODE + 0xa00;
+const JIP_GEOMETRY: u32 = JIP_NODE + 0x200;
+const PROPERTY_LIST: u32 = JIP_NODE + 0x300;
+const JIP_CHILDREN: u32 = JIP_NODE + 0x400;
+const SHADE_PROPERTY: u32 = JIP_NODE + 0x500;
+
+fn scene_graph(e: &mut Engine) {
+    e.map(JIP_NODE, 0x1000);
+    e.mem.set_u32(NODE_VTABLE + 0xc, 0x0068_15c0);
+    e.mem.set_u32(NODE_VTABLE + 0x18, 0x00ac_bb70);
+    e.mem.set_u32(GEOMETRY_VTABLE + 0xc, 0x00ac_bb70);
+    e.mem.set_u32(GEOMETRY_VTABLE + 0x18, 0x00e6_8810);
+    e.mem.set_u32(PROPERTY_VTABLE + 0x8c, 0x00a6_a000);
+    e.mem.set_u32(SHADE_PROPERTY, PROPERTY_VTABLE);
+    e.mem.set_u32(SHADE_PROPERTY + 0x1c, 1);
+    e.mem.set_u32(PROPERTY_LIST + 8, SHADE_PROPERTY);
+    e.mem.set_u32(JIP_GEOMETRY, GEOMETRY_VTABLE);
+    e.mem.set_u32(JIP_GEOMETRY + 0x24, PROPERTY_LIST);
+    e.mem.set_u32(JIP_NODE, NODE_VTABLE);
+    e.mem.set_u32(JIP_NODE + 0xa0, JIP_CHILDREN);
+    e.mem.set_u16(JIP_NODE + 0xa6, 1);
+    e.mem.set_u32(JIP_CHILDREN, JIP_GEOMETRY);
+}
 
 /// A float's bits in ST0.
 fn float_ret(bits: u32) -> Ret {
@@ -1455,6 +1493,7 @@ fn scene_stand_ins(e: &mut Engine) {
     for addr in SCENE_DOUBLES {
         e.register(addr, nothing);
     }
+    scene_graph(e);
     e.register(0x0057_0f70, set_3d);
     e.register(0x0056_7400, |e, a| {
         float_ret(e.mem.u32(a[0] + ANSWER_SCALE))
@@ -1499,9 +1538,11 @@ fn scene_vtable(e: &mut Engine, class: u32) -> u32 {
     vt
 }
 
-/// A node, with a parent (whose slot 0xe8 takes it) or none.
+/// A node (a geometry of [`scene_graph`]'s), with a parent (whose slot 0xe8 takes it) or none.
 fn scene_node(e: &mut Engine, d: &mut Draw) -> u32 {
     let node = e.mem.alloc(0x40);
+    e.mem.set_u32(node, GEOMETRY_VTABLE);
+    e.mem.set_u32(node + 0x24, PROPERTY_LIST);
     if d.next(3) != 0 {
         let vt = e.mem.alloc(0x100);
         e.mem.set_u32(vt + 0xe8, VT_FN + 0xe8);
@@ -1520,8 +1561,11 @@ fn scene_world(e: &mut Engine, seed: u32, flag: u32) -> Vec<u32> {
     e.set_jip_patches([0, 0, NPC_PERKS, NPC_WEAPON_MODS][d.next(4) as usize]);
     e.mem.set_u8(LARGE_STEP_ON, u8::from(d.next(4) != 0));
     let loader = e.mem.alloc(0x250);
+    // The game loader's word: its flag (bit 1) or not, and a third of the seeds with bit 3 as well
+    // (8 alone, 0xa, 0xe), which the flag's test must not take for its own.
+    let high = if seed % 3 == 1 { 8 } else { 0 };
     e.mem
-        .set_u32(loader + 0x244, [0, 0, 2, 6][d.next(4) as usize]);
+        .set_u32(loader + 0x244, [0, 0, 2, 6][d.next(4) as usize] | high);
     e.set_global(GAME_LOADER_POINTER, loader);
     // The reference: its class, type byte, flags, form id and position.
     let class = d.next(4);
@@ -1654,6 +1698,34 @@ fn scene_world(e: &mut Engine, seed: u32, flag: u32) -> Vec<u32> {
     // The player: the reference now and then.
     let player = if d.next(6) == 0 { r } else { 0x0700_1000 };
     e.set_global(PLAYER_POINTER, player);
+    // Four seeds take the large cell's step whatever their draws: a plain reference (the exe's
+    // slots) with no form flags, a type 0x25 base form, a cast whose sizes pass; two of them the
+    // radius 2^40 and the scale 2^30 (the product past 2^63), two a NaN radius. The exe's store
+    // gives the integer indefinite for both, whose low word is 0, where a saturating cast would
+    // give 0xffffffff past 2^63 (and 0 for the NaN).
+    if seed % 24 == 21 {
+        let past = seed % 48 == 21;
+        let vt = scene_vtable(e, 0);
+        e.mem.set_u32(r, vt);
+        e.mem.set_u8(r + 4, 0x3b);
+        e.mem.set_u32(r + 8, 0);
+        e.mem.set_u8(base + 4, 0x25);
+        e.mem.set_u8(LARGE_STEP_ON, 1);
+        let vt = e.mem.alloc(0x200);
+        e.mem.set_u32(vt + 0x1bc, VT_FN + 0x1bc);
+        let cast = e.mem.alloc(0x120);
+        e.mem.set_u32(cast, vt);
+        e.mem.set_f32(cast + 0x8c, 300.0);
+        e.mem.set_f32(cast + 0x90, 250.0);
+        let (radius, scale) = if past {
+            (1_099_511_627_776.0f32, 1_073_741_824.0f32)
+        } else {
+            (f32::NAN, 1.0)
+        };
+        e.mem.set_u32(cast + CAST_RADIUS, radius.to_bits());
+        e.mem.set_u32(base + ANSWER_CAST, cast);
+        e.mem.set_u32(r + ANSWER_SCALE, scale.to_bits());
+    }
     let tes = e.mem.alloc(0x40);
     let r = if seed % 32 == 31 { 0 } else { r };
     vec![tes, r, cell, source, flag]
@@ -1691,7 +1763,11 @@ fn tes_load_reference() {
     .family(&CELL_REFS)
     .family(&leaf::LEAVES)
     .goes_by_address(&[0x0047_c850, 0x0043_fcd0])
+    // The walk's node child count and child (the dispatch family's), on JIP's node.
+    .goes_by_address(&[0x0043_b480, 0x0043_b4a0])
     .ignore_calls(SCENE_INLINED)
+    // What the walk does in place.
+    .ignore_calls(WALK_INLINED)
     .inputs(&[Input::Of(SEEDS), Input::Of(&[0, 1, 0x100])])
     .setup(|e, case| scene_world(e, case.word(0), case.word(1)))
     .run()
@@ -1730,16 +1806,19 @@ const SCENE_BRANCHES: &[&str] = &[
     "lighting updated",
     "type 0x1e's step",
     "the action list set up",
+    "the action list set up under a word of 8 alone",
     "the game loader's flag",
     "counted as seen from a distance",
     "the distant count wraps",
     "the large cell's step",
     "a product just below 5",
-    "a product past 2^63 or a NaN",
+    "a product past 2^63",
+    "a NaN product",
     "an actor's alpha",
     "an ID set on the scene graph",
     "the player's ID not set",
     "JIP's node",
+    "an ID stored in the shade property",
 ];
 
 /// The load's worlds reach every branch it has, checked on the translation (under the other
@@ -1817,6 +1896,10 @@ fn the_scene_seeds_reach_every_branch() {
             if !called(0x005a_c750) {
                 hit("the game loader's flag");
             }
+            let word = e.mem.u32(e.global::<u32>(GAME_LOADER_POINTER) + 0x244);
+            if word == 8 && called(0x005a_c750) {
+                hit("the action list set up under a word of 8 alone");
+            }
             let distant_after = e.mem.u16(cell + 0xaa);
             if distant_after != distant_before {
                 hit(if distant_after == 0 {
@@ -1831,8 +1914,13 @@ fn the_scene_seeds_reach_every_branch() {
                 if scale == 3.0 && step[4] == 4 {
                     hit("a product just below 5");
                 }
-                if step[4] == 0 {
-                    hit("a product past 2^63 or a NaN");
+                let cast = e.mem.u32(base + ANSWER_CAST);
+                let radius = f32::from_bits(e.mem.u32(cast + CAST_RADIUS));
+                if scale == 1_073_741_824.0 && radius == 1_099_511_627_776.0 && step[4] == 0 {
+                    hit("a product past 2^63");
+                }
+                if radius.is_nan() && step[4] == 0 {
+                    hit("a NaN product");
                 }
             }
             if called(0x008c_4640) && !called(0x004b_6dc0) {
@@ -1841,9 +1929,392 @@ fn the_scene_seeds_reach_every_branch() {
             if words(0x004b_6dc0).iter().any(|w| w[0] == JIP_NODE) {
                 hit("JIP's node");
             }
+            if e.mem.u32(SHADE_PROPERTY + 0x70) == e.mem.u32(r + 0xc) {
+                hit("an ID stored in the shade property");
+            }
         }
     }
     for name in SCENE_BRANCHES {
+        assert!(
+            reached.contains_key(name),
+            "no seed reaches {name}: {reached:?}"
+        );
+    }
+}
+
+// The reference ID's walk of the scene graph (`004b6dc0`) and `NiAVObject::GetProperty`
+// (`00a59d30`).
+//
+// Their world, from a seed: a tree below a root (now and then none), at most five levels deep, of
+// objects of four sorts: a node of the exe's `NiNode` slots (0xc the object itself, 0x18 none) with
+// none to four children (a null child now and then); a geometry of the exe's geometry slots (0x18
+// the object itself, 0xc none) with a list of none to four properties (null items too); an object
+// of stand-in slots answering words kept in it (its 0x18 a word that is not the object, or 0 with
+// its 0xc the object itself or 0); and a stand-in node whose slot 0xc answers another node, which
+// holds the children walked, while its own children (never walked) hold a geometry the walk would
+// store in. Each property is of a class whose slot 0x8c holds one of the exe's eleven constant
+// bodies (the shade property's most often) or a stand-in answering a word kept in it (3, 2, 7, -1),
+// with its word at +0x1c from 0, 1, 5, 0xc, 0xd, -1 and 0x8000_0000.
+
+/// Where the walk's stand-in slots are registered: `WALK_VT_FN + slot`.
+const WALK_VT_FN: u32 = 0x00ff_8000;
+/// An object's words its stand-in slots answer: 0x18 and 0xc.
+const ANSWER_GEOMETRY: u32 = 0xb0;
+const ANSWER_NODE: u32 = 0xb4;
+/// A property's word its stand-in slot 0x8c answers.
+const ANSWER_PROPERTY_KIND: u32 = 0x78;
+/// The exe's bodies in a property's slot 0x8c, the shade property's three times.
+const KIND_BODIES: [u32; 13] = [
+    0x00ac_bb70,
+    0x00b6_f470,
+    0x00c1_ba40,
+    0x00a6_a000,
+    0x00a6_a000,
+    0x00a6_a000,
+    0x0081_b6c0,
+    0x00e9_e670,
+    0x00dc_9bc0,
+    0x00a9_50e0,
+    0x00dc_9e60,
+    0x00a5_f500,
+    0x00e0_9620,
+];
+
+/// The vtables of a walk world: the exe's node and geometry slots, stand-ins, and one per property
+/// class (the exe's bodies, then the stand-in's).
+struct WalkVtables {
+    node: u32,
+    geometry: u32,
+    stand_in: u32,
+    properties: Vec<u32>,
+}
+
+fn walk_vtable(e: &mut Engine, slots: &[(u32, u32)]) -> u32 {
+    let vt = e.mem.alloc(0x90);
+    for &(slot, target) in slots {
+        e.mem.set_u32(vt + slot, target);
+    }
+    vt
+}
+
+fn walk_vtables(e: &mut Engine) -> WalkVtables {
+    e.register(WALK_VT_FN + 0xc, answer_of::<ANSWER_NODE>);
+    e.register(WALK_VT_FN + 0x18, answer_of::<ANSWER_GEOMETRY>);
+    e.register(WALK_VT_FN + 0x8c, answer_of::<ANSWER_PROPERTY_KIND>);
+    let node = walk_vtable(e, &[(0xc, 0x0068_15c0), (0x18, 0x00ac_bb70)]);
+    let geometry = walk_vtable(e, &[(0xc, 0x00ac_bb70), (0x18, 0x00e6_8810)]);
+    let stand_in = walk_vtable(e, &[(0xc, WALK_VT_FN + 0xc), (0x18, WALK_VT_FN + 0x18)]);
+    let mut properties: Vec<u32> = KIND_BODIES
+        .iter()
+        .map(|&body| walk_vtable(e, &[(0x8c, body)]))
+        .collect();
+    properties.push(walk_vtable(e, &[(0x8c, WALK_VT_FN + 0x8c)]));
+    WalkVtables {
+        node,
+        geometry,
+        stand_in,
+        properties,
+    }
+}
+
+/// An object of the walk's world: its vtable; its children array at +0x9c (the items at +0xa0, the
+/// count a 16-bit word at +0xa6) and its property list's head (+0x24) filled in by the caller.
+fn walk_object(e: &mut Engine, vt: u32) -> u32 {
+    let o = e.mem.alloc(0xc0);
+    e.mem.set_u32(o, vt);
+    o
+}
+
+fn set_children(e: &mut Engine, node: u32, children: &[u32]) {
+    let n = children.len() as u32;
+    let items = e.mem.alloc(4 * n.max(1));
+    for (i, &child) in (0u32..).zip(children) {
+        e.mem.set_u32(items + 4 * i, child);
+    }
+    e.mem.set_u32(node + 0xa0, items);
+    e.mem.set_u16(node + 0xa6, n as u16);
+}
+
+/// A list of none to four properties (a null item now and then) for `object`.
+fn walk_properties(e: &mut Engine, d: &mut Draw, vts: &WalkVtables, object: u32) {
+    let classes = vts.properties.len() as u32;
+    let mut link = object + 0x24;
+    for _ in 0..d.next(5) {
+        let node = e.mem.alloc(0xc);
+        e.mem.set_u32(link, node);
+        link = node;
+        if d.next(6) == 0 {
+            continue;
+        }
+        let p = e.mem.alloc(0x80);
+        e.mem.set_u32(p, vts.properties[d.next(classes) as usize]);
+        e.mem.set_u32(
+            p + 0x1c,
+            [0, 1, 5, 0xc, 0xd, 0xffff_ffff, 0x8000_0000][d.next(7) as usize],
+        );
+        e.mem.set_u32(p + 0x70, 0x5a5a_0000 + d.next(0x100));
+        e.mem.set_u32(
+            p + ANSWER_PROPERTY_KIND,
+            [3, 2, 7, 0xffff_ffff][d.next(4) as usize],
+        );
+        e.mem.set_u32(node + 8, p);
+    }
+}
+
+/// None to four children below a node at `depth` (a null one now and then).
+fn walk_children(e: &mut Engine, d: &mut Draw, vts: &WalkVtables, depth: u32) -> Vec<u32> {
+    let n = d.next(5);
+    let mut out = Vec::new();
+    for _ in 0..n {
+        let child = if d.next(7) == 0 {
+            0
+        } else {
+            walk_tree(e, d, vts, depth + 1)
+        };
+        out.push(child);
+    }
+    out
+}
+
+/// An object at `depth` and what is below it.
+fn walk_tree(e: &mut Engine, d: &mut Draw, vts: &WalkVtables, depth: u32) -> u32 {
+    let sort = if depth >= 4 { d.next(2) } else { d.next(7) };
+    match sort {
+        // A geometry of the exe's slots.
+        0 => {
+            let o = walk_object(e, vts.geometry);
+            walk_properties(e, d, vts, o);
+            o
+        }
+        // Stand-in slots: a geometry by a word that is not the object, or 0 with the object (or 0)
+        // as a node.
+        1 => {
+            let o = walk_object(e, vts.stand_in);
+            let geometry = [0, 0, 1, 0x0700_0000][d.next(4) as usize];
+            e.mem.set_u32(o + ANSWER_GEOMETRY, geometry);
+            walk_properties(e, d, vts, o);
+            if geometry == 0 && d.next(2) == 0 && depth < 4 {
+                e.mem.set_u32(o + ANSWER_NODE, o);
+                let below = walk_children(e, d, vts, depth);
+                set_children(e, o, &below);
+            }
+            o
+        }
+        // A stand-in node answering another node: that one's children are walked, its own never.
+        2 => {
+            let o = walk_object(e, vts.stand_in);
+            let other = walk_object(e, vts.node);
+            let below = walk_children(e, d, vts, depth);
+            set_children(e, other, &below);
+            e.mem.set_u32(o + ANSWER_NODE, other);
+            let decoy = walk_object(e, vts.geometry);
+            walk_properties(e, d, vts, decoy);
+            set_children(e, o, &[decoy]);
+            o
+        }
+        // A node of the exe's slots.
+        _ => {
+            let o = walk_object(e, vts.node);
+            let below = walk_children(e, d, vts, depth);
+            set_children(e, o, &below);
+            o
+        }
+    }
+}
+
+/// The walk's world of a seed: its root (null for one seed in twelve).
+fn walk_world(e: &mut Engine, seed: u32) -> u32 {
+    let vts = walk_vtables(e);
+    let mut d = Draw(seed.wrapping_mul(0x9e37_79b9) ^ 0x6dc0);
+    let root = walk_tree(e, &mut d, &vts, 0);
+    if seed % 12 == 7 {
+        0
+    } else {
+        root
+    }
+}
+
+/// The bodies the typed walk and `GetProperty` do in place: `004a2c20` and its `00441110`,
+/// `0057bd60`, the slot bodies (0, and the object itself) and the property kinds' constants.
+const WALK_INLINED: &[u32] = &[
+    0x004a_2c20,
+    0x0044_1110,
+    0x0057_bd60,
+    0x00ac_bb70,
+    0x0068_15c0,
+    0x00e6_8810,
+    0x00b6_f470,
+    0x00c1_ba40,
+    0x00a6_a000,
+    0x0081_b6c0,
+    0x00e9_e670,
+    0x00dc_9bc0,
+    0x00a9_50e0,
+    0x00dc_9e60,
+    0x00a5_f500,
+    0x00e0_9620,
+];
+
+/// The reference ID's walk against its translation, over the seeds' trees and two IDs.
+#[test]
+fn set_reference_id_on_scenegraph() {
+    Diff::new(entry!(
+        0x004b_6dc0,
+        cell_refs::scenegraph::set_reference_id_on_scenegraph(u32, u32)
+    ))
+    .family(&CELL_REFS)
+    .family(&engine_typed::dispatch::DISPATCH)
+    .family(&leaf::LEAVES)
+    .ignore_calls(WALK_INLINED)
+    .inputs(&[Input::Of(SEEDS), Input::Of(&[0x0001_2345, 0])])
+    .setup(|e, case| vec![walk_world(e, case.word(0)), case.word(1)])
+    .run()
+    .assert_same();
+}
+
+const PROPERTY_SEEDS: &[u32] = &[
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
+];
+
+/// `GetProperty` against its translation: a geometry's list from a seed, and kinds below 7, at it,
+/// past it and negative.
+#[test]
+fn get_property() {
+    Diff::new(entry!(
+        0x00a5_9d30,
+        cell_refs::scenegraph::get_property(u32, i32) -> u32
+    ))
+    .family(&CELL_REFS)
+    .ignore_calls(WALK_INLINED)
+    .inputs(&[
+        Input::Of(PROPERTY_SEEDS),
+        Input::Of(&[0, 2, 3, 5, 6, 7, 8, 0xd, 0xffff_ffff, 0x8000_0000]),
+    ])
+    .setup(|e, case| {
+        let vts = walk_vtables(e);
+        let mut d = Draw(case.word(0).wrapping_mul(0x9e37_79b9) ^ 0x9d30);
+        let o = walk_object(e, vts.geometry);
+        walk_properties(e, &mut d, &vts, o);
+        vec![o, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The walk's worlds reach what it does, checked on the translation: a null root, an ID stored, a
+/// shade property's word at +0x1c of 0xc (accepted), 0xd and negative (refused), a geometry with no
+/// shade property, a material property ahead of the shade property, the stand-in slots, a stand-in
+/// node answering another node, a null child and a null property item, three of the exe's property
+/// kinds asked, a tree three levels deep.
+#[test]
+fn the_walk_seeds_reach_every_branch() {
+    let mut reached = std::collections::BTreeMap::<&str, u32>::new();
+    for &seed in SEEDS {
+        let mut e = Engine::new_untyped_for_test();
+        let root = walk_world(&mut e, seed);
+        let mut hit = |name| *reached.entry(name).or_default() += 1;
+        if root == 0 {
+            hit("a null root");
+            continue;
+        }
+        e.call_log = Some(Vec::new());
+        e.call(0x004b_6dc0, &args![root, 0x0001_2345u32]);
+        let log = e.call_log.take().unwrap_or_default();
+        let called = |addr: u32| log.iter().any(|(a, _)| *a == addr);
+        for (addr, name) in [
+            (0x0057_bd60, "an ID stored"),
+            (WALK_VT_FN + 0x18, "a stand-in slot 0x18"),
+            (WALK_VT_FN + 0xc, "a stand-in slot 0xc"),
+            (WALK_VT_FN + 0x8c, "a stand-in property kind"),
+            (0x00c1_ba40, "a material property asked"),
+            (0x0081_b6c0, "a stencil property asked"),
+            (0x00e0_9620, "a fog property asked"),
+        ] {
+            if called(addr) {
+                hit(name);
+            }
+        }
+        // What each GetProperty of the walk met in its object's list.
+        for (addr, words) in &log {
+            if *addr == WALK_VT_FN + 0xc {
+                let answer = e.mem.u32(words[0] + ANSWER_NODE);
+                if answer != 0 && answer != words[0] {
+                    hit("a stand-in node answering another node");
+                }
+            }
+            if *addr != 0x00a5_9d30 {
+                continue;
+            }
+            let mut node = e.mem.u32(words[0] + 0x24);
+            let (mut material_first, mut shade) = (false, None);
+            while node != 0 {
+                let p = e.mem.u32(node + 8);
+                node = e.mem.u32(node);
+                if p == 0 {
+                    hit("a null property item");
+                    continue;
+                }
+                let body = e.mem.u32(e.mem.u32(p) + 0x8c);
+                if shade.is_none() && body == 0x00c1_ba40 {
+                    material_first = true;
+                }
+                if shade.is_none() && body == 0x00a6_a000 {
+                    shade = Some(p);
+                }
+            }
+            let Some(p) = shade else {
+                hit("a geometry with no shade property");
+                continue;
+            };
+            if material_first {
+                hit("a material property ahead of the shade property");
+            }
+            match e.mem.u32(p + 0x1c) {
+                0xc => hit("a shade property's word 0xc"),
+                0xd => hit("a shade property's word 0xd"),
+                0xffff_ffff | 0x8000_0000 => hit("a shade property's negative word"),
+                _ => {}
+            }
+        }
+        // The tree's shape, through the exe's nodes: a null child and the depth.
+        let mut stack = vec![(root, 0u32)];
+        while let Some((o, depth)) = stack.pop() {
+            if depth >= 3 {
+                hit("three levels deep");
+            }
+            if e.mem.u32(e.mem.u32(o) + 0xc) != 0x0068_15c0 {
+                continue;
+            }
+            for i in 0..u32::from(e.mem.u16(o + 0xa6)) {
+                let child = e.mem.u32(e.mem.u32(o + 0xa0) + 4 * i);
+                if child == 0 {
+                    hit("a null child");
+                } else {
+                    stack.push((child, depth + 1));
+                }
+            }
+        }
+    }
+    for name in [
+        "a null root",
+        "an ID stored",
+        "a stand-in slot 0x18",
+        "a stand-in slot 0xc",
+        "a stand-in property kind",
+        "a material property asked",
+        "a stencil property asked",
+        "a fog property asked",
+        "a null property item",
+        "a geometry with no shade property",
+        "a material property ahead of the shade property",
+        "a shade property's word 0xc",
+        "a shade property's word 0xd",
+        "a shade property's negative word",
+        "a stand-in node answering another node",
+        "a null child",
+        "three levels deep",
+    ] {
         assert!(
             reached.contains_key(name),
             "no seed reaches {name}: {reached:?}"

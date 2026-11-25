@@ -44,6 +44,8 @@ const LOCK_ACQUIRE: u32 = 0x0040_fbf0;
 /// it is not confirmed).
 const PROPERTY_LOCK: u32 = 0x011f_42a0;
 const PROPERTY_LOCK_COUNT: u32 = 0x011f_42a4;
+/// `NiAVObject::GetProperty` (Xbox PDB), which `PurgeRendererData` calls.
+const GET_PROPERTY: u32 = 0x00a5_9d30;
 /// The vtable `NiAVObject`'s constructor and destructor store.
 const NI_AV_OBJECT_VTABLE: u32 = 0x0109_b00c;
 /// The `NiRTTI` record `GetRTTI` answers; its first word is the class name.
@@ -426,9 +428,11 @@ pub fn ni_av_object_get_object_by_name(e: &mut Engine, this: Ptr<NiAVObject>, na
 // Translated from 00a59e50 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `NiAVObject::PurgeRendererData` (Xbox PDB): passes the property of type
 /// 2 to the renderer's slot 0xF4 when the object has one.
+/// `GetProperty` is called by address, as the exe calls it (the typed
+/// family `cell_refs` registers a native body there).
 pub fn ni_av_object_purge_renderer_data(e: &mut Engine, this: Ptr<NiAVObject>, renderer: Ptr) {
-    let property = ni_av_object_get_property(e, this, 2);
-    if !property.is_null() {
+    let property = e.call(GET_PROPERTY, &args![this, 2u32]).u32();
+    if property != 0 {
         e.vcall(renderer.addr(), SLOT_RENDERER_PURGE, &args![property]);
     }
 }
