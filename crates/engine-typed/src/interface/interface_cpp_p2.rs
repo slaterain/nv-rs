@@ -1488,11 +1488,6 @@ const MANAGER_IS_IN_PIPBOY_MENU: u32 = 0x0071_78a0;
 const MANAGER_IS_CURRENT_RENDERED_MENU_TOPMOST: u32 = 0x0071_7990;
 /// `00726070`: returns the word at `+4` of its object (a list's first node,
 /// an item's count, a menu's tile).
-/// `MenuManager::Instance` (Xbox PDB), `cdecl`: the create flag.
-const MENU_MANAGER_INSTANCE: u32 = 0x0071_e290;
-/// `MenuManager::CreateMenuByClass` (Xbox PDB), on the menu manager: the
-/// menu class id.
-const MENU_MANAGER_CREATE_MENU_BY_CLASS: u32 = 0x0071_e420;
 /// `BSAnimGroupSequence::PlaySounds` (Xbox PDB), `cdecl`.
 const ANIM_GROUP_PLAY_SOUNDS: u32 = 0x004e_ef00;
 /// Trait ids of a menu tile that `Interface::IsRenderedMenu` reads
@@ -1826,12 +1821,17 @@ pub fn fn_00707970(e: &mut Engine, sequence: u32) -> bool {
 /// `class_id` and answers what that gives (the exe ends on that call and
 /// leaves its `EAX`, which the caller keeps).
 pub fn interface_create_menu_by_class(e: &mut Engine, class_id: u32) -> u32 {
-    let menu_manager = e.call(MENU_MANAGER_INSTANCE, &args![1u32]).u32();
-    e.call(
-        MENU_MANAGER_CREATE_MENU_BY_CLASS,
-        &args![menu_manager, class_id],
+    let menu_manager = typed_call!(
+        super::FAMILY,
+        0x0071_e290,
+        super::menu_manager::menu_manager_instance(e, true)
+    );
+    let manager = Ptr::new(menu_manager);
+    typed_call!(
+        super::FAMILY,
+        0x0071_e420,
+        super::menu_manager::menu_manager_create_menu_by_class(e, manager, class_id)
     )
-    .u32()
 }
 
 // Typed from 007079b0
