@@ -911,9 +911,12 @@ pub fn process_movement_blocked(e: &mut Engine, this: Ptr, actor: u32) {
 
 // Typed from 00909d00
 /// `LowProcess::ProcessFleeNonCombat` (Xbox PDB): for the running package (slot 0x27c), the target
-/// is set when there is none (slot 0x8c) and the location (slot 0x90 with 0). The flee distance is
-/// the package target's integer (+8) as a float, 0.0 without a target. A target closer than that
-/// ends it; without a target the package's slot 0x13c runs.
+/// is set when there is none (slot 0x8c) and the location (slot 0x90 with 0). With a target, the
+/// distance to it is measured (`GetDistanceFromReference`) and nothing else happens; without one
+/// the package's slot 0x13c runs. The exe compares that distance with the flee distance (the
+/// package target's integer at +8 as a float) and returns early when the target is farther, but
+/// both ways end there with a target (the slot 0x13c call needs none), so the flee distance is not
+/// worked out.
 pub fn process_flee_non_combat(e: &mut Engine, this: Ptr, actor: Ptr) {
     let process = this.addr();
     let actor = actor.addr();
@@ -922,22 +925,10 @@ pub fn process_flee_non_combat(e: &mut Engine, this: Ptr, actor: Ptr) {
         set_target_for_package_slot(e, process, actor);
     }
     set_location_for_package_slot(e, process, actor);
-    let package_target = e.mem.u32(package.wrapping_add(0x30));
-    let distance = if package_target != 0 {
-        to_float(f64::from(e.mem.i32(package_target.wrapping_add(8))))
-    } else {
-        0.0
-    };
     let target = e.mem.u32(process.wrapping_add(TARGET));
     if target != 0 {
-        let to_target = e
-            .call(REFERENCE_DISTANCE, &args![actor, target, 0u32, 0u32])
-            .st0;
-        if f64::from(distance) < to_target {
-            return;
-        }
-    }
-    if e.mem.u32(process.wrapping_add(TARGET)) == 0 {
+        e.call(REFERENCE_DISTANCE, &args![actor, target, 0u32, 0u32]);
+    } else {
         package_slot_13c(e, package, actor);
     }
 }

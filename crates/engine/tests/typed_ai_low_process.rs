@@ -11,8 +11,8 @@
 //! package target's kind, reference and integer; the base form's type. Each object but the buffer
 //! has a vtable of its own: every slot the code calls is a stand-in answering a seeded word (in EAX,
 //! and as a float in ST0) and counting its calls, or, by the seed, the exe's own body (the process
-//! classes' slots 0x8c, 0x90, 0x12c, 0x22c, 0x244, 0x278, 0x27c, 0x280, 0x284 and 0x33c), so the
-//! typed side's direct branches run. The globals the code reads (the actor value infos, the
+//! classes' slots 0x8c, 0x90, 0x12c, 0x22c, 0x238, 0x23c, 0x244, 0x278, 0x27c, 0x280, 0x284 and
+//! 0x33c), so the typed side's direct branches run. The globals the code reads (the actor value infos, the
 //! procedure lists, the calendar, the frame timer, the zero point, the float -1.0 and the blocked
 //! time's limit) are seeded too; the page at 0 is mapped, so a read through a null pointer reads
 //! zeros on both sides.
@@ -39,6 +39,8 @@ const ANSWERS: u32 = 0x1000;
 const CONTROL: u32 = 0x0300_0000;
 /// The slots' call counts: slot `s` at `SLOT_COUNTS + s`.
 const SLOT_COUNTS: u32 = CONTROL + 0x2000;
+/// The third word of each slot's last call (after `this` and one more): slot `s` at `SLOT_LAST + s`.
+const SLOT_LAST: u32 = CONTROL + 0x4000;
 /// The procedure lists' rows.
 const LISTS: u32 = CONTROL + 0x3000;
 /// The bucket tables the allocator gives.
@@ -46,8 +48,8 @@ const BUFFER: u32 = 0x0400_0000;
 
 /// The slots the code calls, each a stand-in unless the seed gives the exe's body.
 const SLOTS: &[u32] = &[
-    0x8c, 0x90, 0x12c, 0x13c, 0x22c, 0x244, 0x278, 0x27c, 0x280, 0x284, 0x288, 0x298, 0x2a4, 0x33c,
-    0x360, 0x424, 0x810, 0x814,
+    0x8c, 0x90, 0x12c, 0x13c, 0x22c, 0x238, 0x23c, 0x244, 0x278, 0x27c, 0x280, 0x284, 0x288, 0x298,
+    0x2a4, 0x33c, 0x360, 0x424, 0x810, 0x814,
 ];
 /// The exe's bodies a slot may hold instead.
 const REAL_SLOTS: &[(u32, u32)] = &[
@@ -55,6 +57,8 @@ const REAL_SLOTS: &[(u32, u32)] = &[
     (0x90, 0x0090_8c50),
     (0x12c, 0x0091_1e80),
     (0x22c, 0x007f_a950),
+    (0x238, 0x008d_03c0),
+    (0x23c, 0x008d_03e0),
     (0x244, 0x0048_3710),
     (0x278, 0x0071_7e50),
     (0x27c, 0x0085_9670),
@@ -181,6 +185,7 @@ const IN_PLACE: &[u32] = &[
     0x0086_7da0, // Calendar::GetHour
     0x0052_6ac0, // a global's value
     0x0062_1b00, // the package's start hour
+    0x0041_fd00, // the package's procedure index's store (slot 0x238's body does it in place)
 ];
 
 /// The globals the code reads.
@@ -230,6 +235,11 @@ fn calls(e: &Engine, addr: u32) -> u32 {
     e.mem.u32(block(k))
 }
 
+/// The third word of the last call of `slot`.
+fn slot_last(e: &Engine, slot: u32) -> u32 {
+    e.mem.u32(SLOT_LAST + slot)
+}
+
 fn slot_calls(e: &Engine, slot: u32) -> u32 {
     e.mem.u32(SLOT_COUNTS + slot)
 }
@@ -247,11 +257,13 @@ impl World {
             rng: (u64::from(seed) ^ 0x9e37_79b9_7f4a_7c15).wrapping_mul(0xbf58_476d_1ce4_e5b9) | 1,
         };
         e.map(0, 0x1000);
-        e.map(CONTROL, 0x4000);
+        e.map(CONTROL, 0x5000);
         e.map(BUFFER, 0x1_0000);
         for &slot in SLOTS {
             e.register_double(VT_FN + slot, move |e, a| {
                 let n = e.mem.u32(SLOT_COUNTS + slot);
+                let third = a.get(2).copied().unwrap_or(0);
+                e.mem.set_u32(SLOT_LAST + slot, third);
                 e.mem.set_u32(SLOT_COUNTS + slot, n + 1);
                 let vt = e.mem.u32(a[0]);
                 ret(e.mem.u32(vt + ANSWERS + slot))
@@ -301,8 +313,9 @@ impl World {
             for &slot in SLOTS {
                 e.mem.set_u32(vt + slot, VT_FN + slot);
                 let answers: &[u32] = match slot {
-                    0x13c | 0x22c | 0x360 => BOOLS,
-                    0x280 => &[0xffff_ffff, 0, 1, 2, 3],
+                    0x13c | 0x360 => BOOLS,
+                    0x22c => &[0, PACKAGE, PACKAGE, PACKAGE_B],
+                    0x23c | 0x280 => &[0xffff_ffff, 0, 1, 2, 3],
                     0x278 => &[OTHER, OTHER, FORM],
                     0x27c => &[0, PACKAGE, PACKAGE_B],
                     0x810 => &[0, TARGET, ACTOR],
@@ -330,6 +343,9 @@ impl World {
         for o in [self.objects[0], self.objects[5]] {
             let package = self.one_of(&[0, PACKAGE, PACKAGE, PACKAGE_B]);
             e.mem.set_u32(o + 4, package);
+            // The embedded package's procedure index (slot 0x23c's body reads it).
+            let index = self.pick(&[0xffff_ffff, 0, 1, 2, 3]);
+            e.mem.set_u32(o + 0x10, index);
             let start = self.pick(FLOATS);
             e.mem.set_u32(o + 0x14, start);
             let level = self.pick(&[0, 1, 1, 2, 3, 0xffff_ffff]);
@@ -536,7 +552,6 @@ impl InWorld for Diff {
             .family(&CRT)
             .ignore_calls(IN_PLACE)
             .goes_by_address(BY_ADDRESS)
-            .allow_nan_payloads()
             .inputs(&[Input::Of(seeds)])
             .setup(move |e, case| {
                 let mut w = World::new(e, case.word(0));
@@ -593,6 +608,8 @@ fn lock_map() {
         low_process::lock_map_delete_item(Ptr, u32)
     ))
     .in_world(&FEW, |w| vec![w.objects[9], w.objects[7]])
+    // The lock data's constructor, which the typed version does in place.
+    .ignore_calls(&[0x0091_3950])
     .run()
     .assert_same();
     Diff::new(entry!(0x0091_3950, low_process::lock_data_construct(Ptr, u32) -> Ptr))
@@ -627,6 +644,10 @@ fn dates_flags_and_timers() {
         low_process::mod_essential_down_timer(Ptr)
     ))
     .in_world(&MANY, |w| w.process_and(0))
+    // A difference of two NaNs: SSE keeps the first one's payload, x87 the larger one's. Only
+    // here, in the tracked damage's sum and in the blocked time's difference: every other Diff
+    // compares NaN-looking words exactly.
+    .allow_nan_payloads()
     .run()
     .assert_same();
     Diff::new(entry!(
@@ -638,6 +659,7 @@ fn dates_flags_and_timers() {
         let amount = w.pick(FLOATS);
         vec![w.process(), actor, amount]
     })
+    .allow_nan_payloads()
     .run()
     .assert_same();
     Diff::new(entry!(0x0091_1ae0, low_process::float_zero(Ptr, u32, u32) -> f32))
@@ -649,6 +671,7 @@ fn dates_flags_and_timers() {
         low_process::process_movement_blocked(Ptr, u32)
     ))
     .in_world(&MOST, |w| w.process_actor())
+    .allow_nan_payloads()
     .run()
     .assert_same();
 }
@@ -917,10 +940,11 @@ fn the_seeds_reach_every_branch() {
         |w| w.process_actor(),
         &["back", "on", "neither"],
         |e, _| {
+            let moved = slot_calls(e, 0x288) > 0;
             vec![
-                slot_calls(e, 0x13c) > 0 && slot_calls(e, 0x288) > 0,
-                slot_calls(e, 0x13c) == 0 && slot_calls(e, 0x288) > 0,
-                slot_calls(e, 0x288) == 0,
+                moved && slot_last(e, 0x288) == 0xffff_ffff,
+                moved && slot_last(e, 0x288) == 1,
+                !moved,
             ]
         },
     );
@@ -928,11 +952,10 @@ fn the_seeds_reach_every_branch() {
         0x0090_9d00,
         &MOST,
         |w| w.process_actor(),
-        &["closer", "far", "no target"],
+        &["measured", "no target"],
         |e, _| {
             vec![
-                calls(e, 0x0057_23b0) > 0 && slot_calls(e, 0x13c) == 0,
-                calls(e, 0x0057_23b0) > 0 && slot_calls(e, 0x13c) > 0,
+                calls(e, 0x0057_23b0) > 0,
                 calls(e, 0x0057_23b0) == 0 && slot_calls(e, 0x13c) > 0,
             ]
         },

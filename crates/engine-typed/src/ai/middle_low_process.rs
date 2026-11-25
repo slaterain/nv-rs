@@ -21,9 +21,9 @@
 //!
 //! The callees whose bodies are one load, store or test are done in place: the actor value's flag
 //! (`00406d70`), the buffers' change flags (`00428110`, `0042ce30`, `004280f0`), the calendar's hour
-//! (`00867da0` with `00526ac0`), the settings' value addresses (`00403e20`, `00408d60`, `0043d4d0`),
-//! the save/load object's version, position and records, the package and location getters and the
-//! leaves. The values the exe works out and never reads (the hours `Update` stores, the seconds of
+//! and day (`00867da0` and `00867d60`, with `00526ac0`; the day truncated as `_ftol2` does), the
+//! settings' value addresses (`00403e20`, `00408d60`, `0043d4d0`), the save/load object's version,
+//! position and records, the package and location getters and the leaves. The values the exe works out and never reads (the hours `Update` stores, the seconds of
 //! the travel's hours, the reach distance) are not worked out.
 
 use super::base_process::{
@@ -103,13 +103,14 @@ const MIDDLE_LOW_PROCESS_VTABLE: u32 = 0x0108_9bcc;
 const TYPE_REFERENCE: u32 = 0x0118_41cc;
 
 /// The game calendar: its hour global (+0xc) and day global (+8); a global's value is its float at
-/// +0x24. Without the hour global the hour is the float at `01018f7c` (12.0).
+/// +0x24. Without the hour global the hour is the float at `01018f7c` (12.0), without the day
+/// global the day is the float at `01018f8c`.
 const CALENDAR: u32 = 0x011d_e7b8;
 const CALENDAR_HOUR_GLOBAL: u32 = 0xc;
+const CALENDAR_DAY_GLOBAL: u32 = 8;
 const GLOBAL_VALUE: u32 = 0x24;
 const DEFAULT_HOUR: u32 = 0x0101_8f7c;
-/// `Calendar::GetDay` (truncated through `_ftol2`, so it stays a call).
-const CALENDAR_GET_DAY: u32 = 0x0086_7d60;
+const DEFAULT_DAY: u32 = 0x0101_8f8c;
 /// The setting whose float gives the combat rounds, and the double the one-hour combat multiplies
 /// it by (4.0). A setting's value is at +4.
 const COMBAT_ROUNDS_SETTING: u32 = 0x011c_d6cc;
@@ -160,6 +161,18 @@ pub(super) fn calendar_hour(e: &Engine) -> u32 {
         e.mem.u32(DEFAULT_HOUR)
     };
     x87_quiet_bits(bits)
+}
+
+/// `Calendar::GetDay` (`00867d60`): the day global's value, or the default day without one, stored
+/// as a float, loaded again (`FLD`, which quiets a signalling NaN) and truncated (`_ftol2`).
+fn calendar_day(e: &mut Engine) -> u32 {
+    let global = e.mem.u32(CALENDAR + CALENDAR_DAY_GLOBAL);
+    let bits = if global != 0 {
+        e.mem.u32(global.wrapping_add(GLOBAL_VALUE))
+    } else {
+        e.mem.u32(DEFAULT_DAY)
+    };
+    truncate(e, loaded(bits))
 }
 
 /// A float bit pattern as the x87 stack holds it after `FLD dword`.
@@ -1175,7 +1188,7 @@ fn update_finish_package(e: &mut Engine, process: u32, actor: u32, package: &mut
     if current_package(e, process) != 0 {
         let current = current_package(e, process);
         if package_flag(e, current, 0x400) {
-            let day = e.call(CALENDAR_GET_DAY, &args![CALENDAR]).u32() & 0xff;
+            let day = calendar_day(e) & 0xff;
             let current = current_package(e, process);
             e.vcall(actor, 0x28c, &args![current, day]);
         }

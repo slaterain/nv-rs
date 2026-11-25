@@ -191,7 +191,6 @@ const DOUBLES: &[(u32, &[u32], Kind)] = &[
     ), // its reader
     (0x0048_39c0, &[FORM, PACKAGE], Kind::Plain), // the form for an id
     (0x005b_5e40, UNREAD, Kind::Plain), // the SAVELOAD warnings
-    (0x0086_7d60, &[0, 3, 0x1_0001], Kind::Plain), // Calendar::GetDay
     (0x008a_8f60, UNREAD, Kind::Plain), // the actor's package re-evaluation
     (0x0090_a070, UNREAD, Kind::Plain), // LowProcess::ResetTarget
     (0x008b_3bb0, BOOLS, Kind::Plain),  // Actor::IsPathingComplete
@@ -224,6 +223,7 @@ const IN_PLACE: &[u32] = &[
     0x0042_80f0, // their test
     0x0042_ce30, // the buffer's revert flags
     0x0086_7da0, // Calendar::GetHour
+    0x0086_7d60, // Calendar::GetDay
     0x0052_6ac0, // a global's value
     0x0040_3e20, // a float setting's value
     0x0040_8d60, // a byte setting's value
@@ -270,6 +270,7 @@ const IN_PLACE: &[u32] = &[
 const AV_INFOS: u32 = 0x011d_61c8;
 const CALENDAR: u32 = 0x011d_e7b8;
 const DEFAULT_HOUR: u32 = 0x0101_8f7c;
+const DEFAULT_DAY: u32 = 0x0101_8f8c;
 const ROUNDS_SETTING: u32 = 0x011c_d6d0;
 const INTERIOR_REACH: u32 = 0x011c_dbb0;
 const REACH: u32 = 0x011c_d830;
@@ -585,13 +586,16 @@ impl World {
             let info = infos[(self.next() % 4) as usize];
             e.mem.set_u32(AV_INFOS - 4 + 4 * i, info);
         }
-        // The calendar's hour and day globals, and the default hour.
+        // The calendar's hour and day globals, the default hour and the default day (days 3 and
+        // 31, a signalling NaN and 2^32, which truncate to 0x8000_0000).
         let global = self.one_of(&[0, FORM]);
         e.mem.set_u32(CALENDAR + 0xc, global);
         let day = self.one_of(&[0, FORM]);
         e.mem.set_u32(CALENDAR + 8, day);
         let hour = self.pick(&[0x4140_0000, 0x41a0_0000, 0x7f80_0001]);
         e.mem.set_u32(DEFAULT_HOUR, hour);
+        let day = self.pick(&[0x4040_0000, 0x41f8_0000, 0x7f80_0001, 0x4f80_0000]);
+        e.mem.set_u32(DEFAULT_DAY, day);
         // The settings: the combat rounds (small and not below 0, so the rounds end), the reaches
         // and the follower limit.
         let rounds = self.pick(&[0, 0x3f00_0000, 0x3f80_0000, 0x3fc0_0000, 0x4000_0000]);
@@ -720,7 +724,6 @@ impl InWorld for Diff {
             .family(&MULTIBOUND)
             .ignore_calls(IN_PLACE)
             .goes_by_address(&[0x0070_3180])
-            .allow_nan_payloads()
             .inputs(&[Input::Of(seeds)])
             .setup(move |e, case| {
                 let mut w = World::new(e, case.word(0));
@@ -736,6 +739,9 @@ fn actor_values() {
         middle_low_process::get_actor_float_value(Ptr, u32, u32, u32) -> f64
     ))
     .in_world(&MOST, |w| w.modifier_call(false))
+    // The sum of two NaNs: SSE keeps the first one's payload, x87's FADD the larger one's. Only
+    // here: every other Diff compares NaN-looking words exactly.
+    .allow_nan_payloads()
     .run()
     .assert_same();
     Diff::new(entry!(
