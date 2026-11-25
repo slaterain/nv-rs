@@ -25,8 +25,10 @@ list of rules it must not break.
    `Game's main stopped in frame N: <why> (in <exe addresses>)`. Those addresses are what we need.
 2. **Fix translation errors.** Compare a function's Rust translation with the executable (in a
    disassembler such as Ghidra) and fix what differs, with a regression test.
-3. **Speed and stutters.** Rewriting hot code as native Rust, proven to give the same results as
-   the translation it replaces (see [Native code](#native-code)).
+3. **Turning the game native.** Every translated function is being rewritten as native Rust,
+   proven to give the same results as the translation it replaces. It is the biggest job in the
+   project and anyone can take a part of it: see
+   [Turning the game native](#turning-the-game-native).
 4. **Linux and macOS.** Builds exist but have barely been played. Reports and fixes are welcome.
 5. **Mod and script-extender compatibility.** xNVSE, JIP LN NVSE and UI Organizer are built in,
    and JohnnyGuitar NVSE's editor ids. Fixes to them, and ports of other open-source plugins whose licence
@@ -153,6 +155,107 @@ one needs a differential test that runs it against the translation it replaces a
 results. Logic, integers and pointers must match exactly. For floating-point maths: plain `f32` in
 code only the main thread runs; in code other threads run, `f64` rounded to `f32` wherever the
 original stores a float.
+
+## Turning the game native
+
+The translation runs every function of the game through `engine-core`'s model of the original
+program: its memory, its calls by address, its x87 floating point. That is exact but slow. A
+native rewrite is plain Rust registered at the function's address, so every caller that calls that
+address gets it, and it is checked against the translation before it is turned on. The goal is the
+whole game native. About 48,000 functions are translated, and about 1,100 of them have a native
+rewrite so far (the translation stays, as the reference the native code is tested against).
+
+### Where to help
+
+The maintainer's agents work through these crates, one lane each:
+
+| Crate | Translated functions | Who |
+| --- | --- | --- |
+| `engine-bs`, `engine-gamebryo` (the engine under the game: drawing, scene graph, animation, sound) | about 9,400 | maintainer |
+| `engine-fallout-ai` | about 4,900 | maintainer |
+| `engine-fallout-forms`, then `engine-fallout-script` | about 4,800, then 1,550 | maintainer |
+| `engine-fallout-cell` | about 4,200 | maintainer |
+| `engine-fallout-interface`, then `engine-fallout-facegen` | about 2,700, then 950 | maintainer |
+| `engine-havok` (physics) | about 9,000 | open |
+| `engine-fallout-pathfinding` | about 1,800 | open |
+| `engine-fallout-misc`, `engine-fallout-magic`, `engine-fallout-env` | about 1,300, 1,150, 1,150 | open |
+| `engine-fallout-unplaced-a`, `engine-fallout-unplaced-b` | about 1,050, 2,250 | open |
+| `engine-speedtree` | about 750 | open |
+| `engine-core` (the C runtime) | about 850 | open |
+
+Take a file in an open crate. For a file in a maintainer crate, ask in an issue first: its lane may
+already have it in progress. Before you start, open an issue titled `Native: <crate>/<file>` (or
+comment on an existing one) with `Claiming this` and your branch name; the claiming rules in
+[Pull requests](#pull-requests) apply. Count a crate's translated functions with
+`git grep "Translated from" -- crates/<crate> | wc -l`, and the native ones with
+`git grep "Typed from" -- crates/engine-typed | wc -l`. Before you start, check which functions of
+your file already have a native version: `git grep "Typed from <address>" -- crates`.
+
+### How to convert a file
+
+1. **Pick a family.** Native code lives in `crates/engine-typed/src/<family>/`. A family is a
+   group of functions that is switched on and off together (`NV_TYPED=<family>:off`). Use the
+   family that already covers the area; there are only 64 ids, so add one only for a new area. A
+   new family takes the next number after the highest in
+   `git grep "pub const FAMILY: FamilyId" -- crates` (the gaps below it are held by work in
+   progress; check the open pull requests too) and declares
+   `pub static NAME: Family = Family { name: "<family>", id: FAMILY, past_gate: true, threads: Threads::Both, stage2: false, funcs };`.
+   Set `threads` to the threads that run its code (`Main`, `Other` or `Both`): the differential
+   test runs under those threads' float precision. Its `mod.rs` starts with a `//!` comment saying
+   what it covers, which threads run it and how its floats are done. In
+   `crates/engine-typed/src/lib.rs`, add `pub mod <family>;` and a
+   `provide(&crate::<family>::NAME)` line in `units::funcs`. In that file's tests, update the
+   `families()` list and its length, the `past` list, the two `count() == N` checks (families
+   minus one), and the comment saying when each family went on.
+2. **Write each function in plain Rust.** Read the translation and the executable (Ghidra or
+   another disassembler) together. Mark it `// Typed from 00a6db50` directly above the function.
+   Each function takes `e: &mut Engine` first, then the original's arguments (`u32`, `i32`, `f32`,
+   `bool`, `Ptr<T>`). `engine-typed` depends only on `engine-core`, so declare the layouts you read
+   with `image!` (or use a family's `layout` module) instead of importing them from a translated
+   crate. Read and write the game's memory through `e.mem`. Call a function that is already
+   native with `typed_call!(its_family::FAMILY, 0x00a6_db50, path::to_fn(e, ...))`: the family
+   that holds the callee (`FAMILY` for your own), with the address as a literal. Call any other
+   function by address with `e.call(0x00a6_db50, &args![...])`.
+3. **Keep what callers and mods rely on.** The addresses in
+   `crates/engine-core/data/overridable.tsv` are always called with `e.call`, never `typed_call!`.
+   A virtual call stays `e.vcall(this, slot, &args![...])` unless you check that the slot holds
+   exactly the function you call (`slot_target(e, this, slot) == 0x…`, then `typed_call!`). Keep
+   every `e.site(...)`, `e.jip_patches()` and `e.hook_users(...)` check the translation makes, at
+   the same point (`crates/engine-core/src/extend.rs`). Floats follow the rule in
+   [Native code](#native-code). Code that both kinds of thread run is written once over
+   `native::Real` (`crates/engine-typed/src/native.rs`), and a float becomes an integer through
+   `x87::fistp_chop`, never `as` (clippy and the hygiene test refuse it).
+4. **Register it.** Add `entry!(0x00a6_db50, module::name(Ptr, u32) -> u32)` to the family's
+   `funcs()` list.
+5. **Reach every caller.** `git grep fn_00a6db50 -- crates` finds translations that call the
+   function as a plain Rust function. They would skip the native version, so change each one to
+   `e.call(0x00a6_db50, &args![...])`. For an address in `overridable.tsv`, also lower its count
+   there (the hygiene test asks for it).
+6. **Test it against the translation.** Every native function gets a differential test in
+   `crates/engine/tests/typed_<family>.rs`. A test such as
+   `Diff::new(entry!(...)).family(&facegen::FACEGEN).inputs(...).setup(...).run().assert_same()`
+   runs the native function and its translation on the same memory and inputs, and compares the
+   results, the memory written and the calls made. Name your own family, and every family your
+   `typed_call!`s reach, with `.family`; without it the test runs under both threads' precision
+   whatever your `threads` says. Start the file from an existing `typed_*.rs`: it begins with
+   `use engine as _;`. Build the memory in the test, with the real layouts where they matter.
+   Reach every branch. One setup can serve a whole file.
+7. **Prove the tests can fail.** Plant faults: change one line of the native code (a compare, a
+   bound, an offset), run the tests, check that one fails, then put the line back. Do four per
+   pull request, on the riskiest functions, and list them in the pull request with the test that
+   caught each one.
+8. **Run the checks.** `cargo fmt --all -- --check`;
+   `cargo clippy -p engine-typed --all-targets -- -D warnings` and
+   `cargo test -p engine-typed --lib`; `cargo clippy -p engine --test typed_<family> -- -D warnings`
+   and `cargo test -p engine --test typed_<family>` (not `--release`: the harness's direct-call run
+   needs debug assertions); clippy and lib tests for any crate whose translation you changed; and
+   `cargo test -p nvinspect --test repo_hygiene`, which checks that every marked function is
+   registered and has a differential test.
+
+A whole file, or a module of 30 to 100 functions, is a good size for a pull request. Say in the
+pull request which functions it covers, what you checked against the executable, the planted
+faults and the checks you ran. If you find a translation error on the way, fix it in the
+translation as well, with its own regression test.
 
 ## What can and can't be accepted
 
