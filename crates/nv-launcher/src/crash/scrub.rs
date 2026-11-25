@@ -508,7 +508,8 @@ fn extent(text: &[char], start: usize, body: usize, sep: Option<char>) -> usize 
             if text.get(k) != Some(&' ') {
                 break;
             }
-            let from = k + 1;
+            // A run of spaces is one gap (`Jo  Hero\Private`).
+            let from = k + text[k..].iter().take_while(|&&c| c == ' ').count();
             let stop = word_end(from);
             // Another path's start ends this one (`... and G:\x`, `... or /tmp/y`). A web address
             // never extends it: its word ends at `:` before `//` (`word_end`), holding no separator.
@@ -799,7 +800,20 @@ fn character_folders(text: &[char], in_path: &[bool], before: Option<char>) -> V
             && text.len() - i > 5
             && is_saves(&text[i..i + 5])
             && is_separator(text[i + 5]);
-        let found = saves.then(|| folder_at_end(text, i + 5)).flatten();
+        // The path's own separators: those of the word that holds this `Saves`.
+        let own = || -> Vec<char> {
+            let from = text[..i]
+                .iter()
+                .rposition(|c| c.is_whitespace())
+                .map_or(0, |p| p + 1);
+            [BACKSLASH, '/']
+                .into_iter()
+                .filter(|s| text[from..=i + 5].contains(s))
+                .collect()
+        };
+        let found = saves
+            .then(|| folder_at_end(text, i + 5, &own(), false))
+            .flatten();
         let Some((s, end)) = found else {
             out.push(Unit::Char(text[i], in_path[i]));
             i += 1;
@@ -814,8 +828,10 @@ fn character_folders(text: &[char], in_path: &[bool], before: Option<char>) -> V
 
 /// The folder name after the separators at `text[at..]` when it ends its path: its start and
 /// end ([`character_folders`]' end rules); none when more of the path follows it, or it names
-/// nothing (`Saves\*`, `Saves\.`).
-fn folder_at_end(text: &[char], at: usize) -> Option<(usize, usize)> {
+/// nothing (`Saves\*`, `Saves\.`). `own` holds the path's own separators (a later word with
+/// only another kind is the line's: `Saves\Jo Hero 3/4 done`); `nested` when it is the folder
+/// after a later `Saves` of the same name's.
+fn folder_at_end(text: &[char], at: usize, own: &[char], nested: bool) -> Option<(usize, usize)> {
     let s = at + text[at..].iter().take_while(|&&c| is_separator(c)).count();
     // `Saves\ folder`: no name right after it.
     if text.get(s).is_none_or(|c| c.is_whitespace()) {
@@ -825,16 +841,32 @@ fn folder_at_end(text: &[char], at: usize) -> Option<(usize, usize)> {
         let w: Vec<char> = word.chars().collect();
         text[k..].starts_with(&w)
     };
-    // Another character's folder (`..., Saves/Benny and Saves/Jo Hero holds ...`).
-    let saves_next =
-        |k: usize| text.len() - k > 5 && is_saves(&text[k..k + 5]) && is_separator(text[k + 5]);
+    // Another character's folder where it ends its own path (`..., Saves/Benny and Saves/Jo
+    // Hero holds ...`); not a folder named `Old Saves` with more of the path after it.
+    let saves_next = |k: usize| {
+        !nested
+            && text.len() - k > 5
+            && is_saves(&text[k..k + 5])
+            && is_separator(text[k + 5])
+            && folder_at_end(text, k + 5, own, true).is_some()
+    };
+    // A later word with a separator, but none of the path's own kind.
+    let foreign = |k: usize| {
+        let word = text[k..].iter().take_while(|c| !c.is_whitespace());
+        let seps: Vec<char> = word.filter(|&&c| is_separator(c)).copied().collect();
+        !seps.is_empty() && !seps.iter().any(|c| own.contains(c))
+    };
     let mut end = s;
     while end < text.len() {
         let c = text[end];
         // A space inside the name goes on (`Saves\Jo Hero\Private`: the separator then says
-        // whether the path goes on); another path's start, an address or ` holds ` end it.
+        // whether the path goes on); another path's start, an address, ` holds ` or a word
+        // with only another kind of separator end it.
         let other = c == ' '
-            && (next_is(end, " holds ") || starts_other(text, end + 1) || saves_next(end + 1));
+            && (next_is(end, " holds ")
+                || starts_other(text, end + 1)
+                || saves_next(end + 1)
+                || foreign(end + 1));
         if is_separator(c)
             || (ends_path(c) && !matches!(c, ' ' | '\''))
             || (matches!(c, ':' | ',' | ';') && text.get(end + 1) == Some(&' '))
@@ -1927,6 +1959,60 @@ mod tests {
             (
                 "files: /mnt/games/x/Saves/Jo Hero holds 2 names for the game's \"save 3   jo hero.fos\" (Save 3   Jo Hero.fos, SAVE 3   JO HERO.fos); \"Save 3   Jo Hero.fos\" is taken",
                 "files: <path>/Saves/<save> holds 2 names for the game's \"<save>.fos\" (<save>.fos, <save>.fos); \"<save>.fos\" is taken",
+            ),
+            // A folder named like `Saves` under Saves, other separators, spaces in a run.
+            ("E:\\Backup\\Saves\\Jo Saves\\Private\\x.txt", "<path>\\x.txt"),
+            (
+                "E:\\Backup\\Saves\\Old Saves\\Private\\Tax 2026\\x.txt",
+                "<path>\\x.txt",
+            ),
+            (
+                "E:\\Backup\\Saves\\Old Saves\\Jo Hero\\Backup\\Save 1.fos",
+                "<path>\\Backup\\<save>.fos",
+            ),
+            (
+                "E:\\Backup\\Saves\\Old Saves\\Jo Hero\\Save 3   Jo Hero.fos",
+                "<path>\\Saves\\<save> Saves\\<save>\\<save>.fos",
+            ),
+            (
+                "E:\\Backup\\Saves\\Jo Hero Old Saves Copy\\Private\\x.txt",
+                "<path>\\x.txt",
+            ),
+            (
+                "E:\\Backup\\Saves\\Jo Hero Saves\\x and E:\\Backup\\Saves\\Jo Saves",
+                "<path>\\Saves\\<save> Saves\\<save> <path>\\Saves\\<save>",
+            ),
+            (
+                "E:\\Backup\\Saves\\Jo Hero saves/x.txt",
+                "<path>\\Saves\\<save> saves/<save>",
+            ),
+            ("E:\\Backup\\Saves\\Jo  Hero\\Private\\x.txt", "<path>\\x.txt"),
+            ("E:/Backup/Saves/Jo Hero/Private/x.txt", "<path>/x.txt"),
+            ("E:\\Backup/Saves/Jo Hero\\Private\\x.txt", "<path>\\x.txt"),
+            ("smb://jt-nas/games/Saves/Jo Hero/private/x.txt", "<path>/x.txt"),
+            (
+                "file:///E:/Backup/Saves/Jo Hero/Private/x.txt",
+                "file:///<path>/x.txt",
+            ),
+            ("E:\\Backup\\Saves\\Jo Hero copied to Backups\\x", "<path>\\x"),
+            // A later word with only another kind of separator is the line's.
+            (
+                "E:\\Backup\\Saves\\Jo Hero 3/4 done",
+                "<path>\\Saves\\<save> 3/4 done",
+            ),
+            ("E:\\Backup\\Saves\\Jo Hero (1/2)", "<path>\\Saves\\<save> (1/2)"),
+            (
+                "E:\\Backup\\Saves\\Jo Hero and/or x",
+                "<path>\\Saves\\<save> and/or x",
+            ),
+            ("/srv/nv/Saves/Jo Hero 3/4 done", "<path>/4 done"),
+            (
+                "F:\\Games\\nv-rs\\userdata\\game\\Documents\\My Games\\FalloutNV\\Saves\\Jo Hero 3/4 done",
+                "<nv-rs>\\userdata\\game\\Documents\\My Games\\FalloutNV\\Saves\\<save>/4 done",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\Documents\\My Games\\FalloutNV\\Saves\\Jo Hero 3/4 done",
+                "<home>\\...\\<save>\\4 done",
             ),
             // A character's folder at a path's end: where its name ends.
             ("E:\\Backup\\Saves\\Hero, Jo", "<path>\\Saves\\<save>, Jo"),
