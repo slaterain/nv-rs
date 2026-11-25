@@ -172,7 +172,8 @@ pub fn has_container(e: &mut Engine, this: u32) -> u32 {
     if base_form(e, this) == 0 {
         return 0;
     }
-    let kind = e.mem.u8(base_form(e, this).wrapping_add(4));
+    let base = base_form(e, this);
+    let kind = e.mem.u8(base.wrapping_add(4));
     let offset = match kind {
         FORM_TYPE_CONTAINER => CONTAINER_OF_CONTAINER,
         FORM_TYPE_NPC | FORM_TYPE_CREATURE => CONTAINER_OF_ACTOR_BASE,
