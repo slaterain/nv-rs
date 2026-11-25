@@ -28,7 +28,8 @@
 //! the attributes' size `009d2510`, 7). The leaves' family's getters, the runtime's `memcpy` and
 //! `memset` wrappers (`00401460`, `00403d30`), the maps' lookup (`00853130`) and set
 //! (`00844700`) are typed calls of their families; this unit's functions call one another as typed
-//! calls; a word the exe reads twice with nothing between that could change it is read once.
+//! calls; a word the exe reads twice with nothing between that could change it is read once. The
+//! form type's name (`00440e30`) is the form-type table's name pointer, read in place too.
 
 use super::FAMILY;
 use crate::{crt, dispatch, save};
@@ -100,7 +101,8 @@ const SAVE_LOAD_SAVE_NUMERIC_ID: u32 = 0x0085_7a10;
 const SAVE_LOAD_LOAD_NUMERIC_ID: u32 = 0x0085_7aa0;
 const SAVE_BUFFER_WRITE: u32 = 0x0086_5e50;
 const LOAD_BUFFER_READ: u32 = 0x0086_4980;
-const FORM_TYPE_NAME: u32 = 0x0044_0e30;
+/// The form-type table's name pointer of an entry (+4): what `00440e30` answers for a form.
+const FORM_ENUM_NAME: u32 = 4;
 /// The form's name key (JohnnyGuitar NVSE may replace it).
 const FORM_NAME_KEY: u32 = 0x0047_4cb0;
 const STRING_COMPARE: u32 = 0x0040_4dc0;
@@ -320,6 +322,16 @@ fn copy_memory(e: &mut Engine, to: u32, from: u32, n: u32) {
         0x0040_1460,
         crt::mem::memcpy_wrapper(e, Ptr::new(to), Ptr::new(from), n)
     );
+}
+
+/// The name of the form's type (`00440e30`: the form-type table's entry's name pointer).
+fn form_type_name(e: &mut Engine, form: u32) -> u32 {
+    let form_type = form_type(e, form);
+    e.mem.u32(
+        FORM_ENUM_TABLE
+            .wrapping_add(form_type.wrapping_mul(FORM_ENUM_STRIDE))
+            .wrapping_add(FORM_ENUM_NAME),
+    )
 }
 
 /// The packed string word of the form's type: what a record header carries as its tag.
@@ -1037,7 +1049,7 @@ pub fn load_form(e: &mut Engine, this: u32, file: u32) {
 
 /// The base `Copy`/`Compare`'s log line for `other`: its type's name, then its name (slot 0x130).
 fn log_no_override(e: &mut Engine, message: u32, other: u32) {
-    let type_name = e.call(FORM_TYPE_NAME, &args![other]).u32();
+    let type_name = form_type_name(e, other);
     let name = e.vcall(other, SLOT_NAME, &[]).u32();
     e.call(LOG_MESSAGE, &args![message, name, type_name]);
 }
@@ -2004,7 +2016,7 @@ pub fn detailed_string(e: &mut Engine, this: u32, buffer: u32) {
         Some(name) => name,
         None => DEFAULT_NAME,
     };
-    let type_name = e.call(FORM_TYPE_NAME, &args![this]).u32();
+    let type_name = form_type_name(e, this);
     e.call(
         FORMAT_STRING,
         &args![buffer, DETAILED_STRING_FORMAT, type_name, name, id],

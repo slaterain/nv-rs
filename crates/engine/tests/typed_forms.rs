@@ -37,6 +37,9 @@ const DEFLATE_STATUS: u32 = 0x0300_3018;
 const STRING_EMPTY: u32 = 0x0300_3020;
 /// What the seams' handlers were given: the destructor's, `SetTemporary`'s.
 const SEAMS_SEEN: u32 = 0x0300_3024;
+/// A float the chunk read puts in the chunk (its bits, 0 for none) and its offset there.
+const CHUNK_FLOAT: u32 = 0x0300_302c;
+const CHUNK_FLOAT_AT: u32 = 0x0300_3030;
 /// What `__RTDynamicCast` answers for each target type: the word at `CASTS + (type & 0xfff)`.
 const CASTS: u32 = 0x0300_4000;
 const TYPE_TES_FORM: u32 = 0x0118_3028;
@@ -130,6 +133,7 @@ const IN_PLACE: &[u32] = &[
     0x006b_9130, // the weight's getter
     0x004f_5d90, // and setter
     0x009d_2510, // the attributes' size
+    0x0044_0e30, // the form type's name
 ];
 
 /// A file's fields the in-place bodies read: its flags (bit 0 a master), master list, next file,
@@ -145,7 +149,7 @@ const SAVE_KIND_AT: u32 = 0x17;
 const HANDLER_NO_IDS: u32 = 0x620;
 
 /// Every callee answered by a word of its own.
-const ANSWERED: [u32; 50] = [
+const ANSWERED: [u32; 49] = [
     0x0047_0470, // the source file list's destructor
     0x0046_ffb0, // and its wrapper
     0x0048_6b80, // the form array's remove
@@ -176,7 +180,6 @@ const ANSWERED: [u32; 50] = [
     0x0085_7a10, // SaveNumericID
     0x0085_7aa0, // LoadNumericID
     0x0086_5e50, // the save buffer's write
-    0x0044_0e30, // the form type's name
     STRING_COMPARE,
     0x0047_2f60, // TESFile::LoadForm
     FILE_GET_INDEX_FILE,
@@ -305,6 +308,8 @@ fn world(e: &mut Engine) {
     // The form-type table's packed strings and the group tag.
     for t in 0..0x79u32 {
         e.mem.set_u32(FORM_ENUM_TABLE + 12 * t + 8, 0x4d52_0000 | t);
+        // Its name pointer (what `00440e30` reads), a word of its own.
+        e.mem.set_u32(FORM_ENUM_TABLE + 12 * t + 4, 0x0101_0000 | t);
     }
     e.mem.set_u32(GROUP_TAG, GROUP_TAG_VALUE);
     // The seams the destructor (the script extender's, `00483669`) and `SetTemporary` (JohnnyGuitar
@@ -350,7 +355,6 @@ fn world(e: &mut Engine) {
         0x0085_7a10,
         0x0085_7aa0,
         0x0086_5e50,
-        0x0044_0e30,
         0x0040_4dc0,
         0x0047_2f60,
         0x0047_1a10,
@@ -390,6 +394,11 @@ fn world(e: &mut Engine) {
     e.register(0x0047_2890, |e, a| {
         for i in 0..a[2] {
             e.mem.set_u8(a[1] + i, (i * 13 + 5) as u8);
+        }
+        // A float of the case's own at the weight's offset, when it fits.
+        let (bits, at) = (e.mem.u32(CHUNK_FLOAT), e.mem.u32(CHUNK_FLOAT_AT));
+        if bits != 0 && at + 4 <= a[2] {
+            e.mem.set_u32(a[1] + at, bits);
         }
         ret(0)
     });
@@ -2076,10 +2085,20 @@ fn load_data() {
             Input::Of(&[0, 2, 0x30]),
             Input::Of(&[0, 0xff, 0x05, 0x58]),
             Input::Flag,
+            // The weight's float in the chunk: the pattern's; a signalling NaN in the file's byte
+            // order (quiet before a byte-swapped file's swap); one a swap makes a signalling NaN
+            // (made quiet by the weight's store).
+            Input::Of(&[0, 0x7f80_0001, 0x0100_807f]),
         ])
         .setup(|e, case| {
             world(e);
-            components(e, case.word(2));
+            let mask = case.word(2);
+            components(e, mask);
+            if mask & 8 != 0 {
+                let at = case.word(1) + (mask & 1) + 4 * (mask >> 1 & 1) + 4 * (mask >> 2 & 1);
+                e.mem.set_u32(CHUNK_FLOAT, case.word(4));
+                e.mem.set_u32(CHUNK_FLOAT_AT, at);
+            }
             // The file's current chunk: its size and whether it is byte-swapped.
             let file = file(e, false);
             e.mem.set_u32(file + FILE_CHUNK_SIZE_AT, case.word(0));
