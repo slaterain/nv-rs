@@ -810,11 +810,11 @@ pub fn shadow_scene_node_remove_object_recurse(
         let child = e.mem.u32(children.wrapping_add(4 * index));
         if child != 0 {
             if e.vcall(child, SLOT_IS_TRI_BASED_GEOM, &args![]).u32() != 0 {
-                shadow_scene_node_remove_geometry_from_property_lights(e, child);
+                e.call(0x00b5_b0e0, &args![child]);
             } else {
                 let child_node = e.vcall(child, SLOT_IS_NODE, &args![]).u32();
                 if child_node != 0 {
-                    shadow_scene_node_remove_object_recurse(e, this, child_node);
+                    e.call(0x00b5_b150, &args![this, child_node]);
                 }
             }
         }
@@ -831,7 +831,7 @@ pub fn shadow_scene_node_remove_object(e: &mut Engine, this: Ptr<ShadowSceneNode
     }
     let node = e.vcall(object, SLOT_IS_NODE, &args![]).u32();
     if node != 0 {
-        shadow_scene_node_remove_object_recurse(e, this, node);
+        e.call(0x00b5_b150, &args![this, node]);
     }
 }
 
@@ -1232,11 +1232,11 @@ pub fn fn_00b5ddb0(e: &mut Engine, this: Ptr<ShadowSceneNode>, each: u8, skip: u
         let light = item_element(e, item);
         item = item_next(e, item);
         if light != 0 {
-            fn_00b5d270(e, this, light);
+            e.call(0x00b5_d270, &args![this, light]);
         }
     }
     if skip == 0 {
-        fn_00b5d180(e, this);
+        e.call(0x00b5_d180, &args![this]);
     }
 }
 
@@ -1636,15 +1636,12 @@ pub fn shadow_scene_node_add_all_lights_from_node_recurse(
         if child != 0 {
             let child_node = e.vcall(child, SLOT_IS_NODE, &args![]).u32();
             if child_node != 0 {
-                let n = shadow_scene_node_add_all_lights_from_node_recurse(
-                    e,
-                    this,
-                    child_node,
-                    x87_quiet(value),
-                );
+                let n = e
+                    .call(0x00b5_ca70, &args![this, child_node, x87_quiet(value)])
+                    .u32();
                 found = found.wrapping_add(n);
             } else if rtti_chain_has(e, child, LIGHT_RTTI_011F4A28) {
-                shadow_scene_node_add_light(e, this, child, 1);
+                e.call(0x00b5_c940, &args![this, child, 1u32]);
                 update_object(e, child);
                 let point = e
                     .call(CAST_00653290, &args![child, POINT_LIGHT_RTTI_011F4A98])
@@ -1689,7 +1686,7 @@ pub fn fn_00b5cbd0(e: &mut Engine, this: Ptr<ShadowSceneNode>, object: u32) -> u
     }
     e.call(SPIN_LOCK_LOCK, &args![QUEUE_LOCK, 0u32]);
     let shadow_light = new_shadow_scene_light(e);
-    fn_00b5af30(e, Ptr::new(shadow_light), object);
+    e.call(0x00b5_af30, &args![shadow_light, object]);
     e.call(LIGHT_00B9DCB0, &args![shadow_light, 1u32]);
     add_tail_held(e, this, LIGHT_QUEUE_ADD, shadow_light, true);
     unlock_queue(e);
@@ -1839,7 +1836,7 @@ pub fn fn_00b5cde0(e: &mut Engine, this: Ptr<ShadowSceneNode>, argument: u32) {
             let share = x87_load32(x87_store32(share));
             if share > low {
                 let active = e.get(this, ShadowSceneNode::kShadowLightActiveFence);
-                fn_00b5a8d0(e, Ptr::new(list), item, active);
+                e.call(0x00b5_a8d0, &args![list, item, active]);
                 time = x87_load32(e.global::<u32>(FADE_TIME_011AD834));
                 continue;
             }
@@ -1859,7 +1856,7 @@ pub fn fn_00b5cde0(e: &mut Engine, this: Ptr<ShadowSceneNode>, argument: u32) {
         if light == argument {
             e.call(LIST_00B702E0, &args![list, item, fading]);
         } else {
-            fn_00b5a8d0(e, Ptr::new(list), item, fading);
+            e.call(0x00b5_a8d0, &args![list, item, fading]);
         }
         time = x87_load32(e.global::<u32>(FADE_TIME_011AD834));
     }
@@ -2034,8 +2031,8 @@ pub fn fn_00b5d930(e: &mut Engine, this: Ptr<ShadowSceneNode>, light: u32) {
     let x = e.mem.u32(world);
     let y = e.mem.u32(world.wrapping_add(4));
     let z = e.mem.u32(world.wrapping_add(8));
-    fn_00b5a9d0(e, Ptr::new(light), x, y, z);
-    fn_00b5d300(e, this, light);
+    e.call(0x00b5_a9d0, &args![light, x, y, z]);
+    e.call(0x00b5_d300, &args![this, light]);
 }
 
 // Translated from 00b5d9f0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2086,7 +2083,7 @@ pub fn fn_00b5eca0(e: &mut Engine, this: Ptr<ShadowSceneNode>, light: u32) -> u3
         if listed != 0 && e.mem.u32(listed.wrapping_add(LIGHT_SP_LIGHT)) == ni_light {
             let dynamic = e.mem.u8(light.wrapping_add(LIGHT_DYNAMIC));
             e.mem.set_u8(listed.wrapping_add(LIGHT_DYNAMIC), dynamic);
-            fn_00b5d300(e, this, listed);
+            e.call(0x00b5_d300, &args![this, listed]);
             return listed;
         }
     }
@@ -2112,9 +2109,9 @@ pub fn fn_00b5eca0(e: &mut Engine, this: Ptr<ShadowSceneNode>, light: u32) -> u3
             let renderer = e.global::<u32>(RENDERER_011F91A8);
             e.call(RENDERER_00B6D3F0, &args![renderer]).u32()
         };
-        fn_00b5aee0(e, Ptr::new(light), map);
+        e.call(0x00b5_aee0, &args![light, map]);
     }
-    fn_00b5d300(e, this, light);
+    e.call(0x00b5_d300, &args![this, light]);
     0
 }
 
@@ -2124,7 +2121,7 @@ fn queue_removal_held(e: &mut Engine, this: Ptr<ShadowSceneNode>, light: u32) {
     e.with_stack(4, |e, slot| {
         e.mem.set_u32(slot.addr(), light);
         e.call(IMPORT_INTERLOCKED_INCREMENT, &args![light.wrapping_add(4)]);
-        fn_00b5cff0(e, this, slot);
+        e.call(0x00b5_cff0, &args![this, slot]);
         release(e, light);
     });
 }
@@ -2499,7 +2496,7 @@ fn array_append(e: &mut Engine, array: u32, value: u32, generic: bool) {
     let slot = if generic {
         e.call(ARRAY_RESERVE_00761540, &args![array]).u32()
     } else {
-        fn_00b5c360(e, Ptr::new(array))
+        e.call(0x00b5_c360, &args![array]).u32()
     };
     let buffer = e.mem.u32(array.wrapping_add(4));
     e.mem.set_u32(buffer.wrapping_add(4 * slot), value);
@@ -3113,7 +3110,7 @@ pub fn fn_00b5ddf0(e: &mut Engine, this: Ptr<ShadowSceneNode>, graph: u32) {
     if count == 0 {
         e.set_global(OBJECT_QUEUE_LOCK, 0u32);
     }
-    fn_00b5d180(e, this);
+    e.call(0x00b5_d180, &args![this]);
     e.set(this, ShadowSceneNode::pBSPortalGraph, graph);
 }
 
@@ -3169,7 +3166,7 @@ pub fn fn_00b5e5a0(e: &mut Engine, this: Ptr<ShadowSceneNode>) {
                 .set_u32(accumulator.wrapping_add(ACCUMULATOR_SCENE_NODE), 0);
         }
     }
-    fn_00b5d180(e, this);
+    e.call(0x00b5_d180, &args![this]);
     clear_member(e, base + 0xd8);
     clear_member(e, base + 0xdc);
     let sun = e.get(this, ShadowSceneNode::pSunLight);
@@ -3260,7 +3257,7 @@ pub fn shadow_scene_node_pre_on_visible(e: &mut Engine, this: Ptr<ShadowSceneNod
             let ni_light = e.mem.u32(light.wrapping_add(LIGHT_SP_LIGHT));
             if ni_light != 0 && e.mem.u32(ni_light.wrapping_add(4)) != 1 {
                 if e.mem.u8(light.wrapping_add(LIGHT_DYNAMIC)) != 0 {
-                    fn_00b5d270(e, this, light);
+                    e.call(0x00b5_d270, &args![this, light]);
                 }
                 if e.mem.u8(light.wrapping_add(LIGHT_CAST_SHADOW)) != 0
                     && e.call(SCRIPT_TEST_005BF7B0, &args![]).u8() != 0
@@ -3777,7 +3774,7 @@ pub fn fn_00b5f170(
             let count = e.mem.u32(queue + 8).wrapping_sub(1);
             e.mem.set_u32(queue + 8, count);
             let graph = e.get(this, ShadowSceneNode::pBSPortalGraph);
-            fn_00b5c6e0(e, Ptr::new(graph), room);
+            e.call(0x00b5_c6e0, &args![graph, room]);
             let (frustum, portals) = if room != 0 {
                 let shape = e
                     .mem
@@ -4520,7 +4517,7 @@ pub fn shadow_scene_node_get_rtti(_e: &mut Engine) -> Ptr {
 pub fn fn_00b5f080(e: &mut Engine, this: Ptr<ShadowSceneNode>, ni_light: u32) {
     let light = shadow_scene_node_get_light(e, this, ni_light);
     if light != 0 {
-        fn_00b5d270(e, this, light);
+        e.call(0x00b5_d270, &args![this, light]);
     }
 }
 
@@ -4548,14 +4545,14 @@ pub fn shadow_scene_node_find_and_cull_light_recurse(
         }
         if rtti_chain_has(e, child, LIGHT_RTTI_011F4A28) {
             if remove as u8 != 0 {
-                shadow_scene_node_remove_light(e, this, child);
+                e.call(0x00b5_eed0, &args![this, child]);
             } else {
-                shadow_scene_node_add_light(e, this, child, 1);
+                e.call(0x00b5_c940, &args![this, child, 1u32]);
             }
             continue;
         }
         if e.vcall(child, SLOT_IS_NODE, &args![]).u32() != 0 {
-            shadow_scene_node_find_and_cull_light_recurse(e, this, child, remove);
+            e.call(0x00b5_f0c0, &args![this, child, remove]);
         }
     }
 }
@@ -4571,7 +4568,7 @@ pub fn shadow_scene_node_find_and_cull_light(
     remove: u32,
 ) {
     if node != 0 {
-        shadow_scene_node_find_and_cull_light_recurse(e, this, node, remove);
+        e.call(0x00b5_f0c0, &args![this, node, remove]);
     }
 }
 

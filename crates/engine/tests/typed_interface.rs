@@ -5335,6 +5335,7 @@ fn no_member_of_a_family_on_by_default_holds_a_seam() {
         (0x0077_14da, "hud"),
         (0x0077_951e, "hud"),
         (0x0077_955d, "hud"),
+        (0x00b5_cd2a, "scene_node"),
         (0x0059_3fbc, "scripts"),
         (0x0059_49d4, "scripts"),
         (0x005a_cb9d, "scripts"),
