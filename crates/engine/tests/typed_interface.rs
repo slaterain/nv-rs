@@ -2616,7 +2616,13 @@ fn fn_00707970_diff() {
 #[test]
 fn interface_create_menu_by_class_diff() {
     Diff::new(engine_core::entry!(0x0070_7990, interface::interface_cpp_p2::interface_create_menu_by_class(u32) -> u32))
-        .in_arena(&[Arg::Word], CALLEES, &[])
+        .in_arena_without(
+            &[Arg::Class],
+            CALLEES,
+            &[0x0071_e340, 0x0071_e400, 0x0071_f540, 0x0071_f5d0, 0x0072_07a0],
+            &[0x00ec_782f],
+        )
+        .max_cases(96)
         .run()
         .assert_same();
 }
