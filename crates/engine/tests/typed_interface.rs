@@ -247,7 +247,7 @@ fn interface_get_menu_mode_type_diff() {
 #[test]
 fn interface_is_menu_id_visible_diff() {
     Diff::new(engine_core::entry!(0x0070_2680, interface::interface_cpp::interface_is_menu_id_visible(i32, u32) -> u8))
-        .in_arena(&[Arg::Int, Arg::Word], CALLEES, &[0x0070_27b0])
+        .in_arena(&[Arg::Int, Arg::Word], CALLEES, &[0x0070_27b0, 0x0070_2680])
         .run()
         .assert_same();
 }
@@ -1594,7 +1594,34 @@ fn bs_simple_array_tile_value_p_8_scalar_deleting_destructor_diff() {
 /// the translated function that starts nearest below it.
 #[test]
 fn no_member_of_a_family_on_by_default_holds_a_seam() {
-    const KEPT: &[(u32, &str)] = &[];
+    // Each checked in its typed body (2026-11-25): the `e.site` call at the seam, behind the
+    // same extender test as the translation's.
+    const KEPT: &[(u32, &str)] = &[
+        (0x0040_f9d7, "cell_refs"),
+        (0x0045_234e, "cell_refs"),
+        (0x00c6_5b5b, "collision"),
+        (0x00a0_968c, "dispatch"),
+        (0x0077_04ae, "hud"),
+        (0x0077_0b0e, "hud"),
+        (0x0077_14da, "hud"),
+        (0x0077_951e, "hud"),
+        (0x0077_955d, "hud"),
+        (0x0059_3fbc, "scripts"),
+        (0x0059_49d4, "scripts"),
+        (0x005a_cb9d, "scripts"),
+        (0x005a_c763, "script_lines"),
+        (0x005a_c782, "script_lines"),
+        (0x005a_c78a, "script_lines"),
+        (0x005a_cd0d, "script_lines"),
+        (0x005e_0dd1, "script_lines"),
+        (0x005e_0ec9, "script_lines"),
+        (0x005e_0fbe, "script_lines"),
+        (0x005e_16c3, "script_lines"),
+        (0x005e_1716, "script_lines"),
+        (0x005e_1a23, "script_lines"),
+        (0x005e_1f0b, "script_lines"),
+        (0x005e_2329, "script_lines"),
+    ];
     let e = Engine::new_untyped_for_test();
     let mut members = std::collections::HashMap::new();
     for family in engine_typed::families()
