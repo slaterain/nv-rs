@@ -28,6 +28,7 @@ pub mod dispatch;
 pub mod draw;
 pub mod draw_f;
 pub mod facegen;
+pub mod forms;
 pub mod geometry;
 pub mod hud;
 pub mod interface;
@@ -137,13 +138,14 @@ pub mod units {
         engine_core::typed::provide(&crate::cell_refs::CELL_REFS);
         engine_core::typed::provide(&crate::navmesh_edges::NAVMESH_EDGES);
         engine_core::typed::provide(&crate::ai::AI);
+        engine_core::typed::provide(&crate::forms::FORMS);
         crate::render::stream::note_head_check();
     }
 }
 
 /// This crate's families, in the order [`units::funcs`] provides them (the checks that span every
 /// family read it).
-pub fn families() -> [&'static engine_core::typed::Family; 30] {
+pub fn families() -> [&'static engine_core::typed::Family; 31] {
     [
         &crate::lockfree::LOCKFREE,
         &crate::culling::CULLING,
@@ -175,6 +177,7 @@ pub fn families() -> [&'static engine_core::typed::Family; 30] {
         &crate::cell_refs::CELL_REFS,
         &crate::navmesh_edges::NAVMESH_EDGES,
         &crate::ai::AI,
+        &crate::forms::FORMS,
     ]
 }
 
@@ -282,8 +285,8 @@ mod tests {
     /// anim_keys on their tests and reviews (2026-11-11: no comparison runs for native code), process and
     /// lights on their own (2026-11-13), geometry since its recorded-run gate (2026-11-16), facegen and
     /// hud on their tests and reviews (2026-11-21), setup on its tests (2026-11-21), archives on its tests
-    /// (2026-11-23), ai_queries, cell_refs and navmesh_edges on their tests (2026-11-25), interface and ai
-    /// on their tests (2026-11-25);
+    /// (2026-11-23), ai_queries, cell_refs and navmesh_edges on their tests (2026-11-25), interface, ai
+    /// and forms on their tests (2026-11-25);
     /// `NV_TYPED=off` or `<family>:off` turns one off.
     #[test]
     fn families_past_their_gate_are_on_by_default() {
@@ -325,7 +328,8 @@ mod tests {
                 "ai_queries",
                 "cell_refs",
                 "navmesh_edges",
-                "ai"
+                "ai",
+                "forms"
             ]
         );
         let defaults = parse_switch(None, &families).unwrap();
@@ -336,11 +340,11 @@ mod tests {
         assert!(off.iter().all(|m| *m == Mode::Off));
         let one_off = parse_switch(Some("shader:off"), &families).unwrap();
         assert_eq!(one_off[3], Mode::Off);
-        assert!(one_off.iter().filter(|m| **m == Mode::On).count() == 29);
+        assert!(one_off.iter().filter(|m| **m == Mode::On).count() == 30);
         // `NV_TYPED=geometry:off` still turns the geometry family (index 12) off, and only it.
         let geometry_off = parse_switch(Some("geometry:off"), &families).unwrap();
         assert_eq!(geometry_off[12], Mode::Off);
-        assert!(geometry_off.iter().filter(|m| **m == Mode::On).count() == 29);
+        assert!(geometry_off.iter().filter(|m| **m == Mode::On).count() == 30);
     }
 
     /// No two of this crate's families (with the core's) hold the same address, past their gate or not:
