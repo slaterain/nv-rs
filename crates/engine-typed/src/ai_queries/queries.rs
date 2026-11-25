@@ -52,8 +52,8 @@ pub fn word_at_2c(e: &mut Engine, this: u32) -> u32 {
 }
 
 // Typed from 008d6f30
-/// The word at +0x40 (a process's current target: its slot 0x128 on every class but
-/// `BaseProcess`).
+/// The word at +0x40: a reference's parent cell, the getter most of its callers use it as, and a
+/// process's current target (its slot 0x128 on every class but `BaseProcess`).
 #[inline]
 pub fn word_at_40(e: &mut Engine, this: u32) -> u32 {
     e.mem.u32(this.wrapping_add(0x40))
