@@ -2196,14 +2196,15 @@ fn byte_swapped_word(e: &mut Engine, value: u32) -> u32 {
 
 /// Reads the float at `buffer + offset` (`memcpy` into a local, then into a
 /// second local that is swapped when `file` is big endian); returns it and
-/// the offset after it.
+/// the offset after it. The copy into the second local is an `FLD`/`FSTP`
+/// pair (`00486457`), so a signalling NaN comes back quiet before the swap.
 fn read_float(e: &mut Engine, file: Ptr, buffer: u32, offset: u16) -> (f32, u16) {
     let value = e.with_stack(8, |e, locals| {
         let copy = locals.addr();
         let work = copy + 4;
         e.call(MEMCPY, &args![copy, buffer + offset as u32, 4u32]);
-        let value = e.mem.f32(copy);
-        e.mem.set_f32(work, value);
+        let bits = engine_core::x87::x87_quiet_bits(e.mem.u32(copy));
+        e.mem.set_u32(work, bits);
         if e.call(FILE_IS_BIG_ENDIAN, &args![file]).bool() {
             swap_word_in_place(e, work);
         }
@@ -5163,6 +5164,19 @@ mod tests {
         assert_eq!(e.mem.u32(parts.value + 4), 0x0102_0304);
         assert_eq!(e.mem.f32(parts.weight + 4), 2.5);
         assert_eq!(e.mem.u16(parts.attack_damage + 4), 0x1234);
+    }
+
+    /// A big-endian file's float goes through the FPU before its swap (`FLD`/`FSTP` at `00486457`):
+    /// a signalling NaN in the file's byte order comes back quiet, then swapped.
+    #[test]
+    fn load_data_quiets_the_float_before_the_swap() {
+        let chunk = 0x7f80_0001u32.to_le_bytes();
+        let (mut e, file, parts) = load_data_engine(&chunk, true);
+        cast_to(&mut e, &parts, &[TYPE_WEIGHT_FORM]);
+        let f = form(&mut e, 8, 0x20);
+        let destination = e.mem.alloc(8);
+        e.call(0x0048_61f0, &args![f, file, destination, 0u16]);
+        assert_eq!(e.mem.u32(parts.weight + 4), 0x0100_c07f);
     }
 
     #[test]

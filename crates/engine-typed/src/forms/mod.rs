@@ -16,12 +16,23 @@
 //! translations that called one of them as a plain Rust function (all in `tesform.rs` itself)
 //! call it by address now, so the game reaches the typed function from there too.
 //!
-//! What stays as the exe has it: every call that does work outside this family is a call by
-//! address (the form map's and the form array's operations, the save/load game's change tables,
-//! the files' list operations, the allocator, the logger that YUP and xNVSE may replace); every
-//! virtual call is made through its slot, since the form classes override them; the script
-//! extender's seam in the destructor (`00483669`), JohnnyGuitar NVSE's after `SetTemporary`'s
-//! removal (`0048449a`) and JIP LN's G45 mask in the flags' load (`00484e03`) run where they do.
+//! Native: the one-line bodies the exe calls (the form type, its flag tests, the byte swaps, the
+//! files' and save buffers' fields, the components' accessors) are done in place, the leaves', the
+//! C runtime's, dispatch's and the save family's functions are typed calls, and so are this unit's
+//! own (see [`tesform`]'s module comment for the list).
+//!
+//! What stays as the exe has it: every call that does real work outside the typed families is a
+//! call by address (the form map's removal and the form array's operations, the save/load game's
+//! change tables, the files' list operations, the allocator, the logger that YUP and xNVSE may
+//! replace, the one-byte components' setter that JIP LN may replace, the name key JohnnyGuitar NVSE
+//! may replace); every virtual call is made through its slot, since the form classes override them.
+//! The seams inside the unit run where they do, with the words the translation gives them: the
+//! script extender's in the destructor (`00483669`), JohnnyGuitar NVSE's after `SetTemporary`'s
+//! removal (`0048449a`) and at `GetFormDetailedString`'s name (`00486903`), and JIP LN's G45 mask
+//! in the flags' load (`00484e03`, under its fix bit). A seam is a check inside the function, not a
+//! registration over it, so it costs the family nothing; no extender or fix row registers over any
+//! of this family's addresses (`GetFormByEditorID`, which JohnnyGuitar NVSE replaces, stays out),
+//! so the family's calls stay direct in play.
 //! Plugins' load order and form ids are untouched: the ids, the files' order in a form's list and
 //! the compile index are computed exactly as the translation computes them.
 //!
@@ -153,4 +164,26 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0048_6e80, tesform::char_key_map_scalar_deleting_destructor(u32, u32) -> u32),
         entry!(0x0048_6eb0, tesform::string_template_map_scalar_deleting_destructor(u32, u32) -> u32),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    /// No member of the family is an address an extender or a fix row wraps: a wrap there would
+    /// turn the family's direct calls off for the whole run. The seams inside its functions are
+    /// rows of the seam tables, which do not.
+    #[test]
+    fn no_member_is_wrapped() {
+        let members: Vec<u32> = super::funcs().iter().map(|(addr, _)| *addr).collect();
+        for row in engine_core::extend::all_wraps() {
+            assert!(
+                !members.contains(&row.addr),
+                "{:08x} is wrapped: keep it out of the family",
+                row.addr
+            );
+        }
+        for seam in [0x0048_3669, 0x0048_449a, 0x0048_4e03, 0x0048_6903] {
+            assert!(engine_core::extend::all_sites().any(|row| row.addr == seam));
+            assert!(!members.contains(&seam));
+        }
+    }
 }

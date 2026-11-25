@@ -12,6 +12,7 @@
 use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Diff, Input};
+use engine_typed::crt::CRT;
 use engine_typed::forms::{tesform, FORMS};
 
 /// The stand-in slots: `VT_FN + slot`, each answering the word at `SLOT_ANSWERS + slot`.
@@ -21,18 +22,19 @@ const SLOT_ANSWERS: u32 = 0x0300_0000;
 const ANSWERS: u32 = 0x0300_1000;
 /// The one vtable every test form has.
 const VTABLE: u32 = 0x0300_2000;
-/// What the form map's lookup finds; whether `operator new` fails; a save buffer's save kind; the
-/// word a load reads.
+/// What the form map's lookup finds; whether `operator new` fails; the word a load reads.
 const LOOKUP_VALUE: u32 = 0x0300_3000;
 const NEW_FAILS: u32 = 0x0300_3004;
-const SAVE_KIND: u32 = 0x0300_3008;
 const READ_WORD: u32 = 0x0300_300c;
 /// Whether the form map's lookup finds [`LOOKUP_VALUE`].
 const FOUND: u32 = 0x0300_3010;
-/// What `deflate` uses of its output and what it answers; the weight getter's float (its bits).
+/// What `deflate` uses of its output and what it answers.
 const DEFLATED: u32 = 0x0300_3014;
 const DEFLATE_STATUS: u32 = 0x0300_3018;
-const WEIGHT_BITS: u32 = 0x0300_301c;
+/// Whether the string local's constructor leaves it without text.
+const STRING_EMPTY: u32 = 0x0300_3020;
+/// What the seams' handlers were given: the destructor's, `SetTemporary`'s.
+const SEAMS_SEEN: u32 = 0x0300_3024;
 /// What `__RTDynamicCast` answers for each target type: the word at `CASTS + (type & 0xfff)`.
 const CASTS: u32 = 0x0300_4000;
 const TYPE_TES_FORM: u32 = 0x0118_3028;
@@ -71,20 +73,10 @@ const GROUP_TAG_VALUE: u32 = 0x5055_5247;
 // Callees with a double of their own.
 const OPERATOR_NEW: u32 = 0x0040_1000;
 const OPERATOR_DELETE: u32 = 0x0040_1030;
-const MEMCPY: u32 = 0x0040_1460;
 const BUFFER_REALLOC: u32 = 0x0042_f5d0;
 const MAP_LOOKUP: u32 = 0x0085_3130;
-const BUFFER_SAVE_KIND: u32 = 0x0042_8110;
-const WORD_HAS_BITS: u32 = 0x0042_80f0;
 const LOAD_BUFFER_READ: u32 = 0x0086_4980;
 const SAVE_LOAD_LOAD_DATA: u32 = 0x0085_79e0;
-const STORE_WORD: u32 = 0x008c_71b0;
-const FORM_TYPE: u32 = 0x0040_1170;
-const IS_TEMPORARY: u32 = 0x0040_77c0;
-const IS_FLAG_2: u32 = 0x0046_0340;
-const LIST_FIRST_NODE: u32 = 0x0046_0140;
-const IS_BIG_ENDIAN: u32 = 0x0040_1500;
-const FILE_IS_MASTER: u32 = 0x0047_1c20;
 const FORM_NAME_KEY: u32 = 0x0047_4cb0;
 const LIST_POP_NODE: u32 = 0x0063_f7b0;
 const LIST_REMOVE_ITEM: u32 = 0x0090_5330;
@@ -94,21 +86,66 @@ const LIST_PUSH_FRONT: u32 = 0x005a_e3d0;
 // Callees answered by a word.
 const FILE_ADD_FORM: u32 = 0x0047_2fe0;
 const COMPONENTS_COMPARE: u32 = 0x0047_c670;
-const SAVE_LOAD_STUB: u32 = 0x0047_c850;
 const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
 const STRING_COMPARE: u32 = 0x0040_4dc0;
-const FILE_MASTER_LIST: u32 = 0x0046_4df0;
-const FILE_ROOT: u32 = 0x0047_3c70;
 const FILE_GET_INDEX_FILE: u32 = 0x0047_1a10;
-const FILE_COMPILE_INDEX: u32 = 0x0047_3250;
-const SAVE_LOAD_REMAP_ID: u32 = 0x0085_7bf0;
-const RECORD_VERSION: u32 = 0x0047_0bb0;
+
+/// The one-line bodies the typed code does in place (see `tesform`'s module comment). The
+/// translations call them and the typed functions do not, so every test leaves them, with what
+/// they call, out of the translation's calls. No double stands at any of them: the translations
+/// run, so what they answer is what the exe's bodies answer, from the objects' real fields.
+const IN_PLACE: &[u32] = &[
+    0x0040_1170, // the form type (and the one-byte component getters)
+    0x0040_77c0, // temporary
+    0x0046_0340, // flag 2
+    0x0046_0140, // the list's first node
+    0x0040_1500, // the big-endian byte
+    0x0040_1080, // the word swap
+    0x0040_7a90, // the half swap
+    0x0041_41e0, // the chunk header's swap
+    0x0047_0650, // FORM::Endian
+    0x0042_8110, // a save buffer's save kind
+    0x0042_80f0, // a word's bits
+    0x0047_0bb0, // the record version
+    0x0047_3070, // the record writer's buffer
+    0x0047_3080, // and its size
+    0x0047_c850, // the save/load stub
+    0x008c_71b0, // the store of a word
+    0x0047_1c20, // TESFile::GetMaster
+    0x0046_4df0, // the file's master list
+    0x0047_3c70, // the end of the file's chain
+    0x0047_3250, // the file's compile index
+    0x0040_1660, // the file's chunk size
+    0x0040_1680, // the file's big-endian byte
+    0x0048_2f20, // the data handler's flag byte
+    0x0040_1280, // the form's name
+    0x0040_2d30, // the base component's constructor
+    0x0096_a2d0, // the empty list's
+    0x0047_c050, // the component collection's
+    0x006e_cd40, // the health's setter
+    0x0047_ff50, // the attack damage's setter
+    0x004f_1540, // the quality's getter
+    0x006b_9130, // the weight's getter
+    0x004f_5d90, // and setter
+    0x009d_2510, // the attributes' size
+];
+
+/// A file's fields the in-place bodies read: its flags (bit 0 a master), master list, next file,
+/// compile index, current chunk's size and byte-swapped byte.
+const FILE_FLAGS: u32 = 0x3e8;
+const FILE_MASTERS: u32 = 0x3ec;
+const FILE_PARENT: u32 = 4;
+const FILE_COMPILE_INDEX_AT: u32 = 0x40c;
+const FILE_CHUNK_SIZE_AT: u32 = 0x25c;
+const FILE_SWAPPED_AT: u32 = 0x299;
+/// A save buffer's save kind (+0x17) and the data handler's flag byte (+0x620).
+const SAVE_KIND_AT: u32 = 0x17;
+const HANDLER_NO_IDS: u32 = 0x620;
 
 /// Every callee answered by a word of its own.
-const ANSWERED: [u32; 74] = [
+const ANSWERED: [u32; 50] = [
     0x0047_0470, // the source file list's destructor
     0x0046_ffb0, // and its wrapper
-    0x0047_0650, // FORM::Endian
     0x0048_6b80, // the form array's remove
     0x0047_0140, // its add
     0x0047_01d0, // its constructor
@@ -126,14 +163,12 @@ const ANSWERED: [u32; 74] = [
     0x0047_2e60, // TESFile::StartForm
     FILE_ADD_FORM,
     0x0047_3090, // the file's call after a deleted form's start
-    0x0047_c050, // the component collection's constructor
     0x0047_c070, // its fill
     0x0047_c560, // its visit of slot 0
     0x0047_c5b0, // and of slot 1
     0x0047_c600, // its copy
     COMPONENTS_COMPARE,
     0x0048_ce80, // type 0x39's clear
-    SAVE_LOAD_STUB,
     0x005b_5e40, // the log
     0x0085_79b0, // SaveGameDataOLD
     0x0085_7a10, // SaveNumericID
@@ -142,39 +177,18 @@ const ANSWERED: [u32; 74] = [
     0x0044_0e30, // the form type's name
     STRING_COMPARE,
     0x0047_2f60, // TESFile::LoadForm
-    FILE_MASTER_LIST,
-    FILE_ROOT,
     FILE_GET_INDEX_FILE,
-    FILE_COMPILE_INDEX,
-    SAVE_LOAD_REMAP_ID,
-    RECORD_VERSION,
-    0x0040_1080, // the word swap
-    0x0040_7a90, // the half swap
-    0x0041_41e0, // the chunk header's swap
-    0x0040_2d30, // the base class step
-    0x0096_a2d0, // the source file list's constructor
-    0x0048_2f20, // the data handler's flag byte
     0x0046_9800, // its next id
     0x0043_b2b0, // the warning count
     0x00b4_6360, // deflateInit_
     0x00b4_7370, // deflateEnd
     0x004f_15a0, // a component byte's setter
     0x0048_e960, // the value's setter
-    0x006e_cd40, // the health's
-    0x004f_5d90, // the weight's
-    0x004f_1540, // the quality's getter
-    0x0047_ff50, // the attack damage's setter
-    0x009d_2510, // the attributes' size
     0x0048_0100, // their save
     0x0048_0130, // their load
-    0x0040_1660, // the file's chunk size
-    0x0040_1680, // the file's big-endian byte
     0x0046_5110, // CreateFormOfType
-    0x0040_1280, // the form's name
     0x0040_37d0, // a string local's destructor
     0x0040_6f60, // sprintf
-    0x0040_3d30, // memset
-    0x00aa_1070, // the buckets' allocation
     0x0048_6a60, // the map base's destruction
     0x0048_6c80, // the string map base's
     0x0048_6dc0, // the char key map base's
@@ -291,11 +305,21 @@ fn world(e: &mut Engine) {
         e.mem.set_u32(FORM_ENUM_TABLE + 12 * t + 8, 0x4d52_0000 | t);
     }
     e.mem.set_u32(GROUP_TAG, GROUP_TAG_VALUE);
+    // The seams the destructor (the script extender's, `00483669`) and `SetTemporary` (JohnnyGuitar
+    // NVSE's, `0048449a`) keep: each handler notes the form it is given, so a seam not reached, or
+    // given another word, shows in memory.
+    e.on_site_for_test(0x0048_3669, |e, a| {
+        e.mem.set_u32(SEAMS_SEEN, a[0]);
+        None
+    });
+    e.on_site_for_test(0x0048_449a, |e, a| {
+        e.mem.set_u32(SEAMS_SEEN + 4, a[0]);
+        None
+    });
     answered!(
         e,
         0x0047_0470,
         0x0046_ffb0,
-        0x0047_0650,
         0x0048_6b80,
         0x0047_0140,
         0x0047_01d0,
@@ -313,14 +337,12 @@ fn world(e: &mut Engine) {
         0x0047_2e60,
         0x0047_2fe0,
         0x0047_3090,
-        0x0047_c050,
         0x0047_c070,
         0x0047_c560,
         0x0047_c5b0,
         0x0047_c600,
         0x0047_c670,
         0x0048_ce80,
-        0x0047_c850,
         0x005b_5e40,
         0x0085_79b0,
         0x0085_7a10,
@@ -329,46 +351,24 @@ fn world(e: &mut Engine) {
         0x0044_0e30,
         0x0040_4dc0,
         0x0047_2f60,
-        0x0046_4df0,
-        0x0047_3c70,
         0x0047_1a10,
-        0x0047_3250,
-        0x0085_7bf0,
-        0x0047_0bb0,
-        0x0040_1080,
-        0x0040_7a90,
-        0x0041_41e0,
-        0x0040_2d30,
-        0x0096_a2d0,
-        0x0048_2f20,
         0x0046_9800,
         0x0043_b2b0,
         0x00b4_6360,
         0x00b4_7370,
         0x004f_15a0,
         0x0048_e960,
-        0x006e_cd40,
-        0x004f_5d90,
-        0x004f_1540,
-        0x0047_ff50,
-        0x009d_2510,
         0x0048_0100,
         0x0048_0130,
-        0x0040_1660,
-        0x0040_1680,
         0x0046_5110,
-        0x0040_1280,
         0x0040_37d0,
         0x0040_6f60,
-        0x0040_3d30,
-        0x00aa_1070,
         0x0048_6a60,
         0x0048_6c80,
         0x0048_6dc0,
         0x0048_6d60,
         0x0048_6ca0,
     );
-    set_answer(e, RECORD_VERSION, 0xf);
     e.register(OPERATOR_NEW, |e, a| {
         if e.mem.u32(NEW_FAILS) != 0 {
             ret(0)
@@ -385,10 +385,6 @@ fn world(e: &mut Engine) {
         e.mem.set_u32(a[0] + 0x10, left);
         ret(e.mem.u32(DEFLATE_STATUS))
     });
-    e.register(0x006b_9130, |e, _| Ret {
-        st0: f64::from(f32::from_bits(e.mem.u32(WEIGHT_BITS))),
-        ..Ret::default()
-    });
     e.register(0x0047_2890, |e, a| {
         for i in 0..a[2] {
             e.mem.set_u8(a[1] + i, (i * 13 + 5) as u8);
@@ -396,15 +392,18 @@ fn world(e: &mut Engine) {
         ret(0)
     });
     e.register(0x0040_c0e0, |e, a| {
-        e.mem.set_u32(a[0], a[1]);
+        e.mem.set_u32(
+            a[0],
+            if e.mem.u32(STRING_EMPTY) != 0 {
+                0
+            } else {
+                a[1]
+            },
+        );
         ret(a[0])
     });
-    e.register(0x0047_3080, |e, _| ret(e.mem.u32(SAVE_BUFFER_SIZE)));
-    e.register(0x0047_3070, |e, _| ret(e.mem.u32(SAVE_BUFFER)));
-    e.register(MEMCPY, |e, a| {
-        copy_bytes(e, a[0], a[1], a[2]);
-        ret(a[0])
-    });
+    // The buckets' allocation: a block of its own (the map base's `memset` zeroes it).
+    e.register(0x00aa_1070, |e, a| ret(heap_block(e, a[0])));
     e.register(BUFFER_REALLOC, |e, a| {
         let block = heap_block(e, a[1]);
         if a[0] != 0 {
@@ -421,14 +420,6 @@ fn world(e: &mut Engine) {
         }
         ret(found)
     });
-    e.register(BUFFER_SAVE_KIND, |e, a| {
-        let kind = e.mem.u32(SAVE_KIND);
-        e.mem.set_u32(a[1], kind);
-        ret(a[1])
-    });
-    e.register(WORD_HAS_BITS, |e, a| {
-        ret(u32::from(e.mem.u32(a[0]) & a[1] != 0))
-    });
     e.register(LOAD_BUFFER_READ, |e, a| {
         let word = e.mem.u32(READ_WORD);
         e.mem.set_u32(a[1], word);
@@ -438,26 +429,6 @@ fn world(e: &mut Engine) {
         let word = e.mem.u32(READ_WORD);
         e.mem.set_u32(a[1], word);
         ret(0)
-    });
-    e.register(STORE_WORD, |e, a| {
-        e.mem.set_u32(a[0], a[1]);
-        ret(a[0])
-    });
-    e.register(FORM_TYPE, |e, a| ret(u32::from(e.mem.u8(a[0] + 4))));
-    e.register(IS_TEMPORARY, |e, a| {
-        ret(u32::from(e.mem.u32(a[0] + 8) & 0x4000 != 0))
-    });
-    e.register(IS_FLAG_2, |e, a| {
-        ret(u32::from(e.mem.u32(a[0] + 8) & 2 != 0))
-    });
-    e.register(LIST_FIRST_NODE, |_, a| ret(a[0] + 0x10));
-    e.register(IS_BIG_ENDIAN, |e, _| ret(u32::from(e.mem.u8(BIG_ENDIAN))));
-    e.register(FILE_IS_MASTER, |e, a| {
-        ret(if a[0] == 0 {
-            0
-        } else {
-            u32::from(e.mem.u8(a[0]))
-        })
     });
     e.register(FORM_NAME_KEY, |e, a| ret(e.mem.u32(a[0] + 0x30)));
     e.register(LIST_POP_NODE, |e, a| {
@@ -528,10 +499,11 @@ fn form(e: &mut Engine, kind: u32, flags: u32, id: u32) -> u32 {
     f
 }
 
-/// A file `TESFile::GetMaster` accepts (`master`) or not.
+/// A file `TESFile::GetMaster` accepts (`master`: bit 0 of its flags) or not, with no next file, an
+/// empty master list, compile index 0 and no chunk.
 fn file(e: &mut Engine, master: bool) -> u32 {
-    let f = e.mem.alloc(0x10);
-    e.mem.set_u8(f, u8::from(master));
+    let f = e.mem.alloc(0x410);
+    e.mem.set_u32(f + FILE_FLAGS, 0x40 | u32::from(master));
     f
 }
 
@@ -587,7 +559,7 @@ fn registries(e: &mut Engine, map: bool, listed: u32, handler: bool, save_games:
         _ => {}
     }
     if handler {
-        let h = e.mem.alloc(0x220);
+        let h = e.mem.alloc(0x630);
         e.mem.set_u32(DATA_HANDLER, h);
     }
     if save_games {
@@ -617,9 +589,18 @@ fn data(e: &mut Engine, size: u32) -> u32 {
     d
 }
 
-/// Every test runs with this family and the leaves' family its calls reach.
+/// Every test runs with this family and the families its typed calls reach (the leaves', the C
+/// runtime's: `memcpy` and `memset` run as they are), and leaves the bodies done in place out of
+/// the translation's calls. The maps' lookup (dispatch's `00853130`) and set (the save family's
+/// `00844700`) are doubles over the test's stand-in maps, so those families are not named: their
+/// typed calls go by address to the doubles on both sides (both families, like this one, run on
+/// every thread).
 fn forms_cases(d: Diff) -> Diff {
-    d.family(&FORMS).family(&leaf::LEAVES)
+    d.family(&FORMS)
+        .family(&leaf::LEAVES)
+        .family(&CRT)
+        .goes_by_address(&[0x0085_3130, 0x0084_4700])
+        .ignore_calls(IN_PLACE)
 }
 
 /// The cases several tests share, as steps of the `Diff` chain, so that each test is one statement
@@ -965,10 +946,9 @@ fn set_delete() {
 fn set_empty() {
     Diff::new(entry!(0x0048_4580, tesform::set_empty(u32, bool)))
         .forms()
-        .inputs(&[Input::Flag, Input::Of(FLAGS), Input::Flag])
+        .inputs(&[Input::Flag, Input::Of(FLAGS)])
         .setup(|e, case| {
             world(e);
-            set_answer(e, SAVE_LOAD_STUB, case.word(2));
             vec![form(e, 0x20, case.word(1), 0x14), case.word(0)]
         })
         .run()
@@ -1270,8 +1250,8 @@ fn write_flags() {
         .inputs(&[Input::Of(&[0, 1, 2, 3])])
         .setup(|e, case| {
             world(e);
-            e.mem.set_u32(SAVE_KIND, case.word(0));
             let buffer = e.mem.alloc(0x20);
+            e.mem.set_u32(buffer + SAVE_KIND_AT, case.word(0));
             vec![form(e, 0x20, 0x1234_5678, 0x14), buffer]
         })
         .run()
@@ -1287,17 +1267,21 @@ fn read_flags() {
             Input::Flag,
             Input::Of(&[0, 0xffff_ffff, 0x5a5a_5a5a]),
             Input::Of(&[0, 0xffff_ffff]),
-            Input::Flag,
+            // JIP LN's G45: off; on with no handler; on, its handler adding 0x400000 to the mask.
+            Input::Of(&[0, 1, 2]),
         ])
         .setup(|e, case| {
             world(e);
-            e.mem.set_u32(SAVE_KIND, case.word(0));
             e.mem.set_u32(SLOT_ANSWERS + 0xf0, case.word(1));
             e.mem.set_u32(READ_WORD, case.word(2));
             if case.word(4) != 0 {
                 e.set_jip_patches(engine_core::extend::jip_patches::FIXES);
             }
+            if case.word(4) == 2 {
+                e.on_site_for_test(0x0048_4e03, |_, a| Some(a[0] | 0x40_0000));
+            }
             let buffer = e.mem.alloc(0x20);
+            e.mem.set_u32(buffer + SAVE_KIND_AT, case.word(0));
             vec![form(e, 0x20, case.word(3), 0x14), buffer]
         })
         .run()
@@ -1348,9 +1332,11 @@ fn get_file() {
 
 #[test]
 fn get_owner_master() {
+    // No list shape with a node of no file before the list's end: the exe asks `GetMaster` of every
+    // node's file, and of a null one it would read at 0x3e8.
     Diff::new(entry!(0x0048_4ee0, tesform::get_owner_master(u32) -> u32))
         .forms()
-        .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5])])
+        .inputs(&[Input::Of(&[0, 1, 5])])
         .setup(|e, case| {
             if case.word(0) == 5 {
                 // Masters and other files mixed: master, file, master, file.
@@ -1381,7 +1367,7 @@ fn set_file() {
                 1 => set_files(e, f, &[m1]),
                 2 => set_files(e, f, &[n1, m1]),
                 3 => set_files(e, f, &[m1, n1, m2, n2]),
-                4 => set_files(e, f, &[0, n1, 0]),
+                4 => set_files(e, f, &[n1, 0]),
                 5 => set_files(e, f, &[n1, n2, m1]),
                 _ => {}
             }
@@ -1392,8 +1378,9 @@ fn set_file() {
                 3 => n1,
                 _ => {
                     let root = file(e, true);
-                    set_answer(e, FILE_ROOT, root);
-                    file(e, false)
+                    let given = file(e, false);
+                    e.mem.set_u32(given + FILE_PARENT, root);
+                    given
                 }
             };
             vec![f, given]
@@ -1815,16 +1802,19 @@ fn free_form_buffer() {
 fn packed_id() {
     Diff::new(entry!(0x0048_5b60, tesform::packed_id(u32) -> u32))
         .forms()
-        .inputs(&[Input::Of(&[0, 1, 3]), Input::Flag])
+        // Shapes with a file (the exe reads the first file's master list, at 0x3ec of a null one).
+        .inputs(&[Input::Of(&[1, 2, 3]), Input::Flag])
         .setup(|e, case| {
             let f = form_with_files(e, case.word(0));
-            // The first file's masters: an empty list or one holding a master.
-            let masters = e.mem.alloc(8);
+            // The first file's masters (its list at +0x3ec): empty, or holding a master.
+            let first = match e.mem.u32(f + 0x10) {
+                0 => e.mem.u32(e.mem.u32(f + 0x14)),
+                file => file,
+            };
             if case.word(1) != 0 {
                 let m = file(e, true);
-                e.mem.set_u32(masters, m);
+                e.mem.set_u32(first + FILE_MASTERS, m);
             }
-            set_answer(e, FILE_MASTER_LIST, masters);
             vec![f]
         })
         .run()
@@ -1889,7 +1879,6 @@ fn add_compile_index() {
     Diff::new(entry!(0x0048_5d50, tesform::add_compile_index(u32, u32)))
         .forms()
         .inputs(&[
-            Input::Flag,
             Input::Of(&[0x5, 0x0100_0abc, 0xff00_0001]),
             Input::Flag,
             Input::Flag,
@@ -1897,13 +1886,17 @@ fn add_compile_index() {
         .setup(|e, case| {
             world(e);
             registries(e, false, 0, false, true, 0);
-            set_answer(e, SAVE_LOAD_STUB, case.word(0));
-            set_answer(e, SAVE_LOAD_REMAP_ID, 0x0300_0123);
-            set_answer(e, FILE_COMPILE_INDEX, 0x1_0004);
             let id = e.mem.alloc(4);
-            e.mem.set_u32(id, case.word(1));
-            let f = if case.word(2) != 0 { file(e, false) } else { 0 };
-            let indexed = if case.word(3) != 0 { file(e, true) } else { 0 };
+            e.mem.set_u32(id, case.word(0));
+            // The given file's compile index 4, the indexed one's 0x84.
+            let f = if case.word(1) != 0 { file(e, false) } else { 0 };
+            if f != 0 {
+                e.mem.set_u8(f + FILE_COMPILE_INDEX_AT, 4);
+            }
+            let indexed = if case.word(2) != 0 { file(e, true) } else { 0 };
+            if indexed != 0 {
+                e.mem.set_u8(indexed + FILE_COMPILE_INDEX_AT, 0x84);
+            }
             set_answer(e, FILE_GET_INDEX_FILE, indexed);
             vec![id, f]
         })
@@ -1956,7 +1949,7 @@ fn construct() {
             if handler != 0 {
                 registries(e, false, 0, true, false, f);
                 let h = e.mem.u32(DATA_HANDLER);
-                set_answer(e, 0x0048_2f20, u32::from(handler == 1));
+                e.mem.set_u8(h + HANDLER_NO_IDS, u8::from(handler == 1));
                 set_answer(
                     e,
                     0x0046_9800,
@@ -2010,24 +2003,27 @@ fn compress_save_buffer() {
 }
 
 /// The form's components, by bit of `mask` in [`COMPONENT_TYPES`]' order, each a small object
-/// with the test vtable, its byte at +4 and its word at +4 the getters read.
+/// with the test vtable, its byte at +4 and its word at +4 the getters read: the weight's float a
+/// signalling NaN (its load and store bring it back quiet), the quality's byte 0xc8.
 fn components(e: &mut Engine, mask: u32) {
     for (i, target) in COMPONENT_TYPES.into_iter().enumerate() {
         let part = if mask & (1 << i) != 0 {
             let p = e.mem.alloc(0x10);
             e.mem.set_u32(p, VTABLE);
-            e.mem.set_u32(p + 4, 0x0102_0300 + i as u32);
+            let word = match i {
+                3 => 0x7f80_0001,
+                4 => 0xc8,
+                _ => 0x0102_0300 + i as u32,
+            };
+            e.mem.set_u32(p + 4, word);
             p
         } else {
             0
         };
         set_cast(e, target, part);
     }
-    set_answer(e, 0x009d_2510, 3);
     set_answer(e, 0x0048_0100, 3);
     set_answer(e, 0x0048_0130, 2);
-    set_answer(e, 0x004f_1540, 0xc8);
-    e.mem.set_u32(WEIGHT_BITS, 2.5f32.to_bits());
     e.mem.set_u32(SLOT_ANSWERS + 0x10, 0x1234);
 }
 
@@ -2081,16 +2077,13 @@ fn load_data() {
         ])
         .setup(|e, case| {
             world(e);
-            set_answer(e, 0x0040_1660, case.word(0));
-            set_answer(e, 0x0040_1680, case.word(3));
             components(e, case.word(2));
+            // The file's current chunk: its size and whether it is byte-swapped.
+            let file = file(e, false);
+            e.mem.set_u32(file + FILE_CHUNK_SIZE_AT, case.word(0));
+            e.mem.set_u8(file + FILE_SWAPPED_AT, case.word(3) as u8);
             let destination = e.mem.alloc(0x40);
-            vec![
-                form(e, 0x28, 0, 1),
-                file(e, false),
-                destination,
-                case.word(1),
-            ]
+            vec![form(e, 0x28, 0, 1), file, destination, case.word(1)]
         })
         .run()
         .assert_same();
@@ -2130,7 +2123,8 @@ fn components_data_size() {
 fn copy_form() {
     Diff::new(entry!(0x0048_67a0, tesform::copy_form(u32, u32, u32) -> u32))
         .forms()
-        .inputs(&[Input::Flag, Input::Of(&[0, 0x0101_2345]), Input::Flag])
+        // The name local's text after the copy: the string's (the double keeps the pointer) or none.
+        .inputs(&[Input::Flag, Input::Flag, Input::Flag])
         .setup(|e, case| {
             world(e);
             let created = if case.word(0) != 0 {
@@ -2139,7 +2133,7 @@ fn copy_form() {
                 0
             };
             set_answer(e, 0x0046_5110, created);
-            set_answer(e, 0x0040_1280, case.word(1));
+            e.mem.set_u32(STRING_EMPTY, case.word(1));
             let map = if case.word(2) != 0 {
                 form(e, 0x7f, 0, 0)
             } else {
@@ -2170,10 +2164,14 @@ fn form_type_from_string() {
 fn detailed_string() {
     Diff::new(entry!(0x0048_68f0, tesform::detailed_string(u32, u32)))
         .forms()
-        .inputs(&[Input::Of(&[0, 0x0101_2345])])
+        // JohnnyGuitar NVSE's seam at the name's call: no handler (the exe's empty name), or one that
+        // answers a name.
+        .inputs(&[Input::Flag])
         .setup(|e, case| {
             world(e);
-            set_answer(e, 0x0040_1280, case.word(0));
+            if case.word(0) != 0 {
+                e.on_site_for_test(0x0048_6903, |_, _| Some(0x0101_2345));
+            }
             let buffer = e.mem.alloc(0x40);
             vec![form(e, 0x28, 0, 0x0100_0abc), buffer]
         })
@@ -2199,7 +2197,6 @@ fn form_map_construct() {
         .inputs(&[Input::Of(&[0, 1, 0x2008d])])
         .setup(|e, case| {
             world(e);
-            set_answer(e, 0x00aa_1070, 0x0123_4000);
             vec![e.mem.alloc(0x10), case.word(0)]
         })
         .run()
@@ -2224,7 +2221,6 @@ fn map_base_construct() {
         .inputs(&[Input::Of(&[0, 1, 0x2008d, 0x4000_0001])])
         .setup(|e, case| {
             world(e);
-            set_answer(e, 0x00aa_1070, 0x0123_4000);
             vec![e.mem.alloc(0x10), case.word(0)]
         })
         .run()
