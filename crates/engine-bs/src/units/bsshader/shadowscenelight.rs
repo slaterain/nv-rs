@@ -1152,10 +1152,9 @@ pub fn shadow_scene_light_mt_render_frustum_depth_map(
     }
     let camera = e.get(this, ShadowSceneLight::spShadowCamera);
     let accumulator = e.get(this, ShadowSceneLight::spShadowAccumulator);
-    e.call(
-        CAMERA_ACCUMULATOR_00B6C0D0,
-        &args![camera, accumulator, 0u32],
-    );
+    // The exe pushes a third word (0) that `00b6c0d0` never reads (it reads two): left out, so the
+    // call's words are those of the draw family's native `scene_draw`.
+    e.call(CAMERA_ACCUMULATOR_00B6C0D0, &args![camera, accumulator]);
     let accumulator = e.get(this, ShadowSceneLight::spShadowAccumulator);
     let held = e.mem.u32(accumulator.wrapping_add(0x1a0));
     if held != 0 {
@@ -2850,7 +2849,14 @@ pub fn shadow_scene_light_cube_face_frustum_frustum_intersection(
             e.mem.set_u8(data + offset, 0);
         }
         e.call(OBJECT_UPDATE_00A59C60, &args![camera, data]);
-        let answer = fn_00b9c020(e, this, Ptr::new(camera_of_source), Ptr::new(camera));
+        // By address: the lights family's native version answers there.
+        let answer = e
+            .call(
+                LIGHT_CAMERA_TEST_00B9C020,
+                &args![this, camera_of_source, camera],
+            )
+            .u8()
+            != 0;
         e.call(CUBE_MAP_CAMERA_DESTRUCT, &args![camera]);
         answer
     });

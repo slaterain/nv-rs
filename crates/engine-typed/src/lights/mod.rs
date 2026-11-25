@@ -28,8 +28,12 @@
 //!   geometry list's fence clear, head and tail removals and `RemoveTriGeom` (`00b9e770`,
 //!   `00b9e7c0`, `00b9e850`, `00ba01a0`), an accumulator's `NiPointer` (`00b9cfd0`) and the cull of
 //!   its geometries (`00b9d020`). The luminances also run on other threads (the light sort of the
-//!   render passes, the AI's light queries): written once over `native::Real`, their Diff tests
-//!   run both control words.
+//!   render passes on the loading thread, the AI threads' light value `00922dbe`): written once
+//!   over `native::Real`, their Diff tests run both control words.
+//! - [`scene_frustum`]: the rest of the light's own functions, its frustums: the view volume test of
+//!   two cameras (`00b9c020`), the cube face test (`00b9de90`), `TestFrustumCull` (`00b9e970`),
+//!   `MTSetupFrustumDepthMap` (`00b9dfc0`) and `MTRenderFrustumDepthMap` (`00b9f780`), over
+//!   `native::Real` too (the render passes reach them on other threads).
 //!
 //! The objects' `IsNode` and `IsTriBasedGeom` slots and the lights' RTTI slot are answered in place
 //! when they hold the exe's constant bodies (`walk::slot_word`), through the vtable otherwise.
@@ -56,6 +60,7 @@ pub mod dominant;
 mod list;
 pub mod queue;
 pub mod resort;
+pub mod scene_frustum;
 pub mod scene_light;
 pub mod walk;
 pub mod weighted;
@@ -72,7 +77,10 @@ pub static LIGHTS: Family = Family {
     // The walk's members (plain `f32`) run on the main thread only: the light passes and the
     // shadow preparation. The light sort (`resort`) is also reached from the render passes on the
     // loading thread, so it keeps the exact x87 helpers, which are right under either control
-    // word, and its Diff test runs both; the weighted and dominant members keep them too.
+    // word, and its Diff test runs both; the weighted and dominant members keep them too. The
+    // luminances (`scene_light`) and the frustum functions (`scene_frustum`) also run on the AI
+    // threads and the loading thread: they are written over `native::Real`, which picks the
+    // running thread's precision, and their Diff tests run both control words.
     threads: Threads::Main,
     stage2: false,
     funcs,
@@ -176,5 +184,10 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b9_e770, scene_light::clear_fence(Ptr<ShadowSceneLight>)),
         entry!(0x00ba_01a0, scene_light::remove_tri_geom(Ptr<ShadowSceneLight>, u32, u32)),
         entry!(0x00b9_d020, scene_light::cull_geometries(Ptr<ShadowSceneLight>, u32) -> bool),
+        entry!(0x00b9_c020, scene_frustum::volumes_meet(Ptr<ShadowSceneLight>, Ptr, Ptr) -> bool),
+        entry!(0x00b9_de90, scene_frustum::cube_face_meets(Ptr<ShadowSceneLight>, u32, u32, u32, u32, Ptr, u16) -> bool),
+        entry!(0x00b9_e970, scene_frustum::test_frustum_cull(Ptr<ShadowSceneLight>, u32)),
+        entry!(0x00b9_dfc0, scene_frustum::setup_frustum_depth_map(Ptr<ShadowSceneLight>, u32, u32)),
+        entry!(0x00b9_f780, scene_frustum::render_frustum_depth_map(Ptr<ShadowSceneLight>, u32, u32)),
     ]
 }
