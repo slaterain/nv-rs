@@ -11,7 +11,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_typed::process::{self, after_draw};
-use engine_typed::{animation, dispatch, scene};
+use engine_typed::{animation, collision, dispatch, scene};
 
 const LOG: u32 = 0x0300_0000;
 /// Where the stand-in slot functions live, one per slot.
@@ -139,7 +139,6 @@ fn stand_ins(e: &mut Engine) {
         (0x004a_3a20, logged::<0x05>),
         (0x00ca_2ad0, logged::<0x06>),
         (0x00ca_1410, logged::<0x07>),
-        (0x0062_c430, logged::<0x08>),
         (0x0094_df60, logged::<0x09>),
         (0x009b_17a0, logged::<0x0a>),
         (0x0097_8890, logged::<0x0b>),
@@ -206,6 +205,7 @@ fn level0(e: &mut Engine, kind: u32) -> u32 {
 trait Common {
     fn common(self) -> Self;
     fn animation_common(self) -> Self;
+    fn islands(self, typed: bool) -> Self;
 }
 
 impl Common for Diff {
@@ -221,6 +221,16 @@ impl Common for Diff {
             .family(&animation::ANIMATION)
             .family(&scene::SCENE)
             .family(&engine_typed::multibound::MULTIBOUND)
+    }
+
+    /// `ConsolidateSimIslands` (`0062c430`, the collision family's): typed (its gathering and the
+    /// array's destructor stand-ins, no bodies; typed_collision.rs runs its loop), or a double.
+    fn islands(self, typed: bool) -> Diff {
+        if typed {
+            self.family(&collision::COLLISION)
+        } else {
+            self.goes_by_address(&[0x0062_c430])
+        }
     }
 }
 
@@ -355,43 +365,55 @@ fn after_draw_merge_detection() {
 
 #[test]
 fn after_draw_ragdoll_step() {
-    Diff::new(entry!(0x0097_81d0, after_draw::ragdoll_step(Ptr<_>, f32)))
-        .common()
-        .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Flag, Input::Flag])
-        .setup(|e, case: &Case| {
-            stand_ins(e);
-            let objects: Vec<u32> = (0..16)
-                .map(|i| {
-                    let o = level0(e, (i * 5 + case.word(0)) % 16);
-                    if o != 0 {
-                        // A ragdoll object at +0xb0 whose flag byte +0x18 says whether it updates;
-                        // a process at +0x68 or none.
-                        let ragdoll = e.mem.alloc(0x40);
-                        e.mem.set_u8(ragdoll + 0x18, (i % 2) as u8);
-                        e.mem.set_u32(o + 0xb0, ragdoll);
-                        let p = object(e, &[]);
-                        e.mem.set_u32(o + 0x68, p);
-                        // Some actors' frame step (slot +0x34c) clears their process word, so the
-                        // second process read finds none.
-                        if i % 3 == 0 {
-                            let vt = e.mem.u32(o);
-                            e.mem.set_u32(vt + 0x34c, CLEARS_PROCESS);
+    // `ConsolidateSimIslands` once as a double, once typed (the collision family on).
+    for typed_islands in [false, true] {
+        Diff::new(entry!(0x0097_81d0, after_draw::ragdoll_step(Ptr<_>, f32)))
+            .common()
+            .islands(typed_islands)
+            .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Flag, Input::Flag])
+            .setup(move |e, case: &Case| {
+                stand_ins(e);
+                if typed_islands {
+                    // The gathering from the actor's 3D (its +0xac controller is null) leaves the
+                    // array empty; the array's destructor.
+                    e.register(0x00c8_0930, logged::<0x0d>);
+                    e.register(0x0062_9b40, logged::<0x0e>);
+                } else {
+                    e.register(0x0062_c430, logged::<0x08>);
+                }
+                let objects: Vec<u32> = (0..16)
+                    .map(|i| {
+                        let o = level0(e, (i * 5 + case.word(0)) % 16);
+                        if o != 0 {
+                            // A ragdoll object at +0xb0 whose flag byte +0x18 says whether it
+                            // updates; a process at +0x68 or none.
+                            let ragdoll = e.mem.alloc(0x40);
+                            e.mem.set_u8(ragdoll + 0x18, (i % 2) as u8);
+                            e.mem.set_u32(o + 0xb0, ragdoll);
+                            let p = object(e, &[]);
+                            e.mem.set_u32(o + 0x68, p);
+                            // Some actors' frame step (slot +0x34c) clears their process word, so
+                            // the second process read finds none.
+                            if i % 3 == 0 {
+                                let vt = e.mem.u32(o);
+                                e.mem.set_u32(vt + 0x34c, CLEARS_PROCESS);
+                            }
                         }
-                    }
-                    o
-                })
-                .collect();
-            let player = object(e, &[]);
-            if case.word(1) == 1 {
-                let p = object(e, &[]);
-                e.mem.set_u32(player + 0x68, p);
-            }
-            e.mem.set_u32(PLAYER, player);
-            set_logged(e, 0x09, case.word(2));
-            vec![lists(e, &objects), 0x3e80_0000]
-        })
-        .run()
-        .assert_same();
+                        o
+                    })
+                    .collect();
+                let player = object(e, &[]);
+                if case.word(1) == 1 {
+                    let p = object(e, &[]);
+                    e.mem.set_u32(player + 0x68, p);
+                }
+                e.mem.set_u32(PLAYER, player);
+                set_logged(e, 0x09, case.word(2));
+                vec![lists(e, &objects), 0x3e80_0000]
+            })
+            .run()
+            .assert_same();
+    }
 }
 
 /// An animation with its roots (stand-in nodes whose downward slot logs), the pending bit, the limit

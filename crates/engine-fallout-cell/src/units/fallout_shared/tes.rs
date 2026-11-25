@@ -1976,11 +1976,14 @@ pub fn fn_00451ef0(e: &mut Engine, this: Ptr<TES>, refr: Ptr, cell: Ptr, source:
             let second = e.mem.f32(sizes + 4);
             let limit: f64 = e.global(LARGE_CELL_LIMIT);
             if first as f64 > limit && second as f64 > limit {
+                // The radius is stored as a `double`, then `FMUL`ed with the
+                // scale (24 bits under the main thread's word).
                 let radius = e.vcall(cast, 0x1bc, &args![]).f64();
                 let scale = e.call(0x0056_7400, &args![r]).f64();
-                // `fistp` with the rounding mode set to truncate; only the
-                // low word of the 64-bit result is used.
-                let count = (scale * radius) as i64 as i32;
+                // `FISTP qword` with the rounding mode set to truncate (the
+                // integer indefinite past 2^63); only the low word of the
+                // 64-bit result is used.
+                let count = engine_core::x87::fistp_chop64(x87_mul(scale, radius)) as i32;
                 let position = e.vcall(r, 0x1f4, &args![]).u32();
                 let x = e.mem.u32(position);
                 let y = e.mem.u32(position + 4);
@@ -8325,16 +8328,29 @@ mod tests {
     /// `+0x8c`; the reference's slot 0x1f4 returns the position (1, 2, 3) and
     /// `00567400` its scale 2.0.
     fn run_type_0x25(first: f32, second: f32, cast_exists: bool) -> Vec<(u32, Vec<u32>)> {
+        run_type_0x25_with(first, second, cast_exists, (2.5, 2.0), 0x027f)
+    }
+
+    /// [`run_type_0x25`] with the radius and the scale given and the x87
+    /// control word `word` (set back to the threads' default after).
+    fn run_type_0x25_with(
+        first: f32,
+        second: f32,
+        cast_exists: bool,
+        (radius, scale): (f64, f64),
+        word: u16,
+    ) -> Vec<(u32, Vec<u32>)> {
         let (mut e, tes, refr, cell) = reference_engine();
+        crate::units::crt::set_x87_control_word(&mut e, word);
         returns(&mut e, FORM_GET_TYPE, 0x25);
         let cast = object_with_slots(&mut e, 0x0300_6000, &[(0x1bc, 0x0300_01bc)]);
-        returns_float(&mut e, 0x0300_01bc, 2.5);
+        returns_float(&mut e, 0x0300_01bc, radius);
         returns(&mut e, 0x00ec_43fb, if cast_exists { cast } else { 0 });
         let sizes = e.mem.alloc(8);
         e.mem.set_f32(sizes, first);
         e.mem.set_f32(sizes + 4, second);
         returns(&mut e, 0x0045_bb80, sizes);
-        returns_float(&mut e, 0x0056_7400, 2.0);
+        returns_float(&mut e, 0x0056_7400, scale);
         let position = e.mem.alloc(12);
         for (i, value) in [1.0f32, 2.0, 3.0].into_iter().enumerate() {
             e.mem.set_f32(position + 4 * i as u32, value);
@@ -8344,6 +8360,7 @@ mod tests {
         let log = run_logged(&mut e, |e| {
             e.call(0x0045_1ef0, &args![tes, refr, cell, 0u32, 1u8]);
         });
+        crate::units::crt::set_x87_control_word(&mut e, 0x027f);
         let casts = calls_to(&log, 0x00ec_43fb);
         assert_eq!(
             casts,
@@ -8372,6 +8389,23 @@ mod tests {
                 1.0f32.to_bits()
             ]
         );
+    }
+
+    /// The product is the x87's: under the main thread's word (24 bits) 3.0
+    /// times the float nearest 5/3 (5 - 2^-23 exactly) rounds to 5.0 before
+    /// the truncation, under the other threads' it stays below 5. A product
+    /// past 2^63 stores the integer indefinite, whose low word is 0.
+    #[test]
+    fn type_0x25_scaled_radius_is_the_x87_product_truncated() {
+        let count = |radius: f64, scale: f64, word: u16| {
+            let log = run_type_0x25_with(300.0, 250.0, true, (radius, scale), word);
+            calls_to(&log, 0x0054_7ad0)[0][4]
+        };
+        let five_thirds = f64::from(5.0f32 / 3.0);
+        assert_eq!(count(five_thirds, 3.0, 0x007f), 5);
+        assert_eq!(count(five_thirds, 3.0, 0x027f), 4);
+        assert_eq!(count(2f64.powi(40), 2f64.powi(30), 0x027f), 0);
+        assert_eq!(count(-2.5, 3.0, 0x027f), (-7i32) as u32);
     }
 
     #[test]

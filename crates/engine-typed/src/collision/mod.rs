@@ -11,6 +11,8 @@
 //! - [`blend`]: `bhkBlendCollisionObject::UpdateWorldData` and `hktoNiTransform` with its blend;
 //! - [`body`]: `bhkCollisionObject::NitohkTransform`, `NiQuaternion::FromRotation` and the body's
 //!   linear velocity.
+//! - [`islands`]: `TESHavokUtilities::ConsolidateSimIslands`, the merge of a reference's bodies'
+//!   simulation islands after the actors' ragdoll step.
 //!
 //! What stays by address: `bhkCollisionObject::hktoNiTransform` (`00c65a80`, replaced by the fixes
 //! preset's smooth physics drawing, overridable.tsv), the Havok calls (motion type, hard keyframe,
@@ -31,6 +33,7 @@ use engine_core::{entry, AbiFn};
 
 pub mod blend;
 pub mod body;
+pub mod islands;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(21);
@@ -57,5 +60,6 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a6_df40, body::quaternion_from_rotation(Ptr, Ptr)),
         entry!(0x0056_0d80, body::linear_velocity(Ptr) -> Ptr),
         entry!(0x0056_0dc0, body::linear_velocity_of(Ptr) -> Ptr),
+        entry!(0x0062_c430, islands::consolidate_sim_islands(Ptr)),
     ]
 }
