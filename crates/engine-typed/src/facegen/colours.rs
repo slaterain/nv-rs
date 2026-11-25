@@ -1,10 +1,13 @@
 //! The face image's colour vector (`BSFaceGenImage`'s `std::vector` of 16-byte colours): its
 //! `assign(count, value)` (`0064dcf0`), which the face's tint (`0065b410`, through the resize
-//! `0064db50`) runs on a new image: a texel count of copies of (0, 0, 0, 0), 65,536 for a face's
-//! 256 by 256 tint, every click on a preset or a hair in the race menu (a 2026-11-24 profile of the
-//! menu put it at about 3 ms a click). The translation constructs each copy through the library's
-//! helpers, one call by address a copy (the placement `operator new` of `_Construct`); here the
-//! copies are written in one pass.
+//! `0064db50`) runs on a new image, a texel count of copies of (0, 0, 0, 0): 65,536 for a face's
+//! 256 by 256 tint; and its range `erase` (`0064dc50`), which the image's destructor (`0064ce20`,
+//! through its clear `0064db70`) runs on all of them. Both come every click on a preset or a hair
+//! in the race menu (a 2026-11-24 profile of the menu: about 67,000 elements a click each way, 2 to
+//! 3 ms together). The translation constructs each copy and destroys each element through the
+//! library's helpers, one call by address an element (the placement `operator new` of
+//! `_Construct`, the allocator's `destroy`); here the copies are written in one pass, and the
+//! destructor, which does nothing, is not called.
 //!
 //! What stays by address: the checked iterators the exe makes (`end()` `0065f550`, `begin()`
 //! `0044a170`, the copy `0065ded0`) and compares (`0065dfd0`), with their
@@ -18,7 +21,7 @@
 //! No float maths: the colours are copied as words.
 
 use engine_core::ptr::Ptr;
-use engine_core::{args, Engine};
+use engine_core::{args, typed_call, Engine};
 
 /// The vector's first, last and end-of-storage pointers.
 const FIRST: u32 = 0xc;
@@ -64,7 +67,12 @@ pub fn assign(e: &mut Engine, this: Ptr, count: u32, value: u32) {
         let end = (e.mem.u32(at), e.mem.u32(at.wrapping_add(4)));
         let at = e.call(VECTOR_BEGIN, &args![vector, frame + 0x18]).u32();
         let begin = (e.mem.u32(at), e.mem.u32(at.wrapping_add(4)));
-        erase(e, vector, frame + 0x20, begin, end);
+        let erased = frame + 0x20;
+        typed_call!(
+            super::FAMILY,
+            0x0064_dc50,
+            erase(e, this, erased, begin.0, begin.1, end.0, end.1)
+        );
         let at = e.call(VECTOR_BEGIN, &args![vector, frame + 0x28]).u32();
         let (owner, place) = (e.mem.u32(at), e.mem.u32(at.wrapping_add(4)));
         let first = e.mem.u32(vector.wrapping_add(FIRST));
@@ -81,17 +89,28 @@ fn elements(first: u32, last: u32) -> u32 {
     ((last.wrapping_sub(first) as i32) >> 4) as u32
 }
 
-/// The range erase (`0064dc50`, which the translation calls plainly) of the iterators `first` and
-/// `last` (their two words each), in the translation's frame of 0x10 bytes: both made again
-/// (`0065ded0`), and when they differ (`0065dfd0`), the elements from `last` up to the vector's last
-/// copied down to `first` (`std::copy`, `0064e380`) and the last pointer moved to the end of the
-/// copies; the elements past it have the empty destructor. `result` takes the first iterator.
-fn erase(e: &mut Engine, vector: u32, result: u32, first: (u32, u32), last: (u32, u32)) {
+// Typed from 0064dc50
+/// The range `erase(first, last)` of the colour vector (`thiscall`, five words: the result
+/// iterator's address and the two iterators' two words each), in the translation's frame of 0x10
+/// bytes: both iterators made again (`0065ded0`), and when they differ (`0065dfd0`), the elements
+/// from `last` up to the vector's last copied down to `first` (`std::copy`, `0064e380`) and the
+/// last pointer moved to the end of the copies; the elements past it have the empty destructor.
+/// The result is the first iterator; answers its address.
+pub fn erase(
+    e: &mut Engine,
+    this: Ptr,
+    result: u32,
+    first_owner: u32,
+    first: u32,
+    last_owner: u32,
+    last: u32,
+) -> u32 {
+    let vector = this.addr();
     e.with_stack(0x10, |e, frame| {
         let from = frame.addr();
         let to = from + 8;
-        e.call(MAKE_ITERATOR, &args![vector, from, first.0, first.1]);
-        e.call(MAKE_ITERATOR, &args![vector, to, last.0, last.1]);
+        e.call(MAKE_ITERATOR, &args![vector, from, first_owner, first]);
+        e.call(MAKE_ITERATOR, &args![vector, to, last_owner, last]);
         if e.call(ITERATORS_DIFFER, &args![from, to]).bool() {
             let old_last = e.mem.u32(vector.wrapping_add(LAST));
             let (source, dest) = (e.mem.u32(to + 4), e.mem.u32(from + 4));
@@ -103,6 +122,7 @@ fn erase(e: &mut Engine, vector: u32, result: u32, first: (u32, u32), last: (u32
         let pointer = e.mem.u32(from + 4);
         e.mem.set_u32(result.wrapping_add(4), pointer);
     });
+    result
 }
 
 /// `std::copy` of the 16-byte elements from `first` while not at `last` to `dest` on (`0064e380`'s

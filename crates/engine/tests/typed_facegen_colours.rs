@@ -1,11 +1,11 @@
-//! The differential test of the face image's colour vector assignment
-//! (`engine_typed::facegen::colours`, `0064dcf0`) against its translation, on real vectors: each
-//! made by the image's vector constructor (`0065c750`, its proxy included) and given storage by the
-//! vector's own `_Buy` (`0065d0d0`), every helper the assignment reaches the game's own translation
-//! (the iterators, the erase's and the insert's library helpers, `operator new` and
-//! `operator delete`), but `_invalid_parameter_noinfo` and the length error (`0065f640`), counters of
-//! the test's own (the CRT's handler words are not mapped here; the length error throws in the
-//! game).
+//! The differential tests of the face image's colour vector assignment and range erase
+//! (`engine_typed::facegen::colours`, `0064dcf0` and `0064dc50`) against their translations, on
+//! real vectors: each made by the image's vector constructor (`0065c750`, its proxy included) and
+//! given storage by the vector's own `_Buy` (`0065d0d0`), every helper they reach the game's own
+//! translation (the iterators, the erase's and the insert's library helpers, `operator new` and
+//! `operator delete`), but `_invalid_parameter_noinfo` and the length error (`0065f640`),
+//! counters of the test's own (the CRT's handler words are not mapped here; the length error
+//! throws in the game).
 //!
 //! The translation reaches the library's helpers that only answer a word (the category tags
 //! `0065e750` and `0065fd70`, the unchecked pointer `0065fe40`, the placement `operator new`
@@ -16,7 +16,9 @@
 //! larger than needed; a vector whose proxy word is 0 (the iterators' compare calls
 //! `_invalid_parameter_noinfo`); counts of none, within the storage, exactly it, one past it, past
 //! half again, a face's 256 by 256 tint, and past `max_size`; and a value that is a colour of its
-//! own or one of the vector's own elements (copied before they are erased and freed).
+//! own or one of the vector's own elements (copied before they are erased and freed). The erase's
+//! own cases: everything (the image's clear), the middle, the tail, the head, nothing, and
+//! iterators outside the elements (their checks call `_invalid_parameter_noinfo`).
 
 use engine as _;
 use engine_core::prelude::*;
@@ -130,4 +132,61 @@ fn facegen_colours_assign() {
         .max_cases(200)
         .run()
         .assert_same();
+}
+
+/// The callees the typed erase does not call: the copy's tags and unchecked pointers, and the
+/// element destructor.
+const ERASE_IGNORED: [u32; 4] = [0x0065_e750, 0x0065_fd70, 0x0065_fe40, 0x0065_e9a0];
+
+/// The erased range of a vector of `size` elements at `first` with its last at `last`, by kind:
+/// everything, the middle (1 to 3), none at the start, the tail after the first, the head, from
+/// one element before the start to the end (`_invalid_parameter_noinfo`), none past the end (each
+/// iterator's check calls it). A vector too short for a kind takes everything or nothing.
+fn range(kind: u32, size: u32, first: u32, last: u32) -> (u32, u32) {
+    let at = |i: u32| first.wrapping_add(16 * i);
+    match kind {
+        0 => (first, last),
+        1 if size >= 3 => (at(1), at(3)),
+        1 => (first, last),
+        3 if size >= 1 => (at(1), last),
+        4 if size >= 1 => (first, at(1)),
+        5 => (first.wrapping_sub(16), last),
+        6 => (last.wrapping_add(16), last.wrapping_add(16)),
+        _ => (first, first),
+    }
+}
+
+#[test]
+fn facegen_colours_erase() {
+    Diff::new(entry!(
+        0x0064_dc50,
+        colours::erase(Ptr, u32, u32, u32, u32, u32) -> u32
+    ))
+    .family(&facegen::FACEGEN)
+    .family(&leaf::LEAVES)
+    .ignore_calls(&ERASE_IGNORED)
+    .inputs(&[
+        Input::Of(&[2, 0, 1, 3, 4, 5, 6, 7]),
+        Input::Of(&[0, 1, 2, 3, 4, 5, 6]),
+        // The iterators' owner words: the vector's proxy as `begin()` gives it, or another word
+        // (the erase makes both iterators again from the vector, so it reads neither).
+        Input::Flag,
+    ])
+    .setup(|e, case: &Case| {
+        e.map(COUNTERS, 0x1000);
+        e.register(0x00ec_7c56, |e, _| counted(e, COUNTERS));
+        let (size, capacity, proxy) = STATES[case.word(0) as usize];
+        let this = vector(e, size, capacity, proxy);
+        let (first, last) = (e.mem.u32(this + 0xc), e.mem.u32(this + 0x10));
+        let (from, to) = range(case.word(1), size, first, last);
+        let owner = if case.word(2) != 0 {
+            e.mem.u32(this)
+        } else {
+            0x0700_1234
+        };
+        let result = e.mem.alloc(8);
+        vec![this, result, owner, from, owner, to]
+    })
+    .run()
+    .assert_same();
 }
