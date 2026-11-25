@@ -5,10 +5,10 @@
 //! off. The expressions go through the scripts family (on in every run), so the lines reach the
 //! typed evaluator as in play.
 //!
-//! What stands in: the script's header, the casts, the locals' owners and setters, the globals'
-//! set, the console and the logs, the command table and a command's and block type's handler, the
-//! parameter parser, the temporary report string, the reference's changed test and process, and
-//! the CRT's `atol` and `atof`.
+//! The script's header (`00500940`) is the scripts family's own getter. What stands in: the casts,
+//! the locals' owners and setters, the globals' set, the console and the logs, the command table
+//! and a command's and block type's handler, the parameter parser, the temporary report string, the
+//! reference's changed test and process, and the CRT's `atol` and `atof`.
 
 use engine as _;
 use engine_core::extend::{jip_patches, Hook};
@@ -167,7 +167,6 @@ fn world(e: &mut Engine) {
         ret(1)
     });
     e.register(0x0040_13e0, |e, a| ret((e.mem.u32(a[0] + 8) >> 3) & 1));
-    e.register(0x0050_0940, |_, a| ret(a[0] + 0x18));
     e.register(0x0048_3710, |_, _| ret(0));
     e.register(0x005a_bf60, |e, _| ret(e.mem.u32(CONFIG + 0x30)));
     // The locals' deleting destructor (`0041af70`) is the script_lines family's own: its destructor

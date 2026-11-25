@@ -10,7 +10,9 @@
 //! - [`numbers`]: the text tests of an operand (`IsAnInteger`, `IsAFloat`);
 //! - [`value`]: the operand reader and its two lookups;
 //! - [`run`]: `Script::Run` and the run manager every script run goes through, a fresh runner, and
-//!   the locals' variable set, action flags' clear and set, and the action lookup.
+//!   the locals' variable set, action flags' clear and set, and the action lookup, and the two
+//!   folded getters every run and line reads: the script's header (`this + 0x18`, `00500940`) and
+//!   the frame timer's elapsed seconds (the float at +0xc, `0084d030`).
 //!
 //! What stays by address: the tokenizer (`00593870`; a built-in of it reaches every caller there),
 //! the operand reader (`005ac7a0`, a script or frame function of `overridable.tsv`), the CRT's
@@ -76,6 +78,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005a_c4f0, value::referenced_object(Ptr, u32, u32) -> u32),
         entry!(0x005a_9140, value::get_variable(Ptr, u32, Ptr) -> f64),
         entry!(0x005a_c1e0, run::script_run(Ptr, u32, u32, u32, u8) -> bool),
+        entry!(0x0050_0940, run::plus_18(Ptr) -> u32),
+        entry!(0x0084_d030, run::float_at_c(Ptr) -> f64),
         entry!(0x005a_c340, run::run_effect_start(Ptr, u32, u32)),
         entry!(0x005a_c380, run::run_effect_finish(Ptr, u32, u32)),
         entry!(0x005a_c3c0, run::run_effect_update(Ptr, u32, u32, f32)),
