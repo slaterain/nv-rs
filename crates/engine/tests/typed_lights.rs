@@ -899,6 +899,9 @@ mod lists {
             .family(&leaf::LEAVES)
             .ignore_calls(&[0x00b9_dbe0, 0x00ec_6040])
             .control_words(&BOTH)
+            // The luminance is `GetLuminanceToBound`'s native body: x87 and SSE may give a NaN
+            // luminance another sign or payload, which the sort's comparisons treat alike.
+            .allow_nan_payloads()
             .inputs(&[
                 Input::Of(&[0, 1, 2, 5, 9]),
                 Input::Of(&[0, 1, 2, 3, 4, 5, 6]),
@@ -2229,13 +2232,19 @@ mod scene_light {
 
     /// The colour components: ordinary, equal, zero, NaN.
     const COLOURS: &[u32] = &[ONE, HALF, TEN, 0, NAN];
+    /// The colour of pattern 5: minus zero, minus zero, zero, where the largest component's
+    /// "less than" (not "at most") decides which zero comes out.
+    const ZEROS: [u32; 3] = [0x8000_0000, 0x8000_0000, 0];
 
     /// A light for the luminances, from the case's words at `w`: its `NiLight`'s colour (two words
-    /// pick the pattern), dimmer and radius, its `bCastShadow` and `bPointLight`; floats for the
-    /// `NiLight`'s place at `f`. Answers the light and its `NiLight`.
+    /// pick the pattern; 5 is [`ZEROS`]), dimmer and radius, its `bCastShadow` and `bPointLight`;
+    /// floats for the `NiLight`'s place at `f`. Answers the light and its `NiLight`.
     fn luminance_light(e: &mut Engine, case: &Case, w: usize, f: usize) -> (u32, u32) {
         let ni = ni_light_of(e, case, 6, f, case.word(w + 3));
         let colour = |i: usize| {
+            if case.word(w) == 5 {
+                return ZEROS[i];
+            }
             COLOURS[(case.word(w) as usize + i * case.word(w + 1) as usize) % COLOURS.len()]
         };
         words(e, ni + 0xd4, &[colour(0), colour(1), colour(2)]);
@@ -2249,7 +2258,7 @@ mod scene_light {
     /// The luminances' words: the colour pattern (two words), the dimmer, the radius,
     /// bCastShadow, bPointLight.
     const LUMINANCE_INPUTS: [Input; 6] = [
-        Input::Of(&[0, 1, 2, 3, 4]),
+        Input::Of(&[0, 1, 2, 3, 4, 5]),
         Input::Of(&[0, 1, 2]),
         Input::Of(&[ONE, HALF, 0, NAN]),
         Input::Of(RADII),
@@ -2295,18 +2304,21 @@ mod scene_light {
     #[test]
     fn lights_facing_luminance() {
         // The `NiLight` left out; culled or not; the luminance words; the direction point `b` (the
-        // point itself: a zero direction; a far point; from the case's floats); floats for the
-        // `NiLight`'s place and the point `a`.
+        // point itself: a zero direction; a far point; from the case's floats; the light's own
+        // place, so that both unit vectors are the same and their dot rounds to just above 1.0; the
+        // point moved by 0.5 along x); floats for the `NiLight`'s place and the point `a`;
+        // `Unitize`'s minimum (the exe's, or 0.5: a direction of exactly that length is zeroed).
         let mut inputs = vec![Input::Flag, Input::Flag];
         inputs.extend(LUMINANCE_INPUTS);
         inputs.extend([
-            Input::Of(&[0, 1, 2]),
+            Input::Of(&[0, 1, 2, 3, 4]),
             Input::F32,
             Input::F32Swept(ONE),
             Input::F32Swept(TWO),
             Input::F32Swept(HALF),
             Input::F32Swept(MINUS_ONE),
             Input::F32Swept(TEN),
+            Input::Of(&[0, 1]),
         ]);
         Diff::new(entry!(
             0x00b9_bdf0,
@@ -2338,8 +2350,13 @@ mod scene_light {
             let b = match case.word(8) {
                 0 => a,
                 1 => [0x447a_0000, MINUS_ONE, bits(case, 14)],
-                _ => [bits(case, 14), bits(case, 10), bits(case, 9)],
+                2 => [bits(case, 14), bits(case, 10), bits(case, 9)],
+                3 => [bits(case, 9), bits(case, 10), TWO],
+                _ => [(case.f32(11) + 0.5).to_bits(), a[1], a[2]],
             };
+            if case.word(15) != 0 {
+                words(e, 0x0101_7cf8, &[0, 0x3fe0_0000]);
+            }
             vec![l, a[0], a[1], a[2], b[0], b[1], b[2], excluded]
         })
         .run()
@@ -2562,6 +2579,802 @@ mod scene_light {
             e.mem.set_u32(vt + 8, body);
             assert_eq!(e.vcall(o, 8, &[]).u32(), record, "{body:08x}");
             assert_eq!(e.mem.u32(vt + VT_SLOTS + 8), 0);
+        }
+    }
+
+    /// The light's frustum functions (`lights::scene_frustum`). Cameras carry a plane-set word
+    /// (+0x40) that the culler's `SetFrustum` stand-in turns into one of the case's plane sets
+    /// (everything inside, nothing inside, every point on a plane, a box, a half-space that edges
+    /// cross, one whose crossings another plane rejects, the case's floats); their rotation,
+    /// position and frustum come from the case's floats, so that the volume test takes each of
+    /// its ways out. Floats run under both control words.
+    mod frustum {
+        use super::super::{ret_f, THIRD};
+        use super::*;
+        use engine_typed::lights::scene_frustum;
+
+        /// The plane sets (0x80 bytes each: six planes, then the mask) and the unit cross's
+        /// answers (three points) and its call count.
+        const PLANE_SETS: u32 = 0x0300_8000;
+        const CROSSES: u32 = 0x0300_9000;
+        /// The cube faces' plane sets, four bits a face.
+        const FACE_KINDS: u32 = CROSSES + 0x80;
+        const KIND: u32 = 0x40;
+        const QUARTER: u32 = 0x3e80_0000;
+        const NEG_ZERO: u32 = 0x8000_0000;
+
+        /// `NiCullingProcess::SetFrustum`'s stand-in: logs the culler and the frustum, copies the
+        /// plane set its camera's +0x40 names to the culler's +0x2c.
+        fn set_frustum(e: &mut Engine, a: &[u32]) -> Ret {
+            log(e, 0x30, a[0]);
+            log(e, 0x30, a[1]);
+            let camera = e.mem.u32(a[0] + 0xc);
+            let set = PLANE_SETS + 0x80 * (e.mem.u32(camera + KIND) & 7);
+            for i in 0..0x19 {
+                let w = e.mem.u32(set + 4 * i);
+                e.mem.set_u32(a[0] + 0x2c + 4 * i, w);
+            }
+            ret(0)
+        }
+
+        /// `BSCubeMapCamera::SetupTransformation`'s stand-in: logs, and gives the local camera
+        /// the face's plane set, a rotation and a far corner spread from the face.
+        fn cube_setup(e: &mut Engine, a: &[u32]) -> Ret {
+            log(e, 0x31, a[0]);
+            log(e, 0x31, a[1]);
+            let face = a[1] & 0xffff;
+            let kinds = e.mem.u32(FACE_KINDS);
+            e.mem.set_u32(a[0] + KIND, (kinds >> (4 * face)) & 7);
+            let s = if face & 1 != 0 { MINUS_ONE } else { ONE };
+            words(e, a[0] + 0x68, &[s, 0, 0, 0, ONE, 0, 0, 0, s]);
+            words(
+                e,
+                a[0] + 0xdc,
+                &[MINUS_ONE, ONE, ONE, MINUS_ONE, ONE, TEN, 0],
+            );
+            // The world translation `NiAVObject::Update` would make of the local one.
+            for i in 0..3 {
+                let w = e.mem.u32(a[0] + 0x58 + 4 * i);
+                e.mem.set_u32(a[0] + 0x8c + 4 * i, w);
+            }
+            ret(0)
+        }
+
+        /// `NiPoint3::UnitCross`'s stand-in: logs its words, writes the next of the case's three
+        /// answers to `out` and answers `out`.
+        fn unit_cross(e: &mut Engine, a: &[u32]) -> Ret {
+            for w in a {
+                log(e, 0x32, *w);
+            }
+            let n = e.mem.u32(CROSSES + 0x40);
+            e.mem.set_u32(CROSSES + 0x40, n + 1);
+            for i in 0..3 {
+                let w = e.mem.u32(CROSSES + 0xc * (n % 3) + 4 * i);
+                e.mem.set_u32(a[1] + 4 * i, w);
+            }
+            ret(a[1])
+        }
+
+        /// A stand-in that logs its words under `TAG` and answers its first word.
+        fn this_back<const TAG: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+            for w in a {
+                log(e, TAG, *w);
+            }
+            ret(a.first().copied().unwrap_or(0))
+        }
+
+        /// The renderer's shadow map setter's stand-in: logs and puts the map in the light.
+        fn set_map(e: &mut Engine, a: &[u32]) -> Ret {
+            log(e, 0x33, a[0]);
+            log(e, 0x33, a[1]);
+            e.mem.set_u32(a[0] + 0x10c, a[1]);
+            ret(0)
+        }
+
+        /// `NiPointer` assignment's stand-in: logs and stores.
+        fn assign(e: &mut Engine, a: &[u32]) -> Ret {
+            log(e, 0x34, a[0]);
+            log(e, 0x34, a[1]);
+            e.mem.set_u32(a[0], a[1]);
+            ret(a[0])
+        }
+
+        /// The point maths' stand-ins (their families' own tests cover them): `Unitize` logs,
+        /// `operator*` writes the point times the scale to `out`, `Length` answers the root of the
+        /// squared length, `operator+=` adds, all in `f32`.
+        fn normalize(e: &mut Engine, a: &[u32]) -> Ret {
+            log(e, 0x29, a[0]);
+            ret(0)
+        }
+
+        fn times(e: &mut Engine, a: &[u32]) -> Ret {
+            for w in a {
+                log(e, 0x2a, *w);
+            }
+            for i in 0..3 {
+                let v = e.mem.f32(a[0] + 4 * i) * f32::from_bits(a[2]);
+                e.mem.set_f32(a[1] + 4 * i, v);
+            }
+            ret(a[1])
+        }
+
+        fn length(e: &mut Engine, a: &[u32]) -> Ret {
+            log(e, 0x2b, a[0]);
+            let [x, y, z] = [0, 4, 8].map(|i| e.mem.f32(a[0] + i));
+            ret_f(f64::from((x * x + y * y + z * z).sqrt()))
+        }
+
+        fn add_to(e: &mut Engine, a: &[u32]) -> Ret {
+            log(e, 0x2c, a[0]);
+            log(e, 0x2c, a[1]);
+            for i in 0..3 {
+                let v = e.mem.f32(a[0] + 4 * i) + e.mem.f32(a[1] + 4 * i);
+                e.mem.set_f32(a[0] + 4 * i, v);
+            }
+            ret(a[0])
+        }
+
+        /// The data these functions read and their callees' stand-ins.
+        fn fworld(e: &mut Engine) {
+            world(e);
+            for page in [
+                0x0101_6000,
+                0x0101_8000,
+                0x0102_0000,
+                0x0103_1000,
+                0x0103_2000,
+                0x0106_b000,
+                0x0106_c000,
+                0x0108_2000,
+                0x010b_7000,
+                0x011a_9000,
+                0x0120_0000,
+                0x0120_3000,
+                PLANE_SETS,
+                CROSSES,
+            ] {
+                e.map(page, 0x1000);
+            }
+            let double = |e: &mut Engine, at: u32, v: f64| {
+                let b = v.to_bits();
+                words(e, at, &[b as u32, (b >> 32) as u32]);
+            };
+            double(e, 0x0108_2cb0, 0.05);
+            double(e, 0x0103_1148, 0.01);
+            double(e, 0x010b_7ea0, -0.01);
+            double(e, 0x0101_6ff0, 1.5);
+            double(e, 0x0106_c948, 150.0);
+            double(e, 0x0102_0758, 10.0);
+            double(e, 0x0106_b178, 400.0);
+            double(e, 0x0101_8a90, 0.2);
+            e.mem.set_u32(0x0103_2adc, 0x4380_0000);
+            words(e, 0x011a_946c, &[0, 0, ONE]);
+            words(e, 0x011a_9bd0, &[HALF, QUARTER, 0, ONE]);
+            e.mem.set_u32(0x0101_62c0, 0x7f80_0001);
+            e.mem.set_u32(0x0120_31e4, 0x0abc_0010);
+            e.register(0x00a6_9400, this_back::<0x35>);
+            e.register(0x00a6_94a0, set_frustum);
+            e.register(0x00bd_8290, this_back::<0x36>);
+            e.register(0x00bd_7200, cube_setup);
+            e.register(0x00bd_74a0, logged::<0x37>);
+            e.register(0x00a5_9c60, logged::<0x38>);
+            e.register(0x00b4_f5c0, logged::<0x39>);
+            e.register(0x00a5_9d30, logged::<0x3a>);
+            e.register(0x00b6_d4c0, release_map);
+            e.register(0x00b6_d3f0, logged::<0x3b>);
+            e.register(0x00b5_aee0, set_map);
+            e.register(0x00ba_30f0, logged::<0x3c>);
+            e.register(0x00ba_3390, logged::<0x3d>);
+            e.register(0x0053_d1a0, unit_cross);
+            e.register(0x00a5_bdd0, logged::<0x3e>);
+            e.register(0x005b_f7b0, logged::<0x21>);
+            e.register(0x00b5_40f0, logged::<0x22>);
+            e.register(0x0066_b0d0, assign);
+            e.register(0x00aa_13e0, logged::<0x23>);
+            e.register(0x00a7_12f0, this_back::<0x24>);
+            e.register(0x00a7_01b0, logged::<0x25>);
+            e.register(0x00a6_faf0, logged::<0x26>);
+            e.register(0x0071_2e60, logged::<0x27>);
+            e.register(0x00a7_0080, logged::<0x28>);
+            e.register(0x004a_0c10, normalize);
+            e.register(0x0045_bb20, times);
+            e.register(0x0045_7990, length);
+            e.register(0x0063_c8a0, add_to);
+            e.register(0x00a7_4e10, logged::<0x2d>);
+        }
+
+        /// The plane sets from the case's floats at `f`: everything inside (0), nothing (1), on a
+        /// plane (2), a box of half size `f` (3), the half-space x > 0 with the rest open (4), x >
+        /// 0 with y below -1 shut (5), the case's floats (6, 7).
+        fn plane_sets(e: &mut Engine, case: &Case, f: usize) {
+            let open = [0, 0, 0, MINUS_ONE];
+            let s = bits(case, f) ^ NEG_ZERO;
+            let sets: [[[u32; 4]; 6]; 8] = [
+                [open; 6],
+                [[0, 0, 0, ONE]; 6],
+                [[0, 0, 0, 0]; 6],
+                [
+                    [ONE, 0, 0, s],
+                    [MINUS_ONE, 0, 0, s],
+                    [0, ONE, 0, s],
+                    [0, MINUS_ONE, 0, s],
+                    [0, 0, ONE, s],
+                    [0, 0, MINUS_ONE, s],
+                ],
+                [[ONE, 0, 0, 0], open, open, open, open, open],
+                [
+                    [ONE, 0, 0, 0],
+                    [0, MINUS_ONE, 0, ONE],
+                    open,
+                    open,
+                    open,
+                    open,
+                ],
+                super::super::planes(case, f + 1),
+                [
+                    [bits(case, f + 2), ONE, 0, bits(case, f + 3)],
+                    [0, bits(case, f + 1), ONE, HALF],
+                    open,
+                    [MINUS_ONE, HALF, bits(case, f + 2), 0],
+                    open,
+                    [THIRD, THIRD, THIRD, MINUS_ONE],
+                ],
+            ];
+            for (k, set) in (0u32..).zip(sets) {
+                for (i, p) in (0u32..).zip(set) {
+                    words(e, PLANE_SETS + 0x80 * k + 0x10 * i, &p);
+                }
+                e.mem.set_u32(PLANE_SETS + 0x80 * k + 0x60, 0x3f);
+            }
+        }
+
+        /// A camera (0x200 bytes) with plane set `kind`, at (`x`, `y`, 0.5) with the rotation
+        /// `turn` (0 identity, 1 a half turn about z, 2 from the case's floats at `f`), the far
+        /// distance `far` and the frustum's sides `side` and `up`.
+        #[allow(clippy::too_many_arguments)]
+        fn camera(
+            e: &mut Engine,
+            case: &Case,
+            kind: u32,
+            turn: u32,
+            f: usize,
+            at: [u32; 2],
+            far: u32,
+            side: u32,
+        ) -> u32 {
+            let c = block(e, 0x200, &[]);
+            e.mem.set_u32(c + KIND, kind);
+            let rotation = match turn {
+                0 => [ONE, 0, 0, 0, ONE, 0, 0, 0, ONE],
+                1 => [MINUS_ONE, 0, 0, 0, MINUS_ONE, 0, 0, 0, ONE],
+                _ => [
+                    bits(case, f),
+                    HALF,
+                    0,
+                    bits(case, f + 1),
+                    ONE,
+                    THIRD,
+                    0,
+                    MINUS_ONE,
+                    bits(case, f + 2),
+                ],
+            };
+            words(e, c + 0x68, &rotation);
+            words(e, c + 0x8c, &[at[0], at[1], HALF]);
+            words(
+                e,
+                c + 0xdc,
+                &[MINUS_ONE, side, HALF, MINUS_ONE, ONE, far, 0],
+            );
+            c
+        }
+
+        trait Frustum {
+            fn frustum(self) -> Diff;
+        }
+
+        impl Frustum for Diff {
+            fn frustum(self) -> Diff {
+                self.own()
+                    .ignore_calls(&[0x00a6_9940, 0x00a6_93e0])
+                    .control_words(&BOTH)
+                    .allow_nan_payloads()
+            }
+        }
+
+        /// The volume test's inputs: the two cameras' plane sets and rotations; floats for the
+        /// rotation, the box, the planes, the cameras' places, the far distance and the side.
+        fn volume_inputs() -> Vec<Input> {
+            vec![
+                Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7]),
+                Input::Of(&[3, 4, 5, 0, 1, 2, 6, 7]),
+                Input::Of(&[0, 1, 2]),
+                Input::Of(&[0, 2, 1]),
+                Input::F32Swept(HALF),
+                Input::F32Swept(TWO),
+                Input::F32Swept(THIRD),
+                Input::F32Swept(MINUS_ONE),
+                Input::F32Swept(MINUS_ONE),
+                Input::F32Swept(TWO),
+                Input::F32Swept(0xc0a0_0000),
+                Input::F32Swept(QUARTER),
+                Input::F32,
+                Input::F32Swept(HALF),
+            ]
+        }
+
+        /// The two cameras of [`volume_inputs`].
+        fn volume_cameras(e: &mut Engine, case: &Case) -> (u32, u32) {
+            plane_sets(e, case, 5);
+            let far = bits(case, 12);
+            let first = camera(
+                e,
+                case,
+                case.word(0),
+                case.word(2),
+                4,
+                [bits(case, 9), bits(case, 11)],
+                TEN,
+                bits(case, 13),
+            );
+            let second = camera(
+                e,
+                case,
+                case.word(1),
+                case.word(3),
+                5,
+                [bits(case, 10), QUARTER],
+                far,
+                ONE,
+            );
+            (first, second)
+        }
+
+        #[test]
+        fn lights_volumes_meet() {
+            Diff::new(entry!(
+                0x00b9_c020,
+                scene_frustum::volumes_meet(Ptr<_>, Ptr<_>, Ptr<_>) -> bool
+            ))
+            .frustum()
+            .goes_by_address(&[0x00a6_94a0])
+            .inputs(&volume_inputs())
+            .max_cases(900)
+            .float_sweep(200)
+            .setup(|e, case| {
+                fworld(e);
+                let (first, second) = volume_cameras(e, case);
+                vec![0x0abc_0000, first, second]
+            })
+            .run()
+            .assert_same();
+        }
+
+        #[test]
+        fn lights_cube_face_meets() {
+            // The position (floats), the source camera's plane set, the faces' plane sets (a
+            // pattern of six), the face.
+            Diff::new(entry!(
+                0x00b9_de90,
+                scene_frustum::cube_face_meets(Ptr<_>, u32, u32, u32, u32, Ptr<_>, u16) -> bool
+            ))
+            .frustum()
+            .goes_by_address(&[0x00a6_94a0, 0x00a5_9c60])
+            .inputs(&[
+                Input::F32Swept(MINUS_ONE),
+                Input::F32Swept(HALF),
+                Input::F32,
+                Input::Of(&[0, 3, 4, 1, 5, 7]),
+                Input::Of(&[0x0054_3210, 0x0011_1111, 0x0076_5432, 0]),
+                Input::Of(&[0, 1, 2, 3, 4, 5, 0x1_0002]),
+                Input::F32Swept(TWO),
+                Input::F32Swept(THIRD),
+                Input::F32Swept(QUARTER),
+                Input::F32Swept(MINUS_ONE),
+            ])
+            .max_cases(500)
+            .float_sweep(120)
+            .setup(|e, case| {
+                fworld(e);
+                plane_sets(e, case, 6);
+                e.mem.set_u32(FACE_KINDS, case.word(4));
+                let source = block(e, 0x40, &[]);
+                let c = camera(e, case, case.word(3), 0, 6, [bits(case, 0), 0], TEN, ONE);
+                e.mem.set_u32(source + 0xc, c);
+                let tls = e.tls();
+                e.mem.set_u32(tls + 0x2b4, 0x1234);
+                vec![
+                    0x0abc_0000,
+                    bits(case, 0),
+                    bits(case, 1),
+                    bits(case, 2),
+                    0x5555,
+                    source,
+                    case.word(5),
+                ]
+            })
+            .run()
+            .assert_same();
+        }
+
+        /// A shadow scene light for `TestFrustumCull` from the case's words at `w`: the shadow
+        /// camera (none, or one with plane set `w + 1`), `bCastShadow`, `bCubeShadowMap`, the old
+        /// cull word, dimmer and shadow dimmer, the target, the elapsed time, the shadow map
+        /// (none, kept, cleared by the renderer's release), the shadow scene (none, with property
+        /// 2 or without), a geometry list of lit geometries.
+        fn cull_light(e: &mut Engine, case: &Case, w: usize, ni: u32) -> u32 {
+            let l = plain_light(e, ni, case.word(w + 2) as u8);
+            if case.word(w) != 0 {
+                let c = camera(e, case, case.word(w + 1), 0, 0, [0, HALF], TEN, ONE);
+                e.mem.set_u32(l + 0x140, c);
+            }
+            e.mem.set_u8(l + 0xed, case.word(w + 3) as u8);
+            e.mem.set_u16(l + 0x110, case.word(w + 4) as u16);
+            words(
+                e,
+                l + 0xd0,
+                &[case.word(w + 5), case.word(w + 6), case.word(w + 7)],
+            );
+            words(e, l + 0xdc, &[QUARTER]);
+            let map = match case.word(w + 8) {
+                0 => 0,
+                _ => counted(e, 0x40, 1),
+            };
+            e.mem.set_u32(l + 0x10c, map);
+            if case.word(w + 8) == 2 {
+                e.mem.set_u32(LOG + 0x3e00, l + 0x10c);
+            }
+            if case.word(w + 9) != 0 {
+                let scene = block(e, 0x100, &[]);
+                e.mem.set_u32(l + 0x128, scene);
+                if case.word(w + 9) == 1 {
+                    let property = block(e, 0x40, &[]);
+                    e.mem.set_u32(property + 0x3c, HALF);
+                    set_logged_answer(e, 0x3a, property);
+                }
+            }
+            let geometries: Vec<u32> = KINDS.iter().map(|&k| lit_geometry(e, k)).collect();
+            super::super::geometry_list(e, l, &geometries, 9);
+            l
+        }
+
+        #[test]
+        fn lights_test_frustum_cull() {
+            // The culler's planes (the case's floats and a box), their mask, the `NiLight`'s
+            // radius; the light (see `cull_light`); the render level and flags; the shader
+            // accumulator's object (none, scale 2); the fade distances and the fade time.
+            let mut inputs = vec![
+                Input::Of(&[0, 1]),
+                Input::Of(&[0x3f, 0x15, 0x2a, 0]),
+                Input::Of(&[TEN, HALF, 0, NAN, 0x4248_0000]),
+                // cull_light from word 3.
+                Input::Of(&[0, 1]),
+                Input::Of(&[0, 1, 3, 4]),
+                Input::Of(&[1, 0]),
+                Input::Of(&[1, 0]),
+                Input::Of(&[0, 0xff, 3]),
+                Input::Of(&[ONE, 0, HALF, NAN]),
+                Input::Of(&[0, ONE, HALF]),
+                Input::Of(&[ONE, 0]),
+                Input::Of(&[0, 1, 2]),
+                Input::Of(&[1, 0, 2]),
+                // The globals.
+                Input::Of(&[3, 0, 0xffff_ffff]),
+                Input::Flag,
+                Input::Flag,
+                Input::Of(&[0, 1, 2, 3]),
+            ];
+            inputs.extend([
+                Input::F32Swept(HALF),
+                Input::F32Swept(MINUS_ONE),
+                Input::F32Swept(TWO),
+                Input::F32Swept(0x4120_0000),
+                Input::F32Swept(0x4248_0000),
+                Input::F32Swept(QUARTER),
+                Input::F32Swept(ONE),
+                Input::F32Swept(MINUS_ONE),
+            ]);
+            Diff::new(entry!(
+                0x00b9_e970,
+                scene_frustum::test_frustum_cull(Ptr<_>, u32)
+            ))
+            .frustum()
+            .ignore_calls(&[0x00ec_6040])
+            .goes_by_address(&[0x00a6_94a0, 0x00a5_9c60, 0x00b4_f5c0, 0x00a5_9d30])
+            .inputs(&inputs)
+            .max_cases(1500)
+            .float_sweep(200)
+            .setup(|e, case| {
+                fworld(e);
+                plane_sets(e, case, 17);
+                e.mem.set_u32(FACE_KINDS, 0x0034_5012);
+                let f = |i: usize| bits(case, 17 + i);
+                let ni = ni_light_of(e, case, 6, 18, case.word(2));
+                words(e, ni + 0x8c, &[f(0), f(1), HALF]);
+                let culler = block(e, 0x90, &[]);
+                let planes = if case.word(0) == 0 {
+                    super::super::planes(case, 17)
+                } else {
+                    let s = f(2) ^ NEG_ZERO;
+                    [
+                        [ONE, 0, 0, s],
+                        [MINUS_ONE, 0, 0, s],
+                        [0, ONE, 0, s],
+                        [0, MINUS_ONE, 0, s],
+                        [0, 0, ONE, s],
+                        [0, 0, MINUS_ONE, s],
+                    ]
+                };
+                for (i, p) in (0u32..).zip(planes) {
+                    words(e, culler + 0x2c + 0x10 * i, &p);
+                }
+                e.mem.set_u32(culler + 0x8c, case.word(1));
+                let cc = camera(e, case, 3, 0, 18, [f(5), f(6)], TEN, ONE);
+                e.mem.set_u32(culler + 0xc, cc);
+                let l = cull_light(e, case, 3, ni);
+                e.mem.set_u32(0x011f_91c0, case.word(13));
+                e.mem
+                    .set_u8(0x011f_91d8, if case.word(14) != 0 { 0x10 } else { 0xef });
+                let accumulator = block(e, 0x40, &[]);
+                if case.word(15) != 0 {
+                    let object = block(e, 0x200, &[]);
+                    e.mem.set_u32(object + 0x110, TWO);
+                    e.mem.set_u32(accumulator + 8, object);
+                }
+                set_logged_answer(e, 0x39, accumulator);
+                let (near, far) = match case.word(16) {
+                    0 => (f(3), f(4)),
+                    1 => (f(3), 0),
+                    2 => (0x4248_0000, f(4)),
+                    _ => (NAN, f(7)),
+                };
+                words(e, 0x011f_9444, &[near, far, f(3), far]);
+                e.mem.set_u32(0x011f_9410, f(5));
+                e.mem.set_u32(0x011a_d834, HALF);
+                let tls = e.tls();
+                e.mem.set_u32(tls + 0x2b4, 0x1234);
+                vec![l, culler]
+            })
+            .run()
+            .assert_same();
+        }
+
+        #[test]
+        fn lights_setup_frustum_depth_map() {
+            // bCastShadow, bShadowSpotlight, the render level and flags; the light's map (none,
+            // kept); the cull word; the shadow dimmer (above, just above, just below 0.05, NaN);
+            // the accumulator (kept, none); the renderer's free map (one, none); the scene's bound;
+            // the extents' extra data; the shadow camera (a new one, kept); the script test; the
+            // depth pass and the scene's scale; the unit cross small first; floats.
+            Diff::new(entry!(
+                0x00b9_dfc0,
+                scene_frustum::setup_frustum_depth_map(Ptr<_>, u32, u32)
+            ))
+            .frustum()
+            .ignore_calls(&[0x00a7_1b70, 0x0040_4010, 0x0040_ebd0])
+            .goes_by_address(&[
+                0x00a5_9c60,
+                0x004a_0c10,
+                0x0045_bb20,
+                0x0045_7990,
+                0x0063_c8a0,
+                0x00a7_4e10,
+            ])
+            .inputs(&[
+                Input::Flag,
+                Input::Flag,
+                Input::Of(&[3, 0]),
+                Input::Flag,
+                Input::Of(&[1, 0]),
+                Input::Of(&[0, 0xff]),
+                Input::Of(&[ONE, 0x3d4c_cccd, 0x3d4c_cccc, NAN]),
+                Input::Of(&[1, 0]),
+                Input::Flag,
+                Input::Of(&[1, 0]),
+                Input::Of(&[1, 0]),
+                Input::Of(&[0, 1]),
+                Input::Of(&[1, 0]),
+                Input::Of(&[0, 1]),
+                Input::Of(&[0, 1]),
+                Input::F32Swept(HALF),
+                Input::F32Swept(MINUS_ONE),
+                Input::F32Swept(TWO),
+                Input::F32Swept(0x4120_0000),
+                Input::F32Swept(QUARTER),
+                Input::F32,
+                Input::F32Swept(THIRD),
+            ])
+            .max_cases(1200)
+            .float_sweep(200)
+            .setup(|e, case| {
+                fworld(e);
+                let f = |i: usize| bits(case, 15 + i);
+                let ni = ni_light_of(e, case, 6, 15, f(3));
+                e.mem.set_u32(ni + 0x30, 0x10);
+                words(e, ni + 0x68, &[ONE, 0, 0, 0, ONE, 0, 0, 0, ONE]);
+                let l = plain_light(e, ni, case.word(0) as u8);
+                e.mem.set_u8(l + 0x118, case.word(1) as u8);
+                e.mem.set_u32(0x011f_91c0, case.word(2));
+                e.mem
+                    .set_u8(0x011f_91d8, if case.word(3) != 0 { 0x10 } else { 0 });
+                if case.word(4) != 0 {
+                    let map = counted(e, 0x40, 2);
+                    e.mem.set_u32(l + 0x10c, map);
+                }
+                let free_map = if case.word(8) != 0 {
+                    counted(e, 0x40, 1)
+                } else {
+                    0
+                };
+                set_logged_answer(e, 0x3b, free_map);
+                e.mem.set_u16(l + 0x110, case.word(5) as u16);
+                e.mem.set_u32(l + 0xd4, case.word(6));
+                let accumulator = counted(e, 0x200, 2);
+                if case.word(7) == 1 {
+                    e.mem.set_u32(l + 0x20c, accumulator);
+                }
+                set_logged_answer(e, 0x22, accumulator);
+                let scene = block(e, 0x100, &[]);
+                words(e, scene + 0x8c, &[f(5), f(4), f(0)]);
+                e.mem.set_u32(
+                    scene + 0x98,
+                    if case.word(13) != 0 { TWO } else { 0x7f80_0001 },
+                );
+                if case.word(9) != 0 {
+                    let bound = block(e, 0x10, &[0, 0, 0, f(6)]);
+                    e.mem.set_u32(scene + 0x20, bound);
+                }
+                e.mem.set_u32(l + 0x128, scene);
+                if case.word(10) != 0 {
+                    let extra = block(e, 0x40, &[]);
+                    words(e, extra + 0xc, &[f(1), HALF, f(2)]);
+                    words(e, extra + 0x18, &[f(2), f(0), f(4)]);
+                    set_logged_answer(e, 0x3e, extra);
+                }
+                // Without extra data the camera's set-up would read it: the script test says no.
+                let script = if case.word(10) != 0 { case.word(12) } else { 0 };
+                set_logged_answer(e, 0x21, script);
+                let new_camera = block(e, 0x200, &[]);
+                words(
+                    e,
+                    new_camera + 0x68,
+                    &[ONE, 0, 0, 0, ONE, 0, 0, 0, ONE, f(0), f(1), HALF],
+                );
+                words(
+                    e,
+                    new_camera + 0xdc,
+                    &[MINUS_ONE, ONE, ONE, MINUS_ONE, ONE, f(3), 1],
+                );
+                if case.word(11) == 0 {
+                    set_logged_answer(e, 0x23, new_camera);
+                } else {
+                    e.mem.set_u32(l + 0x140, new_camera);
+                }
+                // The unit cross's answers: small first (the fallback up taken) or not.
+                let small = if case.word(14) != 0 {
+                    [0, 0x3c00_0000, 0]
+                } else {
+                    [f(0), ONE, 0]
+                };
+                words(e, CROSSES, &small);
+                words(e, CROSSES + 0xc, &[0, ONE, 0, HALF, 0, ONE]);
+                words(e, 0x011a_9484, &[f(6), f(1), MINUS_ONE]);
+                e.mem.set_u32(0x011f_91b0, case.word(13));
+                vec![l, 0x7777, case.word(13) + 2]
+            })
+            .run()
+            .assert_same();
+        }
+
+        #[test]
+        fn lights_render_frustum_depth_map() {
+            // The holder's old accumulator (none, the same, another); the accumulator's +0x1a0
+            // (none, one); the depth pass flag; bShowDebugTexture; floats for the light's place and
+            // the camera's rotation.
+            Diff::new(entry!(
+                0x00b9_f780,
+                scene_frustum::render_frustum_depth_map(Ptr<_>, u32, u32)
+            ))
+            .frustum()
+            .goes_by_address(&[0x00b6_c0d0, 0x004e_9bb0, 0x00ee_6de0])
+            .inputs(&[
+                Input::Of(&[0, 1, 2]),
+                Input::Flag,
+                Input::Flag,
+                Input::Flag,
+                Input::Of(&[0, 1, 0x7f]),
+                Input::F32Swept(HALF),
+                Input::F32Swept(MINUS_ONE),
+                Input::F32,
+                Input::F32Swept(THIRD),
+                Input::F32Swept(TWO),
+            ])
+            .max_cases(300)
+            .float_sweep(160)
+            .setup(|e, case| {
+                fworld(e);
+                for (addr, f) in [
+                    (
+                        0x00ba_3130u32,
+                        logged::<0x40> as fn(&mut Engine, &[u32]) -> Ret,
+                    ),
+                    (0x00b6_b260, logged::<0x41>),
+                    (0x00b6_b8d0, logged::<0x42>),
+                    (0x00b6_c0d0, logged::<0x43>),
+                    (0x004e_9bb0, logged::<0x44>),
+                    (0x00ee_6de0, logged::<0x45>),
+                    (0x00b6_b790, logged::<0x46>),
+                    (0x00ba_37a0, logged::<0x47>),
+                    (0x004e_ba20, logged::<0x48>),
+                    (0x00ba_3cb0, logged::<0x49>),
+                    (0x00b9_7550, logged::<0x4a>),
+                    (0x004e_ba90, logged::<0x4b>),
+                    (0x00ba_3a00, logged::<0x4c>),
+                    (0x004b_c320, logged::<0x4d>),
+                    (0x00b5_5560, logged::<0x4e>),
+                    (0x00bd_22c0, logged::<0x4f>),
+                    (VT_FN + 0xb4, logged::<0x50>),
+                    (VT_FN + 0xac, logged::<0x51>),
+                ] {
+                    e.register(addr, f);
+                }
+                let renderer = object(e, 0x40, 0, 0, OTHER_RTTI);
+                e.mem.set_u32(0x011f_4748, renderer);
+                let state = block(e, 0xa00, &[]);
+                for i in 0..0x20 {
+                    e.mem
+                        .set_u32(state + 0x980 + 4 * i, 0x3f00_0000 + 0x1_0000 * i);
+                }
+                e.mem.set_u32(0x011f_9508, state);
+                let inner = block(e, 0x60, &[]);
+                e.mem.set_u32(inner + 0x44, 0x0abc_0044);
+                let manager = block(e, 0x20, &[0, 0, inner]);
+                e.mem.set_u32(0x011f_91ac, manager);
+                e.mem.set_u32(0x011f_91a8, 0x0abc_0000);
+                set_logged_answer(e, 0x3b, 0x0abc_0300);
+                set_logged_answer(e, 0x41, 0x0abc_0100);
+                let ni = ni_light_of(e, case, 6, 5, TEN);
+                words(e, ni + 0x8c, &[bits(case, 5), bits(case, 6), bits(case, 7)]);
+                let l = plain_light(e, ni, 1);
+                let camera = block(e, 0x200, &[]);
+                words(
+                    e,
+                    camera + 0x68,
+                    &[
+                        bits(case, 8),
+                        HALF,
+                        0,
+                        bits(case, 9),
+                        ONE,
+                        THIRD,
+                        NEG_ZERO,
+                        MINUS_ONE,
+                        bits(case, 7),
+                    ],
+                );
+                e.mem.set_u32(l + 0x140, camera);
+                let accumulator = counted(e, 0x200, 3);
+                e.mem.set_u32(l + 0x20c, accumulator);
+                if case.word(1) != 0 {
+                    let held = counted(e, 0x40, 1);
+                    e.mem.set_u32(accumulator + 0x1a0, held);
+                }
+                let map = counted(e, 0x40, 1);
+                e.mem.set_u32(l + 0x10c, map);
+                let holder = block(e, 0x100, &[]);
+                let old = match case.word(0) {
+                    0 => 0,
+                    1 => accumulator,
+                    _ => counted(e, 0x40, 1),
+                };
+                e.mem.set_u32(holder + 0xc4, old);
+                e.mem.set_u32(0x011f_91b0, case.word(2));
+                e.mem.set_u8(l + 0x124, case.word(3) as u8);
+                e.mem.set_u8(l + 0x208, 1);
+                vec![l, holder, case.word(4)]
+            })
+            .run()
+            .assert_same();
         }
     }
 }

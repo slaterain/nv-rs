@@ -17,72 +17,36 @@
 //! the exe, which compares the values its own calls answered.
 //!
 //! **Floats.** The render passes that ask for the sort run on the main thread and now and then on
-//! the loading thread, so the luminance keeps the exe's x87 steps with the exact helpers (each sum,
-//! difference and quotient stored as the exe stores it, right under either control word; the Diff
-//! test runs both); its square root of a stored float, stored again as a float, is `f32::sqrt` (a
-//! correctly rounded root, as `FSQRT` then the float store gives under either control word).
+//! the loading thread: the luminance is `GetLuminanceToBound`'s own body in [`super::scene_light`],
+//! written over `native::Real` (each step at the running thread's precision, stored where the exe
+//! stores it; the Diff test runs both control words).
 
+use super::scene_light::luminance_to_bound_here;
 use engine_core::ptr::Ptr;
-use engine_core::x87::{
-    x87_add, x87_div, x87_load32, x87_m32, x87_mul, x87_quiet_bits, x87_store32, x87_sub,
-};
 use engine_core::Engine;
 
 /// The property's light list (`lLightList`, +0x60: head, then tail at +0x64) and
 /// `iLastRenderPassState` (+0x38).
 const LIGHT_LIST: u32 = 0x60;
 const LAST_RENDER_PASS_STATE: u32 = 0x38;
-/// The scene node pointer (`011f91c8`) and its lighting offset (+0x1e4).
+/// The scene node pointer (`011f91c8`); a `ShadowSceneLight`'s `fLuminance` (+0xc) and `spLight`
+/// (+0xf8); an `NiLight`'s world translation (+0x8c) and radius (+0xe0): the tests' world.
+#[cfg(test)]
 const SCENE_NODE: u32 = 0x011f_91c8;
-const LIGHTING_OFFSET: u32 = 0x1e4;
-/// A `ShadowSceneLight`'s `fLuminance` (+0xc) and `spLight` (+0xf8); an `NiLight`'s world
-/// translation (+0x8c) and radius (+0xe0).
+#[cfg(test)]
 const LIGHT_LUMINANCE: u32 = 0xc;
+#[cfg(test)]
 const LIGHT_SP_LIGHT: u32 = 0xf8;
+#[cfg(test)]
 const WORLD_TRANSLATE: u32 = 0x8c;
+#[cfg(test)]
 const LIGHT_RADIUS: u32 = 0xe0;
 
-/// `(y * y + x * x) + z * z` with the exact helpers, in the exe's order.
-fn squared_length(x: f64, y: f64, z: f64) -> f64 {
-    x87_add(x87_add(x87_mul(y, y), x87_mul(x, x)), x87_mul(z, z))
-}
-
-/// `00b9dbe0` in place: `(distance - bound radius) / NiLight radius` as a float (a signalling NaN
-/// quieted), the distance from the `NiLight`'s position moved by the lighting offset to the bound's
-/// centre; stored in the light's `fLuminance` and answered as bits.
+/// `00b9dbe0` in place (its body, not a call): `(distance - bound radius) / NiLight radius`, the
+/// distance from the `NiLight`'s position moved by the lighting offset to the bound's centre;
+/// stored in the light's `fLuminance` and answered as bits.
 fn luminance(e: &mut Engine, light: u32, bound: u32) -> u32 {
-    let node = e.global::<u32>(SCENE_NODE);
-    let offset = [0u32, 4, 8].map(|i| e.mem.u32(node.wrapping_add(LIGHTING_OFFSET + i)));
-    let ni = e.mem.u32(light.wrapping_add(LIGHT_SP_LIGHT));
-    let at = |i: u32| ni.wrapping_add(WORLD_TRANSLATE + i);
-    let px = x87_store32(x87_add(x87_load32(offset[0]), x87_m32(e.mem.u32(at(0)))));
-    let py = x87_store32(x87_add(x87_load32(e.mem.u32(at(4))), x87_m32(offset[1])));
-    let pz = x87_store32(x87_add(x87_load32(e.mem.u32(at(8))), x87_m32(offset[2])));
-    let dx = x87_store32(x87_sub(x87_load32(px), x87_m32(e.mem.u32(bound))));
-    let dy = x87_store32(x87_sub(
-        x87_load32(py),
-        x87_m32(e.mem.u32(bound.wrapping_add(4))),
-    ));
-    let dz = x87_store32(x87_sub(
-        x87_load32(pz),
-        x87_m32(e.mem.u32(bound.wrapping_add(8))),
-    ));
-    let squared = x87_store32(squared_length(
-        x87_load32(dx),
-        x87_load32(dy),
-        x87_load32(dz),
-    ));
-    let distance = f32::from_bits(squared).sqrt().to_bits();
-    let value = x87_div(
-        x87_sub(
-            x87_load32(distance),
-            x87_m32(e.mem.u32(bound.wrapping_add(0xc))),
-        ),
-        x87_m32(e.mem.u32(ni.wrapping_add(LIGHT_RADIUS))),
-    );
-    let value = x87_quiet_bits(x87_store32(value));
-    e.mem.set_u32(light.wrapping_add(LIGHT_LUMINANCE), value);
-    value
+    luminance_to_bound_here(e, Ptr::new(light), bound).to_bits()
 }
 
 /// The list move the exe inlines: `node` goes just before `before`.
