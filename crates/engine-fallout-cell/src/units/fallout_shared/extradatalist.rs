@@ -2619,7 +2619,9 @@ pub(crate) fn save_extra_data(
             let id = form_id(e, value);
             e.mem.set_u32(record.addr(), id);
             copy_block(e, extra.addr() + 0x10, record.addr() + 4, 12);
-            add_swapped_chunk_data(e, chunk_tag(b"XPSL"), record, 0x14, fn_00414220);
+            add_swapped_chunk_data(e, chunk_tag(b"XPSL"), record, 0x14, |e, p| {
+                e.call(0x0041_4220, &args![p]);
+            });
         }),
         // EXTRA_LEVCREA_MOD
         0x1e => add_chunk_word(e, chunk_tag(b"XLCM"), value),
@@ -2716,7 +2718,9 @@ pub(crate) fn save_extra_data(
                     let reference = e.mem.u32(decal);
                     let id = form_id(e, reference);
                     e.mem.set_u32(record.addr(), id);
-                    add_swapped_chunk_data(e, chunk_tag(b"XDCR"), record, 0x1c, fn_00414030);
+                    add_swapped_chunk_data(e, chunk_tag(b"XDCR"), record, 0x1c, |e, p| {
+                        e.call(0x0041_4030, &args![p]);
+                    });
                 });
                 node = list_next(e, node);
             }
@@ -2733,7 +2737,9 @@ pub(crate) fn save_extra_data(
                 if first != 0 {
                     let id = form_id(e, first);
                     e.mem.set_u32(record.addr(), id);
-                    add_swapped_chunk_data(e, chunk_tag(b"XNDP"), record, 8, fn_004141e0);
+                    add_swapped_chunk_data(e, chunk_tag(b"XNDP"), record, 8, |e, p| {
+                        e.call(0x0041_41e0, &args![p]);
+                    });
                 }
             });
         }
@@ -2781,7 +2787,9 @@ pub(crate) fn save_extra_data(
                 let id = form_id(e, position_ref);
                 e.mem.set_u32(data + 0x0c, id);
             }
-            add_swapped_chunk_data(e, chunk_tag(b"XRDO"), Ptr::new(data), 0x10, fn_00414220);
+            add_swapped_chunk_data(e, chunk_tag(b"XRDO"), Ptr::new(data), 0x10, |e, p| {
+                e.call(0x0041_4220, &args![p]);
+            });
             e.mem.set_u32(data + 0x0c, position_ref);
         }
         // EXTRA_PRIMITIVE: radii, colour and type of the BGSPrimitive.
@@ -2798,7 +2806,9 @@ pub(crate) fn save_extra_data(
             });
             let primitive_type = list_next(e, value);
             e.mem.set_u32(record.addr() + 0x1c, primitive_type);
-            add_swapped_chunk_data(e, chunk_tag(b"XPRM"), record, 0x20, fn_00414290);
+            add_swapped_chunk_data(e, chunk_tag(b"XPRM"), record, 0x20, |e, p| {
+                e.call(0x0041_4290, &args![p]);
+            });
         }),
         // EXTRA_AMMO: the ammo as a form id (0 if none), then the count word.
         0x6e => {
@@ -2848,7 +2858,9 @@ pub(crate) fn save_extra_data(
                 };
                 e.mem.set_u32(record.addr() + index * 4, id);
             }
-            add_swapped_chunk_data(e, chunk_tag(b"XORD"), record, 0x10, fn_00414370);
+            add_swapped_chunk_data(e, chunk_tag(b"XORD"), record, 0x10, |e, p| {
+                e.call(0x0041_4370, &args![p]);
+            });
         }),
         // EXTRA_PORTAL_REF_DATA: two linked references.
         0x77 => e.with_stack(8, |e, record| {
@@ -2994,7 +3006,9 @@ pub(crate) fn save_plane(e: &mut Engine, extra: Ptr<BSExtraData>, tag: u32) {
                 ],
             );
         });
-        add_swapped_chunk_data(e, tag, record, 0x24, fn_004140f0);
+        add_swapped_chunk_data(e, tag, record, 0x24, |e, p| {
+            e.call(0x0041_40f0, &args![p]);
+        });
     });
 }
 
@@ -3038,6 +3052,7 @@ pub(crate) const LOAD_FLOAT_SETTERS: &[(&[u8; 4], u32)] = &[
 /// value of the current chunk into a local that starts at zero.
 pub(crate) fn read_chunk_word(e: &mut Engine, file: Ptr) -> u32 {
     e.with_stack(4, |e, local| {
+        e.mem.set_u32(local.addr(), 0);
         e.call(GET_CHUNK_WORD, &args![file, local]);
         e.mem.u32(local.addr())
     })
@@ -9109,8 +9124,10 @@ mod tests {
             });
             let shared = state.clone();
             e.register_double(GET_CHUNK_WORD, move |e, a| {
-                let word = shared.borrow_mut().words.pop_front().unwrap_or(0);
-                e.mem.set_u32(a[1], word);
+                // A chunk with no word left writes nothing, as the file's read of an empty chunk.
+                if let Some(word) = shared.borrow_mut().words.pop_front() {
+                    e.mem.set_u32(a[1], word);
+                }
                 returns(1)
             });
             let shared = state.clone();
@@ -9241,6 +9258,16 @@ mod tests {
             let log = l.run(name, &[], &[], 4);
             assert_eq!(calls_to(&log, setter), vec![vec![l.list.addr(), 0]]);
         }
+    }
+
+    #[test]
+    fn load_hands_0_for_a_word_chunk_that_gives_nothing() {
+        // 004144a0 stores 0 to the word's local before each GetChunkData(&word), so a chunk that
+        // gives nothing hands the setter 0.
+        let mut l = Loader::new();
+        stub(&mut l.e, 0x0041_98a0);
+        let log = l.run(b"XRNK", &[], &[], 4);
+        assert_eq!(calls_to(&log, 0x0041_98a0), vec![vec![l.list.addr(), 0]]);
     }
 
     #[test]

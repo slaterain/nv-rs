@@ -1,13 +1,14 @@
 //! The extra data family (`NV_TYPED=extra_data`): what the game asks of and puts into a
 //! reference's, a cell's or an inventory entry's list of extra data (`ExtraDataList`, Xbox PDB),
 //! from the exe's extra data list unit: `AddExtraCopy` and the copies and compares of whole lists
-//! ([`copy`]), the getters and setters of single extra data ([`access`]), and the small records the
-//! unit's loader and save writer build ([`records`]). The list's own operations (its constructors,
-//! `AddExtra`, `RemoveExtra`, the type bitmap, the thread's cache) are the cell references family's
-//! (`cell_refs::extra_list`), the lookup `GetExtraData` (`00410220`) the dispatch family's. Every
-//! caller reaches these functions by address; the unit's translations that stay (the loader
-//! `004144a0`, the save writer `00412970`, `InitItem` `00416be0`, `GetCanNotWear` `00418b10`) and
-//! the unit's other part files call the native functions by address too.
+//! ([`copy`]), the getters and setters of single extra data ([`access`]), the small records the
+//! unit's loader and save writer build ([`records`]), the loader `ExtraDataList::Load` ([`load`]),
+//! the fix-up of a loaded list `InitItem` ([`init_item`]) and the list's save writer ([`save`]).
+//! The list's own operations (its constructors, `AddExtra`, `RemoveExtra`, the type bitmap, the
+//! thread's cache) are the cell references family's (`cell_refs::extra_list`), the lookup
+//! `GetExtraData` (`00410220`) the dispatch family's. Every caller reaches these functions by
+//! address; the unit's one translation that stays (`GetCanNotWear` `00418b10`) and the unit's other
+//! part files call the native functions by address too.
 //!
 //! **Native.** The exe's order of work. The lookup (`00410220`), the lock (`0040fbf0`, `0040fba0`),
 //! `AddExtra`, both `RemoveExtra`s, `ItemsInList` and the cache's clear are typed calls into their
@@ -40,7 +41,10 @@
 
 pub mod access;
 pub mod copy;
+pub mod init_item;
+pub mod load;
 pub mod records;
+pub mod save;
 
 use crate::{cell_refs, crt, dispatch};
 use dispatch::layout::LightLock;
@@ -78,6 +82,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0041_2490, copy::copy_list_for_reference(u32, u32, bool)),
         entry!(0x0041_26c0, copy::compare_list_for_container(u32, u32, bool, bool) -> bool),
         entry!(0x0041_27e0, copy::compare_list(u32, u32) -> bool),
+        entry!(0x0041_2970, save::save_list(u32)),
         entry!(0x0041_3f40, records::plane_center(u32) -> u32),
         entry!(0x0041_3f60, records::plane_rotation(u32, u32) -> u32),
         entry!(0x0041_3f90, records::primitive_color(u32, u32) -> u32),
@@ -94,6 +99,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0041_43f0, records::primitive_new(u32) -> u32),
         entry!(0x0041_4430, records::color_new(u32, f32, f32, f32, f32) -> u32),
         entry!(0x0041_4470, records::plane_new(u32) -> u32),
+        entry!(0x0041_44a0, load::load_chunk(u32, u32, u32)),
         entry!(0x0041_68a0, records::rotation_matrix(u32, f32, f32, f32, f32)),
         entry!(0x0041_69a0, records::sincos(f32, u32, u32)),
         entry!(0x0041_69d0, records::word_1d8(u32) -> u32),
@@ -104,6 +110,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0041_6ad0, records::portal_extra_new(u32, u32, u32) -> u32),
         entry!(0x0041_6b40, records::radio_data_new(u32) -> u32),
         entry!(0x0041_6b80, records::room_links_new(u32) -> u32),
+        entry!(0x0041_6be0, init_item::init_item(u32, u32)),
         entry!(0x0041_81c0, records::plane_set_linked(u32, u32, u32)),
         entry!(0x0041_81e0, access::save_form(u32) -> u32),
         entry!(0x0041_8200, access::anim_save(u32) -> u32),
