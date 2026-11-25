@@ -27,8 +27,9 @@ pub mod test_support {
 
 /// What the platform layer (`engine-platform`) adds to the core, when the program links it:
 /// its imports ([`imports`] answers them after the core's own), a new copy of its state for each
-/// engine ([`Kernel::platform`]), what closing one of its file handles does ([`close_handle`])
-/// and the procedures of the modules it loads ([`loader::get_proc_address`]). Installed once
+/// engine ([`Kernel::platform`]), what closing one of its file handles does ([`close_handle`]),
+/// the procedures of the modules it loads ([`loader::get_proc_address`]) and its D3DX maths for
+/// typed code's direct calls ([`crate::d3dx_direct`]). Installed once
 /// ([`install_layer`]) by the layer's `units::funcs`, which [`Engine::new`] runs before it makes
 /// the kernel; a program without the layer (an engine part crate's tests) has the core's imports
 /// only.
@@ -50,6 +51,15 @@ pub struct Layer {
     /// `real_threads::device_guard`). They reach only the device state
     /// ([`Layer::new_device_state`]), never the kernel.
     pub device_calls: &'static [std::ops::Range<u32>],
+    /// The layer's D3DX maths imports as registered and as themselves, so that typed code calls them
+    /// as plain Rust calls while their slots hold them ([`crate::d3dx_direct`]).
+    pub d3dx: &'static crate::d3dx_direct::D3dxFns,
+}
+
+/// [`Layer::d3dx`], `None` without the layer.
+#[inline(always)]
+pub(crate) fn layer_d3dx() -> Option<&'static crate::d3dx_direct::D3dxFns> {
+    LAYER.get().map(|layer| layer.d3dx)
 }
 
 /// [`Layer::device_calls`], none without the layer.

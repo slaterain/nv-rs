@@ -36,6 +36,48 @@
 
 use crate::{Engine, Ptr};
 
+/// The nine maths imports typed code calls directly (`engine_core::d3dx_direct`), each as the import
+/// table registers it at its slot (the layer's imports take these very values) and as itself. The
+/// layer hands the table to the core ([`crate::LAYER`]).
+pub static DIRECT: engine_core::d3dx_direct::D3dxFns = engine_core::d3dx_direct::D3dxFns {
+    matrix_multiply_transpose: (
+        crate::entry!(0, matrix_multiply_transpose(Ptr, Ptr, Ptr) -> u32).1,
+        matrix_multiply_transpose,
+    ),
+    vec3_transform_coord: (
+        crate::entry!(0, vec3_transform_coord(Ptr, Ptr, Ptr) -> u32).1,
+        vec3_transform_coord,
+    ),
+    plane_transform: (
+        crate::entry!(0, plane_transform(Ptr, Ptr, Ptr) -> u32).1,
+        plane_transform,
+    ),
+    vec3_normalize: (
+        crate::entry!(0, vec3_normalize(Ptr, Ptr) -> u32).1,
+        vec3_normalize,
+    ),
+    vec3_transform_normal: (
+        crate::entry!(0, vec3_transform_normal(Ptr, Ptr, Ptr) -> u32).1,
+        vec3_transform_normal,
+    ),
+    matrix_multiply: (
+        crate::entry!(0, matrix_multiply(Ptr, Ptr, Ptr) -> u32).1,
+        matrix_multiply,
+    ),
+    matrix_inverse: (
+        crate::entry!(0, matrix_inverse(Ptr, Ptr, Ptr) -> u32).1,
+        matrix_inverse,
+    ),
+    matrix_transpose: (
+        crate::entry!(0, matrix_transpose(Ptr, Ptr) -> u32).1,
+        matrix_transpose,
+    ),
+    plane_normalize: (
+        crate::entry!(0, plane_normalize(Ptr, Ptr) -> u32).1,
+        plane_normalize,
+    ),
+};
+
 /// IEEE single-precision words, with the NaN rules of the SSE instructions spelled out (an
 /// operation with a NaN operand answers its first NaN operand, quieted; an invalid operation
 /// answers the default NaN `ffc00000`), so results do not depend on how the compiler orders
@@ -3250,5 +3292,212 @@ pub mod profiles {
             assert_eq!(super::profile(0xffff_0300, true), Some(&b"ps_3_0"[..]));
             assert_eq!(super::profile(0xffff_0200, true), None);
         }
+    }
+}
+
+/// The core's direct calls of the D3DX maths imports (`engine_core::d3dx_direct`) against the calls
+/// by address.
+#[cfg(test)]
+mod tests_direct {
+    use super::*;
+    use crate::AbiFn;
+    use engine_core::d3dx_direct as direct;
+
+    /// The nine imports: their names, slots and the table's words form of each.
+    fn named() -> [(&'static str, u32, AbiFn); 9] {
+        [
+            (
+                "D3DXMatrixMultiplyTranspose",
+                direct::MATRIX_MULTIPLY_TRANSPOSE,
+                DIRECT.matrix_multiply_transpose.0,
+            ),
+            (
+                "D3DXVec3TransformCoord",
+                direct::VEC3_TRANSFORM_COORD,
+                DIRECT.vec3_transform_coord.0,
+            ),
+            (
+                "D3DXPlaneTransform",
+                direct::PLANE_TRANSFORM,
+                DIRECT.plane_transform.0,
+            ),
+            (
+                "D3DXVec3Normalize",
+                direct::VEC3_NORMALIZE,
+                DIRECT.vec3_normalize.0,
+            ),
+            (
+                "D3DXVec3TransformNormal",
+                direct::VEC3_TRANSFORM_NORMAL,
+                DIRECT.vec3_transform_normal.0,
+            ),
+            (
+                "D3DXMatrixMultiply",
+                direct::MATRIX_MULTIPLY,
+                DIRECT.matrix_multiply.0,
+            ),
+            (
+                "D3DXMatrixInverse",
+                direct::MATRIX_INVERSE,
+                DIRECT.matrix_inverse.0,
+            ),
+            (
+                "D3DXMatrixTranspose",
+                direct::MATRIX_TRANSPOSE,
+                DIRECT.matrix_transpose.0,
+            ),
+            (
+                "D3DXPlaneNormalize",
+                direct::PLANE_NORMALIZE,
+                DIRECT.plane_normalize.0,
+            ),
+        ]
+    }
+
+    /// What the direct calls check a slot against is what the import table registers there: one
+    /// value each, so in play the slot holds it.
+    #[test]
+    fn the_direct_table_is_what_the_imports_register() {
+        let table = crate::imports();
+        for (name, _, f) in named() {
+            let registered = table
+                .iter()
+                .find(|(dll, n, _)| *dll == "d3dx9_38.dll" && *n == name)
+                .unwrap_or_else(|| panic!("no import {name}"))
+                .2;
+            assert!(engine_core::abi::same_fn(registered, f), "{name}");
+        }
+        assert!(
+            std::ptr::eq(crate::LAYER.d3dx, &DIRECT),
+            "the layer hands the core this table"
+        );
+    }
+
+    /// An engine with the nine imports at their exe slots, as the game's import table has them.
+    fn engine_with_imports() -> Engine {
+        let mut e = Engine::new();
+        let imports: Vec<engine_core::exe::Import> = named()
+            .iter()
+            .map(|(name, slot, _)| engine_core::exe::Import {
+                slot: *slot,
+                dll: "d3dx9_38.dll".to_string(),
+                name: name.to_string(),
+            })
+            .collect();
+        assert_eq!(e.register_imports(&imports), 9);
+        e
+    }
+
+    /// Each import called directly gives the memory and the answer of the call by address, over
+    /// matrices, vectors and planes with zeros, NaNs, infinities, denormals and ordinary values; all
+    /// but each slot's first call go direct.
+    #[test]
+    fn each_import_called_directly_answers_as_by_address() {
+        let mut e = engine_with_imports();
+        let special = [
+            0u32,
+            0x8000_0000,
+            0x7fc0_0000,
+            0x7f80_0000,
+            0xff80_0000,
+            1,
+            0x3f80_0000,
+        ];
+        let mut x = 0x9e37_79b9u32;
+        let mut next = move || {
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            if x >> 28 == 0 {
+                special[(x >> 8) as usize % special.len()]
+            } else {
+                ((x >> 8) as f32 / 16_777_216.0 * 8.0 - 4.0).to_bits()
+            }
+        };
+        let input = e.mem.alloc(64 * 3 + 16);
+        let (by_address, directly) = (e.mem.alloc(64), e.mem.alloc(64));
+        let before = direct::direct_calls();
+        let rounds = 64u32;
+        for round in 0..rounds {
+            for i in 0..52 {
+                e.mem.set_u32(input + 4 * i, next());
+            }
+            // The matrix on a 16-byte boundary in even rounds, off it in odd ones (the vector transforms
+            // take one of two paths by that).
+            let (a, b) = (Ptr::new(input), Ptr::new(input + 64 + 4 * (round % 2)));
+            let det = Ptr::new(input + 144);
+            for (k, (_, slot, _)) in named().iter().enumerate() {
+                for out in [by_address, directly] {
+                    for i in 0..16 {
+                        e.mem.set_u32(out + 4 * i, 0xdead_beef);
+                    }
+                }
+                let words: Vec<u32> = match k {
+                    3 | 7 | 8 => vec![by_address, a.addr()],
+                    6 => vec![by_address, det.addr(), b.addr()],
+                    _ => vec![by_address, a.addr(), b.addr()],
+                };
+                let first = e.call(*slot, &words).u32();
+                let out = Ptr::new(directly);
+                let second = match k {
+                    0 => direct::matrix_multiply_transpose(&mut e, out, a, b),
+                    1 => direct::vec3_transform_coord(&mut e, out, a, b),
+                    2 => direct::plane_transform(&mut e, out, a, b),
+                    3 => direct::vec3_normalize(&mut e, out, a),
+                    4 => direct::vec3_transform_normal(&mut e, out, a, b),
+                    5 => direct::matrix_multiply(&mut e, out, a, b),
+                    6 => direct::matrix_inverse(&mut e, out, det, b),
+                    7 => direct::matrix_transpose(&mut e, out, a),
+                    _ => direct::plane_normalize(&mut e, out, a),
+                };
+                let answer = |w: u32| if w == by_address { directly } else { w };
+                assert_eq!(second.addr(), answer(first), "import {k}: the answer");
+                assert_eq!(
+                    e.mem.bytes(by_address, 64),
+                    e.mem.bytes(directly, 64),
+                    "import {k}"
+                );
+            }
+        }
+        assert_eq!(direct::direct_calls() - before, u64::from(rounds) * 9);
+    }
+
+    /// A double registered over each slot (a test's, or a hook's) is what the calls reach from then
+    /// on, by address with the words given: nothing goes direct past it.
+    #[test]
+    fn a_double_over_a_slot_is_called_by_address() {
+        let mut e = engine_with_imports();
+        let out = e.mem.alloc(16);
+        let (a, b) = (Ptr::new(e.mem.alloc(64)), Ptr::new(e.mem.alloc(64)));
+        for (_, slot, _) in named() {
+            // Each import once by address, so the call cache holds the slot's registration.
+            e.call(slot, &[out, a.addr(), b.addr()]);
+            e.register(slot, |e, w| {
+                e.mem.set_u32(w[0], 0x600d);
+                e.mem.set_u32(w[0] + 4, w[1]);
+                crate::Ret {
+                    eax: 0x1234,
+                    ..crate::Ret::default()
+                }
+            });
+        }
+        let before = direct::direct_calls();
+        let o = Ptr::new(out);
+        for k in 0..9 {
+            e.mem.set_u32(out, 0);
+            let answer = match k {
+                0 => direct::matrix_multiply_transpose(&mut e, o, a, b),
+                1 => direct::vec3_transform_coord(&mut e, o, a, b),
+                2 => direct::plane_transform(&mut e, o, a, b),
+                3 => direct::vec3_normalize(&mut e, o, a),
+                4 => direct::vec3_transform_normal(&mut e, o, a, b),
+                5 => direct::matrix_multiply(&mut e, o, a, b),
+                6 => direct::matrix_inverse(&mut e, o, a, b),
+                7 => direct::matrix_transpose(&mut e, o, a),
+                _ => direct::plane_normalize(&mut e, o, a),
+            };
+            assert_eq!(answer.addr(), 0x1234, "import {k}: the double's answer");
+            assert_eq!(e.mem.u32(out), 0x600d, "import {k}: the double ran");
+            assert_eq!(e.mem.u32(out + 4), a.addr(), "import {k}: its words");
+        }
+        assert_eq!(direct::direct_calls(), before, "none went direct");
     }
 }
