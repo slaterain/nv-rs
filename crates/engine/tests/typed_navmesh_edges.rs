@@ -595,24 +595,41 @@ fn real_navmeshes() {
         chosen.extend(by_size.into_iter().take(5));
         chosen.sort_unstable();
         chosen.dedup();
+        // `NV_NAVMESH_ONLY=<form id in hex>`: that navmesh alone.
+        if let Some(only) = std::env::var("NV_NAVMESH_ONLY")
+            .ok()
+            .and_then(|v| u32::from_str_radix(v.trim(), 16).ok())
+        {
+            chosen = (0..meshes.len()).filter(|&i| meshes[i].0 == only).collect();
+        }
         let (mut pairs, mut preferred, mut triangles) = (0u64, 0u64, 0u64);
         for &i in &chosen {
             let (id, (v, t)) = &meshes[i];
-            // This family alone: exact against the translation with the same callees.
-            let (p, c) = match both_ways(v, t, &CALLEES, &ALL) {
+            // Play (every family on) against the translations only. Where they differ, this family
+            // alone against the other families on: if that matches, the difference is the other
+            // families' native floats (their last bits on main), which the translated rebuild also
+            // meets when it calls them; if not, it is this family's.
+            let (p, c) = match both_ways(v, t, &[], &ALL) {
                 Ok(found) => found,
-                Err(why) => {
-                    failures.push(format!("{name} {id:08x}: {why}"));
-                    continue;
-                }
+                Err(why) => match both_ways(v, t, &CALLEES, &ALL) {
+                    Ok(found) => {
+                        eprintln!(
+                            "{name} {id:08x}: play differs from the translations only ({why}); \
+                             this family alone matches"
+                        );
+                        play_differs += 1;
+                        found
+                    }
+                    Err(alone) => {
+                        failures.push(format!(
+                            "{name} {id:08x}: {why}; this family alone: {alone}"
+                        ));
+                        // And call for call, whatever its size: the first call that differs.
+                        small.push((*id, v.clone(), t.clone()));
+                        continue;
+                    }
+                },
             };
-            // Play against the translations only: a difference here that the line above doesn't
-            // have comes from the other families' native floats (their last bits on main).
-            if let Err(why) = both_ways(v, t, &[], &ALL) {
-                let callees = both_ways(v, t, &[], &CALLEES).is_err();
-                eprintln!("{name} {id:08x}: play differs from the translations only ({why}); the callees alone differ too: {callees}");
-                play_differs += 1;
-            }
             pairs += u64::from(p);
             preferred += u64::from(c);
             triangles += t.len() as u64;
@@ -628,7 +645,6 @@ fn real_navmeshes() {
         );
     }
     eprintln!("{play_differs} navmeshes differ in play from the translations only");
-    assert!(failures.is_empty(), "{failures:#?}");
     assert!(
         !small.is_empty(),
         "no small navmesh for the call-for-call comparison"
@@ -651,4 +667,5 @@ fn real_navmeshes() {
     .run()
     .assert_same();
     eprintln!("{count} small real navmeshes compared call for call");
+    assert!(failures.is_empty(), "{failures:#?}");
 }
