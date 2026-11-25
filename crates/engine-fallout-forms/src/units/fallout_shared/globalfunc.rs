@@ -1251,21 +1251,24 @@ pub fn make_triangle(
 
 // Translated from 004b3800 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The cross product `this x other` of two `NiPoint3`s, built into `out`
-/// (`NiPoint3::operator%`); returns `out`.
+/// (`NiPoint3::operator%`); returns `out`. Each component is `FLD` of an
+/// axis of `this`, `FMUL` by one of `other`, the same the other way round,
+/// `FSUBP`, `FSTP dword`, `z` first: at the running thread's precision, so
+/// on main each product rounds to a float before the difference.
 pub fn fn_004b3800(e: &mut Engine, this: Ptr<NiPoint3>, out: Ptr, other: Ptr<NiPoint3>) -> Ptr {
-    let (ax, ay, az) = (
-        e.get(this, NiPoint3::x) as f64,
-        e.get(this, NiPoint3::y) as f64,
-        e.get(this, NiPoint3::z) as f64,
-    );
-    let (bx, by, bz) = (
-        e.get(other, NiPoint3::x) as f64,
-        e.get(other, NiPoint3::y) as f64,
-        e.get(other, NiPoint3::z) as f64,
-    );
-    let z = (ax * by - ay * bx) as f32;
-    let y = (az * bx - ax * bz) as f32;
-    let x = (ay * bz - az * by) as f32;
+    let points: &Engine = e;
+    // `this`'s axis `i` times `other`'s axis `j`.
+    let product = |i: u32, j: u32| {
+        x87_mul(
+            x87_load32(points.mem.u32(this.addr().wrapping_add(4 * i))),
+            x87_m32(points.mem.u32(other.addr().wrapping_add(4 * j))),
+        )
+    };
+    let component =
+        |i: u32, j: u32| f32::from_bits(x87_store32(x87_sub(product(i, j), product(j, i))));
+    let z = component(0, 1);
+    let y = component(2, 0);
+    let x = component(1, 2);
     typed_call!(leaf::FAMILY, 0x0041_6870, leaf::point3_new(e, out, x, y, z));
     out
 }
@@ -4925,6 +4928,31 @@ mod tests {
         assert_eq!(r.u32(), out);
         // (2*6 - 3*5, 3*4 - 1*6, 1*5 - 2*4)
         assert_eq!(read_floats(&e, out, 3), vec![-3.0, 6.0, -3.0]);
+    }
+
+    #[test]
+    fn the_cross_product_rounds_each_product_at_the_threads_precision() {
+        // z = a.x b.y - a.y b.x with a.x = b.y = 1 + 2^-12 and a.y = b.x = 1: the product
+        // 1 + 2^-11 + 2^-24 is a tie at 24 bits (main) and rounds to 1 + 2^-11, so z is 2^-11
+        // there; at 53 bits (the other threads) it is kept, and z is 2^-11 + 2^-24.
+        let near_one = 1.0 + 2f32.powi(-12);
+        for (word, z) in [
+            (0x007f, 2f32.powi(-11)),
+            (
+                engine_core::x87::DEFAULT_CONTROL_WORD,
+                2f32.powi(-11) + 2f32.powi(-24),
+            ),
+        ] {
+            let mut e = engine();
+            point_doubles(&mut e);
+            let a = floats(&mut e, &[near_one, 1.0, 0.0]);
+            let b = floats(&mut e, &[1.0, near_one, 0.0]);
+            let out = e.mem.alloc(12);
+            engine_core::x87::set_control_word(word);
+            e.call(0x004b_3800, &args![p(a), p(out), p(b)]);
+            engine_core::x87::set_control_word(engine_core::x87::DEFAULT_CONTROL_WORD);
+            assert_eq!(read_floats(&e, out, 3), vec![0.0, 0.0, z]);
+        }
     }
 
     #[test]
