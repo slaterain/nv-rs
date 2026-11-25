@@ -1,7 +1,7 @@
 //! The differential test of the face family's coordinate sum (`engine_typed::facegen::coords`,
 //! `00652af0`) against its translation, on real face coordinate blocks: each block's four
 //! matrices made by their constructor (`00449610`) and sized by the game's resize (`0060b340`),
-//! every helper the sum reaches the game's own translation (the copy, the assignment, the clear,
+//! every helper the sum reaches the game's own translation but the square root, a double (the copy, the assignment, the clear,
 //! the storage's resize, `memcpy`, the limit's length, root and scale).
 //!
 //! The translation asks the float vector's size (`00662820`), capacity (`0060b860`) and one-float
@@ -109,8 +109,12 @@ fn facegen_coords_sum() {
         e.map(0x0127_0000, 0x1000);
         e.mem.set_u32(0x0127_0a6c, 1);
         e.map(0x0300_0000, 0x1000);
-        // `GetLastError` (the square root's error path for a NaN or a negative length): no error.
-        e.register(0x00fd_f094, |_, _| Ret::default());
+        // The square root (`0040_19b0`, called by address on both sides) as a double: its CRT error
+        // path for a NaN or a negative length reads CRT words this test does not map.
+        e.register(0x0040_19b0, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0])).sqrt(),
+            ..Ret::default()
+        });
         e.register(0x00ec_7c56, |e, _| {
             let n = e.mem.u32(0x0300_0000);
             e.mem.set_u32(0x0300_0000, n + 1);
