@@ -817,20 +817,24 @@ fn character_folders(text: &[char], in_path: &[bool], before: Option<char>) -> V
 /// nothing (`Saves\*`, `Saves\.`).
 fn folder_at_end(text: &[char], at: usize) -> Option<(usize, usize)> {
     let s = at + text[at..].iter().take_while(|&&c| is_separator(c)).count();
+    // `Saves\ folder`: no name right after it.
+    if text.get(s).is_none_or(|c| c.is_whitespace()) {
+        return None;
+    }
     let next_is = |k: usize, word: &str| {
         let w: Vec<char> = word.chars().collect();
         text[k..].starts_with(&w)
     };
+    // Another character's folder (`..., Saves/Benny and Saves/Jo Hero holds ...`).
+    let saves_next =
+        |k: usize| text.len() - k > 5 && is_saves(&text[k..k + 5]) && is_separator(text[k + 5]);
     let mut end = s;
     while end < text.len() {
         let c = text[end];
+        // A space inside the name goes on (`Saves\Jo Hero\Private`: the separator then says
+        // whether the path goes on); another path's start, an address or ` holds ` end it.
         let other = c == ' '
-            && (next_is(end, " holds ")
-                || starts_other(text, end + 1)
-                || text[end + 1..]
-                    .iter()
-                    .take_while(|c| !c.is_whitespace())
-                    .any(|&c| is_separator(c)));
+            && (next_is(end, " holds ") || starts_other(text, end + 1) || saves_next(end + 1));
         if is_separator(c)
             || (ends_path(c) && !matches!(c, ' ' | '\''))
             || (matches!(c, ':' | ',' | ';') && text.get(end + 1) == Some(&' '))
@@ -1901,6 +1905,58 @@ mod tests {
                 "\"<path>\\x.txt\"",
             ),
             ("E:\\Backup\\Saves\\Alexxander\\x.txt", "<path>\\x.txt"),
+            // ... and with a space in its name (a character's name), in every form.
+            ("E:\\Backup\\Saves\\Jo Hero\\Private\\x.txt", "<path>\\x.txt"),
+            (
+                "E:\\Backup\\Saves\\Jo Hero Old\\Private Stuff\\Tax 2026\\x.txt",
+                "<path>\\x.txt",
+            ),
+            ("/srv/backup/Saves/Jo Hero/private/smith/y.txt", "<path>/y.txt"),
+            (
+                "\\\\JT-NAS\\Games\\Saves\\Jo Hero\\Private\\x.txt",
+                "<path>\\x.txt",
+            ),
+            (
+                "\"E:\\\\Backup\\\\Saves\\\\Jo Hero\\\\Private\\\\x.txt\"",
+                "\"<path>\\x.txt\"",
+            ),
+            (
+                "/mnt/games/SteamLibrary/steamapps/compatdata/22380/pfx/drive_c/users/steamuser/Documents/My Games/FalloutNV/Saves/Jo Hero/Backup/old/Save 1.fos",
+                "<path>/old/<save>.fos",
+            ),
+            (
+                "files: /mnt/games/x/Saves/Jo Hero holds 2 names for the game's \"save 3   jo hero.fos\" (Save 3   Jo Hero.fos, SAVE 3   JO HERO.fos); \"Save 3   Jo Hero.fos\" is taken",
+                "files: <path>/Saves/<save> holds 2 names for the game's \"<save>.fos\" (<save>.fos, <save>.fos); \"<save>.fos\" is taken",
+            ),
+            // A character's folder at a path's end: where its name ends.
+            ("E:\\Backup\\Saves\\Hero, Jo", "<path>\\Saves\\<save>, Jo"),
+            ("E:\\Backup\\Saves\\Jo Hero; then x", "<path>\\Saves\\<save>; then x"),
+            (
+                "E:\\Backup\\Saves\\Jo Hero\\ and more",
+                "<path>\\Saves\\<save>\\ and more",
+            ),
+            (
+                "E:\\Backup\\Saves\\Jo Hero 192.168.1.20",
+                "<path>\\Saves\\<save> <ip>",
+            ),
+            (
+                "E:\\Backup\\Saves\\Jo Hero\tnext field",
+                "<path>\\Saves\\<save>\tnext field",
+            ),
+            ("E:\\Backup\\Saves\\O'Brien Hero, ok", "<path>\\Saves\\<save>, ok"),
+            (
+                "Game's main stopped in frame 12: could not open E:\\Backup\\Saves\\Jo Hero (in 00a1b2c3 < 00400000)",
+                "Game's main stopped in frame 12: could not open <path>\\Saves\\<save> (in 00a1b2c3 < 00400000)",
+            ),
+            // Relative forms stay as main has them; `Saves\` before a space names nothing.
+            (
+                "Saves\\Jo Hero\\Private\\x.txt and saves/Jo Hero/notes/y.txt",
+                "Saves\\Jo Hero\\Private\\x.txt and saves/Jo Hero/notes/y.txt",
+            ),
+            (
+                "the Saves\\ folder, Saves\\Jo Hero",
+                "the Saves\\ folder, Saves\\<save>",
+            ),
             // Hosts and shares.
             ("on \\\\JT-NAS now", "on <path> now"),
             ("on \"\\\\\\\\JT-NAS\"", "on \"<path>\""),
@@ -1955,6 +2011,18 @@ mod tests {
             (
                 "D:\\Profiles\\Jo Tester\\OneDrive is full; see G:\\Private\\Smith\\notes\\x.txt",
                 "<home>\\... is full; see <path>\\x.txt",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd   | next",
+                "<home>\\...   | next",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd> x",
+                "<home>\\...> x",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd\tfield",
+                "<home>\\...\tfield",
             ),
             // Account numbers; what stays.
             (
