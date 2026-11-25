@@ -13,7 +13,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::collision::{self, blend, body};
+use engine_typed::collision::{self, blend, body, islands};
 use engine_typed::{culling, dispatch, pathing};
 
 const VT_FN: u32 = 0x00ff_2000;
@@ -799,6 +799,125 @@ fn collision_world_data_walk() {
         }
         e.mem.set_u32(n + 0x1c, c);
         vec![n, 0x55]
+    })
+    .run()
+    .assert_same();
+}
+
+/// Where `ConsolidateSimIslands`'s gathering stand-ins find the bodies they put in the array (the data
+/// pointer and the size), and the merge stand-in's mode.
+const GATHERED: u32 = 0x0301_0000;
+const MERGE_MODE: u32 = GATHERED + 8;
+
+/// The gathering stand-ins (`GetRBForBones`, `thiscall(controller, array)`; `GatherRigidBodies`,
+/// `cdecl(node, array)`): log their words, then fill the array with the prepared data and size.
+fn gather<const TAG: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+    log(e, TAG, a[0]);
+    log(e, TAG | 0x1_0000, a[1]);
+    let (data, size) = (e.mem.u32(GATHERED), e.mem.u32(GATHERED + 4));
+    e.mem.set_u32(a[1], data);
+    e.mem.set_u32(a[1] + 4, size);
+    ret(0)
+}
+
+/// The merge stand-in (`mergeIslands`, `cdecl(world, first, other)`): logs its words; mode 1 moves
+/// the first body into the other's island, mode 2 swaps the array's first element with the last, so
+/// that what the loop reads again each step changes.
+fn merge_islands(e: &mut Engine, a: &[u32]) -> Ret {
+    for (i, w) in (0u32..).zip(a) {
+        log(e, 0x40 | i, *w);
+    }
+    match e.mem.u32(MERGE_MODE) {
+        1 => {
+            let island = e.mem.u32(a[2] + 0xcc);
+            e.mem.set_u32(a[1] + 0xcc, island);
+        }
+        2 => {
+            let (data, size) = (e.mem.u32(GATHERED), e.mem.u32(GATHERED + 4));
+            let last = data + 4 * (size - 1);
+            let (first, other) = (e.mem.u32(data), e.mem.u32(last));
+            e.mem.set_u32(data, other);
+            e.mem.set_u32(last, first);
+        }
+        _ => {}
+    }
+    ret(0)
+}
+
+/// `TESHavokUtilities::ConsolidateSimIslands`: no reference, a reference with a ragdoll controller or
+/// with its 3D; no bodies, one, two, four, or a negative size; the other bodies in the first one's
+/// world or another (or the first in none), in its island or their own (`pattern`'s bits); the merge
+/// leaving the bodies, moving the first one's island, or swapping the array's elements.
+#[test]
+fn collision_consolidate_sim_islands() {
+    Diff::new(entry!(
+        0x0062_c430,
+        islands::consolidate_sim_islands(Ptr<_>)
+    ))
+    .family(&collision::COLLISION)
+    .family(&dispatch::DISPATCH)
+    .family(&leaf::LEAVES)
+    // The array's element (`00629ab0`) is read in place.
+    .ignore_calls(&[0x0062_9ab0])
+    .inputs(&[
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 1, 2, 4, 0xffff_ffff]),
+        Input::Of(&[0, 1, 2, 5, 0x0a, 0x18, 0x2c, 0x3f]),
+        Input::Flag,
+        Input::Of(&[0, 1, 2]),
+    ])
+    .max_cases(720)
+    .setup(|e, case| {
+        stand_ins(e, 0);
+        e.map(GATHERED, 0x1000);
+        e.register(0x00c7_be20, gather::<0x30>);
+        e.register(0x00c8_0930, gather::<0x31>);
+        e.register(0x00cb_5570, merge_islands);
+        // The array's destructor (it would free the stand-ins' data).
+        e.register(0x0062_9b40, logged::<0x32>);
+        let (kind, size, pattern) = (case.word(0), case.word(1), case.word(2));
+        let world = e.mem.alloc(0x10);
+        let other_world = e.mem.alloc(0x10);
+        let first_island = e.mem.alloc(4);
+        let count = if size == 0xffff_ffff { 1 } else { size };
+        let data = if count == 0 {
+            0
+        } else {
+            e.mem.alloc(4 * count)
+        };
+        for i in 0..count {
+            let body = e.mem.alloc(0xd0);
+            let (own_world, own_island) = if i == 0 {
+                (if case.word(3) == 1 { world } else { 0 }, first_island)
+            } else {
+                let w = if (pattern >> (i - 1)) & 1 == 0 {
+                    world
+                } else {
+                    other_world
+                };
+                let s = if (pattern >> (i + 2)) & 1 == 1 {
+                    first_island
+                } else {
+                    e.mem.alloc(4)
+                };
+                (w, s)
+            };
+            e.mem.set_u32(body + 8, own_world);
+            e.mem.set_u32(body + 0xcc, own_island);
+            e.mem.set_u32(data + 4 * i, body);
+        }
+        words(e, GATHERED, &[data, size, case.word(4)]);
+        if kind == 0 {
+            return vec![0];
+        }
+        let reference = object(e, 0x100);
+        let node = e.mem.alloc(0x10);
+        set_answers(e, reference, node, [0; 4]);
+        if kind == 1 {
+            let controller = e.mem.alloc(0x20);
+            e.mem.set_u32(reference + 0xac, controller);
+        }
+        vec![reference]
     })
     .run()
     .assert_same();
