@@ -1,77 +1,275 @@
-//! The interface family: the interface unit typed (the translation is engine-fallout-interface's `interface.rs`, which
-//! these functions replace at the same addresses). Each function does what its translation does, read for read
-//! and write for write; the functions of the family call one another through `typed_call!`, the rest by address.
+//! The interface unit from its start to `00705a90` (the translation is engine-fallout-interface's
+//! `interface.rs`, which these functions replace at the same addresses): the static `Interface::`
+//! wrappers over the interface manager, the Pip-Boy's menus, the console, the message boxes and the
+//! HUD forwards.
+//!
+//! **Native.** The exe's order of work, its by-address calls of functions no family types, and
+//! its virtual calls. What the exe calls but are plain field reads and stores is done here with
+//! no call ([`in_place`]): the manager singleton (`004b7210`) and its ready byte (`009373f0`), the
+//! menu by class (`00a09030`), the top and entries of the enter stack (`00714f00`, `00714f70`),
+//! the manager's getters and setters, a menu's state word, a tile's node, the list walks' step
+//! (`0057cbe0`), the console's visible byte, the Pip-Boy's query, a setting's text, the empty
+//! `BSString` and the like. The exe's back-to-back repeated reads of the same word with nothing
+//! between are read once; a word read again after a call is read again. The family's functions
+//! call one another through `typed_call!`, also where the translation went by address; the tile's
+//! integer setter (`00700320`) and `_ftol2` (`00ec62c0`) are the dispatch and C runtime families'.
 
+use crate::{crt, dispatch};
 use engine_core::prelude::*;
 use engine_core::typed_call;
 
-/// `004b7210`: the interface manager object (the word at `011d8a80`).
-const GET_MANAGER: u32 = 0x004b_7210;
-/// `009373f0`: the byte at the start of the manager (`bFirstInit`).
-const MANAGER_READY: u32 = 0x0093_73f0;
-/// `InterfaceManager::GetEnterStackTop` (Xbox PDB), on the manager.
-const GET_ENTER_STACK_TOP: u32 = 0x0071_4f00;
-/// `InterfaceManager::GetEnterStack` (Xbox PDB): the entry of the menu
-/// stack at the given index.
-const GET_ENTER_STACK: u32 = 0x0071_4f70;
-/// `Tile::GetMenuByClass` (Xbox PDB), `cdecl`: the menu with the given id.
-const GET_MENU_BY_CLASS: u32 = 0x00a0_9030;
+/// Functions the exe calls that are plain reads and stores of memory, done here with no call. The
+/// differential tests leave these addresses out of the translation's calls.
+pub mod in_place {
+    use engine_core::Engine;
+
+    /// `InterfaceManager::GetSingleton` (`004b7210`): the word at `011d8a80`.
+    pub const SINGLETON: u32 = 0x011d_8a80;
+    /// The manager's fields the getters and setters read and write.
+    pub const MENU_MODE: u32 = 0x0c;
+    pub const MOUSE_MOVE_MODE: u32 = 0x18;
+    pub const DEBUG_TEXT_VISIBLE: u32 = 0x7c;
+    pub const MENUS_ROOT: u32 = 0x9c;
+    pub const NODE_A: u32 = 0xa4;
+    pub const FULL_HELP: u32 = 0xdd;
+    pub const MESSAGE_RESULT_BYTE: u32 = 0xe4;
+    pub const PICK_REF: u32 = 0xf0;
+    pub const ACTIVATE_REF: u32 = 0xf8;
+    pub const TARGET_REF: u32 = 0xfc;
+    pub const TELEKINESIS_REF: u32 = 0x100;
+    pub const CROSSHAIR_POINT: u32 = 0x104;
+    pub const ENTER_STACK: u32 = 0x114;
+    pub const ENTER_STACK_SLOTS: u32 = 10;
+    pub const PIPBOY: u32 = 0x174;
+    pub const PIPBOY_FIELD: u32 = 0x178;
+    pub const FIELD_1DC: u32 = 0x1dc;
+    /// `NODE_B` is the word at `+0x84` of the manager (`004fd3c0`).
+    pub const NODE_B: u32 = 0x84;
+    /// The menus by class (`00a09030`): a `BSSimpleArray`'s data pointer and its count (a `u16`),
+    /// one entry a menu id from `0x3e9`.
+    pub const MENU_TABLE: u32 = 0x011f_350c;
+    pub const MENU_COUNT: u32 = 0x011f_3512;
+    pub const FIRST_MENU_ID: i32 = 0x3e9;
+    pub const LAST_MENU_ID: i32 = 0x43c;
+    /// A menu's state word (`0059bb30` reads it, `007037c0` writes it): `1` faded in, `4` hidden.
+    pub const MENU_STATE: u32 = 0x24;
+    /// A tile's node (`0056c7f0`: the first word of the tile's `+0x2c`).
+    pub const TILE_NODE: u32 = 0x2c;
+    /// The controls object (`00877720` answers `007fdf30`'s word at `011f35cc`, whatever its `this`).
+    pub const CONTROLS: u32 = 0x011f_35cc;
+    /// The console's visible byte (`004a4020`: signed, above 0) and the byte `005b6f70` answers.
+    pub const CONSOLE_VISIBLE: u32 = 0x38;
+    pub const CONSOLE_ACCEPTS_TEXT: u32 = 0x011f_158c;
+    /// The Pip-Boy's byte `00974d90` answers.
+    pub const PIPBOY_QUERY: u32 = 0x28;
+    /// The HUD main menu (`011d96c0`) and its word `007732b0` answers.
+    pub const HUD_MAIN_MENU: u32 = 0x011d_96c0;
+    pub const HUD_WORD: u32 = 0x21c;
+    /// A dialog menu's word `004fb070` answers.
+    pub const DIALOG_WORD: u32 = 0x80;
+
+    /// The interface manager (`004b7210`).
+    #[inline(always)]
+    pub fn manager(e: &Engine) -> u32 {
+        e.mem.u32(SINGLETON)
+    }
+
+    /// The wrappers' guard: the manager when it exists and its `bFirstInit` byte (`009373f0`) is
+    /// set. The exe asks `004b7210` twice with nothing between; read once.
+    #[inline(always)]
+    pub fn ready_manager(e: &Engine) -> Option<u32> {
+        let manager = manager(e);
+        (manager != 0 && e.mem.u8(manager) != 0).then_some(manager)
+    }
+
+    /// `Tile::GetMenuByClass` (`00a09030`, Xbox PDB): the menu of class `id`, 0 outside
+    /// `0x3e9..=0x43c` (signed) or past the table's count.
+    #[inline]
+    pub fn menu_by_class(e: &Engine, id: i32) -> u32 {
+        if !(FIRST_MENU_ID..=LAST_MENU_ID).contains(&id) {
+            return 0;
+        }
+        let index = id.wrapping_sub(FIRST_MENU_ID) as u32;
+        if u32::from(e.mem.u16(MENU_COUNT)) <= index {
+            return 0;
+        }
+        e.mem.u32(e.mem.u32(MENU_TABLE).wrapping_add(index * 4))
+    }
+
+    /// `InterfaceManager::GetEnterStack` (`00714f70`, Xbox PDB): the enter stack's entry `index`.
+    #[inline(always)]
+    pub fn enter_stack(e: &Engine, manager: u32, index: u32) -> u32 {
+        e.mem.u32(
+            manager
+                .wrapping_add(ENTER_STACK)
+                .wrapping_add(index.wrapping_mul(4)),
+        )
+    }
+
+    /// `InterfaceManager::GetEnterStackTop` (`00714f00`, Xbox PDB): the last of the stack's
+    /// leading nonzero entries (the tenth when all ten are set), 0 for an empty stack.
+    #[inline]
+    pub fn enter_stack_top(e: &Engine, manager: u32) -> u32 {
+        let mut depth = 0;
+        while depth < ENTER_STACK_SLOTS && enter_stack(e, manager, depth) != 0 {
+            depth += 1;
+        }
+        if depth == 0 {
+            0
+        } else {
+            enter_stack(e, manager, depth - 1)
+        }
+    }
+
+    /// The menus root tile (`00586150` on the manager).
+    #[inline(always)]
+    pub fn menus_root(e: &Engine, manager: u32) -> u32 {
+        e.mem.u32(manager.wrapping_add(MENUS_ROOT))
+    }
+
+    /// The Pip-Boy object (`00704370` on the manager).
+    #[inline(always)]
+    pub fn pipboy(e: &Engine, manager: u32) -> u32 {
+        e.mem.u32(manager.wrapping_add(PIPBOY))
+    }
+
+    /// A menu's state word (`0059bb30`).
+    #[inline(always)]
+    pub fn menu_state(e: &Engine, menu: u32) -> u32 {
+        e.mem.u32(menu.wrapping_add(MENU_STATE))
+    }
+
+    /// A tile's node (`0056c7f0`: `00559450` on the tile's `+0x2c`, never null here).
+    #[inline(always)]
+    pub fn tile_node(e: &Engine, tile: u32) -> u32 {
+        e.mem.u32(tile.wrapping_add(TILE_NODE))
+    }
+
+    /// The controls object (`00877720` on the global at `011dea0c`, which it doesn't read).
+    #[inline(always)]
+    pub fn controls(e: &Engine) -> u32 {
+        e.mem.u32(CONTROLS)
+    }
+
+    /// `004a4020` on the console: its byte at `+0x38`, signed, is above 0.
+    #[inline(always)]
+    pub fn console_is_visible(e: &Engine, console: u32) -> bool {
+        e.mem.i8(console.wrapping_add(CONSOLE_VISIBLE)) > 0
+    }
+
+    /// `00403df0`: a setting's text (its `+4`), 0 for a null setting.
+    #[inline(always)]
+    pub fn setting_text(e: &Engine, setting: u32) -> u32 {
+        if setting == 0 {
+            0
+        } else {
+            e.mem.u32(setting.wrapping_add(4))
+        }
+    }
+
+    /// `BSString`'s constructor (`004037b0`: `00403970`, then the length and capacity set to 0 by
+    /// `004039c0` and `00403a00`): the 8 bytes of an empty string.
+    #[inline(always)]
+    pub fn empty_string(e: &Engine, string: u32) {
+        e.mem.set_u32(string, 0);
+        e.mem.set_u16(string.wrapping_add(4), 0);
+        e.mem.set_u16(string.wrapping_add(6), 0);
+    }
+
+    /// Every address done in place in this file and in `interface_cpp_p3`: what the differential
+    /// tests leave out of the translation's calls.
+    pub const ADDRESSES: &[u32] = &[
+        0x004b_7210, // the manager
+        0x0093_73f0, // its ready byte
+        0x00a0_9030, // the menu by class
+        0x0071_4f00, // the enter stack's top
+        0x0071_4f70, // an enter stack entry
+        0x0058_6150, // the menus root
+        0x0070_4370, // the Pip-Boy
+        0x0046_0fb0, // the manager's +0x178
+        0x0060_2170, // the manager's +0x1dc
+        0x0064_4640, // the debug text byte
+        0x0087_4480, // the target reference
+        0x009b_4440, // the telekinesis reference
+        0x009b_7010, // the crosshair point's copy
+        0x0071_4d70, // the pick reference stored
+        0x0098_4f60, // the manager's +0x18 stored
+        0x009b_df60, // the activate reference stored
+        0x005e_3fc0, // node A
+        0x004f_d3c0, // node B
+        0x0059_bb30, // a menu's state
+        0x0070_37c0, // a menu's state stored
+        0x0056_c7f0, // a tile's node
+        0x0055_9450, // the word at +0 (a list's head, a string's characters)
+        0x0072_6070, // the word at +4 (a menu's tile)
+        0x0084_e3a0, // the word at +0xc (a form's id)
+        0x0057_cbe0, // the list walks' step
+        0x0087_7720, // the controls object
+        0x007f_df30, // (its body)
+        0x004a_4020, // the console's visible byte
+        0x005b_6f70, // the console's accepts-text byte
+        0x0097_4d90, // the Pip-Boy's query
+        0x0040_3df0, // a setting's text
+        0x0043_d4d0, // a setting's value (constant objects)
+        0x0040_3e20, // a float setting's value (constant objects)
+        0x0040_37b0, // BSString's constructor
+        0x0040_3970, // (its body)
+        0x0040_39c0, // (its length)
+        0x0040_3a00, // (its capacity)
+        0x0040_3d30, // memset wrapper (the message pump's zeroed message)
+        0x00ec_61c0, // (memset)
+        0x0041_8900, // the subtitle value's copy
+        0x0048_3710, // its empty destructor
+        0x0077_32b0, // the HUD's word
+        0x004f_b070, // a dialog menu's word
+        0x004e_a970, // the rendering system object
+        0x004d_e070, // the renderer flag byte
+        0x004d_e0c0, // the renderer width
+        0x004d_e0d0, // the renderer height
+        0x0070_9ac0, // the camera scale
+        0x00a7_1b70, // NiFrustum's constructor
+        0x005b_d5b0, // 007031e0's unused line number: not read at all
+        0x005b_d5c0, // (the same)
+        0x005b_d580, // (the same)
+    ];
+}
+
+use in_place::{manager, menu_by_class, ready_manager};
+
 /// `Tile::GetMenu` (Xbox PDB): the menu a tile belongs to.
 const TILE_GET_MENU: u32 = 0x00a0_3c90;
-/// Reads the word at `+0x24` of a menu (the engine map names `0059bb30`
-/// `D3DTexture_LockRect` because identical code was folded; the body is a
-/// plain getter). `1` means the menu is faded in.
-const MENU_STATE: u32 = 0x0059_bb30;
 /// The menu id on top of the stack that means "one of the five menus in
 /// [`TOP_MENU_CANDIDATES`]".
 const TOP_PLACEHOLDER: i32 = 1;
 /// The menu ids that stand in for [`TOP_PLACEHOLDER`], in the order the code
 /// tries them.
 const TOP_MENU_CANDIDATES: [i32; 5] = [0x3eb, 0x3ea, 0x40b, 0x425, 0x3ff];
-/// First and last menu id of the per-menu flag table at
-/// [`MENU_FLAG_TABLE`].
-const FIRST_MENU_ID: i32 = 0x3e9;
-const LAST_MENU_ID: i32 = 0x43c;
 /// Byte table indexed by menu id (`011f308f + id`).
 const MENU_FLAG_TABLE: u32 = 0x011f_308f;
-/// `00709c00`: true when the manager's `+0x4bc` word is 3.
-const MANAGER_MODE_IS_THREE: u32 = 0x0070_9c00;
 /// `MoviePlayer::GetPlayingSequence` (Xbox PDB), on the movie player whose
 /// pointer is at `0126fac4`.
 const MOVIE_PLAYER_PLAYING: u32 = 0x00ec_17c0;
 /// The movie player pointer.
 const MOVIE_PLAYER: u32 = 0x0126_fac4;
 
-/// Tile trait setter (`00700320`): tile, trait id, value.
-const TILE_SET_VALUE: u32 = 0x0070_0320;
 /// Tile trait getter (`00a011b0`, value in ST0): tile, trait id.
 const TILE_GET_VALUE: u32 = 0x00a0_11b0;
 /// `Tile::GetChildByID` (Xbox PDB).
 const TILE_GET_CHILD_BY_ID: u32 = 0x00a0_3eb0;
 /// Trait id whose value (110.0, 111.0 or 112.0) tells the isolate code what
 /// part a tile plays (`0xfaa`).
-const TRAIT_ROLE: u32 = 0xfaa;
+const TRAIT_ROLE: i32 = 0xfaa;
 /// Trait id read as "enabled" (`0xfa3`).
-const TRAIT_ENABLED: u32 = 0xfa3;
+const TRAIT_ENABLED: i32 = 0xfa3;
 /// Trait id written as "visible" (`0x1779`).
-const TRAIT_VISIBLE: u32 = 0x1779;
+const TRAIT_VISIBLE: i32 = 0x1779;
 /// `110.0`, `111.0`, `112.0` and `0.0` (`double`s the compares read).
 const DOUBLE_110: u32 = 0x0106_ebc8;
 const DOUBLE_111: u32 = 0x0106_ebc0;
 const DOUBLE_112: u32 = 0x0106_ebd0;
 const DOUBLE_ZERO: u32 = 0x0101_2060;
-/// `0056c7f0`: the node a tile keeps (the first word of its `+0x2c`).
-const TILE_NODE: u32 = 0x0056_c7f0;
 /// `00450f90`: sets a flag (byte argument) on a node.
 const SET_NODE_FLAG: u32 = 0x0045_0f90;
-/// `00559450`: the first word of the object (a list head, a string's
-/// character pointer).
-/// `00586150`: the manager's `pMenusRoot` (`+0x9c`).
-const GET_MENUS_ROOT: u32 = 0x0058_6150;
-/// `0057cbe0`: list iterator step. The first argument word is the list
-/// object, the second the address of the cursor word; it returns the
-/// address of the current item and moves the cursor to the next node.
-const LIST_NEXT: u32 = 0x0057_cbe0;
 /// `00905820` on the manager's sub-object at `+0x4c4`; argument: the
 /// address of a tile pointer.
 const SUBOBJECT_ADD_TILE: u32 = 0x0090_5820;
@@ -79,10 +277,6 @@ const SUBOBJECT_ADD_TILE: u32 = 0x0090_5820;
 const SUBOBJECT_CLEAR: u32 = 0x0047_0470;
 /// Offset of that sub-object in the manager.
 const MANAGER_SUBOBJECT: u32 = 0x4c4;
-/// `005e3fc0` / `004fd3c0`: getters on the manager for two nodes whose
-/// flag the isolate code sets.
-const MANAGER_NODE_A: u32 = 0x005e_3fc0;
-const MANAGER_NODE_B: u32 = 0x004f_d3c0;
 
 /// `InterfaceManager::Initialize` (Xbox PDB), `cdecl`: two words.
 const MANAGER_INITIALIZE: u32 = 0x0070_9fd0;
@@ -102,40 +296,23 @@ const MENU_MAP: i32 = 0x3ff;
 /// `Menu::StartFadeOut` / `Menu::StartFadeIn` (Xbox PDB), on a menu.
 const MENU_START_FADE_OUT: u32 = 0x00a1_d910;
 const MENU_START_FADE_IN: u32 = 0x00a1_db20;
-/// Sets the state word (`+0x24`) of a menu; argument: the state.
-const MENU_SET_STATE: u32 = 0x0070_37c0;
 /// State the menus are put in when they are hidden.
 const MENU_STATE_HIDDEN: u32 = 4;
-/// The tile of a menu (the word at `+4`).
 /// Trait of the menus root tile that holds the id of the menu the pause
 /// tabs last made visible (`0x1771`); the visibility functions write the id
 /// they show.
-const TRAIT_CURRENT_MENU: u32 = 0x1771;
-/// `_ftol2` (x87 value in `ST0`).
-const FLOAT_TO_INT: u32 = 0x00ec_62c0;
-/// Getter on the manager for the word at `+0x174`; the object that
-/// `007f8a80` and `007fa010` work on (the engine map puts both in
-/// the Pip-Boy manager's file).
-const MANAGER_PIPBOY: u32 = 0x0070_4370;
+const TRAIT_CURRENT_MENU: i32 = 0x1771;
 const PIPBOY_REFRESH: u32 = 0x007f_8a80;
 /// Takes the object and a tab number.
 const PIPBOY_SELECT_TAB: u32 = 0x007f_a010;
-/// `00974d90` on that object: true when the word at its start is set.
-const PIPBOY_QUERY: u32 = 0x0097_4d90;
 /// `MenuConsole::Instance` (Xbox PDB), `cdecl`: `0` answers the instance
 /// if it exists, `1` creates it when needed.
 const CONSOLE_INSTANCE: u32 = 0x0071_b160;
-/// `004a4020` on the console: true when it is visible.
-const CONSOLE_IS_VISIBLE: u32 = 0x004a_4020;
 /// `MenuConsole::ToggleVisible` (Xbox PDB), on the console.
 const CONSOLE_TOGGLE_VISIBLE: u32 = 0x0071_d580;
-/// `005b6f70`: true when the console may take text while it is closed.
-const CONSOLE_ACCEPTS_TEXT: u32 = 0x005b_6f70;
 /// `0071d0a0` on the console: format string pointer and a `va_list`.
 const CONSOLE_PRINT: u32 = 0x0071_d0a0;
-/// `BSString::dtor` (`004037d0`) and constructor (`004037b0`) of the
-/// 8-byte string local.
-const STRING_CTOR: u32 = 0x0040_37b0;
+/// `BSString::dtor` (`004037d0`) of the 8-byte string local.
 const STRING_DTOR: u32 = 0x0040_37d0;
 /// Message creation of the message menu (`007a8e60`): fifteen words, the
 /// seventh a `va_list`.
@@ -143,9 +320,6 @@ const MESSAGE_CREATE: u32 = 0x007a_8e60;
 /// The byte the message-box loop of `00704010` waits on (`-1` until the
 /// callback `00704130` stores the button).
 const MESSAGE_RESULT: u32 = 0x0119_f349;
-/// The object read from the global `011dea0c` (used as the `this` of
-/// `00877720`).
-const CONTROLS_OBJECT_GLOBAL: u32 = 0x011d_ea0c;
 /// `FaderManager::RemoveFader` (Xbox PDB) and the global holding the fader
 /// manager.
 const REMOVE_FADER: u32 = 0x0070_10e0;
@@ -157,25 +331,21 @@ const START_MENU_CLOSE: u32 = 0x007c_e7a0;
 const ENTER_RENDERED_MENU: u32 = 0x0071_81d0;
 const POP_FROM_ENTER_STACK: u32 = 0x0071_4fd0;
 const ADD_TO_ENTER_STACK: u32 = 0x0071_4d90;
-/// `00403df0` on a setting-like object: its text; `004046f0(buffer, text)`
-/// copies a string (`cdecl`); `00438390` on a string local assigns it a
+/// `004046f0(buffer, text)` copies a string (`cdecl`); `00438390` on a string local assigns it a
 /// character pointer; `BSstristr` (`cdecl`) and `sprintf` (`cdecl`).
-const SETTING_TEXT: u32 = 0x0040_3df0;
 const STRING_COPY: u32 = 0x0040_46f0;
 const STRING_ASSIGN: u32 = 0x0043_8390;
 const STRING_STRISTR: u32 = 0x004b_75a0;
 const SPRINTF: u32 = 0x00ec_623a;
-/// `00877720` on the global at `011dea0c`: the controls object, which
-/// `a23010` (`Controls::Poll`, Xbox PDB) polls.
-const CONTROLS_OBJECT: u32 = 0x0087_7720;
+/// `Controls::Poll` (Xbox PDB), on the controls object.
 const CONTROLS_POLL: u32 = 0x00a2_3010;
-/// `00403d30(block, value, size)`: fills memory (`cdecl`).
-const MEMORY_FILL: u32 = 0x0040_3d30;
 /// Imports of the message pump: `PeekMessageA`, `TranslateMessage`,
 /// `DispatchMessageA` (by their import slots).
 const PEEK_MESSAGE: u32 = 0x00fd_f29c;
 const TRANSLATE_MESSAGE: u32 = 0x00fd_f298;
 const DISPATCH_MESSAGE: u32 = 0x00fd_f294;
+/// The window message the pump fills (`MSG`, 0x1c bytes).
+const MESSAGE_SIZE: u32 = 0x1c;
 /// `StatsMenu::ToggleHealingMode`, `RepairMenu::ResetMenu`,
 /// `ItemModMenu::ResetMenu`, `MapMenu::UpdateMenu`,
 /// `InventoryMenu::UpdateInventoryMenu`, `InventoryMenu::SavePageState` and
@@ -188,26 +358,23 @@ const INVENTORY_UPDATE_MENU: u32 = 0x0078_2a90;
 const INVENTORY_SAVE_PAGE_STATE: u32 = 0x0077_ffd0;
 const STATS_UPDATE_HEALING_OPTIONS: u32 = 0x007d_f230;
 
-/// Reads the manager and applies the wrappers' guard: `Some(manager)` only
-/// when it exists and `009373f0` says so.
-fn ready_manager(e: &mut Engine) -> Option<u32> {
-    if e.call(GET_MANAGER, &[]).u32() == 0 {
-        return None;
-    }
-    let manager = e.call(GET_MANAGER, &[]).u32();
-    if e.call(MANAGER_READY, &args![manager]).bool() {
-        Some(manager)
-    } else {
-        None
-    }
+/// A tile's trait value (`00a011b0`, its float widened).
+fn tile_value(e: &mut Engine, tile: u32, id: i32) -> f64 {
+    f64::from(e.call(TILE_GET_VALUE, &args![tile, id]).f32())
 }
 
-fn tile_value(e: &mut Engine, tile: u32, id: u32) -> f64 {
-    e.call(TILE_GET_VALUE, &args![tile, id]).f32() as f64
+/// `Tile::SetInt` (`00700320`, the dispatch family's): the trait set to the integer as a float.
+#[inline]
+fn set_tile_int(e: &mut Engine, tile: u32, id: i32, value: i32) {
+    typed_call!(
+        dispatch::FAMILY,
+        0x0070_0320,
+        dispatch::tile::set_int(e, Ptr::new(tile), id, value)
+    );
 }
 
-fn set_tile_visible(e: &mut Engine, tile: u32, visible: u32) {
-    e.call(TILE_SET_VALUE, &args![tile, TRAIT_VISIBLE, visible]);
+fn set_tile_visible(e: &mut Engine, tile: u32, visible: i32) {
+    set_tile_int(e, tile, TRAIT_VISIBLE, visible);
 }
 
 /// `true` when the tile's "enabled" trait or its "visible" trait is zero:
@@ -217,29 +384,22 @@ fn node_flag_for(e: &mut Engine, tile: u32) -> bool {
     tile_value(e, tile, TRAIT_ENABLED) == zero || tile_value(e, tile, TRAIT_VISIBLE) == zero
 }
 
-/// Sets the flag of the tile's node (`00450f90` on `0056c7f0`'s result).
+/// Sets the flag of the tile's node (`00450f90` on its node).
 fn set_tile_node_flag(e: &mut Engine, tile: u32, flag: bool) {
-    let node = e.call(TILE_NODE, &args![tile]).u32();
+    let node = in_place::tile_node(e, tile);
     e.call(SET_NODE_FLAG, &args![node, flag]);
 }
 
-/// The walk the isolate and restore code does over a tile list: the cursor
-/// is a word in memory that `0057cbe0` advances; each item is a pointer to
-/// a tile.
-fn for_each_list_item(
-    e: &mut Engine,
-    first: u32,
-    list_owner: u32,
-    mut body: impl FnMut(&mut Engine, u32),
-) {
-    e.with_stack(4, |e, cursor| {
-        e.mem.set_u32(cursor.addr(), first);
-        while e.mem.u32(cursor.addr()) != 0 {
-            let item = e.call(LIST_NEXT, &args![list_owner, cursor]).u32();
-            let value = e.mem.u32(item);
-            body(e, value);
-        }
-    });
+/// The walk the isolate and restore code does over a tile list from its head: each step
+/// (`0057cbe0`) answers the node's item (its `+8`) and moves on to the node's first word.
+fn for_each_list_item(e: &mut Engine, first: u32, mut body: impl FnMut(&mut Engine, u32)) {
+    let mut node = first;
+    while node != 0 {
+        let item = node.wrapping_add(8);
+        node = e.mem.u32(node);
+        let value = e.mem.u32(item);
+        body(e, value);
+    }
 }
 
 // Typed from 00702250
@@ -290,24 +450,23 @@ pub fn interface_is_in_menu_mode(e: &mut Engine) -> bool {
 // Typed from 007023a0
 /// `cMenuMode` of the manager (`+0x0c`) is not 1.
 pub fn fn_007023a0(e: &mut Engine, this: u32) -> bool {
-    e.mem.u32(this + 0x0c) != 1
+    e.mem.u32(this.wrapping_add(in_place::MENU_MODE)) != 1
 }
 
 // Typed from 007023c0
-/// `Interface::GetTopMenuID` (Xbox PDB): `GetEnterStackTop` of the manager,
-/// 0 when it is not ready.
+/// `Interface::GetTopMenuID` (Xbox PDB): the enter stack's top, 0 when the manager is not ready.
 pub fn interface_get_top_menu_id(e: &mut Engine) -> u32 {
     match ready_manager(e) {
-        Some(manager) => e.call(GET_ENTER_STACK_TOP, &args![manager]).u32(),
+        Some(manager) => in_place::enter_stack_top(e, manager),
         None => 0,
     }
 }
 
 // Typed from 00702400
-/// `GetEnterStack(index)` of the manager, 0 when it is not ready.
+/// The enter stack's entry `index`, 0 when the manager is not ready.
 pub fn fn_00702400(e: &mut Engine, index: u32) -> u32 {
     match ready_manager(e) {
-        Some(manager) => e.call(GET_ENTER_STACK, &args![manager, index]).u32(),
+        Some(manager) => in_place::enter_stack(e, manager, index),
         None => 0,
     }
 }
@@ -327,7 +486,7 @@ pub fn interface_is_top_menu_id(e: &mut Engine, menu_id: i32) -> u8 {
     let Some(manager) = ready_manager(e) else {
         return 0;
     };
-    let top = e.call(GET_ENTER_STACK_TOP, &args![manager]).i32();
+    let top = in_place::enter_stack_top(e, manager) as i32;
     if top == TOP_PLACEHOLDER && TOP_MENU_CANDIDATES.contains(&menu_id) {
         return typed_call!(
             super::FAMILY,
@@ -335,18 +494,18 @@ pub fn interface_is_top_menu_id(e: &mut Engine, menu_id: i32) -> u8 {
             interface_is_menu_id_visible(e, menu_id, 0)
         );
     }
-    (top == menu_id) as u8
+    u8::from(top == menu_id)
 }
 
 // Typed from 007024e0
 /// `Interface::IsTopMenuFadedIn` (Xbox PDB): finds the top menu (for the
 /// placeholder id 1, the first visible one of the five stand-in menus) and
-/// returns whether its state word (`0059bb30`) is 1.
+/// returns whether its menu's state word is 1.
 pub fn interface_is_top_menu_faded_in(e: &mut Engine) -> bool {
     let Some(manager) = ready_manager(e) else {
         return false;
     };
-    let top = e.call(GET_ENTER_STACK_TOP, &args![manager]).i32();
+    let top = in_place::enter_stack_top(e, manager) as i32;
     let mut menu = 0;
     if top == TOP_PLACEHOLDER {
         for id in TOP_MENU_CANDIDATES {
@@ -356,30 +515,26 @@ pub fn interface_is_top_menu_faded_in(e: &mut Engine) -> bool {
                 interface_is_menu_id_visible(e, id, 0)
             ) != 0
             {
-                menu = e.call(GET_MENU_BY_CLASS, &args![id]).u32();
+                menu = menu_by_class(e, id);
                 break;
             }
         }
     } else {
-        menu = e.call(GET_MENU_BY_CLASS, &args![top]).u32();
+        menu = menu_by_class(e, top);
     }
-    if menu == 0 {
+    if menu == 0 || e.call(TILE_GET_MENU, &args![menu]).u32() == 0 {
         return false;
     }
     let inner = e.call(TILE_GET_MENU, &args![menu]).u32();
-    if inner == 0 {
-        return false;
-    }
-    let inner = e.call(TILE_GET_MENU, &args![menu]).u32();
-    e.call(MENU_STATE, &args![inner]).u32() == 1
+    in_place::menu_state(e, inner) == 1
 }
 
 // Typed from 00702640
-/// `Interface::GetMenuModeType` (Xbox PDB): `GetEnterStack(0)` of the
-/// manager, 0 when it is not ready.
+/// `Interface::GetMenuModeType` (Xbox PDB): the enter stack's first entry, 0 when the manager is
+/// not ready.
 pub fn interface_get_menu_mode_type(e: &mut Engine) -> u32 {
     match ready_manager(e) {
-        Some(manager) => e.call(GET_ENTER_STACK, &args![manager, 0u32]).u32(),
+        Some(manager) => in_place::enter_stack(e, manager, 0),
         None => 0,
     }
 }
@@ -395,7 +550,11 @@ pub fn interface_is_menu_id_visible(e: &mut Engine, menu_id: i32, mask: u32) -> 
         return 0;
     }
     if menu_id == TOP_PLACEHOLDER {
-        if !e.call(MANAGER_MODE_IS_THREE, &[]).bool() {
+        if !typed_call!(
+            super::FAMILY,
+            0x0070_9c00,
+            super::interface_cpp_p3::fn_00709c00(e)
+        ) {
             return 0;
         }
         for id in TOP_MENU_CANDIDATES {
@@ -411,15 +570,11 @@ pub fn interface_is_menu_id_visible(e: &mut Engine, menu_id: i32, mask: u32) -> 
         return 0;
     }
     if mask != 0 {
-        let menu = e.call(GET_MENU_BY_CLASS, &args![menu_id]).u32();
-        if menu != 0 {
+        let menu = menu_by_class(e, menu_id);
+        if menu != 0 && e.call(TILE_GET_MENU, &args![menu]).u32() != 0 {
             let inner = e.call(TILE_GET_MENU, &args![menu]).u32();
-            if inner != 0 {
-                let inner = e.call(TILE_GET_MENU, &args![menu]).u32();
-                let state = e.call(MENU_STATE, &args![inner]).u32();
-                if state & mask == 0 {
-                    return 0;
-                }
+            if in_place::menu_state(e, inner) & mask == 0 {
+                return 0;
             }
         }
     }
@@ -430,7 +585,7 @@ pub fn interface_is_menu_id_visible(e: &mut Engine, menu_id: i32, mask: u32) -> 
 /// The flag byte of menu `menu_id` in the table at `011f308f`, 0 for an id
 /// outside `0x3e9..=0x43c`.
 pub fn fn_007027b0(e: &mut Engine, menu_id: i32) -> u8 {
-    if !(FIRST_MENU_ID..=LAST_MENU_ID).contains(&menu_id) {
+    if !(in_place::FIRST_MENU_ID..=in_place::LAST_MENU_ID).contains(&menu_id) {
         return 0;
     }
     e.mem.u8(MENU_FLAG_TABLE.wrapping_add(menu_id as u32))
@@ -477,12 +632,15 @@ pub fn fn_00702870(e: &mut Engine) {
     }
 }
 
+/// The rendering system object (`004ea970` answers its address).
+const RENDERING_SYSTEM: u32 = 0x0120_0088;
+
 // Typed from 007028b0
 /// `Interface::Click` (Xbox PDB): when the manager is ready and no movie is
 /// playing, hands the click `(x, y)` to `00713fb0`; otherwise sets the
-/// render thread stage of both rendering threads to 0x17 (`004ea970` returns
-/// the rendering system, `00ba30f0` / `00ba3130` are its stage setters).
-/// Always clears `bClickMultithreaded` (`+0x148`) afterwards.
+/// render thread stage of both rendering threads to 0x17 (`00ba30f0` /
+/// `00ba3130` on the rendering system). Always clears `bClickMultithreaded`
+/// (`+0x148`) afterwards.
 pub fn interface_click(e: &mut Engine, x: u32, y: u32) {
     let mut handled = false;
     if let Some(manager) = ready_manager(e) {
@@ -492,14 +650,10 @@ pub fn interface_click(e: &mut Engine, x: u32, y: u32) {
         }
     }
     if !handled {
-        // 0070290a / 0070291a: `004ea970` takes no word (plain RET, a global); the pushed
-        // stage and 0x17 are the two words of `00ba30f0` / `00ba3130` (RET 8).
-        let system = e.call(0x004e_a970, &args![]).u32();
-        e.call(0x00ba_30f0, &args![system, 0u32, 0x17u32]);
-        let system = e.call(0x004e_a970, &args![]).u32();
-        e.call(0x00ba_3130, &args![system, 1u32, 0x17u32]);
+        e.call(0x00ba_30f0, &args![RENDERING_SYSTEM, 0u32, 0x17u32]);
+        e.call(0x00ba_3130, &args![RENDERING_SYSTEM, 1u32, 0x17u32]);
     }
-    let manager = e.call(GET_MANAGER, &[]).u32();
+    let manager = manager(e);
     typed_call!(super::FAMILY, 0x0070_2940, fn_00702940(e, manager, 0));
 }
 
@@ -507,7 +661,7 @@ pub fn interface_click(e: &mut Engine, x: u32, y: u32) {
 /// Stores the byte `value` in `bClickMultithreaded` (`+0x148`) of the
 /// manager.
 pub fn fn_00702940(e: &mut Engine, this: u32, value: u8) {
-    e.mem.set_u8(this + 0x148, value);
+    e.mem.set_u8(this.wrapping_add(0x148), value);
 }
 
 // Typed from 00702960
@@ -523,24 +677,19 @@ pub fn fn_00702960(e: &mut Engine) {
 /// Updates the visibility of one menu tile `tile` and of those children
 /// whose role trait (`0xfaa`) is 110.0 or 111.0; `flag_a`, `flag_b` and
 /// `flag_c` are the bytes `IsolateMenuElements` passes (`flag_c` is always 1
-/// there). Does nothing for a null tile.
+/// there). Does nothing for a null tile. (The exe also reads the menus root, as
+/// its walk's unused list object: not read here.)
 pub fn fn_00702990(e: &mut Engine, tile: u32, flag_a: u8, flag_b: u8, flag_c: u8) {
     if tile == 0 {
         return;
     }
-    let manager = e.call(GET_MANAGER, &[]).u32();
-    let menus_root = e.call(GET_MENUS_ROOT, &args![manager]).u32();
-    let manager = e.call(GET_MANAGER, &[]).u32();
+    let manager = manager(e);
     let role = tile_value(e, tile, TRAIT_ROLE);
     let is_112 = role == e.global::<f64>(DOUBLE_112);
-    let visible = if (flag_b != 0 && !is_112) || (flag_b == 0 && is_112) {
-        0
-    } else {
-        1
-    };
+    let visible = i32::from(!((flag_b != 0 && !is_112) || (flag_b == 0 && is_112)));
     set_tile_visible(e, tile, visible);
-    let first = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, tile + 4));
-    for_each_list_item(e, first, menus_root + 4, |e, child| {
+    let first = e.mem.u32(tile.wrapping_add(4));
+    for_each_list_item(e, first, |e, child| {
         let role = tile_value(e, child, TRAIT_ROLE);
         let tile_110 = if role == e.global::<f64>(DOUBLE_110) {
             child
@@ -563,25 +712,25 @@ pub fn fn_00702990(e: &mut Engine, tile: u32, flag_a: u8, flag_b: u8, flag_c: u8
                         e.mem.set_u32(slot.addr(), tile_110);
                         e.call(
                             SUBOBJECT_ADD_TILE,
-                            &args![manager + MANAGER_SUBOBJECT, slot],
+                            &args![manager.wrapping_add(MANAGER_SUBOBJECT), slot],
                         );
                     });
                 }
             }
         }
         if tile_111 != 0 {
-            set_tile_visible(e, tile_111, (flag_a == 0) as u32);
+            set_tile_visible(e, tile_111, i32::from(flag_a == 0));
         }
-        if tile_110 != 0 && e.call(TILE_NODE, &args![tile_110]).u32() != 0 {
+        if tile_110 != 0 && in_place::tile_node(e, tile_110) != 0 {
             let flag = node_flag_for(e, tile_110);
             set_tile_node_flag(e, tile_110, flag);
         }
-        if tile_111 != 0 && e.call(TILE_NODE, &args![tile_111]).u32() != 0 {
+        if tile_111 != 0 && in_place::tile_node(e, tile_111) != 0 {
             let flag = flag_a != 0 || node_flag_for(e, tile_111);
             set_tile_node_flag(e, tile_111, flag);
         }
     });
-    if e.call(TILE_NODE, &args![tile]).u32() != 0 {
+    if in_place::tile_node(e, tile) != 0 {
         let flag = node_flag_for(e, tile);
         set_tile_node_flag(e, tile, flag);
     }
@@ -592,27 +741,26 @@ pub fn fn_00702990(e: &mut Engine, tile: u32, flag_a: u8, flag_b: u8, flag_c: u8
 /// applies [`fn_00702990`] with `(tile, a, b, 1)` to every menu tile of the
 /// menus root (when `a` is set and `b` is not, first clears the manager's
 /// sub-object at `+0x4c4`), then sets the flag of the manager's two nodes
-/// (`005e3fc0`, `004fd3c0`) to 0 when both `a` and `b` are zero, else 1.
+/// (`+0xa4`, `+0x84`) to 0 when both `a` and `b` are zero, else 1.
 pub fn interface_isolate_menu_elements(e: &mut Engine, a: u8, b: u8) {
     let Some(manager) = ready_manager(e) else {
         return;
     };
     if a != 0 && b == 0 {
-        e.call(SUBOBJECT_CLEAR, &args![manager + MANAGER_SUBOBJECT]);
+        e.call(
+            SUBOBJECT_CLEAR,
+            &args![manager.wrapping_add(MANAGER_SUBOBJECT)],
+        );
     }
-    let menus_root = e.call(GET_MENUS_ROOT, &args![manager]).u32();
-    let first = typed_call!(
-        leaf::FAMILY,
-        0x0055_9450,
-        leaf::word_at_0(e, menus_root + 4)
-    );
-    for_each_list_item(e, first, menus_root + 4, |e, menu| {
+    let menus_root = in_place::menus_root(e, manager);
+    let first = e.mem.u32(menus_root.wrapping_add(4));
+    for_each_list_item(e, first, |e, menu| {
         typed_call!(super::FAMILY, 0x0070_2990, fn_00702990(e, menu, a, b, 1));
     });
     let flag = !(a == 0 && b == 0);
-    for getter in [MANAGER_NODE_A, MANAGER_NODE_B] {
-        if e.call(getter, &args![manager]).u32() != 0 {
-            let node = e.call(getter, &args![manager]).u32();
+    for field in [in_place::NODE_A, in_place::NODE_B] {
+        let node = e.mem.u32(manager.wrapping_add(field));
+        if node != 0 {
             e.call(SET_NODE_FLAG, &args![node, flag]);
         }
     }
@@ -626,13 +774,9 @@ pub fn interface_restore_menu_elements(e: &mut Engine) {
     let Some(manager) = ready_manager(e) else {
         return;
     };
-    let menus_root = e.call(GET_MENUS_ROOT, &args![manager]).u32();
-    let first = typed_call!(
-        leaf::FAMILY,
-        0x0055_9450,
-        leaf::word_at_0(e, menus_root + 4)
-    );
-    for_each_list_item(e, first, menus_root + 4, |e, menu| {
+    let menus_root = in_place::menus_root(e, manager);
+    let first = e.mem.u32(menus_root.wrapping_add(4));
+    for_each_list_item(e, first, |e, menu| {
         let child_6e = e.call(TILE_GET_CHILD_BY_ID, &args![menu, 0x6eu32]).u32();
         let child_6f = e.call(TILE_GET_CHILD_BY_ID, &args![menu, 0x6fu32]).u32();
         set_tile_visible(e, menu, 1);
@@ -643,7 +787,7 @@ pub fn interface_restore_menu_elements(e: &mut Engine) {
             set_tile_visible(e, child_6f, 1);
         }
         for tile in [menu, child_6e, child_6f] {
-            if tile != 0 && e.call(TILE_NODE, &args![tile]).u32() != 0 {
+            if tile != 0 && in_place::tile_node(e, tile) != 0 {
                 let flag = node_flag_for(e, tile);
                 set_tile_node_flag(e, tile, flag);
             }
@@ -652,11 +796,11 @@ pub fn interface_restore_menu_elements(e: &mut Engine) {
 }
 
 // Typed from 00702fc0
-/// `Interface::IsDebugTextVisible` (Xbox PDB): `00644640` on the manager
-/// when it is ready.
+/// `Interface::IsDebugTextVisible` (Xbox PDB): `bDebugTextVisible` (`+0x7c`, `00644640`) when the
+/// manager is ready.
 pub fn interface_is_debug_text_visible(e: &mut Engine) -> bool {
     match ready_manager(e) {
-        Some(manager) => e.call(0x0064_4640, &args![manager]).bool(),
+        Some(manager) => e.mem.u8(manager.wrapping_add(in_place::DEBUG_TEXT_VISIBLE)) != 0,
         None => false,
     }
 }
@@ -673,18 +817,19 @@ pub fn interface_toggle_debug_text_visible(e: &mut Engine) {
 // Typed from 00703030
 /// Flips `bDebugTextVisible` (`+0x7c`) through [`fn_00703060`].
 pub fn fn_00703030(e: &mut Engine, this: u32) {
-    let visible = e.mem.u8(this + 0x7c) != 0;
+    let visible = e.mem.u8(this.wrapping_add(in_place::DEBUG_TEXT_VISIBLE)) != 0;
     typed_call!(
         super::FAMILY,
         0x0070_3060,
-        fn_00703060(e, this, !visible as u8)
+        fn_00703060(e, this, u8::from(!visible))
     );
 }
 
 // Typed from 00703060
 /// Stores the byte `value` in `bDebugTextVisible` (`+0x7c`).
 pub fn fn_00703060(e: &mut Engine, this: u32, value: u8) {
-    e.mem.set_u8(this + 0x7c, value);
+    e.mem
+        .set_u8(this.wrapping_add(in_place::DEBUG_TEXT_VISIBLE), value);
 }
 
 // Typed from 00703080
@@ -707,8 +852,9 @@ pub fn fn_007030c0(e: &mut Engine, a: u32, b: u32) {
 /// `Interface::ToggleFullHelp` (Xbox PDB): flips `bFullHelp` (`+0xdd`).
 pub fn interface_toggle_full_help(e: &mut Engine) {
     if let Some(manager) = ready_manager(e) {
-        let full = e.mem.u8(manager + 0xdd) != 0;
-        e.mem.set_u8(manager + 0xdd, !full as u8);
+        let at = manager.wrapping_add(in_place::FULL_HELP);
+        let full = e.mem.u8(at) != 0;
+        e.mem.set_u8(at, u8::from(!full));
     }
 }
 
@@ -717,7 +863,7 @@ pub fn interface_toggle_full_help(e: &mut Engine) {
 /// manager is not ready.
 pub fn interface_get_full_help(e: &mut Engine) -> u8 {
     match ready_manager(e) {
-        Some(manager) => e.mem.u8(manager + 0xdd),
+        Some(manager) => e.mem.u8(manager.wrapping_add(in_place::FULL_HELP)),
         None => 0,
     }
 }
@@ -726,54 +872,43 @@ pub fn interface_get_full_help(e: &mut Engine) -> u8 {
 /// `Interface::GetTargetREFR` (Xbox PDB): `pPickRef` through
 /// [`fn_007031c0`], 0 when the manager is not ready.
 pub fn interface_get_target_refr(e: &mut Engine) -> u32 {
-    let manager = e.call(GET_MANAGER, &[]).u32();
-    if manager != 0 && e.call(MANAGER_READY, &args![manager]).bool() {
-        typed_call!(super::FAMILY, 0x0070_31c0, fn_007031c0(e, manager))
-    } else {
-        0
+    match ready_manager(e) {
+        Some(manager) => typed_call!(super::FAMILY, 0x0070_31c0, fn_007031c0(e, manager)),
+        None => 0,
     }
 }
 
 // Typed from 007031c0
 /// `pPickRef` (`+0xf0`) of the manager.
 pub fn fn_007031c0(e: &mut Engine, this: u32) -> u32 {
-    e.mem.u32(this + 0xf0)
+    e.mem.u32(this.wrapping_add(in_place::PICK_REF))
 }
+
+/// The setting whose integer is the debug text's line (`0043d4d0` on `011debac`: its `+4`).
+const DEBUG_TEXT_Y: u32 = 0x011d_ebb0;
 
 // Typed from 007031e0
 /// When the manager is ready: for a non-null reference prints
-/// `"<name>" (<form id>)` as debug text (`DebugText::Print`), then calls
-/// `00714d70(manager, reference)` in every case. The text goes at x =
-/// 640.0 (`0103a1c4`), y = the integer the setting at `011debac` holds,
-/// with the arguments `2, -1, -1.0, 0, 0`.
+/// `"<name>" (<form id>)` as debug text (`DebugText::Print`), then stores the
+/// reference as the manager's `pPickRef` (`00714d70`) in every case. The text
+/// goes at x = 640.0 (`0103a1c4`), y = the integer the setting at `011debac`
+/// holds, with the arguments `2, -1, -1.0, 0, 0`.
 ///
-/// A chain of getters (`0043d4d0`, `005bd5b0`, `005bd5c0`, `005bd580`,
-/// `_ftol2`) computes a line number that the code never uses; the calls
-/// are kept.
+/// The exe also computes a line number from a chain of getters (`0043d4d0`,
+/// `005bd5b0`, `005bd5c0`, `005bd580`, `_ftol2`) that it never uses: reads and
+/// a conversion with no effect, left out here.
 pub fn fn_007031e0(e: &mut Engine, reference: u32) {
     let Some(manager) = ready_manager(e) else {
         return;
     };
     e.with_stack(8, |e, text| {
-        e.call(0x0040_37b0, &args![text]);
+        in_place::empty_string(e, text.addr());
         if reference != 0 {
-            let form_id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, reference));
+            let form_id = e.mem.u32(reference.wrapping_add(0xc));
             let name = e.call(0x0055_d520, &args![reference]).u32();
             e.call(0x0040_6f60, &args![text, 0x0103_a1c8u32, name, form_id]);
-            let setting = e.call(0x0043_d4d0, &args![0x011f_33c8u32]).u32();
-            let value = e.mem.u32(setting).wrapping_sub(1);
-            // 00703275: `005bd5b0` takes no word (plain RET, a global); the pushed value
-            // is the word of `005bd5c0` (RET 4).
-            let a = e.call(0x005b_d5b0, &args![]).u32();
-            let b = e.call(0x005b_d5c0, &args![a, value]).u32();
-            let height = e.call(0x005b_d580, &args![b]).f32();
-            let _unused_line = e
-                .call(0x00ec_62c0, &args![height as f64])
-                .i32()
-                .wrapping_add(3);
-            let y_setting = e.call(0x0043_d4d0, &args![0x011d_ebacu32]).u32();
-            let y = e.mem.i32(y_setting);
-            let characters = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, text));
+            let y = e.mem.i32(DEBUG_TEXT_Y);
+            let characters = e.mem.u32(text.addr());
             let x: f32 = e.global(0x0103_a1c4);
             let minus_one: f32 = e.global(0x0101_2054);
             let debug_text = e.call(0x00a0_d9e0, &args![1u32]).u32();
@@ -782,51 +917,52 @@ pub fn fn_007031e0(e: &mut Engine, reference: u32) {
                 &args![debug_text, characters, x, y as f32, 2u32, -1i32, minus_one, 0u32, 0u32],
             );
         }
-        e.call(0x0071_4d70, &args![manager, reference]);
-        e.call(0x0040_37d0, &args![text]);
+        e.mem
+            .set_u32(manager.wrapping_add(in_place::PICK_REF), reference);
+        e.call(STRING_DTOR, &args![text]);
     });
 }
 
 // Typed from 00703310
-/// `Interface::SetPickREFR` (Xbox PDB): `009bdf60(manager, reference)`
-/// when the manager is ready.
+/// `Interface::SetPickREFR` (Xbox PDB): the reference stored at the manager's `+0xf8`
+/// (`009bdf60`) when the manager is ready.
 pub fn interface_set_pick_refr(e: &mut Engine, reference: u32) {
     if let Some(manager) = ready_manager(e) {
-        e.call(0x009b_df60, &args![manager, reference]);
+        e.mem
+            .set_u32(manager.wrapping_add(in_place::ACTIVATE_REF), reference);
     }
 }
 
 // Typed from 00703350
-/// `00874480` on the manager when it is ready, else 0.
+/// The manager's word at `+0xfc` (`00874480`) when it is ready, else 0.
 pub fn fn_00703350(e: &mut Engine) -> u32 {
     match ready_manager(e) {
-        Some(manager) => e.call(0x0087_4480, &args![manager]).u32(),
+        Some(manager) => e.mem.u32(manager.wrapping_add(in_place::TARGET_REF)),
         None => 0,
     }
 }
 
 // Typed from 00703390
-/// `Interface::GetTelekinesisREFR` (Xbox PDB): `009b4440` on the manager
-/// when it is ready, else 0.
+/// `Interface::GetTelekinesisREFR` (Xbox PDB): the manager's word at `+0x100` (`009b4440`) when
+/// it is ready, else 0.
 pub fn interface_get_telekinesis_refr(e: &mut Engine) -> u32 {
     match ready_manager(e) {
-        Some(manager) => e.call(0x009b_4440, &args![manager]).u32(),
+        Some(manager) => e.mem.u32(manager.wrapping_add(in_place::TELEKINESIS_REF)),
         None => 0,
     }
 }
 
 // Typed from 007033d0
-/// Writes a 3-float point at `out` and returns `out`: `009b7010(manager,
-/// out)` fills it when the manager is ready, else it is copied from the
-/// three words at `011f426c`.
+/// Writes a 3-float point at `out` and returns `out`: the manager's three words at `+0x104`
+/// (`009b7010`) when it is ready, else the three words at `011f426c`.
 pub fn fn_007033d0(e: &mut Engine, out: Ptr) -> Ptr {
-    if let Some(manager) = ready_manager(e) {
-        e.call(0x009b_7010, &args![manager, out]);
-        return out;
-    }
+    let from = match ready_manager(e) {
+        Some(manager) => manager.wrapping_add(in_place::CROSSHAIR_POINT),
+        None => 0x011f_426c,
+    };
     for i in 0..3 {
-        let word = e.mem.u32(0x011f_426c + 4 * i);
-        e.mem.set_u32(out.addr() + 4 * i, word);
+        let word = e.mem.u32(from.wrapping_add(4 * i));
+        e.mem.set_u32(out.addr().wrapping_add(4 * i), word);
     }
     out
 }
@@ -843,7 +979,7 @@ pub fn fn_00703430(e: &mut Engine) -> bool {
 // Typed from 00703470
 /// `bFuzzyActivatePick` (`+0x110`) of the manager.
 pub fn fn_00703470(e: &mut Engine, this: u32) -> bool {
-    e.mem.u8(this + 0x110) != 0
+    e.mem.u8(this.wrapping_add(0x110)) != 0
 }
 
 /// Runs `f` with the address of the given words in memory, the way a
@@ -851,7 +987,8 @@ pub fn fn_00703470(e: &mut Engine, this: u32) -> bool {
 fn with_va_list<R>(e: &mut Engine, words: &[u32], f: impl FnOnce(&mut Engine, u32) -> R) -> R {
     e.with_stack(4 * super::word(words.len().max(1)), |e, block| {
         for (i, word) in words.iter().enumerate() {
-            e.mem.set_u32(block.addr() + 4 * super::word(i), *word);
+            e.mem
+                .set_u32(block.addr().wrapping_add(4 * super::word(i)), *word);
         }
         f(e, block.addr())
     })
@@ -883,22 +1020,23 @@ fn menu_fade_in(e: &mut Engine, tile: u32) {
 
 /// Writes the menu id into the menus root's [`TRAIT_CURRENT_MENU`].
 fn set_current_menu(e: &mut Engine, manager: u32, menu_id: i32) {
-    let root = e.call(GET_MENUS_ROOT, &args![manager]).u32();
-    e.call(TILE_SET_VALUE, &args![root, TRAIT_CURRENT_MENU, menu_id]);
+    let root = in_place::menus_root(e, manager);
+    set_tile_int(e, root, TRAIT_CURRENT_MENU, menu_id);
 }
 
-/// The Pipboy tab refresh the visibility functions end with.
+/// The Pipboy tab refresh the visibility functions end with (the Pip-Boy read again after the
+/// refresh, as the exe does).
 fn refresh_pipboy_tab(e: &mut Engine, manager: u32, tab: u32) {
-    let pipboy = e.call(MANAGER_PIPBOY, &args![manager]).u32();
+    let pipboy = in_place::pipboy(e, manager);
     e.call(PIPBOY_REFRESH, &args![pipboy]);
-    let pipboy = e.call(MANAGER_PIPBOY, &args![manager]).u32();
+    let pipboy = in_place::pipboy(e, manager);
     e.call(PIPBOY_SELECT_TAB, &args![pipboy, tab]);
 }
 
-/// Calls `callee(0)` when the Pipboy object answers true.
+/// Calls `callee(0)` when the Pipboy's byte at `+0x28` (`00974d90`) is set.
 fn call_if_pipboy_query(e: &mut Engine, manager: u32, callee: u32) {
-    let pipboy = e.call(MANAGER_PIPBOY, &args![manager]).u32();
-    if e.call(PIPBOY_QUERY, &args![pipboy]).bool() {
+    let pipboy = in_place::pipboy(e, manager);
+    if e.mem.u8(pipboy.wrapping_add(in_place::PIPBOY_QUERY)) != 0 {
         e.call(callee, &args![0u32]);
     }
 }
@@ -912,10 +1050,11 @@ pub fn fn_00703490(e: &mut Engine) {
 }
 
 // Typed from 007034c0
-/// When the manager is ready: `00984f60(manager, value)`.
+/// When the manager is ready: `value` stored at its `+0x18` (`00984f60`).
 pub fn fn_007034c0(e: &mut Engine, value: u32) {
     if let Some(manager) = ready_manager(e) {
-        e.call(0x0098_4f60, &args![manager, value]);
+        e.mem
+            .set_u32(manager.wrapping_add(in_place::MOUSE_MOVE_MODE), value);
     }
 }
 
@@ -929,9 +1068,13 @@ pub fn interface_show_menus(e: &mut Engine) {
     let Some(manager) = ready_manager(e) else {
         return;
     };
-    let root = e.call(GET_MENUS_ROOT, &args![manager]).u32();
+    let root = in_place::menus_root(e, manager);
     let current = tile_value(e, root, TRAIT_CURRENT_MENU);
-    let mut menu_id = e.call(FLOAT_TO_INT, &args![current]).i32();
+    let mut menu_id = super::low_dword(typed_call!(
+        crt::FAMILY,
+        0x00ec_62c0,
+        crt::math::ftol2_sse(e, current)
+    )) as i32;
     if menu_id == 0 {
         e.call(0x0071_7600, &args![manager]);
         menu_id = MENU_STATS;
@@ -944,10 +1087,11 @@ pub fn interface_show_menus(e: &mut Engine) {
                 interface_set_inventory_menu_visible(e, 1, 0, 1)
             )
         }
-        MENU_STATS => {
-            // `SetStatsMenuVisible` (`00704c10`), `cdecl`.
-            e.call(0x0070_4c10, &args![1u32, 0u32]);
-        }
+        MENU_STATS => typed_call!(
+            super::FAMILY,
+            0x0070_4c10,
+            interface_set_stats_menu_visible(e, 1, 0)
+        ),
         MENU_MAP => typed_call!(
             super::FAMILY,
             0x0070_4170,
@@ -960,34 +1104,33 @@ pub fn interface_show_menus(e: &mut Engine) {
 // Typed from 00703610
 /// `Interface::HideMenus` (Xbox PDB): for each of the stats, inventory,
 /// repair, item-mod and map menus that exist, puts its menu in state 4
-/// (`MENU_SET_STATE`) and sets the "enabled" trait (`0xfa3`) of its tile
-/// to 0. Then `00704f50`, closes the start menu (`StartMenu::Close(1)`)
+/// and sets the "enabled" trait (`0xfa3`) of the menu's tile (its `+4`)
+/// to 0. Then [`fn_00704f50`], closes the start menu (`StartMenu::Close(1)`)
 /// when `004a4040` says it is open, and
 /// `InterfaceManager::EnterRenderedMenu(0)`.
 pub fn interface_hide_menus(e: &mut Engine) {
     let Some(manager) = ready_manager(e) else {
         return;
     };
-    let mut tiles = [0u32; 5];
-    for (slot, id) in tiles.iter_mut().zip([
+    let tiles = [
         MENU_STATS,
         MENU_INVENTORY,
         MENU_REPAIR,
         MENU_ITEM_MOD,
         MENU_MAP,
-    ]) {
-        *slot = e.call(GET_MENU_BY_CLASS, &args![id]).u32();
-    }
+    ]
+    .map(|id| menu_by_class(e, id));
     for tile in tiles {
         if tile != 0 {
             let menu = e.call(TILE_GET_MENU, &args![tile]).u32();
-            e.call(MENU_SET_STATE, &args![menu, MENU_STATE_HIDDEN]);
+            e.mem
+                .set_u32(menu.wrapping_add(in_place::MENU_STATE), MENU_STATE_HIDDEN);
             let menu = e.call(TILE_GET_MENU, &args![tile]).u32();
-            let menu_tile = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, menu));
-            e.call(TILE_SET_VALUE, &args![menu_tile, TRAIT_ENABLED, 0u32]);
+            let menu_tile = e.mem.u32(menu.wrapping_add(4));
+            set_tile_int(e, menu_tile, TRAIT_ENABLED, 0);
         }
     }
-    e.call(0x0070_4f50, &[]);
+    typed_call!(super::FAMILY, 0x0070_4f50, fn_00704f50(e));
     if e.call(0x004a_4040, &[]).bool() {
         e.call(START_MENU_CLOSE, &args![1u32]);
     }
@@ -1008,7 +1151,7 @@ pub fn interface_emergency_close_all_menus_and_break_stuff(e: &mut Engine) {
 /// tile to `value == 0`.
 pub fn fn_00703810(e: &mut Engine, value: u8) {
     if let Some(manager) = ready_manager(e) {
-        let root = e.call(GET_MENUS_ROOT, &args![manager]).u32();
+        let root = in_place::menus_root(e, manager);
         set_tile_node_flag(e, root, value == 0);
     }
 }
@@ -1037,10 +1180,14 @@ pub fn interface_set_enemy_actor(e: &mut Engine, actor: u32) {
 }
 
 // Typed from 007038d0
-/// `007732b0` (the HUD menu's), no arguments; answers its value (the
-/// exe ends on that call and leaves its `EAX`, which the callers compare).
+/// The HUD main menu's word at `+0x21c` (`007732b0`), 0 when there is no HUD main menu.
 pub fn fn_007038d0(e: &mut Engine) -> Ptr {
-    e.call(0x0077_32b0, &[]).ptr()
+    let hud = e.mem.u32(in_place::HUD_MAIN_MENU);
+    if hud == 0 {
+        Ptr::new(0)
+    } else {
+        Ptr::new(e.mem.u32(hud.wrapping_add(in_place::HUD_WORD)))
+    }
 }
 
 // Typed from 007038e0
@@ -1066,7 +1213,7 @@ pub fn interface_set_first_chance_texture_release(e: &mut Engine) {
 // Typed from 00703960
 /// Stores the byte `value` at `+0xec` of the manager.
 pub fn fn_00703960(e: &mut Engine, this: u32, value: u8) {
-    e.mem.set_u8(this + 0xec, value);
+    e.mem.set_u8(this.wrapping_add(0xec), value);
 }
 
 // Typed from 00703980
@@ -1078,21 +1225,31 @@ pub fn fn_00703980(e: &mut Engine) {
     }
 }
 
+/// The control tables of [`interface_get_control_push_text_for`]: by mode 3, 1, 0 and 2.
+const CONTROL_TABLE_3: u32 = 0x011d_5268;
+const CONTROL_TABLE_1: u32 = 0x011d_5240;
+const CONTROL_TABLE_0: u32 = 0x011d_52f0;
+const CONTROL_TABLE_2: u32 = 0x011d_51b0;
+/// The settings whose text is the empty push text and the two labels.
+const SETTING_NO_TEXT: u32 = 0x011d_37b0;
+const SETTING_TRIGGER_LABEL: u32 = 0x011d_4a08;
+const SETTING_BUTTON_LABEL: u32 = 0x011d_3fc4;
+
 // Typed from 007039b0
 /// `Interface::GetControlPushTextFor` (Xbox PDB), `cdecl`: writes the push
 /// text of control `control` (`0..=0x1c`; any other value does nothing)
 /// into the character buffer `buffer`.
 ///
 /// The control's setting is chosen from [`fn_00703be0`] on the controls
-/// object (`00877720` on the global `011dea0c`), by mode: when `004b71d0`
-/// answers true mode 3 and the table at `011d5268`; otherwise mode 1 with
-/// the table at `011d5240` (index below 9), else mode 0 with `011d52f0`
-/// (index below `0xee`), else mode 2 with `011d51b0` (index below 8). Its
-/// text (`00403df0`) is copied to the buffer (`004046f0`). When `with_label`
-/// is set the buffer then becomes `"<label> <text>"` (`sprintf`) where the
-/// label is the setting at `011d4a08` if the setting's text (`+8`) contains
-/// "trigger" (`BSstristr`), else the one at `011d3fc4`, and the text is the
-/// buffer itself, or the setting at `011d37b0` when the buffer is empty.
+/// object, by mode: when `004b71d0` answers true mode 3 and the table at
+/// `011d5268`; otherwise mode 1 with the table at `011d5240` (index below 9),
+/// else mode 0 with `011d52f0` (index below `0xee`), else mode 2 with
+/// `011d51b0` (index below 8). Its text (`+4`) is copied to the buffer
+/// (`004046f0`). When `with_label` is set the buffer then becomes
+/// `"<label> <text>"` (`sprintf`) where the label is the setting at `011d4a08`
+/// if the setting's name (`+8`) contains "trigger" (`BSstristr`), else the one
+/// at `011d3fc4`, and the text is the buffer itself, or the setting at
+/// `011d37b0` when the buffer is empty.
 ///
 /// The compiler's exception-unwinding frame is not translated.
 pub fn interface_get_control_push_text_for(
@@ -1106,65 +1263,68 @@ pub fn interface_get_control_push_text_for(
     }
     let mut setting = 0u32;
     e.mem.set_u8(buffer, 0);
-    if e.call(0x004b_71d0, &[]).bool() {
-        let index = control_byte_for(e, control, 3);
-        setting = e.mem.u32(0x011d_5268 + 4 * index as u32);
+    let alternate = e.call(0x004b_71d0, &[]).bool();
+    let controls = in_place::controls(e);
+    let control_byte = |e: &mut Engine, mode: u32| -> u32 {
+        u32::from(typed_call!(
+            super::FAMILY,
+            0x0070_3be0,
+            fn_00703be0(e, controls, control as u32, mode)
+        ))
+    };
+    if alternate {
+        let index = control_byte(e, 3);
+        setting = e.mem.u32(CONTROL_TABLE_3.wrapping_add(4 * index));
     } else {
-        let index = control_byte_for(e, control, 1);
+        let index = control_byte(e, 1);
         if index < 9 {
-            setting = e.mem.u32(0x011d_5240 + 4 * index as u32);
+            setting = e.mem.u32(CONTROL_TABLE_1.wrapping_add(4 * index));
         } else {
-            let index = control_byte_for(e, control, 0);
+            let index = control_byte(e, 0);
             if index < 0xee {
-                setting = e.mem.u32(0x011d_52f0 + 4 * index as u32);
+                setting = e.mem.u32(CONTROL_TABLE_0.wrapping_add(4 * index));
             } else {
-                let index = control_byte_for(e, control, 2);
+                let index = control_byte(e, 2);
                 if index < 8 {
-                    setting = e.mem.u32(0x011d_51b0 + 4 * index as u32);
+                    setting = e.mem.u32(CONTROL_TABLE_2.wrapping_add(4 * index));
                 }
             }
         }
     }
-    if setting != 0 && e.call(SETTING_TEXT, &args![setting]).u32() != 0 {
-        let text = e.call(SETTING_TEXT, &args![setting]).u32();
+    let text = in_place::setting_text(e, setting);
+    if text != 0 {
         e.call(STRING_COPY, &args![buffer, text]);
     }
     if with_label == 0 {
         return;
     }
-    e.with_stack(8, |e, text| {
-        e.call(STRING_CTOR, &args![text]);
-        if e.mem.u8(buffer) != 0 {
-            e.call(STRING_ASSIGN, &args![text, buffer]);
+    e.with_stack(8, |e, string| {
+        in_place::empty_string(e, string.addr());
+        let shown = if e.mem.u8(buffer) != 0 {
+            buffer
         } else {
-            let fallback = e.call(SETTING_TEXT, &args![0x011d_37b0u32]).u32();
-            e.call(STRING_ASSIGN, &args![text, fallback]);
-        }
-        let is_trigger = setting != 0 && e.mem.u32(setting + 8) != 0 && {
-            let name = e.mem.u32(setting + 8);
-            e.call(STRING_STRISTR, &args![name, 0x0106_ebd8u32]).u32() != 0
+            in_place::setting_text(e, SETTING_NO_TEXT)
         };
-        let characters = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, text));
-        let label_setting = if is_trigger {
-            0x011d_4a08u32
+        e.call(STRING_ASSIGN, &args![string, shown]);
+        let name = if setting == 0 {
+            0
         } else {
-            0x011d_3fc4u32
+            e.mem.u32(setting.wrapping_add(8))
         };
-        let label = e.call(SETTING_TEXT, &args![label_setting]).u32();
+        let is_trigger =
+            name != 0 && e.call(STRING_STRISTR, &args![name, 0x0106_ebd8u32]).u32() != 0;
+        let characters = e.mem.u32(string.addr());
+        let label = in_place::setting_text(
+            e,
+            if is_trigger {
+                SETTING_TRIGGER_LABEL
+            } else {
+                SETTING_BUTTON_LABEL
+            },
+        );
         e.call(SPRINTF, &args![buffer, 0x0101_2058u32, label, characters]);
-        e.call(STRING_DTOR, &args![text]);
+        e.call(STRING_DTOR, &args![string]);
     });
-}
-
-/// `00703be0` on the controls object (`00877720` on the global).
-fn control_byte_for(e: &mut Engine, control: i32, mode: u32) -> u8 {
-    let global = e.global::<u32>(CONTROLS_OBJECT_GLOBAL);
-    let object = e.call(CONTROLS_OBJECT, &args![global]).u32();
-    typed_call!(
-        super::FAMILY,
-        0x0070_3be0,
-        fn_00703be0(e, object, control as u32, mode)
-    )
 }
 
 // Typed from 00703be0
@@ -1175,19 +1335,19 @@ pub fn fn_00703be0(e: &mut Engine, this: u32, control: u32, mode: u32) -> u8 {
 }
 
 /// The console exists and is visible (`MenuConsole::Instance(0)`, then
-/// `Instance(1)` and its visibility test).
+/// `Instance(1)` and its visible byte).
 fn console_visible(e: &mut Engine) -> bool {
     if e.call(CONSOLE_INSTANCE, &args![0u32]).u32() == 0 {
         return false;
     }
     let console = e.call(CONSOLE_INSTANCE, &args![1u32]).u32();
-    e.call(CONSOLE_IS_VISIBLE, &args![console]).bool()
+    in_place::console_is_visible(e, console)
 }
 
-/// Whether the console takes text: it is visible, or `005b6f70` says text
+/// Whether the console takes text: it is visible, or the byte `005b6f70` answers says text
 /// is accepted anyway.
 fn console_takes_text(e: &mut Engine) -> bool {
-    console_visible(e) || e.call(CONSOLE_ACCEPTS_TEXT, &[]).bool()
+    console_visible(e) || e.mem.u8(in_place::CONSOLE_ACCEPTS_TEXT) != 0
 }
 
 /// Prints a formatted line on the console (`cdecl`, varargs: the format
@@ -1223,12 +1383,11 @@ pub fn fn_00703c00(e: &mut Engine, words: &[u32]) -> Ret {
 pub fn print_line(e: &mut Engine, text_pointer: u32, text_length: u32, va: &[u32]) {
     e.with_stack(8, |e, text| {
         e.mem.set_u32(text.addr(), text_pointer);
-        e.mem.set_u32(text.addr() + 4, text_length);
+        e.mem.set_u32(text.addr().wrapping_add(4), text_length);
         if ready_manager(e).is_some() && console_takes_text(e) {
             with_va_list(e, va, |e, list| {
-                let characters = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, text));
                 let console = e.call(CONSOLE_INSTANCE, &args![1u32]).u32();
-                e.call(CONSOLE_PRINT, &args![console, characters, list]);
+                e.call(CONSOLE_PRINT, &args![console, text_pointer, list]);
             });
         }
         e.call(STRING_DTOR, &args![text]);
@@ -1280,7 +1439,7 @@ pub fn interface_open_console(e: &mut Engine) {
         return;
     }
     let console = e.call(CONSOLE_INSTANCE, &args![1u32]).u32();
-    if e.call(CONSOLE_IS_VISIBLE, &args![console]).bool() {
+    if in_place::console_is_visible(e, console) {
         return;
     }
     let console = e.call(CONSOLE_INSTANCE, &args![1u32]).u32();
@@ -1343,7 +1502,7 @@ pub fn fn_00703e80(e: &mut Engine, w: &[u32]) -> Ret {
         &w[9..],
     );
     Ret {
-        eax: ok as u32,
+        eax: u32::from(ok),
         ..Ret::default()
     }
 }
@@ -1404,7 +1563,7 @@ pub fn fn_00703f10(e: &mut Engine, w: &[u32]) -> Ret {
         &w[10..],
     );
     Ret {
-        eax: ok as u32,
+        eax: u32::from(ok),
         ..Ret::default()
     }
 }
@@ -1414,10 +1573,9 @@ pub fn fn_00703f10(e: &mut Engine, w: &[u32]) -> Ret {
 /// manager, which it resets to `0xff`. (It does not check that the manager
 /// is ready.)
 pub fn interface_get_message_menu_result(e: &mut Engine) -> u8 {
-    let manager = e.call(GET_MANAGER, &[]).u32();
-    let result = e.mem.u8(manager + 0xe4);
-    let manager = e.call(GET_MANAGER, &[]).u32();
-    e.mem.set_u8(manager + 0xe4, 0xff);
+    let at = manager(e).wrapping_add(in_place::MESSAGE_RESULT_BYTE);
+    let result = e.mem.u8(at);
+    e.mem.set_u8(at, 0xff);
     result
 }
 
@@ -1430,7 +1588,7 @@ pub fn fn_00703fd0(e: &mut Engine) {
 // Typed from 00703fe0
 /// `MessageMenu::DisableMessageMenu` (Xbox PDB) with the byte.
 pub fn fn_00703fe0(e: &mut Engine, value: u8) {
-    e.call(0x007a_a6b0, &args![value as u32]);
+    e.call(0x007a_a6b0, &args![u32::from(value)]);
 }
 
 // Typed from 00704000
@@ -1457,11 +1615,10 @@ pub fn show_message_and_wait(
     va: &[u32],
 ) -> u8 {
     e.mem.set_u8(MESSAGE_RESULT, 0xff);
-    let mut created = false;
     let fader_manager = e.global::<u32>(FADER_MANAGER_GLOBAL);
     e.call(REMOVE_FADER, &args![fader_manager, 1u32, 1u32]);
-    if ready_manager(e).is_some() {
-        created = with_va_list_cell(e, va, |e, list| {
+    let created = ready_manager(e).is_some()
+        && with_va_list_cell(e, va, |e, list| {
             e.call(
                 MESSAGE_CREATE,
                 &args![
@@ -1484,13 +1641,15 @@ pub fn show_message_and_wait(
             )
             .bool()
         });
-    }
     if !created {
         return 0;
     }
-    while e.mem.u8(MESSAGE_RESULT) as i8 == -1 {
-        e.with_stack(0x1c, |e, message| {
-            e.call(MEMORY_FILL, &args![message, 0u32, 0x1cu32]);
+    while e.mem.u8(MESSAGE_RESULT) == 0xff {
+        e.with_stack(MESSAGE_SIZE, |e, message| {
+            // `00403d30(message, 0, 0x1c)`: the message zeroed, word by word.
+            for at in (0..MESSAGE_SIZE).step_by(4) {
+                e.mem.set_u32(message.addr().wrapping_add(at), 0);
+            }
             while e
                 .call(PEEK_MESSAGE, &args![message, 0u32, 0u32, 0u32, 1u32])
                 .u32()
@@ -1500,9 +1659,8 @@ pub fn show_message_and_wait(
                 e.call(DISPATCH_MESSAGE, &args![message]);
             }
         });
-        let global = e.global::<u32>(CONTROLS_OBJECT_GLOBAL);
-        let object = e.call(CONTROLS_OBJECT, &args![global]).u32();
-        e.call(CONTROLS_POLL, &args![object]);
+        let controls = in_place::controls(e);
+        e.call(CONTROLS_POLL, &args![controls]);
         typed_call!(super::FAMILY, 0x0070_27e0, fn_007027e0(e));
         typed_call!(super::FAMILY, 0x0070_2810, fn_00702810(e));
         typed_call!(super::FAMILY, 0x0070_2840, fn_00702840(e));
@@ -1522,7 +1680,7 @@ pub fn fn_00704010(e: &mut Engine, w: &[u32]) -> Ret {
     );
     let answer = show_message_and_wait(e, w[0], w[1], w[2], w[3], &w[4..]);
     Ret {
-        eax: answer as u32,
+        eax: u32::from(answer),
         ..Ret::default()
     }
 }
@@ -1548,6 +1706,29 @@ pub fn fn_00704140(e: &mut Engine) -> u32 {
     }
 }
 
+/// The five Pip-Boy menus by class: stats, inventory, repair, item mod, map.
+fn pipboy_menus(e: &Engine) -> [u32; 5] {
+    [
+        MENU_STATS,
+        MENU_INVENTORY,
+        MENU_REPAIR,
+        MENU_ITEM_MOD,
+        MENU_MAP,
+    ]
+    .map(|id| menu_by_class(e, id))
+}
+
+/// The "already visible" test of the visibility functions: `check_state` looks at the menu's
+/// state bits `0xb` too.
+fn menu_visible(e: &mut Engine, menu_id: i32, check_state: u8) -> bool {
+    let mask = if check_state != 0 { 0xb } else { 0 };
+    typed_call!(
+        super::FAMILY,
+        0x0070_2680,
+        interface_is_menu_id_visible(e, menu_id, mask)
+    ) != 0
+}
+
 // Typed from 00704170
 /// `Interface::SetMapMenuVisible` (Xbox PDB), `cdecl`: shows (`show` set)
 /// or hides the map menu. `check_state` makes the "already visible" test
@@ -1560,22 +1741,13 @@ pub fn fn_00704140(e: &mut Engine) -> u32 {
 /// the menus root's [`TRAIT_CURRENT_MENU`], then `MapMenu::UpdateMenu`. To
 /// hide it while visible: it fades out and its slot `0x14` runs with
 /// `(0, 0)`. Showing always ends with the Pipboy refresh (tab 3) and
-/// `0079c340(0)` when `00974d90` says so.
+/// `0079c340(0)` when the Pip-Boy's query says so.
 pub fn interface_set_map_menu_visible(e: &mut Engine, show: u8, check_state: u8) {
     let Some(manager) = ready_manager(e) else {
         return;
     };
-    let stats = e.call(GET_MENU_BY_CLASS, &args![MENU_STATS]).u32();
-    let inventory = e.call(GET_MENU_BY_CLASS, &args![MENU_INVENTORY]).u32();
-    let repair = e.call(GET_MENU_BY_CLASS, &args![MENU_REPAIR]).u32();
-    let item_mod = e.call(GET_MENU_BY_CLASS, &args![MENU_ITEM_MOD]).u32();
-    let mut map = e.call(GET_MENU_BY_CLASS, &args![MENU_MAP]).u32();
-    let mask = if check_state != 0 { 0xb } else { 0 };
-    let visible = typed_call!(
-        super::FAMILY,
-        0x0070_2680,
-        interface_is_menu_id_visible(e, MENU_MAP, mask)
-    ) != 0;
+    let [stats, inventory, repair, item_mod, mut map] = pipboy_menus(e);
+    let visible = menu_visible(e, MENU_MAP, check_state);
     if show != 0 && !visible {
         if stats != 0 {
             menu_fade_out(e, stats);
@@ -1628,23 +1800,14 @@ pub fn interface_create_repair_menu(e: &mut Engine) -> u32 {
 /// visible the stats (with `StatsMenu::ToggleHealingMode`), map and item-mod
 /// menus fade out, the repair menu fades in and the inventory fades out.
 /// Its id goes into [`TRAIT_CURRENT_MENU`]; with `refresh_pipboy` the Pipboy
-/// refresh runs (tab 2); and `00782470(0)` runs when `00974d90` says so.
+/// refresh runs (tab 2); and `00782470(0)` runs when the Pip-Boy's query says so.
 /// Hiding fades the menu out when it is visible.
 pub fn fn_007044c0(e: &mut Engine, show: u8, check_state: u8, refresh_pipboy: u8) {
     let Some(manager) = ready_manager(e) else {
         return;
     };
-    let stats = e.call(GET_MENU_BY_CLASS, &args![MENU_STATS]).u32();
-    let inventory = e.call(GET_MENU_BY_CLASS, &args![MENU_INVENTORY]).u32();
-    let mut repair = e.call(GET_MENU_BY_CLASS, &args![MENU_REPAIR]).u32();
-    let item_mod = e.call(GET_MENU_BY_CLASS, &args![MENU_ITEM_MOD]).u32();
-    let map = e.call(GET_MENU_BY_CLASS, &args![MENU_MAP]).u32();
-    let mask = if check_state != 0 { 0xb } else { 0 };
-    let visible = typed_call!(
-        super::FAMILY,
-        0x0070_2680,
-        interface_is_menu_id_visible(e, MENU_REPAIR, mask)
-    ) != 0;
+    let [stats, inventory, mut repair, item_mod, map] = pipboy_menus(e);
+    let visible = menu_visible(e, MENU_REPAIR, check_state);
     if show != 0 {
         if repair == 0 {
             repair = typed_call!(super::FAMILY, 0x0070_4490, interface_create_repair_menu(e));
@@ -1708,17 +1871,8 @@ pub fn fn_007046f0(e: &mut Engine, show: u8, check_state: u8, refresh_pipboy: u8
     let Some(manager) = ready_manager(e) else {
         return;
     };
-    let stats = e.call(GET_MENU_BY_CLASS, &args![MENU_STATS]).u32();
-    let inventory = e.call(GET_MENU_BY_CLASS, &args![MENU_INVENTORY]).u32();
-    let repair = e.call(GET_MENU_BY_CLASS, &args![MENU_REPAIR]).u32();
-    let map = e.call(GET_MENU_BY_CLASS, &args![MENU_MAP]).u32();
-    let mut item_mod = e.call(GET_MENU_BY_CLASS, &args![MENU_ITEM_MOD]).u32();
-    let mask = if check_state != 0 { 0xb } else { 0 };
-    let visible = typed_call!(
-        super::FAMILY,
-        0x0070_2680,
-        interface_is_menu_id_visible(e, MENU_ITEM_MOD, mask)
-    ) != 0;
+    let [stats, inventory, repair, mut item_mod, map] = pipboy_menus(e);
+    let visible = menu_visible(e, MENU_ITEM_MOD, check_state);
     if show != 0 {
         if item_mod == 0 {
             item_mod = typed_call!(
@@ -1785,17 +1939,8 @@ pub fn interface_set_inventory_menu_visible(
     let Some(manager) = ready_manager(e) else {
         return;
     };
-    let stats = e.call(GET_MENU_BY_CLASS, &args![MENU_STATS]).u32();
-    let mut inventory = e.call(GET_MENU_BY_CLASS, &args![MENU_INVENTORY]).u32();
-    let repair = e.call(GET_MENU_BY_CLASS, &args![MENU_REPAIR]).u32();
-    let item_mod = e.call(GET_MENU_BY_CLASS, &args![MENU_ITEM_MOD]).u32();
-    let map = e.call(GET_MENU_BY_CLASS, &args![MENU_MAP]).u32();
-    let mask = if check_state != 0 { 0xb } else { 0 };
-    let visible = typed_call!(
-        super::FAMILY,
-        0x0070_2680,
-        interface_is_menu_id_visible(e, MENU_INVENTORY, mask)
-    ) != 0;
+    let [stats, mut inventory, repair, item_mod, map] = pipboy_menus(e);
+    let visible = menu_visible(e, MENU_INVENTORY, check_state);
     if show != 0 {
         if inventory == 0 {
             inventory = typed_call!(super::FAMILY, 0x0070_48c0, fn_007048c0(e));
@@ -1845,12 +1990,19 @@ pub fn interface_get_inventory_menu_visible(e: &mut Engine) -> u8 {
 /// When the manager is ready, refreshes whichever menu is showing: the
 /// inventory (`InventoryMenu::UpdateInventoryMenu`) if it is visible, else
 /// the stats menu (`StatsMenu::UpdateHealingOptions(menu, 4)`) when
-/// `00704df0` says so, else `00730690(1)` when menu `0x41d` is visible,
-/// else `00728a30(1)` when `0x435` is, else `00704bc0` when `0x3f0` is.
+/// [`fn_00704df0`] says so, else `00730690(1)` when menu `0x41d` is visible,
+/// else `00728a30(1)` when `0x435` is, else [`fn_00704bc0`] when `0x3f0` is.
 pub fn fn_00704af0(e: &mut Engine) {
     if ready_manager(e).is_none() {
         return;
     }
+    let visible = |e: &mut Engine, id: i32| {
+        typed_call!(
+            super::FAMILY,
+            0x0070_2680,
+            interface_is_menu_id_visible(e, id, 0)
+        ) != 0
+    };
     if typed_call!(
         super::FAMILY,
         0x0070_4ad0,
@@ -1858,31 +2010,16 @@ pub fn fn_00704af0(e: &mut Engine) {
     ) != 0
     {
         e.call(INVENTORY_UPDATE_MENU, &[]);
-    } else if e.call(0x0070_4df0, &[]).bool() {
-        let stats = e.call(GET_MENU_BY_CLASS, &args![MENU_STATS]).u32();
+    } else if typed_call!(super::FAMILY, 0x0070_4df0, fn_00704df0(e)) != 0 {
+        let stats = menu_by_class(e, MENU_STATS);
         let menu = e.call(TILE_GET_MENU, &args![stats]).u32();
         e.call(STATS_UPDATE_HEALING_OPTIONS, &args![menu, 4u32]);
-    } else if typed_call!(
-        super::FAMILY,
-        0x0070_2680,
-        interface_is_menu_id_visible(e, 0x41d, 0)
-    ) != 0
-    {
+    } else if visible(e, 0x41d) {
         e.call(0x0073_0690, &args![1u32]);
-    } else if typed_call!(
-        super::FAMILY,
-        0x0070_2680,
-        interface_is_menu_id_visible(e, 0x435, 0)
-    ) != 0
-    {
+    } else if visible(e, 0x435) {
         e.call(0x0072_8a30, &args![1u32]);
-    } else if typed_call!(
-        super::FAMILY,
-        0x0070_2680,
-        interface_is_menu_id_visible(e, 0x3f0, 0)
-    ) != 0
-    {
-        e.call(0x0070_4bc0, &[]);
+    } else if visible(e, 0x3f0) {
+        typed_call!(super::FAMILY, 0x0070_4bc0, fn_00704bc0(e));
     }
 }
 
@@ -1939,17 +2076,13 @@ const RECIPE_MENU_CREATE: u32 = 0x0072_6ff0;
 const SET_GLOBAL_TIME_MULTIPLIER: u32 = 0x00aa_4db0;
 const GLOBAL_TIMER: u32 = 0x011f_6394;
 /// `DialogMenu::Create` (`cdecl`, three words), `DialogMenu::SetPause` (on
-/// the menu, one word), `DialogMenu::ServiceStart` and the getter
-/// `004fb070` on a dialog menu.
+/// the menu, one word) and `DialogMenu::ServiceStart`.
 const DIALOG_MENU_CREATE: u32 = 0x0076_1a20;
 const DIALOG_SET_PAUSE: u32 = 0x0076_4200;
 const DIALOG_SERVICE_START: u32 = 0x0076_3ff0;
-const DIALOG_MENU_GETTER: u32 = 0x004f_b070;
 /// The byte set while a dialog is open (`011d9514`).
 const IN_DIALOG_FLAG: u32 = 0x011d_9514;
-/// The HUD main menu object (the word at `011d96c0`) and, on it,
-/// `HUDMainMenu::ShowSubtitle` (Xbox PDB) and `00775920`.
-const HUD_MAIN_MENU: u32 = 0x011d_96c0;
+/// `HUDMainMenu::ShowSubtitle` (Xbox PDB) and `00775920`, on the HUD main menu.
 const HUD_SHOW_SUBTITLE: u32 = 0x0077_4fd0;
 const HUD_HIDE_SUBTITLE: u32 = 0x0077_5920;
 /// `HUDMainMenu::SetRegionText` (Xbox PDB, `cdecl`): a pointer to a
@@ -1957,11 +2090,6 @@ const HUD_HIDE_SUBTITLE: u32 = 0x0077_5920;
 const HUD_SET_REGION_TEXT: u32 = 0x0077_28f0;
 /// `strcpy_s(buffer, size, text)` (`00406d30`, `cdecl`).
 const STRING_COPY_BOUNDED: u32 = 0x0040_6d30;
-/// The copy (`00418900`: `this`, source pointer; a word, a byte and a word)
-/// and the empty destructor (`00483710`) of the 12-byte value `ShowSubtitle`
-/// takes by value.
-const SUBTITLE_VALUE_COPY: u32 = 0x0041_8900;
-const SUBTITLE_VALUE_DTOR: u32 = 0x0048_3710;
 /// `StartMenu::Create(first, second)` (Xbox PDB, `cdecl`).
 const START_MENU_CREATE: u32 = 0x007c_b7d0;
 /// `LockPickMenu::Create` (Xbox PDB, `cdecl`, three words).
@@ -1974,10 +2102,6 @@ const SLEEP_MENU_CLOSE: u32 = 0x007c_01b0;
 /// `VATSMenu::Create` and `VATSMenu::Close` (Xbox PDB).
 const VATS_MENU_CREATE: u32 = 0x007e_9200;
 const VATS_MENU_CLOSE: u32 = 0x007e_bd50;
-/// `00709be0` and `00709bc0`: true when the manager's `+0x4bc` word is 0
-/// and 2 (`00709c00`, [`MANAGER_MODE_IS_THREE`], tests for 3).
-const MANAGER_MODE_IS_ZERO: u32 = 0x0070_9be0;
-const MANAGER_MODE_IS_TWO: u32 = 0x0070_9bc0;
 /// `RaceSexMenu::Create` (Xbox PDB, `cdecl`) and the words the deferred
 /// path writes: the pending menu kind (`011d8950`) and its argument
 /// (`011d8960`).
@@ -1986,13 +2110,10 @@ const PENDING_MENU_KIND: u32 = 0x011d_8950;
 const PENDING_MENU_ARGUMENT: u32 = 0x011d_8960;
 /// The pending menu kind of the race/sex menu.
 const PENDING_RACE_SEX: u32 = 5;
-/// `0043d4d0` on `011c3ea4`: the address of a counter word.
-const COUNTER_ACCESSOR: u32 = 0x0043_d4d0;
-const COUNTER_OBJECT: u32 = 0x011c_3ea4;
+/// The counter `0043d4d0` finds on `011c3ea4`: its `+4`.
+const MENU_COUNTER: u32 = 0x011c_3ea8;
 /// Methods of the manager the thin wrappers forward to.
 const MANAGER_LAST_MINUTE_UPDATE: u32 = 0x0071_3c70;
-const MANAGER_GETTER_A: u32 = 0x0060_2170;
-const MANAGER_GETTER_B: u32 = 0x0046_0fb0;
 const MANAGER_CALL_A: u32 = 0x0071_33f0;
 const MANAGER_CALL_B: u32 = 0x0071_7e30;
 
@@ -2000,7 +2121,7 @@ const MANAGER_CALL_B: u32 = 0x0071_7e30;
 /// `Tile::GetMenu` and `__RTDynamicCast`. 0 when there is no such menu or
 /// it is another class.
 fn menu_cast(e: &mut Engine, menu_id: i32, target_type: u32) -> u32 {
-    let tile = e.call(GET_MENU_BY_CLASS, &args![menu_id]).u32();
+    let tile = menu_by_class(e, menu_id);
     if tile == 0 {
         return 0;
     }
@@ -2042,22 +2163,13 @@ pub fn fn_00704be0(e: &mut Engine) -> u32 {
 /// id goes into [`TRAIT_CURRENT_MENU`], `StatsMenu::UpdateAll` runs and it
 /// fades in. Hiding a visible one fades it out. Showing always ends with
 /// the Pipboy refresh (tab 1) and `StatsMenu::SetKnobPosition(0)` when
-/// `00974d90` says so.
+/// the Pip-Boy's query says so.
 pub fn interface_set_stats_menu_visible(e: &mut Engine, show: u8, check_state: u8) {
     let Some(manager) = ready_manager(e) else {
         return;
     };
-    let mut stats = e.call(GET_MENU_BY_CLASS, &args![MENU_STATS]).u32();
-    let inventory = e.call(GET_MENU_BY_CLASS, &args![MENU_INVENTORY]).u32();
-    let repair = e.call(GET_MENU_BY_CLASS, &args![MENU_REPAIR]).u32();
-    let item_mod = e.call(GET_MENU_BY_CLASS, &args![MENU_ITEM_MOD]).u32();
-    let map = e.call(GET_MENU_BY_CLASS, &args![MENU_MAP]).u32();
-    let mask = if check_state != 0 { 0xb } else { 0 };
-    let visible = typed_call!(
-        super::FAMILY,
-        0x0070_2680,
-        interface_is_menu_id_visible(e, MENU_STATS, mask)
-    ) != 0;
+    let [mut stats, inventory, repair, item_mod, map] = pipboy_menus(e);
+    let visible = menu_visible(e, MENU_STATS, check_state);
     if show != 0 && !visible {
         if inventory != 0 {
             menu_fade_out(e, inventory);
@@ -2177,13 +2289,13 @@ pub fn fn_00704fc0(e: &mut Engine, first: u32, second: u32) {
 // Typed from 00705000
 /// Whether a menu of class `0x435` exists.
 pub fn fn_00705000(e: &mut Engine) -> bool {
-    e.call(GET_MENU_BY_CLASS, &args![MENU_435]).u32() != 0
+    menu_by_class(e, MENU_435) != 0
 }
 
 // Typed from 00705020
 /// Whether a menu of class `0x41d` exists.
 pub fn fn_00705020(e: &mut Engine) -> bool {
-    e.call(GET_MENU_BY_CLASS, &args![MENU_41D]).u32() != 0
+    menu_by_class(e, MENU_41D) != 0
 }
 
 // Typed from 00705040
@@ -2199,7 +2311,7 @@ pub fn fn_00705050(e: &mut Engine) -> u32 {
     if menu == 0 {
         0
     } else {
-        e.mem.u32(menu + CONTAINER_MENU_FIELD)
+        e.mem.u32(menu.wrapping_add(CONTAINER_MENU_FIELD))
     }
 }
 
@@ -2251,9 +2363,8 @@ pub fn interface_set_dialog_pause(e: &mut Engine, pause: u8) {
 }
 
 // Typed from 00705190
-/// `Interface::InDialogWith` (Xbox PDB): the result of `004fb070` on the
-/// dialog menu when the manager is ready and the menu of class `0x3f1` is a
-/// `DialogMenu`, else 0.
+/// `Interface::InDialogWith` (Xbox PDB): the dialog menu's word at `+0x80` (`004fb070`) when the
+/// manager is ready and the menu of class `0x3f1` is a `DialogMenu`, else 0.
 pub fn interface_in_dialog_with(e: &mut Engine) -> u32 {
     if ready_manager(e).is_none() {
         return 0;
@@ -2262,7 +2373,7 @@ pub fn interface_in_dialog_with(e: &mut Engine) -> u32 {
     if menu == 0 {
         return 0;
     }
-    e.call(DIALOG_MENU_GETTER, &args![menu]).u32()
+    e.mem.u32(menu.wrapping_add(in_place::DIALOG_WORD))
 }
 
 // Typed from 00705210
@@ -2270,11 +2381,12 @@ pub fn interface_in_dialog_with(e: &mut Engine) -> u32 {
 /// (`speaker`), a 12-byte value by value (`text_a/b/c`: a word, a byte and
 /// a word), three words (`position_*`), a word and a byte. Inside a scope
 /// guard (line 0x8ec of the interface's file): when the manager is ready and the
-/// HUD main menu object (`011d96c0`) exists, copies the 12-byte value
-/// (`00418900`) and calls `HUDMainMenu::ShowSubtitle` on the object with the
-/// speaker, the copy, the three words, the word and the byte. The by-value
-/// argument is then destroyed (`00483710`, which does nothing). Always
-/// returns 0. The exception frame is not translated.
+/// HUD main menu object (`011d96c0`) exists, calls `HUDMainMenu::ShowSubtitle`
+/// on the object with the speaker, a copy of the 12-byte value (`00418900`
+/// copies its word, byte and word: the byte's word goes with its other three
+/// bytes zero, where the exe leaves the stack's), the three words, the word and
+/// the byte. The by-value argument's destructor (`00483710`) does nothing.
+/// Always returns 0. The exception frame is not translated.
 #[allow(clippy::too_many_arguments)]
 pub fn interface_show_subtitle(
     e: &mut Engine,
@@ -2293,29 +2405,18 @@ pub fn interface_show_subtitle(
             SCOPE_GUARD_CTOR,
             &args![guard, 0xdu32, 1u32, INTERFACE_SOURCE_NAME, 0x8ecu32],
         );
-        e.with_stack(12, |e, text| {
-            e.mem.set_u32(text.addr(), text_a);
-            e.mem.set_u32(text.addr() + 4, text_b);
-            e.mem.set_u32(text.addr() + 8, text_c);
-            let hud = e.global::<u32>(HUD_MAIN_MENU);
-            if ready_manager(e).is_some() && hud != 0 {
-                e.with_stack(12, |e, copy| {
-                    e.call(SUBTITLE_VALUE_COPY, &args![copy, text]);
-                    let copy_a = e.mem.u32(copy.addr());
-                    let copy_b = e.mem.u32(copy.addr() + 4);
-                    let copy_c = e.mem.u32(copy.addr() + 8);
-                    e.call(
-                        HUD_SHOW_SUBTITLE,
-                        &args![
-                            hud, speaker, copy_a, copy_b, copy_c, position_a, position_b,
-                            position_c, word, flag
-                        ],
-                    );
-                });
-            }
-            e.call(SCOPE_GUARD_DTOR, &args![guard]);
-            e.call(SUBTITLE_VALUE_DTOR, &args![text]);
-        });
+        let hud = e.global::<u32>(in_place::HUD_MAIN_MENU);
+        if ready_manager(e).is_some() && hud != 0 {
+            let copy_b = u32::from(text_b.to_le_bytes()[0]);
+            e.call(
+                HUD_SHOW_SUBTITLE,
+                &args![
+                    hud, speaker, text_a, copy_b, text_c, position_a, position_b, position_c, word,
+                    flag
+                ],
+            );
+        }
+        e.call(SCOPE_GUARD_DTOR, &args![guard]);
     });
     0
 }
@@ -2327,7 +2428,7 @@ pub fn fn_007053b0(e: &mut Engine) {
     if ready_manager(e).is_none() {
         return;
     }
-    let hud = e.global::<u32>(HUD_MAIN_MENU);
+    let hud = e.global::<u32>(in_place::HUD_MAIN_MENU);
     if hud != 0 {
         e.call(HUD_HIDE_SUBTITLE, &args![hud]);
     }
@@ -2352,18 +2453,16 @@ pub fn fn_007053f0(e: &mut Engine) {
 pub fn fn_00705420(e: &mut Engine, region: u32, text_a: u32, text_b: u32, flag: u8) {
     e.with_stack(8, |e, text| {
         e.mem.set_u32(text.addr(), text_a);
-        e.mem.set_u32(text.addr() + 4, text_b);
+        e.mem.set_u32(text.addr().wrapping_add(4), text_b);
         if ready_manager(e).is_some() {
             e.with_stack(0x10c, |e, request| {
-                e.mem.set_u8(request.addr() + 0x108, flag);
+                e.mem.set_u8(request.addr().wrapping_add(0x108), flag);
                 e.mem.set_u32(request.addr(), region);
-                let buffer = request.addr() + 4;
-                if typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, text)) == 0 {
+                let buffer = request.addr().wrapping_add(4);
+                if text_a == 0 {
                     e.mem.set_u8(buffer, 0);
                 } else {
-                    let characters =
-                        typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, text));
-                    e.call(STRING_COPY_BOUNDED, &args![buffer, 0x104u32, characters]);
+                    e.call(STRING_COPY_BOUNDED, &args![buffer, 0x104u32, text_a]);
                 }
                 e.call(HUD_SET_REGION_TEXT, &args![request]);
             });
@@ -2374,11 +2473,17 @@ pub fn fn_00705420(e: &mut Engine, region: u32, text_a: u32, text_b: u32, flag: 
 
 // Typed from 007054f0
 /// `Interface::CreateSleepMenu` (Xbox PDB), `cdecl(flag)`: when the manager
-/// is ready and `00709be0` (its `+0x4bc` word is 0) says so: an existing
-/// sleep/wait menu (class `0x3f4`) is destroyed through slot 0 with 1, then
-/// `SleepWaitMenu::Create(flag)`.
+/// is ready and [`fn_00709be0`](super::interface_cpp_p3::fn_00709be0) (its
+/// `+0x4bc` word is 0) says so: an existing sleep/wait menu (class `0x3f4`)
+/// is destroyed through slot 0 with 1, then `SleepWaitMenu::Create(flag)`.
 pub fn interface_create_sleep_menu(e: &mut Engine, flag: u8) {
-    if ready_manager(e).is_none() || !e.call(MANAGER_MODE_IS_ZERO, &[]).bool() {
+    if ready_manager(e).is_none()
+        || !typed_call!(
+            super::FAMILY,
+            0x0070_9be0,
+            super::interface_cpp_p3::fn_00709be0(e)
+        )
+    {
         return;
     }
     let menu = menu_cast(e, MENU_SLEEP_WAIT, SLEEP_WAIT_MENU_TYPE);
@@ -2421,19 +2526,18 @@ pub fn interface_create_vats_menu(e: &mut Engine) {
 /// and that menu exists, `SleepWaitMenu::UpdateSleeping` on it decides the
 /// result (1 or 0).
 pub fn interface_update_sleeping(e: &mut Engine) -> u8 {
-    let id = typed_call!(super::FAMILY, 0x0070_5770, fn_00705770(e));
-    let tile = e.call(GET_MENU_BY_CLASS, &args![id]).u32();
+    let id = typed_call!(super::FAMILY, 0x0070_5770, fn_00705770(e)) as i32;
+    let tile = menu_by_class(e, id);
     let menu = if tile == 0 {
         0
     } else {
         e.call(TILE_GET_MENU, &args![tile]).u32()
     };
-    if ready_manager(e).is_some() && menu != 0 && e.call(SLEEP_UPDATE_SLEEPING, &args![menu]).bool()
-    {
-        1
-    } else {
-        0
-    }
+    u8::from(
+        ready_manager(e).is_some()
+            && menu != 0
+            && e.call(SLEEP_UPDATE_SLEEPING, &args![menu]).bool(),
+    )
 }
 
 // Typed from 00705770
@@ -2473,7 +2577,7 @@ pub fn fn_00705830(e: &mut Engine, first: u32, second: u32, flag: u8) {
 // Typed from 00705870
 /// `Interface::CreateRaceSexMenu` (Xbox PDB), `cdecl(argument)`: when the
 /// dialog flag ([`fn_00705100`]) is set, `DialogMenu::ServiceStart` runs
-/// first. Then, if the counter that `0043d4d0` finds on `011c3ea4` is above
+/// first. Then, if the counter (`0043d4d0` on `011c3ea4`: its `+4`) is above
 /// 1 (signed) and no menu is pending (`011d8950` is 0), the creation is
 /// deferred: `011d8950` becomes 5 and `011d8960` the argument. Otherwise
 /// `RaceSexMenu::Create(argument)` runs now.
@@ -2481,8 +2585,7 @@ pub fn interface_create_race_sex_menu(e: &mut Engine, argument: u32) {
     if typed_call!(super::FAMILY, 0x0070_5100, fn_00705100(e)) != 0 {
         e.call(DIALOG_SERVICE_START, &[]);
     }
-    let counter = e.call(COUNTER_ACCESSOR, &args![COUNTER_OBJECT]).u32();
-    if e.mem.i32(counter) > 1 && e.global::<u32>(PENDING_MENU_KIND) == 0 {
+    if e.mem.i32(MENU_COUNTER) > 1 && e.global::<u32>(PENDING_MENU_KIND) == 0 {
         e.set_global::<u32>(PENDING_MENU_KIND, PENDING_RACE_SEX);
         e.set_global::<u32>(PENDING_MENU_ARGUMENT, argument);
     } else {
@@ -2493,7 +2596,7 @@ pub fn interface_create_race_sex_menu(e: &mut Engine, argument: u32) {
 // Typed from 007058c0
 /// `fastcall` getter: the word at `+0xc4` of `this`.
 pub fn fn_007058c0(e: &mut Engine, this: u32) -> u32 {
-    e.mem.u32(this + 0xc4)
+    e.mem.u32(this.wrapping_add(0xc4))
 }
 
 // Typed from 007058e0
@@ -2506,29 +2609,29 @@ pub fn interface_last_minute_update(e: &mut Engine) {
 }
 
 // Typed from 00705910
-/// `00602170` on the manager when it is ready, else 0.
+/// The address of the manager's `+0x1dc` (`00602170`) when it is ready, else 0.
 pub fn fn_00705910(e: &mut Engine) -> u32 {
     match ready_manager(e) {
-        Some(manager) => e.call(MANAGER_GETTER_A, &args![manager]).u32(),
+        Some(manager) => manager.wrapping_add(in_place::FIELD_1DC),
         None => 0,
     }
 }
 
 // Typed from 00705950
-/// `00460fb0` on the manager when it is ready, else 0.
+/// The address of the manager's `+0x178` (`00460fb0`) when it is ready, else 0.
 pub fn fn_00705950(e: &mut Engine) -> u32 {
     match ready_manager(e) {
-        Some(manager) => e.call(MANAGER_GETTER_B, &args![manager]).u32(),
+        Some(manager) => manager.wrapping_add(in_place::PIPBOY_FIELD),
         None => 0,
     }
 }
 
 // Typed from 00705990
-/// `Interface::GetPipboy` (Xbox PDB): the manager's Pipboy object (getter
-/// `00704370`) when it is ready, else 0.
+/// `Interface::GetPipboy` (Xbox PDB): the manager's Pipboy object (`+0x174`)
+/// when it is ready, else 0.
 pub fn interface_get_pipboy(e: &mut Engine) -> u32 {
     match ready_manager(e) {
-        Some(manager) => e.call(MANAGER_PIPBOY, &args![manager]).u32(),
+        Some(manager) => in_place::pipboy(e, manager),
         None => 0,
     }
 }
@@ -2543,16 +2646,22 @@ pub fn fn_007059d0(e: &mut Engine) {
 
 // Typed from 00705a00
 /// `Interface::IsInPipboyMenu` (Xbox PDB): when the manager is ready, true
-/// if its `+0x4bc` word is 2 (`00709bc0`) or 3 ([`MANAGER_MODE_IS_THREE`]).
+/// if its `+0x4bc` word is 2 or 3 (`00709bc0`, `00709c00`).
 pub fn interface_is_in_pipboy_menu(e: &mut Engine) -> u8 {
     if ready_manager(e).is_none() {
         return 0;
     }
-    if e.call(MANAGER_MODE_IS_TWO, &[]).bool() || e.call(MANAGER_MODE_IS_THREE, &[]).bool() {
-        1
-    } else {
-        0
-    }
+    u8::from(
+        typed_call!(
+            super::FAMILY,
+            0x0070_9bc0,
+            super::interface_cpp_p3::interface_is_pipboy_opening(e)
+        ) || typed_call!(
+            super::FAMILY,
+            0x0070_9c00,
+            super::interface_cpp_p3::fn_00709c00(e)
+        ),
+    )
 }
 
 // Typed from 00705a60

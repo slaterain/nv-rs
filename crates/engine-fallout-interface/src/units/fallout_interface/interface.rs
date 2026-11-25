@@ -410,7 +410,8 @@ pub fn interface_is_menu_id_visible(e: &mut Engine, menu_id: i32, mask: u32) -> 
             return 0;
         }
         for id in TOP_MENU_CANDIDATES {
-            if interface_is_menu_id_visible(e, id, mask) != 0 {
+            // The exe's own CALL: by address, so the native version answers it too.
+            if e.call(0x0070_2680, &args![id, mask]).u8() != 0 {
                 return 1;
             }
         }
