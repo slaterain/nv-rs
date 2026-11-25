@@ -692,7 +692,11 @@ fn menu_click_routine(e: &mut Engine, a: &[u32]) -> Ret {
         }
     }
     let original = state(e).clicks[i].original;
-    e.call(original, &[menu, tile_id, clicked])
+    // The original handler can load a save and wait for background work that needs the kernel
+    // lock. The extender trampoline holds that lock on entry in real-thread mode.
+    engine_core::real_threads::without_kernel_lock_mut_if_outermost(e, |e| {
+        e.call(original, &[menu, tile_id, clicked])
+    })
 }
 
 /// The script argument read as a script form, or `None` (the command does nothing).
