@@ -226,7 +226,8 @@ pub fn fn_0092ca00(e: &mut Engine, this: Ptr) {
 /// engine map): the destructor (`0092ca00`), then frees `this`
 /// (`00401030`) when bit 0 of `flags` is set. Returns `this`.
 pub fn middle_low_process_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_0092ca00(e, this);
+    // By address, so the typed destructor is reached when it is on.
+    e.call(0x0092_ca00, &args![this]);
     if flags & 1 != 0 {
         e.call(FREE_BLOCK, &args![this]);
     }

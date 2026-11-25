@@ -20,7 +20,7 @@
 //! `008c65a0` does nothing.
 
 use super::FAMILY;
-use crate::{ai_queries, dispatch, slot_target};
+use crate::{ai_queries, dispatch, save, slot_target};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
 use engine_core::x87::{x87_quiet_bits, x87_store32};
@@ -77,9 +77,7 @@ const SAVE_NUMERIC_ID: u32 = 0x0085_7a10;
 const WRITE_BYTES: u32 = 0x0085_79b0;
 const LOAD_NUMERIC_ID: u32 = 0x0085_7aa0;
 const READ_BYTES: u32 = 0x0085_79e0;
-/// The save buffer's `SaveFormID_ov2` (`thiscall`, a form and a word; the save family's) and byte
-/// writer (`thiscall`, an address, a size and a word).
-const SAVE_FORM_ID: u32 = 0x0086_5df0;
+/// The save buffer's byte writer (`thiscall`, an address, a size and a word).
 const BUFFER_WRITE: u32 = 0x0086_5e50;
 /// The load buffer's `LoadFormID_ov2` (`thiscall`, the id's address; a byte answer) and byte reader
 /// (`thiscall`, an address and a size).
@@ -455,6 +453,15 @@ pub fn init_load_game(e: &mut Engine, this: Ptr, _word: u32, _unused: u32) {
 /// Nothing: the exe's only code is the folded block. The word is unread.
 pub fn revert_unused(_e: &mut Engine, _this: Ptr, _word: u32) {}
 
+/// The buffer's `SaveFormID_ov2` of a form (the save family's, `00865df0`; the last word unread).
+fn save_form_id(e: &mut Engine, buffer: Ptr, form: u32) {
+    typed_call!(
+        save::FAMILY,
+        0x0086_5df0,
+        save::refs::save_form_id(e, buffer, Ptr::new(form), 0u32)
+    );
+}
+
 // Typed from 008c65d0
 /// `ActorPackage::SaveGame` (Xbox PDB): the buffer's version asked (its slot 8), the package's form
 /// id saved (`00865df0`). With a package: when its id is a created form's, its type byte (0xff when
@@ -465,7 +472,7 @@ pub fn revert_unused(_e: &mut Engine, _this: Ptr, _word: u32) {}
 pub fn save_game(e: &mut Engine, this: Ptr, buffer: Ptr) {
     let version = e.vcall(buffer.addr(), 8, &[]).u32();
     let package = word(e, this, PACKAGE);
-    e.call(SAVE_FORM_ID, &args![buffer, package, 0u32]);
+    save_form_id(e, buffer, package);
     let package = word(e, this, PACKAGE);
     if package == 0 {
         return;
@@ -508,7 +515,7 @@ pub fn save_game(e: &mut Engine, this: Ptr, buffer: Ptr) {
         );
     }
     let target = word(e, this, TARGET);
-    e.call(SAVE_FORM_ID, &args![buffer, target, 0u32]);
+    save_form_id(e, buffer, target);
 }
 
 // Typed from 008c6730
