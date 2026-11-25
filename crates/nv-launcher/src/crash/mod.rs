@@ -479,9 +479,11 @@ fn plugin_names(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// How much of an F12 report's note or place is read, and how much of it a report keeps
-/// (after scrubbing: a cut path would keep a part of a name).
-const READ_CHARS: usize = 64 * 1024;
+/// How much of an F12 report's note or place is read: [`NOTE_CHARS`] characters in any encoding
+/// (four bytes each at most) four times over, for what scrubbing shortens (a path is `<path>`
+/// and its last part). And how much of it a report keeps (after scrubbing: a cut path would keep
+/// a part of a name).
+const READ_BYTES: u64 = 64 * 1024;
 const NOTE_CHARS: usize = 4000;
 
 /// `text` scrubbed by `s`, then cut at `chars` characters.
@@ -489,19 +491,111 @@ fn scrubbed_cut(s: &Scrubber, text: &str, chars: usize) -> String {
     s.text(text).chars().take(chars).collect()
 }
 
-/// A file as text, at most `chars` characters, trimmed; none when missing or empty.
-fn short_text(path: &Path, chars: usize) -> Option<String> {
-    let bytes = std::fs::read(path).ok()?;
-    let text: String = String::from_utf8_lossy(&bytes)
-        .chars()
-        .take(chars)
-        .collect();
+/// The first `limit` bytes of the file at `path` (all of it when shorter), and whether it goes on
+/// past them; none when it cannot be read.
+fn file_start(path: &Path, limit: u64) -> Option<(Vec<u8>, bool)> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    (&mut file).take(limit).read_to_end(&mut bytes).ok()?;
+    let more = file.read(&mut [0]).ok()? > 0;
+    Some((bytes, more))
+}
+
+/// A text file's bytes as text, by its byte-order mark: UTF-8 (the mark left out), UTF-16 LE or
+/// BE (Notepad's "UTF-16" choices in Save As, Windows PowerShell's `>`). Without a mark: UTF-8
+/// (a character cut at the end left out); else the system's ANSI code page (`ansi`: Notepad's
+/// "ANSI"); else UTF-8 with the bad bytes replaced. NULs go (a UTF-16 file without its mark):
+/// the scrubber finds names, folders and addresses as their letters in a row.
+fn decoded(bytes: &[u8], ansi: impl FnOnce(&[u8]) -> Option<String>) -> String {
+    let utf16 = |rest: &[u8], unit: fn([u8; 2]) -> u16| -> String {
+        let units = rest.as_chunks::<2>().0.iter().map(|&p| unit(p));
+        char::decode_utf16(units)
+            .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
+            .collect()
+    };
+    let text = if let Some(rest) = bytes.strip_prefix(b"\xEF\xBB\xBF") {
+        String::from_utf8_lossy(rest).into_owned()
+    } else if let Some(rest) = bytes.strip_prefix(b"\xFF\xFE") {
+        utf16(rest, u16::from_le_bytes)
+    } else if let Some(rest) = bytes.strip_prefix(b"\xFE\xFF") {
+        utf16(rest, u16::from_be_bytes)
+    } else {
+        match std::str::from_utf8(bytes) {
+            Ok(text) => text.to_string(),
+            Err(e) if e.error_len().is_none() => {
+                String::from_utf8_lossy(&bytes[..e.valid_up_to()]).into_owned()
+            }
+            Err(_) => ansi(bytes).unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned()),
+        }
+    };
+    text.replace('\0', "")
+}
+
+/// Bytes in the system's ANSI code page as text (Windows' `MultiByteToWideChar`, `CP_ACP`); none
+/// when Windows cannot read them.
+#[cfg(windows)]
+fn ansi_text(bytes: &[u8]) -> Option<String> {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MultiByteToWideChar(
+            code_page: u32,
+            flags: u32,
+            text: *const u8,
+            len: i32,
+            wide: *mut u16,
+            wide_len: i32,
+        ) -> i32;
+    }
+    const CP_ACP: u32 = 0;
+    let len = i32::try_from(bytes.len()).ok()?;
+    if len == 0 {
+        return Some(String::new());
+    }
+    // SAFETY: `bytes` is `len` bytes long and lives through the call; no output buffer, so the
+    // call answers how many units it needs.
+    let need =
+        unsafe { MultiByteToWideChar(CP_ACP, 0, bytes.as_ptr(), len, std::ptr::null_mut(), 0) };
+    let mut wide = vec![0u16; usize::try_from(need).ok().filter(|&n| n > 0)?];
+    // SAFETY: as above, and `wide` holds `need` units.
+    let got =
+        unsafe { MultiByteToWideChar(CP_ACP, 0, bytes.as_ptr(), len, wide.as_mut_ptr(), need) };
+    wide.truncate(usize::try_from(got).ok().filter(|&n| n > 0)?);
+    Some(String::from_utf16_lossy(&wide))
+}
+
+/// Linux and macOS have no ANSI code page for a file: it is read as UTF-8, bad bytes replaced.
+#[cfg(not(windows))]
+fn ansi_text(_: &[u8]) -> Option<String> {
+    None
+}
+
+/// A file of the player's as text ([`decoded`]): at most its first [`READ_BYTES`] (then to their
+/// last whole word: a name cut there goes on in the part not read), trimmed, its line ends `\n`;
+/// none when missing or empty.
+fn short_text(path: &Path) -> Option<String> {
+    let (bytes, more) = file_start(path, READ_BYTES)?;
+    let mut text = decoded(&bytes, ansi_text);
+    if more {
+        text.truncate(text.rfind(char::is_whitespace).unwrap_or(0));
+    }
     let text = text.trim().replace("\r\n", "\n");
     (!text.is_empty()).then_some(text)
 }
 
-/// The newest F12 report folder (`NNN`) in `reports` whose note was written at or after
-/// `started`.
+/// When F12 made the report in `folder`: its `place.txt`'s time (F12 writes it once; the player
+/// writes in `note.txt`, maybe long after, in a later run), else the folder's creation (where the
+/// system keeps it).
+fn made(folder: &Path) -> Option<SystemTime> {
+    std::fs::metadata(folder.join("place.txt"))
+        .and_then(|m| m.modified())
+        .or_else(|_| std::fs::metadata(folder).and_then(|m| m.created()))
+        .ok()
+}
+
+/// The newest F12 report folder (`NNN`, the highest number) in `reports` made at or after
+/// `started` ([`made`]): an earlier run's report whose note the player writes during this run is
+/// not this run's.
 fn f12_during(reports: &Path, started: SystemTime) -> Option<F12> {
     let mut found: Option<(u32, PathBuf)> = None;
     for entry in std::fs::read_dir(reports).ok()?.flatten() {
@@ -510,21 +604,19 @@ fn f12_during(reports: &Path, started: SystemTime) -> Option<F12> {
             continue;
         };
         let path = entry.path();
-        let new = std::fs::metadata(path.join("note.txt"))
-            .and_then(|m| m.modified())
-            .is_ok_and(|t| t >= started);
+        let new = made(&path).is_some_and(|t| t >= started);
         if new && found.as_ref().is_none_or(|(n, _)| number > *n) {
             found = Some((number, path));
         }
     }
     let (_, path) = found?;
-    let note = short_text(&path.join("note.txt"), READ_CHARS)
+    let note = short_text(&path.join("note.txt"))
         .map(|n| n.replacen(F12_NOTE_TEMPLATE, "", 1).trim().to_string())
         .filter(|n| !n.is_empty());
     Some(F12 {
         folder: path.file_name()?.to_string_lossy().into_owned(),
         note,
-        place: short_text(&path.join("place.txt"), READ_CHARS),
+        place: short_text(&path.join("place.txt")),
     })
 }
 
@@ -1041,6 +1133,7 @@ mod tests {
         let f12 = own.join("reports").join("001");
         std::fs::create_dir_all(&f12).unwrap();
         std::fs::write(f12.join("note.txt"), "the door would not open\n").unwrap();
+        std::fs::write(f12.join("place.txt"), "Goodsprings 1 2 3\r\n").unwrap();
         let text = sample(&own, &own, None, true, Some("Table Card".into()));
         assert!(
             text.contains("a report keeps its last 2 lines; the last 2 of your newest log"),
@@ -1406,18 +1499,29 @@ mod tests {
             "nv-rs Windows preview 2026-11-16.1\nSource commit: 0123456789abcdef\n",
         )
         .unwrap();
-        // An F12 report of this run (its picture is never read) between two of earlier runs (the
-        // newer number too): only this run's goes in.
+        // Two F12 reports of this run (their pictures are never read), 002 and the newer 003, and
+        // two of an earlier run: 001, and 004, whose note the player wrote during this run (an
+        // F12 report counts by when F12 wrote its place, never by its note): only 003 goes in.
         let started = SystemTime::now() - Duration::from_secs(5);
-        for (n, note) in [("001", "old one"), ("003", "older one"), ("002", "Write here what went wrong and what you did just before it:\r\n\r\nI was near jtest's house\r\n")] {
+        let reports: [(&str, &str, &[&str]); 4] = [
+            ("001", "old one", &["note.txt", "place.txt", "picture.bmp"]),
+            ("002", "the first of this run", &[]),
+            ("003", "Write here what went wrong and what you did just before it:\r\n\r\nI was near jtest's house\r\n", &[]),
+            ("004", "an earlier run's, written now", &["place.txt", "picture.bmp"]),
+        ];
+        for (n, note, old) in reports {
             let f = own.join("reports").join(n);
             std::fs::create_dir_all(&f).unwrap();
             std::fs::write(f.join("note.txt"), note).unwrap();
-            std::fs::write(f.join("place.txt"), "Goodsprings 1 2 3\r\n").unwrap();
+            std::fs::write(f.join("place.txt"), format!("Goodsprings {n}\r\n")).unwrap();
             std::fs::write(f.join("picture.bmp"), "BM").unwrap();
-            if n != "002" {
-                let note = std::fs::File::options().write(true).open(f.join("note.txt")).unwrap();
-                note.set_modified(started - Duration::from_secs(3600)).unwrap();
+            for file in old {
+                let file = std::fs::File::options()
+                    .write(true)
+                    .open(f.join(file))
+                    .unwrap();
+                file.set_modified(started - Duration::from_secs(3600))
+                    .unwrap();
             }
         }
         let log = own.join("logs").join("game-1.log");
@@ -1515,14 +1619,24 @@ mod tests {
         assert!(body.contains("[nv-rs General] sDir=(a path, left out)"));
         assert!(body.contains("[nv-rs General] sName=<user>"), "{body}");
         assert!(body.contains("  <user>'s patch.esp"), "{body}");
-        assert!(body.contains("F12 report made during this run: reports/002"));
-        assert!(body.contains("    I was near <user>'s house"), "{body}");
-        assert!(!body.contains("Write here"), "{body}");
-        assert!(body.contains("    Goodsprings 1 2 3"));
         assert!(
-            !body.contains("older one") && !body.contains("old one"),
+            body.contains("F12 report made during this run: reports/003"),
             "{body}"
         );
+        assert!(body.contains("    I was near <user>'s house"), "{body}");
+        assert!(!body.contains("Write here"), "{body}");
+        assert!(body.contains("    Goodsprings 003"), "{body}");
+        for other in [
+            "old one",
+            "the first of this run",
+            "written now",
+            "Goodsprings 00",
+        ] {
+            assert!(
+                !body.replace("Goodsprings 003", "").contains(other),
+                "{other} in {body}"
+            );
+        }
         assert!(
             body.contains("System:        Some OS 1 (Workstation Edition)"),
             "{body}"
@@ -1551,6 +1665,188 @@ mod tests {
         assert!(!folder.exists());
         assert!(second.exists());
         assert!(own.join("reports").join("001").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The F12 part of a report built for a run started 5 seconds ago whose nv-rs folder is `own`
+    /// (with the `reports` folder the test made), scrubbed by `s`.
+    fn f12_built(own: &Path, s: &Scrubber) -> Option<F12> {
+        let log = own.join("game-1.log");
+        std::fs::write(&log, "Game's main stopped in frame 1: x\n").unwrap();
+        let run = Run {
+            status: Some(3),
+            shell: Shell::Windows,
+            log: &log,
+            started: SystemTime::now() - Duration::from_secs(5),
+            mods: false,
+            own,
+            program: own,
+            games: Vec::new(),
+            table_card: None,
+        };
+        let facts = system::Facts {
+            os: "x".into(),
+            cpu: "x".into(),
+            threads: None,
+            memory: None,
+        };
+        build(
+            &run,
+            &Ending::Stop("x".into()),
+            &facts,
+            s,
+            SystemTime::now(),
+        )
+        .f12
+    }
+
+    /// A note.txt saved in another encoding (Notepad's Save As: UTF-8 with its mark, UTF-16 LE or
+    /// BE, ANSI; Windows PowerShell's `>`: UTF-16 LE) is read as its text, then scrubbed: the
+    /// user's name (not plain ASCII), e-mail, folders and Steam account go in every one.
+    #[test]
+    fn an_f12_note_is_read_in_its_encoding_then_scrubbed() {
+        let root =
+            std::env::temp_dir().join(format!("nv-launcher-note-codes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let f12 = root.join("reports").join("001");
+        std::fs::create_dir_all(&f12).unwrap();
+        std::fs::write(f12.join("place.txt"), "Goodsprings\r\n").unwrap();
+        let mut known = Known::default();
+        known.words.push(("J\u{fc}rgen".into(), "<user>"));
+        known.words.push(("jtest".into(), "<user>"));
+        let s = Scrubber::new(&known);
+        let template = "Write here what went wrong and what you did just before it:\r\n\r\n";
+        let words = format!("{template}J\u{fc}rgen here, steamcommunity.com/id/jtest, jo@example.com; files in D:\\Profiles\\J\u{fc}rgen\\notes.txt\r\n");
+        let want = "<user> here, steamcommunity.com/id/<id>, <e-mail>; files in <path>\\notes.txt";
+        let utf16 = |text: &str, be: bool| -> Vec<u8> {
+            let units = text.encode_utf16();
+            let bytes: Vec<u8> = if be {
+                units.flat_map(u16::to_be_bytes).collect()
+            } else {
+                units.flat_map(u16::to_le_bytes).collect()
+            };
+            let mark: &[u8] = if be { b"\xFE\xFF" } else { b"\xFF\xFE" };
+            [mark, &bytes].concat()
+        };
+        let cases = [
+            ("UTF-8", words.as_bytes().to_vec()),
+            (
+                "UTF-8 with its mark",
+                [b"\xEF\xBB\xBF".as_slice(), words.as_bytes()].concat(),
+            ),
+            ("UTF-16 LE", utf16(&words, false)),
+            ("UTF-16 BE", utf16(&words, true)),
+        ];
+        for (name, bytes) in cases {
+            std::fs::write(f12.join("note.txt"), bytes).unwrap();
+            let note = f12_built(&root, &s).and_then(|f| f.note);
+            assert_eq!(note.as_deref(), Some(want), "{name}");
+        }
+        // UTF-16 LE without its mark: its NULs go.
+        let plain = format!("{template}jtest here, jo@example.com\r\n");
+        std::fs::write(f12.join("note.txt"), &utf16(&plain, false)[2..]).unwrap();
+        let note = f12_built(&root, &s).and_then(|f| f.note);
+        assert_eq!(note.as_deref(), Some("<user> here, <e-mail>"));
+        // Only the template, with UTF-8's or UTF-16's mark: no note.
+        for bytes in [
+            [b"\xEF\xBB\xBF".as_slice(), template.as_bytes()].concat(),
+            utf16(template, false),
+        ] {
+            std::fs::write(f12.join("note.txt"), bytes).unwrap();
+            assert!(f12_built(&root, &s).unwrap().note.is_none());
+        }
+        // ANSI (code page 1252's `ü`): on Windows as the system's code page reads it, elsewhere
+        // with the bad byte replaced (the name's other letters, the e-mail and the path still go).
+        let ansi: Vec<u8> = words
+            .chars()
+            .map(|c| if c == '\u{fc}' { 0xfc } else { c as u8 })
+            .collect();
+        std::fs::write(f12.join("note.txt"), ansi).unwrap();
+        let note = f12_built(&root, &s).and_then(|f| f.note).unwrap();
+        #[cfg(windows)]
+        if crate::play::win::ansi_code_page() == 1252 {
+            assert_eq!(note, want);
+        }
+        #[cfg(not(windows))]
+        assert_eq!(note, want.replacen("<user>", "J\u{fffd}rgen", 1));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// How a note's bytes are read: by the mark; else UTF-8 (a letter cut at the end is no reason
+    /// for the ANSI code page); else ANSI; else UTF-8 with the bad bytes replaced; NULs go.
+    #[test]
+    fn a_notes_bytes_are_decoded_by_their_mark_else_utf8_else_ansi() {
+        let latin = |b: &[u8]| Some(b.iter().map(|&c| char::from(c)).collect::<String>());
+        let never = |_: &[u8]| -> Option<String> { panic!("not ANSI") };
+        assert_eq!(decoded(b"\xEF\xBB\xBFJ\xC3\xBCrgen", never), "J\u{fc}rgen");
+        assert_eq!(decoded(b"\xFF\xFEJ\0\xFC\0r\0", never), "J\u{fc}r");
+        assert_eq!(decoded(b"\xFE\xFF\0J\0\xFC\0r", never), "J\u{fc}r");
+        assert_eq!(decoded("J\u{fc}rgen".as_bytes(), never), "J\u{fc}rgen");
+        assert_eq!(decoded(b"ab J\xC3", never), "ab J");
+        // A UTF-16 unit cut at the end, and half of a pair, at the end.
+        assert_eq!(decoded(b"\xFF\xFEj\0t\0e", never), "jt");
+        assert_eq!(decoded(b"\xFF\xFEj\0\x3D\xD8", never), "j\u{fffd}");
+        assert_eq!(decoded(b"J\xFCrgen", latin), "J\u{fc}rgen");
+        assert_eq!(decoded(b"J\xFCrgen", |_| None), "J\u{fffd}rgen");
+        assert_eq!(decoded(b"j\0t\0e\0s\0t\0", never), "jtest");
+        assert_eq!(decoded(b"", never), "");
+        // Windows' own code page: plain letters as they are; elsewhere there is none.
+        #[cfg(windows)]
+        assert_eq!(ansi_text(b"plain").as_deref(), Some("plain"));
+        #[cfg(not(windows))]
+        assert!(ansi_text(b"plain").is_none());
+    }
+
+    /// A note longer than a report keeps is cut after scrubbing, so no part of a name is left at
+    /// the cut. Of a note.txt longer than what is read only its start is read, to its last whole
+    /// word (the name cut there goes on in the part not read).
+    #[test]
+    fn a_long_note_is_cut_and_a_huge_one_read_only_in_part() {
+        let root =
+            std::env::temp_dir().join(format!("nv-launcher-long-note-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let f12 = root.join("reports").join("001");
+        std::fs::create_dir_all(&f12).unwrap();
+        std::fs::write(f12.join("place.txt"), "Goodsprings\r\n").unwrap();
+        let mut known = Known::default();
+        known.words.push(("jtest".into(), "<user>"));
+        let s = Scrubber::new(&known);
+        let long = format!("{} jtest-was-here {}", "x".repeat(3995), "y".repeat(1000));
+        std::fs::write(f12.join("note.txt"), &long).unwrap();
+        let note = f12_built(&root, &s).and_then(|f| f.note).unwrap();
+        assert_eq!(note.chars().count(), 4000);
+        assert!(note.starts_with("xxx") && note.ends_with(" <use"), "{note}");
+        // A path the scrubber makes short, then a name the read cuts after its third letter.
+        let path = format!("C:\\{}\\b ", "a".repeat(READ_BYTES as usize - 9));
+        assert_eq!(path.len() + 3, READ_BYTES as usize);
+        std::fs::write(f12.join("note.txt"), format!("{path}jtest is here\r\n")).unwrap();
+        let note = f12_built(&root, &s).and_then(|f| f.note);
+        assert_eq!(note.as_deref(), Some("<path>\\b"));
+        // What is read: at most the limit, and whether the file goes on.
+        let bytes = root.join("bytes.txt");
+        std::fs::write(&bytes, b"abcdef").unwrap();
+        assert_eq!(file_start(&bytes, 6), Some((b"abcdef".to_vec(), false)));
+        assert_eq!(file_start(&bytes, 4), Some((b"abcd".to_vec(), true)));
+        assert_eq!(file_start(&root.join("none.txt"), 4), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An F12 report without its place.txt counts as this run's by its folder's creation, where
+    /// the system keeps one.
+    #[test]
+    fn an_f12_report_without_its_place_counts_by_its_folder() {
+        let root =
+            std::env::temp_dir().join(format!("nv-launcher-no-place-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let f12 = root.join("001");
+        std::fs::create_dir_all(&f12).unwrap();
+        std::fs::write(f12.join("note.txt"), "the door").unwrap();
+        if let Ok(created) = std::fs::metadata(&f12).and_then(|m| m.created()) {
+            let found = f12_during(&root, created).unwrap();
+            assert_eq!(found.note.as_deref(), Some("the door"));
+            assert!(found.place.is_none());
+            assert!(f12_during(&root, created + Duration::from_secs(60)).is_none());
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -10,6 +10,7 @@
 //! out as the exe's).
 
 use super::FAMILY;
+use crate::dispatch;
 use engine_core::ptr::Ptr;
 use engine_core::x87::{
     x87_add, x87_div, x87_load32, x87_m32, x87_mul, x87_quiet_bits, x87_store32, x87_sub,
@@ -43,8 +44,6 @@ const LOCK_COLOURS: u32 = 0x00a6_7660;
 /// `NiTriStripsData::GetStripLists` (`00a75f10`) and `NiTriShapeData::GetTriList` (`00a7b850`).
 const GET_STRIP_LISTS: u32 = 0x00a7_5f10;
 const GET_TRI_LIST: u32 = 0x00a7_b850;
-/// The ray-triangle test (`00eadb90`, `cdecl`, ten words).
-const RAY_HITS_TRIANGLE: u32 = 0x00ea_db90;
 /// The point helpers: the matrix times a point (`004b4500`, `thiscall` on the matrix: the out, the
 /// point), a point times a matrix (`004b3ae0`, `cdecl`: the out, the point, the matrix), the
 /// difference and sum of points (`00439ef0`, `00439e90`, `thiscall`: the out, the other), a point's
@@ -458,8 +457,9 @@ fn record_distance_to_translation(
     true
 }
 
-/// The ray-triangle test of the corner copies (`00eadb90`): the cull byte (pick +0x10) goes out in
-/// the low byte of the frame word at `cull_slot`, as the exe pushes it.
+/// The ray-triangle test of the corner copies (`00eadb90`, the dispatch family's, a Rust call while it
+/// is on): the cull byte (pick +0x10) goes out in the low byte of the frame word at `cull_slot`, as the
+/// exe pushes it.
 #[allow(clippy::too_many_arguments)]
 fn test_triangle(
     e: &mut Engine,
@@ -474,24 +474,23 @@ fn test_triangle(
     let cull = e.mem.u8(p + 0x10);
     e.mem.set_u8(cull_slot, cull);
     let cull_word = e.mem.u32(cull_slot);
-    let answer = e
-        .call(
-            RAY_HITS_TRIANGLE,
-            &args![
-                model.origin,
-                model.direction,
-                corners[0],
-                corners[1],
-                corners[2],
-                cull_word,
-                point,
-                distance,
-                weights.u,
-                weights.v
-            ],
+    typed_call!(
+        dispatch::FAMILY,
+        0x00ea_db90,
+        dispatch::ray::ray_hits_triangle(
+            e,
+            Ptr::new(model.origin),
+            Ptr::new(model.direction),
+            Ptr::new(corners[0]),
+            Ptr::new(corners[1]),
+            Ptr::new(corners[2]),
+            cull_word,
+            Ptr::new(point),
+            Ptr::new(distance),
+            Ptr::new(weights.u),
+            Ptr::new(weights.v)
         )
-        .u32();
-    super::low_byte(answer) != 0
+    )
 }
 
 // Typed from 00e993d0

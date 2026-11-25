@@ -8,6 +8,8 @@
 //! - [`math`]: the transforms' and matrices' arithmetic (compose, invert, transpose, matrix times
 //!   matrix and vector), points scaled and normalised, the multi-bound box's corners, the 4x4
 //!   inverse for the shaders, the Havok vector scale, float closeness;
+//! - [`ray`]: the ray-triangle test every pick of a triangle runs (the crosshair's pick of the actors in
+//!   view, VATS, the decals), at the running thread's precision ([`crate::native::Real`]);
 //! - [`scene`]: the scene graph's walks and getters: an object's controllers, children and their
 //!   updates, the collision object and its RTTI cast, a reference's 3D, the frustum test of a bound,
 //!   the geometry's immediate render;
@@ -61,6 +63,7 @@ use crate::culling::layout::{NiAVObject, NiMatrix3, NiNode, NiPoint3, NiTransfor
 pub mod extra;
 pub mod layout;
 pub mod math;
+pub mod ray;
 pub mod refs;
 pub mod saveload;
 pub mod scene;
@@ -119,6 +122,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0045_2dc0, math::point2_new(Ptr, f32, f32) -> Ptr),
         entry!(0x0049_e2f0, math::points_close(Ptr<NiPoint3>, Ptr<NiPoint3>, f32) -> bool),
         entry!(0x0049_e390, math::floats_close(f32, f32, f32) -> bool),
+        // The ray-triangle test of the picks.
+        entry!(0x00ea_db90, ray::ray_hits_triangle(Ptr, Ptr, Ptr, Ptr, Ptr, u32, Ptr, Ptr, Ptr, Ptr) -> bool),
         // The scene graph.
         entry!(0x0043_b230, scene::first_controller(Ptr<NiAVObject>) -> Ptr),
         entry!(0x004a_8a90, scene::next_controller(Ptr) -> u32),
