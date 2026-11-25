@@ -12,10 +12,21 @@ use engine_core::{args, typed_call, Engine};
 
 /// Whether the card has alpha to coverage (`011f9421`).
 const COVERAGE_AVAILABLE: u32 = 0x011f_9421;
-/// `IsShadowPass` (`00b630f0`, `cdecl(type)`, by address).
-const IS_SHADOW_PASS: u32 = 0x00b6_30f0;
 /// The pass map's `GetAt` (`00853130`, `thiscall(map, key, out)`, by address).
 const MAP_GET_AT: u32 = 0x0085_3130;
+
+// Typed from 00b630f0
+/// `BSShaderAccumulator::IsShadowPass` (engine map), `cdecl(type)`, the answer in `AL`: whether the pass type is a
+/// shadow pass, 0x1c4 to 0x1c7, 0x231 to 0x234 or 0x284 to 0x287.
+pub fn is_shadow_pass(_e: &mut Engine, pass_type: u32) -> bool {
+    matches!(pass_type, 0x1c4..=0x1c7 | 0x231..=0x234 | 0x284..=0x287)
+}
+
+/// [`is_shadow_pass`] as the draw and shader families' code asks it (a typed call).
+#[inline(always)]
+pub(crate) fn shadow_pass(e: &mut Engine, pass_type: u32) -> bool {
+    typed_call!(super::FAMILY, 0x00b6_30f0, is_shadow_pass(e, pass_type))
+}
 
 // Typed from 00b99990
 /// A register group holder's own pass list drawn, `cdecl(list, second)`: when the list counts passes (+0x10),
@@ -109,7 +120,7 @@ pub fn render_batches(
                 e.call(MAP_GET_AT, &args![base.wrapping_add(0xc), pass_type, slot]);
                 e.global::<u32>(slot.addr())
             });
-            let skip = e.call(IS_SHADOW_PASS, &args![pass_type]).u8() != 0 && {
+            let skip = shadow_pass(e, pass_type) && {
                 let acc = typed_call!(
                     crate::render::FAMILY,
                     0x00b4_f5c0,

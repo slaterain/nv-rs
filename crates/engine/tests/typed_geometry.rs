@@ -2177,7 +2177,9 @@ fn create_tangent_space_second_shape() {
         .assert_same();
 }
 
-// Batch 3: the pick of a geometry's triangles.
+// Batch 3: the pick of a geometry's triangles. The ray-triangle test (`00eadb90`) is the dispatch
+// family's: these tests leave that family out and stand in for the test by address
+// (`goes_by_address`); `pick_real_triangles` (batch 4) runs the real one.
 
 use engine_core::typed::leaf;
 use engine_typed::geometry::pick;
@@ -2197,6 +2199,13 @@ struct Picked {
 /// arrays the data keeps (bits: 1 positions, 2 normals, 4 colours, 8 texture coordinates), stop at
 /// the first hit, the case's float and where it goes.
 fn pick_world(e: &mut Engine, c: &Case) -> Picked {
+    pick_world_with(e, c, true)
+}
+
+/// [`pick_world`], with the ray-triangle test's stand-in (`stand_in`) or without it: then the real test
+/// runs, the translation on the translation's side and the dispatch family's on the typed side when the
+/// test names that family.
+fn pick_world_with(e: &mut Engine, c: &Case, stand_in: bool) -> Picked {
     lifecycle_globals(e);
     e.map(0x011a_9000, 0x1000);
     e.map(0x0126_f000, 0x1000);
@@ -2205,25 +2214,27 @@ fn pick_world(e: &mut Engine, c: &Case) -> Picked {
     // The stand-ins: the ray-triangle test answers from the table's bits and writes its point,
     // distance and weights; the data's locks fill their blocks from the table; the strip and triangle
     // lists come from the table; the class test answers from the table; the record's set marks.
-    e.register(0x00ea_db90, |e, a| {
-        let k = e.mem.u32(RETS + 0x900);
-        set(e, RETS + 0x900, k + 1);
-        let hit = (e.mem.u32(RETS + 0x904) >> (k % 8)) & 1;
-        if hit != 0 {
-            let value = e.mem.u32(RETS + 0x908);
-            for (slot, bits) in [
-                (a[6], 0x3f80_0000u32),
-                (a[6] + 4, value),
-                (a[6] + 8, 0x4000_0000),
-                (a[7], 0x4120_0000),
-                (a[8], 0x3e80_0000),
-                (a[9], 0x3e00_0000),
-            ] {
-                set(e, slot, bits);
+    if stand_in {
+        e.register(0x00ea_db90, |e, a| {
+            let k = e.mem.u32(RETS + 0x900);
+            set(e, RETS + 0x900, k + 1);
+            let hit = (e.mem.u32(RETS + 0x904) >> (k % 8)) & 1;
+            if hit != 0 {
+                let value = e.mem.u32(RETS + 0x908);
+                for (slot, bits) in [
+                    (a[6], 0x3f80_0000u32),
+                    (a[6] + 4, value),
+                    (a[6] + 8, 0x4000_0000),
+                    (a[7], 0x4120_0000),
+                    (a[8], 0x3e80_0000),
+                    (a[9], 0x3e00_0000),
+                ] {
+                    set(e, slot, bits);
+                }
             }
-        }
-        ret(hit)
-    });
+            ret(hit)
+        });
+    }
     // The locks: the vertices' (data, block), the texture coordinates' (data, 0, block), the
     // normals' and the colours' (data, block) fill the block from the table.
     fn fill_lock(e: &mut Engine, block: u32, at: u32) -> Ret {
@@ -2388,6 +2399,7 @@ fn pick_geometry() {
     .family(&geometry::GEOMETRY)
     .family(&leaf::LEAVES)
     .translation_calls_plainly(&[0x00e9_93d0, 0x00e9_a280, 0x00e9_9330])
+    .goes_by_address(&[0x00ea_db90])
     .max_calls(MAX_CALLS)
     .inputs(PICK_INPUTS)
     .max_cases(800)
@@ -2434,6 +2446,7 @@ fn pick_geometry_second_shape() {
     .family(&geometry::GEOMETRY)
     .family(&leaf::LEAVES)
     .translation_calls_plainly(&[0x00e9_93d0, 0x00e9_a280, 0x00e9_9330])
+    .goes_by_address(&[0x00ea_db90])
     .max_calls(MAX_CALLS)
     .inputs(PICK_INPUTS)
     .max_cases(400)
@@ -2457,6 +2470,7 @@ fn pick_strips_and_shape_second_shape() {
             .family(&geometry::GEOMETRY)
             .family(&leaf::LEAVES)
             .translation_calls_plainly(&[0x00e9_9330])
+            .goes_by_address(&[0x00ea_db90])
             .max_calls(MAX_CALLS)
             .inputs(PICK_INPUTS)
             .max_cases(250)
@@ -2476,6 +2490,7 @@ fn pick_strips() {
         .family(&geometry::GEOMETRY)
         .family(&leaf::LEAVES)
         .translation_calls_plainly(&[0x00e9_9330])
+        .goes_by_address(&[0x00ea_db90])
         .max_calls(MAX_CALLS)
         .inputs(PICK_INPUTS)
         .max_cases(500)
@@ -2494,6 +2509,7 @@ fn pick_shape() {
         .family(&geometry::GEOMETRY)
         .family(&leaf::LEAVES)
         .translation_calls_plainly(&[0x00e9_9330])
+        .goes_by_address(&[0x00ea_db90])
         .max_calls(MAX_CALLS)
         .inputs(PICK_INPUTS)
         .max_cases(500)
@@ -2503,4 +2519,360 @@ fn pick_shape() {
         })
         .run()
         .assert_same();
+}
+
+// Batch 4: the ray-triangle test the picks call (`00eadb90`: `engine_typed::dispatch::ray`, the dispatch
+// family's, a Rust call from the typed picks).
+
+use engine_typed::dispatch::{self, ray};
+
+/// The determinant's limits the test reads: `1e-5` (`010718c0`) and `-1e-5` (`010d5368`).
+fn ray_limits(e: &mut Engine) {
+    for page in [0x0107_1000u32, 0x010d_5000] {
+        e.map(page, 0x1000);
+    }
+    set(e, 0x0107_18c0, 1e-5f32.to_bits());
+    set(e, 0x010d_5368, (-1e-5f32).to_bits());
+}
+
+/// A float in `[0, 1)` from a swept float's mantissa, whatever its exponent.
+fn jitter(bits: u32) -> f32 {
+    f32::from_bits(bits & 0x007f_ffff | 0x3f80_0000) - 1.0
+}
+
+/// The scenes [`ray_scene`] makes.
+const RAY_SCENES: &[u32] = &[
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26, 27,
+];
+
+/// `p + k q`, per axis.
+fn plus(p: [f32; 3], q: [f32; 3], k: f32) -> [f32; 3] {
+    [p[0] + k * q[0], p[1] + k * q[1], p[2] + k * q[2]]
+}
+
+/// Scene `s`'s fifteen floats: the ray's origin and direction (moved a little by the jitters `j`),
+/// then the corners `v0`, `v1`, `v2`. Scenes 0 to 23: a triangle of the spans `a = (3, 0, 0)` and
+/// `b = (0, 2.4, -1.8)` around the point 5 along the ray (12 to 23: 5 behind its origin), the ray meeting
+/// its plane at one of six places (inside, `u < 0`, `u > 1`, `v < 0`, `u + v > 1`, on the edge `u = 0`),
+/// with `v1 - v0` and `v2 - v0` the spans in that order (a back face to this ray) or swapped (6 to 11 and
+/// 18 to 23: a front face). 24 and 25: a triangle whose plane holds the ray, both windings. 26 and 27:
+/// the inside hit with spans a thousandth as long (`|det|` under `1e-5`), both windings. 28 to 39: the
+/// limit scenes ([`ray_limit_scene`]), no jitter.
+fn ray_scene(s: u32, j: [f32; 4]) -> [f32; 15] {
+    if s >= 28 {
+        return ray_limit_scene(s - 28);
+    }
+    let o = [0.25 + 0.01 * j[0], -4.0 + 0.01 * j[1], 0.5 + 0.01 * j[2]];
+    let d = [0.1 + 0.01 * j[3], 0.6, 0.79];
+    let (mut a, mut b) = ([3.0f32, 0.0, 0.0], [0.0f32, 2.4, -1.8]);
+    let (v0, v1, v2) = if s < 24 {
+        let (u, v) = [
+            (1.0 / 3.0, 1.0 / 3.0),
+            (-0.25, 0.5),
+            (1.25, 0.1),
+            (0.5, -0.25),
+            (0.6, 0.6),
+            (0.0, 0.5),
+        ][(s % 6) as usize];
+        let c = plus(o, d, if s < 12 { 5.0 } else { -5.0 });
+        let v0 = plus(plus(c, a, -u), b, -v);
+        if s % 12 >= 6 {
+            std::mem::swap(&mut a, &mut b);
+        }
+        (v0, plus(v0, a, 1.0), plus(v0, b, 1.0))
+    } else if s < 26 {
+        let v0 = plus(plus(o, d, 5.0), a, -0.5);
+        let (first, second) = if s == 24 { (d, a) } else { (a, d) };
+        (v0, plus(v0, first, 3.0), plus(v0, second, 1.0))
+    } else {
+        let (a, b) = (a.map(|x| x * 1e-3), b.map(|x| x * 1e-3));
+        let v0 = plus(plus(plus(o, d, 5.0), a, -1.0 / 3.0), b, -1.0 / 3.0);
+        let (first, second) = if s == 26 { (a, b) } else { (b, a) };
+        (v0, plus(v0, first, 1.0), plus(v0, second, 1.0))
+    };
+    [
+        o[0], o[1], o[2], d[0], d[1], d[2], v0[0], v0[1], v0[2], v1[0], v1[1], v1[2], v2[0], v2[1],
+        v2[2],
+    ]
+}
+
+/// The limit scenes (`k` 0 to 11), every value exact: a triangle in the plane `y = 0` with `v0` at 0,
+/// `v2 = (0, 0, 1)` and `v1` on the x axis, the ray along `(0, 1, 0)`. `v1` is `(1, 0, 0)` for `k` 0
+/// to 5 (a front face to the ray: `det = 1`) and `(-1, 0, 0)` for 6 to 11 (a back face: `det = -1`),
+/// the origin mirrored with it; each origin puts one value exactly on its test's limit: `t = 0`,
+/// `u = 0`, `u = det` (with `v = 0` and `u + v = det`), `v = 0`, `u + v = det`, and last `v1` a
+/// hundred-thousandth as long, `det` exactly `1e-5` (or `-1e-5`), a hit.
+fn ray_limit_scene(k: u32) -> [f32; 15] {
+    let side = if k < 6 { 1.0f32 } else { -1.0 };
+    let (o, x1) = match k % 6 {
+        0 => ([0.25f32, 0.0, 0.25], 1.0f32),
+        1 => ([0.0, -1.0, 0.25], 1.0),
+        2 => ([1.0, -1.0, 0.0], 1.0),
+        3 => ([0.5, -1.0, 0.0], 1.0),
+        4 => ([0.5, -1.0, 0.5], 1.0),
+        _ => ([0.0, -1.0, 0.25], 1e-5),
+    };
+    [
+        side * o[0],
+        o[1],
+        o[2],
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        side * x1,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    ]
+}
+
+/// The limit scenes' numbers.
+const RAY_LIMIT_SCENES: &[u32] = &[28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39];
+
+/// The test's words for `c` (word 0 the scene, 1 the cull word, 2 the outs' layout, 3 to 6 the jitters),
+/// with `plant` (a float's place among the fifteen and its bits) put in: the ray and the corners in
+/// blocks of their own, the outs (the point, `t`, `u`, `v`) in a block filled with a pattern first so an
+/// out left unwritten shows. The layouts: 0 apart; 1 `u`'s out on the direction's `x` (the test reads
+/// the direction after it writes `u`); 2 the point's out on the origin (the point is the origin plus the
+/// scaled direction); 3 `t`'s out on `v`'s; 4 `u`'s out on `v`'s (the test reads `u` back for
+/// `u + v` after it writes `v`); 5 `t`'s out on `u`'s.
+fn ray_words(e: &mut Engine, c: &Case, plant: Option<(usize, u32)>) -> Vec<u32> {
+    ray_limits(e);
+    let j = [3, 4, 5, 6].map(|i| jitter(c.f32(i).to_bits()));
+    let mut bits = ray_scene(c.word(0), j).map(f32::to_bits);
+    if let Some((at, value)) = plant {
+        bits[at] = value;
+    }
+    let blocks: Vec<u32> = bits
+        .chunks(3)
+        .map(|point| {
+            let block = e.mem.alloc(0x10);
+            for (k, word) in (0u32..).zip(point) {
+                set(e, block + 4 * k, *word);
+            }
+            block
+        })
+        .collect();
+    let outs = e.mem.alloc(0x20);
+    for k in 0..8 {
+        set(e, outs + 4 * k, 0x5a5a_0000 + k);
+    }
+    let (mut point, mut t, mut u, v) = (outs, outs + 0xc, outs + 0x10, outs + 0x14);
+    match c.word(2) {
+        1 => u = blocks[1],
+        2 => point = blocks[0],
+        3 => t = v,
+        4 => u = v,
+        5 => t = u,
+        _ => {}
+    }
+    vec![
+        blocks[0],
+        blocks[1],
+        blocks[2],
+        blocks[3],
+        blocks[4],
+        c.word(1),
+        point,
+        t,
+        u,
+        v,
+    ]
+}
+
+/// The swept jitters (a quarter, two thirds, four fifths and none in the ordinary cases).
+const RAY_JITTERS: [Input; 4] = [
+    Input::F32Swept(0x3fa0_0000),
+    Input::F32Swept(0x3f55_5555),
+    Input::F32Swept(0x3fe6_6666),
+    Input::F32Swept(0x3f80_0000),
+];
+
+/// The cull words: its low byte decides (0x100 does not cull, 0xffffff01 does), all of it (2 culls,
+/// though its bit 0 is clear).
+const RAY_CULL_WORDS: &[u32] = &[0, 1, 2, 0x0000_0100, 0xffff_ff01];
+
+/// `00eadb90` against its translation: every scene with every cull word and every layout of the outs,
+/// under both control words, then 256 cases of swept jitters (full mantissas in the ray). The
+/// translation's cross product (`004b3800`, the back faces'), dot products (`004b6190`), scaled
+/// direction (`004a3760`) and sum (`00439e90`) are done in place by the typed test.
+#[test]
+fn ray_hits_triangle() {
+    let mut inputs = vec![
+        Input::Of(RAY_SCENES),
+        Input::Of(RAY_CULL_WORDS),
+        Input::Of(&[0, 1, 2, 3, 4, 5]),
+    ];
+    inputs.extend(RAY_JITTERS);
+    Diff::new(entry!(
+        0x00ea_db90,
+        ray::ray_hits_triangle(Ptr, Ptr, Ptr, Ptr, Ptr, u32, Ptr, Ptr, Ptr, Ptr) -> bool
+    ))
+    .family(&dispatch::DISPATCH)
+    .ignore_calls(&[0x004b_3800, 0x004b_6190, 0x004a_3760, 0x0043_9e90])
+    .allow_nan_payloads()
+    .inputs(&inputs)
+    .max_cases(840)
+    .float_sweep(256)
+    .setup(|e, c| ray_words(e, c, None))
+    .run()
+    .assert_same();
+}
+
+/// `00eadb90` on the limit scenes: `t`, `u`, `v`, `u + v` and the determinant exactly on the limits
+/// the exe compares them with, front faces and back faces, with every cull word and every layout of
+/// the outs.
+#[test]
+fn ray_hits_triangle_on_the_limits() {
+    let mut inputs = vec![
+        Input::Of(RAY_LIMIT_SCENES),
+        Input::Of(RAY_CULL_WORDS),
+        Input::Of(&[0, 1, 2, 3, 4, 5]),
+    ];
+    inputs.extend(RAY_JITTERS);
+    Diff::new(entry!(
+        0x00ea_db90,
+        ray::ray_hits_triangle(Ptr, Ptr, Ptr, Ptr, Ptr, u32, Ptr, Ptr, Ptr, Ptr) -> bool
+    ))
+    .family(&dispatch::DISPATCH)
+    .ignore_calls(&[0x004b_3800, 0x004b_6190, 0x004a_3760, 0x0043_9e90])
+    .allow_nan_payloads()
+    .inputs(&inputs)
+    .max_cases(360)
+    .setup(|e, c| ray_words(e, c, None))
+    .run()
+    .assert_same();
+}
+
+/// `00eadb90` with a NaN (quiet, signalling, with a payload), an infinity or `-0` in one of five places
+/// (the origin's `y`, the direction's `x`, `v0`'s `y`, `v1`'s `z`, `v2`'s `x`) of every scene, culling or
+/// not: each takes the branch the exe's flag tests give it.
+#[test]
+fn ray_hits_triangle_special_floats() {
+    let mut inputs = vec![Input::Of(RAY_SCENES), Input::Of(&[0, 1]), Input::Of(&[0])];
+    inputs.extend(RAY_JITTERS);
+    inputs.extend([
+        Input::Of(&[1, 3, 7, 11, 12]),
+        Input::Of(&[
+            0x7fc0_0000,
+            0x7f80_0001,
+            0xffc1_2345,
+            0x7f80_0000,
+            0xff80_0000,
+            0x8000_0000,
+        ]),
+    ]);
+    Diff::new(entry!(
+        0x00ea_db90,
+        ray::ray_hits_triangle(Ptr, Ptr, Ptr, Ptr, Ptr, u32, Ptr, Ptr, Ptr, Ptr) -> bool
+    ))
+    .family(&dispatch::DISPATCH)
+    .ignore_calls(&[0x004b_3800, 0x004b_6190, 0x004a_3760, 0x0043_9e90])
+    .allow_nan_payloads()
+    .inputs(&inputs)
+    .max_cases(1700)
+    .setup(|e, c| ray_words(e, c, Some((c.word(7) as usize, c.word(8)))))
+    .run()
+    .assert_same();
+}
+
+/// [`pick_world_with`] without the stand-in, an identity transform (the model ray is the ray) and
+/// vertices the ray meets or misses: the origin `(0.25, -4, 0.5)` along the world's `(0, 0.6, 0.8)`;
+/// vertices 0 to 2 a triangle around the point 5 along the ray, 3 to 5 one around the point 9 along it
+/// (the spans of [`ray_scene`]). The layout `c.word(12)`: 0 the first a front face and the second a back
+/// face; 1 the first moved off the ray and the second a front face; 2 both behind the origin. The pick's
+/// cull byte is `c.word(11)`; the case's float is planted nowhere (word 10 past the positions).
+fn pick_real_world(e: &mut Engine, c: &Case) -> Picked {
+    let w = pick_world_with(e, c, false);
+    ray_limits(e);
+    let identity = [
+        1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    for (k, value) in (0u32..).zip(identity) {
+        set(e, w.geometry + 0x68 + 4 * k, value.to_bits());
+    }
+    let o = [0.25f32, -4.0, 0.5];
+    for (k, value) in (0u32..).zip(o) {
+        set(e, w.origin + 4 * k, value.to_bits());
+    }
+    let d = [0.0f32, 0.6, 0.8];
+    let (a, b) = ([3.0f32, 0.0, 0.0], [0.0f32, 2.4, -1.8]);
+    let triangle = |k: f32, front: bool, off: f32| -> [[f32; 3]; 3] {
+        let centre = plus(plus(o, d, k), a, off / 3.0);
+        let v0 = plus(plus(centre, a, -1.0 / 3.0), b, -1.0 / 3.0);
+        let (first, second) = if front { (b, a) } else { (a, b) };
+        [v0, plus(v0, first, 1.0), plus(v0, second, 1.0)]
+    };
+    let (near, far) = match c.word(12) {
+        0 => (triangle(5.0, true, 0.0), triangle(9.0, false, 0.0)),
+        1 => (triangle(5.0, true, 10.0), triangle(9.0, true, 0.0)),
+        _ => (triangle(-5.0, true, 0.0), triangle(-9.0, false, 0.0)),
+    };
+    let vertices: Vec<u32> = near
+        .iter()
+        .chain(far.iter())
+        .flatten()
+        .map(|x| x.to_bits())
+        .collect();
+    let data = e.mem.u32(w.geometry + 0xb8);
+    for block in [e.mem.u32(data + 0x20), e.mem.u32(RETS + 0x910)] {
+        if block != 0 {
+            for (k, word) in (0u32..).zip(&vertices) {
+                set(e, block + 4 * k, *word);
+            }
+        }
+    }
+    e.mem.set_u8(w.pick + 0x10, c.word(11) as u8);
+    w
+}
+
+/// [`pick_real_world`]'s words: the class, the intersect type (the triangles), no skin, each coordinate
+/// type, no stand-in bits, no returns (their point helpers, `004a3760` and `00439e90`, are among the
+/// calls the typed test does in place), the vertices through the lock or not, kept or not, stopping at
+/// the first hit or not, no planted float, both cull bytes, each layout.
+const PICK_REAL_INPUTS: &[Input] = &[
+    Input::Of(&[0, 1, 2, 3]),
+    Input::Of(&[1, 2]),
+    Input::Of(&[0]),
+    Input::Of(&[0, 1]),
+    Input::Of(&[0]),
+    Input::Of(&[0]),
+    Input::Of(&[0, 1]),
+    Input::Of(&[0xf, 0xe]),
+    Input::Of(&[0, 1]),
+    Input::F32Swept(0x3f80_0000),
+    Input::Of(&[99]),
+    Input::Of(&[1, 0]),
+    Input::Of(&[0, 1, 2]),
+];
+
+/// `00e9b4f0` with the real ray-triangle test and the dispatch family named: the typed picks' Rust call
+/// of the test against the translated picks' call by address of the translated test, over triangles the
+/// ray meets in front, meets from behind, misses or leaves behind it, in each class of geometry.
+#[test]
+fn pick_real_triangles() {
+    Diff::new(entry!(
+        0x00e9_b4f0,
+        pick::pick_geometry(Ptr, Ptr, Ptr, Ptr) -> bool
+    ))
+    .family(&geometry::GEOMETRY)
+    .family(&leaf::LEAVES)
+    .family(&dispatch::DISPATCH)
+    .translation_calls_plainly(&[0x00e9_93d0, 0x00e9_a280, 0x00e9_9330])
+    .ignore_calls(&[0x004b_3800, 0x004b_6190, 0x004a_3760, 0x0043_9e90])
+    .max_calls(MAX_CALLS)
+    .inputs(PICK_REAL_INPUTS)
+    .max_cases(800)
+    .setup(|e, c| {
+        let w = pick_real_world(e, c);
+        vec![w.origin, w.direction, w.pick, w.geometry]
+    })
+    .run()
+    .assert_same();
 }

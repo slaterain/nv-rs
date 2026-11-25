@@ -14,15 +14,14 @@
 //!
 //! - the queue's lock (`011f9ec0`, the game's recursive spin lock) is taken with `0040fbf0` (the
 //!   dispatch family's) and given back in place, as the exe inlines it: the count at `011f9ec4`
-//!   down and, at zero, the owner word cleared (a release store when the memory is shared between
-//!   real threads, as the dispatch family's `0040fba0` does);
+//!   down and, at zero, the owner word cleared (the dispatch family's `0040fba0` body without its
+//!   empty call, shared with it: a release store when the memory is shared between real threads);
 //! - the object is held by an `NiPointer` temporary in a stack word (its count at +4 up,
 //!   `InterlockedIncrement`) while the list's add takes a count of its own, and released after
 //!   (`InterlockedDecrement`, the object deleted through its slot 4 at zero);
 //! - the list's add takes a node from the list node pool (`0043a010`, the draw F family's) and
-//!   gives
-//!   it the object (the node's old element released and the new one counted, unless they are the
-//!   same), then links it after the tail and counts it.
+//!   gives it the object (the node's old element released and the new one counted, unless they
+//!   are the same), then links it after the tail and counts it.
 //!
 //! The interlocked words go through the engine's direct calls of the imports
 //! ([`engine_core::sync_direct`]), as the other families' reference counts do.
@@ -49,9 +48,8 @@ const AV_FLAG_CULLED: u8 = 1;
 /// (Xbox PDB), each a list of counted pointers.
 const OBJECT_QUEUE_UPDATE: u32 = 0x108;
 const OBJECT_QUEUE_UPDATE_ACTIVE_ONLY: u32 = 0x114;
-/// The queues' lock (its owner word) and its count.
+/// The queues' lock (its owner word; its count at `011f9ec4`).
 const OBJECT_QUEUE_LOCK: u32 = 0x011f_9ec0;
-const OBJECT_QUEUE_LOCK_COUNT: u32 = 0x011f_9ec4;
 /// A counted object's count (+4) and its deleting slot (4).
 const REF_COUNT: u32 = 4;
 const SLOT_DELETE: u32 = 4;
@@ -78,24 +76,13 @@ fn count_down(e: &mut Engine, object: u32) {
     }
 }
 
-/// The queues' lock given back as the exe inlines it: the count down and, at zero, no owner.
+/// The queues' lock given back as the exe inlines it: the count down and, at zero, no owner (the
+/// dispatch family's [`dispatch::refs::unlock_inline`], `0040fba0`'s body: a release store of the
+/// owner word when the memory is shared between real threads, so the list's links made under the
+/// lock are seen by the next thread that takes it).
 #[inline]
 fn leave_queue_lock(e: &mut Engine) {
-    let count = e.mem.u32(OBJECT_QUEUE_LOCK_COUNT).wrapping_sub(1);
-    e.mem.set_u32(OBJECT_QUEUE_LOCK_COUNT, count);
-    if count != 0 {
-        return;
-    }
-    // The exe's x86 store publishes the list's links made under the lock; with real threads on a
-    // weaker memory model the owner word's clear is a release store, as `0040fba0`'s is.
-    if e.mem.is_shared() {
-        if let Some(owner) = e.mem.atomic_u32(OBJECT_QUEUE_LOCK) {
-            owner.store(0, std::sync::atomic::Ordering::Release);
-            return;
-        }
-        std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
-    }
-    e.mem.set_u32(OBJECT_QUEUE_LOCK, 0);
+    dispatch::refs::unlock_inline(e, Ptr::<LightLock>::new(OBJECT_QUEUE_LOCK));
 }
 
 // Typed from 00b5eeb0

@@ -9,7 +9,7 @@
 //! light direction, the light colour, the tint and the alpha run on the main thread only: plain `f32`,
 //! the exe's own rounding at its 24-bit precision.
 
-use super::batch::{self, pool_give, POOL_LOCK, RENDERING_PASS, RENDERING_PASS_TYPE, SKIN_RTTI};
+use super::batch::{self, pool_give, RENDERING_PASS, RENDERING_PASS_TYPE, SKIN_RTTI};
 use super::layout::{
     BSBatchRenderer, BSShaderAccumulator, BSShaderProperty, NiDX9Renderer, NiGeometry, NiProperty,
     NiSkinInstance, RenderPass, ShaderLight, ShadowSceneNode,
@@ -52,8 +52,6 @@ const SLOT_SKIN_TYPE: u32 = 8;
 /// of `ulFlags`), first person (`0x40` of `ulFlags2`).
 const FLAG_GROUPING: u32 = 0x200;
 const FLAG_FIRST_PERSON: u32 = 0x40;
-/// The node pool's lock (`0040fbf0`, `thiscall(lock, 0)`).
-const LOCK_ENTER: u32 = 0x0040_fbf0;
 
 /// The renderer's `AddPass` (slot 0x8c): [`batch::add_to_group`] directly when the slot holds it (the
 /// batch renderer's own), else through the slot.
@@ -394,7 +392,7 @@ pub fn finish(e: &mut Engine, accumulator: Ptr<BSShaderAccumulator>) {
 #[inline(always)]
 fn give_node(e: &mut Engine, node: u32) {
     e.set_global(node.wrapping_add(8), 0u32);
-    e.call(LOCK_ENTER, &args![POOL_LOCK, 0u32]);
+    batch::pool_lock(e);
     pool_give(e, node);
 }
 

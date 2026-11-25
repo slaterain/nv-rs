@@ -8,7 +8,6 @@
 //! the main thread's 24-bit precision. A float the exe copies through the x87 stack is copied as it is.
 
 use super::{add_d, mul_d};
-use crate::anim_keys::narrow;
 use crate::draw::{capture, packet};
 use engine_core::prelude::*;
 
@@ -185,7 +184,7 @@ pub fn light_setup(e: &mut Engine, index: u32, light: Ptr, scale: f32) {
                 ]
             });
             let w = if object != 0 {
-                narrow(e.vcall(object, 0x10c, &args![]).f64())
+                crate::draw::setups::property_fade_of(e, object)
             } else {
                 1.0
             };
@@ -258,7 +257,7 @@ pub fn light_setup(e: &mut Engine, index: u32, light: Ptr, scale: f32) {
         let pass = capture::own_at::<u16>(e, PASS_TYPE).wrapping_sub(0x154);
         let alpha = packet::pass_light_word(e, light, 0xd4);
         if pass <= 0x23 && object != 0 {
-            let factor = narrow(e.vcall(object, 0x10c, &args![]).f64());
+            let factor = crate::draw::setups::property_fade_of(e, object);
             scale_point(e, point, factor.to_bits());
         }
         for i in 0..3u32 {

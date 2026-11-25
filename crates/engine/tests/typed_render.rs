@@ -328,6 +328,9 @@ impl Common for Diff {
             ])
             // draw_f's helpers: off until its gate, so by address, as in play; run in typed_draw.
             .goes_by_address(DRAW_F_HELPERS)
+            // The draw family's shadow-pass test and a lighting property's fade, which the shader family calls: by
+            // address, run in typed_draw and typed_shader.
+            .goes_by_address(&[0x00b6_30f0, 0x00b6_6b80])
             .max_calls(MAX_CALLS)
             .max_cases(200);
         if real_shader {
