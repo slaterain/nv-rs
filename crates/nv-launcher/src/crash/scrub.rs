@@ -3,25 +3,28 @@
 //! its part below the game's folder or nv-rs's own. The same on every system: a Windows report
 //! read on Linux (or a path written with `/` on Windows) is scrubbed alike.
 //!
-//! 1. Known folders (the game's, nv-rs's own, the package's, the home folder), longest first,
-//!    matched literally in any case with any run of `\` or `/` between their parts (so the doubled
-//!    backslashes of JSON and of Rust's `{:?}` match too): replaced by their placeholder, the part
-//!    below kept (`<game>\Data\x.esm`); below `<home>` only its last two parts
-//!    (`<home>\...\Temp\x.tmp`: the parts in between can name an employer's OneDrive or an
-//!    account).
+//! 1. Known folders (the game's, nv-rs's own, the package's, OneDrive's, the home folder),
+//!    longest first, matched literally in any case with any run of `\` or `/` between their
+//!    parts (so the doubled backslashes of JSON and of Rust's `{:?}` match too): replaced by their
+//!    placeholder, the part below kept (`<game>\Data\x.esm`). Below `<home>` and `<onedrive>`
+//!    never the part right below it and only the last two parts (`<home>\...\Temp\x.tmp`), and a
+//!    Steam account's number is `<id>`. A folder's rest ends at a space, a quote, `;`, `,`, `:`
+//!    before a separator, and where another path or a web address starts.
 //! 2. Save files (`.fos`, and the extender's `.nvse`): their names hold the character's name, the
-//!    place and the play time, so the name goes (`<save>.fos`), in a path or in a line such as
-//!    `NV_SAVE_OUT: copied ...`.
-//! 3. Any other absolute path (`X:\...`, `\\host\share\...`, `//host/share/...`, or `/...` at
-//!    the start of a word): `<path>` and its last part only (`<path>\d3d9.dll`). A path goes on
-//!    over a space when one of the next three words holds its separator
-//!    (`C:\Program Files (x86)\x\y.dll`).
-//! 4. E-mail addresses (`<e-mail>`) and IPv4 and IPv6 addresses (`<ip>`).
+//!    place and the play time, so the name goes (`<save>.fos`), in a path, quoted, or in a line
+//!    such as `NV_SAVE_OUT: copied ...`; so does a character's own folder under `Saves`.
+//! 3. Any other absolute path (`X:\...`, a share `\\host\...` or `//host/...` with its
+//!    backslashes doubled or not, `smb://` and `file://` addresses, or `/...` at the start of a
+//!    word): `<path>` and its last part only (`<path>\d3d9.dll`). A path goes on over a space
+//!    when one of the next five words holds its separator (`C:\Program Files (x86)\x\y.dll`).
+//! 4. E-mail addresses (`<e-mail>`) and IPv4 and IPv6 addresses (`<ip>`); versions, times and
+//!    code paths stay.
 //! 5. Then, outside the placeholders: the user names and the computer's names become `<user>` and
-//!    `<computer>`, in any case; a name of four characters or more wherever it is (also joined to
-//!    other letters: `jtest2`, `jtest_tweaks.esp`), a shorter one as a whole word. A name that is
-//!    also an ordinary word (`user`, `deck`, `fedora`: [`ORDINARY`]) is taken out only inside a
-//!    path, so the report's words stay readable.
+//!    `<computer>`, in any case: as a whole word or joined to digits, `_` or `-`
+//!    (`<user>2.esp`); joined to letters only inside a path or a mod's file name and only when
+//!    four characters or longer. Names of one or two characters, and names that are also ordinary
+//!    words (`user`, `deck`, `fedora`: [`ORDINARY`]), go only inside paths. Never inside an exe
+//!    address (eight hex digits), so a crash's addresses stay for grouping.
 
 use std::path::Path;
 
@@ -89,7 +92,7 @@ struct Name {
     ordinary: bool,
 }
 
-/// Names this long or longer go wherever they are, also joined to other letters or digits.
+/// Names this long or longer go joined to letters too, inside paths and mods' file names.
 const JOINED_FROM: usize = 4;
 
 /// User and computer names that are also ordinary words (Windows' and the distributions'
@@ -131,18 +134,39 @@ pub const ORDINARY: &[&str] = &[
 ];
 
 impl Name {
-    /// Whether this name starts at `text[i]` (`in_path`: which characters are part of a path).
+    /// Whether this name starts at `text[i]` (`in_path`: which characters are part of a path, or
+    /// of a mod's file name). Joined to digits, `_` or `-` a name goes anywhere; joined to
+    /// letters only inside a path (four characters or more: `jtester.esp` in a path, never
+    /// `Johnny` in a line for `John`). One or two characters, and ordinary words, go only inside
+    /// paths. Never inside an exe address (eight hex digits): `00412345` stays for `12345`.
     fn at(&self, text: &[char], in_path: &[bool], i: usize) -> bool {
         let n = self.chars.len();
         if text.len() - i < n || !self.chars.iter().zip(&text[i..]).all(|(&a, &b)| same(a, b)) {
             return false;
         }
-        if self.ordinary && !in_path[i..i + n].iter().all(|&p| p) {
+        let path = in_path[i..i + n].iter().all(|&p| p);
+        if (self.ordinary || n <= 2) && !path {
             return false;
         }
-        let whole = (i == 0 || !is_word_char(text[i - 1]))
-            && !text.get(i + n).is_some_and(|&c| is_word_char(c));
-        whole || (n >= JOINED_FROM && !self.ordinary)
+        // The word around it (letters and digits).
+        let mut start = i;
+        while start > 0 && text[start - 1].is_alphanumeric() {
+            start -= 1;
+        }
+        let mut end = i + n;
+        while end < text.len() && text[end].is_alphanumeric() {
+            end += 1;
+        }
+        if end - start == 8 && text[start..end].iter().all(char::is_ascii_hexdigit) {
+            return false;
+        }
+        let letter = |c: Option<&char>| c.is_some_and(|c| c.is_alphabetic());
+        let joined_to_letters =
+            letter(i.checked_sub(1).map(|k| &text[k])) || letter(text.get(i + n));
+        if !joined_to_letters {
+            return true;
+        }
+        path && n >= JOINED_FROM && !self.ordinary
     }
 }
 
@@ -194,6 +218,12 @@ impl Known {
             #[cfg(windows)]
             if let Some(short) = crate::play::win::short_path(path) {
                 k.folder(&short, "<home>");
+            }
+        }
+        // OneDrive's folders (a work one is named after the company), each its own known folder.
+        for name in ["OneDrive", "OneDriveCommercial", "OneDriveConsumer"] {
+            if let Some(dir) = var(name) {
+                k.folder(Path::new(&dir), "<onedrive>");
             }
         }
         for name in ["USERNAME", "USER", "LOGNAME"] {
@@ -254,8 +284,25 @@ impl Scrubber {
 
     /// `text` with everything above taken out.
     pub fn text(&self, text: &str) -> String {
+        self.scrub(text, false)
+    }
+
+    /// A file's name (a mod's plugin) with everything above taken out, read as a path's part: a
+    /// name joined to letters goes too (`jtestPatch.esp`).
+    pub fn file_name(&self, text: &str) -> String {
+        self.scrub(text, true)
+    }
+
+    fn scrub(&self, text: &str, all_path: bool) -> String {
         let chars: Vec<char> = text.chars().collect();
         let mut units = self.known_folders(&chars);
+        if all_path {
+            for u in &mut units {
+                if let Unit::Char(_, p) = u {
+                    *p = true;
+                }
+            }
+        }
         units = runs(units, save_names);
         units = runs(units, other_paths);
         units = runs(units, addresses);
@@ -295,7 +342,7 @@ impl Scrubber {
                 end
             };
             let part = &text[end..below];
-            let part = if mark == "<home>" {
+            let part = if mark == "<home>" || mark == "<onedrive>" {
                 last_two(part)
             } else {
                 part.to_vec()
@@ -359,6 +406,8 @@ fn runs(
     out
 }
 
+const BACKSLASH: char = '\\';
+
 fn is_separator(c: char) -> bool {
     c == '\\' || c == '/'
 }
@@ -376,11 +425,6 @@ fn separators(text: &[char], i: usize) -> Option<usize> {
 /// `nv-rs2` or `nv-rs.old`).
 fn is_name_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '~' | '$')
-}
-
-/// Characters a word is made of (a short name is a whole word only).
-fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
 }
 
 /// Whether a known folder's text may end before `rest`: at a separator, a space, the end, or
@@ -402,20 +446,38 @@ fn ends_path(c: char) -> bool {
     c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '<' | '>' | '|' | '*' | '?')
 }
 
+/// How many words a path goes on over (folders with spaces: `OneDrive - Some Company Ltd`).
+const LOOK_AHEAD: usize = 5;
+
 /// Where a path whose name starts at `body` (the whole path at `start`) ends: at a space or a
-/// quote, but on over up to three words while one of them holds the separator `sep` (any
+/// quote, but on over up to five words while one of them holds the separator `sep` (any
 /// separator for `None`), the sentence's punctuation after it left out.
 fn extent(text: &[char], start: usize, body: usize, sep: Option<char>) -> usize {
     let holds = |w: &[char]| match sep {
         Some(s) => w.contains(&s),
         None => w.iter().any(|&c| is_separator(c)),
     };
-    let word_end = |from: usize| from + text[from..].iter().take_while(|&&c| !ends_path(c)).count();
+    // A word of the path ends at a space or a quote, and at `;` and `,` (lists of paths), and at
+    // `:` before a separator (Unix lists).
+    let word_end = |from: usize| {
+        let mut k = from;
+        while k < text.len() {
+            let c = text[k];
+            let list = c == ';'
+                || c == ','
+                || (c == ':' && text.get(k + 1).is_some_and(|&d| is_separator(d)));
+            if ends_path(c) || list {
+                break;
+            }
+            k += 1;
+        }
+        k
+    };
     let mut end = word_end(body);
     loop {
         let mut k = end;
         let mut extended = None;
-        for _ in 0..3 {
+        for _ in 0..LOOK_AHEAD {
             if text.get(k) != Some(&' ') {
                 break;
             }
@@ -423,7 +485,9 @@ fn extent(text: &[char], start: usize, body: usize, sep: Option<char>) -> usize 
             let stop = word_end(from);
             // Another path's start ends this one (`... and G:\x`, `... or /tmp/y`).
             let word = &text[from..stop];
+            let url = word.windows(3).any(|w| w == [':', '/', '/']);
             if word.is_empty()
+                || url
                 || is_separator(word[0])
                 || (word.len() > 2 && word[0].is_ascii_alphabetic() && word[1] == ':')
             {
@@ -453,13 +517,16 @@ fn extent(text: &[char], start: usize, body: usize, sep: Option<char>) -> usize 
     end
 }
 
-/// A path's rest below the home folder cut to its last two parts: `\...\Temp\x.tmp`.
+/// A path's rest below the home folder (or OneDrive's): never the part directly below it (a
+/// work OneDrive's company, an account's folder), and of the rest only the last two parts:
+/// `\...\Temp\x.tmp`, `\...\Desktop`; a rest of one part is `\...`. A Steam account's number (a
+/// part of six digits or more) is `<id>`.
 fn last_two(part: &[char]) -> Vec<char> {
     let parts: Vec<&[char]> = part
         .split(|&c| is_separator(c))
         .filter(|p| !p.is_empty())
         .collect();
-    if parts.len() <= 2 {
+    if parts.is_empty() {
         return part.to_vec();
     }
     let lead: Vec<char> = part
@@ -470,11 +537,16 @@ fn last_two(part: &[char]) -> Vec<char> {
     let sep = if lead.is_empty() { vec!['\\'] } else { lead };
     let mut out = sep.clone();
     out.extend("...".chars());
-    for p in &parts[parts.len() - 2..] {
+    let from = parts.len().saturating_sub(2).max(1);
+    for p in &parts[from..] {
         out.extend(&sep);
-        out.extend_from_slice(p);
+        if p.len() >= 6 && p.iter().all(char::is_ascii_digit) {
+            out.extend("<id>".chars());
+        } else {
+            out.extend_from_slice(p);
+        }
     }
-    if part.last().is_some_and(|&c| is_separator(c)) {
+    if parts.len() > 1 && part.last().is_some_and(|&c| is_separator(c)) {
         out.extend(&sep);
     }
     out
@@ -493,19 +565,27 @@ fn save_extension(text: &[char], i: usize) -> Option<usize> {
 /// save_out's word before a save's name (`NV_SAVE_OUT: copied <name>`).
 const COPIED: [char; 7] = [' ', 'c', 'o', 'p', 'i', 'e', 'd'];
 
-/// Where the save name ending at `ext` starts: after a separator, a quote or a bracket, after
-/// `: `, `= ` or `copied ` (save_out's `NV_SAVE_OUT: copied <name>`), else at the text's start.
-/// Save names have spaces in them.
-fn save_start(text: &[char], ext: usize) -> usize {
+/// Where the save name ending at `ext` starts (not before `from`): a quoted name after the quote
+/// that opens it; else after a separator, a double quote, a tab, `<`, `>` or `|`, after `: `, `= `
+/// or `copied ` (save_out's `NV_SAVE_OUT: copied <name>`), else at `from`. Save names have
+/// spaces in them, and a character's name can have an apostrophe or brackets.
+fn save_start(text: &[char], ext: usize, from: usize) -> usize {
+    // Quoted (`"Jo Hero: run.fos"`): from the quote that opens it.
+    let closing = text.get(
+        ext + text[ext..]
+            .iter()
+            .take_while(|c| c.is_alphanumeric() || **c == '.')
+            .count(),
+    );
+    if let Some(&q) = closing.filter(|&&q| q == '"' || q == '\'') {
+        if let Some(open) = text[from..ext].iter().rposition(|&c| c == q) {
+            return from + open + 1;
+        }
+    }
     let mut s = ext;
-    while s > 0 {
+    while s > from {
         let c = text[s - 1];
-        if is_separator(c)
-            || matches!(
-                c,
-                '"' | '\'' | '`' | '\t' | '\n' | '(' | '[' | '<' | '>' | '|'
-            )
-        {
+        if is_separator(c) || matches!(c, '"' | '`' | '\t' | '\n' | '<' | '>' | '|') {
             break;
         }
         if c == ' ' && s >= 2 {
@@ -516,29 +596,60 @@ fn save_start(text: &[char], ext: usize) -> usize {
         }
         s -= 1;
     }
+    // Spaces before the name are the line's.
+    while s < ext && text[s] == ' ' {
+        s += 1;
+    }
     s
 }
 
-/// Save names in a run: `<save>` and the extension.
+/// Save names in a run: `<save>` and the extension. A folder of its own under `Saves` (the
+/// game's `SLocalSavePath=Saves\<character>\`) is the character's name too: `<save>` as well.
 fn save_names(text: &[char], in_path: &[bool], _: Option<char>) -> Vec<Unit> {
     let mut out = Vec::new();
     let mut from = 0;
+    // A name starts after the last one's extension at the earliest (and the walk back is short).
+    let mut bound = 0;
     let mut i = 0;
     while i < text.len() {
         let Some(n) = save_extension(text, i) else {
             i += 1;
             continue;
         };
-        let start = save_start(text, i).max(from);
+        let start = save_start(text, i, bound);
         if start < i {
-            out.extend((from..start).map(|k| Unit::Char(text[k], in_path[k])));
+            let folder = character_folder(text, bound, start);
+            let keep_to = folder.map_or(start, |(f, _)| f);
+            out.extend((from..keep_to).map(|k| Unit::Char(text[k], in_path[k])));
+            if let Some((_, end)) = folder {
+                out.push(Unit::Mark("<save>"));
+                out.extend((end..start).map(|k| Unit::Char(text[k], in_path[k])));
+            }
             out.push(Unit::Mark("<save>"));
             from = i;
         }
         i += n;
+        bound = i;
     }
     out.extend((from..text.len()).map(|k| Unit::Char(text[k], in_path[k])));
     out
+}
+
+/// The folder a save's name at `start` is in, when it is a folder of its own under `Saves`: its
+/// start and end in `text` (at or after `from`).
+fn character_folder(text: &[char], from: usize, start: usize) -> Option<(usize, usize)> {
+    let end = start
+        .checked_sub(1)
+        .filter(|&e| e >= from && is_separator(text[e]))?;
+    let begin = from + text[from..end].iter().rposition(|&c| is_separator(c))? + 1;
+    let parent_end = begin.checked_sub(1)?;
+    let parent_begin = from
+        + text[from..parent_end]
+            .iter()
+            .rposition(|&c| is_separator(c))
+            .map_or(0, |p| p + 1);
+    let parent: String = text[parent_begin..parent_end].iter().collect();
+    (parent.eq_ignore_ascii_case("saves") && begin < end).then_some((begin, end))
 }
 
 /// Whether a `/` (or a `\\` of a share) after `before` opens a path: at the text's start or after
@@ -553,20 +664,51 @@ fn opens_path(before: Option<char>) -> bool {
 /// and end, or none.
 fn path_at(text: &[char], i: usize, before: Option<char>) -> Option<(char, usize)> {
     let at = |k: usize| text.get(i + k).copied();
-    let share =
-        |s: char| at(0) == Some(s) && at(1) == Some(s) && at(2).is_some_and(char::is_alphanumeric);
+    // A share: two or more of one separator (four backslashes in Rust's `{:?}`), then its host;
+    // or the verbatim `\?\UNC\` form, its backslashes doubled or not.
+    let run = |from: usize, s: char| {
+        text[(i + from).min(text.len())..]
+            .iter()
+            .take_while(|&&c| c == s)
+            .count()
+    };
+    let share = |s: char| {
+        let r = run(0, s);
+        if r < 2 {
+            return None;
+        }
+        if at(r).is_some_and(char::is_alphanumeric) {
+            return Some(r);
+        }
+        let r2 = run(r + 1, s);
+        let unc = s == BACKSLASH
+            && at(r) == Some('?')
+            && r2 > 0
+            && text[i + r + 1 + r2..].starts_with(&['U', 'N', 'C'])
+            && at(r + 1 + r2 + 3) == Some(s);
+        // The path's name starts after `UNC` (its `?` would end it).
+        unc.then_some(r + 1 + r2 + 3)
+    };
+    let scheme = ["smb://", "file://"].iter().find_map(|s| {
+        let n = s.chars().count();
+        // With a host after it (`file:///C:/...` is a local path, found by its drive).
+        (text.len() - i > n
+            && s.chars().zip(&text[i..]).all(|(a, &b)| same(a, b))
+            && text[i + n].is_alphanumeric())
+        .then_some(n)
+    });
     let (sep, body) = if at(0).is_some_and(|c| c.is_ascii_alphabetic())
         && at(1) == Some(':')
         && at(2).is_some_and(is_separator)
         && before.is_none_or(|c| !c.is_alphanumeric())
     {
         (at(2)?, i + 3)
-    } else if (share('\\') || text[i..].starts_with(&['\\', '\\', '?', '\\', 'U', 'N', 'C', '\\']))
-        && opens_path(before)
-    {
-        ('\\', i + 2)
-    } else if share('/') && opens_path(before) {
-        ('/', i + 2)
+    } else if let (Some(r), true) = (share(BACKSLASH), opens_path(before)) {
+        (BACKSLASH, i + r)
+    } else if let (Some(r), true) = (share('/'), opens_path(before)) {
+        ('/', i + r)
+    } else if let (Some(n), true) = (scheme, before.is_none_or(|c| !c.is_alphanumeric())) {
+        ('/', i + n)
     } else if at(0) == Some('/')
         && at(1).is_some_and(|c| !is_separator(c) && !ends_path(c))
         && opens_path(before)
@@ -610,7 +752,7 @@ fn other_paths(text: &[char], in_path: &[bool], before: Option<char>) -> Vec<Uni
 }
 
 fn is_email_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-')
+    c.is_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-')
 }
 
 /// An e-mail address starting at `text[i]`: where it ends.
@@ -626,15 +768,14 @@ fn email_at(text: &[char], i: usize) -> Option<usize> {
     let mut end = from
         + text[from..]
             .iter()
-            .take_while(|&&c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+            .take_while(|&&c| c.is_alphanumeric() || c == '.' || c == '-')
             .count();
     while end > from && text[end - 1] == '.' {
         end -= 1;
     }
     let domain: String = text[from..end].iter().collect();
     let tld = domain.rsplit('.').next().unwrap_or("");
-    (domain.contains('.') && tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic()))
-        .then_some(end)
+    (domain.contains('.') && tld.len() >= 2 && tld.chars().all(char::is_alphabetic)).then_some(end)
 }
 
 /// An IPv4 address (four numbers 0 to 255) starting at `text[i]`: where it ends.
@@ -643,6 +784,24 @@ fn ipv4_at(text: &[char], i: usize) -> Option<usize> {
     if i > 0 && joined(text[i - 1]) {
         return None;
     }
+    // A version is no address: `version 1.3.250.0`, `driver 31.0.101.5`, `v1.0.0.1`.
+    let before: String = text[i.saturating_sub(12)..i]
+        .iter()
+        .collect::<String>()
+        .to_lowercase();
+    if ["version", "driver", "build", "ver "]
+        .iter()
+        .any(|w| before.contains(w))
+        || before.ends_with('v')
+    {
+        return None;
+    }
+    ipv4_from(text, i)
+}
+
+/// Four numbers 0 to 255 joined by `.` at `text[i..]`, not part of a longer number: where they
+/// end.
+fn ipv4_from(text: &[char], i: usize) -> Option<usize> {
     let mut k = i;
     for n in 0..4 {
         if n > 0 {
@@ -694,7 +853,23 @@ fn ipv6_at(text: &[char], i: usize) -> Option<usize> {
         && run.chars().any(|c| c.is_ascii_hexdigit())
         && !run.contains(":::")
         && (run.contains("::") || groups.len() == 8);
-    (fits && n >= 3).then_some(end)
+    // Code, not an address: two names of hex letters (`face::add`, `d3d9::d3d9`).
+    let named: Vec<&&str> = groups.iter().filter(|g| !g.is_empty()).collect();
+    let code = named.len() == 2
+        && named
+            .iter()
+            .all(|g| g.chars().any(|c| c.is_ascii_alphabetic()));
+    if !fits || n < 3 || code {
+        return None;
+    }
+    // An IPv4 address at its end (`::ffff:192.168.1.20`).
+    if text.get(end) == Some(&'.') {
+        let last = i + run.rfind(':').map_or(0, |p| p + 1);
+        if let Some(v4) = ipv4_from(text, last) {
+            return Some(v4);
+        }
+    }
+    Some(end)
 }
 
 /// E-mail and network addresses in a run.
@@ -750,26 +925,27 @@ mod tests {
             s.text("temp D:\\Profiles\\Jo Tester\\AppData\\Local\\Temp\\x.tmp"),
             "temp <home>\\...\\Temp\\x.tmp"
         );
-        assert_eq!(s.text("d:/profiles/jo tester/Desktop"), "<home>/Desktop");
+        // The part right below home never stays.
+        assert_eq!(s.text("d:/profiles/jo tester/Desktop"), "<home>/...");
         // Doubled backslashes (JSON, Rust's {:?}) and a mix of both separators.
         assert_eq!(
             s.text("path: \"D:\\\\Profiles\\\\Jo Tester\\\\x.ini\""),
-            "path: \"<home>\\\\x.ini\""
+            "path: \"<home>\\\\...\""
         );
-        assert_eq!(s.text("D:\\Profiles/Jo Tester\\/y"), "<home>\\/y");
+        assert_eq!(s.text("D:\\Profiles/Jo Tester\\/y/z"), "<home>\\/...\\/z");
         // The verbatim form Windows answers for a real path.
         assert_eq!(
-            s.text("\\\\?\\D:\\Profiles\\Jo Tester\\z"),
-            "\\\\?\\<home>\\z"
+            s.text("\\\\?\\D:\\Profiles\\Jo Tester\\z\\w"),
+            "\\\\?\\<home>\\...\\w"
         );
-        assert_eq!(s.text("/home/jtest/.cache/x"), "<home>/.cache/x");
+        assert_eq!(s.text("/home/jtest/.cache/x"), "<home>/.../x");
         // Another folder that only starts like it is not it; the name in it still goes.
         assert_eq!(s.text("/home/jtest2/x"), "<path>/x");
         assert_eq!(s.text("in /home/jtest2"), "in <path>/<user>2");
     }
 
-    /// Below the home folder only the last two parts stay: the ones between can name an
-    /// employer (a work OneDrive) or an account (Steam's user id).
+    /// Below the home folder (and OneDrive's) never the part right below it (a work OneDrive
+    /// names the employer) and only the last two parts; a Steam account's number is `<id>`.
     #[test]
     fn below_the_home_folder_only_its_last_two_parts_stay() {
         let s = player();
@@ -778,11 +954,52 @@ mod tests {
             "<home>\\...\\notes\\x.txt read"
         );
         assert_eq!(
+            s.text("D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd\\Desktop"),
+            "<home>\\...\\Desktop"
+        );
+        assert_eq!(
             s.text("/home/jtest/.steam/steam/userdata/123456789/config/x.vdf"),
             "<home>/.../config/x.vdf"
         );
-        assert_eq!(s.text("/home/jtest/a/b/"), "<home>/a/b/");
+        assert_eq!(
+            s.text("/home/jtest/.local/share/Steam/userdata/123456789/"),
+            "<home>/.../userdata/<id>/"
+        );
+        assert_eq!(s.text("/home/jtest/a/b/"), "<home>/.../b/");
         assert_eq!(s.text("/home/jtest/a/b/c/"), "<home>/.../b/c/");
+        // OneDrive's folder is known as it is, however many words its name has.
+        let k = Scrubber::new(&Known {
+            roots: vec![
+                (
+                    "D:\\Profiles\\Jo Tester\\OneDrive - The University of Somewhere".into(),
+                    "<onedrive>",
+                ),
+                ("D:\\Profiles\\Jo Tester".into(), "<home>"),
+            ],
+            words: Vec::new(),
+        });
+        assert_eq!(
+            k.text("D:\\Profiles\\Jo Tester\\OneDrive - The University of Somewhere\\Documents\\My Games\\FalloutNV\\x.ini"),
+            "<onedrive>\\...\\FalloutNV\\x.ini"
+        );
+        assert_eq!(
+            k.text("at D:\\Profiles\\Jo Tester\\OneDrive - The University of Somewhere"),
+            "at <onedrive>"
+        );
+    }
+
+    /// A known folder's rest ends where a list goes on (`;`, `,`) or a web address starts.
+    #[test]
+    fn a_known_folders_rest_ends_at_a_list_or_an_address() {
+        let s = player();
+        assert_eq!(
+            s.text("F:\\Games\\nv-rs\\userdata\\x;D:\\Private Stuff\\tax 2026\\y.pdf"),
+            "<nv-rs>\\userdata\\x;<path>\\y.pdf"
+        );
+        assert_eq!(
+            s.text("file:///D:/Profiles/Jo Tester/x/y and https://jtest.example.com/x"),
+            "file:///<home>/.../y and https://<user>.example.com/x"
+        );
     }
 
     #[test]
@@ -832,6 +1049,24 @@ mod tests {
         );
         // Not a save: another extension.
         assert_eq!(s.text("the fossil.fosx stays"), "the fossil.fosx stays");
+        // A character's name with an apostrophe or brackets, a quoted name with a colon.
+        assert_eq!(
+            s.text("NV_SAVE_OUT: copied systemsave D'Arcy Tester.fos"),
+            "NV_SAVE_OUT: copied <save>.fos"
+        );
+        assert_eq!(s.text("Jo's (best) run.fos"), "<save>.fos");
+        assert_eq!(
+            s.text("hidden \"Jo Hero: run.fos\" here"),
+            "hidden \"<save>.fos\" here"
+        );
+        // A character's own folder under Saves (SLocalSavePath=Saves\<character>\).
+        assert_eq!(
+            s.text("F:\\Games\\nv-rs\\userdata\\game\\Documents\\My Games\\FalloutNV\\Saves\\Jo Hero\\Save 1.fos"),
+            "<nv-rs>\\userdata\\game\\Documents\\My Games\\FalloutNV\\Saves\\<save>\\<save>.fos"
+        );
+        // Many in one long line: each its own.
+        let many = "a.fos ".repeat(2000);
+        assert_eq!(s.text(&many), "<save>.fos ".repeat(2000));
     }
 
     #[test]
@@ -854,6 +1089,17 @@ mod tests {
             "share <path>\\c.txt"
         );
         assert_eq!(s.text("share //nas-1/games/x.esp"), "share <path>/x.esp");
+        // Rust's {:?} doubles a share's backslashes, its verbatim form too; smb:// and file://.
+        assert_eq!(
+            s.text("open \"\\\\\\\\JT-NAS\\\\Games\\\\Mods\\\\x.esp\""),
+            "open \"<path>\\x.esp\""
+        );
+        assert_eq!(
+            s.text("open \"\\\\\\\\?\\\\UNC\\\\JT-NAS\\\\Games\\\\y.esp\""),
+            "open \"<path>\\y.esp\""
+        );
+        assert_eq!(s.text("at smb://jt-nas/games"), "at <path>/games");
+        assert_eq!(s.text("at file://JT-NAS/games/x.esp"), "at <path>/x.esp");
         assert_eq!(s.text("(C:\\x\\y.log)"), "(<path>\\y.log)");
         assert_eq!(s.text("C:\\"), "<path>");
         assert_eq!(s.text("in D:\\a\\b\\"), "in <path>\\b\\");
@@ -879,6 +1125,15 @@ mod tests {
         // Not addresses: versions with a number over 255, times, Rust paths, a lone @.
         let kept = "FalloutNV.exe 1.4.0.525, build 26200.7171, at 12:34:56, std::fs::read, a @ b";
         assert_eq!(s.text(kept), kept);
+        // An IPv4 address inside IPv6, an e-mail address that is not ASCII.
+        assert_eq!(s.text("from ::ffff:192.168.1.20 now"), "from <ip> now");
+        assert_eq!(
+            s.text("mail j\u{f6}ran.tester@ex\u{e4}mple.se, ok"),
+            "mail <e-mail>, ok"
+        );
+        // Versions with every number 255 or less, and code paths of hex letters, stay.
+        let kept = "Vulkan version 1.3.250.0, driver 31.0.101.5, v1.0.0.1, face::add, d3d9::d3d9";
+        assert_eq!(s.text(kept), kept);
     }
 
     #[test]
@@ -888,21 +1143,49 @@ mod tests {
             s.text("hello JTEST, jo tester on JT-DESK"),
             "hello <user>, <user> on <computer>"
         );
-        // Joined to letters, digits or '_' (four characters or more).
+        // Joined to digits or '_' anywhere; joined to letters only in a path or a mod's name.
         assert_eq!(
             s.text("jtester and xjtest, jtest2 and jtest_tweaks.esp"),
-            "<user>er and x<user>, <user>2 and <user>_tweaks.esp"
+            "jtester and xjtest, <user>2 and <user>_tweaks.esp"
         );
+        assert_eq!(s.text("G:\\x\\xjtestPatch.esp"), "<path>\\x<user>Patch.esp");
+        assert_eq!(s.file_name("jtesterPatch.esp"), "<user>erPatch.esp");
         assert_eq!(s.text("mail jtest@example"), "mail <user>@example");
         // In a path's last part, a two-word name too.
         assert_eq!(s.text("G:\\x\\jtest.txt"), "<path>\\<user>.txt");
         assert_eq!(s.text("G:\\Backups\\Jo Tester.txt"), "<path>\\<user>.txt");
-        // A short name only as a whole word.
-        let short = Scrubber::new(&Known {
+    }
+
+    /// Short names: three characters as a word or joined to digits and '_', never to letters;
+    /// one or two characters only inside paths. A name never goes inside an exe address.
+    #[test]
+    fn short_names_and_exe_addresses() {
+        let bob = Scrubber::new(&Known {
             roots: Vec::new(),
-            words: vec![("jo".into(), "<user>")],
+            words: vec![("bob".into(), "<user>")],
         });
-        assert_eq!(short.text("jolly jo, joke"), "jolly <user>, joke");
+        assert_eq!(
+            bob.text("bob2.esp bob_tweaks BobsPatch xXbobXx, bob."),
+            "<user>2.esp <user>_tweaks BobsPatch xXbobXx, <user>."
+        );
+        assert_eq!(bob.text("in G:\\x\\bob2"), "in <path>\\<user>2");
+        let jo = Scrubber::new(&Known {
+            roots: Vec::new(),
+            words: vec![("jo".into(), "<user>"), ("a".into(), "<user>")],
+        });
+        let stop = "jolly jo: a call the platform does not provide";
+        assert_eq!(jo.text(stop), stop);
+        assert_eq!(
+            jo.text("G:\\x\\jo2.esp and G:\\y\\a"),
+            "<path>\\<user>2.esp and <path>\\<user>"
+        );
+        let hex = Scrubber::new(&Known {
+            roots: Vec::new(),
+            words: vec![("12345".into(), "<user>"), ("cafe".into(), "<user>")],
+        });
+        let stop = "Game's main stopped in frame 3: x (in 00412345 < 0040cafe)";
+        assert_eq!(hex.text(stop), stop);
+        assert_eq!(hex.text("a cafe, 12345."), "a <user>, <user>.");
     }
 
     /// Names that are ordinary words (Fedora's host name, Windows' "User", the Deck's "deck") go
@@ -933,7 +1216,7 @@ mod tests {
             roots: vec![("/srv/home".into(), "<home>")],
             words: vec![("srvx".into(), "<user>"), ("path".into(), "<user>")],
         });
-        assert_eq!(s.text("/srv/home/x and path"), "<home>/x and <user>");
+        assert_eq!(s.text("/srv/home/x and path"), "<home>/... and <user>");
         assert_eq!(s.text("/opt/x/y"), "<path>/y");
     }
 
@@ -967,7 +1250,7 @@ mod tests {
         for (home, mark) in &k.roots {
             if *mark == "<home>" && Root::of(home, mark).is_some() {
                 let scrubbed = s.text(&format!("at {home}/x"));
-                assert_eq!(scrubbed, "at <home>/x");
+                assert_eq!(scrubbed, "at <home>/...");
             }
         }
     }
