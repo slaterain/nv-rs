@@ -45,6 +45,12 @@
 //! `UpdateObjectLighting`, `00b5d9f0`), is typed in [`lighting`] with the add at the tail of a list
 //! of counted pointers (`00a5a310`) it makes; all three are registered at their addresses.
 //!
+//! The reference's script made ready as the load brings it into the scene
+//! (`TESObjectREFR::InitScript`, `00565730`) is typed in [`script`] with what it asks of the
+//! reference: the form its script comes from (the actor classes' slot 0x1a4, `008ae600`), the
+//! form's script (`004826d0`) and the base form's container (`0055d310`); all four are registered
+//! at their addresses.
+//!
 //! Stage 1: the objects stay in guest memory where the game made them. The row is
 //! [`Threads::Both`]: the code is integers (the origin's 0.0 for the vector constructor is a constant
 //! word) but for one product in [`scene`], which keeps the x87's exact helpers.
@@ -54,6 +60,7 @@ pub mod lighting;
 pub mod queue;
 pub mod scene;
 pub mod scenegraph;
+pub mod script;
 
 use crate::{dispatch, draw, slot_target};
 use engine_core::ptr::Ptr;
@@ -104,6 +111,10 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b5_eeb0, lighting::add_object(u32, u32)),
         entry!(0x00b5_d9f0, lighting::update_object_lighting(u32, u32, u8)),
         entry!(0x00a5_a310, lighting::list_add_tail(u32, u32)),
+        entry!(0x0056_5730, script::init_script(u32)),
+        entry!(0x0048_26d0, script::form_script(u32) -> u32),
+        entry!(0x0055_d310, script::has_container(u32) -> u32),
+        entry!(0x008a_e600, script::actor_form_148(u32) -> u32),
     ]
 }
 

@@ -29,7 +29,8 @@
 //! The reference ID set on the node (`SetReferenceIDOnScenegraph`, `004b6dc0`) is
 //! [`super::scenegraph`]'s typed call; the shadow scene node's add of the node and its lighting
 //! update (`ShadowSceneNode::AddObject`, `00b5eeb0`, and `UpdateObjectLighting`, `00b5d9f0`) are
-//! [`super::lighting`]'s.
+//! [`super::lighting`]'s; the reference's script made ready (`TESObjectREFR::InitScript`,
+//! `00565730`) is [`super::script`]'s.
 //!
 //! **Floats.** One product, on the path of a type 0x25 base form in a large cell: the radius its
 //! slot 0x1bc answers (stored as a `double`) times the reference's scale, made an integer toward
@@ -37,7 +38,8 @@
 //! words, so the product is the x87's (`x87_mul`: 24 bits under the main thread's word) and the
 //! store the exe's 64-bit one, whose low word is used.
 
-use super::{answers_true, base_form, init_action_list, is_actor, kind_test, slot_3d, FAMILY};
+use super::FAMILY;
+use super::{answers_true, base_form, init_action_list, is_actor, kind_test, script, slot_3d};
 use super::{
     CELL_ATTACH_REFERENCE_3D, CELL_LOAD_3D, FORM_FLAGS_48, FORM_FLAG_NO_ATTACH, FORM_TYPE_23,
     GAME_LOADER_FLAGS, GAME_LOADER_POINTER, PROCESS_LISTS, PROCESS_LISTS_REMOVE_ACTOR,
@@ -86,16 +88,15 @@ const CELL_DISTANT_COUNT: u32 = 0xaa;
 const SHADOW_SCENE_NODES: u32 = 0x011f_91c8;
 /// The callees that do the work, by address: the reference's 3D set (`(reference, node)`), its
 /// actor base's `SetStartsDead(0)`, the shadow scene node's actor add, the reference's step after
-/// the attach, the master particle addon nodes' removal and addition (`cdecl(node)`),
-/// `TESObjectREFR::InitScript`, `00547ad0` (`(cell; position, count, 1.0)`), `Actor::UpdateAlpha`,
-/// the reference's scale, and the ID set on the scene graph (`cdecl(node, form id)`).
+/// the attach, the master particle addon nodes' removal and addition (`cdecl(node)`), `00547ad0`
+/// (`(cell; position, count, 1.0)`), `Actor::UpdateAlpha`, the reference's scale, and the ID set on
+/// the scene graph (`cdecl(node, form id)`).
 const REFERENCE_SET_3D: u32 = 0x0057_0f70;
 const SET_STARTS_DEAD: u32 = 0x0056_5210;
 const SHADOW_ADD_ACTOR: u32 = 0x00b5_cbd0;
 const REFERENCE_AFTER_ATTACH: u32 = 0x0056_f700;
 const REMOVE_PARTICLE_ADDON_NODES: u32 = 0x0057_8170;
 const ADD_PARTICLE_ADDON_NODES: u32 = 0x0057_8060;
-const REFERENCE_INIT_SCRIPT: u32 = 0x0056_5730;
 const CELL_LARGE_STEP: u32 = 0x0054_7ad0;
 const ACTOR_UPDATE_ALPHA: u32 = 0x008c_4640;
 const REFERENCE_GET_SCALE: u32 = 0x0056_7400;
@@ -242,7 +243,7 @@ pub fn load_reference(
             into_scene(e, reference, cell, node, kind);
         }
     }
-    e.call(REFERENCE_INIT_SCRIPT, &args![reference]);
+    typed_call!(FAMILY, 0x0056_5730, script::init_script(e, reference));
     let loader = e.global::<u32>(GAME_LOADER_POINTER);
     if e.mem.u32(loader.wrapping_add(GAME_LOADER_FLAGS)) & 2 == 0 {
         let list = reference.wrapping_add(REFERENCE_EXTRA_LIST);
