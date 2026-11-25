@@ -11,8 +11,9 @@
 //! to nv-rs's project unless the fork changes that file.
 //!
 //! Nothing personal is sent: the report is the scrubbed one kept on disk, without an F12
-//! report's note and place and without the game's own `F12: ` log lines (all of them stay in the
-//! local copy); the event has no user, no IP address field and no computer name, and its tags
+//! report's note and place, the game's own `F12: ` log lines, and the places (cell or
+//! worldspace, its form id, the grid square) of its `hitch:` lines, all of which stay in the
+//! local copy; the event has no user, no IP address field and no computer name, and its tags
 //! name only the system, the renderer, the kind of end and the profile.
 
 use super::Report;
@@ -211,7 +212,8 @@ pub fn event_json(report: &Report, id: &str) -> String {
 }
 
 /// The envelope of `report` for `dsn`: its header, the event, and the log as `log.txt` (without
-/// the game's `F12: ` lines: [`Report::sent_log`]), each item's length in bytes in its header.
+/// the game's `F12: ` lines and its hitch lines' places: [`Report::sent_log`]), each item's
+/// length in bytes in its header.
 pub fn envelope(report: &Report, dsn: &Dsn, id: &str, sent_at: &str) -> Vec<u8> {
     let event = event_json(report, id);
     let mut log = report.sent_log().join("\n");
@@ -303,11 +305,10 @@ pub fn curl_failure(code: Option<i32>) -> String {
 
 /// `report` (kept in `folder`) sent to `dsn` by the program `curl`: its envelope written into
 /// the folder as `envelope.txt` (what went, for the player to see), then given to curl on its
-/// input and posted (on Windows without a console window of curl's); `sent.txt` notes a success.
+/// input and posted (on Windows without a console window of curl's; stopped after
+/// [`CURL_LIMIT`] at most); `sent.txt` notes a success.
 /// The event's id, or why it did not go.
 pub fn send(report: &Report, folder: &Path, dsn: &Dsn, curl: &Path) -> Result<String, String> {
-    use std::io::Write;
-    use std::process::Stdio;
     let id = event_id();
     let sent_at = format!(
         "{}Z",
@@ -317,38 +318,97 @@ pub fn send(report: &Report, folder: &Path, dsn: &Dsn, curl: &Path) -> Result<St
     let file = folder.join("envelope.txt");
     std::fs::write(&file, &body).map_err(|e| format!("{}: {e}", file.display()))?;
     let mut command = std::process::Command::new(curl);
-    command
-        .args(curl_args(dsn))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    command.args(curl_args(dsn));
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         // CREATE_NO_WINDOW: a console tool without a console window.
         command.creation_flags(0x0800_0000);
     }
-    let out = command.spawn().and_then(|mut child| {
-        // A curl that stops before reading it all says why in its status.
-        if let Some(mut input) = child.stdin.take() {
-            let _ = input.write_all(&body);
-        }
-        child.wait_with_output()
-    });
-    match out {
+    match post(&mut command, &body, CURL_LIMIT) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             Err("curl, the program that sends it, is not on this PC".into())
         }
         Err(e) => Err(format!("curl could not be started ({e})")),
-        Ok(o) if o.status.success() => {
+        Ok(None) => Err("curl did not end in time and was stopped".into()),
+        Ok(Some((status, _))) if status.success() => {
             let _ = std::fs::write(
                 folder.join("sent.txt"),
                 format!("Sent to nv-rs's crash service at {sent_at}: event {id}\n"),
             );
             Ok(id)
         }
-        Ok(o) => Err(curl_failure(o.status.code())),
+        Ok(Some((status, _))) => Err(curl_failure(status.code())),
     }
+}
+
+/// How long curl may take in all, its own 30 seconds and some: past it, it is stopped.
+const CURL_LIMIT: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// `command` started with `body` on its input and waited for, at most `limit`: its status and
+/// what it wrote out, or none when it was stopped at the limit. The body is written, and the
+/// output read, by threads of their own, so a program that never reads its input (or fills its
+/// output) cannot hold the launcher past the limit.
+fn post(
+    command: &mut std::process::Command,
+    body: &[u8],
+    limit: std::time::Duration,
+) -> std::io::Result<Option<(std::process::ExitStatus, Vec<u8>)>> {
+    use std::io::{Read, Write};
+    use std::process::Stdio;
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let input = child.stdin.take().map(|mut input| {
+        let body = body.to_vec();
+        std::thread::spawn(move || {
+            // A program that stops before reading it all says why in its status.
+            let _ = input.write_all(&body);
+        })
+    });
+    let read_all = |pipe: Option<Box<dyn Read + Send>>| {
+        pipe.map(|mut p| {
+            std::thread::spawn(move || {
+                let mut got = Vec::new();
+                let _ = p.read_to_end(&mut got);
+                got
+            })
+        })
+    };
+    let out = read_all(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let err = read_all(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let deadline = std::time::Instant::now() + limit;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break Some(status);
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    if let Some(input) = input {
+        let _ = input.join();
+    }
+    let written = out.and_then(|t| t.join().ok()).unwrap_or_default();
+    if let Some(err) = err {
+        let _ = err.join();
+    }
+    Ok(status.map(|s| (s, written)))
 }
 
 #[cfg(test)]
@@ -529,14 +589,16 @@ mod tests {
             "{asked}"
         );
         assert!(
-            asked.contains("The log's last 2 lines go with it."),
+            asked
+                .contains("The log's last 2 lines go with it, without where you were in the game."),
             "{asked}"
         );
     }
 
-    /// A game log as the game writes it, an F12 report in its last lines: the game's own
-    /// `F12: place:` and `F12: report in` lines stay in the kept log.txt and never reach the
-    /// envelope, nor the question's count of lines.
+    /// A game log as the game writes it, an F12 report and hitches in its last lines: the game's
+    /// own `F12: place:` and `F12: report in` lines and the hitch lines' places stay in the kept
+    /// log.txt and never reach the envelope, nor the question's count of lines; the hitches'
+    /// timings and causes go.
     #[test]
     fn the_games_f12_lines_are_not_sent() {
         let root = std::env::temp_dir().join(format!("nv-launcher-f12-log-{}", std::process::id()));
@@ -553,7 +615,8 @@ mod tests {
                 "F12: report in {}",
                 own.join("reports").join("007").display()
             ),
-            "hitch: 41 ms in frame 812".to_string(),
+            "hitch: 64.0 ms big (typical 11.9) frame 812 at 14.0 s, interior Doc Mitchell's House (0x00104c1c); stages ms: update 40.1, before draw 0.2, culling and set-up 3.1, world draw 6.0, after world 1.2, present 2.3, after present 11.0; work: main's memory blocks 0 allocated, 22,093 freed; likely cause: freed 22,093 memory blocks".to_string(),
+            "hitch: 52.3 ms big (typical 8.1) frame 860 at 16.5 s, first frame after a load, GoodspringsWorld (0x000da726) grid (-3, 5)".to_string(),
             stop.to_string(),
         ];
         std::fs::write(&log, lines.join("\n") + "\n").unwrap();
@@ -580,27 +643,53 @@ mod tests {
         };
         let ending = Ending::Stop(stop.into());
         let r = crate::crash::build(&run, &ending, &facts, &s, SystemTime::now());
-        assert_eq!(r.log.len(), 5);
-        assert_eq!(r.sent_log().len(), 3);
+        assert_eq!(r.log.len(), 6);
+        assert_eq!(r.sent_log().len(), 4);
         let d = Dsn::parse(DSN).unwrap();
         let id = "0123456789abcdef0123456789abcdef";
         let text = String::from_utf8(envelope(&r, &d, id, "2001-09-09T01:46:40Z")).unwrap();
-        for f12 in ["F12:", "GSDocMitchellHouse", "report in"] {
-            assert!(!text.contains(f12), "{f12} in {text}");
+        for place in [
+            "F12:",
+            "GSDocMitchellHouse",
+            "report in",
+            "Doc Mitchell",
+            "0x00104c1c",
+            "GoodspringsWorld",
+            "0x000da726",
+            "grid (",
+        ] {
+            assert!(!text.contains(place), "{place} in {text}");
         }
-        assert!(text.contains("hitch: 41 ms in frame 812"), "{text}");
+        assert!(
+            text.contains("hitch: 64.0 ms big (typical 11.9) frame 812 at 14.0 s, <place>; stages ms: update 40.1, before draw 0.2,"),
+            "{text}"
+        );
+        assert!(
+            text.contains("; likely cause: freed 22,093 memory blocks"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "hitch: 52.3 ms big (typical 8.1) frame 860 at 16.5 s, first frame after a load, <place>\n"
+            ),
+            "{text}"
+        );
         let asked = crate::crash::question(&r);
         assert!(
-            asked.contains("The log's last 3 lines go with it."),
+            asked
+                .contains("The log's last 4 lines go with it, without where you were in the game."),
             "{asked}"
         );
         // The kept copy has them all.
         let kept = r.save(&own.join("reports")).unwrap();
         let kept_log = std::fs::read_to_string(kept.join("log.txt")).unwrap();
-        assert!(
-            kept_log.contains("F12: place: Doc Mitchell's house"),
-            "{kept_log}"
-        );
+        for all in [
+            "F12: place: Doc Mitchell's house",
+            "interior Doc Mitchell's House (0x00104c1c); stages",
+            "GoodspringsWorld (0x000da726) grid (-3, 5)",
+        ] {
+            assert!(kept_log.contains(all), "{all} not in {kept_log}");
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -734,6 +823,44 @@ mod tests {
         );
         assert_eq!(curl_failure(Some(22)), "the crash service refused it");
         assert_eq!(curl_failure(Some(99)), "curl ended with status 99");
+    }
+
+    /// The envelope goes whole on the program's input (a program that echoes it stands in for
+    /// curl: Windows' findstr, elsewhere cat), and a program that never ends is stopped at the
+    /// limit.
+    #[test]
+    fn the_envelope_goes_on_curls_input_and_a_stuck_program_is_stopped() {
+        use std::process::Command;
+        let body = b"{\"event_id\":\"0123\"}\n{\"type\":\"event\"}\nthe log's last line\n";
+        let mut echo = if cfg!(windows) {
+            let mut c = Command::new("findstr");
+            c.arg("^");
+            c
+        } else {
+            Command::new("cat")
+        };
+        let (status, out) = post(&mut echo, body, Duration::from_secs(30))
+            .unwrap()
+            .expect("the echo ends by itself");
+        assert!(status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&out).replace("\r\n", "\n"),
+            String::from_utf8_lossy(body)
+        );
+        let mut stuck = if cfg!(windows) {
+            let mut c = Command::new("ping");
+            c.args(["-n", "60", "127.0.0.1"]);
+            c
+        } else {
+            let mut c = Command::new("sleep");
+            c.arg("60");
+            c
+        };
+        let started = std::time::Instant::now();
+        assert!(post(&mut stuck, body, Duration::from_secs(1))
+            .unwrap()
+            .is_none());
+        assert!(started.elapsed() < Duration::from_secs(20));
     }
 
     /// Nothing is sent without the package's crash service file, or without a yes.
