@@ -18,6 +18,8 @@
 //! - [`colours`]: the face image's colour vector's `assign` (`0064dcf0`) and range `erase` (`0064dc50`),
 //!   which fill a new tint image with a copy a texel (65,536 for a face) and empty it again, every
 //!   click in the race menu.
+//! - [`matrix`]: the face matrices' product (`00658360`) and the face shape statistic on it
+//!   (`00652230`), which the race menu's slider refresh reads every slider's value with.
 //! - [`apply`]: the head's morph pass (`00663050`) with its appliers, the morph data's apply and tables,
 //!   the animation data's weight getters, and the exact skip of a reshape that would change nothing.
 //!
@@ -45,6 +47,7 @@ pub mod colours;
 pub mod coords;
 pub mod head;
 pub mod keyframe;
+pub mod matrix;
 pub mod morph;
 
 /// This family's bit: what each `typed_call!` of it names.
@@ -99,5 +102,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0065_2af0, coords::sum_coordinates(u32, u32, u32, u8, f32)),
         entry!(0x0064_dcf0, colours::assign(Ptr, u32, u32)),
         entry!(0x0064_dc50, colours::erase(Ptr, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x0065_8360, matrix::product(Ptr, Ptr, Ptr) -> Ptr),
+        entry!(0x0065_2230, matrix::shape_statistic(u32, u32, u32, u32) -> f32),
     ]
 }
