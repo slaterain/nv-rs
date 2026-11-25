@@ -4932,26 +4932,36 @@ mod tests {
 
     #[test]
     fn the_cross_product_rounds_each_product_at_the_threads_precision() {
-        // z = a.x b.y - a.y b.x with a.x = b.y = 1 + 2^-12 and a.y = b.x = 1: the product
-        // 1 + 2^-11 + 2^-24 is a tie at 24 bits (main) and rounds to 1 + 2^-11, so z is 2^-11
-        // there; at 53 bits (the other threads) it is kept, and z is 2^-11 + 2^-24.
-        let near_one = 1.0 + 2f32.powi(-12);
-        for (word, z) in [
+        // In each component in turn, one product is (1 + 2^-12)^2 = 1 + 2^-11 + 2^-24 and the
+        // other 1 (z = a.x b.y - a.y b.x, x = a.y b.z - a.z b.y, y = a.z b.x - a.x b.z). The
+        // product is a tie at 24 bits (main) and rounds to 1 + 2^-11, so the component is 2^-11
+        // there; at 53 bits (the other threads) it is kept, and the component is 2^-11 + 2^-24.
+        let n = 1.0 + 2f32.powi(-12);
+        let points: [([f32; 3], [f32; 3], usize); 3] = [
+            ([n, 1.0, 0.0], [1.0, n, 0.0], 2),
+            ([0.0, n, 1.0], [0.0, 1.0, n], 0),
+            ([1.0, 0.0, n], [n, 0.0, 1.0], 1),
+        ];
+        for (word, value) in [
             (0x007f, 2f32.powi(-11)),
             (
                 engine_core::x87::DEFAULT_CONTROL_WORD,
                 2f32.powi(-11) + 2f32.powi(-24),
             ),
         ] {
-            let mut e = engine();
-            point_doubles(&mut e);
-            let a = floats(&mut e, &[near_one, 1.0, 0.0]);
-            let b = floats(&mut e, &[1.0, near_one, 0.0]);
-            let out = e.mem.alloc(12);
-            engine_core::x87::set_control_word(word);
-            e.call(0x004b_3800, &args![p(a), p(out), p(b)]);
-            engine_core::x87::set_control_word(engine_core::x87::DEFAULT_CONTROL_WORD);
-            assert_eq!(read_floats(&e, out, 3), vec![0.0, 0.0, z]);
+            for (first, second, axis) in points {
+                let mut e = engine();
+                point_doubles(&mut e);
+                let a = floats(&mut e, &first);
+                let b = floats(&mut e, &second);
+                let out = e.mem.alloc(12);
+                engine_core::x87::set_control_word(word);
+                e.call(0x004b_3800, &args![p(a), p(out), p(b)]);
+                engine_core::x87::set_control_word(engine_core::x87::DEFAULT_CONTROL_WORD);
+                let mut expected = vec![0.0; 3];
+                expected[axis] = value;
+                assert_eq!(read_floats(&e, out, 3), expected, "axis {axis}, {word:04x}");
+            }
         }
     }
 
