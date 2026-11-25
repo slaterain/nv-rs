@@ -11,6 +11,10 @@
 //!   class keeps in its vtable (the stubs that answer false, 0, -1 or 0.0 and those that do
 //!   nothing), the embedded current package's getters and setters, the destructor, `Copy`, the
 //!   save and load of the process block and the breath timer.
+//! - [`middle_low_process`]: `MiddleLowProcess` (its Xbox PDB source unit): the temporary and
+//!   damage modifiers on top of `LowProcess`'s actor values, the hourly package check, the combat
+//!   rounds, `Update` (the package's procedure actions), the destructors, the copy and the save,
+//!   load and revert of its part of the process.
 //!
 //! Reached: each stays registered at its exe address, so the translations' calls by address and
 //! the vtable slots that hold them reach the typed functions; between them the calls are typed
@@ -20,9 +24,12 @@
 //!
 //! Stage 1: the objects stay in guest memory where the game made them. **Threads and floats.** The
 //! process code runs on main and on the AI threads, so the row is [`Threads::Both`] and the tests
-//! compare under both control words. The floats here are moved, not computed (a load that quiets a
-//! signalling NaN, a sign flip, a zero, the calendar's hour stored as a float), and the one compare is
-//! of a slot's double result with a double constant: the same on any thread.
+//! compare under both control words. Most floats here are moved, not computed (a load that quiets a
+//! signalling NaN, a sign flip, a zero, the calendar's hour stored as a float, an integer stored as
+//! a float). The few computed ones follow the float rule (`crate::native`): a sum stored as a float
+//! is one double sum rounded to a float, which is the exe's result at either precision for the
+//! float-valued operands it gets; a product or quotient that is compared or truncated before any
+//! store is a float operation on main (24 bits) and a double one on the AI threads (53 bits).
 
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
@@ -30,6 +37,7 @@ use engine_core::{entry, AbiFn};
 
 pub mod actor_package;
 pub mod base_process;
+pub mod middle_low_process;
 
 /// This family's bit: what each `typed_call!` of it names (39).
 pub const FAMILY: FamilyId = FamilyId::new(39);
@@ -129,5 +137,27 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x008d_1050, base_process::finish_load_game(Ptr, u32)),
         entry!(0x008d_1070, base_process::revert_buffer(Ptr, u32)),
         entry!(0x008d_10c0, base_process::breath_timer(Ptr) -> f32),
+        entry!(0x0090_7430, middle_low_process::damage_mod_actor_value(Ptr, u32, u32, i32)),
+        entry!(0x0092_c9d0, middle_low_process::scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x0092_ca00, middle_low_process::destructor(Ptr)),
+        entry!(0x0092_ca70, middle_low_process::copy(Ptr, Ptr)),
+        entry!(0x0092_cab0, middle_low_process::process_combat(Ptr, u32)),
+        entry!(0x0092_cc90, middle_low_process::process_combat_one_hour(Ptr, u32, u32) -> bool),
+        entry!(0x0092_cd90, middle_low_process::get_actor_value(Ptr, u32, u32, u32) -> i32),
+        entry!(0x0092_ce00, middle_low_process::get_actor_float_value(Ptr, u32, u32, u32) -> f64),
+        entry!(0x0092_ce70, middle_low_process::temp_mod_actor_value(Ptr, u32, u32, i32)),
+        entry!(0x0092_cec0, middle_low_process::temp_mod_actor_value_float(Ptr, u32, u32, f32)),
+        entry!(0x0092_cf10, middle_low_process::get_temporary_modifier(Ptr, u8) -> f64),
+        entry!(0x0092_cf30, middle_low_process::damage_mod_actor_value_ov2(Ptr, u32, u32, f32)),
+        entry!(0x0092_cfd0, middle_low_process::checkfor_new_package(Ptr, u32, u8) -> u8),
+        entry!(0x0092_d050, middle_low_process::update(Ptr, u32)),
+        entry!(0x0092_e400, middle_low_process::update_step(Ptr, u32, f32)),
+        entry!(0x0092_e420, middle_low_process::get_save_size(Ptr, u32, u32) -> u16),
+        entry!(0x0092_e560, middle_low_process::save_game(Ptr, u32, u32)),
+        entry!(0x0092_e730, middle_low_process::load_game(Ptr, u32, u32, u32)),
+        entry!(0x0092_e9f0, middle_low_process::revert(Ptr, u32, u32)),
+        entry!(0x0092_ea30, middle_low_process::save_game_buffer(Ptr, Ptr)),
+        entry!(0x0092_eaa0, middle_low_process::load_game_buffer(Ptr, u32)),
+        entry!(0x0092_eb00, middle_low_process::revert_buffer(Ptr, u32)),
     ]
 }

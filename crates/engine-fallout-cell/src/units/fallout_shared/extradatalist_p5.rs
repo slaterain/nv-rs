@@ -289,7 +289,7 @@ const VTABLE_EXTRA_ANIM: u32 = 0x0101_5b28;
 
 /// The first extra data of `extra_type` in the list (`GetExtraData`).
 fn find_extra(e: &mut Engine, list: Ptr<ExtraDataList>, extra_type: u8) -> Ptr<BSExtraData> {
-    base_extra_list_get_extra_data(e, list.cast(), extra_type)
+    e.call(0x0041_0220, &args![list, extra_type]).ptr()
 }
 
 /// `new` and construct: allocates `size` bytes and runs `construct` on the
@@ -321,7 +321,7 @@ fn build_extra(
 
 /// `AddExtra` of the list.
 fn add_extra(e: &mut Engine, list: Ptr<ExtraDataList>, extra: Ptr<BSExtraData>) {
-    base_extra_list_add_extra(e, list.cast(), extra);
+    e.call(0x0040_ff60, &args![list, extra]);
 }
 
 /// The shape of the getters of a pointer or word: the word at +0x0C of the
@@ -339,7 +339,7 @@ fn extra_word(e: &mut Engine, list: Ptr<ExtraDataList>, extra_type: u8) -> u32 {
 fn remove_if_present(e: &mut Engine, list: Ptr<ExtraDataList>, extra_type: u8) {
     let extra = find_extra(e, list, extra_type);
     if !extra.is_null() {
-        base_extra_list_remove_extra(e, list.cast(), extra, true);
+        e.call(0x0041_0020, &args![list, extra, true]);
     }
 }
 
@@ -359,7 +359,7 @@ pub fn fn_0042dd90(e: &mut Engine, this: Ptr<ExtraDataList>, form: u32) {
         e.call(FLAGS_TEST, &args![copied, 0x8000_0000u32]).bool()
     });
     if flagged {
-        base_extra_list_remove_extra_ov2(e, this.cast(), EXTRA_USED_MARKERS);
+        e.call(0x0041_0140, &args![this, EXTRA_USED_MARKERS]);
     }
 }
 
@@ -392,7 +392,7 @@ pub fn extra_data_list_get_hot_key(e: &mut Engine, this: Ptr<ExtraDataList>) -> 
 // Translated from 0042dec0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ExtraDataList::RemoveHotKey` (Xbox PDB): `RemoveExtra` by type `0x4A`.
 pub fn extra_data_list_remove_hot_key(e: &mut Engine, this: Ptr<ExtraDataList>) {
-    base_extra_list_remove_extra_ov2(e, this.cast(), EXTRA_HOT_KEY);
+    e.call(0x0041_0140, &args![this, EXTRA_HOT_KEY]);
 }
 
 // Translated from 0042dee0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -453,7 +453,7 @@ pub fn fn_0042e010(e: &mut Engine, this: Ptr, argument: u32) {
 // Translated from 0042e040 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Remover of the type `0x4D` extra data: `RemoveExtra` by type.
 pub fn fn_0042e040(e: &mut Engine, this: Ptr<ExtraDataList>) {
-    base_extra_list_remove_extra_ov2(e, this.cast(), EXTRA_INFO_GENERAL_TOPIC);
+    e.call(0x0041_0140, &args![this, EXTRA_INFO_GENERAL_TOPIC]);
 }
 
 // Translated from 0042e060 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -484,7 +484,7 @@ pub fn extra_data_list_get_talking_actor_extra(
 // Translated from 0042e130 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Remover of the type `0x55` extra data: `RemoveExtra` by type.
 pub fn fn_0042e130(e: &mut Engine, this: Ptr<ExtraDataList>) {
-    base_extra_list_remove_extra_ov2(e, this.cast(), EXTRA_TALKING_ACTOR);
+    e.call(0x0041_0140, &args![this, EXTRA_TALKING_ACTOR]);
 }
 
 // Translated from 0042e150 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -525,7 +525,7 @@ pub fn extra_data_list_get_model_swap(e: &mut Engine, this: Ptr<ExtraDataList>) 
 // Translated from 0042e280 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Remover of the type `0x5B` extra data: `RemoveExtra` by type.
 pub fn fn_0042e280(e: &mut Engine, this: Ptr<ExtraDataList>) {
-    base_extra_list_remove_extra_ov2(e, this.cast(), EXTRA_MODEL_SWAP);
+    e.call(0x0041_0140, &args![this, EXTRA_MODEL_SWAP]);
 }
 
 // Translated from 0042e2a0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -555,7 +555,7 @@ pub fn fn_0042e2c0(e: &mut Engine, this: Ptr<ExtraDataList>, portal: u32) {
             e.call(NAVMESH_PORTAL_COPY, &args![copy, portal + 0x0c]);
             let low = e.mem.u32(copy.addr());
             let high = e.mem.u32(copy.addr() + 4);
-            fn_00416ad0(e, Ptr::new(block), low, high).addr()
+            e.call(0x0041_6ad0, &args![block, low, high]).u32()
         })
     }));
     add_extra(e, this, extra);
@@ -762,7 +762,7 @@ pub fn fn_0042e910(e: &mut Engine, this: Ptr<ExtraDataList>) -> Ptr<BSExtraData>
 /// a new one (`0x10` bytes, `0042ca90`) that is then added.
 pub fn fn_0042e930(e: &mut Engine, this: Ptr<ExtraDataList>, cause: u32) {
     if cause == 0 {
-        base_extra_list_remove_extra_ov2(e, this.cast(), EXTRA_ACTOR_CAUSE);
+        e.call(0x0041_0140, &args![this, EXTRA_ACTOR_CAUSE]);
         return;
     }
     let extra = find_extra(e, this, EXTRA_ACTOR_CAUSE);
@@ -799,7 +799,7 @@ pub fn fn_0042ea20(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
 /// added.
 pub fn fn_0042ea50(e: &mut Engine, this: Ptr<ExtraDataList>, combat_style: u32) {
     if combat_style == 0 {
-        base_extra_list_remove_extra_ov2(e, this.cast(), EXTRA_COMBAT_STYLE);
+        e.call(0x0041_0140, &args![this, EXTRA_COMBAT_STYLE]);
         return;
     }
     let extra = find_extra(e, this, EXTRA_COMBAT_STYLE);
@@ -836,7 +836,7 @@ pub fn extra_data_list_get_ammo(e: &mut Engine, this: Ptr<ExtraDataList>) -> Ptr
 /// `fn_0042ec30`) and adds it.
 pub fn extra_data_list_set_ammo(e: &mut Engine, this: Ptr<ExtraDataList>, ammo: u32, count: u32) {
     if ammo == 0 || count == 0 {
-        base_extra_list_remove_extra_ov2(e, this.cast(), EXTRA_AMMO);
+        e.call(0x0041_0140, &args![this, EXTRA_AMMO]);
         return;
     }
     let extra = find_extra(e, this, EXTRA_AMMO);
@@ -1021,7 +1021,7 @@ pub fn fn_0042f030(e: &mut Engine, this: Ptr<ExtraDataList>, zone: u32, flag: u8
         leaf::word_at_c(e, extra.addr() + 0x0c)
     ) == 0
     {
-        base_extra_list_remove_extra(e, this.cast(), extra, true);
+        e.call(0x0041_0020, &args![this, extra, true]);
         return 0;
     }
     let highest = e.mem.u32(extra.addr() + 0x1c);
@@ -1104,7 +1104,7 @@ pub fn extra_data_list_set_ignored_by_sandbox(
         let extra = build_extra(e, 0x0c, EXTRA_IGNORED_BY_SANDBOX_INIT, &[]);
         add_extra(e, this, extra);
     } else if !extra.is_null() && ignored == 0 {
-        base_extra_list_remove_extra(e, this.cast(), extra, true);
+        e.call(0x0041_0020, &args![this, extra, true]);
     }
 }
 
@@ -1124,7 +1124,7 @@ pub fn fn_0042f300(e: &mut Engine, this: Ptr<ExtraDataList>, user: u32) {
         let extra = build_extra(e, 0x10, EXTRA_PATROL_REF_IN_USE_DATA_INIT, &[user]);
         add_extra(e, this, extra);
     } else if !extra.is_null() && user == 0 {
-        base_extra_list_remove_extra(e, this.cast(), extra, true);
+        e.call(0x0041_0020, &args![this, extra, true]);
     }
 }
 

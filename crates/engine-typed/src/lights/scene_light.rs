@@ -50,7 +50,7 @@ const LIGHTING_OFFSET: u32 = 0x1e4;
 
 /// An `NiPointer`'s release as the exe inlines it: the count (+4) down, the object deleted through
 /// its vtable at zero.
-fn release(e: &mut Engine, object: u32) {
+pub(super) fn release(e: &mut Engine, object: u32) {
     if interlocked_decrement(e, object.wrapping_add(4)) == 0 {
         e.vcall(object, SLOT_DELETE, &args![]);
     }
@@ -325,10 +325,20 @@ fn larger(a: u32, b: u32) -> u32 {
 /// `NiLight`'s position moved by the scene node's lighting offset to the bound's centre, less the
 /// bound's radius, over the `NiLight`'s radius; stored in `fLuminance` and answered.
 pub fn luminance_to_bound(e: &mut Engine, this: Ptr<ShadowSceneLight>, bound: Ptr) -> f32 {
+    luminance_to_bound_here(e, this, bound.addr())
+}
+
+/// [`luminance_to_bound`]'s body at the running thread's precision, for the light sort, which
+/// works the luminance out in place (`resort`).
+pub(super) fn luminance_to_bound_here(
+    e: &mut Engine,
+    this: Ptr<ShadowSceneLight>,
+    bound: u32,
+) -> f32 {
     if float_precision() {
-        luminance_to_bound_in::<f32>(e, this, bound.addr())
+        luminance_to_bound_in::<f32>(e, this, bound)
     } else {
-        luminance_to_bound_in::<f64>(e, this, bound.addr())
+        luminance_to_bound_in::<f64>(e, this, bound)
     }
 }
 
@@ -420,7 +430,8 @@ fn luminance_at_in<R: Real>(
 }
 
 /// `NiPoint3::Unitize` (`004a0c10`) of a stored point in place: a length above the minimum
-/// (`01017cf8`, a double) divides each axis by `1 / length` stored to a float, any other zeroes it.
+/// (`01017cf8`, a double) multiplies each axis by `1 / length` stored to a float, any other zeroes
+/// it.
 fn unit<R: Real>(e: &Engine, p: [u32; 3]) -> [u32; 3] {
     let [x, y, z] = p.map(R::load);
     // `NiPoint3::Length` (`00457990`): `(x * x + y * y) + z * z` stored, its root stored.
@@ -433,8 +444,7 @@ fn unit<R: Real>(e: &Engine, p: [u32; 3]) -> [u32; 3] {
     p.map(|v| (f32::from_bits(v) * inverse).to_bits())
 }
 
-/// `Unitize`'s minimum length (`01017cf8`, a double) and the double 1.0 (`01012070`) the facing
-/// term is cut at.
+/// `Unitize`'s minimum length (`01017cf8`, a double).
 const MINIMUM_LENGTH: u32 = 0x0101_7cf8;
 
 // Typed from 00b9bdf0

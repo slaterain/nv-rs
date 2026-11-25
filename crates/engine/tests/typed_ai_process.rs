@@ -19,8 +19,9 @@
 //! two words and answers the next of eight seeded words; the readers also write a word into the
 //! bytes they read, and the save/load game's readers and writers move its position on as the
 //! exe's do. What runs as itself: the family's own functions and those of the families its typed
-//! calls reach (the leaves, the AI queries, the dispatch family's counts and counted pointers, the
-//! multibound family's world space getter). [`the_seeds_reach_every_branch`] checks, on the
+//! calls reach (the leaves, the AI queries, the dispatch family's counts, counted pointers and map
+//! lookup, the multibound family's world space getter, the save family's form id writer, over a
+//! form id map whose lookup finds every plugin id). [`the_seeds_reach_every_branch`] checks, on the
 //! translations, that the seeds take each deep branch.
 
 use engine as _;
@@ -30,6 +31,7 @@ use engine_typed::ai::{actor_package, base_process, AI};
 use engine_typed::ai_queries::AI_QUERIES;
 use engine_typed::dispatch::DISPATCH;
 use engine_typed::multibound::MULTIBOUND;
+use engine_typed::save::SAVE;
 
 /// Where the stand-in slots are registered: `VT_FN + slot`.
 const VT_FN: u32 = 0x00ff_4000;
@@ -104,8 +106,17 @@ const FLOATS: &[u32] = &[
 const UNREAD: &[u32] = &[0, 1];
 /// The block tag, twice as likely as each other word a block read may give.
 const TAG: u32 = 0x424c_4f4b;
-/// Form ids: none, a plugin's, a created form's (`0xff000000` and up).
-const IDS: &[u32] = &[0, 1, 0x0010_0000, 0xff00_0001, 0xffff_ffff];
+/// Form ids: none, a plugin's, the last before the created forms', a created form's (`0xff000000`
+/// and up, the first of them too).
+const IDS: &[u32] = &[
+    0,
+    1,
+    0x0010_0000,
+    0xfeff_ffff,
+    0xff00_0000,
+    0xff00_0001,
+    0xffff_ffff,
+];
 
 /// What a double does besides answering.
 #[derive(Clone, Copy, PartialEq)]
@@ -136,7 +147,7 @@ const DOUBLES: &[(u32, &[u32], Kind)] = &[
     ), // __RTDynamicCast
     (0x008d_9fa0, UNREAD, Kind::Plain), // the level copies
     (0x0091_4c60, UNREAD, Kind::Plain),
-    (0x0092_ca70, UNREAD, Kind::Plain),
+    (0x0093_7160, UNREAD, Kind::Plain), // the middle-low copy's modifier list copy
     (0x0090_7510, UNREAD, Kind::Plain),
     (0x0086_75e0, UNREAD, Kind::Plain), // the cached values' copy
     (0x0067_59e0, &[0, 1, FORM_A], Kind::Plain), // TESPackage::ComputeInitialTarget
@@ -155,7 +166,7 @@ const DOUBLES: &[(u32, &[u32], Kind)] = &[
         &[0, 1, 0xff, 0xe, 0x3f80_0000, 0x7f80_0001],
         Kind::Read,
     ), // the load buffer's byte reader
-    (0x0086_5df0, UNREAD, Kind::Plain), // SaveFormID_ov2 (the save family's)
+    (0x0086_5570, UNREAD, Kind::Plain), // the save buffer's append (under SaveFormID_ov2)
     (
         0x0086_7da0,
         &[0x4120_0000, 0, 0x8000_0000, 0x7f80_0001, 0x3f80_0001],
@@ -204,6 +215,8 @@ const SAVE_LOG_BYTE: u32 = 0x011d_e4ec;
 const PLAYER: u32 = 0x011d_ea3c;
 const PROCEDURE_COUNTS: u32 = 0x011a_3fbc;
 const PACKAGE_TYPE_NAMES: u32 = 0x0119_bcb0;
+/// The save/load game whose form id map the save family's id writer uses.
+const FORM_ID_MAP_GAME: u32 = 0x011d_df38;
 
 /// The seeds: a few for the functions with no branch, many for the rest.
 static FEW: [u32; 8] = seeds();
@@ -251,6 +264,11 @@ fn last_word(e: &Engine, addr: u32) -> u32 {
     e.mem.u32(block(double(addr)) + 0x24)
 }
 
+/// The first word of the first call of the double at `addr`.
+fn first_word(e: &Engine, addr: u32) -> u32 {
+    e.mem.u32(block(double(addr)) + 0x2c)
+}
+
 /// The world of one seed, made the same on both engines.
 struct World {
     objects: [u32; 5],
@@ -273,7 +291,8 @@ impl World {
                 ret(e.mem.u32(vt + ANSWERS + slot))
             });
         }
-        let extra = w.pick(&[0, 0, 4, 0x1_0000]);
+        // A process block of exactly 0xffff bytes (14 more without an id, 18 with one) and one past.
+        let extra = w.pick(&[0, 0, 0, 0, 4, 0xffed, 0xfff1, 0xfff2, 0x1_0000]);
         e.mem.set_u32(EXTRA, extra);
         for (k, (addr, answers, kind)) in DOUBLES.iter().enumerate() {
             let block = block(k);
@@ -285,6 +304,9 @@ impl World {
             e.register_double(*addr, move |e, a| {
                 let n = e.mem.u32(block);
                 e.mem.set_u32(block, n + 1);
+                if n == 0 {
+                    e.mem.set_u32(block + 0x2c, a.first().copied().unwrap_or(0));
+                }
                 e.mem.set_u32(block + 0x24, a.first().copied().unwrap_or(0));
                 e.mem.set_u32(block + 0x28, a.get(1).copied().unwrap_or(0));
                 let answer = e.mem.u32(block + 4 + 4 * (n % 8));
@@ -371,7 +393,8 @@ impl World {
             e.mem.set_u32(o + 4, package);
             let data = w.one_of(&[0, OTHER, FORM_B]);
             e.mem.set_u32(o + 8, data);
-            let target = w.one_of(&[0, PROCESS, FORM_A, 0x1234]);
+            // A form or none: the save family's id writer reads a target's id.
+            let target = w.one_of(&[0, PROCESS, FORM_A, FORM_B]);
             e.mem.set_u32(o + 0xc, target);
             let index = w.pick(&[0xffff_ffff, 0, 1, 5, 0x30, 0x7fff_ffff]);
             e.mem.set_u32(o + 0x10, index);
@@ -447,6 +470,25 @@ impl World {
             let name = w.word();
             e.mem.set_u32(PACKAGE_TYPE_NAMES - 4 + 4 * i, name);
         }
+        // The save family's form id map (the save/load game at `011ddf38`, its +8), which the typed
+        // `SaveFormID_ov2` asks for a plugin form's index: its hash (slot 4) answers bucket 0, whose
+        // one node's key compares equal (slot 8), so the index is the node's.
+        let game = e.mem.alloc(0x10);
+        let map = e.mem.alloc(0x40);
+        let map_vt = e.mem.alloc(2 * ANSWERS);
+        e.mem.set_u32(map, map_vt);
+        for (slot, answer) in [(4, 0), (8, 1)] {
+            e.mem.set_u32(map_vt + slot, VT_FN + slot);
+            e.mem.set_u32(map_vt + ANSWERS + slot, answer);
+        }
+        let table = e.mem.alloc(0x10);
+        let node = e.mem.alloc(0x10);
+        let index = w.pick(&[0, 0x12_3456, 0xff_ffff]);
+        e.mem.set_u32(node + 8, index);
+        e.mem.set_u32(table, node);
+        e.mem.set_u32(map + 8, table);
+        e.mem.set_u32(game + 8, map);
+        e.mem.set_u32(FORM_ID_MAP_GAME, game);
         w
     }
 
@@ -537,8 +579,8 @@ impl InWorld for Diff {
             .family(&AI_QUERIES)
             .family(&DISPATCH)
             .family(&MULTIBOUND)
+            .family(&SAVE)
             .ignore_calls(IN_PLACE)
-            .goes_by_address(&[0x0086_5df0])
             .inputs(&[Input::Of(seeds)])
             .setup(move |e, case| {
                 let mut w = World::new(e, case.word(0));
@@ -1061,9 +1103,11 @@ fn reaches(
         let mut e = Engine::new_untyped_for_test();
         let mut w = World::new(&mut e, seed);
         let args = words(&mut w);
-        // Before the call: the receiver's first eight words, and the player's running package.
+        // Before the call: the receiver's first eight words, the player's running package and the
+        // save/load game's position.
         let mut before: Vec<u32> = (0..8).map(|i| e.mem.u32(args[0] + 4 * i)).collect();
         before.push(e.mem.u32(e.mem.u32(PLAYER) + 0x208));
+        before.push(e.mem.u32(e.mem.u32(SAVE_LOAD_GAME) + 0x14));
         e.call(addr, &args);
         for (n, hit) in taken.iter_mut().zip(check(&e, &args, &before)) {
             *n += u32::from(hit);
@@ -1091,7 +1135,7 @@ fn the_seeds_reach_every_branch() {
         |e, _, _| {
             vec![
                 slot_calls(e, 0x214) > 0,
-                [0x008d_9fa0, 0x0091_4c60, 0x0092_ca70, 0x0090_7510]
+                [0x008d_9fa0, 0x0091_4c60, 0x0093_7160, 0x0090_7510]
                     .iter()
                     .any(|a| calls(e, *a) > 0),
                 calls(e, 0x0086_75e0) > 0,
@@ -1102,11 +1146,14 @@ fn the_seeds_reach_every_branch() {
         0x008d_0a10,
         &MOST,
         |w| w.process_and(2),
-        &["blocks", "too large"],
-        |e, _, _| {
+        &["blocks", "too large", "exactly 0xffff"],
+        |e, _, before| {
             vec![
                 calls(e, 0x0085_79b0) > 3,
                 calls(e, WARNING) > 0 && last_word(e, WARNING) == 0x0101_5318,
+                calls(e, 0x0085_79b0) > 3
+                    && calls(e, WARNING) == 0
+                    && e.mem.u16(before[9] + 4) == 0xffff,
             ]
         },
     );
@@ -1115,7 +1162,10 @@ fn the_seeds_reach_every_branch() {
         &MOST,
         |w| w.process_and(3),
         &[
-            "bad header",
+            "bad header, a record",
+            "bad header, the version",
+            "a record's name, the default slot",
+            "a record's name, its own slot",
             "overrun, a record",
             "underrun, a record",
             "overrun, the version",
@@ -1125,7 +1175,10 @@ fn the_seeds_reach_every_branch() {
         |e, _, _| {
             let warned = |format| calls(e, WARNING) > 0 && last_word(e, WARNING) == format;
             vec![
-                warned(0x0101_5718) || warned(0x0101_56a8),
+                calls(e, WARNING) > 0 && first_word(e, WARNING) == 0x0101_5718,
+                calls(e, WARNING) > 0 && first_word(e, WARNING) == 0x0101_56a8,
+                calls(e, 0x0048_39c0) > 0 && calls(e, WARNING) > 0 && slot_calls(e, 0x130) == 0,
+                calls(e, 0x0048_39c0) > 0 && calls(e, WARNING) > 0 && slot_calls(e, 0x130) > 0,
                 warned(0x0101_5588),
                 warned(0x0101_5500),
                 warned(0x0101_54a0),
@@ -1190,8 +1243,25 @@ fn the_seeds_reach_every_branch() {
         0x008c_65d0,
         &MOST,
         |w| w.with_buffer(true),
-        &["package's own save", "data's own save"],
-        |e, _, _| vec![slot_calls(e, 0x54) > 0, slot_calls(e, 0xc) > 0],
+        &[
+            "package's own save",
+            "data's own save",
+            "the first created id",
+            "the last plugin id",
+        ],
+        |e, _, before| {
+            let id = if before[0] != 0 {
+                e.mem.u32(before[0] + 0xc)
+            } else {
+                0
+            };
+            vec![
+                slot_calls(e, 0x54) > 0,
+                slot_calls(e, 0xc) > 0,
+                id == 0xff00_0000 && slot_calls(e, 0x15c) > 0,
+                id == 0xfeff_ffff && slot_calls(e, 0x15c) == 0,
+            ]
+        },
     );
     reaches(
         0x008c_6730,

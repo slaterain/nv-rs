@@ -14,8 +14,8 @@
 //! when the slot holds that body, and a call through the slot otherwise. A form's slot 0x130 (its
 //! name) is [`empty_name`] on the classes that keep the default.
 
-use super::actor_package;
 use super::FAMILY;
+use super::{actor_package, middle_low_process};
 use crate::{ai_queries, dispatch, multibound, slot_target};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
@@ -45,9 +45,9 @@ const SHARED_POINT: u32 = 0x011f_426c;
 /// The float `FLT_MAX`, whose negation the last-time-detected stub answers.
 const LARGEST_FLOAT: u32 = 0x0108_5df0;
 /// The double 0.0 that `Copy` compares a slot's result with.
-const ZERO_DOUBLE: u32 = 0x0101_2060;
+pub(super) const ZERO_DOUBLE: u32 = 0x0101_2060;
 /// The float -1.0 that `Revert` (the buffer one) stores as the hour.
-const MINUS_ONE_FLOAT: u32 = 0x0101_2054;
+pub(super) const MINUS_ONE_FLOAT: u32 = 0x0101_2054;
 /// The float 20.0 the breath timer answers.
 const BREATH_TIMER_FLOAT: u32 = 0x0101_7868;
 /// The empty string forms name themselves with.
@@ -60,28 +60,28 @@ const SAVE_LOAD_GAME: u32 = 0x011d_e45c;
 /// The setting whose value byte turns the save size messages on.
 const SAVE_LOG_SETTING: u32 = 0x011d_e4e8;
 /// The block tag written before a process block and checked after it: `KOLB`.
-const BLOCK_TAG: u32 = 0x424c_4f4b;
+pub(super) const BLOCK_TAG: u32 = 0x424c_4f4b;
 /// The source file's path the messages name (the AI folder's `BaseProcess` source).
 const SOURCE_FILE: u32 = 0x0108_65e0;
 /// `GetSaveSize(): %-5i for form %08X %s with flags %08X ending at line %i in file %s`.
-const SAVE_SIZE_FORM_FORMAT: u32 = 0x0101_2cb0;
+pub(super) const SAVE_SIZE_FORM_FORMAT: u32 = 0x0101_2cb0;
 /// `GetSaveSize(): %-5i ending at line %i in file %s`.
-const SAVE_SIZE_FORMAT: u32 = 0x0101_2c78;
+pub(super) const SAVE_SIZE_FORMAT: u32 = 0x0101_2c78;
 /// `SaveGame(): %-5i for form %08X %s with flags %08X ending at line %i in file %s`.
-const SAVE_GAME_FORM_FORMAT: u32 = 0x0101_53a0;
+pub(super) const SAVE_GAME_FORM_FORMAT: u32 = 0x0101_53a0;
 /// `SaveGame(): %-5i ending at line %i in file %s`.
-const SAVE_GAME_FORMAT: u32 = 0x0101_536c;
+pub(super) const SAVE_GAME_FORMAT: u32 = 0x0101_536c;
 /// The warning of a block longer than a 16-bit length holds.
-const BLOCK_TOO_LARGE_FORMAT: u32 = 0x0101_5318;
+pub(super) const BLOCK_TOO_LARGE_FORMAT: u32 = 0x0101_5318;
 /// The warnings of a block whose tag is wrong: with the form being loaded, and with the version.
-const BAD_HEADER_FORM_FORMAT: u32 = 0x0101_5718;
-const BAD_HEADER_FORMAT: u32 = 0x0101_56a8;
+pub(super) const BAD_HEADER_FORM_FORMAT: u32 = 0x0101_5718;
+pub(super) const BAD_HEADER_FORMAT: u32 = 0x0101_56a8;
 /// The warnings of a block read past its end or short of it: with the form being loaded, and with
 /// the version.
-const OVERRUN_FORM_FORMAT: u32 = 0x0101_5588;
-const UNDERRUN_FORM_FORMAT: u32 = 0x0101_5500;
-const OVERRUN_FORMAT: u32 = 0x0101_54a0;
-const UNDERRUN_FORMAT: u32 = 0x0101_5440;
+pub(super) const OVERRUN_FORM_FORMAT: u32 = 0x0101_5588;
+pub(super) const UNDERRUN_FORM_FORMAT: u32 = 0x0101_5500;
+pub(super) const OVERRUN_FORMAT: u32 = 0x0101_54a0;
+pub(super) const UNDERRUN_FORMAT: u32 = 0x0101_5440;
 
 /// The save/load object's buffer position (its word at +0x14, `00825c00`'s body), current
 /// version (its byte at +0x80, `008df040`'s) and record being loaded (its word at +0x84,
@@ -90,17 +90,17 @@ const BUFFER_POSITION: u32 = 0x14;
 const CURRENT_VERSION: u32 = 0x80;
 const LOADING_RECORD: u32 = 0x84;
 /// Writes `size` bytes from an address to the save buffer.
-const WRITE_BYTES: u32 = 0x0085_79b0;
+pub(super) const WRITE_BYTES: u32 = 0x0085_79b0;
 /// Reads `size` bytes from the save buffer into an address.
-const READ_BYTES: u32 = 0x0085_79e0;
+pub(super) const READ_BYTES: u32 = 0x0085_79e0;
 /// The form for a record's id word (`cdecl`).
-const FORM_FOR_ID: u32 = 0x0048_39c0;
+pub(super) const FORM_FOR_ID: u32 = 0x0048_39c0;
 /// The SAVELOAD warnings (`cdecl`, variable arguments). A fix or built-in may replace it, so it is
 /// called by address.
-const SAVELOAD_WARNING: u32 = 0x005b_5e40;
+pub(super) const SAVELOAD_WARNING: u32 = 0x005b_5e40;
 
 /// `__RTDynamicCast` (`cdecl`, five words).
-const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+pub(super) const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
 /// The RTTI type descriptors of the casts.
 const TYPE_BASE_PROCESS: u32 = 0x0118_a6b8;
 const TYPE_HIGH_PROCESS: u32 = 0x0118_a6d4;
@@ -108,7 +108,7 @@ const TYPE_MIDDLE_HIGH_PROCESS: u32 = 0x0118_c64c;
 const TYPE_MIDDLE_LOW_PROCESS: u32 = 0x011a_3668;
 const TYPE_LOW_PROCESS: u32 = 0x011a_364c;
 const TYPE_MOBILE_OBJECT: u32 = 0x0118_4920;
-const TYPE_ACTOR: u32 = 0x0118_46d4;
+pub(super) const TYPE_ACTOR: u32 = 0x0118_46d4;
 
 /// The embedded current package of a process.
 #[inline]
@@ -123,43 +123,43 @@ fn package_ptr(this: Ptr) -> Ptr {
 }
 
 /// `__RTDynamicCast(object, 0, from, to, 0)`.
-fn runtime_cast(e: &mut Engine, object: u32, from: u32, to: u32) -> u32 {
+pub(super) fn runtime_cast(e: &mut Engine, object: u32, from: u32, to: u32) -> u32 {
     e.call(RT_DYNAMIC_CAST, &args![object, 0u32, from, to, 0u32])
         .u32()
 }
 
-fn save_load_game(e: &Engine) -> u32 {
+pub(super) fn save_load_game(e: &Engine) -> u32 {
     e.mem.u32(SAVE_LOAD_GAME)
 }
 
 /// `TESSaveLoadGame::UseSaveGameBlocks` (Xbox PDB, `00862110`): the current version from 0x1f
 /// to 0x59.
-fn use_save_game_blocks(e: &Engine) -> bool {
+pub(super) fn use_save_game_blocks(e: &Engine) -> bool {
     (0x1f..0x5a).contains(&current_version(e))
 }
 
 /// The save/load object's current version (`008df040`).
-fn current_version(e: &Engine) -> u8 {
+pub(super) fn current_version(e: &Engine) -> u8 {
     e.mem.u8(save_load_game(e).wrapping_add(CURRENT_VERSION))
 }
 
 /// The save/load object's record being loaded (`004fd3c0`).
-fn loading_record(e: &Engine) -> u32 {
+pub(super) fn loading_record(e: &Engine) -> u32 {
     e.mem.u32(save_load_game(e).wrapping_add(LOADING_RECORD))
 }
 
-fn buffer_position(e: &Engine) -> u32 {
+pub(super) fn buffer_position(e: &Engine) -> u32 {
     e.mem.u32(save_load_game(e).wrapping_add(BUFFER_POSITION))
 }
 
 /// The save log setting's value byte (`00408d60` gives a setting's value at +4).
-fn save_log_enabled(e: &Engine) -> bool {
+pub(super) fn save_log_enabled(e: &Engine) -> bool {
     e.mem.u8(SAVE_LOG_SETTING + 4) != 0
 }
 
 /// The record being saved: the save/load object's word at +0x88 (`TES::GetWorldSpace`'s body,
 /// the multibound family's).
-fn saving_record(e: &mut Engine) -> u32 {
+pub(super) fn saving_record(e: &mut Engine) -> u32 {
     let save_load = save_load_game(e);
     typed_call!(
         multibound::FAMILY,
@@ -169,7 +169,7 @@ fn saving_record(e: &mut Engine) -> u32 {
 }
 
 /// A form's name (its slot 0x130): [`empty_name`] when the slot holds it.
-fn form_name(e: &mut Engine, form: u32) -> u32 {
+pub(super) fn form_name(e: &mut Engine, form: u32) -> u32 {
     if slot_target(e, form, 0x130) == 0x0040_1280 {
         typed_call!(FAMILY, 0x0040_1280, empty_name(e, Ptr::new(form)))
     } else {
@@ -179,22 +179,22 @@ fn form_name(e: &mut Engine, form: u32) -> u32 {
 
 /// The 16-bit length a block's placeholder holds: the low half of the bytes written.
 #[allow(clippy::cast_possible_truncation)] // A 16-bit store, as the exe's.
-fn low_half(word: u32) -> u16 {
+pub(super) fn low_half(word: u32) -> u16 {
     word as u16
 }
 
 /// The words a save message prints for a record, in the order the code reads them: flags (+5) and
 /// version (+9) before the name slot, the id after it.
-struct RecordWords {
-    form_id: u32,
-    name: u32,
-    version: u32,
-    flags: u32,
+pub(super) struct RecordWords {
+    pub(super) form_id: u32,
+    pub(super) name: u32,
+    pub(super) version: u32,
+    pub(super) flags: u32,
 }
 
 /// A record's message words: the form for its id, then the record's flags (and version when
 /// `with_version`), then the form's name (slot 0x130), then its id again.
-fn record_words(e: &mut Engine, record: u32, with_version: bool) -> RecordWords {
+pub(super) fn record_words(e: &mut Engine, record: u32, with_version: bool) -> RecordWords {
     let id = e.mem.u32(record);
     let form = e.call(FORM_FOR_ID, &args![id]).u32();
     let flags = e.mem.u32(record.wrapping_add(5));
@@ -615,8 +615,8 @@ fn reset_high_process(e: &mut Engine, process: u32) {
 /// `BaseProcess::Copy` (Xbox PDB): nothing for a null `other`. Otherwise `other`, then `this`, cast
 /// to `HighProcess`, `MiddleHighProcess`, `MiddleLowProcess` and `LowProcess`; each high process
 /// reset (`other`'s first); then for each level both are, that level's copy on `this` with `other`
-/// (`008d9fa0` `HighProcess::HighCopy`, `00914c60` `MiddleHighProcess::MiddleHighCopy`, `0092ca70`,
-/// `00907510`); last, when both have cached values, `008675e0` on this one's with the other's.
+/// (`008d9fa0` `HighProcess::HighCopy`, `00914c60` `MiddleHighProcess::MiddleHighCopy`, `0092ca70`
+/// (the middle-low module's, a typed call), `00907510`); last, when both have cached values, `008675e0` on this one's with the other's.
 pub fn copy(e: &mut Engine, this: Ptr, other: Ptr) {
     if other.is_null() {
         return;
@@ -640,7 +640,15 @@ pub fn copy(e: &mut Engine, this: Ptr, other: Ptr) {
     let level_copies = [0x008d_9fa0u32, 0x0091_4c60, 0x0092_ca70, 0x0090_7510];
     for ((target, source), level_copy) in this_as.into_iter().zip(other_as).zip(level_copies) {
         if target != 0 && source != 0 {
-            e.call(level_copy, &args![target, source]);
+            if level_copy == 0x0092_ca70 {
+                typed_call!(
+                    FAMILY,
+                    0x0092_ca70,
+                    middle_low_process::copy(e, Ptr::new(target), Ptr::new(source))
+                );
+            } else {
+                e.call(level_copy, &args![target, source]);
+            }
         }
     }
     let this_cached = e.mem.u32(this.addr().wrapping_add(CACHED_VALUES));
