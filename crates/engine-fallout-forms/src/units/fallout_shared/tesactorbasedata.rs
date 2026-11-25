@@ -374,7 +374,7 @@ pub fn tes_actor_base_data_tes_actor_base_data(
     e.call(BASE_COMPONENT_CONSTRUCT, &args![this]);
     e.mem.set_u32(this.addr(), TES_ACTOR_BASE_DATA_VTABLE);
     e.call(LIST_NODE_CONSTRUCT, &args![this.addr() + 0x2c]);
-    tes_actor_base_data_initialize_data_component(e, this);
+    e.call(0x0047_c8e0, &args![this]);
     this
 }
 
@@ -459,7 +459,7 @@ pub fn tes_actor_base_data_get_karma(e: &mut Engine, this: Ptr<TESActorBaseData>
 // Translation incomplete: 0047c880 - C++ exception unwinding (the frame registered at FS:[0]) is not translated.
 pub fn fn_0047c880(e: &mut Engine, this: Ptr<TESActorBaseData>) {
     e.mem.set_u32(this.addr(), TES_ACTOR_BASE_DATA_VTABLE);
-    tes_actor_base_data_clear_data_component(e, this);
+    e.call(0x0047_c9b0, &args![this]);
     e.call(CHAINED_CONTAINER_DESTRUCT, &args![this.addr() + 0x2c]);
 }
 
@@ -498,7 +498,7 @@ pub fn tes_actor_base_data_initialize_data_component(e: &mut Engine, this: Ptr<T
 // Translated from 0047c9b0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `TESActorBaseData::ClearDataComponent` (Xbox PDB): clears the faction list.
 pub fn tes_actor_base_data_clear_data_component(e: &mut Engine, this: Ptr<TESActorBaseData>) {
-    tes_actor_base_data_clear_faction_list(e, this);
+    e.call(0x0047_c9d0, &args![this]);
 }
 
 // Translated from 0047c9d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -522,7 +522,7 @@ pub fn tes_actor_base_data_copy_faction_list(
     this: Ptr<TESActorBaseData>,
     source: Ptr<TESActorBaseData>,
 ) {
-    tes_actor_base_data_clear_faction_list(e, this);
+    e.call(0x0047_c9d0, &args![this]);
     let mut tail = faction_list_head(e, this);
     let mut node = faction_list_head(e, source);
     while node != 0 {
@@ -551,11 +551,11 @@ pub fn tes_actor_base_data_copy_faction_list(
 pub fn tes_actor_base_data_save(e: &mut Engine, this: Ptr<TESActorBaseData>) {
     let data = this.addr() + 4;
     if e.call(IS_BIG_ENDIAN, &args![]).bool() {
-        fn_0047cb90(e, Ptr::new(data));
+        e.call(0x0047_cb90, &args![data]);
     }
     e.call(TES_FORM_ADD_CHUNK_DATA, &args![TAG_ACBS, data, 0x18u32]);
     if e.call(IS_BIG_ENDIAN, &args![]).bool() {
-        fn_0047cb90(e, Ptr::new(data));
+        e.call(0x0047_cb90, &args![data]);
     }
     for (tag, field) in [
         (TAG_INAM, TESActorBaseData::pDeathItem),
@@ -597,14 +597,14 @@ pub fn fn_0047cb90(e: &mut Engine, data: Ptr) {
 /// Whether bit 15 of the template-use flags is set (`0047cd40` with 15).
 /// Unnamed in the map.
 pub fn fn_0047cca0(e: &mut Engine, this: Ptr<TESActorBaseData>) -> bool {
-    fn_0047cd40(e, this, 0xf)
+    e.call(0x0047_cd40, &args![this, 0xfu32]).bool()
 }
 
 // Translated from 0047ccc0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Sets or clears bit 15 of the template-use flags (`0047cce0` with 15).
 /// Unnamed in the map.
 pub fn fn_0047ccc0(e: &mut Engine, this: Ptr<TESActorBaseData>, value: u8) {
-    fn_0047cce0(e, this, 0xf, value);
+    e.call(0x0047_cce0, &args![this, 0xfu32, u32::from(value)]);
 }
 
 // Translated from 0047cce0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -644,7 +644,7 @@ pub fn fn_0047cd90(e: &mut Engine, this: Ptr<TESActorBaseData>, flags: u16) {
 // Translated from 0047cdb0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `fn_0047cdd0` (the compiler emitted a second copy that forwards to it).
 pub fn fn_0047cdb0(e: &mut Engine, this: Ptr<TESActorBaseData>) -> bool {
-    fn_0047cdd0(e, this)
+    e.call(0x0047_cdd0, &args![this]).bool()
 }
 
 // Translated from 0047cdd0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -670,7 +670,7 @@ pub fn fn_0047cdd0(e: &mut Engine, this: Ptr<TESActorBaseData>) -> bool {
 // Translation incomplete: 0047ce10 - C++ exception unwinding (the frame registered at FS:[0] and the container local's unwind state) is not translated.
 pub fn fn_0047ce10(e: &mut Engine, this: Ptr<TESActorBaseData>, actor: Ptr) {
     if actor.is_null()
-        || !fn_0047cdb0(e, this)
+        || !e.call(0x0047_cdb0, &args![this]).bool()
         || e.call(ACTOR_TEMPLATE_BLOCKED, &args![actor]).bool()
     {
         return;
@@ -710,11 +710,11 @@ pub fn fn_0047ce10(e: &mut Engine, this: Ptr<TESActorBaseData>, actor: Ptr) {
             }
             e.vcall(actor.addr(), 0x1cc, &args![0u32, 1u32]);
         }
-        let manager = path_manager_q_instance(e);
+        let manager = e.call(0x0047_d0b0, &[]).u32();
         if typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, manager)) != 0 {
             let extra_list = e.call(ADDRESS_PLUS_44, &args![actor]).u32();
             let changes = e.call(GET_CONTAINER_CHANGES, &args![extra_list]).u32();
-            let manager = path_manager_q_instance(e);
+            let manager = e.call(0x0047_d0b0, &[]).u32();
             e.call(
                 PATH_MANAGER_CLEAR_INVENTORY_POINTERS,
                 &args![manager, changes],
@@ -728,7 +728,9 @@ pub fn fn_0047ce10(e: &mut Engine, this: Ptr<TESActorBaseData>, actor: Ptr) {
             e.call(CLEAR_ACTOR_PROCESS_FLAGS, &args![actor]);
         }
         let saved_form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, actor));
-        let template_base = create_template_actor_base(e, saved_form, first_entry_word);
+        let template_base = e
+            .call(0x0047_d130, &args![saved_form, first_entry_word])
+            .u32();
         e.call(
             APPLY_TEMPLATE_FORM,
             &args![actor, saved_form, first_entry_word],
@@ -835,24 +837,24 @@ pub fn tes_actor_base_data_copy_component(
     let source: Ptr<TESActorBaseData> = Ptr::new(other);
     let flags_slot = e.call(ADDRESS_PLUS_4, &args![source]).u32();
     let flags = e.mem.u32(flags_slot);
-    fn_0047dd30(e, this, flags);
+    e.call(0x0047_dd30, &args![this, flags]);
     let fatigue = e.vcall(other, 0x60, &args![]).u16();
-    fn_0047e010(e, this, fatigue);
+    e.call(0x0047_e010, &args![this, u32::from(fatigue)]);
     let karma = e.vcall(other, 0x64, &args![]).f32();
-    fn_0047e1c0(e, this, karma);
-    let bartergold = fn_0047d3f0(e, source);
-    fn_0047e240(e, this, bartergold);
-    let level = fn_0047d370(e, source);
-    fn_0047dfe0(e, this, level);
-    let calc_min = fn_0047d390(e, source);
-    fn_0047de40(e, this, calc_min);
-    let calc_max = fn_0047d3b0(e, source);
-    fn_0047de70(e, this, calc_max);
+    e.call(0x0047_e1c0, &args![this, karma]);
+    let bartergold = e.call(0x0047_d3f0, &args![source]).u16();
+    e.call(0x0047_e240, &args![this, u32::from(bartergold)]);
+    let level = e.call(0x0047_d370, &args![source]).u16();
+    e.call(0x0047_dfe0, &args![this, u32::from(level)]);
+    let calc_min = e.call(0x0047_d390, &args![source]).u16();
+    e.call(0x0047_de40, &args![this, u32::from(calc_min)]);
+    let calc_max = e.call(0x0047_d3b0, &args![source]).u16();
+    e.call(0x0047_de70, &args![this, u32::from(calc_max)]);
     let speed = e.call(SPEED_MULT_GETTER, &args![source]).u16();
-    fn_0047e270(e, this, speed);
-    let disposition = fn_0047d3d0(e, source);
-    fn_0047dea0(e, this, disposition);
-    tes_actor_base_data_copy_faction_list(e, this, source);
+    e.call(0x0047_e270, &args![this, u32::from(speed)]);
+    let disposition = e.call(0x0047_d3d0, &args![source]).u16();
+    e.call(0x0047_dea0, &args![this, u32::from(disposition)]);
+    e.call(0x0047_ca20, &args![this, source]);
     let death_item = e.call(WORD_AT_1C, &args![source]).u32();
     e.call(STORE_DEATH_ITEM, &args![this, death_item]);
     let voice = e.vcall(other, 0x68, &args![]).u32();
@@ -935,10 +937,10 @@ pub fn tes_actor_base_data_compare_component(
     if my_karma != their_karma {
         return true;
     }
-    if fn_0047d3f0(e, this) != fn_0047d3f0(e, other)
-        || fn_0047d370(e, this) != fn_0047d370(e, other)
-        || fn_0047d390(e, this) != fn_0047d390(e, other)
-        || fn_0047d3b0(e, this) != fn_0047d3b0(e, other)
+    if e.call(0x0047_d3f0, &args![this]).u16() != e.call(0x0047_d3f0, &args![other]).u16()
+        || e.call(0x0047_d370, &args![this]).u16() != e.call(0x0047_d370, &args![other]).u16()
+        || e.call(0x0047_d390, &args![this]).u16() != e.call(0x0047_d390, &args![other]).u16()
+        || e.call(0x0047_d3b0, &args![this]).u16() != e.call(0x0047_d3b0, &args![other]).u16()
     {
         return true;
     }
@@ -952,7 +954,7 @@ pub fn tes_actor_base_data_compare_component(
     {
         return true;
     }
-    if fn_0047d3d0(e, this) != fn_0047d3d0(e, other) {
+    if e.call(0x0047_d3d0, &args![this]).u16() != e.call(0x0047_d3d0, &args![other]).u16() {
         return true;
     }
     let my_list = faction_list_head(e, this);
@@ -967,7 +969,9 @@ pub fn tes_actor_base_data_compare_component(
         let entry = node_item(e, node);
         if entry != 0 {
             let faction = e.get(Ptr::<FACTION_RANK>::new(entry), FACTION_RANK::pFaction);
-            let rank = tes_actor_base_data_get_faction_rank(e, other, faction.addr(), 0);
+            let rank = e
+                .call(0x0047_d680, &args![other, faction.addr(), 0u32])
+                .i32();
             let own_rank = e.get(Ptr::<FACTION_RANK>::new(entry), FACTION_RANK::cRank) as i8;
             if rank != own_rank as i32 {
                 return true;
@@ -1006,7 +1010,10 @@ pub fn tes_actor_base_data_get_faction_rank(
         let entry = node_item(e, node);
         let entry_faction = e.mem.u32(entry);
         if check_faction_flag != 0 {
-            if entry != 0 && !fn_0047d720(e, Ptr::new(entry_faction)) && entry_faction == faction {
+            if entry != 0
+                && !e.call(0x0047_d720, &args![entry_faction]).bool()
+                && entry_faction == faction
+            {
                 return e.mem.i8(entry + 4) as i32;
             }
         } else if entry != 0 && entry_faction == faction {
@@ -1040,7 +1047,7 @@ pub fn tes_actor_base_data_is_in_evil_factions_only(
         let entry = node_item(e, node);
         if entry != 0 {
             let faction = e.mem.u32(entry);
-            if !fn_0047d7c0(e, Ptr::new(faction)) {
+            if !e.call(0x0047_d7c0, &args![faction]).bool() {
                 result = false;
             }
         }
@@ -1166,13 +1173,15 @@ pub fn tes_actor_base_data_init_item(e: &mut Engine, this: Ptr<TESActorBaseData>
         }
     }
 
-    if !e.get(this, TESActorBaseData::pTemplateForm).is_null() && fn_0047cd40(e, this, 0) {
+    if !e.get(this, TESActorBaseData::pTemplateForm).is_null()
+        && e.call(0x0047_cd40, &args![this, 0u32]).bool()
+    {
         return;
     }
     if e.global::<i32>(ALIGNMENT_TABLE_STATE) == -1 {
         for index in 0..5i32 {
             let value: f32 = e.global(DEFAULT_ALIGNMENT_VALUES + 4 * index as u32);
-            if tes_actor_base_data_get_alignment_for_karma(e, value) != index {
+            if e.call(0x0047_e040, &args![value]).i32() != index {
                 e.set_global(ALIGNMENT_TABLE_STATE, 1i32);
                 let a = setting_float(e, KARMA_THRESHOLD_011C5090);
                 let b = setting_float(e, KARMA_THRESHOLD_011C4E54);
@@ -1264,7 +1273,7 @@ fn log_missing_form(e: &mut Engine, text: u32, id: u32, form: Ptr) {
 /// map.
 pub fn fn_0047dd30(e: &mut Engine, this: Ptr<TESActorBaseData>, flags: u32) {
     e.set(this, TESActorBaseData::iActorBaseFlags, flags);
-    fn_0047e2a0(e, this, 2);
+    e.call(0x0047_e2a0, &args![this, 2u32]);
 }
 
 // Translated from 0047dd50 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1304,13 +1313,13 @@ pub fn tes_actor_base_data_set_flag_bit(
                     .call(GET_CHANGE, &args![save_load, form, change_flags])
                     .bool()
                 {
-                    fn_0047e2a0(e, this, 0x0100_0000);
+                    e.call(0x0047_e2a0, &args![this, 0x0100_0000u32]);
                 } else {
-                    fn_0047e2f0(e, this, 0x0100_0000);
+                    e.call(0x0047_e2f0, &args![this, 0x0100_0000u32]);
                 }
             }
         } else if mark_changed != 0 {
-            fn_0047e2a0(e, this, 2);
+            e.call(0x0047_e2a0, &args![this, 2u32]);
         }
     }
     let flags = e.get(this, TESActorBaseData::iActorBaseFlags);
@@ -1326,14 +1335,14 @@ pub fn tes_actor_base_data_set_flag_bit(
 /// Sets `usCalcLevelMin` and marks the form changed (`2`). Unnamed in the map.
 pub fn fn_0047de40(e: &mut Engine, this: Ptr<TESActorBaseData>, value: u16) {
     e.set(this, TESActorBaseData::usCalcLevelMin, value);
-    fn_0047e2a0(e, this, 2);
+    e.call(0x0047_e2a0, &args![this, 2u32]);
 }
 
 // Translated from 0047de70 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Sets `usCalcLevelMax` and marks the form changed (`2`). Unnamed in the map.
 pub fn fn_0047de70(e: &mut Engine, this: Ptr<TESActorBaseData>, value: u16) {
     e.set(this, TESActorBaseData::usCalcLevelMax, value);
-    fn_0047e2a0(e, this, 2);
+    e.call(0x0047_e2a0, &args![this, 2u32]);
 }
 
 // Translated from 0047dea0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1341,7 +1350,7 @@ pub fn fn_0047de70(e: &mut Engine, this: Ptr<TESActorBaseData>, value: u16) {
 /// map.
 pub fn fn_0047dea0(e: &mut Engine, this: Ptr<TESActorBaseData>, value: u16) {
     e.set(this, TESActorBaseData::usBaseDisposition, value);
-    fn_0047e2a0(e, this, 2);
+    e.call(0x0047_e2a0, &args![this, 2u32]);
 }
 
 // Translated from 0047ded0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1352,22 +1361,31 @@ pub fn fn_0047dea0(e: &mut Engine, this: Ptr<TESActorBaseData>, value: u16) {
 /// is below it, that minimum is returned; otherwise a non-zero
 /// `usCalcLevelMax` below the level caps it. Unnamed in the map.
 pub fn fn_0047ded0(e: &mut Engine, this: Ptr<TESActorBaseData>) -> u16 {
-    let mut level = fn_0047d370(e, this);
+    let mut level = e.call(0x0047_d370, &args![this]).u16();
     if e.call(FLAG_WORD_HAS_BIT_80, &args![this]).bool() {
         let divisor: f64 = e.global(THOUSAND);
-        let scale = (level as f64 / divisor) as f32;
+        let scale = f32::from_bits(crate::x87::x87_store32(crate::x87::x87_div(
+            f64::from(level),
+            divisor,
+        )));
         let source = e.mem.u32(LEVEL_SOURCE_OBJECT);
         let form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, source));
         let component = if form != 0 { form + 0x30 } else { 0 };
         if component != 0 {
-            let other = fn_0047d370(e, Ptr::new(component));
-            level = float_to_int_truncated(other as f64 * scale as f64) as u16;
+            let other = e.call(0x0047_d370, &args![component]).u16();
+            // FMUL then FISTP with no store between: the product at the control word's precision.
+            level = float_to_int_truncated(crate::x87::x87_mul(f64::from(other), f64::from(scale)))
+                as u16;
         }
-        if fn_0047d390(e, this) != 0 && level < fn_0047d390(e, this) {
-            return fn_0047d390(e, this);
+        if e.call(0x0047_d390, &args![this]).u16() != 0
+            && level < e.call(0x0047_d390, &args![this]).u16()
+        {
+            return e.call(0x0047_d390, &args![this]).u16();
         }
-        if fn_0047d3b0(e, this) != 0 && level > fn_0047d3b0(e, this) {
-            level = fn_0047d3b0(e, this);
+        if e.call(0x0047_d3b0, &args![this]).u16() != 0
+            && level > e.call(0x0047_d3b0, &args![this]).u16()
+        {
+            level = e.call(0x0047_d3b0, &args![this]).u16();
         }
     }
     level
@@ -1377,14 +1395,14 @@ pub fn fn_0047ded0(e: &mut Engine, this: Ptr<TESActorBaseData>) -> u16 {
 /// Sets `sLevel` and marks the form changed (`2`). Unnamed in the map.
 pub fn fn_0047dfe0(e: &mut Engine, this: Ptr<TESActorBaseData>, value: u16) {
     e.set(this, TESActorBaseData::sLevel, value);
-    fn_0047e2a0(e, this, 2);
+    e.call(0x0047_e2a0, &args![this, 2u32]);
 }
 
 // Translated from 0047e010 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Sets `usFatigue` and marks the form changed (`2`). Unnamed in the map.
 pub fn fn_0047e010(e: &mut Engine, this: Ptr<TESActorBaseData>, value: u16) {
     e.set(this, TESActorBaseData::usFatigue, value);
-    fn_0047e2a0(e, this, 2);
+    e.call(0x0047_e2a0, &args![this, 2u32]);
 }
 
 // Translated from 0047e040 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1437,7 +1455,7 @@ pub fn tes_actor_base_data_get_karmic_title(e: &mut Engine, actor: Ptr) -> u32 {
         let karma = e
             .vcall(actor.addr() + 0xa4, 8, &args![KARMA_ACTOR_VALUE])
             .i32();
-        let alignment = tes_actor_base_data_get_alignment_for_karma(e, karma as f32);
+        let alignment = e.call(0x0047_e040, &args![karma as f32]).i32();
         let row = match alignment {
             0..=2 => alignment as u32,
             3 => 0,
@@ -1461,7 +1479,8 @@ pub fn tes_actor_base_data_get_karmic_title(e: &mut Engine, actor: Ptr) -> u32 {
 /// the lower one (`011c5160`), and marks the form changed (`2`). Unnamed in
 /// the map.
 pub fn fn_0047e1c0(e: &mut Engine, this: Ptr<TESActorBaseData>, karma: f32) {
-    e.set(this, TESActorBaseData::fKarma, karma);
+    // FLD/FSTP of the argument: a signalling NaN is stored quiet.
+    e.set(this, TESActorBaseData::fKarma, crate::x87::x87_quiet(karma));
     let upper = setting_float(e, KARMA_MAX_SETTING);
     let current = e.get(this, TESActorBaseData::fKarma);
     if upper < current {
@@ -1473,21 +1492,21 @@ pub fn fn_0047e1c0(e: &mut Engine, this: Ptr<TESActorBaseData>, karma: f32) {
             e.set(this, TESActorBaseData::fKarma, lower);
         }
     }
-    fn_0047e2a0(e, this, 2);
+    e.call(0x0047_e2a0, &args![this, 2u32]);
 }
 
 // Translated from 0047e240 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Sets `usBartergold` and marks the form changed (`2`). Unnamed in the map.
 pub fn fn_0047e240(e: &mut Engine, this: Ptr<TESActorBaseData>, value: u16) {
     e.set(this, TESActorBaseData::usBartergold, value);
-    fn_0047e2a0(e, this, 2);
+    e.call(0x0047_e2a0, &args![this, 2u32]);
 }
 
 // Translated from 0047e270 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Sets `usSpeedMult` and marks the form changed (`2`). Unnamed in the map.
 pub fn fn_0047e270(e: &mut Engine, this: Ptr<TESActorBaseData>, value: u16) {
     e.set(this, TESActorBaseData::usSpeedMult, value);
-    fn_0047e2a0(e, this, 2);
+    e.call(0x0047_e2a0, &args![this, 2u32]);
 }
 
 // Translated from 0047e2a0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1750,7 +1769,7 @@ pub fn tes_actor_base_data_load_game(
     if flags & 2 != 0 {
         e.call(LOAD_BYTES, &args![save_load, this.addr() + 4, 0x18u32]);
     }
-    tes_actor_base_data_clear_faction_list(e, this);
+    e.call(0x0047_c9d0, &args![this]);
     let count = e.with_stack(4, |e, count| {
         e.call(LOAD_BYTES, &args![save_load, count, 2u32]);
         e.mem.u16(count.addr())
@@ -2612,11 +2631,14 @@ mod tests {
                 WORD_AT_68,
                 0x0340_0244,
                 0x0340_01cc,
+                // The path manager's instance and the template base's creation, by address now.
+                0x0047_d0b0,
                 PATH_MANAGER_CONSTRUCT,
                 ATEXIT,
                 WORD_AT_0,
                 ADDRESS_PLUS_44,
                 GET_CONTAINER_CHANGES,
+                0x0047_d0b0,
                 PATH_MANAGER_CLEAR_INVENTORY_POINTERS,
                 ADDRESS_PLUS_44,
                 EXTRA_LIST_CLEAR_A,
@@ -2625,6 +2647,7 @@ mod tests {
                 0x0340_0100,
                 CLEAR_ACTOR_PROCESS_FLAGS,
                 WORD_AT_20,
+                0x0047_d130,
                 TLS_FLAG_ONE_SET,
                 FORM_TYPE_GETTER,
                 CREATE_FORM_OF_TYPE,
@@ -3616,6 +3639,35 @@ mod tests {
         e.call(0x0047e1c0, &args![this, f32::NAN]);
         assert!(e.get(this, TESActorBaseData::fKarma).is_nan());
         assert_eq!(*seen.borrow(), vec![vec![0x48, 2]; 5]);
+    }
+
+    #[test]
+    fn set_karma_stores_a_signalling_nan_quiet() {
+        let mut e = engine();
+        e.mem.set_f32(KARMA_MAX_SETTING + 4, 1000.0);
+        e.mem.set_f32(KARMA_MIN_SETTING + 4, -1000.0);
+        let (this, _) = component_in_form(&mut e, 16);
+        e.call(0x0047e1c0, &args![this, 0x7f80_0001u32]);
+        assert_eq!(e.mem.u32(this.addr() + 0x14), 0x7fc0_0001);
+    }
+
+    #[test]
+    fn level_multiplier_product_rounds_to_the_threads_precision_before_the_chop() {
+        // 900 / 1000 is the float 0.89999997615814; times 10 it is 2^-22 below 9. The exe's FMUL
+        // feeds the FISTP directly: rounded to 24 bits on main it is 9.0, at 53 bits it chops to 8.
+        let saved = crate::x87::control_word();
+        let mut answers = Vec::new();
+        for word in [0x007fu16, 0x027f] {
+            let mut e = engine();
+            let (this, player) = level_fixture(&mut e);
+            e.set(this, TESActorBaseData::iActorBaseFlags, 0x80);
+            e.set(this, TESActorBaseData::sLevel, 900);
+            e.set(player, TESActorBaseData::sLevel, 10);
+            crate::x87::set_control_word(word);
+            answers.push(e.call(0x0047ded0, &args![this]).u16());
+            crate::x87::set_control_word(saved);
+        }
+        assert_eq!(answers, vec![9, 8]);
     }
 
     #[test]
