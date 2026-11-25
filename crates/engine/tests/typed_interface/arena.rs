@@ -81,16 +81,26 @@ fn word(seed: u32, at: u32, first_later: u32) -> u32 {
     }
 }
 
-/// Appends `words` to the log under `tag`.
+/// What the log holds for a word that points into the stack for locals: the harness compares those
+/// words itself (by their offset in their frame, or as the local they are), and a local the native
+/// code places differently has another address.
+const STACK_WORD: u32 = 0x5ac0_0000;
+
+/// Appends `words` to the log under `tag` (a stack address as [`STACK_WORD`]).
 fn log(e: &mut Engine, tag: u32, words: &[u32]) {
+    let stack = e.guest_stack_region();
     let n = e.mem.u32(LOG);
     if 4 * (n + 2 + words.len() as u32) >= LOG_SIZE - 16 {
         return;
     }
     e.mem.set_u32(LOG + 4 + 4 * n, tag);
     e.mem.set_u32(LOG + 8 + 4 * n, words.len() as u32);
-    for (i, w) in (2u32..).zip(words) {
-        e.mem.set_u32(LOG + 4 + 4 * (n + i), *w);
+    for (i, &w) in (2u32..).zip(words) {
+        let w = match stack {
+            Some((low, end)) if (low..end).contains(&w) => STACK_WORD,
+            _ => w,
+        };
+        e.mem.set_u32(LOG + 4 + 4 * (n + i), w);
     }
     e.mem.set_u32(LOG, n + 2 + words.len() as u32);
 }
@@ -258,7 +268,7 @@ fn known_words(e: &mut Engine, seed: u32) {
         1 => (1280.0f32, 720.0f32, 75.0f32),
         2 => (1920.0, 1080.0, 90.0),
         3 => (1024.0, 768.0, 60.0),
-        _ => (800.0, 600.0, 0.0),
+        _ => (800.0, 600.0, -0.0),
     };
     e.mem.set_f32(0x0118_948c, width);
     e.mem.set_f32(0x0118_9490, height);
@@ -270,6 +280,11 @@ fn known_words(e: &mut Engine, seed: u32) {
         (0x0106_ede0, 0x3fc5_0a6b),
     ] {
         e.mem.set_u64(at, f64::from(f32::from_bits(bits)).to_bits());
+    }
+    // Seed 4: the limit +0.0 against the product -0.0 (the field of view -0.0): equal, so the
+    // limit is taken, and the angle's sign tells a `<=` from the exe's `<`.
+    if seed == 4 {
+        e.mem.set_u64(0x0106_ede0, 0.0f64.to_bits());
     }
     e.mem.set_u32(0x0103_0020, 0x459c_4000);
 }
@@ -318,7 +333,22 @@ static INDEX: [u32; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
 
 /// The other families' typed functions the family calls through `typed_call!`: by address in these
 /// tests (their stand-ins answer), each family's own tests run them.
-const OTHER_FAMILIES: &[u32] = &[0x0070_0320, 0x00ec_62c0, 0x006b_3eb0, 0x0084_54f0];
+const OTHER_FAMILIES: &[u32] = &[
+    0x0070_0320,
+    0x00ec_62c0,
+    0x006b_3eb0,
+    0x0084_54f0,
+    0x00a0_12d0,
+    0x00a0_1350,
+    0x0040_fbf0,
+    0x0040_fba0,
+    0x0066_29f0,
+    0x0043_b230,
+    0x00a0_11b0,
+    0x00a0_8b20,
+    0x00a0_3da0,
+    0x004c_8f30,
+];
 
 /// The world's settings for a Diff of the family.
 pub trait InArena {
@@ -336,6 +366,17 @@ pub trait InArena {
         plain: &[u32],
         without: &'static [u32],
     ) -> Diff;
+    /// [`InArena::in_arena`] with one more input that is no argument: each of `extra`'s values in
+    /// turn, which `put` writes into the world once it is built (a queue's words, say), so a
+    /// function with few arguments still reaches each of its branches.
+    fn in_arena_and(
+        self,
+        args: &'static [Arg],
+        callees: &'static [u32],
+        plain: &[u32],
+        extra: &'static [u32],
+        put: fn(&mut Engine, u32),
+    ) -> Diff;
 }
 
 impl InArena for Diff {
@@ -350,22 +391,52 @@ impl InArena for Diff {
         plain: &[u32],
         without: &'static [u32],
     ) -> Diff {
-        let mut inputs = vec![Input::Of(SEEDS)];
-        inputs.extend(args.iter().map(|a| Input::Of(&INDEX[..values(*a).len()])));
-        self.family(&engine_typed::interface::INTERFACE)
-            .translation_calls_plainly(plain)
-            .ignore_calls(engine_typed::interface::interface_cpp::in_place::ADDRESSES)
-            .ignore_calls(without)
-            .goes_by_address(OTHER_FAMILIES)
-            .inputs(&inputs)
-            .max_cases(24)
-            .max_calls(400)
-            .setup(move |e, case: &Case| {
-                world(e, case.word(0), callees, without);
-                args.iter()
-                    .enumerate()
-                    .map(|(i, a)| values(*a)[case.word(i + 1) as usize])
-                    .collect()
-            })
+        arena_diff(self, args, callees, plain, without, None)
     }
+
+    fn in_arena_and(
+        self,
+        args: &'static [Arg],
+        callees: &'static [u32],
+        plain: &[u32],
+        extra: &'static [u32],
+        put: fn(&mut Engine, u32),
+    ) -> Diff {
+        arena_diff(self, args, callees, plain, &[], Some((extra, put)))
+    }
+}
+
+/// The Diff of [`InArena`]'s methods.
+fn arena_diff(
+    diff: Diff,
+    args: &'static [Arg],
+    callees: &'static [u32],
+    plain: &[u32],
+    without: &'static [u32],
+    extra: Option<(&'static [u32], fn(&mut Engine, u32))>,
+) -> Diff {
+    let mut inputs = vec![Input::Of(SEEDS)];
+    inputs.extend(args.iter().map(|a| Input::Of(&INDEX[..values(*a).len()])));
+    if let Some((list, _)) = extra {
+        inputs.push(Input::Of(list));
+    }
+    diff.family(&engine_typed::interface::INTERFACE)
+        .translation_calls_plainly(plain)
+        .ignore_calls(engine_typed::interface::interface_cpp::in_place::ADDRESSES)
+        .ignore_calls(engine_typed::interface::interface_cpp_p2::IN_PLACE)
+        .ignore_calls(without)
+        .goes_by_address(OTHER_FAMILIES)
+        .inputs(&inputs)
+        .max_cases(24)
+        .max_calls(400)
+        .setup(move |e, case: &Case| {
+            world(e, case.word(0), callees, without);
+            if let Some((_, put)) = extra {
+                put(e, case.word(1 + args.len()));
+            }
+            args.iter()
+                .enumerate()
+                .map(|(i, a)| values(*a)[case.word(i + 1) as usize])
+                .collect()
+        })
 }

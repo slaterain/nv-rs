@@ -11,16 +11,24 @@
 //!   manager (menu ids on the stack, the Pip-Boy's state, the console, the faders, the HUD and map
 //!   menu forwards), the camera frustum set-up and a `BSSimpleArray<Tile::Value *>`'s constructor
 //!   and destructors.
+//! - [`interface_cpp_p2`]: the same unit from `00705a90` up to `00709b50`: more of the static
+//!   wrappers (the loading, hacking, computers and level-up menus' creation, save and load, the roots,
+//!   the screen sizes, timers, the enter stack, model files, rendered menus, the queued menu opens),
+//!   the tab line's layout, the item card's stats text, and the `Tile`, `TileRect` and `TileMenu`
+//!   type names, constructors and deleting destructors.
 //!
 //! **Floats.** The menus run on the main thread ([`Threads::Main`]), at the float precision the
 //! exe's main thread computes in once Direct3D set it: plain `f32` (the camera frustum's products;
 //! a product by one of the exe's double factors is exact in an `f64` and rounded once to the float).
-//! The rest are stores of integers as floats.
+//! The item card's ratios, the screen ratio and the tab line's share take a double operand of the
+//! exe's (a constant, an integer loaded whole): each such step is the `f64` result rounded once to the
+//! float, the 24-bit step. The rest are stores of integers as floats.
 
 use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::AbiFn;
 
 pub mod interface_cpp;
+pub mod interface_cpp_p2;
 pub mod interface_cpp_p3;
 
 /// This family's bit: what each `typed_call!` of it names.
@@ -40,6 +48,7 @@ pub static INTERFACE: Family = Family {
 /// The family's functions, by exe address: each file's list.
 fn funcs() -> Vec<(u32, AbiFn)> {
     let mut all = interface_cpp::funcs();
+    all.extend(interface_cpp_p2::funcs());
     all.extend(interface_cpp_p3::funcs());
     all
 }
@@ -59,5 +68,17 @@ pub(crate) fn word(count: usize) -> u32 {
 /// The low word of a 64-bit result (`_ftol2`'s `EAX`).
 #[allow(clippy::cast_possible_truncation)]
 pub(crate) fn low_dword(value: u64) -> u32 {
+    value as u32
+}
+
+/// The low word of a 64-bit integer store, read as a signed dword (what `FISTP qword` leaves there).
+#[allow(clippy::cast_possible_truncation)]
+pub(crate) fn low_dword_signed(value: i64) -> i32 {
+    value as i32
+}
+
+/// An integer's bits as the guest's unsigned word (what a trait or format argument takes).
+#[allow(clippy::cast_sign_loss)]
+pub(crate) fn bits(value: i32) -> u32 {
     value as u32
 }
