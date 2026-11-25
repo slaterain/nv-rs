@@ -125,15 +125,17 @@ fn list(e: &mut Engine, archives: &[u32]) {
     e.mem.set_u32(LIST, next);
 }
 
-/// The test world: four archives (meshes, textures, a second meshes one, and one whose count is 0,
-/// so asking it deletes it) and a null node; answers the file entries `WHICH` names.
+/// The test world: five archives (meshes, textures, a second meshes one, one whose count is 0, so
+/// asking it deletes it, and one with no type bits, which a walk over any type finds only by its test
+/// of the mask itself) and a null node; answers the file entries `WHICH` names.
 fn world(e: &mut Engine) -> Vec<u32> {
     stand_ins(e);
     let (meshes, m) = archive(e, 1, 1, &[3, 1, 0, 5], None);
     let (textures, t) = archive(e, 2, 1, &[2, 4], None);
     let (meshes2, m2) = archive(e, 1, 2, &[1], None);
     let (dying, d) = archive(e, 4, 0, &[2], None);
-    list(e, &[meshes, 0, textures, dying, meshes2]);
+    let (untyped, u) = archive(e, 0, 1, &[2], None);
+    list(e, &[meshes, 0, textures, dying, meshes2, untyped]);
     vec![
         m[0],                 // the first archive's first entry
         m[0] + 2 * 16,        // its last entry of the first directory
@@ -146,11 +148,12 @@ fn world(e: &mut Engine) -> Vec<u32> {
         d[0] + 16,            // the archive that is deleted when asked
         0,                    // null
         0x7fff_0000,          // in no archive
+        u[0] + 16,            // the archive with no type bits
     ]
 }
 
 /// Which file entry ([`world`]'s list).
-const WHICH: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+const WHICH: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 /// The type masks: any, each type, none, two types and a mask with bits past 16.
 const TYPES: &[u32] = &[0xffff, 1, 2, 4, 0, 3, 0x1_0002];
 
@@ -174,7 +177,7 @@ fn owner_of() {
 fn archive_holds() {
     Diff::new(entry!(0x00af_dc00, lookup::archive_holds(Ptr, u32) -> bool))
         .family(&archives::ARCHIVES)
-        .inputs(&[Input::Of(WHICH), Input::Of(&[0, 2, 3, 4])])
+        .inputs(&[Input::Of(WHICH), Input::Of(&[0, 2, 3, 4, 5])])
         .setup(|e, case| {
             let entries = world(e);
             let mut node = e.mem.u32(LIST);
@@ -210,8 +213,10 @@ fn directory_holds() {
 }
 
 /// The directory tables of every BSA in `NV_DATA`: each archive's folder records, version 104 (an
-/// 8-byte name hash, a file count, an offset), with its type bits (the header's file flags).
+/// 8-byte name hash, a file count, an offset), with its type bits (the header's file flags). Only the
+/// 36-byte header and the folder records are read.
 fn real_archives(data: &std::path::Path) -> Vec<(String, u16, Vec<u32>)> {
+    use std::io::{Read, Seek, SeekFrom};
     let mut names: Vec<std::path::PathBuf> = std::fs::read_dir(data)
         .expect("NV_DATA")
         .filter_map(|d| d.ok().map(|d| d.path()))
@@ -220,14 +225,23 @@ fn real_archives(data: &std::path::Path) -> Vec<(String, u16, Vec<u32>)> {
     names.sort();
     let mut out = Vec::new();
     for path in names {
-        let bytes = std::fs::read(&path).expect("a BSA");
-        let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().expect("4 bytes"));
-        if bytes.len() < 36 || &bytes[0..4] != b"BSA\0" || word(4) != 104 {
+        let mut file = std::fs::File::open(&path).expect("a BSA");
+        let mut header = [0u8; 36];
+        if file.read_exact(&mut header).is_err() {
             continue;
         }
-        let (records, folders) = (word(8) as usize, word(16) as usize);
-        let types = u16::from_le_bytes([bytes[32], bytes[33]]);
-        let counts = (0..folders).map(|i| word(records + 16 * i + 8)).collect();
+        let word =
+            |b: &[u8], at: usize| u32::from_le_bytes(b[at..at + 4].try_into().expect("4 bytes"));
+        if header[0..4] != [b'B', b'S', b'A', 0] || word(&header, 4) != 104 {
+            continue;
+        }
+        let (records, folders) = (word(&header, 8), word(&header, 16) as usize);
+        let types = u16::from_le_bytes([header[32], header[33]]);
+        let mut table = vec![0u8; 16 * folders];
+        file.seek(SeekFrom::Start(u64::from(records)))
+            .expect("the folder records");
+        file.read_exact(&mut table).expect("the folder records");
+        let counts = (0..folders).map(|i| word(&table, 16 * i + 8)).collect();
         let name = path
             .file_name()
             .map_or(String::new(), |n| n.to_string_lossy().into());

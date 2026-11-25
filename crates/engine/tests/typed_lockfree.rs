@@ -2561,12 +2561,16 @@ const KEY_NOT_BELOW: u32 = 0x00c3_f6b0;
 const KEYS_EQUAL: u32 = 0x0084_b950;
 /// `00c41f40`, the retirement of an unlinked node: a stand-in that keeps the node it was given.
 const RETIRE_TASK_NODE: u32 = 0x00c4_1f40;
+/// A stand-in key compare below `00c3f6b0` (inside `00c3f690`, not a function's start), so a test of
+/// the slot that is not exactly `00c3f6b0` shows.
+const LOW_COMPARE: u32 = 0x00c3_f6a0;
 /// Words the task map's stand-ins keep: the node last retired, what the compare changes when it
 /// meets the node with key 5 (0 nothing, 1 the node after it marked deleted, 2 the node after it
-/// unlinked; once), and that node's address.
+/// unlinked; once), and that node's address; the address of bucket 3's first node.
 const W_RETIRED: u32 = WORLD + 0x40;
 const W_MEANWHILE: u32 = WORLD + 0x44;
 const W_FIVE: u32 = WORLD + 0x48;
+const W_SEVEN: u32 = WORLD + 0x4c;
 
 /// The world's node keys and those looked for, `(low, high)`: below, at and past each node, low
 /// words past 2^31 (compared unsigned), high words negative (compared signed), the smallest and
@@ -2601,27 +2605,32 @@ fn task_node(e: &mut Engine, low: u32, high: u32, next: u32) -> u32 {
     n
 }
 
-/// The task map's stand-in compares: the exe's, answering with junk above the low byte (the exe
+/// The task map's stand-in key compare: the exe's, answering with junk above the low byte (the exe
 /// reads only that byte); the compare at the node with key 5 first does what [`W_MEANWHILE`] says,
 /// as another thread's remove would.
-fn register_task_map_functions(e: &mut Engine) {
-    e.register(TASK_VT_FN + 0x34, |e, a| {
-        let meanwhile = e.mem.u32(W_MEANWHILE);
-        if meanwhile != 0 && a[1] == 5 && a[2] == 0 {
-            e.mem.set_u32(W_MEANWHILE, 0);
-            let five = e.mem.u32(W_FIVE);
-            let after = e.mem.u32(five + 0xc) & !1;
-            let beyond = e.mem.u32(after + 0xc);
-            if meanwhile == 1 {
-                e.mem.set_u32(after + 0xc, beyond | 1);
-            } else {
-                e.mem.set_u32(five + 0xc, beyond);
-            }
+fn stand_in_compare(e: &mut Engine, a: &[u32]) -> Ret {
+    let meanwhile = e.mem.u32(W_MEANWHILE);
+    if meanwhile != 0 && a[1] == 5 && a[2] == 0 {
+        e.mem.set_u32(W_MEANWHILE, 0);
+        let five = e.mem.u32(W_FIVE);
+        let after = e.mem.u32(five + 0xc) & !1;
+        let beyond = e.mem.u32(after + 0xc);
+        if meanwhile == 1 {
+            e.mem.set_u32(after + 0xc, beyond | 1);
+        } else {
+            e.mem.set_u32(five + 0xc, beyond);
         }
-        let node = ((u64::from(a[2]) << 32) | u64::from(a[1])) as i64;
-        let key = ((u64::from(a[4]) << 32) | u64::from(a[3])) as i64;
-        ret(0x5a00 | u32::from(node >= key))
-    });
+    }
+    let node = ((u64::from(a[2]) << 32) | u64::from(a[1])) as i64;
+    let key = ((u64::from(a[4]) << 32) | u64::from(a[3])) as i64;
+    ret(0x5a00 | u32::from(node >= key))
+}
+
+/// The task map's stand-ins: the key compare past `.text` and below `00c3f6b0`, the equality (junk
+/// above the low byte too) and the retirement.
+fn register_task_map_functions(e: &mut Engine) {
+    e.register(TASK_VT_FN + 0x34, stand_in_compare);
+    e.register(LOW_COMPARE, stand_in_compare);
     e.register(TASK_VT_FN + 0x38, |_, a| {
         ret(0x5a00 | u32::from(a[1] == a[3] && a[2] == a[4]))
     });
@@ -2632,9 +2641,10 @@ fn register_task_map_functions(e: &mut Engine) {
 }
 
 /// The task map world: buckets 0 empty, 1 = [5, 2^31, (3, 1)], 2 = [(0x10, -1), 0], 3 = [7
-/// (deleted), 11]. Its vtable holds the exe's compares when `exe_compares`, the stand-ins otherwise.
+/// (deleted), 9 (deleted), 11]. Its vtable holds, by `compares`: 0 the exe's compares, 1 the
+/// stand-ins past `.text`, 2 the stand-in key compare below `00c3f6b0` and the stand-in equality.
 /// Answers the thread's interface.
-fn task_world(e: &mut Engine, exe_compares: bool, meanwhile: u32) -> u32 {
+fn task_world(e: &mut Engine, compares: u32, meanwhile: u32) -> u32 {
     register_map_functions(e);
     register_task_map_functions(e);
     e.map(WORLD, 0x1000);
@@ -2642,9 +2652,13 @@ fn task_world(e: &mut Engine, exe_compares: bool, meanwhile: u32) -> u32 {
     for slot in (0..0x48).step_by(4) {
         e.mem.set_u32(vt + slot, TASK_VT_FN + slot);
     }
-    if exe_compares {
-        e.mem.set_u32(vt + 0x34, KEY_NOT_BELOW);
-        e.mem.set_u32(vt + 0x38, KEYS_EQUAL);
+    match compares {
+        0 => {
+            e.mem.set_u32(vt + 0x34, KEY_NOT_BELOW);
+            e.mem.set_u32(vt + 0x38, KEYS_EQUAL);
+        }
+        2 => e.mem.set_u32(vt + 0x34, LOW_COMPARE),
+        _ => {}
     }
     let map = e.mem.alloc(0x40);
     e.mem.set_u32(map, vt);
@@ -2661,7 +2675,8 @@ fn task_world(e: &mut Engine, exe_compares: bool, meanwhile: u32) -> u32 {
     let negative = task_node(e, 0x10, 0xffff_ffff, zero);
     e.mem.set_u32(buckets + 8, negative);
     let eleven = task_node(e, 11, 0, 0);
-    let seven = task_node(e, 7, 0, eleven | 1);
+    let nine = task_node(e, 9, 0, eleven | 1);
+    let seven = task_node(e, 7, 0, nine | 1);
     e.mem.set_u32(buckets + 12, seven);
     let face = e.mem.alloc(0x24);
     e.mem.set_u32(face, map);
@@ -2670,6 +2685,7 @@ fn task_world(e: &mut Engine, exe_compares: bool, meanwhile: u32) -> u32 {
     e.mem.set_u32(face + 0xc, refs + 8);
     e.mem.set_u32(W_MEANWHILE, meanwhile);
     e.mem.set_u32(W_FIVE, five);
+    e.mem.set_u32(W_SEVEN, seven);
     face
 }
 
@@ -2703,8 +2719,8 @@ fn task_map_key_not_below() {
 }
 
 /// `00c416a0`, the task map's search: every bucket and key, with the exe's compares (the typed one
-/// called directly) or stand-ins (through the vtable), with the first compare-exchange failing or
-/// none.
+/// called directly) or stand-ins above or below `00c3f6b0` (through the vtable), with the first
+/// compare-exchange failing or none.
 #[test]
 fn task_map_search() {
     let report = Diff::new(entry!(
@@ -2717,12 +2733,12 @@ fn task_map_search() {
     .inputs(&[
         Input::Of(&[0, 1, 2, 3]),
         Input::Of(TASK_KEY_PICKS),
-        Input::Flag,
+        Input::Of(&[0, 1, 2]),
         Input::Of(&[0, 1]),
     ])
-    .max_cases(4 * 15 * 2 * 2)
+    .max_cases(4 * 15 * 3 * 2)
     .setup(|e, case| {
-        let face = task_world(e, case.word(2) != 0, 0);
+        let face = task_world(e, case.word(2), 0);
         fail_cas(e, case.word(3));
         let (low, high) = TASK_KEYS[case.word(1) as usize];
         vec![face, case.word(0), low, high]
@@ -2754,10 +2770,41 @@ fn task_map_search_meanwhile() {
     ])
     .max_cases(15 * 2 * 2)
     .setup(|e, case| {
-        let face = task_world(e, false, case.word(1));
+        let face = task_world(e, 1, case.word(1));
         fail_cas(e, case.word(2));
         let (low, high) = TASK_KEYS[case.word(0) as usize];
         vec![face, 1, low, high]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `00c416a0` in bucket 3 with the interface's next-node slot naming the first node's own link: the
+/// next node's publish then clears that link's mark, so the link read again after it differs and
+/// the search starts again, as when another thread changes the link between the two reads. Every
+/// key, with the exe's compares or stand-ins.
+///
+/// The other re-read the search makes with nothing in between, of the bucket head after the current
+/// node's publish, can't be made to differ here: the publish stores the very value it is compared
+/// with, and nothing else runs between the two reads, so only another thread could change the head
+/// (a test would need a hook on memory accesses).
+#[test]
+fn task_map_search_next_link_changed() {
+    Diff::new(entry!(
+        0x00c4_16a0,
+        task_map::search(Ptr, u32, u32, u32) -> bool
+    ))
+    .family(&lockfree::LOCKFREE)
+    .ignore_calls(INLINED)
+    .max_calls(MAX_CALLS)
+    .inputs(&[Input::Of(TASK_KEY_PICKS), Input::Of(&[0, 1])])
+    .max_cases(15 * 2)
+    .setup(|e, case| {
+        let face = task_world(e, case.word(1), 0);
+        let seven = e.mem.u32(W_SEVEN);
+        e.mem.set_u32(face + 4, seven + 0xc);
+        let (low, high) = TASK_KEYS[case.word(0) as usize];
+        vec![face, 3, low, high]
     })
     .run()
     .assert_same();
