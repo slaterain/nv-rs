@@ -470,7 +470,7 @@ impl World {
             e.mem.set_u32(o + 4, package);
             let index = self.pick(&[0xffff_ffff, 0, 1, 2, 3]);
             e.mem.set_u32(o + 0x10, index);
-            let level = self.pick(&[0, 1, 2, 2, 2, 3]);
+            let level = self.pick(&[0, 1, 2, 2, 2, 2, 3]);
             e.mem.set_u32(o + 0x28, level);
             let flags = self.pick(&[0, 0x80, 0x20, 0xa4, 0xff]);
             e.mem.set_u8(o + 0x30, flags as u8);
@@ -502,7 +502,7 @@ impl World {
         }
         // The packages: type, flags, procedure, location, data and the data's word.
         for o in [self.objects[3], self.objects[4]] {
-            let kind = self.pick(&[0xffff_ffff, 0, 1, 2, 0x1a, 0x1a]);
+            let kind = self.pick(&[0xffff_ffff, 0, 0, 1, 2, 0x1a, 0x1a]);
             e.mem.set_u32(o + 0x18, kind);
             let mut flags = 0;
             for bit in [0x20, 0x100, 0x400, 0x800, 0x1_0000] {
