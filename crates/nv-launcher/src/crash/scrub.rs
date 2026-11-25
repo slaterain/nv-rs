@@ -545,8 +545,8 @@ fn extent(text: &[char], start: usize, body: usize, sep: Option<char>) -> usize 
 
 /// Where a home folder's rest goes on from, its separators at `at`: past a part named
 /// `OneDrive - <...>` (a work OneDrive, `OneDrive - Contoso, Ltd`) whatever its name holds, up to
-/// its next separator, `: `, another path or address ([`starts_other`]) or the line's end; else
-/// at `at`.
+/// its next separator, a quote or `|`, `: `, another path or address ([`starts_other`]) or the
+/// line's end; else at `at`.
 fn onedrive_part(text: &[char], at: usize) -> usize {
     let name = at + text[at..].iter().take_while(|&&c| is_separator(c)).count();
     let word: Vec<char> = "OneDrive - ".chars().collect();
@@ -559,13 +559,17 @@ fn onedrive_part(text: &[char], at: usize) -> usize {
     while k < text.len() {
         let c = text[k];
         if is_separator(c)
-            || matches!(c, '\n' | '"')
+            || (ends_path(c) && !matches!(c, ' ' | '\''))
             || (c == ':' && text.get(k + 1) == Some(&' '))
             || (c == ' ' && starts_other(text, k + 1))
         {
             break;
         }
         k += 1;
+    }
+    // Spaces before what ends it are the line's.
+    while k > name + word.len() && text[k - 1] == ' ' {
+        k -= 1;
     }
     k
 }
@@ -781,51 +785,70 @@ fn is_saves(part: &[char]) -> bool {
         .eq_ignore_ascii_case("saves")
 }
 
-/// A character's own save folder right after a path's `Saves` that no save follows (saves are
-/// `<save>` already: [`save_names`]), as the host's `files: <folder> holds ...` lines print it on
-/// Linux and macOS: `<save>`, up to ` holds ` where the line says that (a name with spaces), else
-/// to the next separator or the path's end.
+/// A character's own save folder where it ends a path, right after its `Saves` (a save in it is
+/// `<save>` already: [`save_names`]; one in the middle of a path goes with the path's cut), as
+/// the host's `files: <folder> holds ...` lines print it on Linux and macOS: `<save>`, its name
+/// up to ` holds `, `: `, `, `, `; `, a quote, another path or address, ` (in ` or the line's end
+/// (a name has spaces).
 fn character_folders(text: &[char], in_path: &[bool], before: Option<char>) -> Vec<Unit> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < text.len() {
-        let after_separator = if i == 0 {
-            before.is_some_and(is_separator)
-        } else {
-            is_separator(text[i - 1])
-        };
-        let saves = after_separator
+        let prev = if i == 0 { before } else { Some(text[i - 1]) };
+        let saves = prev.is_none_or(|c| is_separator(c) || !is_name_char(c))
             && text.len() - i > 5
             && is_saves(&text[i..i + 5])
             && is_separator(text[i + 5]);
-        if !saves {
+        let found = saves.then(|| folder_at_end(text, i + 5)).flatten();
+        let Some((s, end)) = found else {
             out.push(Unit::Char(text[i], in_path[i]));
             i += 1;
             continue;
-        }
-        let mut s = i + 5;
-        while s < text.len() && is_separator(text[s]) {
-            s += 1;
-        }
-        let holds: Vec<char> = " holds ".chars().collect();
-        let mut end = s;
-        while end < text.len()
-            && !is_separator(text[end])
-            && !matches!(text[end], '"' | '\n')
-            && !text[end..].starts_with(&holds)
-        {
-            end += 1;
-        }
-        if !text[end..].starts_with(&holds) {
-            end = extent(text, s, s, None).min(end);
-        }
+        };
         out.extend((i..s).map(|k| Unit::Char(text[k], in_path[k])));
-        if end > s {
-            out.push(Unit::Mark("<save>"));
-        }
-        i = end.max(s);
+        out.push(Unit::Mark("<save>"));
+        i = end;
     }
     out
+}
+
+/// The folder name after the separators at `text[at..]` when it ends its path: its start and
+/// end ([`character_folders`]' end rules); none when more of the path follows it, or it names
+/// nothing (`Saves\*`, `Saves\.`).
+fn folder_at_end(text: &[char], at: usize) -> Option<(usize, usize)> {
+    let s = at + text[at..].iter().take_while(|&&c| is_separator(c)).count();
+    let next_is = |k: usize, word: &str| {
+        let w: Vec<char> = word.chars().collect();
+        text[k..].starts_with(&w)
+    };
+    let mut end = s;
+    while end < text.len() {
+        let c = text[end];
+        let other = c == ' '
+            && (next_is(end, " holds ")
+                || starts_other(text, end + 1)
+                || text[end + 1..]
+                    .iter()
+                    .take_while(|c| !c.is_whitespace())
+                    .any(|&c| is_separator(c)));
+        if is_separator(c)
+            || (ends_path(c) && !matches!(c, ' ' | '\''))
+            || (matches!(c, ':' | ',' | ';') && text.get(end + 1) == Some(&' '))
+            || other
+        {
+            break;
+        }
+        end += 1;
+    }
+    // Spaces before what ends it are the line's.
+    while end > s && text[end - 1] == ' ' {
+        end -= 1;
+    }
+    // More of the path after it: not where it ends.
+    let past = end + text[end..].iter().take_while(|&&c| is_separator(c)).count();
+    let more = past > end && text.get(past).is_some_and(|&c| !ends_path(c));
+    let names = text[s..end].iter().any(|c| c.is_alphanumeric());
+    (names && !more).then_some((s, end))
 }
 
 /// Whether a `/` (or a `\\` of a share) after `before` opens a path: at the text's start or after
@@ -1752,5 +1775,202 @@ mod tests {
         ] {
             assert_eq!(s.text(text), want, "{text}");
         }
+    }
+
+    /// Every review example for the made-up player (REVIEW-1035-delta to REVIEW-1042-delta2),
+    /// each alone and all in one long mixed line, so a later fix cannot reopen an old leak or let
+    /// one case's rule reach into the next.
+    #[test]
+    fn every_review_example_holds_alone_and_in_one_long_line() {
+        let s = player();
+        let cases: &[(&str, &str)] = &[
+            // Lists of paths, a comma in a folder.
+            ("C:\\a\\b;\\\\JT-NAS\\Private\\y.pdf", "<path>\\b;<path>\\y.pdf"),
+            ("/srv/a:/srv/private/tax 2026/y.pdf", "<path>/a:<path>/y.pdf"),
+            (
+                "LD_LIBRARY_PATH=/opt/a/lib:/mnt/Private Stuff/lib",
+                "LD_LIBRARY_PATH=<path>/lib:<path>/lib",
+            ),
+            (
+                "/home/jtest/x:/media/jtest-backup/Private/tax.pdf",
+                "<home>/...:<path>/tax.pdf",
+            ),
+            (
+                "F:\\Games\\nv-rs\\userdata\\x;\\\\JT-NAS\\Private\\y.pdf",
+                "<nv-rs>\\userdata\\x;<path>\\y.pdf",
+            ),
+            (
+                "/home/jtest/.local/share/nv-rs/x;/srv/private/y.pdf",
+                "<nv-rs-data>/x;<path>/y.pdf",
+            ),
+            ("G:\\Backups\\Tester, Jo\\x.txt", "<path>\\x.txt"),
+            // Addresses and versions.
+            ("connected to server 192.168.1.20", "connected to server <ip>"),
+            (
+                "observer 10.0.0.5, build server at 10.1.2.3",
+                "observer <ip>, build server at <ip>",
+            ),
+            (
+                "version 1.3.250.0, driver: 31.0.101.5",
+                "version 1.3.250.0, driver: 31.0.101.5",
+            ),
+            ("at fe80::beef and fd00::cafe", "at <ip> and <ip>"),
+            // Saves and characters' folders.
+            (
+                "D:\\Profiles\\Jo Tester\\Documents\\My Games\\FalloutNV\\Saves\\Alexxander\\quicksave.fos",
+                "<home>\\...\\<save>\\<save>.fos",
+            ),
+            (
+                "\"F:\\\\Games\\\\nv-rs\\\\userdata\\\\game\\\\Documents\\\\My Games\\\\FalloutNV\\\\Saves\\\\Jo Hero\\\\quicksave.fos\"",
+                "\"<nv-rs>\\\\userdata\\\\game\\\\Documents\\\\My Games\\\\FalloutNV\\\\Saves\\\\<save>\\\\<save>.fos\"",
+            ),
+            ("removed 'Jo's run.fos'", "removed '<save>.fos'"),
+            ("removed 'D'Arcy Tester.fos'", "removed '<save>.fos'"),
+            (
+                "NV_SAVE_OUT: copied Save 3   Jo Hero.fos, Save 4   Jo Hero.fos; Save 5   Jo Hero.fos",
+                "NV_SAVE_OUT: copied <save>.fos, <save>.fos; <save>.fos",
+            ),
+            (
+                "NV_SAVE_OUT: copied Jo's (best) run.fos",
+                "NV_SAVE_OUT: copied <save>.fos",
+            ),
+            (
+                "files: /home/jtest/.local/share/nv-rs/game/Documents/My Games/FalloutNV/Saves/Alexxander holds \"Jo Hero: run.fos\", a name Windows cannot hold in a folder",
+                "files: <nv-rs-data>/game/Documents/My Games/FalloutNV/Saves/<save> holds \"<save>.fos\", a name Windows cannot hold in a folder",
+            ),
+            (
+                "files: /home/jtest/.local/share/nv-rs/game/Documents/My Games/FalloutNV/Saves holds \"Jo \\\"Ace\\\" run.fos\", a name Windows cannot hold in a folder",
+                "files: <nv-rs-data>/game/Documents/My Games/FalloutNV/Saves holds \"<save>.fos\", a name Windows cannot hold in a folder",
+            ),
+            (
+                "files: /srv/nv/Saves/Alexxander, Saves/Benny and Saves/Jo Hero holds 2 names",
+                "files: <path>/Saves/<save>, Saves/<save> Saves/<save> holds 2 names",
+            ),
+            (
+                "F:\\Games\\nv-rs\\userdata\\game\\Documents\\My Games\\FalloutNV\\Saves\\Jo Hero: access denied",
+                "<nv-rs>\\userdata\\game\\Documents\\My Games\\FalloutNV\\Saves\\<save>: access denied",
+            ),
+            (
+                "F:\\Games\\nv-rs\\userdata\\game\\Documents\\My Games\\FalloutNV\\Saves\\Jo Hero and more",
+                "<nv-rs>\\userdata\\game\\Documents\\My Games\\FalloutNV\\Saves\\<save>",
+            ),
+            (
+                "F:\\Games\\nv-rs\\userdata\\game\\Documents\\My Games\\FalloutNV\\Saves\\Save 3   Jo Hero  Primm.bak copied",
+                "<nv-rs>\\userdata\\game\\Documents\\My Games\\FalloutNV\\Saves\\<save>",
+            ),
+            (
+                "F:\\Games\\nv-rs\\userdata\\game\\Documents\\My Games\\FalloutNV\\Saves\\*.fos and Saves\\* and Saves\\.",
+                "<nv-rs>\\userdata\\game\\Documents\\My Games\\FalloutNV\\Saves\\<save>.fos and Saves\\* and Saves\\.",
+            ),
+            (
+                "/home/jtest/.local/share/nv-rs/game/Documents/My Games/FalloutNV/Saves/Jo Hero",
+                "<nv-rs-data>/game/Documents/My Games/FalloutNV/Saves/<save>",
+            ),
+            (
+                "NV_SAVE_OUT=D:\\Backup\\Saves\\Jo Hero: refused (a link); saves are not copied.",
+                "NV_SAVE_OUT=<path>\\Saves\\<save>: refused (a link); saves are not copied.",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\Documents\\My Games\\FalloutNV\\Saves\\Alexxander\\",
+                "<home>\\...\\Saves\\<save>\\",
+            ),
+            // A character's folder in the middle of a path goes with the path's cut.
+            (
+                "E:\\Backup\\FalloutNV\\Saves\\Alexxander\\Private Stuff\\Tax 2026\\x.txt",
+                "<path>\\x.txt",
+            ),
+            (
+                "E:\\Backup\\FalloutNV\\Saves\\Alexxander\\old\\Smith family\\Save 1.fos",
+                "<path>\\Smith family\\<save>.fos",
+            ),
+            ("/srv/backup/Saves/Alexxander/private/smith/y.txt", "<path>/y.txt"),
+            (
+                "\\\\JT-NAS\\Games\\Saves\\Alexxander\\Private\\x.txt",
+                "<path>\\x.txt",
+            ),
+            (
+                "\"E:\\\\Backup\\\\Saves\\\\Alexxander\\\\Private\\\\x.txt\"",
+                "\"<path>\\x.txt\"",
+            ),
+            ("E:\\Backup\\Saves\\Alexxander\\x.txt", "<path>\\x.txt"),
+            // Hosts and shares.
+            ("on \\\\JT-NAS now", "on <path> now"),
+            ("on \"\\\\\\\\JT-NAS\"", "on \"<path>\""),
+            ("at smb://jt-nas and file://JT-NAS", "at <path> and <path>"),
+            ("path:\\\\JT-NAS\\Private\\x", "path:<path>\\x"),
+            // OneDrive without its variables.
+            ("D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd", "<home>\\..."),
+            (
+                "D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd is full",
+                "<home>\\...",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\OneDrive - Royal Melbourne Institute of Technology\\Documents\\My Games\\FalloutNV\\x.ini",
+                "<home>\\...\\FalloutNV\\x.ini",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\OneDrive - Smith, Jones & Co\\Desktop\\x.txt",
+                "<home>\\...\\Desktop\\x.txt",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\OneDrive - AT@T Services\\Documents\\x.ini",
+                "<home>\\...\\Documents\\x.ini",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\OneDrive - Contoso (in liquidation) Ltd\\Documents\\x.ini",
+                "<home>\\...\\Documents\\x.ini",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd - Archive\\x.ini",
+                "<home>\\...\\x.ini",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\OneDrive - 10.0.0.5 Holdings\\x.ini",
+                "<home>\\...\\x.ini",
+            ),
+            (
+                "\"D:\\\\Profiles\\\\Jo Tester\\\\OneDrive - Contoso Ltd\": access denied",
+                "\"<home>\\\\...\": access denied",
+            ),
+            (
+                "could not write D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd: access denied (in 00a1b2c3 < 00400000)",
+                "could not write <home>\\...: access denied (in 00a1b2c3 < 00400000)",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd and G:\\Private\\Tax 2026\\Smith family\\return.pdf",
+                "<home>\\... <path>\\return.pdf",
+            ),
+            (
+                "mail jo.tester@example.com about D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd, ip 192.168.1.20",
+                "mail <e-mail> about <home>\\... <ip>",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\OneDrive is full; see G:\\Private\\Smith\\notes\\x.txt",
+                "<home>\\... is full; see <path>\\x.txt",
+            ),
+            // Account numbers; what stays.
+            (
+                "C:\\Program Files (x86)\\Steam\\userdata\\123456789",
+                "<path>\\<id>",
+            ),
+            (
+                "E:\\Steam\\steamapps\\common\\Fallout New Vegas\\Data\\Saves\\x.esp",
+                "<game>\\Data\\Saves\\<save>",
+            ),
+            (
+                "read of 1a2b3c00 not mapped (in 00412345 < 0040cafe)",
+                "read of 1a2b3c00 not mapped (in 00412345 < 0040cafe)",
+            ),
+            (
+                "see https://github.com/slaterain/nv-rs/issues at 12:34:56",
+                "see https://github.com/slaterain/nv-rs/issues at 12:34:56",
+            ),
+        ];
+        for (text, want) in cases {
+            assert_eq!(s.text(text), *want, "{text}");
+        }
+        let line: Vec<&str> = cases.iter().map(|(t, _)| *t).collect();
+        let want: Vec<&str> = cases.iter().map(|(_, w)| *w).collect();
+        assert_eq!(s.text(&line.join(" | ")), want.join(" | "));
     }
 }
