@@ -1924,7 +1924,7 @@ fn setup_frustum_main(e: &mut Engine, this: Ptr<ShadowSceneLight>, index: u32) {
         let camera = e.get(this, ShadowSceneLight::spShadowCamera);
         e.call(CAMERA_SET_VIEW_FRUSTUM, &args![camera, frustum]);
         let accumulator = e.get(this, ShadowSceneLight::spShadowAccumulator);
-        fn_00b9cfd0(e, Ptr::new(accumulator), base);
+        e.call(0x00b9_cfd0, &args![accumulator, base]);
         let accumulator = e.get(this, ShadowSceneLight::spShadowAccumulator);
         let scene = e.get(this, ShadowSceneLight::spShadowScene);
         let camera = e.get(this, ShadowSceneLight::spShadowCamera);

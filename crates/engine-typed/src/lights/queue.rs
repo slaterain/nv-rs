@@ -5,10 +5,13 @@
 //! `00b5c5c0`, the per-geometry updates `00b5b260` and `00b5b410`). Every moving or animating
 //! character goes through it every frame.
 //!
-//! Native code with the exe's calls: the bound test (`BoundWithinLightRadius`, typed) and the add
-//! (`AddTriGeom`, typed) are reached directly, the rest by address; the candidates in the exe's
-//! order, the CRT's `qsort` called with the exe's comparator (`00b5aa70`) and `GetLuminanceToBound`
-//! (`00b9dbe0`, which writes each gathered light's luminance) called as the exe calls them.
+//! Native code with the exe's calls: the bound test (`BoundWithinLightRadius`), the add
+//! (`AddTriGeom`) and `GetLuminanceToBound` (`00b9dbe0`, which writes each gathered light's
+//! luminance) are this family's and reached directly; the objects' `IsNode` and `IsTriBasedGeom`
+//! slots and the RTTI slot of the lamp and the parent are answered in place when they hold the
+//! exe's constant bodies ([`walk::slot_word`]), through the vtable otherwise; the rest by address:
+//! the candidates in the exe's order, the CRT's `qsort` called with the exe's comparator
+//! (`00b5aa70`).
 //!
 //! **The light table (`NV_LIGHT_TABLE`, off by default).** The exe's bound test asks each lamp's
 //! `NiLight` for its kind (a virtual call) and reads its place and radius again for every geometry
@@ -17,7 +20,9 @@
 //! scene node's lighting offset. Each geometry is then tested against the table with the typed
 //! bound test's float steps. Nothing in the object half moves a lamp or changes its kind (its
 //! callees change light lists, fences, flags and luminances only), so every geometry gets the
-//! same lamps in the same order; what goes is the repeated kind call per geometry and lamp.
+//! same lamps in the same order; what goes is the repeated read of each lamp's place and radius
+//! per geometry, and for a lamp class whose RTTI slot holds something other than the exe's bodies
+//! (which are answered in place with the table off too) the repeated kind call.
 //!
 //! **Floats.** Main thread only. The drain's own: the near test's one ordered comparison (150.0
 //! above the bound's radius). The table's bound test: native `f32` in the exe's order, as the
@@ -68,7 +73,7 @@ impl Table {
             Some(s) => *s,
             None => {
                 let s = Sphere {
-                    free: e.vcall(ni_light, SLOT_RTTI, &args![]).u32() == RADIUS_FREE_RTTI,
+                    free: walk::slot_word(e, ni_light, SLOT_RTTI) == RADIUS_FREE_RTTI,
                     position: [0u32, 4, 8]
                         .map(|i| e.mem.f32(ni_light.wrapping_add(WORLD_TRANSLATE + i))),
                     radius: e.mem.f32(ni_light.wrapping_add(NI_LIGHT_RADIUS)),
@@ -193,7 +198,6 @@ const SCRAP_DEALLOCATE: u32 = 0x00aa_5610;
 const SCRAP_ALIGNMENT: u32 = 0x010a_2720;
 const QSORT: u32 = 0x00ec_6f20;
 const LUMINANCE_COMPARE: u32 = 0x00b5_aa70;
-const LUMINANCE_TO_BOUND: u32 = 0x00b9_dbe0;
 /// The flag a geometry gets once its lights were redone.
 const LIGHTING_DONE: u32 = 0x40_0000;
 
@@ -405,10 +409,10 @@ fn walk_start(e: &mut Engine, object: u32) -> Result<u32, u8> {
     if e.mem.u32(object.wrapping_add(FLAGS)) & 1 != 0 {
         return Err(0);
     }
-    if e.vcall(object, SLOT_IS_NODE, &args![]).u32() == 0 {
+    if walk::slot_word(e, object, SLOT_IS_NODE) == 0 {
         return Err(0);
     }
-    Ok(e.vcall(object, SLOT_IS_NODE, &args![]).u32())
+    Ok(walk::slot_word(e, object, SLOT_IS_NODE))
 }
 
 /// The multibound step: the node cast to the record at `011f5eb4` and its indexed child; `None`
@@ -443,7 +447,7 @@ fn walk_tree(e: &mut Engine, object: u32, leaf: &mut dyn FnMut(&mut Engine, u32)
         let children = e.mem.u32(node.wrapping_add(CHILDREN_BASE));
         let child = e.mem.u32(children.wrapping_add(4 * index));
         if child != 0 {
-            answer &= if e.vcall(child, SLOT_IS_TRI_BASED_GEOM, &args![]).u32() != 0 {
+            answer &= if walk::slot_word(e, child, SLOT_IS_TRI_BASED_GEOM) != 0 {
                 leaf(e, child)
             } else {
                 walk_tree(e, child, leaf)
@@ -497,14 +501,14 @@ pub fn update_start(e: &mut Engine, object: u32, node: u32, skip_culled: u32, co
         others: 0,
     };
     if parent != 0 {
-        if e.vcall(parent, SLOT_RTTI, &args![]).u32() == ROOM_RTTI {
+        if walk::slot_word(e, parent, SLOT_RTTI) == ROOM_RTTI {
             from.rooms = parent;
-        } else if e.vcall(parent, SLOT_RTTI, &args![]).u32() == OTHER_RTTI {
+        } else if walk::slot_word(e, parent, SLOT_RTTI) == OTHER_RTTI {
             from.others = parent;
         }
     }
     if collect & 0xff == 0 {
-        if e.vcall(object, SLOT_IS_TRI_BASED_GEOM, &args![]).u32() != 0 {
+        if walk::slot_word(e, object, SLOT_IS_TRI_BASED_GEOM) != 0 {
             update_geometry(e, object, node, skip_culled, from.rooms, from.others);
         } else {
             update_tree(e, object, node, skip_culled, from.rooms, from.others);
@@ -550,7 +554,11 @@ pub fn update_start(e: &mut Engine, object: u32, node: u32, skip_culled: u32, co
             }
             e.mem.set_u32(array.wrapping_add(4 * count), light);
             count = count.wrapping_add(1);
-            e.call(LUMINANCE_TO_BOUND, &args![light, bound]);
+            typed_call!(
+                super::FAMILY,
+                0x00b9_dbe0,
+                super::scene_light::luminance_to_bound(e, Ptr::new(light), Ptr::new(bound))
+            );
         });
         if any && (count as i32) > 0 {
             e.call(QSORT, &args![array, count, 4u32, LUMINANCE_COMPARE]);
@@ -565,7 +573,7 @@ pub fn update_start(e: &mut Engine, object: u32, node: u32, skip_culled: u32, co
 /// The near flag of an object: `IsNode` answers and 150.0 is above its bound's radius (the null
 /// bound without one; not when unordered).
 fn near_flag(e: &mut Engine, object: u32) -> u32 {
-    if e.vcall(object, SLOT_IS_NODE, &args![]).u32() == 0 {
+    if walk::slot_word(e, object, SLOT_IS_NODE) == 0 {
         return 0;
     }
     let bound = match e.mem.u32(object.wrapping_add(WORLD_BOUND)) {

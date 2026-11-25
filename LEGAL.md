@@ -136,6 +136,9 @@ terms, whose notice must be kept:
   (Philip Rebohle, Joshua Ashton, Robin Kertels, Jeffrey Ellison; zlib/libpng licence) and
   altered to make wgpu-hal's pipelines; DXVK's copyright and licence notice is at the top of
   the file, and the file says it is an altered version.
+- `crates/engine-platform/data/gamecontrollerdb-windows.txt` comes from SDL_GameControllerDB
+  (zlib licence; its notice is in
+  [crates/engine-platform/data/LICENSE-SDL_GameControllerDB](crates/engine-platform/data/LICENSE-SDL_GameControllerDB)).
 
 ## Requests from rights holders
 
