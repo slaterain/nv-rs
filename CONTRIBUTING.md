@@ -206,9 +206,10 @@ your file already have a native version: `git grep "Typed from <address>" -- cra
    Set `threads` to the threads that run its code (`Main`, `Other` or `Both`): the differential
    test runs under those threads' float precision. Its `mod.rs` starts with a `//!` comment saying
    what it covers, which threads run it and how its floats are done. In
-   `crates/engine-typed/src/lib.rs`, add `pub mod <family>;` and a
-   `provide(&crate::<family>::NAME)` line in `units::funcs`. In that file's tests, update the
-   `families()` list and its length, the `past` list, the two `count() == N` checks (families
+   `crates/engine-typed/src/lib.rs`, add `pub mod <family>;` and
+   `&crate::<family>::NAME` at the end of `FAMILIES` (and its length; `units::funcs` provides
+   that list, and the tests read it). In that file's tests, update the length `families()`
+   returns, the `past` list, the two `count() == N` checks (families
    minus one), and the comment saying when each family went on.
 2. **Write each function in plain Rust.** Read the translation and the executable (Ghidra or
    another disassembler) together. Mark it `// Typed from 00a6db50` directly above the function.

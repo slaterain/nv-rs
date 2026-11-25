@@ -27,8 +27,8 @@ pub fn fn_0071b040(e: &mut Engine, this: Ptr) {
     if object != 0 {
         e.call(DELETE_007B3FA0, &args![object, 1u32]);
     }
-    fn_0071b020(e, this.byte_add(0x10));
-    fn_0071b020(e, this.byte_add(4));
+    e.call(0x0071_b020, &args![this.byte_add(0x10)]);
+    e.call(0x0071_b020, &args![this.byte_add(4)]);
 }
 
 /// This unit's translated functions, by exe address.

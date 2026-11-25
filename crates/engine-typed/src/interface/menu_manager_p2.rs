@@ -13,9 +13,9 @@
 //! and the function-local statics that keep trait ids, so each method has one body here over an
 //! [`Of`], and a body calls the instance's own methods (as the exe does, directly) through
 //! `typed_call!` with that instance's address. The calls of functions no family types stay calls by
-//! address: the embedded list's constructor, destructor and sort, the list box set-up, the
+//! address: the embedded list's constructor, destructor and sort, the
 //! collection, a node's and an item's deletes, the free, the trait ids by name, the item tile's
-//! position, the list's count, the value actions and the update queue, the two roundings.
+//! position, the value actions and the update queue, the two roundings.
 //! `Tile::Value::CalculateValue` (`00a09410`) is an `overridable.tsv` row: by address too. The
 //! tile's trait getters, test, setters, value and children by name and path are the dispatch
 //! family's, `_ftol2` the C runtime's, the simple array's set-up the pathing family's and its clear
@@ -36,23 +36,20 @@ use engine_core::x87::fistp_chop64;
 /// calls (the differential tests leave these out of the translation's calls).
 pub const IN_PLACE: &[u32] = &[
     0x006e_cd40, // a list node's next stored (its +4)
-    0x0071_aa80, // a tile's byte at +0x35
-    0x0071_aa60, // a tile's byte at +0x35 stored
     0x0064_7b70, // the larger of two integers (signed)
+    0x007a_1950, // a list box flag (usFlags bit) set or cleared
 ];
 
 /// The allocator's free (cdecl).
-const FREE: u32 = 0x0040_1030;
+pub(super) const FREE: u32 = 0x0040_1030;
 /// The embedded list's destructor and sort (thiscall on the list box's +4; its constructor, two
 /// zero words, is done in place).
 const LIST_DESTRUCT: u32 = 0x0046_ffb0;
 const LIST_SORT: u32 = 0x0083_fd60;
 /// A list node's deleting destructor (thiscall, flags) and a `ListBoxItem`'s data delete
 /// (`004459e0`, thiscall with 1).
-const NODE_DELETE: u32 = 0x0047_02f0;
-const ITEM_DELETE: u32 = 0x0044_59e0;
-/// The list box set-up every constructor calls with 0 and 1 (thiscall, two words).
-const LIST_BOX_INIT_FLAGS: u32 = 0x007a_1950;
+pub(super) const NODE_DELETE: u32 = 0x0047_02f0;
+pub(super) const ITEM_DELETE: u32 = 0x0044_59e0;
 /// `ListBoxBase`'s vtable (RTTI `.?AVListBoxBase@@`).
 const LIST_BOX_BASE_VTABLE: u32 = 0x0107_0418;
 /// The object every list box is added to (`005ae3d0`) and removed from (`00905330`), each given
@@ -63,58 +60,56 @@ const LIST_BOX_COLLECTION_REMOVE: u32 = 0x0090_5330;
 /// While this byte is set, `RemoveAll` leaves the items' tiles alone.
 const KEEP_ITEM_TILES: u32 = 0x011d_8909;
 /// `Tile::TextToTrait` (a trait's id by name, cdecl) and `Tile::AddUserTrait` (cdecl: name, -1).
-const TEXT_TO_TRAIT: u32 = 0x00a0_1860;
-const ADD_USER_TRAIT: u32 = 0x00a0_0940;
+pub(super) const TEXT_TO_TRAIT: u32 = 0x00a0_1860;
+pub(super) const ADD_USER_TRAIT: u32 = 0x00a0_0940;
 /// The trait names: `"_num_filtered"`, `"_scroll_delta"`, `"_enabled"`, `"_highlight_y"`,
 /// `"_selected_height"`, `"_number_of_items"`.
-const NUM_FILTERED_TEXT: u32 = 0x0106_f8d0;
-const SCROLL_DELTA_TEXT: u32 = 0x0106_f90c;
+pub(super) const NUM_FILTERED_TEXT: u32 = 0x0106_f8d0;
+pub(super) const SCROLL_DELTA_TEXT: u32 = 0x0106_f90c;
 const ENABLED_TEXT: u32 = 0x0107_0244;
-const HIGHLIGHT_Y_TEXT: u32 = 0x0106_f8c0;
-const SELECTED_HEIGHT_TEXT: u32 = 0x0106_f8ac;
-const NUMBER_OF_ITEMS_TEXT: u32 = 0x0106_f8f8;
+pub(super) const HIGHLIGHT_Y_TEXT: u32 = 0x0106_f8c0;
+pub(super) const SELECTED_HEIGHT_TEXT: u32 = 0x0106_f8ac;
+pub(super) const NUMBER_OF_ITEMS_TEXT: u32 = 0x0106_f8f8;
 /// `"lb_highlight_box"` and its edges' names, `"top"`, `"bottom"`, `"left"`, `"right"`.
-const HIGHLIGHT_BOX_TEXT: u32 = 0x0106_f898;
-const TOP_TEXT: u32 = 0x0106_f894;
-const EDGE_TEXTS: [u32; 3] = [0x0106_f88c, 0x0106_f884, 0x0106_f87c];
+pub(super) const HIGHLIGHT_BOX_TEXT: u32 = 0x0106_f898;
+pub(super) const TOP_TEXT: u32 = 0x0106_f894;
+pub(super) const EDGE_TEXTS: [u32; 3] = [0x0106_f88c, 0x0106_f884, 0x0106_f87c];
 /// The traits read by id: an item tile's index, a tile's height.
-const TRAIT_INDEX: i32 = 0xfac;
-const TRAIT_HEIGHT: i32 = 0xfb0;
+pub(super) const TRAIT_INDEX: i32 = 0xfac;
+pub(super) const TRAIT_HEIGHT: i32 = 0xfb0;
 /// The highlighted tile's traits the highlight box follows, and the action it adds.
-const TRAIT_Y: u32 = 0xfa2;
-const ACTION_COPY: u32 = 0x7d0;
+pub(super) const TRAIT_Y: u32 = 0xfa2;
+pub(super) const ACTION_COPY: u32 = 0x7d0;
 /// `Tile::Value::AddAction` (thiscall: action, tile, trait) and `Tile::Value::CalculateValue`
 /// (thiscall, a word; an `overridable.tsv` row).
-const VALUE_ADD_ACTION: u32 = 0x00a0_9130;
-const VALUE_CALCULATE: u32 = 0x00a0_9410;
+pub(super) const VALUE_ADD_ACTION: u32 = 0x00a0_9130;
+pub(super) const VALUE_CALCULATE: u32 = 0x00a0_9410;
 /// `Tile::AddNeedsUpdate` (thiscall, flags).
 const TILE_ADD_NEEDS_UPDATE: u32 = 0x00a0_7530;
 /// A tile's byte at +0x35 (`0071aa80` reads it, `0071aa60` stores it).
-const TILE_BYTE_35: u32 = 0x35;
+pub(super) const TILE_BYTE_35: u32 = 0x35;
 /// `ListBox<StartMenu::Option *>::InitTilePosition` (thiscall on the list box: the tile).
-const INIT_TILE_POSITION: u32 = 0x0072_69d0;
-/// The count of a list box's embedded list (thiscall).
-const LIST_COUNT: u32 = 0x0072_6c40;
+pub(super) const INIT_TILE_POSITION: u32 = 0x0072_69d0;
 /// The page step's rounding (`004bd510`, cdecl: the step, 1.0) and `SetTotalListHeight`'s
 /// (`004e4430`, cdecl: a float), each a float in `ST0`.
 const SCROLL_ROUND: u32 = 0x004b_d510;
-const ROUND_FLOAT: u32 = 0x004e_4430;
+pub(super) const ROUND_FLOAT: u32 = 0x004e_4430;
 
 /// `ListBox` (Xbox PDB): its embedded list (`+4` the first node's item, `+8` its next) and fields.
-const FIRST_ITEM: u32 = 0x04;
-const SECOND_NODE: u32 = 0x08;
-const CONTAINER: u32 = 0x0c;
-const HIGHLIGHTED: u32 = 0x10;
-const SCROLL_BAR: u32 = 0x14;
-const TEMPLATE_NAME: u32 = 0x18;
-const NEXT_INDEX: u32 = 0x1c;
-const TOTAL_HEIGHT: u32 = 0x20;
+pub(super) const FIRST_ITEM: u32 = 0x04;
+pub(super) const SECOND_NODE: u32 = 0x08;
+pub(super) const CONTAINER: u32 = 0x0c;
+pub(super) const HIGHLIGHTED: u32 = 0x10;
+pub(super) const SCROLL_BAR: u32 = 0x14;
+pub(super) const TEMPLATE_NAME: u32 = 0x18;
+pub(super) const NEXT_INDEX: u32 = 0x1c;
+pub(super) const TOTAL_HEIGHT: u32 = 0x20;
 const SAVED_HIGHLIGHT_INDEX: u32 = 0x24;
 const SAVED_SCROLLBAR_VALUE: u32 = 0x28;
 const FLAGS: u32 = 0x2c;
 /// A `ListBoxItem`'s (Xbox PDB) data (`+4`) and filtered byte (`+8`); its tile is its first word.
-const ITEM_DATA: u32 = 4;
-const ITEM_FILTERED: u32 = 8;
+pub(super) const ITEM_DATA: u32 = 4;
+pub(super) const ITEM_FILTERED: u32 = 8;
 
 /// The `BSSimpleArray` vtables (RTTI): of `SPECIALBookMenu::SpecialBookTextItem`,
 /// `SpecialBookButton`, `LoveTesterMenu::LoveTesterTextItem`, `LoveTesterLightBulbGlows` and
@@ -397,7 +392,7 @@ fn collection(e: &mut Engine, method: u32, list_box: u32) {
 
 /// A tile's float trait (`Tile::GetFloat`, the dispatch family's).
 #[inline]
-fn tile_float(e: &mut Engine, tile: u32, id: i32) -> f32 {
+pub(super) fn tile_float(e: &mut Engine, tile: u32, id: i32) -> f32 {
     typed_call!(
         dispatch::FAMILY,
         0x00a0_11b0,
@@ -407,7 +402,7 @@ fn tile_float(e: &mut Engine, tile: u32, id: i32) -> f32 {
 
 /// `Tile::SetInt` (the dispatch family's).
 #[inline]
-fn tile_set_int(e: &mut Engine, tile: u32, id: i32, value: i32) {
+pub(super) fn tile_set_int(e: &mut Engine, tile: u32, id: i32, value: i32) {
     typed_call!(
         dispatch::FAMILY,
         0x0070_0320,
@@ -417,7 +412,7 @@ fn tile_set_int(e: &mut Engine, tile: u32, id: i32, value: i32) {
 
 /// `Tile::SetFloat` with the flag 1 (the dispatch family's).
 #[inline]
-fn tile_set_float(e: &mut Engine, tile: u32, id: i32, value: f32) {
+pub(super) fn tile_set_float(e: &mut Engine, tile: u32, id: i32, value: f32) {
     typed_call!(
         dispatch::FAMILY,
         0x00a0_12d0,
@@ -427,7 +422,7 @@ fn tile_set_float(e: &mut Engine, tile: u32, id: i32, value: f32) {
 
 /// `_ftol2` of `ST0` (the C runtime family's): its `EAX`.
 #[inline]
-fn ftol2(e: &mut Engine, value: f64) -> i32 {
+pub(super) fn ftol2(e: &mut Engine, value: f64) -> i32 {
     super::low_dword(typed_call!(
         crt::FAMILY,
         0x00ec_62c0,
@@ -437,7 +432,7 @@ fn ftol2(e: &mut Engine, value: f64) -> i32 {
 
 /// A trait's id by name (`Tile::TextToTrait`, by address).
 #[inline]
-fn trait_by_name(e: &mut Engine, name: u32) -> i32 {
+pub(super) fn trait_by_name(e: &mut Engine, name: u32) -> i32 {
     e.call(TEXT_TO_TRAIT, &args![name]).i32()
 }
 
@@ -454,7 +449,7 @@ fn tile_enabled(e: &mut Engine, tile: u32) -> bool {
 /// A function-local static trait id: the first time (bit `bit` of the word at `guard` clear) the
 /// bit is set, then the id `Tile::AddUserTrait(name, -1)` answers is kept at `cache`. The id.
 #[inline]
-fn static_trait(e: &mut Engine, guard: u32, bit: u32, cache: u32, name: u32) -> i32 {
+pub(super) fn static_trait(e: &mut Engine, guard: u32, bit: u32, cache: u32, name: u32) -> i32 {
     let word = e.mem.u32(guard);
     if word & bit != 0 {
         return e.mem.i32(cache);
@@ -467,7 +462,7 @@ fn static_trait(e: &mut Engine, guard: u32, bit: u32, cache: u32, name: u32) -> 
 
 /// The first node of the embedded list (`this + 4`; the code guards a null `this`).
 #[inline]
-fn first_node(this: u32) -> u32 {
+pub(super) fn first_node(this: u32) -> u32 {
     if this == 0 {
         0
     } else {
@@ -475,9 +470,24 @@ fn first_node(this: u32) -> u32 {
     }
 }
 
+/// The list box's flag `bit` (`usFlags`, `+0x2c`) set or cleared (`007a1950`, thiscall: the bit,
+/// a byte; in place): `1 << bit` (the shift count masked to 5 bits, as `SHL` does) or-ed in, or its
+/// complement and-ed, and the low 16 bits stored.
+#[inline]
+pub(super) fn set_flag(e: &mut Engine, at: u32, bit: u32, set: bool) {
+    let flags = e.mem.u16(at.wrapping_add(FLAGS));
+    // The mask's low 16 bits: none for a shift of 16 to 31.
+    let mask = match bit & 0x1f {
+        shift @ 0..=15 => 1u16 << shift,
+        _ => 0,
+    };
+    let flags = if set { flags | mask } else { flags & !mask };
+    e.mem.set_u16(at.wrapping_add(FLAGS), flags);
+}
+
 /// `ListBox<T>::ListBox` (Xbox PDB): the `ListBoxBase` vtable (`007240c0`), the embedded list, the
-/// instance's vtable, the fields cleared, the set-up with 0 and 1, the list box added to the
-/// collection (`00721130`). `this`.
+/// instance's vtable, the fields cleared, the flag 0 set (`007a1950` with 0 and 1, in place), the
+/// list box added to the collection (`00721130`). `this`.
 fn construct(e: &mut Engine, of: Of, this: Ptr) -> Ptr {
     let at = this.addr();
     e.mem.set_u32(at, LIST_BOX_BASE_VTABLE);
@@ -492,7 +502,7 @@ fn construct(e: &mut Engine, of: Of, this: Ptr) -> Ptr {
     e.mem.set_f32(at.wrapping_add(SAVED_SCROLLBAR_VALUE), 0.0);
     e.mem.set_f32(at.wrapping_add(SAVED_HIGHLIGHT_INDEX), 0.0);
     e.mem.set_f32(at.wrapping_add(TOTAL_HEIGHT), 0.0);
-    e.call(LIST_BOX_INIT_FLAGS, &args![this, 0u32, 1u32]);
+    set_flag(e, at, 0, true);
     collection(e, LIST_BOX_COLLECTION_ADD, at);
     this
 }
@@ -769,10 +779,15 @@ fn is_enabled(e: &mut Engine, of: Of, this: Ptr) -> bool {
         )
 }
 
-/// The tile's byte at +0x35 set to `flag` (`0071aa60`) and the tile queued for an update (8).
+/// The tile's byte at +0x35 set to `flag` (`0071aa60`, the family's) and the tile queued for an
+/// update (8).
 #[inline]
-fn mark_tile(e: &mut Engine, tile: u32, flag: u8) {
-    e.mem.set_u8(tile.wrapping_add(TILE_BYTE_35), flag);
+pub(super) fn mark_tile(e: &mut Engine, tile: u32, flag: u8) {
+    typed_call!(
+        super::FAMILY,
+        0x0071_aa60,
+        super::item_list_box::fn_0071aa60(e, Ptr::new(tile), flag)
+    );
     e.call(TILE_ADD_NEEDS_UPDATE, &args![tile, 8u32]);
 }
 
@@ -817,7 +832,13 @@ fn update_highlight_box_pos(e: &mut Engine, of: Of, this: Ptr) {
         e.call(VALUE_CALCULATE, &args![value, 0u32]);
     }
     let highlighted = e.mem.u32(at.wrapping_add(HIGHLIGHTED));
-    let flag = u8::from(e.mem.u8(highlighted.wrapping_add(TILE_BYTE_35)) != 0);
+    let flag = u8::from(
+        typed_call!(
+            super::FAMILY,
+            0x0071_aa80,
+            super::item_list_box::fn_0071aa80(e, Ptr::new(highlighted))
+        ) != 0,
+    );
     let container = e.mem.u32(at.wrapping_add(CONTAINER));
     let box_tile = typed_call!(
         dispatch::FAMILY,
@@ -841,7 +862,7 @@ fn update_highlight_box_pos(e: &mut Engine, of: Of, this: Ptr) {
 
 /// `Tile::GetChildByName` (the dispatch family's).
 #[inline]
-fn child_by_name(e: &mut Engine, tile: u32, name: u32) -> u32 {
+pub(super) fn child_by_name(e: &mut Engine, tile: u32, name: u32) -> u32 {
     typed_call!(
         dispatch::FAMILY,
         0x00a0_3da0,
@@ -901,7 +922,11 @@ fn set_total_list_height(e: &mut Engine, of: Of, this: Ptr) {
 fn num_unfiltered(e: &mut Engine, of: Of, this: Ptr) -> i32 {
     let guard = of.guards()[2];
     let num_filtered = static_trait(e, guard, 1, guard.wrapping_sub(4), NUM_FILTERED_TEXT);
-    let count = e.call(LIST_COUNT, &args![this]).i32();
+    let count = typed_call!(
+        super::FAMILY,
+        0x0072_6c40,
+        super::small_units::fn_00726c40(e, this)
+    ) as i32;
     let container = e.mem.u32(this.addr().wrapping_add(CONTAINER));
     let filtered = tile_float(e, container, num_filtered);
     count.wrapping_sub(super::low_dword_signed(fistp_chop64(f64::from(filtered))))
@@ -921,7 +946,7 @@ fn simple_array_construct(e: &mut Engine, this: Ptr, vtable: u32) -> Ptr {
 
 /// A `BSSimpleArray` destructor: the vtable, then the clear with 1 (`008454f0`, the dispatch
 /// family's).
-fn simple_array_destruct(e: &mut Engine, this: Ptr, vtable: u32) {
+pub(super) fn simple_array_destruct(e: &mut Engine, this: Ptr, vtable: u32) {
     e.mem.set_u32(this.addr(), vtable);
     typed_call!(
         dispatch::FAMILY,
