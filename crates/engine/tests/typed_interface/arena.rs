@@ -181,7 +181,8 @@ pub enum Arg {
     Ptr,
     /// An object, null, 1, a menu id, 0x7fff.
     Word,
-    /// 0, 1, 2, a menu id, 1,000.
+    /// 0, 1, 2, menu ids (the first, one inside, the last), the ids just outside the menus' range
+    /// (1,000 below, 0x43d above).
     Int,
     /// 0, 1, 0xff.
     Byte,
@@ -191,7 +192,7 @@ pub enum Arg {
 
 const PTRS: [u32; 3] = [ARENA + 3 * OBJECT, ARENA + 40 * OBJECT, 0];
 const WORDS: [u32; 5] = [ARENA + 5 * OBJECT, 0, 1, 0x3eb, 0x7fff];
-const INTS: [u32; 5] = [0, 1, 2, 0x3ef, 1000];
+const INTS: [u32; 8] = [0, 1, 2, 0x3e9, 0x3ef, 0x43c, 0x43d, 1000];
 const BYTES: [u32; 3] = [0, 1, 0xff];
 const F32S: [u32; 5] = [0x3f80_0000, 0xbf00_0000, 0, 0x7fc0_0000, 0x7149_f2ca];
 
@@ -205,14 +206,8 @@ fn values(arg: Arg) -> &'static [u32] {
     }
 }
 
-const INDICES: [&[u32]; 6] = [
-    &[],
-    &[0],
-    &[0, 1],
-    &[0, 1, 2],
-    &[0, 1, 2, 3],
-    &[0, 1, 2, 3, 4],
-];
+/// The indices of an argument's values (the first `n` of these).
+static INDEX: [u32; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
 
 /// The world's settings for a Diff of the family.
 pub trait InArena {
@@ -224,7 +219,7 @@ pub trait InArena {
 impl InArena for Diff {
     fn in_arena(self, args: &'static [Arg], callees: &'static [u32], plain: &[u32]) -> Diff {
         let mut inputs = vec![Input::Of(SEEDS)];
-        inputs.extend(args.iter().map(|a| Input::Of(INDICES[values(*a).len()])));
+        inputs.extend(args.iter().map(|a| Input::Of(&INDEX[..values(*a).len()])));
         self.family(&engine_typed::interface::INTERFACE)
             .family(&engine_core::typed::leaf::LEAVES)
             .translation_calls_plainly(plain)
