@@ -1543,6 +1543,10 @@ pub fn still_good(drawn: Option<&Cascade>, now: &Cascade, sun_changed: bool) -> 
     }
 }
 
+/// A caster's draw without its pipeline ([`GeoKey::drawn`]): its buffers and offsets, its index buffer,
+/// its range and base vertex.
+pub(crate) type Drawn = ([(u64, u64); 8], u64, u32, u32, i32);
+
 /// What a caster draws: its pipeline, buffers (by their own numbers, [`crate::device::Buf::id`],
 /// offset and upload count) and range. One geometry can stand in several places ([`Cache`]).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1565,6 +1569,18 @@ impl GeoKey {
             index: (self.index.0, 0),
             ..self.clone()
         }
+    }
+
+    /// The draw whatever its pipeline and whatever has been written into its buffers since: what a
+    /// caster whose kind changes keeps while its new pipeline is on its way.
+    pub fn drawn(&self) -> Drawn {
+        (
+            self.streams.map(|(b, o, _)| (b, o)),
+            self.index.0,
+            self.start,
+            self.count,
+            self.base_vertex,
+        )
     }
 
     /// Its buffers alone (their own numbers, without offsets' upload counts, ranges or pipeline):
@@ -3971,6 +3987,21 @@ pub fn characters() -> bool {
 
 /// A test's choice of [`casters_ahead`] (0: none, the run's; 1 off; 2 on).
 static AHEAD_FOR_TESTS: AtomicU8 = AtomicU8::new(0);
+
+static CASTER_DELAY_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Tests: each caster pipeline made on a thread of its own from now on waits `ms` on its thread
+/// first, as a slow compile would (0: none).
+#[doc(hidden)]
+pub fn caster_delay_for_tests(ms: u64) {
+    CASTER_DELAY_MS.store(ms, Ordering::Relaxed);
+}
+
+/// [`caster_delay_for_tests`]'s wait, if any.
+pub(crate) fn caster_delay() -> Option<std::time::Duration> {
+    let ms = CASTER_DELAY_MS.load(Ordering::Relaxed);
+    (ms != 0).then(|| std::time::Duration::from_millis(ms))
+}
 
 /// Tests: still casters' pipelines made ahead or not for devices made from now on, whatever the run says (`None`:
 /// the run's choice again).

@@ -1658,6 +1658,10 @@ struct SunState {
     /// (their ribbons' and lists' too) with [`sun_shadow::casters_ahead`], by the map they go in and
     /// their key; kept at each present once made ([`Device::collect_sun_casters`]).
     caster_pending: Map<(SunMap, PipeOf), CasterPending>,
+    /// Still casters drawn this frame whose pipeline is on its way (their draws without pipeline,
+    /// [`sun_shadow::GeoKey::drawn`]): the places they cast at with the pipeline before (a kind they
+    /// left) are kept meanwhile, however long it takes.
+    caster_waiting: crate::fxhash::Set<sun_shadow::Drawn>,
     /// The characters' places (geometry, centre) of the frame before and of this one (kept for its
     /// list), for the frame's step; and a test's allowance in place of the measured one.
     skin_before: Vec<(sun_shadow::GeoKey, [f64; 3])>,
@@ -1808,6 +1812,7 @@ impl SunState {
             skinned: Vec::new(),
             skinned_seen: 0,
             caster_pending: Map::default(),
+            caster_waiting: crate::fxhash::Set::default(),
             skin_before: Vec::new(),
             skin_now: Vec::new(),
             allow_override: None,
@@ -8211,6 +8216,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // A still caster's pipeline on a thread of its own too ([`sun_shadow::casters_ahead`]).
         let still_ahead = self.sun.as_ref().is_some_and(|s| s.ahead);
         let ahead = per_frame || still_ahead;
+        let indexed = index32.is_some();
         let samplers = self.sampler_bindings(vs, ps);
         let sampler_keys: Vec<(u32, u8, bool)> =
             samplers.as_slice().iter().map(|(k, _)| *k).collect();
@@ -8263,8 +8269,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 });
                 match made {
                     Some(at) => at,
-                    // On its way: the caster waits (rejected for the frame).
+                    // On its way: the caster waits (rejected for the frame), where it cast before
+                    // kept meanwhile.
                     None => {
+                        if !per_frame {
+                            self.sun_wait(link, indexed, start, count, base_vertex);
+                        }
                         self.sun_reject(2, vs, ps, count);
                         return;
                     }
@@ -8579,6 +8589,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                         // On its way: the caster waits until all its pipelines are there, so the
                         // shadow that comes is the one it casts with them made at once.
                         None => {
+                            if !per_frame {
+                                self.sun_waiting(key.drawn());
+                            }
                             self.sun_reject(2, vs, ps, count);
                             return;
                         }
@@ -8657,6 +8670,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                         Some(at) => at,
                         // On its way: the caster waits, as for its ribbons.
                         None => {
+                            if !per_frame {
+                                self.sun_waiting(key.drawn());
+                            }
                             self.sun_reject(2, vs, ps, count);
                             return;
                         }
@@ -9040,6 +9056,44 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         )
     }
 
+    /// A still caster whose pipeline is on its way, drawn now: its draw ([`sun_shadow::GeoKey::drawn`]) as
+    /// the stream sources and indices hold it, waiting ([`Device::sun_waiting`]).
+    fn sun_wait(
+        &mut self,
+        link: &VertexLink,
+        indexed: bool,
+        start: u32,
+        count: u32,
+        base_vertex: i32,
+    ) {
+        let mut streams = [(0u64, 0u64); 8];
+        for (k, a) in link.attributes.iter().enumerate() {
+            if a.is_empty() {
+                continue;
+            }
+            let Some(b) = self.st.streams[k].buffer.as_ref() else {
+                return;
+            };
+            streams[k] = (b.id, u64::from(self.st.streams[k].offset));
+        }
+        let index = match (indexed, self.st.indices.as_ref()) {
+            (true, Some(b)) => b.id,
+            (true, None) => return,
+            (false, _) => 0,
+        };
+        self.sun_waiting((streams, index, start, count, base_vertex));
+    }
+
+    /// A still caster's draw `drawn` waits for its pipeline this frame: the places where the same
+    /// draw cast with another pipeline (a kind it left) are not let go for not being drawn until the
+    /// next present's let-go has passed (the shadow stays while the new kind's pipeline is made,
+    /// however long that takes; review of #994).
+    fn sun_waiting(&mut self, drawn: sun_shadow::Drawn) {
+        if let Some(sun) = self.sun.as_mut() {
+            sun.caster_waiting.insert(drawn);
+        }
+    }
+
     /// The sun shadows' caster pipeline `key` in `map`: made (`Some`, its place in the maps'
     /// pipelines, none when wgpu refused it), or (`None`) on its way from a thread of its own. A
     /// new one is sent now when its kind has a slot free (characters and still casters have
@@ -9091,9 +9145,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             return Some(None);
         };
         let (tx, rx) = std::sync::mpsc::channel();
+        let delay = sun_shadow::caster_delay();
         let spawned = std::thread::Builder::new()
             .name("nv-wgpu-sun-caster".into())
             .spawn(move || {
+                if let Some(d) = delay {
+                    std::thread::sleep(d);
+                }
                 let _ = tx.send(job());
             });
         let sun = self.sun.as_mut().expect("on");
@@ -9139,7 +9197,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     }
 
     /// The caster pipelines back from their threads kept, at each present: a slot frees whether
-    /// or not the kind it was made for is drawn again.
+    /// or not the kind it was made for is drawn again. With the switch off too, for characters' (a
+    /// fix of the port's own shadows, which the original game does not have: before, six character
+    /// kinds seen once and not again held the six slots, and no new kind of character cast after them;
+    /// these shadows replace the game's own character shadows, so such a character had none).
     fn collect_sun_casters(&mut self) {
         let Some(sun) = &self.sun else {
             return;
@@ -9813,6 +9874,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             .collect();
         let settled = sun.cache.settle(now, sun_shadow::SETTLE);
         still.extend(settled.iter().copied());
+        // Still casters waiting for a new kind's pipeline: where they cast before stays meanwhile.
+        let waiting = std::mem::take(&mut sun.caster_waiting);
         let mut why = [0u64; 3];
         let mut written = Vec::new();
         for (_, sphere, moving) in sun.cache.sweep(|k, i| {
@@ -9826,6 +9889,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 distance - i.radius > reach,
                 i.moved_on(now)
                     || (now - i.seen > sun_shadow::GRACE
+                        && !waiting.contains(&k.drawn())
                         && (sun_shadow::wholly_in_view(frustum, v, i.radius, near, far)
                             || sun_shadow::segment_gone(
                                 frustum,
@@ -9902,6 +9966,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 || i.left
                 || !far_here.touches(i.centre, i.radius + 2.0 * far_step)
                 || (now - i.seen > sun_shadow::GRACE
+                    && !waiting.contains(&k.drawn())
                     && (sun_shadow::wholly_in_view(frustum, v, i.radius, near, view_far)
                         || (inside
                             && sun_shadow::partly_in_view(frustum, v, i.radius, near, view_far))
