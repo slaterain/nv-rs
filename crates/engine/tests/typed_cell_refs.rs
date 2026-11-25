@@ -30,6 +30,10 @@
 //! The shadow scene node's add of an object and its lighting update (`00b5eeb0`, `00b5d9f0`) and
 //! the add at the tail of a list of counted pointers (`00a5a310`) run on a shadow scene node, its
 //! queues, their lock and an object from a seed, the list node pool standing in.
+//!
+//! `TESObjectREFR::InitScript` (`00565730`), the script of a form (`004826d0`), the reference's
+//! container (`0055d310`) and the actor classes' slot 0x1a4 (`008ae600`) run on a reference, its
+//! forms and its extra data list from a seed, the work `InitScript` hands on standing in.
 
 use engine as _;
 use engine_core::prelude::*;
@@ -141,7 +145,14 @@ fn stand_ins(e: &mut Engine) {
     e.register(0x0054_df30, |e, _| ret(e.mem.u32(SCRIPTS_ANSWER)));
     e.register(0x0045_3490, |e, _| ret(e.mem.u32(TES_ACCEPTS)));
     e.register(0x0045_8be0, |e, _| ret(e.mem.u32(PRIORITY)));
-    e.register(0x00ec_43fb, |e, a| ret(e.mem.u32(a[0] + ANSWER_CAST)));
+    // The cast: the word its object keeps (null for none, as the exe's).
+    e.register(0x00ec_43fb, |e, a| {
+        ret(if a[0] == 0 {
+            0
+        } else {
+            e.mem.u32(a[0] + ANSWER_CAST)
+        })
+    });
     e.register(0x0043_d410, |e, a| {
         for i in 0..3 {
             e.mem.set_u32(a[0] + 4 * i, a[1 + i as usize]);
@@ -1406,6 +1417,8 @@ const ANSWER_SCALE: u32 = 0x110;
 const ANSWER_OTHER: u32 = 0x114;
 const ANSWER_LOAD_3D: u32 = 0x118;
 const ANSWER_JIP: u32 = 0x11c;
+/// What a stand-in slot 0x1a4 answers (`InitScript`'s form).
+const ANSWER_SCRIPT_FORM: u32 = 0x120;
 /// A cast's radius, its slot 0x1bc's answer (a float's bits).
 const CAST_RADIUS: u32 = 0x100;
 /// The node JIP's handler answers.
@@ -1419,14 +1432,15 @@ const LARGE_LIMIT: u32 = 0x0101_79e0;
 /// The work the load hands on, standing in (the call log holds each call with its words). The
 /// reference ID's walk of the scene graph (`004b6dc0`) is this family's and runs as itself on
 /// [`scene_graph`]'s objects; so do the shadow scene node's add and lighting update (`00b5eeb0`,
-/// `00b5d9f0`) on its queues, their lock and the list node pool of [`lighting_stand_ins`].
-const SCENE_DOUBLES: [u32; 8] = [
+/// `00b5d9f0`) on its queues, their lock and the list node pool of [`lighting_stand_ins`], and
+/// `TESObjectREFR::InitScript` (`00565730`) on the reference, its callees standing in
+/// ([`script_stand_ins`]).
+const SCENE_DOUBLES: [u32; 7] = [
     0x0056_5210, // TESActorBase::SetStartsDead
     0x00b5_cbd0, // the shadow scene node's actors' add
     0x0056_f700, // the step after the attach
     0x0057_8170, // the master particle addon nodes' removal
     0x0057_8060, // and addition
-    0x0056_5730, // TESObjectREFR::InitScript
     0x008c_4640, // Actor::UpdateAlpha
     0x0054_7ad0, // the large cell's step
 ];
@@ -1500,6 +1514,8 @@ fn scene_stand_ins(e: &mut Engine) {
     // The shadow scene node (its queues empty) and what its queue meets.
     e.map(0x0333_0000, 0x1000);
     lighting_stand_ins(e);
+    script_stand_ins(e);
+    e.register(VT_FN + 0x1a4, answer_of::<ANSWER_SCRIPT_FORM>);
     e.register(0x0057_0f70, set_3d);
     e.register(0x0056_7400, |e, a| {
         float_ret(e.mem.u32(a[0] + ANSWER_SCALE))
@@ -1523,11 +1539,14 @@ fn scene_stand_ins(e: &mut Engine) {
 fn scene_vtable(e: &mut Engine, class: u32) -> u32 {
     let vt = e.mem.alloc(0x310);
     for slot in [
-        0x100, 0x1c8, 0x1d0, 0x1f4, 0x220, 0x224, 0x260, 0x304, 0x308,
+        0x100, 0x1a4, 0x1c8, 0x1d0, 0x1f4, 0x220, 0x224, 0x260, 0x304, 0x308,
     ] {
         e.mem.set_u32(vt + slot, VT_FN + slot);
     }
     if class != 3 {
+        // The slot 0x1a4 of `TESObjectREFR` and `Explosion` (0) and of the actor classes (+0x148).
+        let script_form = if class == 1 { 0x008a_e600 } else { 0x00ac_bb70 };
+        e.mem.set_u32(vt + 0x1a4, script_form);
         let (is_actor, other) = match class {
             1 => (0x008d_0360, 0x0047_c850),
             2 => (0x0047_c850, 0x008d_0360),
@@ -1583,7 +1602,7 @@ fn scene_world(e: &mut Engine, seed: u32, flag: u32) -> Vec<u32> {
     // The reference: its class, type byte, flags, form id and position.
     let class = d.next(4);
     let vt = scene_vtable(e, class);
-    let r = e.mem.alloc(0x140);
+    let r = e.mem.alloc(0x150);
     e.mem.set_u32(r, vt);
     e.mem
         .set_u8(r + 4, if d.next(10) == 0 { 0x3d } else { 0x3b });
@@ -1739,6 +1758,21 @@ fn scene_world(e: &mut Engine, seed: u32, flag: u32) -> Vec<u32> {
         e.mem.set_u32(base + ANSWER_CAST, cast);
         e.mem.set_u32(r + ANSWER_SCALE, scale.to_bits());
     }
+    // `InitScript`'s words: the form an actor's slot 0x1a4 (+0x148) and the stand-in's answer (none,
+    // the base form, or a form of its own with a script), and now and then a script in the base
+    // form's scriptable form (the cast's +4).
+    let form = match d.next(4) {
+        2 => base,
+        3 => script_form(e, 2),
+        _ => 0,
+    };
+    e.mem.set_u32(r + 0x148, form);
+    e.mem.set_u32(r + ANSWER_SCRIPT_FORM, form);
+    let scriptable = e.mem.u32(base + ANSWER_CAST);
+    if scriptable != 0 && d.next(2) == 0 {
+        let script = e.mem.alloc(0x10);
+        e.mem.set_u32(scriptable + 4, script);
+    }
     let tes = e.mem.alloc(0x40);
     let r = if seed % 32 == 31 { 0 } else { r };
     vec![tes, r, cell, source, flag]
@@ -1779,8 +1813,8 @@ fn tes_load_reference() {
     // The walk's node child count and child (the dispatch family's), on JIP's node.
     .goes_by_address(&[0x0043_b480, 0x0043_b4a0])
     // The shadow scene node's queue lock (the dispatch family's) and list node pool (the draw F
-    // family's).
-    .goes_by_address(&[0x0040_fbf0, 0x0043_a010])
+    // family's), and `InitScript`'s extra data lookup (the dispatch family's).
+    .goes_by_address(&[0x0040_fbf0, 0x0043_a010, 0x0041_0220])
     .ignore_calls(SCENE_INLINED)
     // What the walk does in place.
     .ignore_calls(WALK_INLINED)
@@ -1835,6 +1869,8 @@ const SCENE_BRANCHES: &[&str] = &[
     "a product past 2^63",
     "a NaN product",
     "an actor's alpha",
+    "a script set",
+    "the inventory changes' scripts set up",
     "an ID set on the scene graph",
     "the player's ID not set",
     "JIP's node",
@@ -1897,6 +1933,8 @@ fn the_scene_seeds_reach_every_branch() {
                 (0x0045_34f0, "type 0x1e's step"),
                 (0x005a_c750, "the action list set up"),
                 (0x008c_4640, "an actor's alpha"),
+                (0x0041_9ed0, "a script set"),
+                (0x004d_1960, "the inventory changes' scripts set up"),
                 (0x004b_6dc0, "an ID set on the scene graph"),
             ] {
                 if called(addr) {
@@ -2686,6 +2724,337 @@ fn the_lighting_seeds_reach_every_branch() {
         "the old element let go",
         "the temporary's release deletes the object",
     ] {
+        assert!(
+            reached.contains_key(name),
+            "no seed reaches {name}: {reached:?}"
+        );
+    }
+}
+
+// `TESObjectREFR::InitScript` (`00565730`) and what it asks of the reference: the actor classes'
+// slot 0x1a4 (`008ae600`), the form's script (`004826d0`) and the base form's container
+// (`0055d310`).
+//
+// Their world, from a seed: a reference, deleted now and then (form flag 0x20, alone or with
+// 0x800), whose class's slot 0x1a4 holds `TESObjectREFR`'s body (0), the actor classes' (the word
+// at +0x148) or a stand-in answering a word kept in the reference, that word none, the base form
+// or a form of its own; its base form (none now and then) of type 0x1b, 0x2a or 0x2b (a container)
+// or 0x29, 0x2c, 0x15, 0x1a, 0x1c (none); each form's `TESScriptableForm` (the cast's answer) none,
+// one without a script or one with a script; its extra data list's chain of none to three extra
+// data of types 0x1d, 0x15 and 0xd (the script extra, its script none or one), the type bitmap
+// as the chain says and, now and then, type 0xd's bit the other way. The lookup's thread cache
+// starts empty and the extra data lock free. JIP's patches are all on for half the seeds, off for
+// the others: nothing of JIP's is reached, and the same code runs either way.
+
+/// The memory contexts' depth, which their doubles keep.
+const SCRIPT_SCOPE_DEPTH: u32 = CONTROL + 0x900;
+
+/// What `InitScript` hands on, standing in: the memory contexts (their depth kept, each scope given
+/// the context it entered), the script's and the event list's set into the list and the inventory
+/// changes' scripts (their words in the call log), the event list made (an answer from the script)
+/// and the inventory changes (an answer from the reference).
+fn script_stand_ins(e: &mut Engine) {
+    e.register(0x0040_4eb0, |e, a| {
+        e.mem
+            .set_u32(SCRIPT_SCOPE_DEPTH, e.mem.u32(SCRIPT_SCOPE_DEPTH) + 1);
+        e.mem.set_u32(a[0], a[1]);
+        ret(a[0])
+    });
+    e.register(0x0040_4ee0, |e, a| {
+        e.mem
+            .set_u32(SCRIPT_SCOPE_DEPTH, e.mem.u32(SCRIPT_SCOPE_DEPTH) - 1);
+        e.mem.set_u32(a[0], 0xdead);
+        Ret::default()
+    });
+    for addr in [0x0041_9ed0, 0x0041_9f80, 0x004d_1960] {
+        e.register(addr, nothing);
+    }
+    e.register(0x005a_bf60, |_, a| ret(a[0] ^ 0x0a00_0000));
+    e.register(0x004b_f220, |_, a| ret(a[0] + 0x30));
+}
+
+/// A form whose scriptable form (the cast's answer) is none (`scripted` 0), has no script (1) or
+/// has one (2).
+fn script_form(e: &mut Engine, scripted: u32) -> u32 {
+    let form = e.mem.alloc(0x120);
+    if scripted != 0 {
+        let scriptable = e.mem.alloc(8);
+        if scripted == 2 {
+            let script = e.mem.alloc(0x10);
+            e.mem.set_u32(scriptable + 4, script);
+        }
+        e.mem.set_u32(form + ANSWER_CAST, scriptable);
+    }
+    form
+}
+
+/// The bitmap's byte and bit of an extra data type.
+fn extra_bit(list: u32, kind: u8) -> (u32, u8) {
+    (list + 8 + u32::from(kind >> 3), 1 << (kind & 7))
+}
+
+/// The script's world of a seed: the reference.
+fn script_world(e: &mut Engine, seed: u32) -> u32 {
+    stand_ins(e);
+    lighting_stand_ins(e);
+    script_stand_ins(e);
+    e.register(VT_FN + 0x1a4, answer_of::<ANSWER_SCRIPT_FORM>);
+    let mut d = Draw(seed.wrapping_mul(0x9e37_79b9) ^ 0x5730);
+    e.set_jip_patches(if seed % 2 == 0 { 0 } else { u32::MAX });
+    let vt = e.mem.alloc(0x200);
+    let slot = [0x00ac_bb70, 0x008a_e600, VT_FN + 0x1a4][d.next(3) as usize];
+    e.mem.set_u32(vt + 0x1a4, slot);
+    let r = e.mem.alloc(0x150);
+    e.mem.set_u32(r, vt);
+    e.mem.set_u32(
+        r + 8,
+        [0, 0, 0, 0x20, 0x820, 0x800, 0x400][d.next(7) as usize],
+    );
+    let base = if d.next(8) == 0 {
+        0
+    } else {
+        let base = script_form(e, d.next(3));
+        let kind = [0x1b, 0x2a, 0x2b, 0x29, 0x2c, 0x15, 0x1a, 0x1c][d.next(8) as usize];
+        e.mem.set_u8(base + 4, kind);
+        base
+    };
+    e.mem.set_u32(r + 0x20, base);
+    let form = match d.next(4) {
+        0 => 0,
+        1 => base,
+        _ => script_form(e, d.next(3)),
+    };
+    e.mem.set_u32(r + 0x148, form);
+    e.mem.set_u32(r + ANSWER_SCRIPT_FORM, form);
+    // The extra data list (+0x44): its chain (+0x48), built from its end, and the type bitmap.
+    let list = r + 0x44;
+    let mut next = 0;
+    for _ in 0..d.next(4) {
+        let kind = [0x1d, 0x15, 0xd][d.next(3) as usize];
+        let extra = e.mem.alloc(0x18);
+        e.mem.set_u32(extra, 0x0101_0000);
+        e.mem.set_u8(extra + 4, kind);
+        e.mem.set_u32(extra + 8, next);
+        if kind == 0xd && d.next(2) == 0 {
+            let script = e.mem.alloc(0x10);
+            e.mem.set_u32(extra + 0xc, script);
+        }
+        let (byte, bit) = extra_bit(list, kind);
+        e.mem.set_u8(byte, e.mem.u8(byte) | bit);
+        next = extra;
+    }
+    e.mem.set_u32(list + 4, next);
+    if d.next(5) == 0 {
+        let (byte, bit) = extra_bit(list, 0xd);
+        e.mem.set_u8(byte, e.mem.u8(byte) ^ bit);
+    }
+    r
+}
+
+/// The calls `InitScript` does in place: the form type (in the container's test) and the extra
+/// data list.
+const SCRIPT_INLINED: &[u32] = &[0x0040_1170, 0x005d_43c0];
+
+/// `TESObjectREFR::InitScript` against its translation, over the seeds' worlds.
+#[test]
+fn reference_init_script() {
+    Diff::new(entry!(0x0056_5730, cell_refs::script::init_script(u32)))
+        .family(&CELL_REFS)
+        .family(&leaf::LEAVES)
+        // The extra data lookup (the dispatch family's) on its translation.
+        .goes_by_address(&[0x0041_0220])
+        .ignore_calls(SCRIPT_INLINED)
+        .inputs(&[Input::Of(SEEDS)])
+        .setup(|e, case| vec![script_world(e, case.word(0))])
+        .run()
+        .assert_same();
+}
+
+/// The script of a form against its translation: a null form, one without a scriptable form, one
+/// whose scriptable form has no script, one with a script.
+#[test]
+fn the_script_of_a_form() {
+    Diff::new(entry!(
+        0x0048_26d0,
+        cell_refs::script::form_script(u32) -> u32
+    ))
+    .family(&CELL_REFS)
+    .family(&leaf::LEAVES)
+    .inputs(&[Input::Of(&[0, 1, 2, 3])])
+    .setup(|e, case| {
+        stand_ins(e);
+        let form = match case.word(0) {
+            3 => 0,
+            scripted => script_form(e, scripted),
+        };
+        vec![form]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `TESObjectREFR::HasContainer` against its translation: no base form (0x100), and a base form of
+/// each type around the three with a container.
+#[test]
+fn reference_has_container() {
+    Diff::new(entry!(
+        0x0055_d310,
+        cell_refs::script::has_container(u32) -> u32
+    ))
+    .family(&CELL_REFS)
+    .family(&leaf::LEAVES)
+    .ignore_calls(&[0x0040_1170])
+    .inputs(&[Input::Of(&[
+        0, 0x1a, 0x1b, 0x1c, 0x29, 0x2a, 0x2b, 0x2c, 0xff, 0x100,
+    ])])
+    .setup(|e, case| {
+        let r = e.mem.alloc(0x40);
+        if case.word(0) < 0x100 {
+            let base = e.mem.alloc(0x80);
+            e.mem.set_u8(base + 4, case.word(0) as u8);
+            e.mem.set_u32(r + 0x20, base);
+        }
+        vec![r]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The actor classes' slot 0x1a4 against its translation.
+#[test]
+fn actor_script_form() {
+    Diff::new(entry!(
+        0x008a_e600,
+        cell_refs::script::actor_form_148(u32) -> u32
+    ))
+    .family(&CELL_REFS)
+    .inputs(&[Input::Of(&[0, 0x0700_0000, u32::MAX])])
+    .setup(|e, case| {
+        let actor = e.mem.alloc(0x150);
+        e.mem.set_u32(actor + 0x148, case.word(0));
+        vec![actor]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The branches [`the_script_seeds_reach_every_branch`] asks the seeds to reach.
+const SCRIPT_BRANCHES: &[&str] = &[
+    "JIP's patches off",
+    "JIP's patches on",
+    "a deleted reference left",
+    "a reference already scripted left",
+    "no script extra",
+    "a script extra without a script",
+    "a script extra its bit does not show",
+    "the bit with no script extra",
+    "the form of slot 0x1a4",
+    "the base form for TESObjectREFR's slot",
+    "the base form for an actor's empty word",
+    "the base form for a stand-in's empty answer",
+    "no form at all",
+    "a form without a scriptable form",
+    "a scriptable form without a script",
+    "a script set",
+    "a container's inventory",
+    "an NPC's inventory",
+    "a creature's inventory",
+    "no container",
+];
+
+/// The script's worlds reach every branch it has, checked on the translation.
+#[test]
+fn the_script_seeds_reach_every_branch() {
+    let mut reached = std::collections::BTreeMap::<&str, u32>::new();
+    for &seed in SEEDS {
+        let mut e = Engine::new_untyped_for_test();
+        let r = script_world(&mut e, seed);
+        let deleted = e.mem.u32(r + 8) & 0x20 != 0;
+        let slot = e.mem.u32(e.mem.u32(r) + 0x1a4);
+        let (form, base) = (e.mem.u32(r + 0x148), e.mem.u32(r + 0x20));
+        // The chain's first script extra, and whether the bitmap shows type 0xd.
+        let list = r + 0x44;
+        let (byte, bit) = extra_bit(list, 0xd);
+        let shown = e.mem.u8(byte) & bit != 0;
+        let mut extra = e.mem.u32(list + 4);
+        while extra != 0 && e.mem.u8(extra + 4) != 0xd {
+            extra = e.mem.u32(extra + 8);
+        }
+        e.call_log = Some(Vec::new());
+        e.call(0x0056_5730, &args![r]);
+        let log = e.call_log.take().unwrap_or_default();
+        let words = |addr: u32| -> Vec<Vec<u32>> {
+            log.iter()
+                .filter(|(a, _)| *a == addr)
+                .map(|(_, w)| w.clone())
+                .collect()
+        };
+        let called = |addr: u32| !words(addr).is_empty();
+        let mut hit = |name| *reached.entry(name).or_default() += 1;
+        hit(if e.jip_patches() == 0 {
+            "JIP's patches off"
+        } else {
+            "JIP's patches on"
+        });
+        assert_eq!(e.mem.u32(SCRIPT_SCOPE_DEPTH), 0, "the memory context left");
+        if deleted {
+            assert!(!called(0x0040_4eb0));
+            hit("a deleted reference left");
+            continue;
+        }
+        let script_of_extra = if shown && extra != 0 {
+            e.mem.u32(extra + 0xc)
+        } else {
+            0
+        };
+        if script_of_extra != 0 {
+            assert!(!called(0x0048_26d0));
+            hit("a reference already scripted left");
+            continue;
+        }
+        hit(match (shown, extra != 0) {
+            (true, true) => "a script extra without a script",
+            (false, true) => "a script extra its bit does not show",
+            (true, false) => "the bit with no script extra",
+            (false, false) => "no script extra",
+        });
+        let asked = words(0x0048_26d0)[0][0];
+        if form != 0 && slot != 0x00ac_bb70 {
+            assert_eq!(asked, form);
+            hit("the form of slot 0x1a4");
+        } else if base == 0 {
+            hit("no form at all");
+        } else {
+            assert_eq!(asked, base);
+            hit(match slot {
+                0x00ac_bb70 => "the base form for TESObjectREFR's slot",
+                0x008a_e600 => "the base form for an actor's empty word",
+                _ => "the base form for a stand-in's empty answer",
+            });
+        }
+        let scriptable = if asked == 0 {
+            0
+        } else {
+            e.mem.u32(asked + ANSWER_CAST)
+        };
+        if called(0x0041_9ed0) {
+            hit("a script set");
+        } else if scriptable == 0 {
+            hit("a form without a scriptable form");
+        } else {
+            hit("a scriptable form without a script");
+        }
+        if called(0x004d_1960) {
+            hit(match e.mem.u8(base + 4) {
+                0x1b => "a container's inventory",
+                0x2a => "an NPC's inventory",
+                _ => "a creature's inventory",
+            });
+        } else if base != 0 {
+            hit("no container");
+        }
+    }
+    for name in SCRIPT_BRANCHES {
         assert!(
             reached.contains_key(name),
             "no seed reaches {name}: {reached:?}"

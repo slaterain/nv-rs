@@ -184,9 +184,17 @@ pub fn lock(e: &mut Engine, this: Ptr<LightLock>, _unused: u32) {
 }
 
 // Typed from 0040fba0
-/// The lock given back (`thiscall(this)`): one count fewer; at zero no owner.
+/// The lock given back (`thiscall(this)`): one count fewer; at zero no owner ([`unlock_inline`]).
 pub fn unlock(e: &mut Engine, this: Ptr<LightLock>) {
     typed_call!(leaf::FAMILY, 0x0040_fbe0, leaf::nothing(e));
+    unlock_inline(e, this);
+}
+
+/// `0040fba0`'s body past its empty call, as the exe inlines it where it gives the lock back in
+/// place (the shadow scene node's queues' lock, `cell_refs::lighting`): one count fewer and, at
+/// zero, the owner word cleared.
+#[inline]
+pub fn unlock_inline(e: &mut Engine, this: Ptr<LightLock>) {
     let count = e.get(this, LightLock::count).wrapping_sub(1);
     e.set(this, LightLock::count, count);
     if count == 0 {
@@ -704,4 +712,65 @@ pub fn map_lookup(e: &mut Engine, this: Ptr, key: u32, out: Ptr<u32>) -> u8 {
         node = e.mem.u32(node);
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+
+    /// A lock (its owner word, then its count) and a word it guards, on a page of their own.
+    const LOCK: u32 = 0x0300_0000;
+    const GUARDED: u32 = LOCK + 0x40;
+
+    /// An engine whose memory is shared, as with real threads.
+    fn shared() -> Engine {
+        let mut e = Engine::new();
+        e.map(LOCK, 0x1000);
+        e.mem.start_sharing();
+        e
+    }
+
+    /// On shared memory a count past 1 keeps the owner; the last count clears it.
+    #[test]
+    fn the_last_count_clears_the_owner_on_shared_memory() {
+        let mut e = shared();
+        assert!(e.mem.is_shared());
+        e.mem.set_u32(LOCK, 7);
+        e.mem.set_u32(LOCK + 4, 2);
+        unlock_inline(&mut e, Ptr::new(LOCK));
+        assert_eq!((e.mem.u32(LOCK), e.mem.u32(LOCK + 4)), (7, 1));
+        unlock_inline(&mut e, Ptr::new(LOCK));
+        assert_eq!((e.mem.u32(LOCK), e.mem.u32(LOCK + 4)), (0, 0));
+    }
+
+    /// Another real thread spinning on the owner word, as `0040fbf0`'s compare-exchange does, takes
+    /// the lock once this one gives it back, and reads what this one wrote under it.
+    #[test]
+    fn a_thread_waiting_on_shared_memory_takes_the_lock_given_back() {
+        let mut e = shared();
+        e.mem.set_u32(LOCK, 7);
+        e.mem.set_u32(LOCK + 4, 1);
+        let other = e.mem.view();
+        let waiter = std::thread::spawn(move || {
+            let owner = other.atomic_u32(LOCK).expect("an aligned, mapped word");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while owner
+                .compare_exchange(0, 9, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                if Instant::now() > deadline {
+                    return None;
+                }
+                std::thread::yield_now();
+            }
+            Some(other.u32(GUARDED))
+        });
+        e.mem.set_u32(GUARDED, 0x1234_5678);
+        unlock_inline(&mut e, Ptr::new(LOCK));
+        let seen = waiter.join().expect("the waiting thread");
+        assert_eq!(seen, Some(0x1234_5678), "the waiter took the lock");
+        assert_eq!((e.mem.u32(LOCK), e.mem.u32(LOCK + 4)), (9, 0));
+    }
 }
