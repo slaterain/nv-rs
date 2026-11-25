@@ -420,10 +420,12 @@ fn common(d: Diff) -> Diff {
             0x0041_6870,
             // The native square root takes `FSQRT` where the translation calls the runtime's.
             0x00ec_6054,
+            // An array's 12-byte entry (pass 2's edges, every vertex point), read in place.
+            0x006a_1440,
         ])
-        // The pathing family's root and absolute value call these by address; their translations
-        // plainly.
-        .translation_calls_plainly(&[0x0040_19d0, 0x0040_8860])
+        // The pathing family's root, absolute value and edge vertices call these by address; their
+        // translations plainly.
+        .translation_calls_plainly(&[0x0040_19d0, 0x0040_8860, 0x0068_efd0])
         // Pass 3's two locals: the planar difference and the chosen vertex.
         .local_at(0x0058_9850, 0, 12)
         .local_at(0x0069_1820, 1, 2)

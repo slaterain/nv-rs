@@ -20,6 +20,7 @@
 //!
 //! **Native.** Passes 1, 2 and 4 keep the translation's order of work and its calls, with the calls into
 //! typed families (pathing, the leaves, dispatch) made `typed_call!`s: they are per boundary edge and few.
+//! The 12-byte array entries (`006a1440`, a read) are read in place.
 //! Pass 3 reads the pair map once, in the order the exe's walk visits it (`004b9ba0`, then `00694d30`
 //! as it steps from item to item and from bucket to bucket), with each pair's vertex point, and then
 //! does each triangle's search over that list in plain Rust: no call by address and no guest memory per
@@ -162,12 +163,19 @@ fn difference(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
+/// Entry `index` of an array of 12-byte entries, unchecked: `006a1440`'s read, done in place.
+#[inline(always)]
+fn entry_12(e: &Engine, array: Ptr<SimpleArray>, index: u32) -> u32 {
+    index
+        .wrapping_mul(0xc)
+        .wrapping_add(e.get(array, SimpleArray::data))
+}
+
 /// The address of vertex `index`'s point (`0068f0a0` through `006a1440`): entry `index` of the mesh's
-/// vertex array, 12 bytes each, unchecked.
+/// vertex array.
 #[inline(always)]
 fn vertex_point(e: &Engine, mesh: Ptr<NavMesh>, index: u16) -> u32 {
-    let data = e.get(mesh.at(NavMesh::vertices), SimpleArray::data);
-    u32::from(index).wrapping_mul(0xc).wrapping_add(data)
+    entry_12(e, mesh.at(NavMesh::vertices), u32::from(index))
 }
 
 /// The first item of a `NiTMap` (`004b9ba0`): the head of its first non-empty bucket, or 0.
@@ -474,21 +482,16 @@ fn pair_corners(e: &mut Engine, this: Ptr<NavMesh>, map: Ptr) {
             if ordinary.wrapping_add(portals) != 2 || ordinary == 0 {
                 return;
             }
-            let first_element =
-                typed_call!(pathing::FAMILY, 0x006a_1440, navmesh::entry_12(e, edges, 0));
+            let first_element = entry_12(e, edges, 0);
             typed_call!(
                 pathing::FAMILY,
                 0x006b_c870,
                 pov::mesh_edge_copy(e, first.cast(), Ptr::new(first_element))
             );
             let second_element = if ordinary == 2 {
-                typed_call!(pathing::FAMILY, 0x006a_1440, navmesh::entry_12(e, edges, 1))
+                entry_12(e, edges, 1)
             } else {
-                typed_call!(
-                    pathing::FAMILY,
-                    0x006a_1440,
-                    navmesh::entry_12(e, portal_edges, 0)
-                )
+                entry_12(e, portal_edges, 0)
             };
             typed_call!(
                 pathing::FAMILY,
@@ -632,52 +635,54 @@ fn choose_preferred(e: &mut Engine, this: Ptr<NavMesh>, triangles: u32) {
     let mut pairs: Option<Vec<(u16, [f32; 3])>> = None;
     for index in 0..triangles {
         let index = low_16(index);
-        let center = circumcenter(e, this, index);
-        let t = typed_call!(
-            pathing::FAMILY,
-            0x0055_82f0,
-            navmesh::triangle(e, this, index)
-        );
-        let first = typed_call!(pathing::FAMILY, 0x0055_82d0, navmesh::vertex(e, t, 0));
-        let planar = difference(read_point(e, vertex_point(e, this, first)), center);
-        let length = e.with_stack(12, |e, local| {
-            write_point(e, local.addr(), planar);
-            typed_call!(
+        // The exe's frame for one triangle (80 bytes): the planar difference at +24 and the chosen
+        // vertex at +52 are the two locals its calls see.
+        e.with_stack(80, |e, scratch| {
+            let local_difference = scratch.byte_add(24);
+            let local_key = scratch.byte_add(52);
+            let center = circumcenter(e, this, index);
+            let t = typed_call!(
+                pathing::FAMILY,
+                0x0055_82f0,
+                navmesh::triangle(e, this, index)
+            );
+            let first = typed_call!(pathing::FAMILY, 0x0055_82d0, navmesh::vertex(e, t, 0));
+            let planar = difference(read_point(e, vertex_point(e, this, first)), center);
+            write_point(e, local_difference.addr(), planar);
+            let length = typed_call!(
                 pathing::FAMILY,
                 0x0058_9850,
-                point::length_2d(e, local.cast::<Point2>())
-            )
-        });
-        let widened = length + reach;
-        let squared = widened * widened;
-        let mut nearest = squared * squared;
-        if pairs.is_none() {
-            pairs = Some(pairs_in_walk_order(e, this));
-        }
-        let main = float_precision();
-        let height_limit = double_global(e, HEIGHT_LIMIT);
-        let mut best = NONE;
-        // Both tests are the exe's `FCOM`s: a NaN is never nearer and never low enough.
-        for &(key, p) in pairs.as_deref().unwrap_or_default() {
-            let distance = squared_xy(main, p[0] - center[0], p[1] - center[1]);
-            if distance < nearest {
-                let height = typed_call!(
-                    pathing::FAMILY,
-                    0x0040_8840,
-                    point::abs(e, p[2] - center[2])
-                );
-                if f64::from(height) < height_limit {
-                    nearest = distance;
-                    best = key;
+                point::length_2d(e, local_difference.cast::<Point2>())
+            );
+            let widened = length + reach;
+            let squared = widened * widened;
+            let mut nearest = squared * squared;
+            if pairs.is_none() {
+                pairs = Some(pairs_in_walk_order(e, this));
+            }
+            let main = float_precision();
+            let height_limit = double_global(e, HEIGHT_LIMIT);
+            let mut best = NONE;
+            // Both tests are the exe's `FCOM`s: a NaN is never nearer and never low enough.
+            for &(key, p) in pairs.as_deref().unwrap_or_default() {
+                let distance = squared_xy(main, p[0] - center[0], p[1] - center[1]);
+                if distance < nearest {
+                    let height = typed_call!(
+                        pathing::FAMILY,
+                        0x0040_8840,
+                        point::abs(e, p[2] - center[2])
+                    );
+                    if f64::from(height) < height_limit {
+                        nearest = distance;
+                        best = key;
+                    }
                 }
             }
-        }
-        e.with_stack(4, |e, local| {
-            e.mem.set_u16(local.addr(), best);
+            e.mem.set_u16(local_key.addr(), best);
             typed_call!(
                 pathing::FAMILY,
                 0x0069_1820,
-                search::push_index(e, preferred, local)
+                search::push_index(e, preferred, local_key)
             );
         });
     }
