@@ -2626,7 +2626,7 @@ impl ActorCases for Diff {
 /// A getter's cases: components filled from a few seeds.
 fn abd_getter_cases(d: Diff) -> Diff {
     d.actor()
-        .inputs(&[Input::Of(&[0, 1, 0x7f, 0xff])])
+        .inputs(&[Input::Of(&[0, 1, 0x7f, 0xfe, 0xff])])
         .setup(|e, case| {
             actor_world(e);
             vec![actor_data(e, case.word(0))]
@@ -3328,6 +3328,11 @@ fn abd_init_item() {
             let karma = [0.0005f32, 500.0, -500.0, 1000.0, -1000.0, 42.0][case.word(1) as usize];
             e.mem.set_f32(c + 0x14, karma);
             let owner = form(e, 0x2a, 0, 0x0100_0abc);
+            // Two source files with their compile indexes: the ids are remapped by the last one.
+            let (a, b) = (file(e, true), file(e, false));
+            e.mem.set_u8(a + FILE_COMPILE_INDEX_AT, 3);
+            e.mem.set_u8(b + FILE_COMPILE_INDEX_AT, 7);
+            set_files(e, owner, &[a, b]);
             vec![c, owner]
         })
         .run()
@@ -3407,14 +3412,16 @@ fn abd_set_base_disposition() {
 
 #[test]
 fn abd_calculated_level() {
-    // The level, flag 0x80, the player's base form there or not, the calculated range.
+    // The level, flag 0x80, the player's base form there or not, the calculated range, the player's
+    // level (10 with 700 or 900: a product just under an integer, which 24 bits round up).
     Diff::new(entry!(0x0047_ded0, actor_base_data::calculated_level(u32) -> u16))
         .actor()
         .inputs(&[
-            Input::Of(&[1, 500, 2000]),
+            Input::Of(&[1, 500, 700, 900, 2000]),
             Input::Flag,
             Input::Flag,
             Input::Of(&[0, 1, 2]),
+            Input::Of(&[37, 10]),
         ])
         .setup(|e, case| {
             actor_world(e);
@@ -3430,7 +3437,7 @@ fn abd_calculated_level() {
             e.mem.set_u32(0x011d_ea3c, player);
             if case.word(2) != 0 {
                 let base = actor_data(e, 0) - 0x30;
-                e.mem.set_u16(base + 0x30 + 0xc, 37);
+                e.mem.set_u16(base + 0x30 + 0xc, case.word(4) as u16);
                 e.mem.set_u32(player + 0x20, base);
             }
             vec![c]
@@ -3532,6 +3539,7 @@ fn abd_set_karma() {
             0xc47a_4000,
             0x7fc0_0000,
             0x3f80_0000,
+            0x7f80_0001,
         ])])
         .setup(|e, case| {
             actor_world(e);
@@ -3720,9 +3728,9 @@ fn abd_load_game() {
         for (i, b) in bytes.into_iter().enumerate() {
             e.mem.set_u8(STREAM + i as u32, b);
         }
-        if case.word(5) == 0 {
-            // No form resolves, so no current load entry either: the exe would call the slot of
-            // the entry's form looked up in vain (a null form).
+        if case.word(5) == 0 && case.word(2) == 0 {
+            // Without a current load entry, no form resolves either. (With one, a wrong tag logs
+            // the header message naming the entry's form, which resolves.)
             set_found(e, false);
             let save_load = e.mem.u32(SAVE_LOAD_GAME);
             e.mem.set_u32(save_load + SL_LOAD_ENTRY, 0);

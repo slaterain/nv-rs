@@ -32,7 +32,7 @@
 use super::{tesform, FAMILY};
 use crate::{cell_refs, crt};
 use engine_core::typed::leaf;
-use engine_core::x87::fistp_chop;
+use engine_core::x87::{fistp_chop, x87_div, x87_mul, x87_quiet};
 use engine_core::{args, typed_call, Engine, Ptr};
 
 const OPERATOR_NEW: u32 = 0x0040_1000;
@@ -1181,13 +1181,15 @@ pub fn calculated_level(e: &mut Engine, this: u32) -> u16 {
     let mut level = typed_call!(FAMILY, 0x0047_d370, level(e, this));
     if base_flag(e, this, 0x80) {
         let divisor = e.mem.f64(THOUSAND);
-        let scale = round_to_f32(f64::from(level) / divisor);
+        let scale = round_to_f32(x87_div(f64::from(level), divisor));
         let source = e.mem.u32(LEVEL_SOURCE_OBJECT);
         let form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, source));
         let component = if form != 0 { form + 0x30 } else { 0 };
         if component != 0 {
             let other = typed_call!(FAMILY, 0x0047_d370, self::level(e, component));
-            level = chopped_half(f64::from(other) * f64::from(scale));
+            // The exe's FMUL feeds its FISTP with no store between: the product rounded to the
+            // running thread's precision (24 bits on main) is what is chopped.
+            level = chopped_half(x87_mul(f64::from(other), f64::from(scale)));
         }
         // Each bound is asked again for each use, as the exe calls its getter.
         if typed_call!(FAMILY, 0x0047_d390, calc_level_min(e, this)) != 0
@@ -1280,7 +1282,8 @@ pub fn karmic_title(e: &mut Engine, actor: u32) -> u32 {
 /// (`011c5160`); the form marked changed.
 pub fn set_karma(e: &mut Engine, this: u32, karma: f32) {
     let field = at(this, KARMA);
-    e.mem.set_f32(field, karma);
+    // The exe's FLD/FSTP of the argument quiets a signalling NaN.
+    e.mem.set_f32(field, x87_quiet(karma));
     let upper = setting_float(e, KARMA_MAX_SETTING);
     let current = e.mem.f32(field);
     if upper < current {
