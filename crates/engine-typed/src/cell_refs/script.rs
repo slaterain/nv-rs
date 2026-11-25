@@ -1,8 +1,8 @@
 //! `TESObjectREFR::InitScript` (`00565730`, Xbox PDB): the reference's script made ready when it
 //! comes into the scene. `TES`'s load of a reference into the scene ([`super::scene`]) calls it for
-//! every reference it loads; the exe's other callers (the player's set-up, a reference's
-//! `SetObjectReference`, the script compiler's and the map name's code) call it by address and
-//! reach it through its registration.
+//! every reference it loads; the exe's other callers (`InitItem`, the actor base template code, the
+//! player's set-up and the script compiler's `GetVariable`) call it by address and reach it
+//! through its registration.
 //!
 //! For a reference that is not deleted (form flag `0x20`), inside the memory context `0x15` (named
 //! by the reference unit's source file name and a line): unless its extra data list already holds a
