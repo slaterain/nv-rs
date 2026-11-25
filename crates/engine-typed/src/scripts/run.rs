@@ -43,8 +43,6 @@ const FREE: u32 = 0x0040_1030;
 const INTERLOCKED_INCREMENT: u32 = 0x0040_b460;
 const INTERLOCKED_DECREMENT: u32 = 0x0040_19a0;
 const FILL: u32 = 0x0040_3d30;
-const SCRIPT_HEADER_OF: u32 = 0x0050_0940;
-const ELAPSED_TIME: u32 = 0x0084_d030;
 const ELAPSED_TIME_OBJECT: u32 = 0x011f_6394;
 const QUEST_DELAY_ACCESSOR: u32 = 0x0040_3e20;
 const QUEST_DELAY_SETTING: u32 = 0x011c_ac68;
@@ -87,7 +85,7 @@ fn list_is_empty(e: &mut Engine, node: u32) -> bool {
 
 #[inline]
 fn header_of(e: &mut Engine, script: Ptr) -> u32 {
-    typed_call!(FAMILY, SCRIPT_HEADER_OF, plus_18(e, script))
+    typed_call!(FAMILY, 0x0050_0940, plus_18(e, script))
 }
 
 // Typed from 00500940
@@ -163,14 +161,14 @@ pub fn script_run(
     if e.mem.u8(header + 0x10) != 0 && e.mem.f32(me + QUEST_DELAY) > 0.0 {
         let elapsed: f64 = typed_call!(
             FAMILY,
-            ELAPSED_TIME,
+            0x0084_d030,
             float_at_c(e, Ptr::new(ELAPSED_TIME_OBJECT))
         );
         let delay = f64::from(e.mem.f32(me + QUEST_DELAY));
         e.mem.set_f32(me + QUEST_DELAY, to_float(delay - elapsed));
         let elapsed: f64 = typed_call!(
             FAMILY,
-            ELAPSED_TIME,
+            0x0084_d030,
             float_at_c(e, Ptr::new(ELAPSED_TIME_OBJECT))
         );
         let buffer = f64::from(e.mem.f32(me + GET_SECONDS_BUFFER));
