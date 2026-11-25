@@ -14,10 +14,13 @@
 //!
 //! **Counts and memory.** A task is a counted object (its count at `+8`): the task pointer on the
 //! stack counts it when it takes it (`0092c870`, an interlocked increment), the map's node counts
-//! it again, and the pointer's release at the end (`0044dd60`, an interlocked decrement) deletes
-//! the task through its slot 0 when it was the last count (only when the map refused it). The task
-//! is allocated by the game's memory manager (`00401000`), inside the memory context `0x31` (and
-//! `0x34` for the player, `0x32` for a creature or an actor, nested inside it), entered and left by
+//! it again. When the map refuses the task, the pointer's assignment of null (`006f74f0`, whose
+//! release `0044dd60` is an interlocked decrement) drops the last count and deletes the task
+//! through its slot 0, inside the context `0x31`. The pointer's release at the end (`0044cbf0`)
+//! lets go of whatever it still holds, which deletes only if every other count went meanwhile (a
+//! loader thread finished the task and the map let it go between the find or the add and that
+//! release). The task is allocated by the game's memory manager (`00401000`), inside the memory context `0x31` (and
+//! `0x34` for the player, `0x32` for an NPC or a creature, nested inside it), entered and left by
 //! address (`00404eb0`, `00404ee0`) since they set the context the allocator files the block under.
 //!
 //! **Which thread.** Everything here runs on the calling thread, normally main. With `later` set
@@ -86,19 +89,22 @@ const LINE_QUEUE: u32 = 0xc4e;
 const CONTEXT_PLAYER: u32 = 0x34;
 const LINE_PLAYER: u32 = 0xc53;
 const CONTEXT_ACTOR: u32 = 0x32;
-const LINE_CREATURE: u32 = 0xc6b;
-const LINE_ACTOR: u32 = 0xc72;
+const LINE_NPC: u32 = 0xc6b;
+const LINE_CREATURE: u32 = 0xc72;
 /// The player (a global) and the task constructors by kind (`thiscall(block, reference, priority)`;
-/// the player's `thiscall(block, priority)`), with their blocks' sizes.
+/// the player's `thiscall(block, priority)`), with their blocks' sizes: `QueuedPlayer`,
+/// `QueuedTree`, `QueuedCharacter` for an NPC (base form type 0x2a, `TESNPC`), `QueuedCreature` for
+/// a creature (0x2b, `TESCreature`) and `QueuedReference` (the vtables they install: `01016d7c`,
+/// `01016c5c`, `01016cec`, `01016d34`, `01016ba4`).
 const PLAYER_POINTER: u32 = 0x011d_ea3c;
 const TASK_PLAYER: u32 = 0x0044_1b20;
 const TASK_TREE: u32 = 0x0044_0e50;
-const TASK_CREATURE: u32 = 0x0044_1440;
-const TASK_ACTOR: u32 = 0x0044_1920;
+const TASK_CHARACTER: u32 = 0x0044_1440;
+const TASK_CREATURE: u32 = 0x0044_1920;
 const TASK_DEFAULT: u32 = 0x0043_fd40;
 const FORM_TYPE_TREE: u8 = 0x25;
-const FORM_TYPE_CREATURE: u8 = 0x2a;
-const FORM_TYPE_ACTOR: u8 = 0x2b;
+const FORM_TYPE_NPC: u8 = 0x2a;
+const FORM_TYPE_CREATURE: u8 = 0x2b;
 const SIZE_SMALL: u32 = 0x40;
 const SIZE_LARGE: u32 = 0x48;
 /// The loader's owner thread object (a global) and menu mode (`Interface::IsInMenuMode`).
@@ -221,7 +227,7 @@ pub fn is_3d_critical(e: &mut Engine, this: u32) -> bool {
 /// `body` inside the memory context `context` (named by the model loader's source file and `line`),
 /// its scope a 4-byte local.
 #[inline]
-fn in_context(e: &mut Engine, context: u32, line: u32, body: impl FnOnce(&mut Engine)) {
+pub(super) fn in_context(e: &mut Engine, context: u32, line: u32, body: impl FnOnce(&mut Engine)) {
     e.with_stack(4, |e, scope| {
         e.call(
             SCOPE_BEGIN,
@@ -255,15 +261,16 @@ fn build_task(e: &mut Engine, holder: u32, reference: u32, priority: u32) {
         FORM_TYPE_TREE => build(e, holder, SIZE_SMALL, |e, block| {
             e.call(TASK_TREE, &args![block, reference, priority]).u32()
         }),
-        FORM_TYPE_CREATURE => in_context(e, CONTEXT_ACTOR, LINE_CREATURE, |e| {
+        FORM_TYPE_NPC => in_context(e, CONTEXT_ACTOR, LINE_NPC, |e| {
             build(e, holder, SIZE_LARGE, |e, block| {
-                e.call(TASK_CREATURE, &args![block, reference, priority])
+                e.call(TASK_CHARACTER, &args![block, reference, priority])
                     .u32()
             });
         }),
-        FORM_TYPE_ACTOR => in_context(e, CONTEXT_ACTOR, LINE_ACTOR, |e| {
+        FORM_TYPE_CREATURE => in_context(e, CONTEXT_ACTOR, LINE_CREATURE, |e| {
             build(e, holder, SIZE_SMALL, |e, block| {
-                e.call(TASK_ACTOR, &args![block, reference, priority]).u32()
+                e.call(TASK_CREATURE, &args![block, reference, priority])
+                    .u32()
             });
         }),
         _ => build(e, holder, SIZE_SMALL, |e, block| {
@@ -275,7 +282,7 @@ fn build_task(e: &mut Engine, holder: u32, reference: u32, priority: u32) {
 
 /// The reference's cell (`008d6f30`, the word at +0x40).
 #[inline]
-fn parent_cell(e: &mut Engine, reference: u32) -> u32 {
+pub(super) fn parent_cell(e: &mut Engine, reference: u32) -> u32 {
     typed_call!(
         ai_queries::FAMILY,
         0x008d_6f30,
