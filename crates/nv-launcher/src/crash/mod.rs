@@ -579,11 +579,13 @@ fn build(
     Report {
         // A panic's place from the line as it was, cut to its crate's part (scrubbing would turn a
         // dependency's folder into `<path>` and group every crate's `mod.rs:12` together).
-        // A stop's kind from the scrubbed line (its paths the same on every machine), its exe
-        // addresses from the line as it was (scrubbing never reaches into them then).
+        // A stop's kind from the scrubbed line (its paths the same on every machine), its call
+        // path's exe addresses from the line as it was (scrubbing never reaches into them then).
         fingerprint: match raw {
             Ending::Panic(_) => fingerprint(raw).iter().map(|p| s.text(p)).collect(),
-            Ending::Stop(_) => {
+            // Only a call path's addresses, `(in A < B)`: without one, the eight-hex words of
+            // the text could be a user's number, so those come from the scrubbed line.
+            Ending::Stop(line) if line.contains("(in ") => {
                 let mut f = fingerprint(&ending);
                 f.truncate(2);
                 f.extend(fingerprint(raw).into_iter().skip(2));
@@ -905,7 +907,11 @@ mod tests {
         let home = std::env::var("USERPROFILE")
             .or_else(|_| std::env::var("HOME"))
             .unwrap();
-        std::fs::write(logs.join("game-2.log"), format!("first\nat {home}/x.ini\n")).unwrap();
+        std::fs::write(
+            logs.join("game-2.log"),
+            format!("first\nat {home}/a/x.ini\n"),
+        )
+        .unwrap();
         let plugins = own
             .join("mods")
             .join("AppData")
@@ -921,7 +927,7 @@ mod tests {
             text.contains("a report keeps its last 2 lines; the last 2 of your newest log"),
             "{text}"
         );
-        assert!(text.contains("at <home>/x.ini"), "{text}");
+        assert!(text.contains("at <home>/.../x.ini"), "{text}");
         assert!(!text.contains("an older run's line"));
         assert!(text.contains("  Some Mod.esp"), "{text}");
         assert!(text.contains("Graphics card: Table Card"), "{text}");
@@ -1142,8 +1148,8 @@ mod tests {
         );
     }
 
-    /// A stop's exe addresses group the same crash on every machine: taken from the line as it
-    /// was, even with a user name made of digits or hex letters.
+    /// A stop's exe addresses group the same crash on every machine: a call path's taken from
+    /// the line as it was, even with a user name made of digits or hex letters.
     #[test]
     fn a_stops_addresses_are_kept_for_grouping() {
         let root = std::env::temp_dir().join(format!("nv-launcher-group-{}", std::process::id()));
@@ -1184,6 +1190,24 @@ mod tests {
         assert_eq!(
             report.fingerprint,
             ["stop", "read of # not mapped", "00412345", "0040cafe"]
+        );
+        // Without a call path the text's eight-hex words come from the scrubbed line: one of
+        // them could be the user's number.
+        let num = Scrubber::new(&Known {
+            roots: Vec::new(),
+            words: vec![("20231234".into(), "<user>")],
+        });
+        let bare = "Game's main stopped in frame 3: no save for 20231234 at 00412345";
+        let report = build(
+            &run,
+            &Ending::Stop(bare.into()),
+            &facts,
+            &num,
+            SystemTime::now(),
+        );
+        assert_eq!(
+            report.fingerprint,
+            ["stop", "no save for <user> at #", "00412345"]
         );
         let _ = std::fs::remove_dir_all(&root);
     }
