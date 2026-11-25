@@ -163,12 +163,40 @@ pub fn world(e: &mut Engine, seed: u32, callees: &[u32]) {
     // its slot from a zero page and calls address 0: a stand-in there too, so both sides go on.
     stand_in(e, 0);
     for &at in callees {
-        if at == LIST_STEP {
-            list_step(e);
-        } else {
-            stand_in(e, at);
+        match at {
+            LIST_STEP => list_step(e),
+            GET_MANAGER => manager(e, seed),
+            MANAGER_READY => manager_ready(e, seed),
+            _ => stand_in(e, at),
         }
     }
+}
+
+/// `004b7210`: the interface manager, one object of the arena for the whole run (another in each
+/// seed's world), as the game's singleton is.
+const GET_MANAGER: u32 = 0x004b_7210;
+/// `009373f0`: whether the manager is ready (its `bFirstInit` byte): ready in two of the three seeds'
+/// worlds, so the functions that start with the check go on in those and stop in the third.
+const MANAGER_READY: u32 = 0x0093_73f0;
+
+fn manager(e: &mut Engine, seed: u32) {
+    e.register_double(GET_MANAGER, move |e, words| {
+        log(e, GET_MANAGER, words);
+        Ret {
+            eax: object(7 + 31 * seed),
+            ..Ret::default()
+        }
+    });
+}
+
+fn manager_ready(e: &mut Engine, seed: u32) {
+    e.register_double(MANAGER_READY, move |e, words| {
+        log(e, MANAGER_READY, words);
+        Ret {
+            eax: u32::from(seed % 3 != 0),
+            ..Ret::default()
+        }
+    });
 }
 
 /// `0057cbe0` (`thiscall`: the list and a cursor word): the list walks' step. The walks loop until

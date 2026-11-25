@@ -182,6 +182,33 @@ mod tests {
         ]
     }
 
+    /// A wrap an extender registers over a member of a family (its WRAPS rows, the game patches'
+    /// rows) clears the whole family's direct bit for the run, so every `typed_call!` of the family
+    /// goes by address from then on. So no family on by default holds a wrapped address, except one
+    /// whose doc says it is built around that (`script_lines`: the functions xNVSE wraps).
+    #[test]
+    fn no_family_past_its_gate_holds_a_wrapped_address() {
+        const BUILT_AROUND_WRAPS: &[&str] = &["script_lines"];
+        let wrapped: Vec<u32> = engine_core::extend::WRAPS
+            .iter()
+            .chain(engine_core::extend::PATCH_WRAPS.iter().copied().flatten())
+            .map(|w| w.addr)
+            .collect();
+        for family in families() {
+            if !family.past_gate || BUILT_AROUND_WRAPS.contains(&family.name) {
+                continue;
+            }
+            for (addr, _) in (family.funcs)() {
+                assert!(
+                    !wrapped.contains(&addr),
+                    "family `{}` holds {addr:08x}, which an extender wraps: its wrap would turn the \
+                     family's direct calls off for the run",
+                    family.name
+                );
+            }
+        }
+    }
+
     /// Which of this crate's families are past their gate, and so on with no switch: all of them, the first
     /// six since their speed gate together (2026-11-08), render since its own (2026-11-09), draw, scene,
     /// particles, collision and multibound since their recorded-run gates (2026-11-10), animation, draw_f and

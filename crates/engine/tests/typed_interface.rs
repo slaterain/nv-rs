@@ -24,6 +24,7 @@ const CALLEES: &[u32] = &[
     0x0040_37d0,
     0x0040_3d30,
     0x0040_3df0,
+    0x0040_3e20,
     0x0040_46f0,
     0x0040_4eb0,
     0x0040_4ee0,
@@ -46,6 +47,7 @@ const CALLEES: &[u32] = &[
     0x004d_e0d0,
     0x004e_a970,
     0x004f_b070,
+    0x004f_d3c0,
     0x0055_d520,
     0x0056_7790,
     0x0056_c7f0,
@@ -58,6 +60,7 @@ const CALLEES: &[u32] = &[
     0x005b_d580,
     0x005b_d5b0,
     0x005b_d5c0,
+    0x005e_3fc0,
     0x0060_2170,
     0x0064_4640,
     0x006b_3eb0,
@@ -117,12 +120,14 @@ const CALLEES: &[u32] = &[
     0x0077_f490,
     0x0077_fc10,
     0x0077_ffd0,
+    0x0078_2470,
     0x0078_2a90,
     0x0078_3440,
     0x0078_46a0,
     0x0078_db00,
     0x0079_6b90,
     0x0079_aba0,
+    0x0079_c340,
     0x007a_1880,
     0x007a_8e60,
     0x007a_a530,
@@ -142,6 +147,7 @@ const CALLEES: &[u32] = &[
     0x007d_cfc0,
     0x007d_d090,
     0x007d_f230,
+    0x007d_fc90,
     0x007e_9200,
     0x007e_bd50,
     0x007f_8a80,
@@ -178,6 +184,7 @@ const CALLEES: &[u32] = &[
     0x00ec_62c0,
     0x00fd_f294,
     0x00fd_f298,
+    0x00fd_f29c,
 ];
 
 #[test]
@@ -600,6 +607,7 @@ fn interface_show_menus_diff() {
             0x0070_27b0,
             0x0070_4140,
             0x0070_48c0,
+            0x0070_4be0,
             0x0070_2680,
             0x0070_48f0,
             0x0070_4170,
@@ -1216,14 +1224,6 @@ fn interface_in_dialog_with_diff() {
 fn interface_show_subtitle_diff() {
     Diff::new(engine_core::entry!(0x0070_5210, interface::interface_cpp::interface_show_subtitle(u32, u32, u32, u32, u32, u32, u32, u32, u8) -> u8))
         .in_arena(&[Arg::Word, Arg::Word, Arg::Word, Arg::Word, Arg::Word, Arg::Word, Arg::Word, Arg::Word, Arg::Byte], CALLEES, &[])
-        .run()
-        .assert_same();
-}
-
-#[test]
-fn fn_007052f0_diff() {
-    Diff::new(engine_core::entry!(0x0070_52f0, interface::interface_cpp::fn_007052f0(u32, u32, u32, u32, f32, u8) -> u8))
-        .in_arena(&[Arg::Word, Arg::Word, Arg::Word, Arg::Word, Arg::F32, Arg::Byte], CALLEES, &[])
         .run()
         .assert_same();
 }

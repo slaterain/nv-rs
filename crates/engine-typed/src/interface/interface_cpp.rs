@@ -2321,48 +2321,6 @@ pub fn interface_show_subtitle(
     0
 }
 
-// Typed from 007052f0
-/// `cdecl`, six words (the fifth a float, the sixth a byte): inside a scope
-/// guard (line 0x901 of the interface's file), when the manager is ready and the
-/// HUD main menu object (`011d96c0`) exists, calls `00775380` on it with
-/// the six words. Always returns 0. The exception frame is not translated.
-pub fn fn_007052f0(
-    e: &mut Engine,
-    first: u32,
-    second: u32,
-    third: u32,
-    fourth: u32,
-    value: f32,
-    flag: u8,
-) -> u8 {
-    e.with_stack(4, |e, guard| {
-        e.call(
-            SCOPE_GUARD_CTOR,
-            &args![guard, 0xdu32, 1u32, INTERFACE_SOURCE_NAME, 0x901u32],
-        );
-        let hud = e.global::<u32>(HUD_MAIN_MENU);
-        if ready_manager(e).is_some() && hud != 0 {
-            // JIP LN NVSE's G09 at `0x70535C` (group GA's row and handler, a fix row:
-            // `WriteRelJump(0x70535C, QueueUIMessageHook)`, the time pushed in place of the
-            // caller's): the seam with the time's bits answers the time to show (a built-in
-            // plugin's call is marked, `Engine::mark_plugin_ui_message`). One load while JIP's
-            // fixes are not in.
-            let value = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
-                e.site(0x0070_535c, &[value.to_bits()])
-                    .map_or(value, f32::from_bits)
-            } else {
-                value
-            };
-            e.call(
-                HUD_SHOW_SUBTITLE_TIMED,
-                &args![hud, first, second, third, fourth, value.to_bits(), flag],
-            );
-        }
-        e.call(SCOPE_GUARD_DTOR, &args![guard]);
-    });
-    0
-}
-
 // Typed from 007053b0
 /// When the manager is ready and the HUD main menu object (`011d96c0`)
 /// exists: `00775920` on it.
@@ -2717,7 +2675,6 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00705210,
             interface_show_subtitle(u32, u32, u32, u32, u32, u32, u32, u32, u8) -> u8
         ),
-        entry!(0x007052f0, fn_007052f0(u32, u32, u32, u32, f32, u8) -> u8),
         entry!(0x007053b0, fn_007053b0()),
         entry!(0x007053f0, fn_007053f0()),
         entry!(0x00705420, fn_00705420(u32, u32, u32, u8)),
