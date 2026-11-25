@@ -35,6 +35,8 @@ const CUT_VS: u32 = 0x1560;
 const CUT_PS: u32 = 0x1570;
 const CUT_DECL: u32 = 0x1580;
 const CUT_TEX: u32 = 0x1590;
+/// [`CUT_PS`] as a character's face's pixel shader (its constant table names `FaceGenMap0`).
+const FACE_CUT_PS: u32 = 0x1760;
 /// The lit pixel shader: ambient (c1) plus the sun's light colour (c3), as the game's lit shaders add
 /// them.
 const LIT_PS: u32 = 0x1320;
@@ -164,6 +166,30 @@ fn constant_table() -> Vec<u32> {
     constant_table_for(0xFFFE_0200)
 }
 
+/// A `ps_3_0` constant table naming the sampler s0 `FaceGenMap0` (a character's face's shader).
+fn face_table() -> Vec<u32> {
+    let mut b = Vec::new();
+    for v in [28u32, 0, 0xFFFF_0300, 1, 28, 0, 0] {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    // Its name, set (sampler), first register, count, reserved, type, default.
+    b.extend_from_slice(&48u32.to_le_bytes());
+    for v in [3u16, 0, 1, 0] {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    b.extend_from_slice(&[0; 8]);
+    b.extend_from_slice(b"FaceGenMap0\0");
+    b.resize(b.len().div_ceil(4) * 4, 0);
+    let mut t = vec![u32::from_le_bytes(*b"CTAB")];
+    t.extend(
+        b.chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])),
+    );
+    let mut out = vec![0xFFFE | ((t.len() as u32) << 16)];
+    out.extend(t);
+    out
+}
+
 /// [`constant_table`] for the shader version `version`.
 fn constant_table_for(version: u32) -> Vec<u32> {
     let mut b = Vec::new();
@@ -235,7 +261,15 @@ fn box_corners(x: f32, y: f32, half: f32, height: f32) -> Vec<[f32; 3]> {
 /// and a pixel shader writing `c0`, the ground and the box in vertex buffers; none without an
 /// adapter.
 fn backend(samples: u32) -> Option<WgpuBackend> {
+    backend_in(samples, None)
+}
+
+/// [`backend`] keeping its pipelines and lists in `cache` (a folder), when given.
+fn backend_in(samples: u32, cache: Option<std::path::PathBuf>) -> Option<WgpuBackend> {
     let mut b = WgpuBackend::new(Output::Offscreen);
+    if let Some(dir) = cache {
+        b = b.with_cache_dir(dir);
+    }
     let present = words(&[SIZE, SIZE, A8R8G8B8, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0]);
     let back = words(&[BACK]);
     b.execute(Cmd::CreateDevice {
@@ -488,6 +522,11 @@ fn hook_words_at(sun: [f64; 3], shift: [f64; 3]) -> ([u32; 16], [u32; 16]) {
 /// The frame: the ground and the box, the hook's words when `words`, the depth-only clear, the
 /// arms; the target's pixels (B, G, R, A).
 fn frame(b: &mut WgpuBackend, words: bool) -> Vec<[u8; 4]> {
+    frame_with(b, words, None)
+}
+
+/// [`frame`] with the box drawn through `box_shaders` (vertex, pixel), the rest as [`frame`] draws it.
+fn frame_with(b: &mut WgpuBackend, words: bool, box_shaders: Option<(u32, u32)>) -> Vec<[u8; 4]> {
     if words {
         let (view, sun) = hook_words();
         for (state, m) in [
@@ -512,7 +551,13 @@ fn frame(b: &mut WgpuBackend, words: bool) -> Vec<[u8; 4]> {
     constants(b, 3, 0, &[0.4, 0.4, 0.4, 1.0]);
     draw(b, GROUND, 2);
     constants(b, 3, 0, &[0.7, 0.6, 0.5, 1.0]);
+    if let Some((vs, ps)) = box_shaders {
+        box_through(b, vs, ps);
+    }
     draw(b, BOX, 10);
+    if box_shaders.is_some() {
+        box_through(b, VS, PS);
+    }
     if words {
         let (view, sun) = hook_words();
         for (state, m) in [(scene_light::STATE, view), (sun_shadow::STATE, sun)] {
@@ -879,6 +924,9 @@ struct Extra {
     ribbon_round_opaque: bool,
     /// [`RIBBON_ROUND`] drawn with a texture too opaque for a cable ([`STRIP_TEX`]) and the alpha test.
     ribbon_round_textured: bool,
+    /// [`RIBBON_ROUND`] and [`MIXED_CUT`] (`ribbon_round`, `mixed_cut`) drawn through a face's pixel
+    /// shader ([`FACE_CUT_PS`]): a character's casters.
+    face_cutouts: bool,
     /// The cable of `cable` written again (the same bytes) before it is drawn.
     rewrite_cable: bool,
     /// The pipe of [`CABLES`] drawn after `cable` (another buffer of the same layout and count).
@@ -1007,7 +1055,19 @@ fn draw_cut(b: &mut WgpuBackend, buffer: u32, texture: u32, count: u32) {
 
 /// [`draw_cut`] with the alpha test on (`test`) or off.
 fn draw_textured(b: &mut WgpuBackend, buffer: u32, texture: u32, count: u32, test: bool) {
-    set_shaders(b, CUT_VS, CUT_PS, CUT_DECL);
+    draw_textured_through(b, CUT_PS, buffer, texture, count, test);
+}
+
+/// [`draw_textured`] through the pixel shader `ps`.
+fn draw_textured_through(
+    b: &mut WgpuBackend,
+    ps: u32,
+    buffer: u32,
+    texture: u32,
+    count: u32,
+    test: bool,
+) {
+    set_shaders(b, CUT_VS, ps, CUT_DECL);
     run(
         b,
         Cmd::SetTexture {
@@ -1514,7 +1574,15 @@ fn extras(b: &mut WgpuBackend) {
     ps.extend(ins(66, &[0x800F_0000, 0x90E4_0000, 0xA0E4_0800]));
     ps.extend(ins(1, &[0x800F_0800, 0x80E4_0000]));
     ps.push(END);
-    for (shader, pixel, tokens) in [(CUT_VS, false, vs), (CUT_PS, true, ps)] {
+    // The same with a table naming its sampler `FaceGenMap0` (a face's).
+    let mut face = vec![ps[0]];
+    face.extend(face_table());
+    face.extend_from_slice(&ps[1..]);
+    for (shader, pixel, tokens) in [
+        (CUT_VS, false, vs),
+        (CUT_PS, true, ps),
+        (FACE_CUT_PS, true, face),
+    ] {
         let t = words(&tokens);
         run(
             b,
@@ -1859,8 +1927,9 @@ fn lit_sequence_with(
         if e.mixed {
             draw(b, MIXED, 2 * 16 * 6 * 2);
         }
+        let cut_ps = if e.face_cutouts { FACE_CUT_PS } else { CUT_PS };
         if e.mixed_cut {
-            set_shaders(b, CUT_VS, CUT_PS, CUT_DECL);
+            set_shaders(b, CUT_VS, cut_ps, CUT_DECL);
             run(
                 b,
                 Cmd::SetTexture {
@@ -1916,7 +1985,8 @@ fn lit_sequence_with(
             draw(b, CABLE + 3, 16 * 6 * 2);
         }
         if e.ribbon_round {
-            draw_cut(b, RIBBON_ROUND, RIBBON_TEX, 32 + 16 * 6 * 2);
+            let count = 32 + 16 * 6 * 2;
+            draw_textured_through(b, cut_ps, RIBBON_ROUND, RIBBON_TEX, count, true);
         }
         if e.ribbon_round_opaque {
             draw_textured(b, RIBBON_ROUND, RIBBON_TEX, 32 + 16 * 6 * 2, false);
@@ -3947,4 +4017,527 @@ fn a_far_caster_stepping_across_frames_keeps_only_its_latest_place() {
     }
     assert!(seen[2][0].2, "moving while it steps: {:?}", seen[2]);
     assert!(!seen[43][0].2, "still again: {:?}", seen[43]);
+}
+
+/// The box's frames with still casters' pipelines made ahead ([`sun_shadow::casters_ahead`]): the
+/// first frame (its pipeline sent to a thread of its own), the second after the pipeline is there
+/// (the maps drawn from the first frame's casters: none kept), the third (the maps drawn from the
+/// second's, the box among them).
+fn ahead_frames(samples: u32) -> Option<Vec<Vec<[u8; 4]>>> {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    sun_shadow::enable_debug();
+    sun_shadow::casters_ahead_for_tests(Some(true));
+    let b = backend(samples);
+    sun_shadow::enable(false);
+    sun_shadow::casters_ahead_for_tests(None);
+    let mut b = b?;
+    let first = frame(&mut b, true);
+    present(&mut b, 1);
+    if let Some(d) = b.device() {
+        d.wait_for_sun_variants();
+    }
+    let second = frame(&mut b, true);
+    present(&mut b, 2);
+    let third = frame(&mut b, true);
+    Some(vec![first, second, third])
+}
+
+/// Still casters' pipelines made ahead (`NV_SUN_CASTERS_AHEAD=1`): the render thread does not stop
+/// to make the box's pipeline the frame the box is first seen; the box casts from the frame its
+/// pipeline is there, the same shadow as with the pipeline made at once one frame earlier, and not
+/// before.
+#[test]
+fn a_still_casters_pipeline_made_ahead_casts_once_it_is_there() {
+    use d3d9_stream::hitch::{snapshot, Count};
+    let Some(at_once) = picture(1, true, true) else {
+        return;
+    };
+    let before = snapshot();
+    let frames = ahead_frames(1).expect("the adapter");
+    let now = snapshot();
+    let made = |c: Count| now[c as usize] - before[c as usize];
+    assert!(
+        made(Count::ShadowPipelinesAhead) >= 1,
+        "the box's caster pipeline made on a thread of its own: {}",
+        made(Count::ShadowPipelinesAhead)
+    );
+    // (None made on the render thread: `cables_pipelines_made_ahead_are_all_made_off_the_render_thread`
+    // counts that on its turn, where no other test makes any.)
+    for p in [
+        [-50.0, 150.0, 0.0],
+        [-60.0, 140.0, 0.0],
+        [-45.0, 165.0, 0.0],
+    ] {
+        let shadowed = at(&at_once, pixel(p));
+        assert!(
+            at(&frames[1], pixel(p))[2] > shadowed[2],
+            "{p:?}: no shadow before the pipeline was there to keep the box: {:?} against {shadowed:?}",
+            at(&frames[1], pixel(p))
+        );
+        assert_eq!(
+            at(&frames[2], pixel(p)),
+            shadowed,
+            "{p:?}: the shadow once the pipeline is there"
+        );
+    }
+}
+
+/// The box's first two frames with still casters' pipelines made ahead on a new backend keeping
+/// its pipelines and lists in `dir`; the backend is dropped after (its lists written).
+fn ahead_in(dir: &std::path::Path) -> Vec<Vec<[u8; 4]>> {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    sun_shadow::enable_debug();
+    sun_shadow::casters_ahead_for_tests(Some(true));
+    let b = backend_in(1, Some(dir.to_path_buf()));
+    sun_shadow::enable(false);
+    sun_shadow::casters_ahead_for_tests(None);
+    let mut b = b.expect("the adapter");
+    let first = frame(&mut b, true);
+    present(&mut b, 1);
+    let second = frame(&mut b, true);
+    drop(b);
+    vec![first, second]
+}
+
+/// With still casters' pipelines made ahead, the caster kinds a run sees are kept beside the
+/// pipeline list (`casters.txt` in the cache folder) and made before play at the next start, as
+/// the listed pipelines are: on a new backend in the same folder the box casts from the second
+/// frame, the same shadow as with its pipeline made at once; in a new folder it does not yet.
+#[test]
+fn a_caster_kind_seen_before_on_this_machine_is_made_at_the_start() {
+    let Some(at_once) = picture(1, true, true) else {
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("nv-rs-sun-casters-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a folder");
+    let new = ahead_in(&dir);
+    let text = std::fs::read_to_string(dir.join("casters.txt")).expect("the casters' list");
+    assert!(
+        text.lines().any(|l| l.starts_with("c1 0 0 p2 ")),
+        "the box's kind listed: {text}"
+    );
+    let seen = ahead_in(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    for p in [
+        [-50.0, 150.0, 0.0],
+        [-60.0, 140.0, 0.0],
+        [-45.0, 165.0, 0.0],
+    ] {
+        let shadowed = at(&at_once, pixel(p));
+        assert!(
+            at(&new[1], pixel(p))[2] > shadowed[2],
+            "{p:?}: a kind never seen casts once its pipeline is there, not in the second frame"
+        );
+        assert_eq!(
+            at(&seen[1], pixel(p)),
+            shadowed,
+            "{p:?}: a kind seen before is made at the start and casts as made at once"
+        );
+    }
+}
+
+/// With still casters' pipelines made ahead, a cut-out cable geometry's kinds (its own, its ribbons'
+/// coverage pipelines' and its list's, each a `c1` line) are listed too and made at the next start:
+/// on a new backend in the same folder it casts from its second frame as with its pipelines made at
+/// once, every caster pipeline made by the start's preparation (one for each listed kind) and none
+/// sent to a thread at a draw (review of #994).
+#[test]
+fn a_cable_geometry_seen_before_on_this_machine_is_made_at_the_start() {
+    use d3d9_stream::hitch::{snapshot, Count};
+    let frames = [Extra {
+        ribbon_round: true,
+        mixed_cut: true,
+        ..Extra::default()
+    }; 2];
+    let Some(at_once) = lit_sequence_picture(1, true, &frames) else {
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("nv-rs-sun-cables-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a folder");
+    // A start in `dir` drawing `frames` (`pause` ms after each): their pixels, and the caster pipelines
+    // made where the render thread waits and on threads of their own meanwhile.
+    let start = |frames: &[Extra], pause: u64| {
+        let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+        sun_shadow::enable(true);
+        sun_shadow::casters_ahead_for_tests(Some(true));
+        let b = backend_in(1, Some(dir.clone()));
+        sun_shadow::enable(false);
+        sun_shadow::casters_ahead_for_tests(None);
+        let mut b = b.expect("the adapter");
+        let before = snapshot();
+        let px = lit_sequence_with(&mut b, frames, true, &mut |_, _| {
+            std::thread::sleep(std::time::Duration::from_millis(pause))
+        });
+        let now = snapshot();
+        drop(b);
+        let d = |c: Count| now[c as usize] - before[c as usize];
+        (
+            px,
+            d(Count::ShadowPipelines),
+            d(Count::ShadowPipelinesAhead),
+        )
+    };
+    // The first start: the geometry's pipelines sent one after another over a few frames, listed.
+    let _ = start(&[frames[0]; 10], 30);
+    let text = std::fs::read_to_string(dir.join("casters.txt")).expect("the casters' list");
+    let listed = text.lines().filter(|l| l.starts_with("c1 ")).count() as u64;
+    assert!(
+        text.lines()
+            .any(|l| l.starts_with("c1 ") && l.split(' ').nth(1) != Some("0")),
+        "a ribbon's or a list's kind listed: {text}"
+    );
+    let (px, made, ahead) = start(&frames, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(ahead, 0, "no caster pipeline sent to a thread at a draw");
+    assert_eq!(
+        made, listed,
+        "each listed kind made by the start's preparation, nothing more: {text}"
+    );
+    let worst = px[1]
+        .iter()
+        .zip(&at_once[1])
+        .flat_map(|(a, b)| a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)))
+        .max()
+        .unwrap_or(0);
+    assert!(
+        worst <= 1,
+        "the second frame as with the pipelines made at once: {worst} apart at most"
+    );
+}
+
+/// Vertex shaders drawing as [`VS`] does, each another kind of caster (another pipeline): `VS_KIND
+/// + k` has `k` instructions more that change nothing drawn ([`vs_kind`]).
+const VS_KIND: u32 = 0x1E00;
+
+/// [`VS`]'s tokens with `extra` instructions `mov r1, c0` before its position (nothing drawn
+/// changes; the shader is another, and so is its caster's pipeline).
+fn vs_kind(extra: u32) -> Vec<u32> {
+    let mut vs = vec![0xFFFE_0200];
+    vs.extend(constant_table());
+    vs.extend(ins(31, &[0x8000_0000, 0x900F_0000]));
+    for _ in 0..extra {
+        vs.extend(ins(1, &[0x800F_0001, 0xA0E4_0000]));
+    }
+    for k in 0..4u32 {
+        vs.extend(ins(
+            9,
+            &[0xC000_0000 | (0x1_0000 << k), 0x90E4_0000, 0xA0E4_0000 | k],
+        ));
+    }
+    vs.push(END);
+    vs
+}
+
+/// A backend with still casters' pipelines made ahead (the debug step on) and the kinds
+/// `VS_KIND + 1..=kinds` made; none without an adapter.
+fn ahead_backend(kinds: u32) -> Option<WgpuBackend> {
+    kinds_backend(kinds, true)
+}
+
+/// [`ahead_backend`] with still casters' pipelines made ahead or not (`ahead`).
+fn kinds_backend(kinds: u32, ahead: bool) -> Option<WgpuBackend> {
+    sun_shadow::enable_debug();
+    sun_shadow::casters_ahead_for_tests(Some(ahead));
+    let b = backend(1);
+    sun_shadow::enable(false);
+    sun_shadow::casters_ahead_for_tests(None);
+    let mut b = b?;
+    for k in 1..=kinds {
+        let t = words(&vs_kind(k));
+        run(
+            &mut b,
+            Cmd::CreateShader {
+                device: DEVICE,
+                shader: VS_KIND + k,
+                pixel: false,
+                tokens: Data::Bytes(&t),
+            },
+        );
+    }
+    Some(b)
+}
+
+/// The box's frame drawn through `VS_KIND + kind`.
+fn kind_frame(b: &mut WgpuBackend, kind: u32) -> Vec<[u8; 4]> {
+    run(
+        b,
+        Cmd::SetShader {
+            device: DEVICE,
+            pixel: false,
+            shader: VS_KIND + kind,
+        },
+    );
+    frame(b, true)
+}
+
+/// The three points in the box's shadow ([`on_the_box_casts_its_shadow_away_from_the_sun`]).
+const IN_SHADOW: [[f64; 3]; 3] = [
+    [-50.0, 150.0, 0.0],
+    [-60.0, 140.0, 0.0],
+    [-45.0, 165.0, 0.0],
+];
+
+/// Seven kinds of still caster with their pipelines made ahead and nothing waiting for them: six
+/// seen for one frame each and not again, then the seventh drawn on. Its pipeline is sent once
+/// one of the six's slots is free (each is kept at a present once made, whether or not its kind
+/// is drawn again), and the box casts with it.
+#[test]
+fn a_seventh_still_kind_casts_after_six_seen_once() {
+    let Some(at_once) = picture(1, true, true) else {
+        return;
+    };
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let mut b = ahead_backend(7).expect("the adapter");
+    let mut last = Vec::new();
+    for f in 1..=40u32 {
+        last = kind_frame(&mut b, f.min(7));
+        present(&mut b, f);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    for p in IN_SHADOW {
+        assert_eq!(at(&last, pixel(p)), at(&at_once, pixel(p)), "{p:?}");
+    }
+}
+
+/// The box's vertex and pixel shaders set to `vs` and `ps`.
+fn box_through(b: &mut WgpuBackend, vs: u32, ps: u32) {
+    for (pixel, shader) in [(false, vs), (true, ps)] {
+        run(
+            b,
+            Cmd::SetShader {
+                device: DEVICE,
+                pixel,
+                shader,
+            },
+        );
+    }
+}
+
+/// The box drawn as a character's part (through `VS_KIND + kind` and a face's pixel shader, with
+/// the ribbons' texture bound to its sampler); the ground and the rest as [`frame`] draws them.
+fn character_frame(b: &mut WgpuBackend, kind: u32) -> Vec<[u8; 4]> {
+    frame_with(b, true, Some((VS_KIND + kind, FACE_CUT_PS)))
+}
+
+/// A backend for [`character_frame`] (the switch off: characters' pipelines are on threads of their
+/// own whatever it says): [`kinds_backend`] with the face's shaders and the ribbons' texture made.
+fn characters_backend(kinds: u32) -> Option<WgpuBackend> {
+    let mut b = kinds_backend(kinds, false)?;
+    extras(&mut b);
+    run(
+        &mut b,
+        Cmd::SetTexture {
+            device: DEVICE,
+            sampler: 0,
+            texture: RIBBON_TEX,
+        },
+    );
+    Some(b)
+}
+
+/// Switched off (the default) too, a character's caster pipeline back from its thread is kept at
+/// the next present whether or not its kind is drawn again. Seven kinds of character: six seen for
+/// one frame each and not again (a load's fade, a character glimpsed), then the seventh drawn on:
+/// it casts, as the first one drawn on does. (Before, each of the six kept one of the characters'
+/// six threads until its kind came back: no character kind new after them cast for the rest of
+/// the run, and the game's own character shadows are replaced by these.)
+#[test]
+fn switched_off_a_seventh_character_kind_casts_after_six_seen_once() {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut b) = characters_backend(1) else {
+        return;
+    };
+    let mut reference = Vec::new();
+    for f in 1..=12u32 {
+        reference = character_frame(&mut b, 1);
+        present(&mut b, f);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let mut b = characters_backend(7).expect("the adapter");
+    let first = character_frame(&mut b, 1);
+    present(&mut b, 1);
+    let mut last = Vec::new();
+    for f in 2..=40u32 {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        last = character_frame(&mut b, f.min(7));
+        present(&mut b, f);
+    }
+    for p in IN_SHADOW {
+        assert_ne!(
+            at(&first, pixel(p)),
+            at(&reference, pixel(p)),
+            "the character casts once its pipeline is there: {p:?}"
+        );
+        assert_eq!(at(&last, pixel(p)), at(&reference, pixel(p)), "{p:?}");
+    }
+}
+
+/// A box casting through one kind whose draw moves to another kind whose pipeline takes longer than
+/// the let-go's grace ([`sun_shadow::GRACE`] frames; a slow compile, or a flood of new kinds holding
+/// the threads): where it cast stays meanwhile, the shadow in every frame (review of #994).
+#[test]
+fn a_caster_switching_to_a_slow_kind_keeps_its_shadow_past_the_grace() {
+    let Some(at_once) = picture(1, true, true) else {
+        return;
+    };
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let mut b = ahead_backend(2).expect("the adapter");
+    let mut px = Vec::new();
+    for f in 1..=6u32 {
+        px = kind_frame(&mut b, 1);
+        present(&mut b, f);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    for p in IN_SHADOW {
+        assert_eq!(
+            at(&px, pixel(p)),
+            at(&at_once, pixel(p)),
+            "kind 1 casts: {p:?}"
+        );
+    }
+    // Kind 2's pipeline takes 0.6 s on its thread: about 25 frames here, three times the grace.
+    struct Delay;
+    impl Drop for Delay {
+        fn drop(&mut self) {
+            sun_shadow::caster_delay_for_tests(0);
+        }
+    }
+    let _delay = Delay;
+    sun_shadow::caster_delay_for_tests(600);
+    let frames = 7 + 3 * sun_shadow::GRACE as u32;
+    for f in 7..=frames {
+        let px = kind_frame(&mut b, 2);
+        present(&mut b, f);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        for p in IN_SHADOW {
+            assert_eq!(at(&px, pixel(p)), at(&at_once, pixel(p)), "frame {f} {p:?}");
+        }
+    }
+}
+
+/// A box casting through one kind whose draw moves to another kind, made ahead: its shadow stays
+/// in every frame while the new kind's pipeline is on its way and after.
+#[test]
+fn a_caster_switching_kind_keeps_its_shadow() {
+    let Some(at_once) = picture(1, true, true) else {
+        return;
+    };
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let mut b = ahead_backend(2).expect("the adapter");
+    let _ = kind_frame(&mut b, 1);
+    present(&mut b, 1);
+    if let Some(d) = b.device() {
+        d.wait_for_sun_variants();
+    }
+    for f in 2..=30u32 {
+        let px = kind_frame(&mut b, if f < 6 { 1 } else { 2 });
+        present(&mut b, f);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        if f >= 3 {
+            for p in IN_SHADOW {
+                assert_eq!(at(&px, pixel(p)), at(&at_once, pixel(p)), "frame {f} {p:?}");
+            }
+        }
+    }
+}
+
+/// With still casters' pipelines made ahead, a cut-out cable geometry's ribbon and list pipelines
+/// are made on threads of their own too: the render thread makes no caster pipeline, and once
+/// they are all there the shadows are the ones made at once.
+#[test]
+fn cables_pipelines_made_ahead_are_all_made_off_the_render_thread() {
+    use d3d9_stream::hitch::{snapshot, Count};
+    let frames = [Extra {
+        ribbon_round: true,
+        mixed: true,
+        mixed_cut: true,
+        ..Extra::default()
+    }; 6];
+    let Some(off) = lit_sequence_picture(1, true, &frames) else {
+        return;
+    };
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    sun_shadow::enable(true);
+    sun_shadow::casters_ahead_for_tests(Some(true));
+    let b = backend(1);
+    sun_shadow::enable(false);
+    sun_shadow::casters_ahead_for_tests(None);
+    let mut b = b.expect("the adapter");
+    let before = snapshot();
+    let on = lit_sequence(&mut b, &frames, true);
+    let now = snapshot();
+    let d = |c: Count| now[c as usize] - before[c as usize];
+    assert_eq!(
+        d(Count::ShadowPipelines),
+        0,
+        "no caster pipeline made on the render thread"
+    );
+    assert!(
+        d(Count::ShadowPipelinesAhead) >= 3,
+        "the casters', the ribbons' and the list's: {}",
+        d(Count::ShadowPipelinesAhead)
+    );
+    // The same shadows (coverage added in another order may round a last bit apart).
+    let worst = on[5]
+        .iter()
+        .zip(&off[5])
+        .flat_map(|(a, b)| a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)))
+        .max()
+        .unwrap_or(0);
+    assert!(
+        worst <= 1,
+        "the shadows once all are there: {worst} apart at most"
+    );
+}
+
+/// With still casters' pipelines NOT made ahead (the switch off), a character's cut-out cable
+/// geometries (drawn through a face's pixel shader) are as before the switch: their own pipeline
+/// made on a thread of its own, their ribbons' and list's made at once on the render thread.
+#[test]
+fn switched_off_a_characters_ribbon_and_list_pipelines_are_made_at_once() {
+    use d3d9_stream::hitch::{snapshot, Count};
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    assert!(sun_shadow::characters(), "characters cast (the default)");
+    // The caster pipelines made on threads of their own and at once, the cut-outs drawn through a
+    // face's pixel shader or not.
+    let made = |face: bool| {
+        let frames = [Extra {
+            ribbon_round: true,
+            mixed_cut: true,
+            face_cutouts: face,
+            ..Extra::default()
+        }; 4];
+        sun_shadow::enable(true);
+        sun_shadow::casters_ahead_for_tests(Some(false));
+        let b = backend(1);
+        sun_shadow::enable(false);
+        sun_shadow::casters_ahead_for_tests(None);
+        let mut b = b?;
+        let before = snapshot();
+        let _ = lit_sequence(&mut b, &frames, true);
+        let now = snapshot();
+        let d = |c: Count| now[c as usize] - before[c as usize];
+        Some((d(Count::ShadowPipelinesAhead), d(Count::ShadowPipelines)))
+    };
+    let Some(still) = made(false) else {
+        return;
+    };
+    let face = made(true).expect("the adapter");
+    assert_eq!(still.0, 0, "switched off, no still caster's made ahead");
+    assert!(
+        still.1 >= 3,
+        "the cut-outs', the ribbons' and the list's: {}",
+        still.1
+    );
+    assert_eq!(
+        face.0, 1,
+        "only the face's own pipeline made on a thread of its own"
+    );
+    assert_eq!(
+        face.1,
+        still.1 - 1,
+        "the face's ribbons' and list's made at once, as a still caster's"
+    );
 }

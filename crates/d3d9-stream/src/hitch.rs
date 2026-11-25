@@ -38,10 +38,15 @@ pub enum Count {
     RenderSyncNs,
     AcquireNs,
     SwapNs,
-    /// The sun shadows' caster pipelines made (a newly seen object's depth-only pipeline; on the render thread for
-    /// a still object, on a thread of its own for a character) and their time (ns). Not in [`Count::Pipelines`].
+    /// The sun shadows' caster pipelines made where the render thread waits for them (a newly seen still object's
+    /// depth-only pipeline on the render thread; the kinds seen before, made before play on the worker threads) and
+    /// their time (ns). Not in [`Count::Pipelines`].
     ShadowPipelines,
     ShadowPipelineNs,
+    /// The sun shadows' caster pipelines made on threads of their own while play goes on (a character's; with
+    /// `NV_SUN_CASTERS_AHEAD=1` a still object's too) and their time (ns): no wait of the render thread's.
+    ShadowPipelinesAhead,
+    ShadowPipelineAheadNs,
     /// The render thread's time carrying out the game's commands (ns): its calls and waits below included, the rest
     /// is its own work on the commands.
     RenderBusyNs,
