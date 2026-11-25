@@ -1630,6 +1630,26 @@ mod tests {
             s.text("D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd see https://example.com/x"),
             "<home>\\... https://example.com/x"
         );
+        for (text, want) in [
+            (
+                "D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd mailed jo@example.com",
+                "<home>\\... <e-mail>",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd to \\\\JT-NAS\\Private\\x.zip",
+                "<home>\\... <path>\\x.zip",
+            ),
+            (
+                "D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd to smb://jt-nas/private/x.zip",
+                "<home>\\... <path>/x.zip",
+            ),
+            (
+                "could not read D:\\Profiles\\Jo Tester\\OneDrive - Contoso Ltd (in 00a1b2c3 < 00400000)",
+                "could not read <home>\\... (in 00a1b2c3 < 00400000)",
+            ),
+        ] {
+            assert_eq!(s.text(text), want, "{text}");
+        }
         assert_eq!(
             s.text(
                 "D:\\Profiles\\Jo Tester\\OneDrive is full; see G:\\Private\\Smith\\notes\\x.txt"
