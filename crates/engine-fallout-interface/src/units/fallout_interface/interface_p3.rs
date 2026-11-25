@@ -205,6 +205,11 @@ pub fn fn_00709d40(e: &mut Engine) -> bool {
 /// frustum is `left = -t*s*aspect`, `right = t*s*aspect`, `top = t*s`,
 /// `bottom = -t*s`, `near = 1.0`, `far` = the float at `01030020`,
 /// perspective; `NiCamera::SetViewFrustum` receives it.
+///
+/// Every step is the exe's x87 instruction at the running thread's precision
+/// (00709d89..00709e58): the width stored as a double and `FDIVR`'d by the
+/// height, the half angle's three `FMUL`s (a float, then two doubles), each
+/// plane's `FMUL`s by the stored float scale and aspect, each `FSTP dword`.
 pub fn fn_00709d50(e: &mut Engine, camera: u32, scale: f32) {
     if camera == 0 {
         return;
@@ -212,39 +217,48 @@ pub fn fn_00709d50(e: &mut Engine, camera: u32, scale: f32) {
     if e.call(RENDERER_FLAG, &[]).u8() == 0 {
         return;
     }
-    let unit = e.call(CAMERA_SCALE, &[]).f32();
+    let unit = x87_store32(e.call(CAMERA_SCALE, &[]).f64());
     e.call(NI_CAMERA_FN_00A6FB90, &args![camera, unit, 0u32]);
-    let aspect = (e.call(RENDERER_WIDTH, &[]).f64() / e.call(RENDERER_HEIGHT, &[]).f64()) as f32;
+    let width = e.call(RENDERER_WIDTH, &[]).f64();
+    let aspect = x87_store32(x87_div(width, e.call(RENDERER_HEIGHT, &[]).f64()));
     let factor_a = e.global::<f64>(ANGLE_FACTOR_A);
     let factor_b = e.global::<f64>(ANGLE_FACTOR_B);
     let limit = e.global::<f64>(ANGLE_LIMIT);
-    let setting = e
-        .call(FLOAT_SETTING_GET, &args![FLOAT_SETTING_OBJECT])
-        .u32();
-    let mut angle = scale as f64 * e.mem.f32(setting) as f64 * factor_a * factor_b;
-    if angle < limit {
+    let half_angle = |e: &mut Engine| {
         let setting = e
             .call(FLOAT_SETTING_GET, &args![FLOAT_SETTING_OBJECT])
             .u32();
-        angle = scale as f64 * e.mem.f32(setting) as f64 * factor_a * factor_b;
+        let product = x87_mul(x87_load32(scale.to_bits()), x87_m32(e.mem.u32(setting)));
+        x87_mul(x87_mul(product, factor_a), factor_b)
+    };
+    let mut angle = half_angle(e);
+    if angle < limit {
+        angle = half_angle(e);
     } else {
         angle = limit;
     }
-    let angle = angle as f32;
-    let (unit, aspect) = (unit as f64, aspect as f64);
+    let angle = f32::from_bits(x87_store32(angle));
     e.with_stack(0x1c, |e, frustum| {
         let f = frustum.addr();
         e.call(NI_FRUSTUM_NEW, &args![f, 0u32]);
         // NiFrustum: +0 left, +4 right, +8 top, +0xc bottom, +0x10 near,
         // +0x14 far, +0x18 ortho (byte).
-        let tangent = e.call(TANGENT, &args![angle]).f32() as f64;
-        e.mem.set_f32(f, (-tangent * unit * aspect) as f32);
-        let tangent = e.call(TANGENT, &args![angle]).f32() as f64;
-        e.mem.set_f32(f + 4, (tangent * unit * aspect) as f32);
-        let tangent = e.call(TANGENT, &args![angle]).f32() as f64;
-        e.mem.set_f32(f + 0xc, (-tangent * unit) as f32);
-        let tangent = e.call(TANGENT, &args![angle]).f32() as f64;
-        e.mem.set_f32(f + 8, (tangent * unit) as f32);
+        let plane = |tangent: f64, with_aspect: bool| {
+            let value = x87_mul(tangent, x87_m32(unit));
+            x87_store32(if with_aspect {
+                x87_mul(value, x87_m32(aspect))
+            } else {
+                value
+            })
+        };
+        let tangent = e.call(TANGENT, &args![angle]).f64();
+        e.mem.set_u32(f, plane(-tangent, true));
+        let tangent = e.call(TANGENT, &args![angle]).f64();
+        e.mem.set_u32(f + 4, plane(tangent, true));
+        let tangent = e.call(TANGENT, &args![angle]).f64();
+        e.mem.set_u32(f + 0xc, plane(-tangent, false));
+        let tangent = e.call(TANGENT, &args![angle]).f64();
+        e.mem.set_u32(f + 8, plane(tangent, false));
         e.mem.set_u8(f + 0x18, 0);
         e.mem.set_f32(f + 0x10, 1.0);
         let far = e.global::<f32>(FAR_PLANE);
@@ -542,6 +556,59 @@ mod tests {
         // angle = 4.0 * 0.5 = 2.0 is not below the limit 0.25, which is used.
         let (f, _) = frustum_of(0.25, 4.0);
         assert_eq!(f, [-1.0, 1.0, 0.5, -0.5, 1.0, 4000.0]);
+    }
+
+    /// 00709d89..00709e58 on the main thread (24-bit precision): the aspect's `FDIVR` and each
+    /// plane's two `FMUL`s round to a float step by step, so the planes are the float products
+    /// in the exe's order. A product kept in a double and rounded once at the store is an ulp off
+    /// for some of these tangents (checked below, so the case is one where it matters).
+    #[test]
+    fn camera_frustum_rounds_each_step_at_the_thread_precision() {
+        let mut differs = false;
+        for k in 1..40u32 {
+            let tangent = 1.0f32 / (k as f32 + 0.3);
+            let mut e = camera_engine(true, 10.0);
+            e.register(CAMERA_SCALE, |_, _| Ret {
+                st0: 3.0,
+                ..Ret::default()
+            });
+            e.register(RENDERER_WIDTH, |_, _| Ret {
+                st0: 700.0,
+                ..Ret::default()
+            });
+            e.register(RENDERER_HEIGHT, |_, _| Ret {
+                st0: 300.0,
+                ..Ret::default()
+            });
+            e.mem.set_f32(0x011d_b200, tangent);
+            e.register(TANGENT, |e, _| Ret {
+                st0: f64::from(e.mem.f32(0x011d_b200)),
+                ..Ret::default()
+            });
+            e.register_double(NI_CAMERA_SET_VIEW_FRUSTUM, |e, a| {
+                for i in 0..4u32 {
+                    let word = e.mem.u32(a[1] + 4 * i);
+                    e.mem.set_u32(0x011d_b100 + 4 * i, word);
+                }
+                Ret::default()
+            });
+            crate::x87::set_control_word(0x007f);
+            e.call(0x00709d50, &args![0x1000u32, 1.0f32]);
+            crate::x87::set_control_word(crate::x87::DEFAULT_CONTROL_WORD);
+            let planes: Vec<f32> = (0..4u32).map(|i| e.mem.f32(0x011d_b100 + 4 * i)).collect();
+            let (unit, aspect) = (3.0f32, 700.0f32 / 300.0f32);
+            let floats = [
+                -tangent * unit * aspect,
+                tangent * unit * aspect,
+                tangent * unit,
+                -tangent * unit,
+            ];
+            assert_eq!(planes, floats, "tangent {tangent}");
+            let wide_aspect = f64::from((700.0f64 / 300.0f64) as f32);
+            let wide = f64::from(tangent) * 3.0 * wide_aspect;
+            differs |= (wide as f32) != floats[1];
+        }
+        assert!(differs, "no tangent here tells the two roundings apart");
     }
 
     #[test]

@@ -2,11 +2,14 @@
 //! against its translation (`engine-fallout-interface`), one Diff each, in the shared world of
 //! `typed_interface/arena.rs` (an arena of objects whose words are zero, small numbers, floats,
 //! vtables of logging stand-ins and pointers to later objects; the exe's data pages filled alike; a
-//! logging stand-in at every address the tested files call). The family's own functions run for real
-//! on both sides (the translation's plain calls of them are listed per test).
+//! logging stand-in at every address the native code still calls; the words it reads in place set
+//! per seed). The family's own functions run for real on both sides (the translation's plain calls
+//! of them are listed per test); what the native code does in place runs as its translation on the
+//! translation's side and is left out of that side's calls.
 //!
 //! The files' own unit tests (in `engine-fallout-interface`) keep checking the behaviour on real
-//! objects; these check that the typed copy does what the translation does, word for word.
+//! objects; these check that the native code does what the translation does, call for call and
+//! write for write.
 
 use engine as _;
 use engine_core::prelude::*;
@@ -17,59 +20,30 @@ use engine_typed::interface;
 mod arena;
 use arena::{Arg, InArena};
 
-/// Every address the tested files call by address: a logging stand-in in each test's world.
+/// Every address the native code calls by address (and the translations call): a logging stand-in
+/// in each test's world.
 const CALLEES: &[u32] = &[
     0x0040_1030,
-    0x0040_37b0,
     0x0040_37d0,
-    0x0040_3d30,
-    0x0040_3df0,
-    0x0040_3e20,
     0x0040_46f0,
     0x0040_4eb0,
     0x0040_4ee0,
     0x0040_6d30,
     0x0040_6f60,
-    0x0041_8900,
     0x0043_8390,
-    0x0043_d4d0,
     0x0045_0f90,
-    0x0046_0fb0,
     0x0047_0470,
-    0x0048_3710,
-    0x004a_4020,
     0x004a_4040,
     0x004b_71d0,
-    0x004b_7210,
     0x004b_75a0,
-    0x004d_e070,
-    0x004d_e0c0,
-    0x004d_e0d0,
-    0x004e_a970,
-    0x004f_b070,
-    0x004f_d3c0,
     0x0055_d520,
     0x0056_7790,
-    0x0056_c7f0,
     0x0057_85e0,
-    0x0057_cbe0,
     0x0057_dd70,
-    0x0058_6150,
-    0x0059_bb30,
-    0x005b_6f70,
-    0x005b_d580,
-    0x005b_d5b0,
-    0x005b_d5c0,
-    0x005e_3fc0,
-    0x0060_2170,
-    0x0064_4640,
     0x006b_3eb0,
     0x0070_0320,
     0x0070_10e0,
-    0x0070_37c0,
-    0x0070_4370,
     0x0070_4390,
-    0x0070_9ac0,
     0x0070_9fd0,
     0x0070_a0b0,
     0x0070_b8f0,
@@ -81,10 +55,7 @@ const CALLEES: &[u32] = &[
     0x0071_3f00,
     0x0071_3fb0,
     0x0071_4c60,
-    0x0071_4d70,
     0x0071_4d90,
-    0x0071_4f00,
-    0x0071_4f70,
     0x0071_4fd0,
     0x0071_51b0,
     0x0071_5e00,
@@ -109,7 +80,6 @@ const CALLEES: &[u32] = &[
     0x0077_28f0,
     0x0077_2d10,
     0x0077_3190,
-    0x0077_32b0,
     0x0077_4fd0,
     0x0077_5380,
     0x0077_5920,
@@ -153,20 +123,11 @@ const CALLEES: &[u32] = &[
     0x007f_8a80,
     0x007f_a010,
     0x0084_54f0,
-    0x0087_4480,
-    0x0087_7720,
     0x0090_5820,
-    0x0093_73f0,
-    0x0097_4d90,
-    0x0098_4f60,
-    0x009b_4440,
-    0x009b_7010,
-    0x009b_df60,
     0x00a0_11b0,
     0x00a0_3c90,
     0x00a0_3eb0,
     0x00a0_4200,
-    0x00a0_9030,
     0x00a0_d9e0,
     0x00a0_f8b0,
     0x00a1_d910,
@@ -174,7 +135,6 @@ const CALLEES: &[u32] = &[
     0x00a2_3010,
     0x00a6_faf0,
     0x00a6_fb90,
-    0x00a7_1b70,
     0x00aa_4db0,
     0x00ba_30f0,
     0x00ba_3130,
@@ -247,7 +207,7 @@ fn interface_get_top_menu_id_diff() {
 #[test]
 fn fn_00702400_diff() {
     Diff::new(engine_core::entry!(0x0070_2400, interface::interface_cpp::fn_00702400(u32) -> u32))
-        .in_arena(&[Arg::Word], CALLEES, &[])
+        .in_arena(&[Arg::Int], CALLEES, &[])
         .run()
         .assert_same();
 }
@@ -516,7 +476,7 @@ fn fn_007031e0_diff() {
         0x0070_31e0,
         interface::interface_cpp::fn_007031e0(u32)
     ))
-    .in_arena(&[Arg::Word], CALLEES, &[])
+    .in_arena_without(&[Arg::Word], CALLEES, &[], &[0x00ec_62c0])
     .run()
     .assert_same();
 }
@@ -1625,4 +1585,73 @@ fn bs_simple_array_tile_value_p_8_scalar_deleting_destructor_diff() {
         .in_arena(&[Arg::Word, Arg::Word], CALLEES, &[0x0070_9eb0])
         .run()
         .assert_same();
+}
+
+/// A seam (`extend.rs`'s SITES and the game patches' rows: an instruction inside a translated
+/// function where a built-in takes part through `e.site`) inside a member of a family on by default
+/// is skipped unless the typed body keeps its `e.site` call there. So no such member holds a seam,
+/// except the ones listed, whose typed bodies call `e.site` at it. The function holding a seam is
+/// the translated function that starts nearest below it.
+#[test]
+fn no_member_of_a_family_on_by_default_holds_a_seam() {
+    // Each checked in its typed body (2026-11-25): the `e.site` call at the seam, behind the
+    // same extender test as the translation's.
+    const KEPT: &[(u32, &str)] = &[
+        (0x0040_f9d7, "cell_refs"),
+        (0x0045_234e, "cell_refs"),
+        (0x00c6_5b5b, "collision"),
+        (0x00a0_968c, "dispatch"),
+        (0x0077_04ae, "hud"),
+        (0x0077_0b0e, "hud"),
+        (0x0077_14da, "hud"),
+        (0x0077_951e, "hud"),
+        (0x0077_955d, "hud"),
+        (0x0059_3fbc, "scripts"),
+        (0x0059_49d4, "scripts"),
+        (0x005a_cb9d, "scripts"),
+        (0x005a_c763, "script_lines"),
+        (0x005a_c782, "script_lines"),
+        (0x005a_c78a, "script_lines"),
+        (0x005a_cd0d, "script_lines"),
+        (0x005e_0dd1, "script_lines"),
+        (0x005e_0ec9, "script_lines"),
+        (0x005e_0fbe, "script_lines"),
+        (0x005e_16c3, "script_lines"),
+        (0x005e_1716, "script_lines"),
+        (0x005e_1a23, "script_lines"),
+        (0x005e_1f0b, "script_lines"),
+        (0x005e_2329, "script_lines"),
+    ];
+    let e = Engine::new_untyped_for_test();
+    let mut members = std::collections::HashMap::new();
+    for family in engine_typed::families()
+        .into_iter()
+        .chain([&engine_core::typed::leaf::LEAVES])
+    {
+        if family.past_gate {
+            for (addr, _) in (family.funcs)() {
+                members.insert(addr, family.name);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    for site in engine_core::extend::all_sites() {
+        let holder = (0..0x4000u32)
+            .map(|back| site.addr.wrapping_sub(back))
+            .find(|&start| e.is_translated(start));
+        if let Some(family) = holder.and_then(|start| members.get(&start)) {
+            found.push((site.addr, *family));
+        }
+    }
+    let unkept: Vec<_> = found.iter().filter(|f| !KEPT.contains(f)).collect();
+    assert!(
+        unkept.is_empty(),
+        "seams inside members of families on by default (seam, family): {unkept:x?}"
+    );
+    for kept in KEPT {
+        assert!(
+            found.contains(kept),
+            "{kept:x?} is no member's seam any more"
+        );
+    }
 }
