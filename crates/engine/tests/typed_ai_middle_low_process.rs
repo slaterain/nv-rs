@@ -126,6 +126,9 @@ const FLOATS: &[u32] = &[
 const UNREAD: &[u32] = &[0, 1];
 /// Bytes answers (a `bool` in `AL`, with high bits that must not count).
 const BOOLS: &[u32] = &[0, 1, 0x100, 0xff];
+/// Mostly true byte answers (0x100: a high byte that is false), so the travel seeds more often find
+/// the path done and set its goal.
+const DONE: &[u32] = &[1, 1, 0xff, 0x100];
 /// The block tag, twice as likely as each other word a block read may give.
 const TAG: u32 = 0x424c_4f4b;
 /// The actions a procedure may give: every arm of `Update`'s switch, the finish and past the end.
@@ -193,7 +196,7 @@ const DOUBLES: &[(u32, &[u32], Kind)] = &[
     (0x005b_5e40, UNREAD, Kind::Plain), // the SAVELOAD warnings
     (0x008a_8f60, UNREAD, Kind::Plain), // the actor's package re-evaluation
     (0x0090_a070, UNREAD, Kind::Plain), // LowProcess::ResetTarget
-    (0x008b_3bb0, BOOLS, Kind::Plain),  // Actor::IsPathingComplete
+    (0x008b_3bb0, DONE, Kind::Plain),   // Actor::IsPathingComplete
     (0x008b_3bf0, BOOLS, Kind::Plain),  // Actor::IsWaitingOnPath
     (0x0067_8670, FLOATS, Kind::Plain), // TESPackage::GetPackageRadiusActorToLocation
     (0x0067_5a50, &[0, FORM], Kind::Plain), // TESPackage::GetLocationWorld
@@ -570,10 +573,13 @@ impl World {
             0x0101_1000,
             0x0101_d000,
             0x0103_0000,
+            0x0103_5000,
             0x0127_0000,
         ] {
             e.map(page, 0x1000);
         }
+        // The hours of a day (the exe's 24.0), which the travel's dead hours read past midnight.
+        e.mem.set_f64(0x0103_56d8, 24.0);
         // The actor value infos: four infos with seeded flags, every entry one of them.
         let mut infos = [0u32; 4];
         for info in &mut infos {
