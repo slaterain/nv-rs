@@ -3642,8 +3642,14 @@ fn fn_00720a70_diff() {
 #[test]
 fn menu_manager_reload_menu_diff() {
     Diff::new(engine_core::entry!(0x0072_0aa0, interface::menu_manager::menu_manager_reload_menu(Ptr, u32) -> u32))
-    .in_arena(&[Arg::Ptr, Arg::Class], CALLEES, &[])
-    .max_cases(96)
+    .in_arena_and(
+        &[Arg::Ptr, Arg::Class],
+        CALLEES,
+        &[],
+        &RELOAD_VARIANTS,
+        put_reload_casts,
+    )
+    .max_cases(240)
     .run()
     .assert_same();
 }
@@ -3668,7 +3674,8 @@ fn menu_manager_delete_menu_diff() {
 #[test]
 fn menu_manager_get_frontmost_menu_diff() {
     Diff::new(engine_core::entry!(0x0072_0e60, interface::menu_manager::menu_manager_get_frontmost_menu(Ptr) -> u32))
-    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .in_arena_and(&[Arg::Ptr], CALLEES, &[], &MENU_LIST_VARIANTS, put_menu_list)
+    .max_cases(48)
     .run()
     .assert_same();
 }
@@ -3676,10 +3683,140 @@ fn menu_manager_get_frontmost_menu_diff() {
 #[test]
 fn menu_manager_is_menu_open_diff() {
     Diff::new(engine_core::entry!(0x0072_0f90, interface::menu_manager::menu_manager_is_menu_open(Ptr, u32) -> bool))
-    .in_arena(&[Arg::Ptr, Arg::Int], CALLEES, &[])
-    .max_cases(96)
+    .in_arena_and(
+        &[Arg::Ptr, Arg::Int],
+        CALLEES,
+        &[],
+        &MENU_LIST_VARIANTS,
+        put_menu_list,
+    )
+    .max_cases(160)
     .run()
     .assert_same();
+}
+
+/// The variants of [`put_menu_list`]'s world.
+const MENU_LIST_VARIANTS: [u32; 4] = [0, 1, 2, 3];
+
+/// A world for `GetFrontmostMenu` and `IsMenuOpen` that reaches each of their tests: the manager
+/// (`011d8a80`) with a menus root whose tile list has six nodes (the second's tile null, the third's
+/// tile with no menu, the fourth's menu with no tile); `Tile::GetMenu` answering a tile's `+0x10`;
+/// each menu's class (its vtable's `+0x34`) its `+0x30`, its state its `+0x24`; the tile float
+/// getter answering the depth (`0xfad`) from a menu tile's `+0x40`, the kind (`0xfa7`) from its
+/// `+0x44`; `Tile::IsTrue` its `+0x48`. The variant picks the six depths, kinds, states, classes and
+/// enabled bits: a deeper menu of the passed-over kind (6008.0), equal depths, a NaN depth and
+/// kind, states 2, 3 and 4, a matching menu enabled or not.
+fn put_menu_list(e: &mut Engine, variant: u32) {
+    use arena::object;
+    const NAN: f32 = f32::NAN;
+    let v = variant as usize;
+    let depths: [[f32; 6]; 4] = [
+        [1.0, 9.0, 9.0, 9.0, 3.0, 2.0],
+        [5.0, 9.0, 9.0, 9.0, 5.0, 5.0],
+        [NAN, 9.0, 9.0, 9.0, 1.0, 0.5],
+        [-2.0e8, 9.0, 9.0, 9.0, -3.0e8, 7.0],
+    ];
+    let kinds: [[f32; 6]; 4] = [
+        [0.0, 0.0, 0.0, 0.0, 6008.0, 0.0],
+        [6008.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [NAN, 0.0, 0.0, 0.0, 6008.0, 1.0],
+        [0.0, 0.0, 0.0, 0.0, 0.0, 6008.0],
+    ];
+    let states: [[u32; 6]; 4] = [
+        [0, 0, 0, 0, 1, 4],
+        [2, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 2, 3],
+        [4, 0, 0, 0, 3, 2],
+    ];
+    let classes: [[u32; 6]; 4] = [
+        [0x3e9, 1, 1, 1, 0x3ef, 1],
+        [1, 2, 2, 2, 1, 1],
+        [2, 0x3e9, 0x3e9, 0x3e9, 0x3e9, 2],
+        [0x43d, 0, 0, 0, 0x3e9, 1],
+    ];
+    let enabled: [[u32; 6]; 4] = [
+        [1, 1, 1, 1, 1, 0],
+        [1, 1, 1, 1, 0, 1],
+        [0, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1],
+    ];
+    let manager = object(70);
+    e.mem.set_u32(0x011d_8a80, manager);
+    e.mem.set_u32(manager + 0x9c, object(71));
+    e.mem.set_u32(object(71) + 4, object(72));
+    let vtable = object(79);
+    e.mem.set_u32(vtable + 0x34, 0x7d00_2000);
+    for k in 0..6u32 {
+        let node = object(72 + k);
+        e.mem.set_u32(node, if k < 5 { object(73 + k) } else { 0 });
+        let tile = if k == 1 { 0 } else { object(80 + k) };
+        e.mem.set_u32(node + 8, tile);
+        let menu = if k == 2 { 0 } else { object(90 + k) };
+        if tile != 0 {
+            e.mem.set_u32(tile + 0x10, menu);
+        }
+        let menu_tile = if k == 3 { 0 } else { object(100 + k) };
+        let i = k as usize;
+        if menu == 0 {
+            continue;
+        }
+        e.mem.set_u32(menu, vtable);
+        e.mem.set_u32(menu + 4, menu_tile);
+        e.mem.set_u32(menu + 0x24, states[v][i]);
+        e.mem.set_u32(menu + 0x30, classes[v][i]);
+        if menu_tile != 0 {
+            e.mem.set_f32(menu_tile + 0x40, depths[v][i]);
+            e.mem.set_f32(menu_tile + 0x44, kinds[v][i]);
+            e.mem.set_u32(menu_tile + 0x48, enabled[v][i]);
+        }
+    }
+    e.mem.set_f32(0x0107_0218, -1.0e8);
+    e.mem.set_u64(0x0107_0210, 6008.0f64.to_bits());
+    e.register_double(0x00a0_3c90, |e, words| Ret {
+        eax: e.mem.u32(words[0] + 0x10),
+        ..Ret::default()
+    });
+    e.register_double(0x7d00_2000, |e, words| Ret {
+        eax: e.mem.u32(words[0] + 0x30),
+        ..Ret::default()
+    });
+    e.register_double(0x00a0_11b0, |e, words| {
+        let at = match words[1] {
+            0xfad => 0x40,
+            0xfa7 => 0x44,
+            _ => 0x4c,
+        };
+        Ret {
+            st0: f64::from(e.mem.f32(words[0] + at)),
+            ..Ret::default()
+        }
+    });
+    e.register_double(0x00a0_1230, |e, words| Ret {
+        eax: e.mem.u32(words[0] + 0x48) & 1,
+        ..Ret::default()
+    });
+}
+
+/// The variants of [`put_reload_casts`]'s world.
+const RELOAD_VARIANTS: [u32; 2] = [0, 1];
+
+/// A world for `ReloadMenu`'s container and book menus: the menu of class 0x3f0 (an object whose
+/// `+0x70` and `+0x74` differ, its `+0x30` a reference whose `+0x20` is an object), and
+/// `__RTDynamicCast` answering the object it is given (variant 0) or null (variant 1).
+fn put_reload_casts(e: &mut Engine, variant: u32) {
+    use arena::object;
+    let menu = object(140);
+    e.mem
+        .set_u32(e.mem.u32(0x011f_350c) + 4 * (0x3f0 - 0x3e9), menu);
+    e.mem.set_u32(menu + 0x70, 0x0bad_0070);
+    e.mem.set_u32(menu + 0x74, 0x0bad_0074);
+    e.mem.set_u32(menu + 0x30, object(141));
+    e.mem.set_u32(object(141) + 0x20, object(142));
+    let succeeds = variant == 0;
+    e.register_double(0x00ec_43fb, move |_, words| Ret {
+        eax: if succeeds { words[0] } else { 0 },
+        ..Ret::default()
+    });
 }
 
 /// Every family the program has: the core's and the ones each crate provides when the engine is put
