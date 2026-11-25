@@ -5406,7 +5406,13 @@ pub(crate) mod tests {
                 }
             }
         }
-        let (mut e, device) = extra_device();
+        // The test table with what the render target asks too: `CheckDeviceFormat` of an X8R8G8B8
+        // render target surface (usage 1, `D3DRTYPE_SURFACE`).
+        let (mut e, device) = device_with(
+            "\nDomain\td1\t15,16\nCheckDeviceFormat\t0 1 16 0 1\t0\t\td1\
+             \nCheckDeviceFormat\t0 1 16 1 1\t0\t\td1",
+            0x40,
+        );
         let out = e.mem.alloc(4);
         let (target, system) = {
             let mut make = |slot: u32, args: &[u32]| {
