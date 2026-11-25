@@ -657,21 +657,20 @@ fn choose_preferred(e: &mut Engine, this: Ptr<NavMesh>, triangles: u32) {
         let main = float_precision();
         let height_limit = double_global(e, HEIGHT_LIMIT);
         let mut best = NONE;
+        // Both tests are the exe's `FCOM`s: a NaN is never nearer and never low enough.
         for &(key, p) in pairs.as_deref().unwrap_or_default() {
             let distance = squared_xy(main, p[0] - center[0], p[1] - center[1]);
-            if !(distance < nearest) {
-                continue;
+            if distance < nearest {
+                let height = typed_call!(
+                    pathing::FAMILY,
+                    0x0040_8840,
+                    point::abs(e, p[2] - center[2])
+                );
+                if f64::from(height) < height_limit {
+                    nearest = distance;
+                    best = key;
+                }
             }
-            let height = typed_call!(
-                pathing::FAMILY,
-                0x0040_8840,
-                point::abs(e, p[2] - center[2])
-            );
-            if !(f64::from(height) < height_limit) {
-                continue;
-            }
-            nearest = distance;
-            best = key;
         }
         e.with_stack(4, |e, local| {
             e.mem.set_u16(local.addr(), best);
