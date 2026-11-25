@@ -43,7 +43,7 @@ fn log(e: &mut Engine, tag: u32, word: u32) {
 
 /// The exe's data page and the stand-ins.
 fn stand_ins(e: &mut Engine) {
-    e.map(LOG, 0x10_0000);
+    e.map(LOG, 0x1000);
     e.map(LIST & !0xfff, 0x1000);
     e.register(ENTER, |e, a| {
         log(e, 1, a[0]);
@@ -72,8 +72,17 @@ fn stand_ins(e: &mut Engine) {
 }
 
 /// One archive: its type bits, its reference count and its directories' file counts. Answers the
-/// archive and each directory's first file entry.
-fn archive(e: &mut Engine, types: u16, refs: u32, counts: &[u32]) -> (u32, Vec<u32>) {
+/// archive and each directory's first file entry. With `entries`, the file entries are one block
+/// there, each directory's after the one before, as a real table's are, with no memory behind them:
+/// the walk only compares addresses with each directory's range. Without, each directory's entries
+/// are a block of their own (so one past a directory's end is in no directory).
+fn archive(
+    e: &mut Engine,
+    types: u16,
+    refs: u32,
+    counts: &[u32],
+    entries: Option<u32>,
+) -> (u32, Vec<u32>) {
     let a = e.mem.alloc(0x1d0);
     let vtable = e.mem.alloc(8);
     e.mem.set_u32(vtable + 4, DELETE_THIS);
@@ -84,18 +93,10 @@ fn archive(e: &mut Engine, types: u16, refs: u32, counts: &[u32]) -> (u32, Vec<u
     let table = e.mem.alloc((16 * n).max(16));
     e.mem.set_u32(a + 0x170, n);
     e.mem.set_u32(a + 0x184, table);
-    // A real table's file entries are one block, each directory's after the one before; a small
-    // one's each a block of its own (so one past a directory's end is in no directory).
-    let contiguous = counts.len() > 64;
-    let total: u32 = counts.iter().sum();
-    let mut next = if contiguous {
-        e.mem.alloc((16 * total).max(16))
-    } else {
-        0
-    };
+    let mut next = entries.unwrap_or(0);
     let mut starts = Vec::new();
     for (i, &count) in counts.iter().enumerate() {
-        let block = if contiguous {
+        let block = if entries.is_some() {
             let block = next;
             next += 16 * count;
             block
@@ -127,10 +128,10 @@ fn list(e: &mut Engine, archives: &[u32]) {
 /// so asking it deletes it) and a null node; answers the file entries `WHICH` names.
 fn world(e: &mut Engine) -> Vec<u32> {
     stand_ins(e);
-    let (meshes, m) = archive(e, 1, 1, &[3, 1, 0, 5]);
-    let (textures, t) = archive(e, 2, 1, &[2, 4]);
-    let (meshes2, m2) = archive(e, 1, 2, &[1]);
-    let (dying, d) = archive(e, 4, 0, &[2]);
+    let (meshes, m) = archive(e, 1, 1, &[3, 1, 0, 5], None);
+    let (textures, t) = archive(e, 2, 1, &[2, 4], None);
+    let (meshes2, m2) = archive(e, 1, 2, &[1], None);
+    let (dying, d) = archive(e, 4, 0, &[2], None);
     list(e, &[meshes, 0, textures, dying, meshes2]);
     vec![
         m[0],                 // the first archive's first entry
@@ -235,8 +236,8 @@ fn real_archives(data: &std::path::Path) -> Vec<(String, u16, Vec<u32>)> {
 }
 
 /// Opt-in (`NV_DATA`): every BSA's real directory table in one list, name order; for each archive
-/// its first directory's first entry, its middle one's last entry and the end of its last one, under
-/// any type and each archive's own type bits, and one entry in no archive.
+/// its first directory's first entry, its middle one's last entry and the end of its last one, and
+/// one entry in no archive, under any type, the meshes bit, the textures bit and 0x10.
 #[test]
 #[ignore = "needs a Data folder with BSAs (set NV_DATA)"]
 fn owner_of_real_archives() {
@@ -257,8 +258,10 @@ fn owner_of_real_archives() {
             stand_ins(e);
             let mut archives = Vec::new();
             let mut entries = Vec::new();
-            for (_, types, counts) in all {
-                let (a, starts) = archive(e, *types, 1, counts);
+            for (i, (_, types, counts)) in all.iter().enumerate() {
+                // Each archive's file entries 16 MB apart, above the memory the test maps.
+                let entries_at = 0x4000_0000 + 0x0100_0000 * i as u32;
+                let (a, starts) = archive(e, *types, 1, counts, Some(entries_at));
                 archives.push(a);
                 let mid = counts.len() / 2;
                 entries.push(starts.first().copied().unwrap_or(0));
