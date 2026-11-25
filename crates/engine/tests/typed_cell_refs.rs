@@ -5949,3 +5949,684 @@ fn the_extra_data_worlds_reach_every_branch() {
         );
     }
 }
+
+// ---- The extra data family's loader, InitItem and save writer ----------------------------------
+
+/// What the loader, `InitItem` and the save writer do in place beside the family's own: the file's
+/// chunk size and byte-swap flag, a form's type and id, a reference's extra list, a simple list's
+/// emptiness and item store, the map marker's flags and reputation, the audio marker's controller
+/// and its store, the big-endian flag, the distant data's point constructor.
+const XF_IN_PLACE: &[u32] = &[
+    0x0040_1660,
+    0x0040_1680,
+    0x0040_1170,
+    0x0084_e3a0,
+    0x005d_43c0,
+    0x0082_56d0,
+    0x0072_6c60,
+    0x0043_8ed0,
+    0x0043_8ef0,
+    0x0044_de80,
+    0x0044_edb0,
+    0x0059_bb30,
+    0x0070_37c0,
+    0x0040_1500,
+    0x0041_6870,
+];
+
+trait XfCase {
+    fn xf_case(self) -> Diff;
+}
+
+impl XfCase for Diff {
+    fn xf_case(self) -> Diff {
+        self.extra_data_case()
+            .family(&engine_typed::pathing::PATHING)
+            .ignore_calls(XF_IN_PLACE)
+    }
+}
+
+/// The stand-ins' seed, the chunk the file stands at, their draw count, the file's next word, the
+/// pool of blocks, and a log of what the messages, the chunk adds and the coins said.
+const XF_SEED: u32 = CONTROL + 0x400;
+const XF_CHUNK: u32 = CONTROL + 0x404;
+const XF_DRAWS: u32 = CONTROL + 0x408;
+const XF_POOL_AT: u32 = CONTROL + 0x410;
+const XF_LOG_N: u32 = CONTROL + 0x440;
+const XF_LOG: u32 = CONTROL + 0x444;
+const XF_LOG_MAX: u32 = 0x60;
+/// A reference's vtable slot 0x100 (whether it is an actor that lives) answers a coin.
+const XF_COIN_FN: u32 = 0x00ff_c200;
+/// The pool's blocks: each word 0, a small id (page 0), or a later block, so walks end.
+const XF_POOL: u32 = 6;
+const XF_SMALL: [u32; 3] = [0x40, 0x1e, 0x37];
+
+/// A draw of the stand-ins: the case's seed and their count.
+fn xf_draw(e: &mut Engine, n: u32) -> u32 {
+    let k = e.mem.u32(XF_DRAWS).wrapping_add(1);
+    e.mem.set_u32(XF_DRAWS, k);
+    Draw(k.wrapping_mul(0x9e37_79b9) ^ e.mem.u32(XF_SEED)).next(n)
+}
+
+/// A line of the log.
+fn xf_note(e: &mut Engine, word: u32) {
+    let n = e.mem.u32(XF_LOG_N);
+    if n < XF_LOG_MAX {
+        e.mem.set_u32(XF_LOG + 4 * n, word);
+        e.mem.set_u32(XF_LOG_N, n + 1);
+    }
+}
+
+/// The log's lines.
+fn xf_lines(e: &Engine) -> Vec<u32> {
+    (0..e.mem.u32(XF_LOG_N))
+        .map(|i| e.mem.u32(XF_LOG + 4 * i))
+        .collect()
+}
+
+/// A stand-in answering 0 or 1 (a load's success, a loop check, a health, a string length).
+fn xf_coin(e: &mut Engine, _: &[u32]) -> Ret {
+    let coin = xf_draw(e, 2);
+    xf_note(e, 0xc0_0000 | coin);
+    ret(coin)
+}
+
+/// A stand-in answering its second word or 0 (a region found or not, an occlusion plane).
+fn xf_maybe(e: &mut Engine, a: &[u32]) -> Ret {
+    let pick = xf_draw(e, 3);
+    ret(if pick == 0 {
+        0
+    } else {
+        a.get(1).copied().unwrap_or(a[0])
+    })
+}
+
+/// The log (`005b5e40`) and the chunk adds: their first word logged.
+fn xf_logged(e: &mut Engine, a: &[u32]) -> Ret {
+    xf_note(e, a[0]);
+    Ret::default()
+}
+
+/// `TESFile::GetTESChunk`: the case's chunk.
+fn xf_chunk(e: &mut Engine, _: &[u32]) -> Ret {
+    ret(e.mem.u32(XF_CHUNK))
+}
+
+/// Words the file holds: none, one, a count of three with the master flag, a small id, a
+/// signalling NaN, 1.0, a negative count of two.
+const XF_FILE_WORDS: [u32; 7] = [
+    0,
+    1,
+    0x0001_0003,
+    0x40,
+    0x7fa0_0001,
+    0x3f80_0000,
+    0x8000_0002,
+];
+
+/// `TESFile::GetChunkData(&word)`: the next word of the file into the local.
+fn xf_chunk_word(e: &mut Engine, a: &[u32]) -> Ret {
+    let word = XF_FILE_WORDS[xf_draw(e, 7) as usize];
+    e.mem.set_u32(a[1], word);
+    ret(1)
+}
+
+/// `TESFile::GetChunkData(buffer, size)`: the file's words into the buffer (its last bytes too).
+fn xf_chunk_data(e: &mut Engine, a: &[u32]) -> Ret {
+    for i in 0..a[2] {
+        if i % 4 == 0 {
+            let word = XF_FILE_WORDS[xf_draw(e, 7) as usize];
+            for (k, byte) in word.to_le_bytes().into_iter().enumerate() {
+                if i + (k as u32) < a[2] {
+                    e.mem.set_u8(a[1] + i + k as u32, byte);
+                }
+            }
+        }
+    }
+    ret(1)
+}
+
+/// `TESForm::AddCompileIndex(&id, file)`: the id's bit 0 flipped.
+fn xf_compile_index(e: &mut Engine, a: &[u32]) -> Ret {
+    let id = e.mem.u32(a[0]);
+    e.mem.set_u32(a[0], id ^ 1);
+    Ret::default()
+}
+
+/// The lookup by id: no form for some ids, else a block of the pool.
+fn xf_lookup(e: &mut Engine, a: &[u32]) -> Ret {
+    if a[0] % 3 == 0 {
+        return ret(0);
+    }
+    let pool = e.mem.u32(XF_POOL_AT + 4 * (a[0] % XF_POOL));
+    ret(pool)
+}
+
+/// `__RTDynamicCast`: the form, or none for some forms and targets.
+fn xf_cast(e: &mut Engine, a: &[u32]) -> Ret {
+    let none = xf_draw(e, 4) == 0;
+    ret(if none { 0 } else { a[0] })
+}
+
+/// `BSSimpleList::Count`: the nodes of the list.
+fn xf_list_count(e: &mut Engine, a: &[u32]) -> Ret {
+    let (mut node, mut n) = (a[0], 0u32);
+    while node != 0 && n < 16 {
+        n += 1;
+        node = e.mem.u32(node + 4);
+    }
+    ret(n)
+}
+
+/// What the loader, `InitItem` and the save writer call by address in other units and the list's
+/// other part files: each a stand-in that counts and answers its first word.
+const XF_NOTED: &[u32] = &[
+    0x0047_26f0,
+    0x0089_1170,
+    0x0050_3210,
+    0x0060_ce80,
+    0x0046_2230,
+    0x004f_6320,
+    0x004f_6600,
+    0x005a_e3d0,
+    0x004d_9330,
+    0x0043_a160,
+    0x0043_8bb0,
+    0x0058_9450,
+    0x0068_0890,
+    0x0055_a400,
+    0x0043_8f50,
+    0x0069_2870,
+    0x00c3_35d0,
+    0x0067_c690,
+    0x0043_a4e0,
+    0x0043_8ca0,
+    0x0058_9600,
+    0x0058_9890,
+    0x0043_8fc0,
+    0x0069_dfd0,
+    0x0043_2f30,
+    0x0067_dd20,
+    0x0043_0a90,
+    0x004a_4e90,
+    0x0041_b3d0,
+    0x0041_bd10,
+    0x0041_c090,
+    0x0041_c190,
+    0x0041_c290,
+    0x0041_e160,
+    0x0041_e250,
+    0x0041_e440,
+    0x0042_1430,
+    0x0042_1b70,
+    0x0042_1c60,
+    0x0042_1d50,
+    0x0042_1e40,
+    0x0042_1540,
+    0x0041_b580,
+    0x0042_2220,
+    0x0042_2350,
+    0x0042_eb60,
+    0x0041_ac30,
+    0x0041_bbd0,
+    0x0041_ad00,
+    0x0041_d950,
+    0x0041_da40,
+    0x0041_dc70,
+    0x0041_ece0,
+    0x0041_f080,
+    0x0042_1f30,
+    0x0042_e2c0,
+    0x0041_f1a0,
+    0x0041_f330,
+    0x0041_f940,
+    0x0041_fa60,
+    0x0042_2150,
+    0x0041_fc10,
+    0x0041_fe90,
+    0x0041_fec0,
+    0x0042_0210,
+    0x0042_0440,
+    0x0042_0fd0,
+    0x0042_f200,
+    0x0041_fd00,
+    0x0048_4e60,
+    0x0046_1630,
+    0x0043_7730,
+    0x0041_dcd0,
+    0x0041_e530,
+    0x0043_3db0,
+    0x0043_3ed0,
+    0x0043_4050,
+    0x0067_c6c0,
+    0x0042_0ce0,
+    0x0058_f210,
+    0x0041_edd0,
+    0x0090_5330,
+    0x0063_f7b0,
+    0x004d_93c0,
+    0x0043_a420,
+    0x0043_8c10,
+    0x0043_8f90,
+    0x0058_9560,
+    0x0067_dc80,
+    0x007d_6bb0,
+    0x00a5_8550,
+    0x0041_ec80,
+    0x0040_37d0,
+];
+
+/// The stand-ins of the extra data world and these three's: the file, the forms, the casts, the
+/// log and chunk adds, the coins, the ragdoll extra data's constructor.
+fn xf_stand_ins(e: &mut Engine) {
+    for &addr in XF_NOTED {
+        e.register(addr, noted);
+    }
+    e.register(0x0047_26b0, xf_chunk);
+    e.register(0x0047_27f0, xf_chunk_word);
+    e.register(0x0047_2890, xf_chunk_data);
+    e.register(0x0048_5d50, xf_compile_index);
+    e.register(0x0048_39c0, xf_lookup);
+    e.register(0x00ec_43fb, xf_cast);
+    e.register(0x005a_e380, xf_list_count);
+    e.register(0x00aa_13e0, xd_new);
+    e.register(0x0043_2cb0, built::<0x14>);
+    for addr in [
+        0x005b_5e40,
+        0x0048_5910,
+        0x0048_58f0,
+        0x0048_56d0,
+        0x0048_5990,
+        0x0048_5710,
+        0x0048_56f0,
+    ] {
+        e.register(addr, xf_logged);
+    }
+    for addr in [
+        0x004d_94a0,
+        0x0043_a590,
+        0x0056_aac0,
+        0x0057_5d10,
+        0x005f_0b00,
+        XF_COIN_FN,
+    ] {
+        e.register(addr, xf_coin);
+    }
+    // `BSString::Length` (`004048e0`): the string's 16-bit length at +4 (no 0xffff strings here).
+    e.register(0x0040_48e0, |e, a| ret(u32::from(e.mem.u16(a[0] + 4))));
+    for addr in [0x0042_eb40, 0x004f_66c0, 0x0042_2120] {
+        e.register(addr, xf_maybe);
+    }
+}
+
+/// The pool: `XF_POOL` blocks of 0x100 bytes, each word 0, a small id or a later block (so every
+/// walk through them ends), their addresses at `XF_POOL_AT`.
+fn xf_pool(e: &mut Engine, d: &mut Draw) -> Vec<u32> {
+    let pool: Vec<u32> = (0..XF_POOL).map(|_| e.mem.alloc(0x100)).collect();
+    for (i, &block) in pool.iter().enumerate() {
+        e.mem.set_u32(XF_POOL_AT + 4 * i as u32, block);
+        for offset in (0..0x100).step_by(4) {
+            let later = &pool[i + 1..];
+            let pick = d.next(4 + later.len() as u32) as usize;
+            let word = match pick {
+                0 => 0,
+                1..=3 => XF_SMALL[pick - 1],
+                _ => later[pick - 4],
+            };
+            e.mem.set_u32(block + offset, word);
+        }
+    }
+    pool
+}
+
+/// A word of an extra data's fields: 0, a small id or a block of the pool.
+fn xf_field(d: &mut Draw, pool: &[u32]) -> u32 {
+    let pick = d.next(4 + pool.len() as u32) as usize;
+    match pick {
+        0 => 0,
+        1..=3 => XF_SMALL[pick - 1],
+        _ => pool[pick - 4],
+    }
+}
+
+/// The extra data world (`xd_world`) with the page past page 0 mapped (the world chain's payloads
+/// point there), the big-endian flag for some seeds, the stand-ins and the pool.
+fn xf_world(e: &mut Engine, seed: u32) -> (ExtraWorld, Vec<u32>) {
+    let w = xd_world(e, seed);
+    e.map(0x1000, 0x1000);
+    e.map(0x011c_5000, 0x1000);
+    let mut d = Draw(seed.wrapping_mul(0x2c1b_3c6d) ^ 0x0041_2970);
+    e.mem.set_u8(0x011c_54ba, u8::from(d.next(4) == 0));
+    e.mem.set_u32(XF_SEED, seed);
+    xf_stand_ins(e);
+    let pool = xf_pool(e, &mut d);
+    (w, pool)
+}
+
+/// `n` extra data of `kinds` added at the head of the world's list, their fields from the pool.
+fn xf_chain(e: &mut Engine, w: &ExtraWorld, pool: &[u32], d: &mut Draw, kinds: &[u32], n: u32) {
+    let vt = e.mem.u32(XD_VT);
+    for _ in 0..n {
+        let kind = kinds[d.next(kinds.len() as u32) as usize];
+        let x = e.mem.alloc(0x40);
+        let head = e.mem.u32(w.list + 4);
+        for (k, word) in [vt, kind, head].into_iter().enumerate() {
+            e.mem.set_u32(x + 4 * k as u32, word);
+        }
+        for offset in (0xc..0x40).step_by(4) {
+            let word = xf_field(d, pool);
+            e.mem.set_u32(x + offset, word);
+        }
+        e.mem.set_u32(w.list + 4, x);
+        if kind >> 3 < 0x15 {
+            let flags = e.mem.u8(w.list + 8 + (kind >> 3)) | (1 << (kind & 7));
+            e.mem.set_u8(w.list + 8 + (kind >> 3), flags);
+        }
+    }
+}
+
+/// The chunks the loader knows, and one it does not.
+const fn xf_tag(name: &[u8; 4]) -> u32 {
+    u32::from_le_bytes(*name)
+}
+const XF_CHUNKS: &[u32] = &[
+    xf_tag(b"XACT"),
+    xf_tag(b"XOWN"),
+    xf_tag(b"XGLB"),
+    xf_tag(b"XRNK"),
+    xf_tag(b"XPSN"),
+    xf_tag(b"XCMO"),
+    xf_tag(b"XCAS"),
+    xf_tag(b"XCCM"),
+    xf_tag(b"XCIM"),
+    xf_tag(b"XCWT"),
+    xf_tag(b"XRTM"),
+    xf_tag(b"XLKR"),
+    xf_tag(b"XMRC"),
+    xf_tag(b"XTRG"),
+    xf_tag(b"XEZN"),
+    xf_tag(b"XEMI"),
+    xf_tag(b"XMBR"),
+    xf_tag(b"XLCM"),
+    xf_tag(b"XHLP"),
+    xf_tag(b"XTIM"),
+    xf_tag(b"XCHG"),
+    xf_tag(b"XRDS"),
+    xf_tag(b"XRAD"),
+    xf_tag(b"XHLT"),
+    xf_tag(b"XUSE"),
+    xf_tag(b"XCNT"),
+    xf_tag(b"XAMC"),
+    xf_tag(b"XAMT"),
+    xf_tag(b"XLOC"),
+    xf_tag(b"XRDO"),
+    xf_tag(b"XTEL"),
+    xf_tag(b"XMRK"),
+    xf_tag(b"MMRK"),
+    xf_tag(b"AMRK"),
+    xf_tag(b"XSED"),
+    xf_tag(b"XCLR"),
+    xf_tag(b"XPSL"),
+    xf_tag(b"XRGD"),
+    xf_tag(b"XRGB"),
+    xf_tag(b"XLOD"),
+    xf_tag(b"XESP"),
+    xf_tag(b"XAPD"),
+    xf_tag(b"XATO"),
+    xf_tag(b"XAPR"),
+    xf_tag(b"XACR"),
+    xf_tag(b"XDCR"),
+    xf_tag(b"XMBO"),
+    xf_tag(b"XPCI"),
+    xf_tag(b"XNVP"),
+    xf_tag(b"XNDP"),
+    xf_tag(b"XPWR"),
+    xf_tag(b"XLTW"),
+    xf_tag(b"XPRM"),
+    xf_tag(b"XOCP"),
+    xf_tag(b"XPTL"),
+    xf_tag(b"XPRD"),
+    xf_tag(b"XORD"),
+    xf_tag(b"XPOD"),
+    xf_tag(b"XRMR"),
+    xf_tag(b"XTRI"),
+    xf_tag(b"XPPA"),
+    xf_tag(b"XIBS"),
+    xf_tag(b"XSRF"),
+    xf_tag(b"XSRD"),
+    xf_tag(b"XCMT"),
+    xf_tag(b"XCET"),
+    xf_tag(b"ZZZZ"),
+];
+const XF_LOAD_SEEDS: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
+/// The types whose extra data the loader looks for, placed in the list for some seeds with a
+/// payload block of zeros or none.
+const XF_LOAD_KINDS: [u32; 9] = [0x2a, 0x14, 0x53, 0x92, 0x2b, 0x2c, 0x90, 0x91, 0x68];
+
+/// The loader's world: the list with some of [`XF_LOAD_KINDS`], the file (its chunk size 4, 1, 8,
+/// 0x13 or 0x10, the swap flag set for some seeds), the save buffer (its form none, of type 0x23 or
+/// another). Answers the list, the file and the buffer.
+fn xf_load_world(e: &mut Engine, seed: u32, chunk: u32) -> Vec<u32> {
+    let (w, pool) = xf_world(e, seed);
+    e.mem.set_u32(XF_CHUNK, chunk);
+    let mut d = Draw(seed.wrapping_mul(0x7f4a_7c15) ^ chunk);
+    let vt = e.mem.u32(XD_VT);
+    for kind in XF_LOAD_KINDS {
+        if d.next(2) == 0 {
+            continue;
+        }
+        let x = e.mem.alloc(0x40);
+        let payload = if d.next(4) == 0 { 0 } else { e.mem.alloc(0x40) };
+        let head = e.mem.u32(w.list + 4);
+        for (k, word) in [vt, kind, head, payload].into_iter().enumerate() {
+            e.mem.set_u32(x + 4 * k as u32, word);
+        }
+        e.mem.set_u32(w.list + 4, x);
+        let flags = e.mem.u8(w.list + 8 + (kind >> 3)) | (1 << (kind & 7));
+        e.mem.set_u8(w.list + 8 + (kind >> 3), flags);
+    }
+    let file = e.mem.alloc(0x300);
+    e.mem
+        .set_u32(file + 0x25c, [4, 1, 8, 0x13, 0x10][d.next(5) as usize]);
+    e.mem.set_u8(file + 0x299, u8::from(d.next(3) == 0));
+    let buffer = e.mem.alloc(0x40);
+    let form = [0, pool[0], pool[1]][d.next(3) as usize];
+    e.mem.set_u32(buffer + 0x20, form);
+    if form == pool[0] {
+        e.mem.set_u8(pool[0] + 4, 0x23);
+    }
+    vec![w.list, file, buffer]
+}
+
+#[test]
+fn xf_load_chunk() {
+    Diff::new(entry!(
+        0x0041_44a0,
+        extra_data::load::load_chunk(u32, u32, u32)
+    ))
+    .xf_case()
+    .max_cases(XF_LOAD_SEEDS.len() * XF_CHUNKS.len())
+    .inputs(&[Input::Of(XF_LOAD_SEEDS), Input::Of(XF_CHUNKS)])
+    .setup(|e, case| xf_load_world(e, case.word(0), case.word(1)))
+    .run()
+    .assert_same();
+}
+
+/// The types `InitItem` and the save writer have arms for, and two they leave alone.
+const XF_LIST_KINDS: &[u32] = &[
+    0x03, 0x04, 0x07, 0x08, 0x0e, 0x13, 0x14, 0x18, 0x1e, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+    0x28, 0x2a, 0x2b, 0x2c, 0x31, 0x37, 0x3b, 0x3c, 0x3f, 0x44, 0x51, 0x53, 0x57, 0x59, 0x5a, 0x5c,
+    0x5d, 0x61, 0x62, 0x63, 0x66, 0x67, 0x68, 0x6b, 0x6e, 0x6f, 0x71, 0x72, 0x74, 0x76, 0x77, 0x78,
+    0x7a, 0x7b, 0x80, 0x81, 0x85, 0x8c, 0x8d, 0x90, 0x91, 0x92, 0x0d, 0xa0,
+];
+const XF_LIST_SEEDS: &[u32] = &[
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
+];
+
+/// A list for `InitItem` and the save writer: the world's with 2 to 7 extra data of
+/// [`XF_LIST_KINDS`] at its head, and the reference (its vtable's slot 0x100 a coin, its words from
+/// the pool). Answers the list and the reference.
+fn xf_list_world(e: &mut Engine, seed: u32) -> Vec<u32> {
+    let (w, pool) = xf_world(e, seed);
+    let mut d = Draw(seed.wrapping_mul(0x6c07_8965) ^ 0x0041_6be0);
+    let n = d.next(5);
+    xf_chain(e, &w, &pool, &mut d, XF_LIST_KINDS, n);
+    // Four types in turn at the head, so each type is in the lists of three seeds: with its fields
+    // as drawn (seeds 0 to 14), all 0 (15 to 29: empty lists, no forms), or with its payload a block
+    // of an id the lookup does not find (30 to 44).
+    let count = XF_LIST_KINDS.len() as u32;
+    for j in 0..4 {
+        let kind = XF_LIST_KINDS[((seed * 4 + j) % count) as usize];
+        xf_chain(e, &w, &pool, &mut d, &[kind], 1);
+        let head = e.mem.u32(w.list + 4);
+        match seed / 15 {
+            1 => {
+                for offset in (0xc..0x40).step_by(4) {
+                    e.mem.set_u32(head + offset, 0);
+                }
+            }
+            2 => {
+                // The block's own address is an id the lookup does not find too (`xf_lookup`).
+                let mut block = e.mem.alloc(0x40);
+                while (block ^ 1) % 3 != 0 {
+                    block = e.mem.alloc(0x40);
+                }
+                for offset in (0..0x40).step_by(4) {
+                    e.mem.set_u32(block + offset, 0x37);
+                }
+                e.mem.set_u32(head + 0xc, block);
+                for offset in (0x10..0x40).step_by(4) {
+                    e.mem.set_u32(head + offset, 0x37);
+                }
+            }
+            _ => {}
+        }
+    }
+    let vtable = e.mem.alloc(0x200);
+    e.mem.set_u32(vtable + 0x100, XF_COIN_FN);
+    let reference = e.mem.alloc(0x60);
+    for offset in (4..0x60).step_by(4) {
+        let word = xf_field(&mut d, &pool);
+        e.mem.set_u32(reference + offset, word);
+    }
+    e.mem.set_u32(reference, vtable);
+    vec![w.list, reference]
+}
+
+#[test]
+fn xf_init_item() {
+    Diff::new(entry!(
+        0x0041_6be0,
+        extra_data::init_item::init_item(u32, u32)
+    ))
+    .xf_case()
+    .inputs(&[Input::Of(XF_LIST_SEEDS)])
+    .setup(|e, case| xf_list_world(e, case.word(0)))
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xf_save_list() {
+    Diff::new(entry!(0x0041_2970, extra_data::save::save_list(u32)))
+        .xf_case()
+        .inputs(&[Input::Of(XF_LIST_SEEDS)])
+        .setup(|e, case| vec![xf_list_world(e, case.word(0))[0]])
+        .run()
+        .assert_same();
+}
+
+/// The loader, `InitItem` and the save writer, run as their translations over the tests' worlds,
+/// reach every arm's branches: each message `InitItem` logs, each chunk the save writer adds, both
+/// sides of the coins, the big-endian flag and the file's swap flag.
+#[test]
+fn the_list_load_worlds_reach_every_branch() {
+    let mut lines = std::collections::BTreeSet::<u32>::new();
+    let mut facts = std::collections::BTreeSet::<String>::new();
+    for &seed in XF_LIST_SEEDS {
+        for function in [0x0041_6be0u32, 0x0041_2970] {
+            let mut e = Engine::new_untyped_for_test();
+            let words = xf_list_world(&mut e, seed);
+            facts.insert(format!("big-endian {}", e.mem.u8(0x011c_54ba)));
+            if function == 0x0041_6be0 {
+                e.call(function, &args![words[0], words[1]]);
+            } else {
+                e.call(function, &args![words[0]]);
+            }
+            lines.extend(xf_lines(&e));
+        }
+    }
+    for &seed in XF_LOAD_SEEDS {
+        for &chunk in &XF_CHUNKS[..XF_CHUNKS.len() - 1] {
+            let mut e = Engine::new_untyped_for_test();
+            let words = xf_load_world(&mut e, seed, chunk);
+            facts.insert(format!("swaps {}", e.mem.u8(words[1] + 0x299)));
+            facts.insert(format!("size {}", e.mem.u32(words[1] + 0x25c)));
+            e.call(0x0041_44a0, &args![words[0], words[1], words[2]]);
+            lines.extend(xf_lines(&e));
+        }
+    }
+    let messages: [u32; 25] = [
+        0x0101_4db0,
+        0x0101_4fa8,
+        0x0101_4be0,
+        0x0101_4b88,
+        0x0101_5060,
+        0x0101_4c90,
+        0x0101_4c50,
+        0x0101_4b28,
+        0x0101_4890,
+        0x0101_46b8,
+        0x0101_4684,
+        0x0101_4728,
+        0x0101_50f8,
+        0x0101_50b0,
+        0x0101_4ab8,
+        0x0101_4a80,
+        0x0101_4a18,
+        0x0101_49c0,
+        0x0101_4920,
+        0x0101_4658,
+        0x0101_5000,
+        0x0101_48ec,
+        0x0101_48b8,
+        0x0101_45ac,
+        0x0101_45d8,
+    ];
+    let mut missing: Vec<String> = messages
+        .iter()
+        .filter(|message| !lines.contains(message))
+        .map(|message| format!("message {message:08x}"))
+        .collect();
+    for name in [
+        b"XCWT", b"XCLR", b"XACT", b"XLOD", b"XPSL", b"XCNT", b"XHLT", b"XLOC", b"XMRK", b"XSED",
+        b"XESP", b"XRTM", b"XAPD", b"XAPR", b"XATO", b"XDCR", b"XNDP", b"XMBP", b"XPWR", b"XRDO",
+        b"XPRM", b"XAMT", b"XPRD", b"XOCP", b"XPTL", b"XTRI", b"XORD", b"XPOD", b"XRMR", b"XLRM",
+        b"XIBS", b"XLTW", b"MMRK", b"AMRK", b"XSRF", b"XSRD",
+    ] {
+        if !lines.contains(&xf_tag(name)) {
+            missing.push(format!("chunk {}", String::from_utf8_lossy(name)));
+        }
+    }
+    for coin in [0xc0_0000, 0xc0_0001] {
+        if !lines.contains(&coin) {
+            missing.push(format!("coin {coin:x}"));
+        }
+    }
+    for fact in [
+        "big-endian 0",
+        "big-endian 1",
+        "swaps 0",
+        "swaps 1",
+        "size 4",
+        "size 1",
+        "size 19",
+    ] {
+        if !facts.contains(fact) {
+            missing.push(fact.to_string());
+        }
+    }
+    assert!(missing.is_empty(), "no world reaches {missing:?}");
+}
