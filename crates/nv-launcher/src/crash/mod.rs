@@ -14,6 +14,7 @@
 //! The same on every system: Windows' Play reads the game's exit code, Linux's and macOS's
 //! play.sh passes the program's status on (a signal as 128 + its number, `sh`'s rule).
 
+pub mod consent;
 mod scrub;
 mod system;
 
@@ -761,9 +762,110 @@ pub fn after_run(run: &Run) -> Option<Result<PathBuf, String>> {
     )
 }
 
+/// The example stop line of [`sample`]: said to be an example, with made-up addresses.
+const EXAMPLE_STOP: &str =
+    "Game's main stopped in frame 1234: (an example: what the game's code was doing) (in 00a1b2c3 < 00400000)";
+
+/// How many of the log's last lines [`sample`] shows.
+const SAMPLE_LOG_LINES: usize = 20;
+
+/// The newest game log in `logs` (`game-<time>.log`: the names sort by time).
+fn newest_log(logs: &Path) -> Option<PathBuf> {
+    let mut names: Vec<String> = std::fs::read_dir(logs)
+        .ok()?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("game-") && n.ends_with(".log"))
+        .collect();
+    names.sort();
+    names.pop().map(|n| logs.join(n))
+}
+
+/// What a crash report holds, for the player to read before answering whether reports may be
+/// sent: one made now from this PC (its system, the game profile's settings, the newest game
+/// log's end), around an example stop line, scrubbed as a real one is. Nothing is written.
+pub fn sample(own: &Path, program: &Path, game: Option<&Path>) -> String {
+    let log = newest_log(&own.join("logs")).unwrap_or_default();
+    let run = Run {
+        status: Some(3),
+        shell: if cfg!(windows) {
+            Shell::Windows
+        } else {
+            Shell::Unix
+        },
+        log: &log,
+        started: SystemTime::now(),
+        mods: false,
+        own,
+        program,
+        games: game.into_iter().map(Path::to_path_buf).collect(),
+        table_card: None,
+    };
+    let games: Vec<&Path> = game.into_iter().collect();
+    let scrubber = Scrubber::new(&Known::from_system(&games, program, own));
+    let report = build(
+        &run,
+        &Ending::Stop(EXAMPLE_STOP.into()),
+        &system::facts(),
+        &scrubber,
+        SystemTime::now(),
+    );
+    sample_text(&report)
+}
+
+/// [`sample`]'s text: the report as `report.txt` has it, then the end of its log.
+fn sample_text(report: &Report) -> String {
+    let mut text = report.text();
+    let shown = report.log.len().min(SAMPLE_LOG_LINES);
+    if shown == 0 {
+        text.push_str("\n(No game log yet: a real report has the log's last lines here.)\n");
+    } else {
+        text.push_str(&format!(
+            "\nThe last {shown} lines of your newest game log, as a report would hold them:\n"
+        ));
+        for line in &report.log[report.log.len() - shown..] {
+            text.push_str(line);
+            text.push('\n');
+        }
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The example is made from this PC and says it is an example; it writes nothing, shows
+    /// the newest log's end scrubbed, and says so when there is no log yet.
+    #[test]
+    fn the_example_report_is_made_from_this_pc_and_writes_nothing() {
+        let own = std::env::temp_dir().join(format!("nv-launcher-sample-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&own);
+        std::fs::create_dir_all(&own).unwrap();
+        let text = sample(&own, &own, None);
+        assert!(
+            text.contains("(an example: what the game's code was doing)"),
+            "{text}"
+        );
+        assert!(text.contains("System:"));
+        assert!(text.contains("No game log yet"));
+        let logs = own.join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(logs.join("game-1.log"), "an older run's line\n").unwrap();
+        let home = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap();
+        std::fs::write(logs.join("game-2.log"), format!("first\nat {home}/x.ini\n")).unwrap();
+        let text = sample(&own, &own, None);
+        assert!(
+            text.contains("The last 2 lines of your newest game log"),
+            "{text}"
+        );
+        assert!(text.contains("at <home>/x.ini"), "{text}");
+        assert!(!text.contains("an older run's line"));
+        assert!(!own.join("reports").exists());
+        let _ = std::fs::remove_dir_all(&own);
+    }
 
     #[test]
     fn a_stop_line_a_panic_a_signal_and_a_code_are_crashes_a_clean_end_is_not() {

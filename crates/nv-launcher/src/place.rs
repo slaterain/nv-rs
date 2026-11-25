@@ -122,7 +122,7 @@ pub fn set_sounds(own: &Path, on: bool) -> std::io::Result<()> {
 
 /// Sets `key` in the launcher's own file's `[Launcher]` section, keeping its other lines; never
 /// through a link; written beside it and moved over it.
-fn set_launcher_key(own: &Path, key: &str, value: &str) -> std::io::Result<()> {
+pub fn set_launcher_key(own: &Path, key: &str, value: &str) -> std::io::Result<()> {
     let file = launcher_ini(own);
     if std::fs::symlink_metadata(&file).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err(std::io::Error::other("the launcher's file is a link"));
