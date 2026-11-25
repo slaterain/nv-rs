@@ -447,6 +447,27 @@ mod tests {
             let [from, other, to] = vectors;
             assert!(!taken(&mut e, from, other, to, 50), "the words of {which}");
         }
+        // Only a vector's last word read inside the floats written, the others just below them: a
+        // source's LAST (its FIRST below), or the destination's END (its FIRST and LAST below).
+        for which in 0..3 {
+            let mut e = Engine::new();
+            let block = e.mem.alloc(0x20 + 4 * 60);
+            let storage = block + 0x20;
+            let mut vectors = [vector(&mut e, 50, 50), vector(&mut e, 50, 50), 0];
+            if which < 2 {
+                let data = e.mem.u32(vectors[which] + FIRST);
+                vectors[which] = vector_at(&mut e, storage - LAST, data, 50, 50);
+                let to = e.mem.alloc(0x20);
+                vectors[2] = vector_at(&mut e, to, storage, 0, 60);
+            } else {
+                vectors[2] = vector_at(&mut e, storage - END, storage, 0, 60);
+            }
+            let [from, other, to] = vectors;
+            assert!(
+                !taken(&mut e, from, other, to, 50),
+                "the last word of {which}"
+            );
+        }
         // Floats read or written past 4 GB: either source's, or the destination's.
         for which in 0..3 {
             let mut e = Engine::new();

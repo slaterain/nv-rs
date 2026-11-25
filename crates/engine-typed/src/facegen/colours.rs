@@ -15,8 +15,9 @@
 //! `operator delete`; the length error. What is done in place: the library's helpers that only
 //! answer a word (the pointer and iterator category tags `0065e750` and `0065fd70`, the unchecked
 //! pointer `0065fe40`, the placement `operator new` `006e6da0`, the allocator's `max_size`
-//! `0064e2d0`), the element copies and fills, and the element destructor (`0065e9a0`), which calls
-//! only the empty `0040fbe0`: nothing to do for an element that goes.
+//! `0064e2d0`), the element copies and fills, `std::fill` (`0064e4b0`) of the empty range the
+//! in-place insert passes it (it writes nothing), and the element destructor (`0065e9a0`), which
+//! calls only the empty `0040fbe0`: nothing to do for an element that goes.
 //!
 //! No float maths: the colours are copied as words.
 
