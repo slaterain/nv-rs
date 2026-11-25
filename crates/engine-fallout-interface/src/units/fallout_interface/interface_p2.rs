@@ -1008,15 +1008,19 @@ pub fn fn_00706e80(e: &mut Engine) -> f32 {
 /// constant of `00706e80` times (slot `0x90` of one result of that object's
 /// slot `0xc8`, called with 0) divided by (slot `0x8c` of another result of
 /// the same call, called with 0), the two counts read as unsigned.
+///
+/// The steps are the exe's x87 instructions at the running thread's precision (00706ee0..00706f13):
+/// the two counts loaded whole (`FILD qword`), the `FDIV` stored as a double, the `FMUL` by the
+/// float, `FSTP dword`.
 pub fn fn_00706e90(e: &mut Engine) -> f32 {
     let object = e.call(0x0043_c4b0, &[]).u32();
     let first = e.vcall(object, 0xc8, &[]).u32();
     let second = e.vcall(object, 0xc8, &[]).u32();
-    let divisor = e.vcall(second, 0x8c, &args![0u32]).u32() as f64;
-    let dividend = e.vcall(first, 0x90, &args![0u32]).u32() as f64;
-    let ratio = dividend / divisor;
-    let base = fn_00706e80(e) as f64;
-    (base * ratio) as f32
+    let divisor = f64::from(e.vcall(second, 0x8c, &args![0u32]).u32());
+    let dividend = f64::from(e.vcall(first, 0x90, &args![0u32]).u32());
+    let ratio = x87_div(dividend, divisor);
+    let base = f64::from(fn_00706e80(e));
+    f32::from_bits(x87_store32(x87_mul(base, ratio)))
 }
 
 // Translated from 00706f20 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1983,8 +1987,11 @@ pub fn interface_initialize_tabline(
             count += 1;
             e.call(STRING_ASSIGN, &args![string, name_at(count as usize)]);
         }
-        let line_size = tile_float(e, tile, TRAIT_0FB1) as f64;
-        let share = (line_size - total as f64) / (count as f64 + 1.0);
+        // 00707d16..00707d25: `FISUB` and `FIDIV` (the count plus one as a signed word) at the
+        // running thread's precision, then `_ftol2`.
+        let line_size = f64::from(tile_float(e, tile, TRAIT_0FB1));
+        let difference = x87_sub(line_size, f64::from(total));
+        let share = x87_div(difference, f64::from(count.wrapping_add(1) as i32));
         let left_line_length = double_to_int(e, share);
         let trait_id = e
             .call(TILE_TEXT_TO_TRAIT, &args![LEFT_LINE_LENGTH_NAME])
@@ -4381,6 +4388,31 @@ mod tests {
         assert_eq!(e.call(0x0070_6e90, &[]).f32(), 5.0);
         assert_eq!(logged(&e, 0x0200_0002), vec![vec![object, 0]]);
         assert_eq!(logged(&e, 0x0200_0003), vec![vec![object, 0]]);
+    }
+
+    /// 00706ee0..00706f13 on the main thread (24-bit precision): the quotient is rounded to a
+    /// float before the product, so 1280 * (768 / 1366) is 719.64856, where one rounding of the
+    /// product kept in a double gives 719.648621.
+    #[test]
+    fn fn_00706e90_rounds_the_quotient_then_the_product_at_the_thread_precision() {
+        let (mut e, _) = text_engine();
+        e.set_global(ASPECT_RATIO_CONSTANT, 1280.0f32);
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, 0x0200_2000);
+        e.put_vtable(0x0200_2000, &[0u32; 0x40]);
+        e.mem.set_u32(0x0200_2000 + 0xc8, 0x0200_0001);
+        e.mem.set_u32(0x0200_2000 + 0x8c, 0x0200_0002);
+        e.mem.set_u32(0x0200_2000 + 0x90, 0x0200_0003);
+        stub(&mut e, 0x0043_c4b0, object);
+        stub(&mut e, 0x0200_0001, object);
+        stub(&mut e, 0x0200_0002, 1366);
+        stub(&mut e, 0x0200_0003, 768);
+        crate::x87::set_control_word(0x007f);
+        let value = e.call(0x0070_6e90, &[]).f32();
+        crate::x87::set_control_word(crate::x87::DEFAULT_CONTROL_WORD);
+        assert_eq!(value.to_bits(), 0x4433_e982, "{value}");
+        let once = (1280.0f64 * (768.0 / 1366.0)) as f32;
+        assert_ne!(once, value, "the case tells the two roundings apart");
     }
 
     #[test]
