@@ -155,15 +155,15 @@ https://github.com/slaterain/nv-rs/issues
 At its first start the launcher asks whether crash reports may be sent to nv-rs's developers
 through Sentry (sentry.io): nothing is sent without your yes, and Settings, Crash reports, changes
 the answer. A report sent is the one kept in the reports folder, without an F12 report's note
-and place and without the game's F12 lines in its log; envelope.txt in its folder is what was
-sent.
+and without where you were in the game (its log's F12 lines and the places in its hitch lines
+stay on this PC); envelope.txt in its folder is what was sent, or would have been.
 
 Say that it is the Linux preview, your distribution and its version, your graphics card and
 driver, and how you installed the game (Steam, Flathub or Snap Steam, Heroic, Lutris, copied).
 If the game stopped, the launcher (nv-rs) keeps a crash report in the reports folder above (a
 crash-<date and time> folder, your user name and folder names taken out of it): attach its
-report.txt and log.txt. Otherwise attach the newest game-*.log from the logs folder above. Attach the report folder
-from reports too if you made one with F12. Logs can show your user name in folder paths: look
-through them first if that matters to you. Never attach game files.
+report.txt and log.txt. Otherwise attach the newest game-*.log from the logs folder above.
+Attach the report folder from reports too if you made one with F12. Logs can show your user
+name in folder paths: look through them first if that matters to you. Never attach game files.
 
 Licence terms and notices are in LICENSE, LEGAL.md, THIRD-PARTY-NOTICES.txt and the licenses folder.
