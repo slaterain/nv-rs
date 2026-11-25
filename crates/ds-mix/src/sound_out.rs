@@ -1580,6 +1580,17 @@ mod tests {
         assert_eq!(ASKS.load(Ordering::SeqCst), 1);
     }
 
+    /// A stand-in ask held until `go` is set: at most five seconds, so a wait in the wrong place
+    /// fails its test instead of hanging it.
+    fn held_until(go: &AtomicBool) {
+        for _ in 0..5000 {
+            if go.load(Ordering::SeqCst) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
     /// Asking ahead returns while the system has not answered yet; the first need then waits for
     /// that answer (and asks nothing of its own).
     #[test]
@@ -1588,9 +1599,7 @@ mod tests {
         static ASKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         fn ask() -> Mix {
             ASKS.fetch_add(1, Ordering::SeqCst);
-            while !GO.load(Ordering::SeqCst) {
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
+            held_until(&GO);
             Some((22050, Layout::MONO))
         }
         let state = Mutex::new(Answer::Unasked);
@@ -1631,9 +1640,7 @@ mod tests {
     fn asking_again_replaces_the_answer() {
         static GO: AtomicBool = AtomicBool::new(false);
         fn held() -> Mix {
-            while !GO.load(Ordering::SeqCst) {
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
+            held_until(&GO);
             Some((44100, Layout::STEREO))
         }
         fn changed() -> Mix {
