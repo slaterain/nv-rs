@@ -10,11 +10,12 @@
 //! that file (a build from source, a test package) sending is off. A fork's release package sends
 //! to nv-rs's project unless the fork changes that file.
 //!
-//! Nothing personal is sent: the report is the scrubbed one kept on disk, without an F12
-//! report's note and place, the game's own `F12: ` log lines, and the places (cell or
-//! worldspace, its form id, the grid square) of its `hitch:` lines, all of which stay in the
-//! local copy; the event has no user, no IP address field and no computer name, and its tags
-//! name only the system, the renderer, the kind of end and the profile.
+//! What is sent is the scrubbed report kept on disk: where the player was in the game goes with
+//! it (an F12 report's place, the log's `F12: ` lines and its `hitch:` lines' cells and
+//! worldspaces), and so does the note of an F12 report made in that run, both scrubbed like the
+//! rest (user and computer names, folders, e-mail and network addresses). Nothing personal is
+//! sent: the event has no user, no IP address field and no computer name, and its tags name only
+//! the system, the renderer, the kind of end and the profile.
 
 use super::Report;
 use std::ffi::OsString;
@@ -149,7 +150,8 @@ pub fn release(report: &Report) -> String {
 }
 
 /// The event: the stop as its exception (the service's title for the group), level fatal, the
-/// release, tags to sort by, the system as contexts, the settings and mods as extra data, and
+/// release, tags to sort by, the system as contexts, the settings, mods and an F12 report made
+/// in the run (its folder, its place, the player's note when there is one) as extra data, and
 /// the fingerprint that groups the same crash. No user, no IP address, no server name.
 pub fn event_json(report: &Report, id: &str) -> String {
     let system = |k: &str| {
@@ -177,6 +179,23 @@ pub fn event_json(report: &Report, id: &str) -> String {
         .iter()
         .map(|(k, v)| format!("{}:{}", json(k), json(v)))
         .collect();
+    let mut extra = vec![
+        format!("\"what happened\":{}", json(&what)),
+        format!("\"settings\":{}", json_list(&report.settings)),
+        format!("\"mods\":{}", json_list(&report.mods)),
+    ];
+    if let Some(f12) = &report.f12 {
+        extra.push(format!(
+            "\"F12 report\":{}",
+            json(&format!("reports/{}", f12.folder))
+        ));
+        if let Some(place) = &f12.place {
+            extra.push(format!("\"F12 place\":{}", json(place)));
+        }
+        if let Some(note) = &f12.note {
+            extra.push(format!("\"F12 note\":{}", json(note)));
+        }
+    }
     let parts = [
         format!("\"event_id\":{}", json(id)),
         format!("\"timestamp\":{secs}"),
@@ -200,23 +219,17 @@ pub fn event_json(report: &Report, id: &str) -> String {
             json(system("Graphics card")),
             context.join(",")
         ),
-        format!(
-            "\"extra\":{{\"what happened\":{},\"settings\":{},\"mods\":{}}}",
-            json(&what),
-            json_list(&report.settings),
-            json_list(&report.mods)
-        ),
+        format!("\"extra\":{{{}}}", extra.join(",")),
         format!("\"fingerprint\":{}", json_list(&report.fingerprint)),
     ];
     format!("{{{}}}", parts.join(","))
 }
 
-/// The envelope of `report` for `dsn`: its header, the event, and the log as `log.txt` (without
-/// the game's `F12: ` lines and its hitch lines' places: [`Report::sent_log`]), each item's
-/// length in bytes in its header.
+/// The envelope of `report` for `dsn`: its header, the event, and the log as `log.txt` (as kept
+/// on this PC, every line whole), each item's length in bytes in its header.
 pub fn envelope(report: &Report, dsn: &Dsn, id: &str, sent_at: &str) -> Vec<u8> {
     let event = event_json(report, id);
-    let mut log = report.sent_log().join("\n");
+    let mut log = report.log.join("\n");
     log.push('\n');
     let mut out = format!(
         "{{\"event_id\":{},\"dsn\":{},\"sent_at\":{}}}\n",
@@ -563,60 +576,95 @@ mod tests {
         }
     }
 
-    /// An F12 report's note and place stay on this PC: not in the envelope, and the question
-    /// before sending shows the report without them and says so.
+    /// An F12 report made in the run goes with the report: its folder, its place and the
+    /// player's note as the event's extra data, and the question before sending shows them. A
+    /// note not written is none (the place still goes); without an F12 report the event names
+    /// none.
     #[test]
-    fn an_f12_reports_note_and_place_are_not_sent() {
+    fn an_f12_reports_place_and_note_are_sent() {
+        let d = Dsn::parse(DSN).unwrap();
+        let id = "0123456789abcdef0123456789abcdef";
+        let sent =
+            |r: &Report| String::from_utf8(envelope(r, &d, id, "2001-09-09T01:46:40Z")).unwrap();
+        let plain = sent(&report());
+        assert!(!plain.contains("F12"), "{plain}");
         let mut r = report();
         r.f12 = Some(crate::crash::F12 {
             folder: "717".into(),
-            note: Some("the door would not open".into()),
-            place: Some("Goodsprings, by the saloon".into()),
-        });
-        let d = Dsn::parse(DSN).unwrap();
-        let id = "0123456789abcdef0123456789abcdef";
-        let text = String::from_utf8(envelope(&r, &d, id, "2001-09-09T01:46:40Z")).unwrap();
-        let asked = crate::crash::question(&r);
-        for f12 in ["door would not open", "Goodsprings", "reports/717"] {
-            assert!(!text.contains(f12), "{f12} in {text}");
-            assert!(!asked.contains(f12), "{f12} in {asked}");
-        }
-        assert!(r.text().contains("the door would not open"));
-        assert!(
-            asked.contains(
-                "The note and place of the F12 report made during this run stay on this PC."
+            note: Some("the door would not open\nafter I saved".into()),
+            place: Some(
+                "interior cell: GSDocMitchellHouse (0x00104c1c)\nposition: 125 -340 7".into(),
             ),
-            "{asked}"
-        );
-        assert!(
-            asked
-                .contains("The log's last 2 lines go with it, without where you were in the game."),
-            "{asked}"
-        );
+        });
+        let text = sent(&r);
+        for part in [
+            "\"F12 report\":\"reports/717\"",
+            "\"F12 place\":\"interior cell: GSDocMitchellHouse (0x00104c1c)\\nposition: 125 -340 7\"",
+            "\"F12 note\":\"the door would not open\\nafter I saved\"",
+        ] {
+            assert!(text.contains(part), "{part} not in {text}");
+        }
+        let asked = crate::crash::question(&r);
+        for part in [
+            "F12 report made during this run: reports/717\n",
+            "  Where you were:\n    interior cell: GSDocMitchellHouse (0x00104c1c)\n    position: 125 -340 7\n",
+            "  Your note:\n    the door would not open\n    after I saved\n",
+            "\nThe log's last 2 lines go with it.\n",
+        ] {
+            assert!(asked.contains(part), "{part} not in {asked}");
+        }
+        assert!(!asked.contains("stay on this PC"), "{asked}");
+        // A note the player did not write: none goes, the place still does.
+        r.f12.as_mut().unwrap().note = None;
+        let text = sent(&r);
+        assert!(!text.contains("F12 note"), "{text}");
+        assert!(text.contains("\"F12 place\":\"interior cell: "), "{text}");
+        let asked = crate::crash::question(&r);
+        assert!(asked.contains("  Your note: (not written)\n"), "{asked}");
     }
 
-    /// A game log as the game writes it, an F12 report and hitches in its last lines: the game's
-    /// own `F12: place:` and `F12: report in` lines and the hitch lines' places stay in the kept
-    /// log.txt and never reach the envelope, nor the question's count of lines; the hitches'
-    /// timings and causes go.
+    /// A game log as the game writes it, an F12 report and hitches in its last lines, and that F12
+    /// report's folder, built into a report and its envelope: the game's own `F12: place:` and
+    /// `F12: report in` lines and the hitch lines go whole, their places too; so do the F12
+    /// report's place and the player's words in its note (never the note's template). The user's
+    /// name, folders, e-mail and network addresses are taken out of all of them, nothing of the
+    /// picture goes, and the log sent is the log kept.
     #[test]
-    fn the_games_f12_lines_are_not_sent() {
-        let root = std::env::temp_dir().join(format!("nv-launcher-f12-log-{}", std::process::id()));
+    fn where_the_player_was_and_the_f12_note_are_sent_scrubbed() {
+        let root =
+            std::env::temp_dir().join(format!("nv-launcher-f12-sent-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("Profiles").join("jtest");
         let own = root.join("userdata");
         std::fs::create_dir_all(own.join("logs")).unwrap();
+        let f12 = own.join("reports").join("007");
+        std::fs::create_dir_all(&f12).unwrap();
+        let template = "Write here what went wrong and what you did just before it:\r\n\r\n";
+        std::fs::write(
+            f12.join("note.txt"),
+            format!(
+                "{template}Jtest's door would not open. Mail jtest@mail.example.net; my notes are in {}\\notes.txt; server 192.168.1.20\r\n",
+                home.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            f12.join("place.txt"),
+            "interior cell: Jtest_Shack (0x0100abcd)\r\nposition: 125 -340 7\r\nview: pitch 0.0 heading 90.0 (degrees)\r\ngame hour: 9.50\r\nweather: none\r\nlighting: NV_D3D9=wgpu\r\nconsole: coc Jtest_Shack; player.setpos x 125\r\n",
+        )
+        .unwrap();
+        std::fs::write(f12.join("picture.bmp"), "BM picture-bytes").unwrap();
         let log = own.join("logs").join("game-1.log");
         let stop =
             "Game's main stopped in frame 900: read of 1a2b3c00 not mapped (in 00412345 < 0040cafe)";
         let lines = [
             "NV_D3D9=wgpu: drawing with Some Card (Vulkan)".to_string(),
-            "F12: place: Doc Mitchell's house (GSDocMitchellHouse); position 125.0 -340.5 7.2; view 90.0; game hour 9.50; weather clear; lighting interior; coc GSDocMitchellHouse".to_string(),
-            format!(
-                "F12: report in {}",
-                own.join("reports").join("007").display()
-            ),
+            "F12: place: interior cell: Jtest_Shack (0x0100abcd); position: 125 -340 7; view: pitch 0.0 heading 90.0 (degrees); game hour: 9.50; weather: none; lighting: NV_D3D9=wgpu; console: coc Jtest_Shack; player.setpos x 125".to_string(),
+            format!("F12: report in {}", f12.display()),
             "hitch: 64.0 ms big (typical 11.9) frame 812 at 14.0 s, interior Doc Mitchell's House (0x00104c1c); stages ms: update 40.1, before draw 0.2, culling and set-up 3.1, world draw 6.0, after world 1.2, present 2.3, after present 11.0; work: main's memory blocks 0 allocated, 22,093 freed; likely cause: freed 22,093 memory blocks".to_string(),
             "hitch: 52.3 ms big (typical 8.1) frame 860 at 16.5 s, first frame after a load, GoodspringsWorld (0x000da726) grid (-3, 5)".to_string(),
+            // A mod's interior with the user's name in it, and a file named after it.
+            "hitch: 30.0 ms (typical 9.0) frame 870 at 17.0 s, interior Jtest's Shack (0x0100abcd); largest read 2.1 MB of Jtest's Shack.nif".to_string(),
             stop.to_string(),
         ];
         std::fs::write(&log, lines.join("\n") + "\n").unwrap();
@@ -624,7 +672,7 @@ mod tests {
             status: Some(3),
             shell: crate::crash::Shell::Windows,
             log: &log,
-            started: SystemTime::now(),
+            started: SystemTime::now() - Duration::from_secs(5),
             mods: false,
             own: &own,
             program: &root,
@@ -632,8 +680,11 @@ mod tests {
             table_card: None,
         };
         let s = crate::crash::scrub::Scrubber::new(&crate::crash::scrub::Known {
-            roots: vec![(root.display().to_string(), "<nv-rs>")],
-            words: Vec::new(),
+            roots: vec![
+                (home.display().to_string(), "<home>"),
+                (root.display().to_string(), "<nv-rs>"),
+            ],
+            words: vec![("jtest".into(), "<user>")],
         });
         let facts = crate::crash::system::Facts {
             os: "x".into(),
@@ -643,53 +694,65 @@ mod tests {
         };
         let ending = Ending::Stop(stop.into());
         let r = crate::crash::build(&run, &ending, &facts, &s, SystemTime::now());
-        assert_eq!(r.log.len(), 6);
-        assert_eq!(r.sent_log().len(), 4);
+        assert_eq!(r.log.len(), 7);
         let d = Dsn::parse(DSN).unwrap();
         let id = "0123456789abcdef0123456789abcdef";
         let text = String::from_utf8(envelope(&r, &d, id, "2001-09-09T01:46:40Z")).unwrap();
-        for place in [
-            "F12:",
-            "GSDocMitchellHouse",
-            "report in",
-            "Doc Mitchell",
-            "0x00104c1c",
-            "GoodspringsWorld",
-            "0x000da726",
-            "grid (",
+        for sent in [
+            "\nF12: place: interior cell: <user>_Shack (0x0100abcd); position: 125 -340 7; view: pitch 0.0",
+            "\nF12: report in <nv-rs>",
+            "\nhitch: 64.0 ms big (typical 11.9) frame 812 at 14.0 s, interior Doc Mitchell's House (0x00104c1c); stages ms: update 40.1, before draw 0.2,",
+            "; likely cause: freed 22,093 memory blocks\n",
+            "\nhitch: 52.3 ms big (typical 8.1) frame 860 at 16.5 s, first frame after a load, GoodspringsWorld (0x000da726) grid (-3, 5)\n",
+            "\nhitch: 30.0 ms (typical 9.0) frame 870 at 17.0 s, interior <user>'s Shack (0x0100abcd); largest read 2.1 MB of <user>'s Shack.nif\n",
+            "\"F12 report\":\"reports/007\"",
+            "\"F12 place\":\"interior cell: <user>_Shack (0x0100abcd)\\nposition: 125 -340 7\\nview: pitch 0.0 heading 90.0 (degrees)\\n",
+            "console: coc <user>_Shack; player.setpos x 125\"",
+            "\"F12 note\":\"<user>'s door would not open. Mail <e-mail>; my notes are in <home>",
+            "; server <ip>\"",
         ] {
-            assert!(!text.contains(place), "{place} in {text}");
+            assert!(text.contains(sent), "{sent} not in {text}");
         }
+        for never in [
+            "jtest",
+            "Jtest",
+            "mail.example.net",
+            "192.168.1.20",
+            "Write here",
+            "picture-bytes",
+            root.to_str().unwrap(),
+        ] {
+            assert!(!text.contains(never), "{never} in {text}");
+        }
+        // The log sent is the one kept, every line whole.
+        let kept = r.save(&own.join("reports")).unwrap();
+        let kept_log = std::fs::read_to_string(kept.join("log.txt")).unwrap();
+        let kept_log = kept_log.replace("\r\n", "\n");
         assert!(
-            text.contains("hitch: 64.0 ms big (typical 11.9) frame 812 at 14.0 s, <place>; stages ms: update 40.1, before draw 0.2,"),
-            "{text}"
-        );
-        assert!(
-            text.contains("; likely cause: freed 22,093 memory blocks"),
-            "{text}"
-        );
-        assert!(
-            text.contains(
-                "hitch: 52.3 ms big (typical 8.1) frame 860 at 16.5 s, first frame after a load, <place>\n"
-            ),
+            text.contains(&format!("\"filename\":\"log.txt\"}}\n{kept_log}\n")),
             "{text}"
         );
         let asked = crate::crash::question(&r);
         assert!(
-            asked
-                .contains("The log's last 4 lines go with it, without where you were in the game."),
+            asked.contains("    <user>'s door would not open."),
             "{asked}"
         );
-        // The kept copy has them all.
-        let kept = r.save(&own.join("reports")).unwrap();
-        let kept_log = std::fs::read_to_string(kept.join("log.txt")).unwrap();
-        for all in [
-            "F12: place: Doc Mitchell's house",
-            "interior Doc Mitchell's House (0x00104c1c); stages",
-            "GoodspringsWorld (0x000da726) grid (-3, 5)",
-        ] {
-            assert!(kept_log.contains(all), "{all} not in {kept_log}");
-        }
+        assert!(
+            asked.contains("    interior cell: <user>_Shack (0x0100abcd)\n"),
+            "{asked}"
+        );
+        assert!(
+            asked.contains("\nThe log's last 7 lines go with it.\n"),
+            "{asked}"
+        );
+        // A note left as F12 wrote it: no note goes, the place still does.
+        std::fs::write(f12.join("note.txt"), template).unwrap();
+        let r = crate::crash::build(&run, &ending, &facts, &s, SystemTime::now());
+        let text = String::from_utf8(envelope(&r, &d, id, "2001-09-09T01:46:40Z")).unwrap();
+        assert!(!text.contains("F12 note"), "{text}");
+        assert!(!text.contains("Write here"), "{text}");
+        assert!(text.contains("\"F12 place\":\"interior cell: "), "{text}");
+        assert!(crate::crash::question(&r).contains("  Your note: (not written)\n"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
