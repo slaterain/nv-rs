@@ -167,9 +167,30 @@ pub fn world(e: &mut Engine, seed: u32, callees: &[u32]) {
             LIST_STEP => list_step(e),
             GET_MANAGER => manager(e, seed),
             MANAGER_READY => manager_ready(e, seed),
+            CONTROLS_POLL => controls_poll(e),
             _ => stand_in(e, at),
         }
     }
+}
+
+/// `00a23010` (`Controls::Poll`), the call each round of a message box's wait loop (`00704010`)
+/// makes: from its third call in a run on, the message box's answer byte (`0119f349`) holds 1, as
+/// the message's callback (`00704130`) stores it once the player answers, so the loop runs a few
+/// rounds and ends.
+const CONTROLS_POLL: u32 = 0x00a2_3010;
+const MESSAGE_RESULT: u32 = 0x0119_f349;
+const POLLS: u32 = LOG + LOG_SIZE - 12;
+
+fn controls_poll(e: &mut Engine) {
+    e.register_double(CONTROLS_POLL, |e, words| {
+        log(e, CONTROLS_POLL, words);
+        let polls = e.mem.u32(POLLS) + 1;
+        e.mem.set_u32(POLLS, polls);
+        if polls >= 3 {
+            e.mem.set_u8(MESSAGE_RESULT, 1);
+        }
+        Ret::default()
+    });
 }
 
 /// `004b7210`: the interface manager, one object of the arena for the whole run (another in each

@@ -1948,10 +1948,9 @@ const DIALOG_MENU_GETTER: u32 = 0x004f_b070;
 /// The byte set while a dialog is open (`011d9514`).
 const IN_DIALOG_FLAG: u32 = 0x011d_9514;
 /// The HUD main menu object (the word at `011d96c0`) and, on it,
-/// `HUDMainMenu::ShowSubtitle` (Xbox PDB), `00775380` and `00775920`.
+/// `HUDMainMenu::ShowSubtitle` (Xbox PDB) and `00775920`.
 const HUD_MAIN_MENU: u32 = 0x011d_96c0;
 const HUD_SHOW_SUBTITLE: u32 = 0x0077_4fd0;
-const HUD_SHOW_SUBTITLE_TIMED: u32 = 0x0077_5380;
 const HUD_HIDE_SUBTITLE: u32 = 0x0077_5920;
 /// `HUDMainMenu::SetRegionText` (Xbox PDB, `cdecl`): a pointer to a
 /// 0x10c-byte request (a word, a 260-byte text, a flag byte at `+0x108`).
