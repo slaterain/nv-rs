@@ -7,11 +7,15 @@
 //!   number, a float, a vtable, a stand-in's address, or a pointer to a LATER object: a chain of
 //!   pointers always ends (at most [`OBJECTS`] steps), so a walk of a list never loops.
 //! - **The exe's data**: the `.rdata` and `.data` pages the menus' code reads ([`DATA`]), filled by the
-//!   same generator (their pointers reach any object).
+//!   same generator (their pointers reach any object), with the words the native code reads in
+//!   place set per seed (`known_words`: the manager, its enter stack and mode, the menus by class,
+//!   the controls object, the renderer's and the camera's values).
 //! - **The callees**: every function the tested code calls by address is a logging stand-in: it
 //!   writes its address and words to the log page ([`LOG`]), so the memory compare sees them as well
 //!   as the harness's call log, and answers a word, a float in ST0 and a word in EDX from a sequence
-//!   (by the call's number and the seed), the same on both sides.
+//!   (by the call's number and the seed), the same on both sides. The functions the native code does
+//!   in place (`in_place::ADDRESSES`) are no stand-ins: their translations run on the translation's
+//!   side, reading the same words, and their calls are left out of its log.
 //!
 //! What it can't see: behaviour that needs real objects (a callee's real effect, a vtable slot
 //! holding a typed function), which the files' own tests in `engine-fallout-interface` keep.
@@ -40,7 +44,7 @@ const LOG_SIZE: u32 = 0x4_0000;
 pub const DATA: [(u32, u32); 2] = [(0x0100_0000, 0x10_0000), (0x0118_0000, 0x10_0000)];
 
 /// The world's seeds: each case builds the world from one.
-pub const SEEDS: &[u32] = &[1, 2, 3];
+pub const SEEDS: &[u32] = &[1, 2, 3, 4];
 
 /// The `k`th object (wrapping).
 pub fn object(k: u32) -> u32 {
@@ -123,7 +127,7 @@ fn stand_in(e: &mut Engine, at: u32) {
 }
 
 /// Builds the world of `seed`, with stand-ins at every address of `callees`.
-pub fn world(e: &mut Engine, seed: u32, callees: &[u32]) {
+pub fn world(e: &mut Engine, seed: u32, callees: &[u32], without: &[u32]) {
     // The first 64 KB and the pages a float word or a stand-in's address points at, as zeros: a null or
     // small pointer, or a float read as one, reads zeros on both sides instead of stopping both.
     for base in [0u32, CODE]
@@ -162,11 +166,12 @@ pub fn world(e: &mut Engine, seed: u32, callees: &[u32]) {
     // A virtual call on a word that is no object (a small number, a float, a stand-in's address) reads
     // its slot from a zero page and calls address 0: a stand-in there too, so both sides go on.
     stand_in(e, 0);
+    known_words(e, seed);
     for &at in callees {
+        if without.contains(&at) {
+            continue;
+        }
         match at {
-            LIST_STEP => list_step(e),
-            GET_MANAGER => manager(e, seed),
-            MANAGER_READY => manager_ready(e, seed),
             CONTROLS_POLL => controls_poll(e),
             _ => stand_in(e, at),
         }
@@ -193,50 +198,88 @@ fn controls_poll(e: &mut Engine) {
     });
 }
 
-/// `004b7210`: the interface manager, one object of the arena for the whole run (another in each
-/// seed's world), as the game's singleton is.
-const GET_MANAGER: u32 = 0x004b_7210;
-/// `009373f0`: whether the manager is ready (its `bFirstInit` byte): ready in two of the three seeds'
-/// worlds, so the functions that start with the check go on in those and stop in the third.
-const MANAGER_READY: u32 = 0x0093_73f0;
-
-fn manager(e: &mut Engine, seed: u32) {
-    e.register_double(GET_MANAGER, move |e, words| {
-        log(e, GET_MANAGER, words);
-        Ret {
-            eax: object(7 + 31 * seed),
-            ..Ret::default()
+/// The exe's words the native code reads in place (the manager singleton, the menus by class, the
+/// controls object, the renderer and camera values) set per seed, so each branch is reached: the
+/// manager ready with the enter stack's placeholder (1) on top and the mode 3 (the five candidate
+/// menus tried) in seed 1, ready with a full enter stack and the mode 2 in seed 2, there but not
+/// ready in seed 3, none in seed 4. The translation reads the same words through its callees.
+fn known_words(e: &mut Engine, seed: u32) {
+    let manager = if seed == 4 { 0 } else { object(7 + 31 * seed) };
+    e.mem.set_u32(SINGLETON, manager);
+    if manager != 0 {
+        e.mem.set_u8(manager, u8::from(seed != 3));
+        let stack: &[u32] = match seed {
+            1 => &[0x3ea, 1],
+            2 => &[
+                0x3ea, 0x3eb, 0x40b, 0x425, 0x3ff, 0x3f1, 0x3f4, 0x420, 0x41d, 0x435,
+            ],
+            _ => &[0x3eb],
+        };
+        for i in 0..10 {
+            let entry = stack.get(i).copied().unwrap_or(0);
+            e.mem.set_u32(manager + 0x114 + 4 * i as u32, entry);
         }
-    });
+        e.mem
+            .set_u32(manager + 0x4bc, if seed == 1 { 3 } else { seed });
+        e.mem.set_u32(manager + 0x0c, if seed == 1 { 2 } else { 1 });
+        e.mem.set_u8(manager + 0x7c, u8::from(seed == 1));
+        e.mem.set_u8(manager + 0xdd, u8::from(seed == 1));
+        // The menus root (+0x9c) with a list to walk (its +4: the head node; each node's first word
+        // the next, its +8 the item).
+        if seed != 3 {
+            e.mem.set_u32(manager + 0x9c, object(60));
+            e.mem.set_u32(object(60) + 4, object(61));
+        }
+    }
+    // The menus by class: one object's words, every id but in seed 2 (only the first 0x16: the
+    // map's, 0x3ff, is the first past the count); the placeholder's five candidates exist in seed 1.
+    e.mem.set_u32(MENU_TABLE, object(200));
+    e.mem.set_u32(object(200) + 4 * 0x16, object(130));
+    e.mem
+        .set_u16(MENU_COUNT, if seed == 2 { 0x16 } else { 0x54 });
+    if seed == 1 {
+        for (k, id) in [0x3eb_u32, 0x3ea, 0x40b, 0x425, 0x3ff]
+            .into_iter()
+            .enumerate()
+        {
+            e.mem
+                .set_u32(object(200) + 4 * (id - 0x3e9), object(120 + k as u32));
+        }
+    }
+    e.mem.set_u32(CONTROLS, object(20));
+    // What 007031e0's unused line number reads through (in the translation only).
+    e.mem.set_u32(0x011f_33cc, 2);
+    e.mem.set_u32(0x011f_33f8, object(150));
+    // The renderer and the camera (00709d50): the flag but in seed 3; the screen; the exe's
+    // constants (the scale 0.75, pi/180 and 1.1 as floats widened, the limit 88.2 degrees, the far
+    // plane 5000); the field of view setting by seed.
+    e.mem.set_u8(0x011c_70ed, u8::from(seed != 3));
+    let (width, height, fov) = match seed {
+        1 => (1280.0f32, 720.0f32, 75.0f32),
+        2 => (1920.0, 1080.0, 90.0),
+        3 => (1024.0, 768.0, 60.0),
+        _ => (800.0, 600.0, 0.0),
+    };
+    e.mem.set_f32(0x0118_948c, width);
+    e.mem.set_f32(0x0118_9490, height);
+    e.mem.set_f32(0x0120_3154, fov);
+    e.mem.set_u32(0x0101_6264, 0x3f40_0000);
+    for (at, bits) in [
+        (0x0102_3128, 0x3c8e_fa35_u32),
+        (0x0102_90f8, 0x3f8c_cccd),
+        (0x0106_ede0, 0x3fc5_0a6b),
+    ] {
+        e.mem.set_u64(at, f64::from(f32::from_bits(bits)).to_bits());
+    }
+    e.mem.set_u32(0x0103_0020, 0x459c_4000);
 }
 
-fn manager_ready(e: &mut Engine, seed: u32) {
-    e.register_double(MANAGER_READY, move |e, words| {
-        log(e, MANAGER_READY, words);
-        Ret {
-            eax: u32::from(seed % 3 != 0),
-            ..Ret::default()
-        }
-    });
-}
-
-/// `0057cbe0` (`thiscall`: the list and a cursor word): the list walks' step. The walks loop until
-/// the cursor is 0, so its stand-in moves the cursor on: to the word after the one it holds (a chain
-/// that ends, as every chain of the arena does), and answers the word it held.
-const LIST_STEP: u32 = 0x0057_cbe0;
-
-fn list_step(e: &mut Engine) {
-    e.register_double(LIST_STEP, |e, words| {
-        log(e, LIST_STEP, words);
-        let cursor = words[1];
-        let held = e.mem.u32(cursor);
-        e.mem.set_u32(cursor, e.mem.u32(held.wrapping_add(4)));
-        Ret {
-            eax: held,
-            ..Ret::default()
-        }
-    });
-}
+/// The manager singleton (`004b7210`'s word), the menus by class (`00a09030`'s data pointer and
+/// count) and the controls object (`007fdf30`'s word).
+const SINGLETON: u32 = 0x011d_8a80;
+const MENU_TABLE: u32 = 0x011f_350c;
+const MENU_COUNT: u32 = 0x011f_3512;
+const CONTROLS: u32 = 0x011f_35cc;
 
 /// What a parameter of the tested function takes.
 #[derive(Clone, Copy, Debug)]
@@ -273,25 +316,52 @@ fn values(arg: Arg) -> &'static [u32] {
 /// The indices of an argument's values (the first `n` of these).
 static INDEX: [u32; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
 
+/// The other families' typed functions the family calls through `typed_call!`: by address in these
+/// tests (their stand-ins answer), each family's own tests run them.
+const OTHER_FAMILIES: &[u32] = &[0x0070_0320, 0x00ec_62c0, 0x006b_3eb0, 0x0084_54f0];
+
 /// The world's settings for a Diff of the family.
 pub trait InArena {
     /// The family named, the seeds and `args`'s values as the cases, the world built with stand-ins
     /// at `callees`; `plain`: the family's functions the translation reaches with a plain Rust call.
+    /// What the family does in place is left out of the translation's calls.
     fn in_arena(self, args: &'static [Arg], callees: &'static [u32], plain: &[u32]) -> Diff;
+    /// The same with no stand-in at `without`'s addresses (their real functions run) and their
+    /// calls left out of the translation's too: for a typed function that leaves out work whose
+    /// result the exe never uses.
+    fn in_arena_without(
+        self,
+        args: &'static [Arg],
+        callees: &'static [u32],
+        plain: &[u32],
+        without: &'static [u32],
+    ) -> Diff;
 }
 
 impl InArena for Diff {
     fn in_arena(self, args: &'static [Arg], callees: &'static [u32], plain: &[u32]) -> Diff {
+        self.in_arena_without(args, callees, plain, &[])
+    }
+
+    fn in_arena_without(
+        self,
+        args: &'static [Arg],
+        callees: &'static [u32],
+        plain: &[u32],
+        without: &'static [u32],
+    ) -> Diff {
         let mut inputs = vec![Input::Of(SEEDS)];
         inputs.extend(args.iter().map(|a| Input::Of(&INDEX[..values(*a).len()])));
         self.family(&engine_typed::interface::INTERFACE)
-            .family(&engine_core::typed::leaf::LEAVES)
             .translation_calls_plainly(plain)
+            .ignore_calls(engine_typed::interface::interface_cpp::in_place::ADDRESSES)
+            .ignore_calls(without)
+            .goes_by_address(OTHER_FAMILIES)
             .inputs(&inputs)
             .max_cases(24)
             .max_calls(400)
             .setup(move |e, case: &Case| {
-                world(e, case.word(0), callees);
+                world(e, case.word(0), callees, without);
                 args.iter()
                     .enumerate()
                     .map(|(i, a)| values(*a)[case.word(i + 1) as usize])
