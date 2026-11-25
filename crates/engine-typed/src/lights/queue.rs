@@ -5,10 +5,13 @@
 //! `00b5c5c0`, the per-geometry updates `00b5b260` and `00b5b410`). Every moving or animating
 //! character goes through it every frame.
 //!
-//! Native code with the exe's calls: the bound test (`BoundWithinLightRadius`, typed) and the add
-//! (`AddTriGeom`, typed) are reached directly, the rest by address; the candidates in the exe's
-//! order, the CRT's `qsort` called with the exe's comparator (`00b5aa70`) and `GetLuminanceToBound`
-//! (`00b9dbe0`, which writes each gathered light's luminance) called as the exe calls them.
+//! Native code with the exe's calls: the bound test (`BoundWithinLightRadius`), the add
+//! (`AddTriGeom`) and `GetLuminanceToBound` (`00b9dbe0`, which writes each gathered light's
+//! luminance) are this family's and reached directly; the objects' `IsNode` and `IsTriBasedGeom`
+//! slots and the RTTI slot of the lamp and the parent are answered in place when they hold the
+//! exe's constant bodies ([`walk::slot_word`]), through the vtable otherwise; the rest by address:
+//! the candidates in the exe's order, the CRT's `qsort` called with the exe's comparator
+//! (`00b5aa70`).
 //!
 //! **The light table (`NV_LIGHT_TABLE`, off by default).** The exe's bound test asks each lamp's
 //! `NiLight` for its kind (a virtual call) and reads its place and radius again for every geometry
@@ -17,7 +20,9 @@
 //! scene node's lighting offset. Each geometry is then tested against the table with the typed
 //! bound test's float steps. Nothing in the object half moves a lamp or changes its kind (its
 //! callees change light lists, fences, flags and luminances only), so every geometry gets the
-//! same lamps in the same order; what goes is the repeated kind call per geometry and lamp.
+//! same lamps in the same order; what goes is the repeated read of each lamp's place and radius
+//! per geometry, and for a lamp class whose RTTI slot holds something other than the exe's bodies
+//! (which are answered in place with the table off too) the repeated kind call.
 //!
 //! **Floats.** Main thread only. The drain's own: the near test's one ordered comparison (150.0
 //! above the bound's radius). The table's bound test: native `f32` in the exe's order, as the
@@ -193,7 +198,6 @@ const SCRAP_DEALLOCATE: u32 = 0x00aa_5610;
 const SCRAP_ALIGNMENT: u32 = 0x010a_2720;
 const QSORT: u32 = 0x00ec_6f20;
 const LUMINANCE_COMPARE: u32 = 0x00b5_aa70;
-const LUMINANCE_TO_BOUND: u32 = 0x00b9_dbe0;
 /// The flag a geometry gets once its lights were redone.
 const LIGHTING_DONE: u32 = 0x40_0000;
 
@@ -550,7 +554,11 @@ pub fn update_start(e: &mut Engine, object: u32, node: u32, skip_culled: u32, co
             }
             e.mem.set_u32(array.wrapping_add(4 * count), light);
             count = count.wrapping_add(1);
-            e.call(LUMINANCE_TO_BOUND, &args![light, bound]);
+            typed_call!(
+                super::FAMILY,
+                0x00b9_dbe0,
+                super::scene_light::luminance_to_bound(e, Ptr::new(light), Ptr::new(bound))
+            );
         });
         if any && (count as i32) > 0 {
             e.call(QSORT, &args![array, count, 4u32, LUMINANCE_COMPARE]);

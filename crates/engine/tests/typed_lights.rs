@@ -1089,7 +1089,7 @@ mod lists {
 mod queue {
     use super::{
         bits, block, geometry, light, logged, ni_light, object, set_logged_answer, stand_ins, tree,
-        words, HALF, LOG, ONE, OTHER_RTTI, RADIUS_FREE_RTTI, TWO, VT_FN,
+        words, HALF, LOG, ONE, OTHER_RTTI, RADIUS_FREE_RTTI, TWO, VT_FN, VT_SLOTS,
     };
     use engine_core::prelude::*;
     use engine_core::typed::diff::{memory_differences_beside_stack, Case, Diff, Input, Value};
@@ -1270,35 +1270,87 @@ mod queue {
         // the lights' and the object's places.
         Diff::new(entry!(0x00b5_dac0, queue::update_start(u32, u32, u32, u32) -> u8))
             .queue_common()
-            .inputs(&[
-                Input::Of(&[0, 1, 4, 5]),
-                Input::Of(&[0, 1, 2, 3]),
-                Input::Flag,
-                Input::Flag,
-                Input::Of(&[3, 0, 1, 7]),
-                Input::Of(&[0, 1, 2]),
-                Input::Flag,
-                Input::F32,
-                Input::F32Swept(ONE),
-            ])
+            .inputs(&START_INPUTS)
             .max_cases(400)
-            .setup(|e, case| {
-                queue_stand_ins(e);
-                let lights = lights_of(e, case, case.word(4) as usize, case.word(5) as usize, 7);
-                let node = scene_node(e, &lights);
-                let object = queued_object(e, case, case.word(0), 7);
-                let p = parent(e, case.word(1), &lights);
-                e.mem.set_u32(object + 0x18, p);
-                // The multibound cast: none, or the node itself with its first child indexed.
-                if case.word(6) == 1 && case.word(0) != 0 {
-                    set_logged_answer(e, 0x13, object);
-                    let first = e.mem.u32(e.mem.u32(object + 0xa0));
-                    set_logged_answer(e, 0x14, first);
-                }
-                vec![object, node, case.word(2), case.word(3)]
-            })
+            .setup(|e, case| start_world(e, case).0)
             .run()
             .assert_same();
+    }
+
+    const START_INPUTS: [Input; 9] = [
+        Input::Of(&[0, 1, 4, 5]),
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Flag,
+        Input::Flag,
+        Input::Of(&[3, 0, 1, 7]),
+        Input::Of(&[0, 1, 2]),
+        Input::Flag,
+        Input::F32,
+        Input::F32Swept(ONE),
+    ];
+
+    /// The world of an object-half case: answers the call's words, the lights, the object and its
+    /// parent.
+    fn start_world(e: &mut Engine, case: &Case) -> (Vec<u32>, Vec<u32>, u32, u32) {
+        queue_stand_ins(e);
+        let lights = lights_of(e, case, case.word(4) as usize, case.word(5) as usize, 7);
+        let node = scene_node(e, &lights);
+        let object = queued_object(e, case, case.word(0), 7);
+        let p = parent(e, case.word(1), &lights);
+        e.mem.set_u32(object + 0x18, p);
+        // The multibound cast: none, or the node itself with its first child indexed.
+        if case.word(6) == 1 && case.word(0) != 0 {
+            set_logged_answer(e, 0x13, object);
+            let first = e.mem.u32(e.mem.u32(object + 0xa0));
+            set_logged_answer(e, 0x14, first);
+        }
+        (
+            vec![object, node, case.word(2), case.word(3)],
+            lights,
+            object,
+            p,
+        )
+    }
+
+    /// The object half with the exe's bodies in every slot the queue answers in place: the tree's
+    /// `IsNode` and `IsTriBasedGeom` (`006815c0`, `00e68810`, `00acbb70`), the lamps' `GetRTTI`
+    /// (the point light's `00a7d790` for the ordinary lamps, the directional light's `00a75c70` for
+    /// the radius-free ones: the same answers as their stand-ins' records) and an other parent's
+    /// (the ambient light's `00a9b390`: neither a room nor the other kind, as its stand-in). The
+    /// exe's bodies are left out of the calls, so a site gone back to the vtable shows as a call
+    /// the translation lacks; with the light table on too (its kind read).
+    #[test]
+    fn lights_update_start_exe_bodies() {
+        for table in [false, true] {
+            queue::force_light_table(Some(table));
+            let report =
+                Diff::new(entry!(0x00b5_dac0, queue::update_start(u32, u32, u32, u32) -> u8))
+                    .queue_common()
+                    .ignore_calls(&super::EXE_BODIES)
+                    .inputs(&START_INPUTS)
+                    .max_cases(400)
+                    .setup(|e, case| {
+                        let (call, lights, object, parent) = start_world(e, case);
+                        super::exe_bodies(e, object);
+                        for l in lights {
+                            let ni = e.mem.u32(l + 0xf8);
+                            let vt = e.mem.u32(ni);
+                            let free = e.mem.u32(vt + VT_SLOTS + 8) == RADIUS_FREE_RTTI;
+                            let body = if free { 0x00a7_5c70 } else { 0x00a7_d790 };
+                            e.mem.set_u32(vt + 8, body);
+                        }
+                        if parent != 0 {
+                            let vt = e.mem.u32(parent);
+                            if e.mem.u32(vt + VT_SLOTS + 8) == OTHER_RTTI {
+                                e.mem.set_u32(vt + 8, 0x00a9_b390);
+                            }
+                        }
+                        call
+                    })
+                    .run();
+            queue::force_light_table(None);
+            report.assert_same();
+        }
     }
 
     /// The inputs of the per-geometry update and its walk: a null node (the accumulator's, or the
@@ -1849,6 +1901,667 @@ mod dead_lights {
                 }
                 dead::set_guard(&e, false);
             }
+        }
+    }
+}
+
+/// The light's own functions (`lights::scene_light`): each world builds the light, its `NiLight`
+/// (with the exe's `GetRTTI` bodies in its RTTI slot, or a stand-in answering a record chained to
+/// one), its lists and the globals the function reads, from the case's words so that each branch
+/// is taken in some case; the luminances run under both control words with swept floats.
+mod scene_light {
+    use super::{
+        bits, block, light, log, logged, object, ret, set_logged_answer, stand_ins, words,
+        EXE_BODIES, HALF, LOG, MINUS_ONE, ONE, OTHER_RTTI, RADIUS_FREE_RTTI, TWO, VT_FN, VT_SLOTS,
+    };
+    use engine_core::prelude::*;
+    use engine_core::typed::diff::{Case, Diff, Input};
+    use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
+    use engine_typed::lights::{self, scene_light};
+
+    const BOTH: [u16; 2] = [OTHER_THREADS, MAIN_THREAD];
+    const NAN: u32 = 0x7fc0_0000;
+    const TEN: u32 = 0x4120_0000;
+    const POINT_RTTI: u32 = 0x011f_4a98;
+    const AMBIENT_RTTI: u32 = 0x011f_5f6c;
+    /// The exe's `GetRTTI` bodies of the point, directional and ambient lights.
+    const POINT_BODY: u32 = 0x00a7_d790;
+    const DIRECTIONAL_BODY: u32 = 0x00a7_5c70;
+    const AMBIENT_BODY: u32 = 0x00a9_b390;
+
+    fn count_up(e: &mut Engine, a: &[u32]) -> Ret {
+        let n = e.mem.u32(a[0]).wrapping_add(1);
+        e.mem.set_u32(a[0], n);
+        ret(n)
+    }
+
+    fn count_down(e: &mut Engine, a: &[u32]) -> Ret {
+        let n = e.mem.u32(a[0]).wrapping_sub(1);
+        e.mem.set_u32(a[0], n);
+        ret(n)
+    }
+
+    /// A stand-in that logs its words under `TAG` and writes its answer word into the `NiPointer`
+    /// its second word points at (a list removal's out pointer).
+    fn out_writer<const TAG: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+        for w in a {
+            log(e, TAG, *w);
+        }
+        let answer = e.mem.u32(LOG + 0x3f00 + 4 * (TAG & 0x3f));
+        e.mem.set_u32(a[1], answer);
+        ret(0)
+    }
+
+    /// The renderer's shadow map release: logs and, when `LOG + 0x3e00` names a word, clears it
+    /// (the light's map, which the typed code must read again).
+    fn release_map(e: &mut Engine, a: &[u32]) -> Ret {
+        for w in a {
+            log(e, 0x20, *w);
+        }
+        let at = e.mem.u32(LOG + 0x3e00);
+        if at != 0 {
+            e.mem.set_u32(at, 0);
+        }
+        ret(0)
+    }
+
+    /// The walk tests' stand-ins and the data these functions read: the imports' counts, the
+    /// deleting slot, the list item free, the exe's 0.0 and 1.0 doubles, `Unitize`'s minimum and
+    /// the spotlight's field of view.
+    fn world(e: &mut Engine) {
+        stand_ins(e);
+        for page in [
+            0x0101_2000,
+            0x0101_7000,
+            0x0102_4000,
+            0x011a_d000,
+            0x011f_5000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        words(e, 0x0101_2060, &[0, 0, 0, 0, 0, 0x3ff0_0000]);
+        words(e, 0x0101_7cf8, &[0xa000_0000, 0x3eb0_c6f7]);
+        e.mem.set_u32(0x0102_49d8, 0x42b4_0000);
+        e.register(0x00fd_f1c0, count_up);
+        e.register(0x00fd_f1c4, count_down);
+        e.register(VT_FN + 4, logged::<0x17>);
+        e.register(0x00e6_e830, logged::<0x18>);
+    }
+
+    /// A counted object (its count at +4) of `size` bytes with its own vtable.
+    fn counted(e: &mut Engine, size: u32, count: u32) -> u32 {
+        let o = object(e, size, 0, 0, OTHER_RTTI);
+        e.mem.set_u32(o + 4, count);
+        o
+    }
+
+    /// An `NiLight` of `kind`: 0 none; 1, 2, 3 the point, ambient and directional lights' exe
+    /// `GetRTTI`; 4, 5 a stand-in answering a record whose base is the point or the ambient light's
+    /// record; 6 a stand-in answering an unrelated record. Its count 1, its place from the case's
+    /// floats at `f`, its radius `radius`.
+    fn ni_light_of(e: &mut Engine, case: &Case, kind: u32, f: usize, radius: u32) -> u32 {
+        if kind == 0 {
+            return 0;
+        }
+        let record = match kind {
+            4 => block(e, 8, &[0, POINT_RTTI]),
+            5 => block(e, 8, &[0, AMBIENT_RTTI]),
+            _ => OTHER_RTTI,
+        };
+        let l = object(e, 0x100, 0, 0, record);
+        let vt = e.mem.u32(l);
+        match kind {
+            1 => e.mem.set_u32(vt + 8, POINT_BODY),
+            2 => e.mem.set_u32(vt + 8, AMBIENT_BODY),
+            3 => e.mem.set_u32(vt + 8, DIRECTIONAL_BODY),
+            _ => {}
+        }
+        e.mem.set_u32(l + 4, 1);
+        words(e, l + 0x8c, &[bits(case, f), bits(case, f + 1), TWO]);
+        e.mem.set_u32(l + 0xe0, radius);
+        l
+    }
+
+    /// A shadow scene light with no planes, its `NiLight` `ni` and its `bCastShadow`.
+    fn plain_light(e: &mut Engine, ni: u32, cast: u8) -> u32 {
+        light(e, &[[0; 4]; 6], 0, ni, 0, cast)
+    }
+
+    trait Own {
+        fn own(self) -> Diff;
+    }
+
+    impl Own for Diff {
+        fn own(self) -> Diff {
+            self.family(&lights::LIGHTS)
+                .family(&leaf::LEAVES)
+                .ignore_calls(&EXE_BODIES)
+                .max_calls(20_000)
+        }
+    }
+
+    #[test]
+    fn lights_set_light() {
+        // The new light's kind; the old one (none, the same, another deleted by its release,
+        // another kept); bDynamicLight; floats for the new light's place.
+        Diff::new(entry!(0x00b9_dda0, scene_light::set_light(Ptr<_>, Ptr<_>)))
+            .own()
+            .inputs(&[
+                Input::Of(&[0, 1, 2, 3, 4, 5, 6]),
+                Input::Of(&[0, 1, 2, 3]),
+                Input::Flag,
+                Input::F32,
+                Input::F32Swept(ONE),
+            ])
+            .max_cases(400)
+            .setup(|e, case| {
+                world(e);
+                let new = ni_light_of(e, case, case.word(0), 3, TEN);
+                let old = match case.word(1) {
+                    0 => 0,
+                    1 => new,
+                    2 => counted(e, 0x40, 1),
+                    _ => counted(e, 0x40, 3),
+                };
+                let l = plain_light(e, old, 0);
+                e.mem.set_u8(l + 0xfc, case.word(2) as u8);
+                words(e, l + 0xd0, &[HALF]);
+                words(e, l + 0x100, &[7, 8, 9]);
+                words(e, l + 0xf4, &[0x0101_0101]);
+                vec![l, new]
+            })
+            .run()
+            .assert_same();
+    }
+
+    #[test]
+    fn lights_construct() {
+        // The block's old contents (a pattern or zeros); the field of view (90.0, a signalling NaN,
+        // which the exe's load and store quiet, minus infinity); the zero point's words.
+        Diff::new(entry!(
+            0x00b9_fda0,
+            scene_light::construct(Ptr<_>) -> Ptr<_>
+        ))
+        .own()
+        .ignore_calls(&[0x00a6_9940, 0x00ec_61c0])
+        .inputs(&[
+            Input::Flag,
+            Input::Of(&[0x42b4_0000, 0x7f80_0001, 0xff80_0000]),
+            Input::F32,
+            Input::F32Swept(MINUS_ONE),
+        ])
+        .max_cases(100)
+        .setup(|e, case| {
+            world(e);
+            let l = e.mem.alloc(0x260);
+            if case.word(0) != 0 {
+                for i in 0..0x98 {
+                    e.mem.set_u32(l + 4 * i, 0x5a5a_0000 | i);
+                }
+            }
+            e.mem.set_u32(0x0102_49d8, case.word(1));
+            words(e, 0x011f_426c, &[bits(case, 2), bits(case, 3), HALF]);
+            vec![l]
+        })
+        .run()
+        .assert_same();
+    }
+
+    /// A list at `list` of `n` items whose elements follow `pattern` (bit `i` clear: item `i`'s
+    /// element null; set: an object with count 1).
+    fn pointer_list(e: &mut Engine, list: u32, n: u32, pattern: u32) {
+        let items: Vec<u32> = (0..n).map(|_| e.mem.alloc(0xc)).collect();
+        for (i, &item) in items.iter().enumerate() {
+            let next = items.get(i + 1).copied().unwrap_or(0);
+            let previous = if i == 0 { 0 } else { items[i - 1] };
+            let element = if pattern >> i & 1 != 0 {
+                counted(e, 0x40, 1)
+            } else {
+                0
+            };
+            words(e, item, &[next, previous, element]);
+        }
+        let (head, tail) = (items.first().copied(), items.last().copied());
+        words(e, list, &[head.unwrap_or(0), tail.unwrap_or(0), n]);
+    }
+
+    fn pop_world(e: &mut Engine, case: &Case) -> Vec<u32> {
+        world(e);
+        let list = block(e, 0xc, &[]);
+        pointer_list(e, list, case.word(0), case.word(1));
+        let out = block(e, 4, &[0xdead_beef]);
+        vec![list, out]
+    }
+
+    #[test]
+    fn lights_pop_head() {
+        Diff::new(entry!(
+            0x00b9_e7c0,
+            scene_light::pop_head(Ptr<_>, Ptr<_>) -> Ptr<_>
+        ))
+        .own()
+        .inputs(&[Input::Of(&[1, 2, 3]), Input::Of(&[0, 1, 2, 5, 7])])
+        .setup(pop_world)
+        .run()
+        .assert_same();
+    }
+
+    #[test]
+    fn lights_pop_tail() {
+        Diff::new(entry!(
+            0x00b9_e850,
+            scene_light::pop_tail(Ptr<_>, Ptr<_>) -> Ptr<_>
+        ))
+        .own()
+        .inputs(&[Input::Of(&[1, 2, 3]), Input::Of(&[0, 1, 2, 4, 7])])
+        .setup(pop_world)
+        .run()
+        .assert_same();
+    }
+
+    #[test]
+    fn lights_set_held_1a0() {
+        // The held object (none, the given one, another deleted by its release, another kept); the
+        // given object (none, one).
+        Diff::new(entry!(0x00b9_cfd0, scene_light::set_held_1a0(Ptr<_>, u32)))
+            .own()
+            .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Flag])
+            .setup(|e, case| {
+                world(e);
+                let given = if case.word(1) != 0 {
+                    counted(e, 0x40, 2)
+                } else {
+                    0
+                };
+                let held = match case.word(0) {
+                    0 => 0,
+                    1 => given,
+                    2 => counted(e, 0x40, 1),
+                    _ => counted(e, 0x40, 3),
+                };
+                let this = block(e, 0x200, &[]);
+                e.mem.set_u32(this + 0x1a0, held);
+                vec![this, given]
+            })
+            .run()
+            .assert_same();
+    }
+
+    /// Radii: ordinary, zero, negative, NaN, huge, small.
+    const RADII: &[u32] = &[TEN, 0, MINUS_ONE, NAN, 0x7f00_0000, HALF];
+
+    #[test]
+    fn lights_luminance_to_bound() {
+        // The `NiLight`'s radius; the bound's radius; floats for the `NiLight`, the bound's centre
+        // and the scene node's lighting offset.
+        Diff::new(entry!(
+            0x00b9_dbe0,
+            scene_light::luminance_to_bound(Ptr<_>, Ptr<_>) -> f32
+        ))
+        .own()
+        .ignore_calls(&[0x00ec_6040])
+        .control_words(&BOTH)
+        // x87 and SSE pick different NaNs of two (the float rule accepts it).
+        .allow_nan_payloads()
+        .inputs(&[
+            Input::Of(RADII),
+            Input::Of(&[HALF, 0, TEN, NAN]),
+            Input::F32,
+            Input::F32Swept(ONE),
+            Input::F32Swept(TWO),
+            Input::F32Swept(HALF),
+            Input::F32Swept(MINUS_ONE),
+        ])
+        .max_cases(300)
+        .float_sweep(96)
+        .setup(|e, case| {
+            world(e);
+            let ni = ni_light_of(e, case, 6, 2, case.word(0));
+            let l = plain_light(e, ni, 0);
+            let node = e.mem.u32(0x011f_91c8);
+            words(e, node + 0x1e4, &[bits(case, 5), bits(case, 6), HALF]);
+            let bound = block(e, 0x10, &[bits(case, 4), bits(case, 3), ONE, case.word(1)]);
+            vec![l, bound]
+        })
+        .run()
+        .assert_same();
+    }
+
+    /// The colour components: ordinary, equal, zero, NaN.
+    const COLOURS: &[u32] = &[ONE, HALF, TEN, 0, NAN];
+
+    /// A light for the luminances, from the case's words at `w`: its `NiLight`'s colour (two words
+    /// pick the pattern), dimmer and radius, its `bCastShadow` and `bPointLight`; floats for the
+    /// `NiLight`'s place at `f`. Answers the light and its `NiLight`.
+    fn luminance_light(e: &mut Engine, case: &Case, w: usize, f: usize) -> (u32, u32) {
+        let ni = ni_light_of(e, case, 6, f, case.word(w + 3));
+        let colour = |i: usize| {
+            COLOURS[(case.word(w) as usize + i * case.word(w + 1) as usize) % COLOURS.len()]
+        };
+        words(e, ni + 0xd4, &[colour(0), colour(1), colour(2)]);
+        e.mem.set_u32(ni + 0xc4, case.word(w + 2));
+        let l = plain_light(e, ni, case.word(w + 4) as u8);
+        e.mem.set_u8(l + 0xf4, case.word(w + 5) as u8);
+        words(e, l + 0xc, &[0x4040_0000]);
+        (l, ni)
+    }
+
+    /// The luminances' words: the colour pattern (two words), the dimmer, the radius,
+    /// bCastShadow, bPointLight.
+    const LUMINANCE_INPUTS: [Input; 6] = [
+        Input::Of(&[0, 1, 2, 3, 4]),
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[ONE, HALF, 0, NAN]),
+        Input::Of(RADII),
+        Input::Of(&[0, 1, 2]),
+        Input::Flag,
+    ];
+
+    #[test]
+    fn lights_luminance_at() {
+        // The `NiLight` left out (the light's own or none); the luminance words; floats for the
+        // `NiLight`'s place and the point.
+        let mut inputs = vec![Input::Flag];
+        inputs.extend(LUMINANCE_INPUTS);
+        inputs.extend([
+            Input::F32,
+            Input::F32Swept(ONE),
+            Input::F32Swept(TWO),
+            Input::F32Swept(HALF),
+            Input::F32Swept(MINUS_ONE),
+        ]);
+        Diff::new(entry!(
+            0x00b9_bc50,
+            scene_light::luminance_at(Ptr<_>, u32, u32, u32, u32) -> f32
+        ))
+        .own()
+        .ignore_calls(&[0x00ec_6040])
+        .control_words(&BOTH)
+        // x87 and SSE pick different NaNs of two (the float rule accepts it).
+        .allow_nan_payloads()
+        .inputs(&inputs)
+        .max_cases(600)
+        .float_sweep(128)
+        .setup(|e, case| {
+            world(e);
+            let (l, ni) = luminance_light(e, case, 1, 7);
+            let excluded = if case.word(0) != 0 { ni } else { 0 };
+            vec![l, bits(case, 9), bits(case, 10), bits(case, 11), excluded]
+        })
+        .run()
+        .assert_same();
+    }
+
+    #[test]
+    fn lights_facing_luminance() {
+        // The `NiLight` left out; culled or not; the luminance words; the direction point `b` (the
+        // point itself: a zero direction; a far point; from the case's floats); floats for the
+        // `NiLight`'s place and the point `a`.
+        let mut inputs = vec![Input::Flag, Input::Flag];
+        inputs.extend(LUMINANCE_INPUTS);
+        inputs.extend([
+            Input::Of(&[0, 1, 2]),
+            Input::F32,
+            Input::F32Swept(ONE),
+            Input::F32Swept(TWO),
+            Input::F32Swept(HALF),
+            Input::F32Swept(MINUS_ONE),
+            Input::F32Swept(TEN),
+        ]);
+        Diff::new(entry!(
+            0x00b9_bdf0,
+            scene_light::facing_luminance(Ptr<_>, u32, u32, u32, u32, u32, u32, u32) -> f32
+        ))
+        .own()
+        .ignore_calls(&[
+            0x00ec_6040,
+            0x0045_7990,
+            0x004a_0c10,
+            0x0040_4010,
+            0x0040_ebd0,
+        ])
+        .control_words(&BOTH)
+        .allow_nan_payloads()
+        .inputs(&inputs)
+        .max_cases(800)
+        .float_sweep(160)
+        .setup(|e, case| {
+            world(e);
+            // The C runtime's `sqrt` under the point length's root (its error path calls imports).
+            e.register(0x00ec_6054, |_, a| {
+                super::ret_f(super::f64_arg(a, 0).sqrt())
+            });
+            let (l, ni) = luminance_light(e, case, 2, 9);
+            let excluded = if case.word(0) != 0 { ni } else { 0 };
+            e.mem.set_u32(ni + 0x30, case.word(1));
+            let a = [bits(case, 11), bits(case, 12), bits(case, 13)];
+            let b = match case.word(8) {
+                0 => a,
+                1 => [0x447a_0000, MINUS_ONE, bits(case, 14)],
+                _ => [bits(case, 14), bits(case, 10), bits(case, 9)],
+            };
+            vec![l, a[0], a[1], a[2], b[0], b[1], b[2], excluded]
+        })
+        .run()
+        .assert_same();
+    }
+
+    #[test]
+    fn lights_set_cast_shadow() {
+        // The light's flag before and the one given; the render level (signed); the render flags'
+        // bit 0x10; the map (none, deleted by its release, kept, cleared by the renderer's
+        // release).
+        Diff::new(entry!(
+            0x00b9_dcb0,
+            scene_light::set_cast_shadow(Ptr<_>, u8)
+        ))
+        .own()
+        .inputs(&[
+            Input::Flag,
+            Input::Flag,
+            Input::Of(&[3, 2, 0xffff_ffff, 7]),
+            Input::Flag,
+            Input::Of(&[0, 1, 2, 3]),
+        ])
+        .setup(|e, case| {
+            world(e);
+            e.register(0x00b6_d4c0, release_map);
+            let l = plain_light(e, 0, case.word(0) as u8);
+            e.mem.set_u32(0x011f_91a8, 0x0abc_0000);
+            e.mem.set_u32(0x011f_91c0, case.word(2));
+            e.mem
+                .set_u8(0x011f_91d8, if case.word(3) != 0 { 0x13 } else { 0xef });
+            let map = match case.word(4) {
+                0 => 0,
+                1 => counted(e, 0x40, 1),
+                _ => counted(e, 0x40, 2),
+            };
+            e.mem.set_u32(l + 0x10c, map);
+            if case.word(4) == 3 {
+                e.mem.set_u32(LOG + 0x3e00, l + 0x10c);
+            }
+            let tls = e.tls();
+            e.mem.set_u32(tls + 0x2b4, 0x1234);
+            vec![l, case.word(1)]
+        })
+        .run()
+        .assert_same();
+    }
+
+    /// A geometry (count 1) with a lighting property of type `kind` (0 none) at +0xa8 whose +0x38
+    /// is set.
+    fn lit_geometry(e: &mut Engine, kind: u32) -> u32 {
+        let g = counted(e, 0x100, 1);
+        if kind != 0 {
+            let p = block(e, 0x40, &[]);
+            words(e, p + 0x1c, &[kind]);
+            words(e, p + 0x38, &[0x55]);
+            e.mem.set_u32(g + 0xa8, p);
+        }
+        g
+    }
+
+    /// The property types: none, the bounds of 1 to 12, outside them.
+    const KINDS: [u32; 6] = [0, 1, 12, 13, 0xffff_ffff, 4];
+
+    #[test]
+    fn lights_clear_fence() {
+        // The fence (none, the head, the second item); the list's geometries (by the pattern of
+        // types, a null element among them).
+        Diff::new(entry!(0x00b9_e770, scene_light::clear_fence(Ptr<_>)))
+            .own()
+            .inputs(&[Input::Of(&[0, 1, 2]), Input::Of(&[0, 1, 2, 3, 4, 5])])
+            .setup(|e, case| {
+                world(e);
+                let l = plain_light(e, 0, 0);
+                let geometries: Vec<u32> = (0..6usize)
+                    .map(|i| {
+                        if i == 3 {
+                            0
+                        } else {
+                            lit_geometry(e, KINDS[(i + case.word(1) as usize) % 6])
+                        }
+                    })
+                    .collect();
+                super::geometry_list(e, l, &geometries, 9);
+                let head = e.mem.u32(l + 0xe0);
+                let fence = match case.word(0) {
+                    0 => 0,
+                    1 => head,
+                    _ => e.mem.u32(head),
+                };
+                e.mem.set_u32(l + 0x138, fence);
+                vec![l]
+            })
+            .run()
+            .assert_same();
+    }
+
+    #[test]
+    fn lights_remove_tri_geom() {
+        // The geometry's property type; an item given or not; the geometry's count (0: its release
+        // deletes it); what the removal hands back (none, an object deleted by its release, one
+        // kept).
+        Diff::new(entry!(
+            0x00ba_01a0,
+            scene_light::remove_tri_geom(Ptr<_>, u32, u32)
+        ))
+        .own()
+        .inputs(&[
+            Input::Of(&KINDS),
+            Input::Flag,
+            Input::Of(&[0, 1]),
+            Input::Of(&[0, 1, 2]),
+        ])
+        .setup(|e, case| {
+            world(e);
+            e.register(0x00b7_17a0, logged::<0x19>);
+            e.register(0x00b9_efa0, out_writer::<0x1a>);
+            e.register(0x00b9_fcc0, out_writer::<0x1b>);
+            let l = plain_light(e, 0, 0);
+            let g = lit_geometry(e, case.word(0));
+            e.mem.set_u32(g + 4, case.word(2));
+            let item = if case.word(1) != 0 {
+                block(e, 0xc, &[0, 0, g])
+            } else {
+                0
+            };
+            let removed = match case.word(3) {
+                0 => 0,
+                1 => counted(e, 0x40, 1),
+                _ => counted(e, 0x40, 4),
+            };
+            set_logged_answer(e, 0x1a, removed);
+            set_logged_answer(e, 0x1b, removed);
+            vec![l, g, item]
+        })
+        .run()
+        .assert_same();
+    }
+
+    #[test]
+    fn lights_cull_geometries() {
+        // The `NiLight` culled or not; the callback set or not; the render flags' bit 0; the busy
+        // test's answer; the types' pattern (+0x68 of 1, 5, 6, 0x11, 0, -1, 2, and none at +0xc0);
+        // the geometries' +0xbc words.
+        Diff::new(entry!(
+            0x00b9_d020,
+            scene_light::cull_geometries(Ptr<_>, u32) -> bool
+        ))
+        .own()
+        .family(&engine_typed::culling::CULLING)
+        .inputs(&[
+            Input::Flag,
+            Input::Flag,
+            Input::Flag,
+            Input::Flag,
+            Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7]),
+            Input::Flag,
+        ])
+        .max_cases(300)
+        .setup(|e, case| {
+            const TYPES: [u32; 7] = [1, 5, 6, 0x11, 0, 0xffff_ffff, 2];
+            world(e);
+            let ni = object(e, 0x100, 0, 0, OTHER_RTTI);
+            e.mem.set_u32(ni + 0x30, case.word(0));
+            let l = plain_light(e, ni, 0);
+            e.register(0x00c0_0000, logged::<0x1c>);
+            let callback = if case.word(1) != 0 { 0x00c0_0000 } else { 0 };
+            e.mem.set_u32(0x011f_91ec, callback);
+            e.mem
+                .set_u8(0x011a_d82c, if case.word(2) != 0 { 0x81 } else { 0x7e });
+            let renderer = block(e, 0x10, &[0, 0, 0x0bad_0000]);
+            e.mem.set_u32(0x011f_4748, renderer);
+            e.register(0x00aa_0ff0, logged::<0x1d>);
+            set_logged_answer(e, 0x1d, case.word(3));
+            e.register(0x00b7_a870, logged::<0x1e>);
+            e.register(0x00bb_d880, logged::<0x1f>);
+            e.register(VT_FN + 0x24, logged::<0x21>);
+            e.register(VT_FN + 0x44, logged::<0x22>);
+            let mut geometries: Vec<u32> = (0..7usize)
+                .map(|i| {
+                    let g = block(e, 0x100, &[]);
+                    // The cull's flags (+0x30): the application culls every third.
+                    e.mem.set_u32(g + 0x30, u32::from(i % 3 == 2));
+                    e.mem.set_u32(g + 0xbc, (i as u32 ^ case.word(5)) & 1);
+                    let k = (i + case.word(4) as usize) % 8;
+                    if k < 7 {
+                        let p = block(e, 0x80, &[]);
+                        e.mem.set_u32(p + 0x68, TYPES[k]);
+                        let first = object(e, 0x20, 0, 0, OTHER_RTTI);
+                        let second = object(e, 0x20, 0, 0, OTHER_RTTI);
+                        e.mem.set_u32(p + 0x34, first);
+                        e.mem.set_u32(p + 0x30, second);
+                        e.mem.set_u32(g + 0xc0, p);
+                    }
+                    g
+                })
+                .collect();
+            geometries.insert(2, 0);
+            super::geometry_list(e, l, &geometries, 99);
+            let culler = object(e, 0x40, 0, 0, OTHER_RTTI);
+            vec![l, culler]
+        })
+        .run()
+        .assert_same();
+    }
+
+    #[test]
+    fn lights_rtti_bodies_answer_their_records() {
+        // The exe's `GetRTTI` bodies the light's kind tests answer in place answer the same records
+        // through their translations.
+        let mut e = Engine::new();
+        world(&mut e);
+        for (body, record) in [
+            (POINT_BODY, POINT_RTTI),
+            (AMBIENT_BODY, AMBIENT_RTTI),
+            (DIRECTIONAL_BODY, RADIUS_FREE_RTTI),
+        ] {
+            let o = object(&mut e, 0x40, 0, 0, 0);
+            let vt = e.mem.u32(o);
+            e.mem.set_u32(vt + 8, body);
+            assert_eq!(e.vcall(o, 8, &[]).u32(), record, "{body:08x}");
+            assert_eq!(e.mem.u32(vt + VT_SLOTS + 8), 0);
         }
     }
 }
