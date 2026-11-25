@@ -1549,7 +1549,9 @@ fn scene_world(e: &mut Engine, seed: u32, flag: u32) -> Vec<u32> {
     }
     // The base form, and its cast for type 0x25: the sizes, the radius, the reference's scale.
     let base = e.mem.alloc(0x120);
-    let kind = [0x2c, 0x2d, 0x23, 0x23, 0x1e, 0x25, 0x25, 0x25, 0x15, 0x2a][d.next(10) as usize];
+    // The seed takes part, so every type meets every other draw (the sequence alone pairs them).
+    let kind = [0x2c, 0x2d, 0x23, 0x23, 0x1e, 0x25, 0x25, 0x25, 0x15, 0x2a]
+        [((d.next(10) + seed) % 10) as usize];
     e.mem.set_u8(base + 4, kind);
     e.mem.set_u32(base + 8, [0, 0, 0x8000][d.next(3) as usize]);
     e.mem
