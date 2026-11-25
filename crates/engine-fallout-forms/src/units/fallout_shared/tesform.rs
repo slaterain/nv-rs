@@ -464,7 +464,7 @@ pub fn tes_form_tes_form(e: &mut Engine, this: Ptr<TESForm>) -> Ptr<TESForm> {
     e.call(SIMPLE_LIST_CONSTRUCT, &args![this.byte_add(0x10)]);
 
     if e.global::<u32>(FORM_COUNT) == 0 {
-        fn_00483a50(e);
+        e.call(0x0048_3a50, &[]);
     }
     let count = e.global::<u32>(FORM_COUNT);
     e.set_global(FORM_COUNT, count.wrapping_add(1));
@@ -486,9 +486,9 @@ pub fn tes_form_tes_form(e: &mut Engine, this: Ptr<TESForm>) -> Ptr<TESForm> {
         e.set(this, TESForm::iFormID, id);
         // PC 00483566 reloads again after GetNextID.
         let handler = e.global::<u32>(DATA_HANDLER);
-        if fn_004835e0(e, handler) != 0 {
+        if e.call(0x0048_35e0, &args![handler]).u32() != 0 {
             let handler = e.global::<u32>(DATA_HANDLER);
-            let file = fn_004835e0(e, handler);
+            let file = e.call(0x0048_35e0, &args![handler]).u32();
             e.call(SET_FILE, &args![this, file]);
         }
         if e.get(this, TESForm::iFormID) < 0x800 {
@@ -553,7 +553,7 @@ pub fn tes_form_scalar_deleting_destructor(
     this: Ptr<TESForm>,
     flags: u32,
 ) -> Ptr<TESForm> {
-    tes_form_dtor(e, this);
+    e.call(0x0048_3630, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -569,7 +569,7 @@ pub fn tes_form_dtor(e: &mut Engine, this: Ptr<TESForm>) {
     // The seam at this call (`0x00483669`, ADR-0016): the script extender forgets what it kept
     // for the form (its form extra data).
     e.site(0x0048_3669, &[this.addr()]);
-    tes_form_remove_from_data_structures(e, this);
+    e.call(0x0048_3c70, &args![this]);
     e.call(SIMPLE_LIST_DESTROY, &args![this.byte_add(0x10)]);
     let save_load = e.global::<u32>(SAVE_LOAD_GAME);
     if !e.call(IS_TEMPORARY, &args![this]).bool() && save_load != 0 {
@@ -583,7 +583,7 @@ pub fn tes_form_dtor(e: &mut Engine, this: Ptr<TESForm>) {
     let count = e.global::<u32>(FORM_COUNT).wrapping_sub(1);
     e.set_global(FORM_COUNT, count);
     if count == 0 {
-        fn_00483b80(e);
+        e.call(0x0048_3b80, &[]);
     }
     e.call(SIMPLE_LIST_DESTROY_WRAPPER, &args![this.byte_add(0x10)]);
 }
@@ -908,7 +908,7 @@ pub fn fn_00484150(e: &mut Engine, this: Ptr<TESForm>, group: Ptr) -> bool {
 /// `TESForm::SetTemporary` (Xbox PDB): removes the form from the registries
 /// and the save/load change tables, then sets the temporary flag (0x4000).
 pub fn tes_form_set_temporary(e: &mut Engine, this: Ptr<TESForm>) {
-    tes_form_remove_from_data_structures(e, this);
+    e.call(0x0048_3c70, &args![this]);
     // JohnnyGuitar NVSE's seam after the call `0x48449A`: its names of the form leave the map.
     e.site(0x0048_449a, &[this.addr()]);
     let save_load = e.global::<u32>(SAVE_LOAD_GAME);
@@ -1190,7 +1190,7 @@ pub fn fn_00484bf0(_e: &mut Engine, _this: Ptr<TESForm>, flags: u32) -> u16 {
 /// saves the form's flags word (+8, 4 bytes) with `SaveGameDataOLD`.
 pub fn fn_00484c20(e: &mut Engine, this: Ptr<TESForm>, flags: u32) {
     if flags & 1 != 0 {
-        tes_form_save_game_data_old(e, this, this.byte_add(8), 4);
+        e.call(0x0048_4ce0, &args![this, this.byte_add(8), 4u32]);
     }
 }
 
@@ -1205,7 +1205,7 @@ pub fn tes_form_load_game(e: &mut Engine, this: Ptr<TESForm>, flags: u32, _unuse
         return;
     }
     let saved = e.with_stack(4, |e, word| {
-        tes_form_load_game_data_old(e, this, word, 4);
+        e.call(0x0048_4d00, &args![this, word, 4u32]);
         e.mem.u32(word.addr())
     });
     let reference = e
@@ -1311,7 +1311,7 @@ pub fn fn_00484da0(e: &mut Engine, this: Ptr<TESForm>, buffer: Ptr) {
 /// word at +0x0C).
 pub fn fn_00484e40(e: &mut Engine, this: Ptr<TESForm>) -> bool {
     let id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, this));
-    fn_00484b40(e, id)
+    e.call(0x0048_4b40, &args![id]).bool()
 }
 
 // Translated from 00484e60 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1666,27 +1666,27 @@ pub fn tes_form_close_form(e: &mut Engine, this: Ptr<TESForm>) {
 /// `TESForm::AddChunk` (Xbox PDB), the overload without data: a chunk with
 /// this tag and size 0 (cdecl).
 pub fn tes_form_add_chunk(e: &mut Engine, tag: u32) {
-    tes_form_add_chunk_data(e, tag, Ptr::NULL, 0);
+    e.call(0x0048_5990, &args![tag, 0u32, 0u32]);
 }
 
 // Translated from 004856f0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `TESForm::AddChunkArray` (Xbox PDB): a chunk with `size` bytes of `data`
 /// (cdecl).
 pub fn tes_form_add_chunk_array(e: &mut Engine, tag: u32, data: Ptr, size: u32) {
-    tes_form_add_chunk_data(e, tag, data, size);
+    e.call(0x0048_5990, &args![tag, data, size]);
 }
 
 // Translated from 00485710 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `TESForm::AddChunkArray_ov2` (Xbox PDB): a chunk of `count` 32-bit values
 /// (cdecl); see [`tes_form_add_chunk_array32`].
 pub fn tes_form_add_chunk_array_ov2(e: &mut Engine, tag: u32, data: Ptr, count: u32) {
-    tes_form_add_chunk_array32(e, tag, data, count);
+    e.call(0x0048_5750, &args![tag, data, count]);
 }
 
 // Translated from 00485730 (decompiled, FalloutNV.exe 1.4.0.525)
 /// A chunk of `count` 16-bit values (cdecl); see [`fn_00485820`].
 pub fn fn_00485730(e: &mut Engine, tag: u32, data: Ptr, count: u32) {
-    fn_00485820(e, tag, data, count);
+    e.call(0x0048_5820, &args![tag, data, count]);
 }
 
 // Translated from 00485750 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1696,7 +1696,7 @@ pub fn fn_00485730(e: &mut Engine, tag: u32, data: Ptr, count: u32) {
 pub fn tes_form_add_chunk_array32(e: &mut Engine, tag: u32, data: Ptr, count: u32) {
     let size = count << 2;
     if !is_big_endian(e) {
-        tes_form_add_chunk_data(e, tag, data, size);
+        e.call(0x0048_5990, &args![tag, data, size]);
         return;
     }
     let request = count.saturating_mul(4);
@@ -1705,7 +1705,7 @@ pub fn tes_form_add_chunk_array32(e: &mut Engine, tag: u32, data: Ptr, count: u3
     for i in 0..count {
         e.call(SWAP_WORD, &args![copy.wrapping_add(i << 2), 0u32]);
     }
-    tes_form_add_chunk_data(e, tag, Ptr::new(copy), size);
+    e.call(0x0048_5990, &args![tag, copy, size]);
     e.call(OPERATOR_DELETE, &args![copy]);
 }
 
@@ -1715,7 +1715,7 @@ pub fn tes_form_add_chunk_array32(e: &mut Engine, tag: u32, data: Ptr, count: u3
 pub fn fn_00485820(e: &mut Engine, tag: u32, data: Ptr, count: u32) {
     let size = count << 1;
     if !is_big_endian(e) {
-        tes_form_add_chunk_data(e, tag, data, size);
+        e.call(0x0048_5990, &args![tag, data, size]);
         return;
     }
     let request = count.saturating_mul(2);
@@ -1724,7 +1724,7 @@ pub fn fn_00485820(e: &mut Engine, tag: u32, data: Ptr, count: u32) {
     for i in 0..count {
         e.call(SWAP_HALF, &args![copy.wrapping_add(i << 1), 0u32]);
     }
-    tes_form_add_chunk_data(e, tag, Ptr::new(copy), size);
+    e.call(0x0048_5990, &args![tag, copy, size]);
     e.call(OPERATOR_DELETE, &args![copy]);
 }
 
@@ -1733,7 +1733,7 @@ pub fn fn_00485820(e: &mut Engine, tag: u32, data: Ptr, count: u32) {
 /// the address of the stack word that holds it.
 pub fn fn_004858f0(e: &mut Engine, tag: u32, value: u32) {
     with_item(e, value, |e, slot| {
-        tes_form_add_chunk_data(e, tag, slot, 1);
+        e.call(0x0048_5990, &args![tag, slot, 1u32]);
     });
 }
 
@@ -1745,7 +1745,7 @@ pub fn fn_00485910(e: &mut Engine, tag: u32, value: u32) {
         if is_big_endian(e) {
             e.call(SWAP_WORD, &args![slot, 0u32]);
         }
-        tes_form_add_chunk_data(e, tag, slot, 4);
+        e.call(0x0048_5990, &args![tag, slot, 4u32]);
     });
 }
 
@@ -1758,7 +1758,7 @@ pub fn tes_form_add_chunk_ov2(e: &mut Engine, tag: u32, value: u32) {
         if is_big_endian(e) {
             e.call(SWAP_HALF, &args![slot, 0u32]);
         }
-        tes_form_add_chunk_data(e, tag, slot, 2);
+        e.call(0x0048_5990, &args![tag, slot, 2u32]);
     });
 }
 
@@ -1771,7 +1771,7 @@ pub fn tes_form_add_chunk_ov2(e: &mut Engine, tag: u32, value: u32) {
 pub fn tes_form_add_chunk_data(e: &mut Engine, tag: u32, data: Ptr, size: u32) {
     let mut size16 = size as u16;
     if size > 0xffff {
-        fn_00485910(e, OVERSIZE_CHUNK_TAG, size);
+        e.call(0x0048_5910, &args![OVERSIZE_CHUNK_TAG, size]);
         size16 = 0;
     }
     let old = e.global::<u32>(SAVE_BUFFER_SIZE);
@@ -1840,8 +1840,8 @@ pub fn tes_form_free_form_buffer(e: &mut Engine, _this: Ptr<TESForm>) {
 /// the form's first file is not empty. A form without a file reads the
 /// "file" at null.
 pub fn fn_00485b60(e: &mut Engine, this: Ptr<TESForm>) -> u32 {
-    let id = fn_00485bc0(e, this);
-    let file = tes_form_get_file(e, this, 0);
+    let id = e.call(0x0048_5bc0, &args![this]).u32();
+    let file = e.call(0x0048_4e60, &args![this, 0u32]).u32();
     let masters = e.call(FILE_MASTER_LIST, &args![file]).u32();
     let empty = typed_call!(leaf::FAMILY, 0x0082_56d0, leaf::both_words_zero(e, masters));
     ((!empty) as u32) << 24 | id
@@ -1856,7 +1856,7 @@ pub fn fn_00485bc0(e: &mut Engine, this: Ptr<TESForm>) -> u32 {
 // Translated from 00485be0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Whether the low 24 bits of `form_id` equal those of the form's ID.
 pub fn fn_00485be0(e: &mut Engine, this: Ptr<TESForm>, form_id: u32) -> bool {
-    form_id & 0x00ff_ffff == fn_00485bc0(e, this)
+    form_id & 0x00ff_ffff == e.call(0x0048_5bc0, &args![this]).u32()
 }
 
 // Translated from 00485c10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1911,7 +1911,7 @@ pub fn tes_form_add_compile_index(e: &mut Engine, id: Ptr, file: Ptr) {
         return;
     }
     let old = e.mem.u32(id.addr());
-    if fn_00484b40(e, old) || file.addr() == 0 {
+    if e.call(0x0048_4b40, &args![old]).bool() || file.addr() == 0 {
         return;
     }
     let indexed = e
@@ -2009,7 +2009,7 @@ fn x87_truncate(value: f32) -> i32 {
 // Translated from 00485e00 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `TESForm::SaveData` (Xbox PDB): `__SaveData` with no data.
 pub fn tes_form_save_data(e: &mut Engine, this: Ptr<TESForm>) {
-    tes_form_save_data_inner(e, this, Ptr::new(0), 0);
+    e.call(0x0048_5e20, &args![this, 0u32, 0u32]);
 }
 
 // Translated from 00485e20 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2025,7 +2025,7 @@ pub fn tes_form_save_data_inner(e: &mut Engine, this: Ptr<TESForm>, data: Ptr, s
         return;
     }
     let size_before = e.call(SAVE_BUFFER_SIZE_GETTER, &args![this]).u32();
-    tes_form_add_chunk_data(e, DATA_CHUNK_TAG, data, size);
+    e.call(0x0048_5990, &args![DATA_CHUNK_TAG, data, size]);
     let chunk = e
         .call(SAVE_BUFFER_GETTER, &args![this])
         .u32()
@@ -2036,7 +2036,10 @@ pub fn tes_form_save_data_inner(e: &mut Engine, this: Ptr<TESForm>, data: Ptr, s
         return;
     }
     let size_before = e.call(SAVE_BUFFER_SIZE_GETTER, &args![this]).u32();
-    if !fn_00485a70(e, this, Ptr::new(chunk), extra) {
+    if !e
+        .call(0x0048_5a70, &args![this, chunk, u32::from(extra)])
+        .bool()
+    {
         return;
     }
     let mut out = e
@@ -2121,7 +2124,9 @@ pub fn tes_form_load_data(
     e.with_stack((size as u32).max(1), |e, buffer| {
         let buffer = buffer.addr();
         e.call(FILE_READ_CHUNK, &args![file, buffer, size as u32]);
-        let copied = fn_004865f0(e, size, start);
+        let copied = e
+            .call(0x0048_65f0, &args![u32::from(size), u32::from(start)])
+            .u16();
         e.call(MEMCPY, &args![destination, buffer, copied as u32]);
         let parts = cast_components(e, this);
         let mut offset = start;
@@ -2191,14 +2196,15 @@ fn byte_swapped_word(e: &mut Engine, value: u32) -> u32 {
 
 /// Reads the float at `buffer + offset` (`memcpy` into a local, then into a
 /// second local that is swapped when `file` is big endian); returns it and
-/// the offset after it.
+/// the offset after it. The copy into the second local is an `FLD`/`FSTP`
+/// pair (`00486457`), so a signalling NaN comes back quiet before the swap.
 fn read_float(e: &mut Engine, file: Ptr, buffer: u32, offset: u16) -> (f32, u16) {
     let value = e.with_stack(8, |e, locals| {
         let copy = locals.addr();
         let work = copy + 4;
         e.call(MEMCPY, &args![copy, buffer + offset as u32, 4u32]);
-        let value = e.mem.f32(copy);
-        e.mem.set_f32(work, value);
+        let bits = engine_core::x87::x87_quiet_bits(e.mem.u32(copy));
+        e.mem.set_u32(work, bits);
         if e.call(FILE_IS_BIG_ENDIAN, &args![file]).bool() {
             swap_word_in_place(e, work);
         }
@@ -2302,7 +2308,7 @@ pub fn ni_t_pointer_map_form_scalar_deleting_destructor(
     this: Ptr,
     flags: u32,
 ) -> Ptr {
-    fn_00486a00(e, this);
+    e.call(0x0048_6a00, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -2313,7 +2319,7 @@ pub fn ni_t_pointer_map_form_scalar_deleting_destructor(
 /// The constructor of the form map `(buckets)`: the map base's constructor
 /// (`fn_00486990`) and then the `NiTPointerMap` vtable.
 pub fn fn_00486930(e: &mut Engine, this: Ptr, buckets: u32) -> Ptr {
-    fn_00486990(e, this, buckets);
+    e.call(0x0048_6990, &args![this, buckets]);
     e.mem.set_u32(this.addr(), POINTER_MAP_VTABLE);
     this
 }
@@ -2372,7 +2378,7 @@ pub fn bst_case_insensitive_string_map_form_scalar_deleting_destructor(
     this: Ptr,
     flags: u32,
 ) -> Ptr {
-    fn_00486c60(e, this);
+    e.call(0x0048_6c60, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -5158,6 +5164,19 @@ mod tests {
         assert_eq!(e.mem.u32(parts.value + 4), 0x0102_0304);
         assert_eq!(e.mem.f32(parts.weight + 4), 2.5);
         assert_eq!(e.mem.u16(parts.attack_damage + 4), 0x1234);
+    }
+
+    /// A big-endian file's float goes through the FPU before its swap (`FLD`/`FSTP` at `00486457`):
+    /// a signalling NaN in the file's byte order comes back quiet, then swapped.
+    #[test]
+    fn load_data_quiets_the_float_before_the_swap() {
+        let chunk = 0x7f80_0001u32.to_le_bytes();
+        let (mut e, file, parts) = load_data_engine(&chunk, true);
+        cast_to(&mut e, &parts, &[TYPE_WEIGHT_FORM]);
+        let f = form(&mut e, 8, 0x20);
+        let destination = e.mem.alloc(8);
+        e.call(0x0048_61f0, &args![f, file, destination, 0u16]);
+        assert_eq!(e.mem.u32(parts.weight + 4), 0x0100_c07f);
     }
 
     #[test]

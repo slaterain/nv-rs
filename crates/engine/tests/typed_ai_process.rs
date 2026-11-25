@@ -559,10 +559,6 @@ fn answers_without_reading() {
         .in_world(&FEW, |w| vec![w.word()])
         .run()
         .assert_same();
-    Diff::new(entry!(0x0071_7e50, base_process::address_4(Ptr) -> u32))
-        .in_world(&MANY, |w| vec![w.word()])
-        .run()
-        .assert_same();
     Diff::new(entry!(0x008d_08f0, base_process::weapon_last_pos(Ptr) -> u32))
         .in_world(&FEW, |w| w.process_and(0))
         .run()

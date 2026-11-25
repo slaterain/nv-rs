@@ -171,6 +171,14 @@ pub fn provide(family: &'static Family) {
     }
 }
 
+/// Every family: this crate's and the ones provided so far ([`provide`]), so all of them once an
+/// engine is made ([`Engine::new`] runs every crate's `units::funcs`). The checks that span every
+/// family read it.
+pub fn all_families() -> Vec<&'static Family> {
+    let provided = PROVIDED.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    FAMILIES.iter().copied().chain(provided).collect()
+}
+
 /// A number or a name used twice in the table: `families` must have neither. Checked at every
 /// [`apply`], whichever families the switch has on, so a clash doesn't wait for both to be on.
 pub(crate) fn check_table(families: &[&Family]) -> Result<(), String> {
@@ -588,8 +596,7 @@ pub fn switch_for(spec: Option<&str>, compared: bool) -> Option<&str> {
 /// registration). With no family, or with `NV_TYPED=off`, it registers nothing and leaves the flags
 /// clear; so does a run compared with the original's record and no `NV_TYPED` ([`switch_for`]).
 pub fn apply(e: &mut Engine) {
-    let provided = PROVIDED.lock().unwrap_or_else(|p| p.into_inner()).clone();
-    let families: Vec<&Family> = FAMILIES.iter().copied().chain(provided).collect();
+    let families = all_families();
     let compared = COMPARED_RUN_VARIABLES
         .iter()
         .any(|name| std::env::var_os(name).is_some());
@@ -601,11 +608,8 @@ pub fn apply(e: &mut Engine) {
 /// comparisons above 0). `None` when no family is in its dual run.
 pub fn dual_line(e: &Engine) -> Option<String> {
     let moved = e.moved()?;
-    let provided = PROVIDED.lock().unwrap_or_else(|p| p.into_inner()).clone();
-    let parts: Vec<String> = FAMILIES
-        .iter()
-        .copied()
-        .chain(provided)
+    let parts: Vec<String> = all_families()
+        .into_iter()
         .filter(|f| e.typed_dual(f.id))
         .map(|f| {
             let (compared, differed) = moved.dual.counts(f.id);
