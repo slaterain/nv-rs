@@ -5,10 +5,10 @@
 //! reach it through its registration.
 //!
 //! For a reference that is not deleted (form flag `0x20`), inside the memory context `0x15` (named
-//! by `TESObjectREFR.cpp`'s file and a line): unless its extra data list already holds a script
-//! extra data (type `0xd`) with a script (+0xc), the script of the reference's form (its slot
-//! 0x1a4, else its base form) goes into the list with an event list made for it, and a reference
-//! with a container has its inventory changes' scripts set up.
+//! by the reference unit's source file name and a line): unless its extra data list already holds a
+//! script extra data (type `0xd`) with a script (+0xc), the script of the reference's form (its
+//! slot 0x1a4, else its base form) goes into the list with an event list made for it, and a
+//! reference with a container has its inventory changes' scripts set up.
 //!
 //! **Native.** The exe's order of work and every call that does work stay the exe's. Done in place
 //! or as typed calls: the deleted flag (`00440d80`), the extra data list (`005d43c0`, the reference
@@ -36,8 +36,8 @@ use engine_core::typed::leaf;
 use engine_core::{args, typed_call, Engine};
 
 /// The memory context's entry (`thiscall(scope, context, 1, source file, line)`, `ret 0x10`) and
-/// exit (`thiscall(scope)`), the context `0x15`, named by `TESObjectREFR.cpp` (`0102fc20`) and the
-/// line 0x196e.
+/// exit (`thiscall(scope)`), the context `0x15`, named by the reference unit's source file name
+/// (`0102fc20`) and the line 0x196e.
 const SCOPE_BEGIN: u32 = 0x0040_4eb0;
 const SCOPE_END: u32 = 0x0040_4ee0;
 const SCOPE_MODE: u32 = 1;
@@ -91,11 +91,11 @@ fn script_form(e: &mut Engine, reference: u32) -> u32 {
 // Typed from 00565730
 /// `TESObjectREFR::InitScript` (Xbox PDB), `thiscall(reference)`: nothing for a deleted reference
 /// (form flag `0x20`). Otherwise, inside the memory context `0x15`: a reference whose extra data
-/// list holds a script extra data (type `0xd`) with a script (+0xc) is left as it is; any other
-/// has the script of its form (slot 0x1a4, its base form when that gives none, `004826d0`) set
-/// into its list (`00419ed0`) when there is one, with the event list `005abf60` makes for it
-/// (`00419f80`), and, when it has a container (`0055d310`), its inventory changes' scripts set up
-/// (`004bf220`, `004d1960`).
+/// list holds a script extra data (type `0xd`) with a script (+0xc) is left as it is; any other has
+/// the script of its form (slot 0x1a4, its base form when that gives none, `004826d0`) set into its
+/// list (`00419ed0`) when there is one, with the event list `005abf60` makes for it (`00419f80`),
+/// and, when it has a container (`0055d310`), its inventory changes' scripts set up (`004bf220`,
+/// `004d1960`).
 pub fn init_script(e: &mut Engine, this: u32) {
     if typed_call!(leaf::FAMILY, 0x0044_0d80, leaf::form_flag_20(e, this)) {
         return;
@@ -146,9 +146,8 @@ fn set_up(e: &mut Engine, reference: u32, list: u32) {
 }
 
 // Typed from 004826d0
-/// The script of a form (`cdecl(form)`): its `TESScriptableForm` (`__RTDynamicCast` from
-/// `TESForm`, by address) and that one's script (`00726070`, the word at +4), or null when the form
-/// has none.
+/// The script of a form (`cdecl(form)`): its `TESScriptableForm` (`__RTDynamicCast` from `TESForm`,
+/// by address) and that one's script (`00726070`, the word at +4), or null when the form has none.
 pub fn form_script(e: &mut Engine, form: u32) -> u32 {
     let scriptable = e
         .call(
