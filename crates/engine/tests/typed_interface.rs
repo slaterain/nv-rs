@@ -3737,7 +3737,7 @@ fn fn_00721150_diff() {
         &LIST_BOX_VARIANTS,
         put_list_box,
     )
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -3760,7 +3760,7 @@ fn list_box_actor_value_remove_all_diff() {
         interface::menu_manager_p2::list_box_actor_value_remove_all(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -3778,7 +3778,7 @@ fn list_box_actor_value_sort_diff() {
         &LIST_BOX_VARIANTS,
         put_list_box,
     )
-    .max_cases(168)
+    .max_cases(42)
     .run()
     .assert_same();
 }
@@ -3787,7 +3787,7 @@ fn list_box_actor_value_sort_diff() {
 fn list_box_actor_value_highlight_diff() {
     Diff::new(engine_core::entry!(0x0072_1440, interface::menu_manager_p2::list_box_actor_value_highlight(Ptr, u32) -> bool))
     .in_arena_and(&[Arg::Ptr, Arg::ListTile], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(168)
+    .max_cases(42)
     .run()
     .assert_same();
 }
@@ -3796,7 +3796,7 @@ fn list_box_actor_value_highlight_diff() {
 fn list_box_actor_value_get_highlight_target_diff() {
     Diff::new(engine_core::entry!(0x0072_14b0, interface::menu_manager_p2::list_box_actor_value_get_highlight_target(Ptr, u32) -> u32))
     .in_arena_and(&[Arg::Ptr, Arg::Direction], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(504)
+    .max_cases(56)
     .run()
     .assert_same();
 }
@@ -3824,7 +3824,7 @@ fn fn_00721920_diff() {
         &LIST_BOX_VARIANTS,
         put_list_box,
     )
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -3836,7 +3836,7 @@ fn list_box_perk_rank_data_remove_all_diff() {
         interface::menu_manager_p2::list_box_perk_rank_data_remove_all(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -3854,7 +3854,7 @@ fn list_box_perk_rank_data_sort_diff() {
         &LIST_BOX_VARIANTS,
         put_list_box,
     )
-    .max_cases(168)
+    .max_cases(42)
     .run()
     .assert_same();
 }
@@ -3863,7 +3863,7 @@ fn list_box_perk_rank_data_sort_diff() {
 fn list_box_perk_rank_data_highlight_diff() {
     Diff::new(engine_core::entry!(0x0072_1bf0, interface::menu_manager_p2::list_box_perk_rank_data_highlight(Ptr, u32) -> bool))
     .in_arena_and(&[Arg::Ptr, Arg::ListTile], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(168)
+    .max_cases(42)
     .run()
     .assert_same();
 }
@@ -3872,7 +3872,7 @@ fn list_box_perk_rank_data_highlight_diff() {
 fn list_box_perk_rank_data_get_highlight_target_diff() {
     Diff::new(engine_core::entry!(0x0072_1c60, interface::menu_manager_p2::list_box_perk_rank_data_get_highlight_target(Ptr, u32) -> u32))
     .in_arena_and(&[Arg::Ptr, Arg::Direction], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(504)
+    .max_cases(56)
     .run()
     .assert_same();
 }
@@ -3900,7 +3900,7 @@ fn fn_007220d0_diff() {
         &LIST_BOX_VARIANTS,
         put_list_box,
     )
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -3912,7 +3912,7 @@ fn list_box_misc_stat_id_remove_all_diff() {
         interface::menu_manager_p2::list_box_misc_stat_id_remove_all(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -3930,7 +3930,7 @@ fn list_box_misc_stat_id_sort_diff() {
         &LIST_BOX_VARIANTS,
         put_list_box,
     )
-    .max_cases(168)
+    .max_cases(42)
     .run()
     .assert_same();
 }
@@ -3939,7 +3939,7 @@ fn list_box_misc_stat_id_sort_diff() {
 fn list_box_misc_stat_id_highlight_diff() {
     Diff::new(engine_core::entry!(0x0072_23a0, interface::menu_manager_p2::list_box_misc_stat_id_highlight(Ptr, u32) -> bool))
     .in_arena_and(&[Arg::Ptr, Arg::ListTile], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(168)
+    .max_cases(42)
     .run()
     .assert_same();
 }
@@ -3948,7 +3948,7 @@ fn list_box_misc_stat_id_highlight_diff() {
 fn list_box_misc_stat_id_get_highlight_target_diff() {
     Diff::new(engine_core::entry!(0x0072_2410, interface::menu_manager_p2::list_box_misc_stat_id_get_highlight_target(Ptr, u32) -> u32))
     .in_arena_and(&[Arg::Ptr, Arg::Direction], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(504)
+    .max_cases(56)
     .run()
     .assert_same();
 }
@@ -3976,7 +3976,7 @@ fn fn_00722880_diff() {
         &LIST_BOX_VARIANTS,
         put_list_box,
     )
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -3988,7 +3988,7 @@ fn list_box_status_effect_remove_all_diff() {
         interface::menu_manager_p2::list_box_status_effect_remove_all(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4006,7 +4006,7 @@ fn list_box_status_effect_sort_diff() {
         &LIST_BOX_VARIANTS,
         put_list_box,
     )
-    .max_cases(168)
+    .max_cases(42)
     .run()
     .assert_same();
 }
@@ -4015,7 +4015,7 @@ fn list_box_status_effect_sort_diff() {
 fn list_box_status_effect_highlight_diff() {
     Diff::new(engine_core::entry!(0x0072_2b50, interface::menu_manager_p2::list_box_status_effect_highlight(Ptr, u32) -> bool))
     .in_arena_and(&[Arg::Ptr, Arg::ListTile], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(168)
+    .max_cases(42)
     .run()
     .assert_same();
 }
@@ -4024,7 +4024,7 @@ fn list_box_status_effect_highlight_diff() {
 fn list_box_status_effect_get_highlight_target_diff() {
     Diff::new(engine_core::entry!(0x0072_2bc0, interface::menu_manager_p2::list_box_status_effect_get_highlight_target(Ptr, u32) -> u32))
     .in_arena_and(&[Arg::Ptr, Arg::Direction], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(504)
+    .max_cases(56)
     .run()
     .assert_same();
 }
@@ -4052,7 +4052,7 @@ fn fn_00723070_diff() {
         &LIST_BOX_VARIANTS,
         put_list_box,
     )
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4064,7 +4064,7 @@ fn list_box_tes_reputation_remove_all_diff() {
         interface::menu_manager_p2::list_box_tes_reputation_remove_all(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4082,7 +4082,7 @@ fn list_box_tes_reputation_sort_diff() {
         &LIST_BOX_VARIANTS,
         put_list_box,
     )
-    .max_cases(168)
+    .max_cases(42)
     .run()
     .assert_same();
 }
@@ -4091,7 +4091,7 @@ fn list_box_tes_reputation_sort_diff() {
 fn list_box_tes_reputation_highlight_diff() {
     Diff::new(engine_core::entry!(0x0072_3340, interface::menu_manager_p2::list_box_tes_reputation_highlight(Ptr, u32) -> bool))
     .in_arena_and(&[Arg::Ptr, Arg::ListTile], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(168)
+    .max_cases(42)
     .run()
     .assert_same();
 }
@@ -4100,7 +4100,7 @@ fn list_box_tes_reputation_highlight_diff() {
 fn list_box_tes_reputation_get_highlight_target_diff() {
     Diff::new(engine_core::entry!(0x0072_33b0, interface::menu_manager_p2::list_box_tes_reputation_get_highlight_target(Ptr, u32) -> u32))
     .in_arena_and(&[Arg::Ptr, Arg::Direction], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(504)
+    .max_cases(56)
     .run()
     .assert_same();
 }
@@ -4128,7 +4128,7 @@ fn fn_00723820_diff() {
         &LIST_BOX_VARIANTS,
         put_list_box,
     )
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4140,7 +4140,7 @@ fn list_box_unsigned_int_remove_all_diff() {
         interface::menu_manager_p2::list_box_unsigned_int_remove_all(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4158,7 +4158,7 @@ fn list_box_unsigned_int_sort_diff() {
         &LIST_BOX_VARIANTS,
         put_list_box,
     )
-    .max_cases(168)
+    .max_cases(42)
     .run()
     .assert_same();
 }
@@ -4167,7 +4167,7 @@ fn list_box_unsigned_int_sort_diff() {
 fn list_box_unsigned_int_highlight_diff() {
     Diff::new(engine_core::entry!(0x0072_3af0, interface::menu_manager_p2::list_box_unsigned_int_highlight(Ptr, u32) -> bool))
     .in_arena_and(&[Arg::Ptr, Arg::ListTile], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(168)
+    .max_cases(42)
     .run()
     .assert_same();
 }
@@ -4176,7 +4176,7 @@ fn list_box_unsigned_int_highlight_diff() {
 fn list_box_unsigned_int_get_highlight_target_diff() {
     Diff::new(engine_core::entry!(0x0072_3b60, interface::menu_manager_p2::list_box_unsigned_int_get_highlight_target(Ptr, u32) -> u32))
     .in_arena_and(&[Arg::Ptr, Arg::Direction], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(504)
+    .max_cases(56)
     .run()
     .assert_same();
 }
@@ -4290,7 +4290,7 @@ fn fn_00724070_diff() {
 fn list_box_actor_value_scalar_deleting_destructor_diff() {
     Diff::new(engine_core::entry!(0x0072_4090, interface::menu_manager_p2::list_box_actor_value_scalar_deleting_destructor(Ptr, u32) -> Ptr))
     .in_arena_and(&[Arg::Ptr, Arg::Byte], CALLEES, &[0x0072_1150, 0x0072_11e0], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(168)
+    .max_cases(42)
     .run()
     .assert_same();
 }
@@ -4309,7 +4309,7 @@ fn fn_007240c0_diff() {
 fn list_box_perk_rank_data_scalar_deleting_destructor_diff() {
     Diff::new(engine_core::entry!(0x0072_40e0, interface::menu_manager_p2::list_box_perk_rank_data_scalar_deleting_destructor(Ptr, u32) -> Ptr))
     .in_arena_and(&[Arg::Ptr, Arg::Byte], CALLEES, &[0x0072_1920, 0x0072_1990], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(168)
+    .max_cases(42)
     .run()
     .assert_same();
 }
@@ -4318,7 +4318,7 @@ fn list_box_perk_rank_data_scalar_deleting_destructor_diff() {
 fn list_box_misc_stat_id_scalar_deleting_destructor_diff() {
     Diff::new(engine_core::entry!(0x0072_4110, interface::menu_manager_p2::list_box_misc_stat_id_scalar_deleting_destructor(Ptr, u32) -> Ptr))
     .in_arena_and(&[Arg::Ptr, Arg::Byte], CALLEES, &[0x0072_20d0, 0x0072_2140], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(168)
+    .max_cases(42)
     .run()
     .assert_same();
 }
@@ -4327,7 +4327,7 @@ fn list_box_misc_stat_id_scalar_deleting_destructor_diff() {
 fn list_box_status_effect_scalar_deleting_destructor_diff() {
     Diff::new(engine_core::entry!(0x0072_4140, interface::menu_manager_p2::list_box_status_effect_scalar_deleting_destructor(Ptr, u32) -> Ptr))
     .in_arena_and(&[Arg::Ptr, Arg::Byte], CALLEES, &[0x0072_2880, 0x0072_28f0], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(168)
+    .max_cases(42)
     .run()
     .assert_same();
 }
@@ -4336,7 +4336,7 @@ fn list_box_status_effect_scalar_deleting_destructor_diff() {
 fn list_box_tes_reputation_scalar_deleting_destructor_diff() {
     Diff::new(engine_core::entry!(0x0072_4170, interface::menu_manager_p2::list_box_tes_reputation_scalar_deleting_destructor(Ptr, u32) -> Ptr))
     .in_arena_and(&[Arg::Ptr, Arg::Byte], CALLEES, &[0x0072_3070, 0x0072_30e0], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(168)
+    .max_cases(42)
     .run()
     .assert_same();
 }
@@ -4345,7 +4345,7 @@ fn list_box_tes_reputation_scalar_deleting_destructor_diff() {
 fn list_box_unsigned_int_scalar_deleting_destructor_diff() {
     Diff::new(engine_core::entry!(0x0072_41a0, interface::menu_manager_p2::list_box_unsigned_int_scalar_deleting_destructor(Ptr, u32) -> Ptr))
     .in_arena_and(&[Arg::Ptr, Arg::Byte], CALLEES, &[0x0072_3820, 0x0072_3890], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(168)
+    .max_cases(42)
     .run()
     .assert_same();
 }
@@ -4402,7 +4402,7 @@ fn fn_007242c0_diff() {
         &LIST_BOX_VARIANTS,
         put_list_box,
     )
-    .max_cases(168)
+    .max_cases(42)
     .run()
     .assert_same();
 }
@@ -4419,7 +4419,7 @@ fn fn_007242f0_diff() {
         &LIST_BOX_VARIANTS,
         put_list_box,
     )
-    .max_cases(168)
+    .max_cases(42)
     .run()
     .assert_same();
 }
@@ -4431,7 +4431,7 @@ fn list_box_actor_value_synchronize_diff() {
         interface::menu_manager_p2::list_box_actor_value_synchronize(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4440,7 +4440,7 @@ fn list_box_actor_value_synchronize_diff() {
 fn list_box_actor_value_is_enabled_diff() {
     Diff::new(engine_core::entry!(0x0072_4430, interface::menu_manager_p2::list_box_actor_value_is_enabled(Ptr) -> bool))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4452,7 +4452,7 @@ fn list_box_actor_value_update_highlight_box_pos_diff() {
         interface::menu_manager_p2::list_box_actor_value_update_highlight_box_pos(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4464,7 +4464,7 @@ fn list_box_actor_value_set_total_list_height_diff() {
         interface::menu_manager_p2::list_box_actor_value_set_total_list_height(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4476,7 +4476,7 @@ fn list_box_perk_rank_data_synchronize_diff() {
         interface::menu_manager_p2::list_box_perk_rank_data_synchronize(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4485,7 +4485,7 @@ fn list_box_perk_rank_data_synchronize_diff() {
 fn list_box_perk_rank_data_is_enabled_diff() {
     Diff::new(engine_core::entry!(0x0072_4a00, interface::menu_manager_p2::list_box_perk_rank_data_is_enabled(Ptr) -> bool))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4497,7 +4497,7 @@ fn list_box_perk_rank_data_update_highlight_box_pos_diff() {
         interface::menu_manager_p2::list_box_perk_rank_data_update_highlight_box_pos(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4509,7 +4509,7 @@ fn list_box_perk_rank_data_set_total_list_height_diff() {
         interface::menu_manager_p2::list_box_perk_rank_data_set_total_list_height(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4521,7 +4521,7 @@ fn list_box_misc_stat_id_synchronize_diff() {
         interface::menu_manager_p2::list_box_misc_stat_id_synchronize(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4530,7 +4530,7 @@ fn list_box_misc_stat_id_synchronize_diff() {
 fn list_box_misc_stat_id_is_enabled_diff() {
     Diff::new(engine_core::entry!(0x0072_4fd0, interface::menu_manager_p2::list_box_misc_stat_id_is_enabled(Ptr) -> bool))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4542,7 +4542,7 @@ fn list_box_misc_stat_id_update_highlight_box_pos_diff() {
         interface::menu_manager_p2::list_box_misc_stat_id_update_highlight_box_pos(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4554,7 +4554,7 @@ fn list_box_misc_stat_id_set_total_list_height_diff() {
         interface::menu_manager_p2::list_box_misc_stat_id_set_total_list_height(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4566,7 +4566,7 @@ fn list_box_status_effect_synchronize_diff() {
         interface::menu_manager_p2::list_box_status_effect_synchronize(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4575,7 +4575,7 @@ fn list_box_status_effect_synchronize_diff() {
 fn list_box_status_effect_is_enabled_diff() {
     Diff::new(engine_core::entry!(0x0072_55a0, interface::menu_manager_p2::list_box_status_effect_is_enabled(Ptr) -> bool))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4587,7 +4587,7 @@ fn list_box_status_effect_update_highlight_box_pos_diff() {
         interface::menu_manager_p2::list_box_status_effect_update_highlight_box_pos(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4599,7 +4599,7 @@ fn list_box_status_effect_set_total_list_height_diff() {
         interface::menu_manager_p2::list_box_status_effect_set_total_list_height(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4611,7 +4611,7 @@ fn list_box_tes_reputation_synchronize_diff() {
         interface::menu_manager_p2::list_box_tes_reputation_synchronize(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4620,7 +4620,7 @@ fn list_box_tes_reputation_synchronize_diff() {
 fn list_box_tes_reputation_is_enabled_diff() {
     Diff::new(engine_core::entry!(0x0072_5b70, interface::menu_manager_p2::list_box_tes_reputation_is_enabled(Ptr) -> bool))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4632,7 +4632,7 @@ fn list_box_tes_reputation_update_highlight_box_pos_diff() {
         interface::menu_manager_p2::list_box_tes_reputation_update_highlight_box_pos(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4644,7 +4644,7 @@ fn list_box_tes_reputation_set_total_list_height_diff() {
         interface::menu_manager_p2::list_box_tes_reputation_set_total_list_height(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4656,7 +4656,7 @@ fn list_box_unsigned_int_synchronize_diff() {
         interface::menu_manager_p2::list_box_unsigned_int_synchronize(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4665,7 +4665,7 @@ fn list_box_unsigned_int_synchronize_diff() {
 fn list_box_unsigned_int_is_enabled_diff() {
     Diff::new(engine_core::entry!(0x0072_6160, interface::menu_manager_p2::list_box_unsigned_int_is_enabled(Ptr) -> bool))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4677,7 +4677,7 @@ fn list_box_unsigned_int_update_highlight_box_pos_diff() {
         interface::menu_manager_p2::list_box_unsigned_int_update_highlight_box_pos(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4689,7 +4689,7 @@ fn list_box_unsigned_int_set_total_list_height_diff() {
         interface::menu_manager_p2::list_box_unsigned_int_set_total_list_height(Ptr)
     ))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4698,7 +4698,7 @@ fn list_box_unsigned_int_set_total_list_height_diff() {
 fn list_box_actor_value_num_unfiltered_diff() {
     Diff::new(engine_core::entry!(0x0072_6660, interface::menu_manager_p2::list_box_actor_value_num_unfiltered(Ptr) -> i32))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4707,7 +4707,7 @@ fn list_box_actor_value_num_unfiltered_diff() {
 fn list_box_perk_rank_data_num_unfiltered_diff() {
     Diff::new(engine_core::entry!(0x0072_6710, interface::menu_manager_p2::list_box_perk_rank_data_num_unfiltered(Ptr) -> i32))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4716,7 +4716,7 @@ fn list_box_perk_rank_data_num_unfiltered_diff() {
 fn list_box_misc_stat_id_num_unfiltered_diff() {
     Diff::new(engine_core::entry!(0x0072_67c0, interface::menu_manager_p2::list_box_misc_stat_id_num_unfiltered(Ptr) -> i32))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4725,7 +4725,7 @@ fn list_box_misc_stat_id_num_unfiltered_diff() {
 fn list_box_status_effect_num_unfiltered_diff() {
     Diff::new(engine_core::entry!(0x0072_6870, interface::menu_manager_p2::list_box_status_effect_num_unfiltered(Ptr) -> i32))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4734,7 +4734,7 @@ fn list_box_status_effect_num_unfiltered_diff() {
 fn list_box_tes_reputation_num_unfiltered_diff() {
     Diff::new(engine_core::entry!(0x0072_6920, interface::menu_manager_p2::list_box_tes_reputation_num_unfiltered(Ptr) -> i32))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
@@ -4743,13 +4743,14 @@ fn list_box_tes_reputation_num_unfiltered_diff() {
 fn list_box_unsigned_int_num_unfiltered_diff() {
     Diff::new(engine_core::entry!(0x0072_6b40, interface::menu_manager_p2::list_box_unsigned_int_num_unfiltered(Ptr) -> i32))
     .in_arena_and(&[Arg::Ptr], CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
-    .max_cases(84)
+    .max_cases(28)
     .run()
     .assert_same();
 }
 
-/// The variants of [`put_list_box`]'s world.
-const LIST_BOX_VARIANTS: [u32; 7] = [0, 1, 2, 3, 4, 5, 6];
+/// The variants of [`put_list_box`]'s world, the richest first: the cases that vary one input at a
+/// time vary it against this one.
+const LIST_BOX_VARIANTS: [u32; 7] = [6, 5, 3, 2, 1, 4, 0];
 
 /// The guard words of the six list box instances' function-local statics (`IsEnabled`'s,
 /// `UpdateHighlightBoxPos`'s, `NumUnfiltered`'s of each).

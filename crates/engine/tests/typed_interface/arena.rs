@@ -331,7 +331,7 @@ pub enum Arg {
     /// Tile ids at the edges of each menu's `AttachTileByID` range: -1, 0 to 3, 7, 8, 18, 19, 31, 32,
     /// 59, 60.
     TileId,
-    /// A list box's moves (`GetHighlightTarget`): up, down, a page up, a page down, none, another.
+    /// A list box's moves (`GetHighlightTarget`): down, up, a page up, a page down, none, another.
     Direction,
     /// Tiles of the list box world's items (the first, the third, the last), one of no item, null.
     ListTile,
@@ -346,7 +346,7 @@ const CLASSES: [u32; 22] = [
     0x3ff, 0x40b, 0x425, 0x3ea, 0x3eb, 0x3ec, 0x3f5, 0x3ef, 0x403, 0x3f0, 0x402, 0x3f8, 0x423,
     0x41b, 0x41e, 0x420, 0x424, 0x432, 0x3e9, 0x3f2, 0x43d, 0,
 ];
-const DIRECTIONS: [u32; 6] = [1, 2, 0xf, 0x10, 0, 3];
+const DIRECTIONS: [u32; 6] = [2, 1, 0xf, 0x10, 0, 3];
 /// The list box world's item tiles (`put_list_box` in the tests): objects 180 on.
 const LIST_TILES: [u32; 5] = [
     ARENA + 180 * OBJECT,
