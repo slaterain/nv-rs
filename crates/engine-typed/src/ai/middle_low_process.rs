@@ -125,7 +125,7 @@ const LOAD_HEADER_LINE: u32 = 0x287;
 const LOAD_END_LINE: u32 = 0x290;
 
 /// Whether the actor value `code` has `flag` (`00406d70`: the flags of its info, at +0x44).
-fn value_has_flag(e: &Engine, code: u32, flag: u32) -> bool {
+pub(super) fn value_has_flag(e: &Engine, code: u32, flag: u32) -> bool {
     let info = e
         .mem
         .u32(ACTOR_VALUE_INFOS.wrapping_add(code.wrapping_mul(4)));
@@ -152,7 +152,7 @@ fn int_to_float(value: i32) -> f32 {
 
 /// `Calendar::GetHour` (`00867da0`): the hour global's value, or the default hour without one, as
 /// loaded (`FLD`, which quiets a signalling NaN).
-fn calendar_hour(e: &Engine) -> u32 {
+pub(super) fn calendar_hour(e: &Engine) -> u32 {
     let global = e.mem.u32(CALENDAR + CALENDAR_HOUR_GLOBAL);
     let bits = if global != 0 {
         e.mem.u32(global.wrapping_add(GLOBAL_VALUE))
@@ -164,7 +164,7 @@ fn calendar_hour(e: &Engine) -> u32 {
 
 /// A float bit pattern as the x87 stack holds it after `FLD dword`.
 #[inline]
-fn loaded(bits: u32) -> f64 {
+pub(super) fn loaded(bits: u32) -> f64 {
     f64::from(f32::from_bits(x87_quiet_bits(bits)))
 }
 
@@ -745,11 +745,11 @@ pub fn revert_buffer(e: &mut Engine, this: Ptr, buffer: u32) {
 /// A package's type (its word at +0x18, `009611e0`), procedure (the signed byte at +0x20,
 /// `0041ca90`), flags (+0x1c) and location (+0x2c, `0055b980`).
 #[inline]
-fn package_kind(e: &Engine, package: u32) -> u32 {
+pub(super) fn package_kind(e: &Engine, package: u32) -> u32 {
     e.mem.u32(package.wrapping_add(0x18))
 }
 #[inline]
-fn procedure(e: &Engine, package: u32) -> i32 {
+pub(super) fn procedure(e: &Engine, package: u32) -> i32 {
     i32::from(e.mem.i8(package.wrapping_add(0x20)))
 }
 #[inline]
@@ -762,12 +762,12 @@ fn package_location(e: &Engine, package: u32) -> u32 {
 }
 
 /// The process's current package (its slot 0x22c).
-fn current_package(e: &mut Engine, process: u32) -> u32 {
+pub(super) fn current_package(e: &mut Engine, process: u32) -> u32 {
     ai_queries::queries::process_slot_22c(e, process)
 }
 
 /// The process's slot 0x280 (the running procedure index).
-fn procedure_index_running(e: &mut Engine, process: u32) -> u32 {
+pub(super) fn procedure_index_running(e: &mut Engine, process: u32) -> u32 {
     if slot_target(e, process, 0x280) == 0x008d_0450 {
         typed_call!(
             FAMILY,
@@ -780,7 +780,7 @@ fn procedure_index_running(e: &mut Engine, process: u32) -> u32 {
 }
 
 /// The process's slot 0x284 (sets the running procedure index).
-fn set_procedure_index_running(e: &mut Engine, process: u32, index: u32) {
+pub(super) fn set_procedure_index_running(e: &mut Engine, process: u32, index: u32) {
     if slot_target(e, process, 0x284) == 0x008d_0470 {
         typed_call!(
             FAMILY,
