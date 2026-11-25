@@ -674,6 +674,16 @@ The log's last {} lines are in log.txt beside this file.
         t
     }
 
+    /// The log lines that are sent: the game's own `F12: ` lines (the place, the report's
+    /// folder) left out, as the F12 report's note and place are; the local copy keeps them.
+    pub fn sent_log(&self) -> Vec<&str> {
+        self.log
+            .iter()
+            .map(String::as_str)
+            .filter(|l| !l.trim_start().starts_with("F12:"))
+            .collect()
+    }
+
     /// The body, with the F12 report's part or without it.
     fn body_with(&self, with_f12: bool) -> String {
         let mut t = String::new();
@@ -831,6 +841,7 @@ pub fn after_run(run: &Run) -> Option<Outcome> {
             run.own,
             run.program,
             &send::curl(),
+            consent::session(run.own),
             ask_player,
         )
     });
@@ -857,48 +868,71 @@ pub fn next_step(answer: consent::Consent, can_send: bool) -> Next {
 }
 
 /// The question after a crash with "Ask me each time": what would go under it (the report
-/// without an F12 report's note and place, and its log's last lines).
+/// without an F12 report's note and place, and how many of its log's last lines go, without the
+/// game's `F12: ` lines).
 fn question(report: &Report) -> String {
     format!(
         "The game stopped, and nv-rs kept the crash report below. Send it to nv-rs's developers?\n\n{}\nThe log's last {} lines go with it.\n",
         report.sent_body(),
-        report.log.len()
+        report.sent_log().len()
     )
 }
 
-/// The player asked in the launcher's window, Send or Don't send: a yes only for Send. Esc and a
-/// closed window answer the last entry (Don't send); no window at all is a no.
-fn ask_player(text: &str) -> bool {
+/// The per-crash question's entries: "Don't send" first, so it is the highlighted one, a message
+/// box's default button and the answer without a window; "Send" is the only yes.
+pub const ASK_ENTRIES: [&str; 2] = ["Don't send", "Send"];
+
+/// The player asked through `send` (the launcher's window, [`crate::session::send`]): a yes only
+/// for "Send". Esc and a closed window answer "Don't send"; a reply dropped without an answer and
+/// no window at all are a no.
+fn ask_with(send: impl FnOnce(crate::session::Event) -> bool, text: &str) -> bool {
     let (reply, answer) = std::sync::mpsc::channel();
-    let asked = crate::session::send(crate::session::Event::Message {
+    let asked = send(crate::session::Event::Message {
         tone: crate::session::Tone::Question,
         text: text.to_string(),
-        entries: vec!["Send".into(), "Don't send".into()],
+        entries: ASK_ENTRIES.iter().map(|e| e.to_string()).collect(),
         reply,
     });
-    asked && answer.recv() == Ok(0)
+    asked && answer.recv() == Ok(1)
 }
 
+/// [`ask_with`] the launcher's window.
+fn ask_player(text: &str) -> bool {
+    ask_with(crate::session::send, text)
+}
+
+/// What the player sees while curl posts a report (up to 30 seconds).
+pub const SENDING: &str = "Sending the crash report...";
+
 /// `report`, kept in `folder`, sent or not as the player answered (nv-rs's own folder `own`
-/// holds the answer, the launcher's folder `program` the crash service's file), by the program
-/// `curl`, `ask` asking first where the answer is "ask each time". The line for the player, none
-/// when nothing was to be sent.
+/// holds the saved answer, `session` this launcher's own if it gave one, and the stricter of the
+/// two is in force; the launcher's folder `program` holds the crash service's file), by the
+/// program `curl`, `ask` asking first where the answer is "ask each time". The line for the
+/// player, none when nothing was to be sent.
 pub fn deliver(
     report: &Report,
     folder: &Path,
     own: &Path,
     program: &Path,
     curl: &Path,
+    session: Option<consent::Consent>,
     ask: impl FnOnce(&str) -> bool,
 ) -> Option<String> {
     let dsn = send::package_dsn(program);
-    match next_step(consent::read(own), dsn.is_some()) {
+    let answer = consent::in_force(consent::read(own), session);
+    match next_step(answer, dsn.is_some()) {
         Next::Keep => return None,
         Next::Ask if !ask(&question(report)) => {
             return Some("The crash report was not sent: it stays on this PC.".into())
         }
         Next::Ask | Next::Send => {}
     }
+    // Seen while it goes: Windows' waiting screen, a line after play.sh's elsewhere.
+    crate::session::send(if cfg!(windows) {
+        crate::session::Event::Status(SENDING.into())
+    } else {
+        crate::session::Event::Output(format!("\n{SENDING}\n"))
+    });
     Some(match send::send(report, folder, dsn.as_ref()?, curl) {
         Ok(_) => "The crash report was sent to nv-rs's developers. Thank you.".into(),
         Err(why) => {
@@ -1577,6 +1611,45 @@ mod tests {
         let body = std::fs::read_to_string(kept.join("report.txt")).unwrap();
         assert!(body.contains("signal 11, SIGSEGV"), "{body}");
         assert!(body.contains("built from source"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// After a run, with the crash service's file beside the launcher and "Ask me each time":
+    /// asked in the launcher's window, and with no window (a test has none) nothing is sent.
+    /// (The file names a port on this PC nothing listens on, should anything try.)
+    #[test]
+    fn after_a_run_nothing_goes_without_the_players_yes() {
+        let root =
+            std::env::temp_dir().join(format!("nv-launcher-after-ask-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("logs")).unwrap();
+        let log = root.join("logs").join("game.log");
+        std::fs::write(&log, "a line of the game's\n").unwrap();
+        std::fs::write(
+            root.join(send::DSN_FILE),
+            "http://0123456789abcdef0123456789abcdef@127.0.0.1:9/1\n",
+        )
+        .unwrap();
+        consent::write(&root, consent::Consent::Ask).unwrap();
+        let outcome = after_run(&Run {
+            status: Some(139),
+            shell: Shell::Unix,
+            log: &log,
+            started: SystemTime::now(),
+            mods: false,
+            own: &root,
+            program: &root,
+            games: Vec::new(),
+            table_card: None,
+        })
+        .unwrap();
+        let kept = outcome.kept.unwrap();
+        assert_eq!(
+            outcome.sent.as_deref(),
+            Some("The crash report was not sent: it stays on this PC.")
+        );
+        assert!(!kept.join("envelope.txt").exists());
+        assert!(!kept.join("sent.txt").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

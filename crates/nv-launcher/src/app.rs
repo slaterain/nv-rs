@@ -196,13 +196,14 @@ pub fn append_output(lines: &mut Vec<String>, text: &str) {
     lines.drain(..extra);
 }
 
-/// Esc's entry: the screen's Back or No, else its last (Exit, OK); none without entries.
+/// Esc's entry: the screen's Back, No or Don't send, else its last (Exit, OK); none without
+/// entries.
 pub fn back_entry(entries: &[String]) -> Option<usize> {
     let last = entries.len().checked_sub(1)?;
     Some(
         entries
             .iter()
-            .position(|x| x == "Back" || x == "No")
+            .position(|x| x == "Back" || x == "No" || x == "Don't send")
             .unwrap_or(last),
     )
 }
@@ -770,6 +771,22 @@ pub fn row_step_act(testing: bool, index: usize) -> Option<Act> {
 /// intro's note waits); an answer from Settings is written at once, as Settings' other rows are.
 pub fn keeps_at_once(from_settings: bool) -> bool {
     from_settings || cfg!(not(windows))
+}
+
+/// `answer` for crash reports: this launcher's own from now on, so a crash in this run follows
+/// it too (never sending more than the saved answer: [`consent::in_force`]), and kept in nv-rs's
+/// own folder `own` (none where nv-rs may not write there, `refused`): at once (`now`), or, for
+/// the first start's answer on Windows, once Play's first-write checks pass ([`keeps_at_once`];
+/// a first answer never kept so is asked again at the next start). What went wrong, if it could
+/// not be kept.
+pub fn keep_consent(own: &Path, refused: bool, answer: Consent, now: bool) -> Option<String> {
+    consent::set_session(own, answer);
+    if refused {
+        return Some("Not saved: nv-rs may not write in its own folder".into());
+    }
+    consent::keep(own, answer, now).err().map(|e| {
+        format!("Your crash reports answer was not saved ({e}): until nv-rs closes, a report goes only if both it and the saved answer let it.")
+    })
 }
 
 /// The Settings list's entry that opens the Testing list, and the start screen's for Settings.
@@ -1912,18 +1929,10 @@ impl App {
         );
     }
 
-    /// `answer` kept for crash reports in the launcher's own file: at once (`now`), or, for the
-    /// first start's answer on Windows, once Play's first-write checks pass ([`keeps_at_once`];
-    /// a first answer never kept so is asked again at the next start). What went wrong, if it
-    /// could not be kept.
+    /// `answer` kept for crash reports ([`keep_consent`]).
     fn set_consent(&mut self, answer: Consent, now: bool) -> Option<String> {
         self.consent = answer;
-        if self.place.refused.is_some() {
-            return Some("Not saved: nv-rs may not write in its own folder".into());
-        }
-        consent::keep(&self.place.own, answer, now).err().map(|e| {
-            format!("Your crash reports answer was not saved ({e}): it holds until nv-rs closes.")
-        })
+        keep_consent(&self.place.own, self.place.refused.is_some(), answer, now)
     }
 
     /// The question answered: kept, then back to where the screens were opened from.
@@ -3084,6 +3093,8 @@ mod tests {
         assert_eq!(back_entry(&e(&["Play", "Exit"])), Some(1));
         assert_eq!(back_entry(&e(&["OK"])), Some(0));
         assert_eq!(back_entry(&[]), None);
+        // The crash question's: Esc and a closed window never send.
+        assert_eq!(back_entry(&e(&crate::crash::ASK_ENTRIES)), Some(0));
     }
 
     /// Enter sends what is typed (a folder from the start screen or at the folder prompt); Esc

@@ -3,7 +3,8 @@
 //! `[Launcher] sCrashReports`) and changed in Settings. Until the player answers, nothing is ever
 //! sent: an unanswered launcher keeps its reports on this PC only, as "never" does.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 /// The launcher's own file's key for the answer.
 const KEY: &str = "sCrashReports";
@@ -70,6 +71,39 @@ pub fn read(own: &Path) -> Consent {
 /// write (Windows: `crate::place::write_held_keys`).
 pub fn keep(own: &Path, answer: Consent, now: bool) -> std::io::Result<()> {
     crate::place::set_key_when_allowed(own, now, KEY, answer.value())
+}
+
+/// The answers given in this launcher since it started, by nv-rs's own folder, saved or not.
+static SESSION: Mutex<Vec<(PathBuf, Consent)>> = Mutex::new(Vec::new());
+
+/// `answer` is this launcher's answer for nv-rs's own folder `own` from now on, whether or not
+/// it can be kept.
+pub fn set_session(own: &Path, answer: Consent) {
+    if let Ok(mut all) = SESSION.lock() {
+        all.retain(|(o, _)| o != own);
+        all.push((own.to_path_buf(), answer));
+    }
+}
+
+/// The answer given in this launcher for nv-rs's own folder `own` since it started, if any.
+pub fn session(own: &Path) -> Option<Consent> {
+    let all = SESSION.lock().ok()?;
+    all.iter().find(|(o, _)| o == own).map(|&(_, a)| a)
+}
+
+/// The answer in force: the saved one, or the stricter of it and this launcher's answer
+/// (`session`), so an answer that could not be saved never sends more than the saved one, and a
+/// stricter one holds until nv-rs closes.
+pub fn in_force(saved: Consent, session: Option<Consent>) -> Consent {
+    let rank = |c: Consent| match c {
+        Consent::Send => 2,
+        Consent::Ask => 1,
+        Consent::Never | Consent::Unanswered => 0,
+    };
+    match session {
+        Some(s) if rank(s) < rank(saved) => s,
+        _ => saved,
+    }
 }
 
 /// `answer` kept in nv-rs's own folder `own` at once (the launcher's file's other lines stay):

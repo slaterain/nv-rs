@@ -86,7 +86,7 @@ fn crash_report(
     })?;
     let mut line = match outcome.kept {
         Ok(folder) => format!(
-            "\nnv-rs kept a crash report of this, with your user name and folder names taken out:\n{}\nAttach its two files when you report it.\n",
+            "\nnv-rs kept a crash report of this, with your user name and folder names taken out:\n{}\nAttach its report.txt and log.txt when you report it.\n",
             folder.display()
         ),
         Err(why) => format!("\nnv-rs could not keep a crash report: {why}\n"),

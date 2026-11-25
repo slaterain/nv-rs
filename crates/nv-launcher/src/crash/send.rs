@@ -5,14 +5,15 @@
 //! said plainly.
 //!
 //! Where to send comes from the package, not the build: `crash-reports.txt` beside the launcher
-//! (the repository's `distribution/crash-reports.txt`, copied by the package scripts) holds the
-//! project's DSN, a public client key. Without that file (a build from source, a fork's run)
-//! sending is off.
+//! (the repository's `distribution/crash-reports.txt`, copied by the package scripts into release
+//! packages only, never into test builds) holds the project's DSN, a public client key. Without
+//! that file (a build from source, a test package) sending is off. A fork's release package sends
+//! to nv-rs's project unless the fork changes that file.
 //!
 //! Nothing personal is sent: the report is the scrubbed one kept on disk, without an F12
-//! report's note and place (they stay on this PC); the event has no user, no IP address field
-//! and no computer name, and its tags name only the system, the renderer, the kind of end and
-//! the profile.
+//! report's note and place and without the game's own `F12: ` log lines (all of them stay in the
+//! local copy); the event has no user, no IP address field and no computer name, and its tags
+//! name only the system, the renderer, the kind of end and the profile.
 
 use super::Report;
 use std::ffi::OsString;
@@ -32,21 +33,28 @@ pub struct Dsn {
 
 impl Dsn {
     /// A DSN, or none: HTTPS (plain HTTP only to this PC), a key of letters and digits with no
-    /// secret part, a host, and a project of letters and digits.
+    /// secret part, a host of letters, digits, `.` and `-` (a port after `:`), a path of the
+    /// same and `/`, and a project of letters and digits.
     pub fn parse(dsn: &str) -> Option<Dsn> {
         let dsn = dsn.trim();
         let (scheme, rest) = dsn.split_once("://")?;
         let (key, place) = rest.split_once('@')?;
         let (host_path, project) = place.trim_end_matches('/').rsplit_once('/')?;
-        let host = host_path.split('/').next()?;
-        let here = host == "localhost"
-            || host.starts_with("localhost:")
-            || host == "127.0.0.1"
-            || host.starts_with("127.0.0.1:");
+        let (host, path) = host_path.split_once('/').unwrap_or((host_path, ""));
+        let (name, port) = host.split_once(':').unwrap_or((host, ""));
+        let plain = |s: &str, also: &[u8]| {
+            s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || also.contains(&b))
+        };
+        let here = name == "localhost" || name == "127.0.0.1";
         let fine = (scheme == "https" || (scheme == "http" && here))
             && !key.is_empty()
             && key.bytes().all(|b| b.is_ascii_alphanumeric())
-            && !host.is_empty()
+            && !name.is_empty()
+            && plain(name, b"")
+            && (!host.contains(':')
+                || (!port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())))
+            && plain(path, b"/")
             && !project.is_empty()
             && project.bytes().all(|b| b.is_ascii_alphanumeric());
         fine.then(|| Dsn {
@@ -202,11 +210,11 @@ pub fn event_json(report: &Report, id: &str) -> String {
     format!("{{{}}}", parts.join(","))
 }
 
-/// The envelope of `report` for `dsn`: its header, the event, and the log as `log.txt`, each
-/// item's length in bytes in its header.
+/// The envelope of `report` for `dsn`: its header, the event, and the log as `log.txt` (without
+/// the game's `F12: ` lines: [`Report::sent_log`]), each item's length in bytes in its header.
 pub fn envelope(report: &Report, dsn: &Dsn, id: &str, sent_at: &str) -> Vec<u8> {
     let event = event_json(report, id);
-    let mut log = report.log.join("\n");
+    let mut log = report.sent_log().join("\n");
     log.push('\n');
     let mut out = format!(
         "{{\"event_id\":{},\"dsn\":{},\"sent_at\":{}}}\n",
@@ -238,17 +246,26 @@ pub fn curl() -> PathBuf {
     PathBuf::from("curl")
 }
 
-/// curl's arguments to post the envelope file `file` to `dsn`'s endpoint: quiet but for errors,
-/// an HTTP error a failure, 10 seconds to connect and 30 in all.
-pub fn curl_args(dsn: &Dsn, file: &Path) -> Vec<OsString> {
+/// curl's arguments to post the envelope it reads on its input to `dsn`'s endpoint: no config
+/// file of the player's (`--disable` first, as curl wants it), only the endpoint's own protocol
+/// (HTTPS but on this PC), quiet but for errors, an HTTP error a failure, 10 seconds to connect
+/// and 30 in all. The body is not a file argument, so no folder name goes through the system's
+/// code page.
+pub fn curl_args(dsn: &Dsn) -> Vec<OsString> {
     let auth = format!(
         "X-Sentry-Auth: Sentry sentry_version=7, sentry_key={}, sentry_client=nv-launcher/{}",
         dsn.key,
         env!("CARGO_PKG_VERSION")
     );
-    let mut data = OsString::from("@");
-    data.push(file);
+    let proto = if dsn.endpoint.starts_with("https://") {
+        "=https"
+    } else {
+        "=http"
+    };
     let mut args: Vec<OsString> = [
+        "--disable",
+        "--proto",
+        proto,
         "--silent",
         "--show-error",
         "--fail",
@@ -263,11 +280,11 @@ pub fn curl_args(dsn: &Dsn, file: &Path) -> Vec<OsString> {
         "-H",
         &auth,
         "--data-binary",
+        "@-",
     ]
     .iter()
     .map(OsString::from)
     .collect();
-    args.push(data);
     args.push(OsString::from(&dsn.endpoint));
     args
 }
@@ -285,21 +302,39 @@ pub fn curl_failure(code: Option<i32>) -> String {
 }
 
 /// `report` (kept in `folder`) sent to `dsn` by the program `curl`: its envelope written into
-/// the folder as `envelope.txt` (what went, for the player to see), then posted; `sent.txt` notes
-/// a success. The event's id, or why it did not go.
+/// the folder as `envelope.txt` (what went, for the player to see), then given to curl on its
+/// input and posted (on Windows without a console window of curl's); `sent.txt` notes a success.
+/// The event's id, or why it did not go.
 pub fn send(report: &Report, folder: &Path, dsn: &Dsn, curl: &Path) -> Result<String, String> {
+    use std::io::Write;
+    use std::process::Stdio;
     let id = event_id();
     let sent_at = format!(
         "{}Z",
         super::utc(std::time::SystemTime::now()).0.replace(' ', "T")
     );
+    let body = envelope(report, dsn, &id, &sent_at);
     let file = folder.join("envelope.txt");
-    std::fs::write(&file, envelope(report, dsn, &id, &sent_at))
-        .map_err(|e| format!("{}: {e}", file.display()))?;
-    let out = std::process::Command::new(curl)
-        .args(curl_args(dsn, &file))
-        .stdin(std::process::Stdio::null())
-        .output();
+    std::fs::write(&file, &body).map_err(|e| format!("{}: {e}", file.display()))?;
+    let mut command = std::process::Command::new(curl);
+    command
+        .args(curl_args(dsn))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: a console tool without a console window.
+        command.creation_flags(0x0800_0000);
+    }
+    let out = command.spawn().and_then(|mut child| {
+        // A curl that stops before reading it all says why in its status.
+        if let Some(mut input) = child.stdin.take() {
+            let _ = input.write_all(&body);
+        }
+        child.wait_with_output()
+    });
     match out {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             Err("curl, the program that sends it, is not on this PC".into())
@@ -340,7 +375,8 @@ mod tests {
                 ("Launcher", "0.1.0".into()),
             ],
             system: vec![
-                ("System", "Some OS 1".into()),
+                // Not ASCII: an item's length is its bytes.
+                ("System", "Syst\u{e8}me 1".into()),
                 ("Graphics card", "Some \"Card\" (Vulkan)".into()),
                 ("Renderer", "wgpu".into()),
             ],
@@ -374,6 +410,17 @@ mod tests {
         assert_eq!(Dsn::parse("https://k@host"), None);
         assert_eq!(Dsn::parse("https://k@host/"), None);
         assert_eq!(Dsn::parse("ftp://k@host/1"), None);
+        // Only this PC by name for plain HTTP; a host, port, path and project of plain words.
+        assert_eq!(Dsn::parse("http://k@localhost.example.org/1"), None);
+        assert_eq!(Dsn::parse("http://k@127.0.0.1.example.org/1"), None);
+        assert!(Dsn::parse("http://k@localhost/1").is_some());
+        assert_eq!(Dsn::parse("https://k@host/a-b"), None);
+        assert_eq!(Dsn::parse("https://k@ho#st/1"), None);
+        assert_eq!(Dsn::parse("https://k@a@host/1"), None);
+        assert_eq!(Dsn::parse("https://k@host:x/1"), None);
+        assert_eq!(Dsn::parse("https://k@host:/1"), None);
+        assert_eq!(Dsn::parse("https://k@host/s p/1"), None);
+        assert!(Dsn::parse("https://k@o1.ingest.example.org:8443/sub/7").is_some());
     }
 
     /// The package's file: comments skipped; the repository's own parses (the packages carry it).
@@ -487,23 +534,198 @@ mod tests {
         );
     }
 
+    /// A game log as the game writes it, an F12 report in its last lines: the game's own
+    /// `F12: place:` and `F12: report in` lines stay in the kept log.txt and never reach the
+    /// envelope, nor the question's count of lines.
+    #[test]
+    fn the_games_f12_lines_are_not_sent() {
+        let root = std::env::temp_dir().join(format!("nv-launcher-f12-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let own = root.join("userdata");
+        std::fs::create_dir_all(own.join("logs")).unwrap();
+        let log = own.join("logs").join("game-1.log");
+        let stop =
+            "Game's main stopped in frame 900: read of 1a2b3c00 not mapped (in 00412345 < 0040cafe)";
+        let lines = [
+            "NV_D3D9=wgpu: drawing with Some Card (Vulkan)".to_string(),
+            "F12: place: Doc Mitchell's house (GSDocMitchellHouse); position 125.0 -340.5 7.2; view 90.0; game hour 9.50; weather clear; lighting interior; coc GSDocMitchellHouse".to_string(),
+            format!(
+                "F12: report in {}",
+                own.join("reports").join("007").display()
+            ),
+            "hitch: 41 ms in frame 812".to_string(),
+            stop.to_string(),
+        ];
+        std::fs::write(&log, lines.join("\n") + "\n").unwrap();
+        let run = crate::crash::Run {
+            status: Some(3),
+            shell: crate::crash::Shell::Windows,
+            log: &log,
+            started: SystemTime::now(),
+            mods: false,
+            own: &own,
+            program: &root,
+            games: Vec::new(),
+            table_card: None,
+        };
+        let s = crate::crash::scrub::Scrubber::new(&crate::crash::scrub::Known {
+            roots: vec![(root.display().to_string(), "<nv-rs>")],
+            words: Vec::new(),
+        });
+        let facts = crate::crash::system::Facts {
+            os: "x".into(),
+            cpu: "x".into(),
+            threads: None,
+            memory: None,
+        };
+        let ending = Ending::Stop(stop.into());
+        let r = crate::crash::build(&run, &ending, &facts, &s, SystemTime::now());
+        assert_eq!(r.log.len(), 5);
+        assert_eq!(r.sent_log().len(), 3);
+        let d = Dsn::parse(DSN).unwrap();
+        let id = "0123456789abcdef0123456789abcdef";
+        let text = String::from_utf8(envelope(&r, &d, id, "2001-09-09T01:46:40Z")).unwrap();
+        for f12 in ["F12:", "GSDocMitchellHouse", "report in"] {
+            assert!(!text.contains(f12), "{f12} in {text}");
+        }
+        assert!(text.contains("hitch: 41 ms in frame 812"), "{text}");
+        let asked = crate::crash::question(&r);
+        assert!(
+            asked.contains("The log's last 3 lines go with it."),
+            "{asked}"
+        );
+        // The kept copy has them all.
+        let kept = r.save(&own.join("reports")).unwrap();
+        let kept_log = std::fs::read_to_string(kept.join("log.txt")).unwrap();
+        assert!(
+            kept_log.contains("F12: place: Doc Mitchell's house"),
+            "{kept_log}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The per-crash question through a stand-in window: only "Send" (entry 1) is a yes; "Don't
+    /// send" is first (highlighted); a reply dropped without an answer and no window are a no.
+    #[test]
+    fn only_send_answers_the_crash_question_yes() {
+        use crate::session::Event;
+        let answering = |answer: Option<usize>, window: bool| {
+            move |event: Event| {
+                if let Event::Message { entries, reply, .. } = event {
+                    assert_eq!(entries, ["Don't send", "Send"]);
+                    if let Some(a) = answer {
+                        let _ = reply.send(a);
+                    }
+                }
+                window
+            }
+        };
+        assert!(crate::crash::ask_with(answering(Some(1), true), "q"));
+        assert!(!crate::crash::ask_with(answering(Some(0), true), "q"));
+        assert!(!crate::crash::ask_with(answering(None, true), "q"));
+        assert!(!crate::crash::ask_with(answering(Some(1), false), "q"));
+        // Esc and a closed window answer Don't send.
+        let entries: Vec<String> = crate::crash::ASK_ENTRIES.map(String::from).to_vec();
+        assert_eq!(crate::app::back_entry(&entries), Some(0));
+    }
+
+    /// The stricter of the saved answer and this launcher's own is in force: an answer that
+    /// could not be saved never sends more than the saved one, and a stricter one holds.
+    #[test]
+    fn the_stricter_of_the_saved_and_the_session_answer_holds() {
+        let root = std::env::temp_dir().join(format!("nv-launcher-session-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let folder = root.join("reports").join("crash-x");
+        std::fs::create_dir_all(&folder).unwrap();
+        let program = root.join("program");
+        std::fs::create_dir_all(&program).unwrap();
+        std::fs::write(program.join(DSN_FILE), format!("{DSN}\n")).unwrap();
+        let r = report();
+        let no_curl = Path::new("nv-rs-no-such-curl-here");
+        let asked = std::cell::Cell::new(0);
+        let ask = |text: &str| {
+            assert!(text.starts_with("The game stopped"));
+            asked.set(asked.get() + 1);
+            false
+        };
+        use consent::Consent as C;
+        // Saved Send, Never or no answer here (not saved): nothing goes, nothing is asked.
+        consent::write(&root, C::Send).unwrap();
+        for session in [C::Never, C::Unanswered] {
+            assert_eq!(
+                deliver(&r, &folder, &root, &program, no_curl, Some(session), ask),
+                None
+            );
+        }
+        // Saved Send, Ask here: asked first.
+        assert_eq!(
+            deliver(&r, &folder, &root, &program, no_curl, Some(C::Ask), ask).as_deref(),
+            Some("The crash report was not sent: it stays on this PC.")
+        );
+        // Saved Never, Send here (it could not be saved): the saved one holds.
+        consent::write(&root, C::Never).unwrap();
+        assert_eq!(
+            deliver(&r, &folder, &root, &program, no_curl, Some(C::Send), ask),
+            None
+        );
+        assert_eq!(asked.get(), 1);
+        assert!(!folder.join("envelope.txt").exists());
+        // The launcher's own answer, given where it could not be kept (nv-rs may not write in
+        // its folder): the saved Send no longer sends in this run.
+        consent::write(&root, C::Send).unwrap();
+        let note = crate::app::keep_consent(&root, true, C::Never, true);
+        assert!(note.is_some_and(|n| n.starts_with("Not saved")));
+        assert_eq!(consent::read(&root), C::Send);
+        assert_eq!(consent::session(&root), Some(C::Never));
+        assert_eq!(
+            deliver(
+                &r,
+                &folder,
+                &root,
+                &program,
+                no_curl,
+                consent::session(&root),
+                ask
+            ),
+            None
+        );
+        assert!(!folder.join("envelope.txt").exists());
+        assert_eq!(consent::session(&program), None);
+        assert_eq!(consent::in_force(C::Send, None), C::Send);
+        assert_eq!(consent::in_force(C::Ask, Some(C::Send)), C::Ask);
+        assert_eq!(consent::in_force(C::Send, Some(C::Ask)), C::Ask);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// curl reads no config file of the player's (`--disable` first), speaks only HTTPS (plain
+    /// HTTP only to this PC), reads the body on its input, and has its limits.
     #[test]
     fn curl_is_asked_to_post_the_file_quietly_with_limits() {
         let d = Dsn::parse(DSN).unwrap();
-        let args: Vec<String> = curl_args(&d, Path::new("env.txt"))
-            .iter()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
+        let strings = |d: &Dsn| -> Vec<String> {
+            curl_args(d)
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect()
+        };
+        let args = strings(&d);
+        assert_eq!(args[0], "--disable");
         assert_eq!(args.last(), Some(&d.endpoint));
-        assert_eq!(args[args.len() - 2], "@env.txt");
-        for want in [
-            "--fail",
-            "--max-time",
-            "--connect-timeout",
-            "Content-Type: application/x-sentry-envelope",
-        ] {
+        let after = |args: &[String], flag: &str| {
+            let at = args.iter().position(|a| a == flag).expect(flag);
+            args[at + 1].clone()
+        };
+        assert_eq!(after(&args, "--proto"), "=https");
+        assert_eq!(after(&args, "--connect-timeout"), "10");
+        assert_eq!(after(&args, "--max-time"), "30");
+        assert_eq!(after(&args, "--data-binary"), "@-");
+        assert_eq!(after(&args, "-X"), "POST");
+        let local = Dsn::parse("http://k@127.0.0.1:9000/1").unwrap();
+        assert_eq!(after(&strings(&local), "--proto"), "=http");
+        for want in ["--fail", "Content-Type: application/x-sentry-envelope"] {
             assert!(args.iter().any(|a| a == want), "{want}");
         }
+        assert!(!args.iter().any(|a| a == "-L" || a == "--location"));
         assert!(args.iter().any(|a| a
             .starts_with("X-Sentry-Auth: Sentry sentry_version=7, sentry_key=0123456789abcdef")));
         assert_eq!(
@@ -557,14 +779,14 @@ mod tests {
         // No crash service file: nothing, whatever the answer.
         consent::write(&root, consent::Consent::Send).unwrap();
         assert_eq!(
-            deliver(&r, &folder, &root, &program, no_curl, ask(true)),
+            deliver(&r, &folder, &root, &program, no_curl, None, ask(true)),
             None
         );
         std::fs::write(program.join(DSN_FILE), format!("# a comment\n{DSN}\n")).unwrap();
         for answer in [consent::Consent::Never, consent::Consent::Unanswered] {
             consent::write(&root, answer).unwrap();
             assert_eq!(
-                deliver(&r, &folder, &root, &program, no_curl, ask(true)),
+                deliver(&r, &folder, &root, &program, no_curl, None, ask(true)),
                 None
             );
         }
@@ -572,12 +794,12 @@ mod tests {
         assert!(!folder.join("envelope.txt").exists());
         consent::write(&root, consent::Consent::Ask).unwrap();
         assert_eq!(
-            deliver(&r, &folder, &root, &program, no_curl, ask(false)).as_deref(),
+            deliver(&r, &folder, &root, &program, no_curl, None, ask(false)).as_deref(),
             Some("The crash report was not sent: it stays on this PC.")
         );
         assert_eq!(asked.get(), 1);
         assert!(!folder.join("envelope.txt").exists());
-        let line = deliver(&r, &folder, &root, &program, no_curl, ask(true)).unwrap();
+        let line = deliver(&r, &folder, &root, &program, no_curl, None, ask(true)).unwrap();
         assert!(
             line.contains("could not be sent (curl, the program that sends it, is not on this PC)"),
             "{line}"
@@ -586,7 +808,7 @@ mod tests {
         assert!(folder.join("envelope.txt").exists());
         assert!(!folder.join("sent.txt").exists());
         consent::write(&root, consent::Consent::Send).unwrap();
-        let line = deliver(&r, &folder, &root, &program, no_curl, ask(true)).unwrap();
+        let line = deliver(&r, &folder, &root, &program, no_curl, None, ask(true)).unwrap();
         assert!(line.contains("not on this PC"), "{line}");
         assert_eq!(asked.get(), 2);
         let _ = std::fs::remove_dir_all(&root);
