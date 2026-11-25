@@ -69,14 +69,14 @@
 0068f320	1	ITR
 007052f0	0	xNVSE
 00719ef0	0	nv-rs crash and leak fixes
-007308e0	3	nv-rs crash and leak fixes
-00730950	1	nv-rs crash and leak fixes
-00756490	1	nv-rs crash and leak fixes
-0075eac0	0	nv-rs crash and leak fixes
+007308e0	4	nv-rs crash and leak fixes
+00730950	2	nv-rs crash and leak fixes
+00756490	2	nv-rs crash and leak fixes
+0075eac0	1	nv-rs crash and leak fixes
 0077a480	0	JIP
-00780140	0	nv-rs crash and leak fixes
-00780c50	1	nv-rs crash and leak fixes
-00780d60	1	nv-rs crash and leak fixes
+00780140	1	nv-rs crash and leak fixes
+00780c50	2	nv-rs crash and leak fixes
+00780d60	2	nv-rs crash and leak fixes
 007838a0	1	nv-rs mod fit worn question
 0078ac60	0	JIP
 007acb60	0	nv-rs facial hair by race folder
@@ -100,7 +100,7 @@
 008a8dd0	2	JIP
 008b39f0	0	ITR
 008bca90	0	JIP
-008c1f80	1	nv-rs crash and leak fixes
+008c1f80	2	nv-rs crash and leak fixes
 008d4e80	0	ITR
 00903180	0	kNVSE
 00932a00	1	nv-rs half-loaded actor's level change
