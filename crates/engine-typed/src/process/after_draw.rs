@@ -10,7 +10,7 @@
 //! No float maths but moves (`009781d0`'s frame time is passed on as the caller gave it).
 
 use super::{array, FAMILY};
-use crate::dispatch;
+use crate::{collision, dispatch};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
 use engine_core::{args, typed_call, Engine};
@@ -224,9 +224,10 @@ pub fn merge_detection_lists(e: &mut Engine, this: Ptr, owner: Ptr) {
 /// end asked again each step): an actor that `00576d30` does not skip gets `008ba600`, its process's
 /// slot +0x104, the ragdoll update of its object at +0xb0 (`00978400`, then `00ca2ad0` with the
 /// actor's 3D node and a value from `00931ed0` and `004a3a20`; `00ca1410`), `ConsolidateSimIslands`
-/// (`0062c430`) unless its slot +0x22c(0) is true, its slot +0x34c(delta, the player resting) and its
-/// process's slots +0x500(actor, 0), +0x170(actor) and +0x1d8(actor); another object with slot
-/// +0x220 gets `009b17a0(delta)`. Then `00978890(delta)`, and the player's process slot +0x170.
+/// (`0062c430`, the collision family's, a typed call) unless its slot +0x22c(0) is true, its slot
+/// +0x34c(delta, the player resting) and its process's slots +0x500(actor, 0), +0x170(actor) and
+/// +0x1d8(actor); another object with slot +0x220 gets `009b17a0(delta)`. Then `00978890(delta)`, and
+/// the player's process slot +0x170.
 pub fn ragdoll_step(e: &mut Engine, this: Ptr, delta: f32) {
     let mut index = 0u32;
     while index < tail(e, this, 0) {
@@ -268,7 +269,11 @@ fn actor_step(e: &mut Engine, actor: u32, delta: f32) {
     let ragdoll = e.mem.u32(actor + 0xb0);
     e.call(0x00ca_1410, &args![ragdoll]);
     if !e.vcall(actor, SLOT_0X22C, &args![0u32]).bool() {
-        e.call(0x0062_c430, &args![actor]);
+        typed_call!(
+            collision::FAMILY,
+            0x0062_c430,
+            collision::islands::consolidate_sim_islands(e, Ptr::new(actor))
+        );
     }
     let player = e.mem.u32(PLAYER);
     let resting = e.call(0x0094_df60, &args![player]).u8();
