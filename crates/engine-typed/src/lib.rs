@@ -29,6 +29,7 @@ pub mod draw_f;
 pub mod facegen;
 pub mod geometry;
 pub mod hud;
+pub mod interface;
 pub mod lights;
 pub mod lockfree;
 pub mod multibound;
@@ -125,6 +126,7 @@ pub mod units {
         engine_core::typed::provide(&crate::lights::LIGHTS);
         engine_core::typed::provide(&crate::scripts::SCRIPTS);
         engine_core::typed::provide(&crate::hud::HUD);
+        engine_core::typed::provide(&crate::interface::INTERFACE);
         engine_core::typed::provide(&crate::script_lines::SCRIPT_LINES);
         engine_core::typed::provide(&crate::facegen::FACEGEN);
         engine_core::typed::provide(&crate::save::SAVE);
@@ -146,7 +148,7 @@ mod tests {
     use engine_core::typed::{parse_switch, Family, Mode};
 
     /// This crate's families, in the order `units::funcs` provides them.
-    fn families() -> [&'static Family; 28] {
+    fn families() -> [&'static Family; 29] {
         [
             &crate::lockfree::LOCKFREE,
             &crate::culling::CULLING,
@@ -168,6 +170,7 @@ mod tests {
             &crate::lights::LIGHTS,
             &crate::scripts::SCRIPTS,
             &crate::hud::HUD,
+            &crate::interface::INTERFACE,
             &crate::script_lines::SCRIPT_LINES,
             &crate::facegen::FACEGEN,
             &crate::save::SAVE,
@@ -185,7 +188,8 @@ mod tests {
     /// anim_keys on their tests and reviews (2026-11-11: no comparison runs for native code), process and
     /// lights on their own (2026-11-13), geometry since its recorded-run gate (2026-11-16), facegen and
     /// hud on their tests and reviews (2026-11-21), setup on its tests (2026-11-21), archives on its tests
-    /// (2026-11-23), ai_queries, cell_refs and navmesh_edges on their tests (2026-11-25);
+    /// (2026-11-23), ai_queries, cell_refs and navmesh_edges on their tests (2026-11-25), interface on
+    /// its tests (2026-11-25);
     /// `NV_TYPED=off` or `<family>:off` turns one off.
     #[test]
     fn families_past_their_gate_are_on_by_default() {
@@ -218,6 +222,7 @@ mod tests {
                 "lights",
                 "scripts",
                 "hud",
+                "interface",
                 "script_lines",
                 "facegen",
                 "save",
@@ -236,11 +241,11 @@ mod tests {
         assert!(off.iter().all(|m| *m == Mode::Off));
         let one_off = parse_switch(Some("shader:off"), &families).unwrap();
         assert_eq!(one_off[3], Mode::Off);
-        assert!(one_off.iter().filter(|m| **m == Mode::On).count() == 27);
+        assert!(one_off.iter().filter(|m| **m == Mode::On).count() == 28);
         // `NV_TYPED=geometry:off` still turns the geometry family (index 12) off, and only it.
         let geometry_off = parse_switch(Some("geometry:off"), &families).unwrap();
         assert_eq!(geometry_off[12], Mode::Off);
-        assert!(geometry_off.iter().filter(|m| **m == Mode::On).count() == 27);
+        assert!(geometry_off.iter().filter(|m| **m == Mode::On).count() == 28);
     }
 
     /// No two of this crate's families (with the core's) hold the same address, past their gate or not:

@@ -1580,6 +1580,25 @@ mod tests {
         assert_eq!(ASKS.load(Ordering::SeqCst), 1);
     }
 
+    /// Through the public functions (the process's own answer, whatever the system says: a device's
+    /// format or none): asking ahead starts the kept ask, the first need takes that answer and keeps
+    /// it, and asking ahead again asks nothing. The only test that touches the process's answer.
+    #[test]
+    fn the_public_ask_ahead_is_the_answer_the_first_need_takes() {
+        let state = || match &*MIX.lock().unwrap_or_else(|e| e.into_inner()) {
+            Answer::Unasked => "unasked",
+            Answer::Asking(_) => "asking",
+            Answer::Known(_) => "known",
+        };
+        ask_device_mix_ahead();
+        assert_ne!(state(), "unasked");
+        let first = device_mix();
+        assert!(matches!(*MIX.lock().unwrap(), Answer::Known(m) if m == first));
+        ask_device_mix_ahead();
+        assert_eq!(state(), "known");
+        assert_eq!(device_mix(), first);
+    }
+
     /// A stand-in ask held until `go` is set: at most five seconds, so a wait in the wrong place
     /// fails its test instead of hanging it.
     fn held_until(go: &AtomicBool) {
