@@ -247,7 +247,7 @@ fn interface_get_menu_mode_type_diff() {
 #[test]
 fn interface_is_menu_id_visible_diff() {
     Diff::new(engine_core::entry!(0x0070_2680, interface::interface_cpp::interface_is_menu_id_visible(i32, u32) -> u8))
-        .in_arena(&[Arg::Int, Arg::Word], CALLEES, &[0x0070_27b0, 0x0070_2680])
+        .in_arena(&[Arg::Int, Arg::Word], CALLEES, &[0x0070_27b0])
         .run()
         .assert_same();
 }
