@@ -14,6 +14,7 @@
 //! when the slot holds that body, and a call through the slot otherwise. A form's slot 0x130 (its
 //! name) is [`empty_name`] on the classes that keep the default.
 
+use super::actor_package;
 use super::FAMILY;
 use crate::{ai_queries, dispatch, multibound, slot_target};
 use engine_core::ptr::Ptr;
@@ -29,6 +30,8 @@ const SYSTEM_TIME_CLOCK: u32 = 0x1c;
 const HOUR_LAST_PROCESSED: u32 = 0x20;
 /// `iDateLastProcessed`.
 const DATE_LAST_PROCESSED: u32 = 0x24;
+/// `ActorPackage::iCurrentProcedureIndex`, in the embedded package.
+const PROCEDURE_INDEX: u32 = 0x0c;
 /// `pCachedValues`.
 const CACHED_VALUES: u32 = 0x2c;
 /// `CachedValues::iFlags`.
@@ -80,22 +83,18 @@ const UNDERRUN_FORM_FORMAT: u32 = 0x0101_5500;
 const OVERRUN_FORMAT: u32 = 0x0101_54a0;
 const UNDERRUN_FORMAT: u32 = 0x0101_5440;
 
-/// `TESSaveLoadGame::UseSaveGameBlocks` (Xbox PDB).
-const USE_SAVE_GAME_BLOCKS: u32 = 0x0086_2110;
-/// The save/load object's buffer position (its word at +0x14).
-const BUFFER_POSITION: u32 = 0x0082_5c00;
+/// The save/load object's buffer position (its word at +0x14, `00825c00`'s body), current
+/// version (its byte at +0x80, `008df040`'s) and record being loaded (its word at +0x84,
+/// `004fd3c0`'s).
+const BUFFER_POSITION: u32 = 0x14;
+const CURRENT_VERSION: u32 = 0x80;
+const LOADING_RECORD: u32 = 0x84;
 /// Writes `size` bytes from an address to the save buffer.
 const WRITE_BYTES: u32 = 0x0085_79b0;
 /// Reads `size` bytes from the save buffer into an address.
 const READ_BYTES: u32 = 0x0085_79e0;
-/// The save/load object's record being loaded (its word at +0x84).
-const LOADING_RECORD: u32 = 0x004f_d3c0;
-/// The save/load object's current version (its byte at +0x80).
-const CURRENT_VERSION: u32 = 0x008d_f040;
 /// The form for a record's id word (`cdecl`).
 const FORM_FOR_ID: u32 = 0x0048_39c0;
-/// The setting's value address.
-const SETTING_VALUE: u32 = 0x0040_8d60;
 /// The SAVELOAD warnings (`cdecl`, variable arguments). A fix or built-in may replace it, so it is
 /// called by address.
 const SAVELOAD_WARNING: u32 = 0x005b_5e40;
@@ -117,6 +116,12 @@ fn package_of(this: Ptr) -> u32 {
     this.addr().wrapping_add(CURRENT_PACKAGE)
 }
 
+/// The embedded current package, as a pointer.
+#[inline]
+fn package_ptr(this: Ptr) -> Ptr {
+    Ptr::new(package_of(this))
+}
+
 /// `__RTDynamicCast(object, 0, from, to, 0)`.
 fn runtime_cast(e: &mut Engine, object: u32, from: u32, to: u32) -> u32 {
     e.call(RT_DYNAMIC_CAST, &args![object, 0u32, from, to, 0u32])
@@ -127,19 +132,29 @@ fn save_load_game(e: &Engine) -> u32 {
     e.mem.u32(SAVE_LOAD_GAME)
 }
 
-fn use_save_game_blocks(e: &mut Engine) -> bool {
-    let save_load = save_load_game(e);
-    e.call(USE_SAVE_GAME_BLOCKS, &args![save_load]).bool()
+/// `TESSaveLoadGame::UseSaveGameBlocks` (Xbox PDB, `00862110`): the current version from 0x1f
+/// to 0x59.
+fn use_save_game_blocks(e: &Engine) -> bool {
+    (0x1f..0x5a).contains(&current_version(e))
 }
 
-fn buffer_position(e: &mut Engine) -> u32 {
-    let save_load = save_load_game(e);
-    e.call(BUFFER_POSITION, &args![save_load]).u32()
+/// The save/load object's current version (`008df040`).
+fn current_version(e: &Engine) -> u8 {
+    e.mem.u8(save_load_game(e).wrapping_add(CURRENT_VERSION))
 }
 
-fn save_log_enabled(e: &mut Engine) -> bool {
-    let value = e.call(SETTING_VALUE, &args![SAVE_LOG_SETTING]).u32();
-    e.mem.u8(value) != 0
+/// The save/load object's record being loaded (`004fd3c0`).
+fn loading_record(e: &Engine) -> u32 {
+    e.mem.u32(save_load_game(e).wrapping_add(LOADING_RECORD))
+}
+
+fn buffer_position(e: &Engine) -> u32 {
+    e.mem.u32(save_load_game(e).wrapping_add(BUFFER_POSITION))
+}
+
+/// The save log setting's value byte (`00408d60` gives a setting's value at +4).
+fn save_log_enabled(e: &Engine) -> bool {
+    e.mem.u8(SAVE_LOG_SETTING + 4) != 0
 }
 
 /// The record being saved: the save/load object's word at +0x88 (`TES::GetWorldSpace`'s body,
@@ -328,14 +343,16 @@ pub fn float_zero_2(_e: &mut Engine, _this: Ptr, _unused_0: u32, _unused_1: u32)
 /// `BaseProcess::ClearCurrentPackage` (Xbox PDB): `ActorPackage::Clear` (`008c5ef0`) on the
 /// embedded current package.
 pub fn clear_current_package(e: &mut Engine, this: Ptr) {
-    e.call(0x008c_5ef0, &args![package_of(this)]);
+    let package = package_ptr(this);
+    typed_call!(FAMILY, 0x008c_5ef0, actor_package::clear(e, package));
 }
 
 // Typed from 008d03c0
-/// `BaseProcess::SetCurrentProcedureIndex` (Xbox PDB, the slot 0x238): `0041fd00` (the store of a
-/// word at +0x0c) on the embedded current package.
+/// `BaseProcess::SetCurrentProcedureIndex` (Xbox PDB, the slot 0x238): the embedded current
+/// package's procedure index (+0x0c) stored (`0041fd00`'s body).
 pub fn set_current_procedure_index(e: &mut Engine, this: Ptr, index: u32) {
-    e.call(0x0041_fd00, &args![package_of(this), index]);
+    e.mem
+        .set_u32(package_of(this).wrapping_add(PROCEDURE_INDEX), index);
 }
 
 // Typed from 008d03e0
@@ -347,10 +364,12 @@ pub fn current_procedure_index(e: &mut Engine, this: Ptr) -> u32 {
 }
 
 // Typed from 008d0400
-/// `BaseProcess::AddToCurrentProcedureIndex` (Xbox PDB, the slot 0x240): `0049bb50` (which adds
-/// its word to the word at +0x0c) on the embedded current package.
+/// `BaseProcess::AddToCurrentProcedureIndex` (Xbox PDB, the slot 0x240): `amount` added to the
+/// embedded current package's procedure index (+0x0c; `0049bb50`'s body).
 pub fn add_to_current_procedure_index(e: &mut Engine, this: Ptr, amount: u32) {
-    e.call(0x0049_bb50, &args![package_of(this), amount]);
+    let at = package_of(this).wrapping_add(PROCEDURE_INDEX);
+    let index = e.mem.u32(at).wrapping_add(amount);
+    e.mem.set_u32(at, index);
 }
 
 // Typed from 008d0420
@@ -554,10 +573,13 @@ pub fn float_zero_3(
 }
 
 // Typed from 008d0590
-/// `BaseProcess::GetSoundHandle` (Xbox PDB): an empty sound handle made in `result` (`0041a250`),
-/// which it answers; the second word unread.
+/// `BaseProcess::GetSoundHandle` (Xbox PDB): an empty sound handle made in `result` (`0041a250`'s
+/// body: the id -1, the byte at +4 and the word at +8 0), which it answers; the second word unread.
 pub fn sound_handle(e: &mut Engine, _this: Ptr, result: Ptr, _unused_0: u32) -> Ptr {
-    e.call(0x0041_a250, &args![result]);
+    let at = result.addr();
+    e.mem.set_u32(at, u32::MAX);
+    e.mem.set_u8(at.wrapping_add(4), 0);
+    e.mem.set_u32(at.wrapping_add(8), 0);
     result
 }
 
@@ -577,7 +599,8 @@ pub fn scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr 
 /// (`008c5e70`).
 pub fn destructor(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), BASE_PROCESS_VTABLE);
-    e.call(0x008c_5e70, &args![package_of(this)]);
+    let package = package_ptr(this);
+    typed_call!(FAMILY, 0x008c_5e70, actor_package::destroy_data(e, package));
 }
 
 /// `Copy`'s step for one high process (none for 0): when its slot 0x1e0 answers more than the
@@ -641,7 +664,12 @@ pub fn copy(e: &mut Engine, this: Ptr, other: Ptr) {
 /// handler (`008c5ec0`), then to the slot 0x04 of the object [`running_package_word`] answers, when
 /// there is one.
 pub fn handle_deleted_reference(e: &mut Engine, this: Ptr, reference: u32) {
-    e.call(0x008c_5ec0, &args![package_of(this), reference]);
+    let package = package_ptr(this);
+    typed_call!(
+        FAMILY,
+        0x008c_5ec0,
+        actor_package::handle_deleted_reference(e, package, reference)
+    );
     let running = typed_call!(FAMILY, 0x008d_0430, running_package_word(e, this));
     if running != 0 {
         e.vcall(running, 0x4, &args![reference]);
@@ -654,7 +682,12 @@ pub fn handle_deleted_reference(e: &mut Engine, this: Ptr, reference: u32) {
 /// (`ActorPackage::InitFromPackage`, `008c6080`).
 pub fn set_current_package(e: &mut Engine, this: Ptr, package: u32, actor: u32) {
     let target = e.call(0x0067_59e0, &args![package, actor]).u32();
-    e.call(0x008c_6080, &args![package_of(this), package, target]);
+    let embedded = package_ptr(this);
+    typed_call!(
+        FAMILY,
+        0x008c_6080,
+        actor_package::init_from_package(e, embedded, Ptr::new(package), target)
+    );
 }
 
 // Typed from 008d08f0
@@ -674,9 +707,12 @@ pub fn save_size(e: &mut Engine, this: Ptr, argument: u32, _unused_0: u32) -> u1
         size = size.wrapping_add(4);
         size = size.wrapping_add(2);
     }
-    let package_size = e
-        .call(0x008c_61a0, &args![package_of(this), argument])
-        .u16();
+    let package = package_ptr(this);
+    let package_size = low_half(typed_call!(
+        FAMILY,
+        0x008c_61a0,
+        actor_package::save_size(e, package, argument)
+    ));
     size = size.wrapping_add(package_size);
     size = size.wrapping_add(4);
     if save_log_enabled(e) {
@@ -715,7 +751,12 @@ pub fn save_game(e: &mut Engine, this: Ptr, argument: u32, _unused_0: u32) {
             e.call(WRITE_BYTES, &args![save_load, length, 2u32]);
         });
     }
-    e.call(0x008c_6250, &args![package_of(this), argument]);
+    let package = package_ptr(this);
+    typed_call!(
+        FAMILY,
+        0x008c_6250,
+        actor_package::save(e, package, argument)
+    );
     let save_load = save_load_game(e);
     let clock = this.addr().wrapping_add(SYSTEM_TIME_CLOCK);
     e.call(WRITE_BYTES, &args![save_load, clock, 4u32]);
@@ -746,8 +787,7 @@ pub fn save_game(e: &mut Engine, this: Ptr, argument: u32, _unused_0: u32) {
 /// `LoadGame`'s tag check: the warning at line 0x104, with the record being loaded or with the
 /// current version.
 fn bad_header(e: &mut Engine) {
-    let save_load = save_load_game(e);
-    let record = e.call(LOADING_RECORD, &args![save_load]).u32();
+    let record = loading_record(e);
     if record != 0 {
         let words = record_words(e, record, true);
         e.call(
@@ -763,8 +803,7 @@ fn bad_header(e: &mut Engine) {
             ],
         );
     } else {
-        let save_load = save_load_game(e);
-        let current = u32::from(e.call(CURRENT_VERSION, &args![save_load]).u8());
+        let current = u32::from(current_version(e));
         e.call(
             SAVELOAD_WARNING,
             &args![BAD_HEADER_FORMAT, SOURCE_FILE, 0x104u32, current],
@@ -798,9 +837,11 @@ pub fn load_game(e: &mut Engine, this: Ptr, argument_0: u32, argument_1: u32, _u
             e.mem.u16(slot.addr())
         });
     }
-    e.call(
+    let package = package_ptr(this);
+    typed_call!(
+        FAMILY,
         0x008c_6320,
-        &args![package_of(this), argument_0, argument_1],
+        actor_package::load_game(e, package, argument_0, argument_1)
     );
     let save_load = save_load_game(e);
     let clock = this.addr().wrapping_add(SYSTEM_TIME_CLOCK);
@@ -809,8 +850,7 @@ pub fn load_game(e: &mut Engine, this: Ptr, argument_0: u32, argument_1: u32, _u
         return;
     }
     let end = buffer_position(e);
-    let save_load = save_load_game(e);
-    let record = e.call(LOADING_RECORD, &args![save_load]).u32();
+    let record = loading_record(e);
     let expected = u32::from(length).wrapping_add(block_start);
     if record != 0 {
         let id = e.mem.u32(record);
@@ -847,8 +887,7 @@ pub fn load_game(e: &mut Engine, this: Ptr, argument_0: u32, argument_1: u32, _u
         } else {
             return;
         };
-        let save_load = save_load_game(e);
-        let current = u32::from(e.call(CURRENT_VERSION, &args![save_load]).u8());
+        let current = u32::from(current_version(e));
         e.call(
             SAVELOAD_WARNING,
             &args![format, bytes, SOURCE_FILE, 0x109u32, current],
@@ -860,9 +899,11 @@ pub fn load_game(e: &mut Engine, this: Ptr, argument_0: u32, argument_1: u32, _u
 /// `BaseProcess::InitLoadGame` (Xbox PDB): `ActorPackage::InitLoadGame` (`008c64d0`) on the
 /// embedded package with the first two words; the third unread.
 pub fn init_load_game(e: &mut Engine, this: Ptr, argument_0: u32, argument_1: u32, _unused_0: u32) {
-    e.call(
+    let package = package_ptr(this);
+    typed_call!(
+        FAMILY,
         0x008c_64d0,
-        &args![package_of(this), argument_0, argument_1],
+        actor_package::init_load_game(e, package, argument_0, argument_1)
     );
 }
 
@@ -910,7 +951,12 @@ pub fn finish_init_load_game(
 /// `BaseProcess::Revert` (Xbox PDB): `008c65a0` on the embedded package with the first word; the
 /// second unread.
 pub fn revert(e: &mut Engine, this: Ptr, argument: u32, _unused_0: u32) {
-    e.call(0x008c_65a0, &args![package_of(this), argument]);
+    let package = package_ptr(this);
+    typed_call!(
+        FAMILY,
+        0x008c_65a0,
+        actor_package::revert_unused(e, package, argument)
+    );
 }
 
 // Typed from 008d0f30
@@ -922,7 +968,12 @@ pub fn save_game_buffer(e: &mut Engine, this: Ptr, buffer: u32) {
         let at = this.addr().wrapping_add(field);
         e.call(0x0086_5e50, &args![buffer, at, 4u32, 0u32]);
     }
-    e.call(0x008c_65d0, &args![package_of(this), buffer]);
+    let package = package_ptr(this);
+    typed_call!(
+        FAMILY,
+        0x008c_65d0,
+        actor_package::save_game(e, package, Ptr::new(buffer))
+    );
 }
 
 // Typed from 008d0f90
@@ -940,7 +991,12 @@ pub fn load_game_buffer(e: &mut Engine, this: Ptr, buffer: u32) {
             e.call(0x0086_4980, &args![buffer, at, 4u32]);
         }
     }
-    e.call(0x008c_6730, &args![package_of(this), buffer]);
+    let package = package_ptr(this);
+    typed_call!(
+        FAMILY,
+        0x008c_6730,
+        actor_package::load_game_buffer(e, package, Ptr::new(buffer))
+    );
 }
 
 /// The cached values' flags cleared ([`cached_values_out_of_date`]) when the process has cached
@@ -961,7 +1017,12 @@ fn cached_out_of_date(e: &mut Engine, this: Ptr) {
 /// `ActorPackage::InitLoadGame_ov2` (`008c6970`) on the embedded package, then the cached values'
 /// flags cleared when there are cached values.
 pub fn init_load_game_buffer(e: &mut Engine, this: Ptr, buffer: u32) {
-    e.call(0x008c_6970, &args![package_of(this), buffer]);
+    let package = package_ptr(this);
+    typed_call!(
+        FAMILY,
+        0x008c_6970,
+        actor_package::init_load_game_buffer(e, package, Ptr::new(buffer))
+    );
     cached_out_of_date(e, this);
 }
 
@@ -975,7 +1036,12 @@ pub fn cached_values_out_of_date(e: &mut Engine, this: Ptr) {
 /// `BaseProcess::FinishLoadGame` (Xbox PDB): `ActorPackage::FinishLoadGame` (`008c6b20`) on the
 /// embedded package.
 pub fn finish_load_game(e: &mut Engine, this: Ptr, buffer: u32) {
-    e.call(0x008c_6b20, &args![package_of(this), buffer]);
+    let package = package_ptr(this);
+    typed_call!(
+        FAMILY,
+        0x008c_6b20,
+        actor_package::finish_load_game(e, package, Ptr::new(buffer))
+    );
 }
 
 // Typed from 008d1070
@@ -989,7 +1055,12 @@ pub fn revert_buffer(e: &mut Engine, this: Ptr, buffer: u32) {
         .set_u32(this.addr().wrapping_add(HOUR_LAST_PROCESSED), hour);
     e.mem
         .set_u32(this.addr().wrapping_add(DATE_LAST_PROCESSED), 0);
-    e.call(0x008c_6c80, &args![package_of(this), buffer]);
+    let package = package_ptr(this);
+    typed_call!(
+        FAMILY,
+        0x008c_6c80,
+        actor_package::revert(e, package, buffer)
+    );
     cached_out_of_date(e, this);
 }
 

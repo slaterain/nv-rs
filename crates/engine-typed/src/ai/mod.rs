@@ -3,6 +3,10 @@
 //! source unit's functions, registered at their exe addresses over the translations in
 //! `engine-fallout-ai`.
 //!
+//! - [`actor_package`]: `ActorPackage` (its Xbox PDB source unit): the package record a process
+//!   holds (the current one is embedded in every process): its clear, its start from a package,
+//!   its move, its reference count, its save and load (the save/load game's and a buffer's) and
+//!   its flags; with the data's delete and the deleted reference handler its code shares.
 //! - [`base_process`]: `BaseProcess` (its Xbox PDB source unit): the defaults every process
 //!   class keeps in its vtable (the stubs that answer false, 0, -1 or 0.0 and those that do
 //!   nothing), the embedded current package's getters and setters, the destructor, `Copy`, the
@@ -17,13 +21,14 @@
 //! Stage 1: the objects stay in guest memory where the game made them. **Threads and floats.** The
 //! process code runs on main and on the AI threads, so the row is [`Threads::Both`] and the tests
 //! compare under both control words. The floats here are moved, not computed (a load that quiets a
-//! signalling NaN, a sign flip, a zero), and the one compare is of a slot's double result with a
-//! double constant: the same on any thread.
+//! signalling NaN, a sign flip, a zero, the calendar's hour stored as a float), and the one compare is
+//! of a slot's double result with a double constant: the same on any thread.
 
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 
+pub mod actor_package;
 pub mod base_process;
 
 /// This family's bit: what each `typed_call!` of it names (39).
@@ -46,6 +51,26 @@ fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0040_1280, base_process::empty_name(Ptr) -> u32),
         entry!(0x0071_7e50, base_process::address_4(Ptr) -> u32),
+        entry!(0x008c_5e70, actor_package::destroy_data(Ptr)),
+        entry!(0x008c_5ec0, actor_package::handle_deleted_reference(Ptr, u32)),
+        entry!(0x008c_5ef0, actor_package::clear(Ptr)),
+        entry!(0x008c_6030, actor_package::dec_ref_count(Ptr) -> u32),
+        entry!(0x008c_6060, actor_package::null_instance_data(Ptr)),
+        entry!(0x008c_6080, actor_package::init_from_package(Ptr, Ptr, u32)),
+        entry!(0x008c_6100, actor_package::inc_ref_count(Ptr) -> u32),
+        entry!(0x008c_6130, actor_package::move_to(Ptr, Ptr)),
+        entry!(0x008c_61a0, actor_package::save_size(Ptr, u32) -> u32),
+        entry!(0x008c_6250, actor_package::save(Ptr, u32)),
+        entry!(0x008c_6320, actor_package::load_game(Ptr, u32, u32)),
+        entry!(0x008c_64d0, actor_package::init_load_game(Ptr, u32, u32)),
+        entry!(0x008c_65a0, actor_package::revert_unused(Ptr, u32)),
+        entry!(0x008c_65d0, actor_package::save_game(Ptr, Ptr)),
+        entry!(0x008c_6730, actor_package::load_game_buffer(Ptr, Ptr)),
+        entry!(0x008c_6920, actor_package::set_flag(Ptr, u32, u8)),
+        entry!(0x008c_6970, actor_package::init_load_game_buffer(Ptr, Ptr)),
+        entry!(0x008c_6b00, actor_package::flag(Ptr, u32) -> u32),
+        entry!(0x008c_6b20, actor_package::finish_load_game(Ptr, Ptr)),
+        entry!(0x008c_6c80, actor_package::revert(Ptr, u32)),
         entry!(0x008d_02d0, base_process::last_time_detected(Ptr, u32, u32) -> f32),
         entry!(0x008d_02f0, base_process::false_6(Ptr, u32, u32, u32, u32, u32, u32) -> bool),
         entry!(0x008d_0300, base_process::false_2(Ptr, u32, u32) -> bool),
