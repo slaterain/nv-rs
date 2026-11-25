@@ -599,6 +599,21 @@ pub fn property_fade(e: &mut Engine, this: Ptr) -> f32 {
     fade_between(packet::property_distance(e, base), near, far)
 }
 
+/// A shader property's slot 0x10c, its fade, and the exe's target there on the lighting property class
+/// `010ae0d0` and every class built on it (`010b8330`, `010b9338`, `010b9490`, `010b9910`, `010babf8`).
+const SLOT_FADE: u32 = 0x10c;
+const FADE: u32 = 0x00b6_6b80;
+
+/// A shader property's slot 0x10c (its fade, a float in `ST0`) as the light set-ups take it, rounded to a
+/// float: [`property_fade`] directly when the slot holds the exe's (`00b66b80`), else through the vtable.
+pub fn property_fade_of(e: &mut Engine, property: u32) -> f32 {
+    if crate::slot_target(e, property, SLOT_FADE) == FADE {
+        typed_call!(FAMILY, 0x00b6_6b80, property_fade(e, Ptr::new(property)))
+    } else {
+        crate::anim_keys::narrow(e.vcall(property, SLOT_FADE, &[]).f64())
+    }
+}
+
 /// The fog upload ([`fog_upload`], `00b7c3a0`) as the type groups' begins call it.
 fn fog_upload_call(e: &mut Engine, shader: u32) {
     typed_call!(FAMILY, 0x00b7_c3a0, fog_upload(e, Ptr::new(shader)));

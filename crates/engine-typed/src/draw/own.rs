@@ -344,10 +344,9 @@ pub(crate) fn free_alpha_group(e: &mut Engine, group: u32) {
 /// and given back once the node is on the free list (the shader family's `pool_give`) (condition 4).
 pub(crate) fn give_node(e: &mut Engine, node: u32) {
     e.set_global(node.wrapping_add(8), 0u32);
-    e.call(LOCK_ENTER, &args![batch::POOL_LOCK, 0u32]);
+    batch::pool_lock(e);
     batch::pool_give(e, node);
 }
-const LOCK_ENTER: u32 = 0x0040_fbf0;
 
 // Typed from 00b71300
 /// `NiTPointerListBase::RemoveAll`, `thiscall(list)` (head, tail, count): each node in turn, from the head, back to

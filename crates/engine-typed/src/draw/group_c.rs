@@ -576,7 +576,7 @@ pub fn direction_light(e: &mut Engine, index: u32, light: Ptr, scale: f32) {
     let direction: [u32; 3] =
         std::array::from_fn(|i| packet::light_value_word(e, data, 0xf0 + 4 * lighting::idx(i)));
     let w = if object != 0 {
-        crate::anim_keys::narrow(e.vcall(object, 0x10c, &args![]).f64())
+        super::setups::property_fade_of(e, object)
     } else {
         1.0
     };

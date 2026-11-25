@@ -236,7 +236,7 @@ fn stand_ins(e: &mut Engine) {
 }
 
 /// The dispatch family's functions the draw, render and shader families' typed code calls: `compose`,
-/// `invert_non_uniform`, `inverse_4x4`, `normalize`, the RTTI cast and the two immediate renders.
+/// `invert_non_uniform`, `inverse_4x4`, `normalize`, the RTTI cast, the two immediate renders and the node pool's lock.
 const DISPATCH_CALLED: &[u32] = &[
     0x0062_c250,
     0x004b_4880,
@@ -245,6 +245,7 @@ const DISPATCH_CALLED: &[u32] = &[
     0x0065_3290,
     0x00a8_0610,
     0x00a7_1d70,
+    0x0040_fbf0,
 ];
 
 trait Common {
@@ -2662,4 +2663,105 @@ fn lists_pass_in_every_type() {
     .max_cases(240)
     .run()
     .assert_same();
+}
+
+/// `IsShadowPass` (`00b630f0`): the pass types at and beside each end of its three ranges, 0 and the top words.
+#[test]
+fn is_shadow_pass() {
+    Diff::new(entry!(0x00b6_30f0, lists::is_shadow_pass(u32) -> bool))
+        .family(&draw::DRAW)
+        .inputs(&[Input::Of(&[
+            0,
+            1,
+            0x1c3,
+            0x1c4,
+            0x1c5,
+            0x1c7,
+            0x1c8,
+            0x230,
+            0x231,
+            0x233,
+            0x234,
+            0x235,
+            0x283,
+            0x284,
+            0x286,
+            0x287,
+            0x288,
+            0x8000_0284,
+            0xffff_ffff,
+        ])])
+        .run()
+        .assert_same();
+}
+
+/// A shader property's slot 0x10c as the light set-ups take it (`setups::property_fade_of`): with the exe's fade
+/// (`00b66b80`) in the slot, the typed fade called directly (the draw family on) answers what the call through the
+/// slot answers with only the translations (the fade's translation), over the property's flags, its distance and
+/// the fade's near and far distances (`011f9454`, `011f9458`); with another function in the slot, both call it.
+#[test]
+fn property_fade_of_the_slot() {
+    const FADE_NEAR: u32 = 0x011f_9454;
+    const FADE_FAR: u32 = 0x011f_9458;
+    const OTHER_FADE: u32 = VT_FN + 0x10c;
+    let mut by_address = Engine::new_untyped_for_test();
+    let mut direct = Engine::new_untyped_for_test();
+    direct.typed_apply_for_test(&[&draw::DRAW, &leaf::LEAVES], "");
+    assert!(direct.typed_direct(draw::FAMILY, 0x00b6_6b80));
+    let mut properties = Vec::new();
+    for e in [&mut by_address, &mut direct] {
+        e.map(FADE_NEAR & !0xfff, 0x1000);
+        e.register(OTHER_FADE, |e, a| Ret {
+            st0: f64::from(f32::from_bits(e.mem.u32(a[0] + 0x34))) * 3.0,
+            ..Ret::default()
+        });
+        let real = vtable(e, &[(0x10c, 0x00b6_6b80)]);
+        let other = vtable(e, &[]);
+        properties.push([obj(e, 0x40, real), obj(e, 0x40, other)]);
+    }
+    let floats = [
+        0,
+        ONE,
+        HALF,
+        TWO,
+        0x4100_0000,
+        0xbf80_0000,
+        0x8000_0000,
+        0x7f80_0000,
+        0x7fc0_0000,
+        1,
+    ];
+    let mut compared = 0;
+    for flags in [0u32, 1, 3, 0xffff_fffe] {
+        for flags_24 in [0u32, 0x0080_0000, 0xff7f_ffff] {
+            for near in floats {
+                for far in floats {
+                    for distance in floats {
+                        let mut answers = Vec::new();
+                        for (e, of) in [
+                            (&mut by_address, properties[0]),
+                            (&mut direct, properties[1]),
+                        ] {
+                            set(e, FADE_NEAR, near);
+                            set(e, FADE_FAR, far);
+                            let mut answer = Vec::new();
+                            for property in of {
+                                set(e, property + 0x20, flags);
+                                set(e, property + 0x24, flags_24);
+                                set(e, property + 0x34, distance);
+                                answer.push(draw::setups::property_fade_of(e, property).to_bits());
+                            }
+                            answers.push(answer);
+                        }
+                        assert_eq!(
+                            answers[1], answers[0],
+                            "flags {flags:x} {flags_24:x}, near {near:x}, far {far:x}, distance {distance:x}"
+                        );
+                        compared += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(compared, 4 * 3 * 1000);
 }

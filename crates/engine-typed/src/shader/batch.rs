@@ -88,13 +88,11 @@ const MEMORY_FREE: u32 = 0x00aa_4060;
 const OPERATOR_NEW: u32 = 0x00aa_13e0;
 const RENDERER_CONSTRUCT: u32 = 0x00b9_a5b0;
 const ACTIVE_INSERT_FIRST: u32 = 0x00b9_8e20;
-const IS_SHADOW_PASS: u32 = 0x00b6_30f0;
 const SETUP_TYPES_FC_FD: u32 = 0x00b7_dde0;
 const SETUP_TYPE_CA: u32 = 0x00b7_ded0;
 const SETUP_TYPE_D1: u32 = 0x00b7_dfe0;
 const SETUP_TYPE_102: u32 = 0x00b7_e150;
 const TAIL_KIND_11: u32 = 0x00bb_96d0;
-const LOCK_ENTER: u32 = 0x0040_fbf0;
 /// The global node pool: its lock (owner `011c5f80`, count `011c5f84`) and free list (`011c5f58`).
 pub(crate) const POOL_LOCK: u32 = 0x011c_5f80;
 const POOL_LOCK_COUNT: u32 = 0x011c_5f84;
@@ -627,7 +625,7 @@ pub fn render_standard(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second
     } else {
         shader_geometry_setups(e, shader, state);
         if e.get(pass, RenderPass::ucSortFlag) != 0 {
-            if second && e.call(IS_SHADOW_PASS, &args![pass_type]).u8() == 0 {
+            if second && !crate::draw::lists::shadow_pass(e, pass_type) {
                 shader_blend(e, shader, state);
             }
             if first
@@ -638,7 +636,7 @@ pub fn render_standard(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second
                 shader_alpha_function(e, shader, state);
             }
         } else if e.global::<u8>(RESTORE_OWED) != 0
-            && e.call(IS_SHADOW_PASS, &args![pass_type]).u8() == 0
+            && !crate::draw::lists::shadow_pass(e, pass_type)
         {
             shader_restore(e, shader, state);
             e.set_global(RESTORE_OWED, 0u8);
@@ -699,7 +697,7 @@ pub fn render_skinned(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second:
             if first_partition {
                 shader_geometry_setups(e, shader, state);
                 if e.get(pass, RenderPass::ucSortFlag) != 0
-                    && e.call(IS_SHADOW_PASS, &args![pass_type]).u8() == 0
+                    && !crate::draw::lists::shadow_pass(e, pass_type)
                 {
                     if second {
                         shader_blend(e, shader, state);
@@ -1481,11 +1479,11 @@ pub fn clear_renderer(e: &mut Engine, this: Ptr<BSBatchRenderer>, _unused: u32) 
 pub fn release_spare(e: &mut Engine, this: Ptr<PassList>) -> u32 {
     let mut node = e.get(this, PassList::pSpare);
     if node != 0 {
-        e.call(LOCK_ENTER, &args![POOL_LOCK, 0u32]);
+        pool_lock(e);
         loop {
             let current = node;
             node = e.global::<u32>(node);
-            e.call(LOCK_ENTER, &args![POOL_LOCK, 0u32]);
+            pool_lock(e);
             pool_give(e, current);
             if node == 0 {
                 break;
@@ -1499,6 +1497,17 @@ pub fn release_spare(e: &mut Engine, this: Ptr<PassList>) -> u32 {
         e.set_global(tail, 0u32);
     }
     tail
+}
+
+/// The global node pool's lock taken (`0040fbf0`, the dispatch family's recursive spin lock, `thiscall(lock, 0)`):
+/// [`pool_give`] holds it once less.
+#[inline(always)]
+pub(crate) fn pool_lock(e: &mut Engine) {
+    typed_call!(
+        crate::dispatch::FAMILY,
+        0x0040_fbf0,
+        crate::dispatch::refs::lock(e, Ptr::new(POOL_LOCK), 0u32)
+    );
 }
 
 /// A node back to the pool's free list, the lock held once less.

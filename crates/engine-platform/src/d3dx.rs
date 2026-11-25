@@ -3303,53 +3303,70 @@ mod tests_direct {
     use crate::AbiFn;
     use engine_core::d3dx_direct as direct;
 
-    /// The nine imports: their names, slots and the table's words form of each.
-    fn named() -> [(&'static str, u32, AbiFn); 9] {
+    /// One import's function as itself, by its Rust name here.
+    #[derive(Clone, Copy)]
+    enum Plain {
+        Two(direct::Fn2),
+        Three(direct::Fn3),
+    }
+
+    /// The nine imports: their names, slots, the table's words form of each and the function of that
+    /// name here (each row ties the four together).
+    fn named() -> [(&'static str, u32, AbiFn, Plain); 9] {
         [
             (
                 "D3DXMatrixMultiplyTranspose",
                 direct::MATRIX_MULTIPLY_TRANSPOSE,
                 DIRECT.matrix_multiply_transpose.0,
+                Plain::Three(matrix_multiply_transpose),
             ),
             (
                 "D3DXVec3TransformCoord",
                 direct::VEC3_TRANSFORM_COORD,
                 DIRECT.vec3_transform_coord.0,
+                Plain::Three(vec3_transform_coord),
             ),
             (
                 "D3DXPlaneTransform",
                 direct::PLANE_TRANSFORM,
                 DIRECT.plane_transform.0,
+                Plain::Three(plane_transform),
             ),
             (
                 "D3DXVec3Normalize",
                 direct::VEC3_NORMALIZE,
                 DIRECT.vec3_normalize.0,
+                Plain::Two(vec3_normalize),
             ),
             (
                 "D3DXVec3TransformNormal",
                 direct::VEC3_TRANSFORM_NORMAL,
                 DIRECT.vec3_transform_normal.0,
+                Plain::Three(vec3_transform_normal),
             ),
             (
                 "D3DXMatrixMultiply",
                 direct::MATRIX_MULTIPLY,
                 DIRECT.matrix_multiply.0,
+                Plain::Three(matrix_multiply),
             ),
             (
                 "D3DXMatrixInverse",
                 direct::MATRIX_INVERSE,
                 DIRECT.matrix_inverse.0,
+                Plain::Three(matrix_inverse),
             ),
             (
                 "D3DXMatrixTranspose",
                 direct::MATRIX_TRANSPOSE,
                 DIRECT.matrix_transpose.0,
+                Plain::Two(matrix_transpose),
             ),
             (
                 "D3DXPlaneNormalize",
                 direct::PLANE_NORMALIZE,
                 DIRECT.plane_normalize.0,
+                Plain::Two(plane_normalize),
             ),
         ]
     }
@@ -3359,7 +3376,7 @@ mod tests_direct {
     #[test]
     fn the_direct_table_is_what_the_imports_register() {
         let table = crate::imports();
-        for (name, _, f) in named() {
+        for (name, _, f, _) in named() {
             let registered = table
                 .iter()
                 .find(|(dll, n, _)| *dll == "d3dx9_38.dll" && *n == name)
@@ -3378,7 +3395,7 @@ mod tests_direct {
         let mut e = Engine::new();
         let imports: Vec<engine_core::exe::Import> = named()
             .iter()
-            .map(|(name, slot, _)| engine_core::exe::Import {
+            .map(|(name, slot, _, _)| engine_core::exe::Import {
                 slot: *slot,
                 dll: "d3dx9_38.dll".to_string(),
                 name: name.to_string(),
@@ -3388,9 +3405,10 @@ mod tests_direct {
         e
     }
 
-    /// Each import called directly gives the memory and the answer of the call by address, over
-    /// matrices, vectors and planes with zeros, NaNs, infinities, denormals and ordinary values; all
-    /// but each slot's first call go direct.
+    /// Each import called directly gives the memory and the answer of the call by address and of the
+    /// function of its name called as itself, over matrices, vectors and planes with zeros, NaNs,
+    /// infinities, denormals and ordinary values: the out words, the inverse's determinant word, and
+    /// the inputs left as they were. All but each slot's first call go direct.
     #[test]
     fn each_import_called_directly_answers_as_by_address() {
         let mut e = engine_with_imports();
@@ -3412,31 +3430,43 @@ mod tests_direct {
                 ((x >> 8) as f32 / 16_777_216.0 * 8.0 - 4.0).to_bits()
             }
         };
-        let input = e.mem.alloc(64 * 3 + 16);
-        let (by_address, directly) = (e.mem.alloc(64), e.mem.alloc(64));
+        // The inputs on a 16-byte boundary (an allocation is only sure of 8).
+        let input = (e.mem.alloc(64 * 3 + 16 + 16) + 15) & !15;
+        // By address, directly, and the function of the import's name as itself: an out matrix and a
+        // determinant word each.
+        let outs = [e.mem.alloc(64), e.mem.alloc(64), e.mem.alloc(64)];
+        let dets = [e.mem.alloc(4), e.mem.alloc(4), e.mem.alloc(4)];
         let before = direct::direct_calls();
         let rounds = 64u32;
         for round in 0..rounds {
             for i in 0..52 {
                 e.mem.set_u32(input + 4 * i, next());
             }
+            let given = e.mem.bytes(input, 4 * 52);
             // The matrix on a 16-byte boundary in even rounds, off it in odd ones (the vector transforms
             // take one of two paths by that).
             let (a, b) = (Ptr::new(input), Ptr::new(input + 64 + 4 * (round % 2)));
-            let det = Ptr::new(input + 144);
-            for (k, (_, slot, _)) in named().iter().enumerate() {
-                for out in [by_address, directly] {
+            assert_eq!(
+                b.addr() & 0xf == 0,
+                round % 2 == 0,
+                "round {round}: the boundary"
+            );
+            for (k, (name, slot, _, plain)) in named().iter().enumerate() {
+                for out in outs {
                     for i in 0..16 {
                         e.mem.set_u32(out + 4 * i, 0xdead_beef);
                     }
                 }
+                for det in dets {
+                    e.mem.set_u32(det, 0xdead_beef);
+                }
                 let words: Vec<u32> = match k {
-                    3 | 7 | 8 => vec![by_address, a.addr()],
-                    6 => vec![by_address, det.addr(), b.addr()],
-                    _ => vec![by_address, a.addr(), b.addr()],
+                    3 | 7 | 8 => vec![outs[0], a.addr()],
+                    6 => vec![outs[0], dets[0], b.addr()],
+                    _ => vec![outs[0], a.addr(), b.addr()],
                 };
                 let first = e.call(*slot, &words).u32();
-                let out = Ptr::new(directly);
+                let (out, det) = (Ptr::new(outs[1]), Ptr::new(dets[1]));
                 let second = match k {
                     0 => direct::matrix_multiply_transpose(&mut e, out, a, b),
                     1 => direct::vec3_transform_coord(&mut e, out, a, b),
@@ -3448,12 +3478,36 @@ mod tests_direct {
                     7 => direct::matrix_transpose(&mut e, out, a),
                     _ => direct::plane_normalize(&mut e, out, a),
                 };
-                let answer = |w: u32| if w == by_address { directly } else { w };
-                assert_eq!(second.addr(), answer(first), "import {k}: the answer");
+                let (out, det) = (Ptr::new(outs[2]), Ptr::new(dets[2]));
+                let third = match (k, *plain) {
+                    (3 | 7 | 8, Plain::Two(f)) => f(&mut e, out, a),
+                    (6, Plain::Three(f)) => f(&mut e, out, det, b),
+                    (0..=2 | 4 | 5, Plain::Three(f)) => f(&mut e, out, a, b),
+                    _ => panic!("{name}: the function takes another number of words"),
+                };
+                // Each answer as which out it is, or its word (a singular matrix's inverse answers 0).
+                let answer = |w: u32, i: usize| if w == outs[i] { u32::MAX } else { w };
                 assert_eq!(
-                    e.mem.bytes(by_address, 64),
-                    e.mem.bytes(directly, 64),
-                    "import {k}"
+                    answer(second.addr(), 1),
+                    answer(first, 0),
+                    "{name}: the answer"
+                );
+                assert_eq!(
+                    answer(third, 2),
+                    answer(first, 0),
+                    "{name}: by its function"
+                );
+                let written = |e: &Engine, i: usize| (e.mem.bytes(outs[i], 64), e.mem.u32(dets[i]));
+                assert_eq!(
+                    written(&e, 1),
+                    written(&e, 0),
+                    "{name}: out and determinant"
+                );
+                assert_eq!(written(&e, 2), written(&e, 0), "{name}: by its function");
+                assert_eq!(
+                    e.mem.bytes(input, 4 * 52),
+                    given,
+                    "{name}: the inputs left alone"
                 );
             }
         }
@@ -3467,7 +3521,7 @@ mod tests_direct {
         let mut e = engine_with_imports();
         let out = e.mem.alloc(16);
         let (a, b) = (Ptr::new(e.mem.alloc(64)), Ptr::new(e.mem.alloc(64)));
-        for (_, slot, _) in named() {
+        for (_, slot, _, _) in named() {
             // Each import once by address, so the call cache holds the slot's registration.
             e.call(slot, &[out, a.addr(), b.addr()]);
             e.register(slot, |e, w| {

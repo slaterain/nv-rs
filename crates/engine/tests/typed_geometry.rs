@@ -2557,8 +2557,12 @@ fn plus(p: [f32; 3], q: [f32; 3], k: f32) -> [f32; 3] {
 /// its plane at one of six places (inside, `u < 0`, `u > 1`, `v < 0`, `u + v > 1`, on the edge `u = 0`),
 /// with `v1 - v0` and `v2 - v0` the spans in that order (a back face to this ray) or swapped (6 to 11 and
 /// 18 to 23: a front face). 24 and 25: a triangle whose plane holds the ray, both windings. 26 and 27:
-/// the inside hit with spans a thousandth as long (`|det|` under `1e-5`), both windings.
+/// the inside hit with spans a thousandth as long (`|det|` under `1e-5`), both windings. 28 to 39: the
+/// limit scenes ([`ray_limit_scene`]), no jitter.
 fn ray_scene(s: u32, j: [f32; 4]) -> [f32; 15] {
+    if s >= 28 {
+        return ray_limit_scene(s - 28);
+    }
     let o = [0.25 + 0.01 * j[0], -4.0 + 0.01 * j[1], 0.5 + 0.01 * j[2]];
     let d = [0.1 + 0.01 * j[3], 0.6, 0.79];
     let (mut a, mut b) = ([3.0f32, 0.0, 0.0], [0.0f32, 2.4, -1.8]);
@@ -2593,12 +2597,51 @@ fn ray_scene(s: u32, j: [f32; 4]) -> [f32; 15] {
     ]
 }
 
+/// The limit scenes (`k` 0 to 11), every value exact: a triangle in the plane `y = 0` with `v0` at 0,
+/// `v2 = (0, 0, 1)` and `v1` on the x axis, the ray along `(0, 1, 0)`. `v1` is `(1, 0, 0)` for `k` 0
+/// to 5 (a front face to the ray: `det = 1`) and `(-1, 0, 0)` for 6 to 11 (a back face: `det = -1`),
+/// the origin mirrored with it; each origin puts one value exactly on its test's limit: `t = 0`,
+/// `u = 0`, `u = det` (with `v = 0` and `u + v = det`), `v = 0`, `u + v = det`, and last `v1` a
+/// hundred-thousandth as long, `det` exactly `1e-5` (or `-1e-5`), a hit.
+fn ray_limit_scene(k: u32) -> [f32; 15] {
+    let side = if k < 6 { 1.0f32 } else { -1.0 };
+    let (o, x1) = match k % 6 {
+        0 => ([0.25f32, 0.0, 0.25], 1.0f32),
+        1 => ([0.0, -1.0, 0.25], 1.0),
+        2 => ([1.0, -1.0, 0.0], 1.0),
+        3 => ([0.5, -1.0, 0.0], 1.0),
+        4 => ([0.5, -1.0, 0.5], 1.0),
+        _ => ([0.0, -1.0, 0.25], 1e-5),
+    };
+    [
+        side * o[0],
+        o[1],
+        o[2],
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        side * x1,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    ]
+}
+
+/// The limit scenes' numbers.
+const RAY_LIMIT_SCENES: &[u32] = &[28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39];
+
 /// The test's words for `c` (word 0 the scene, 1 the cull word, 2 the outs' layout, 3 to 6 the jitters),
 /// with `plant` (a float's place among the fifteen and its bits) put in: the ray and the corners in
 /// blocks of their own, the outs (the point, `t`, `u`, `v`) in a block filled with a pattern first so an
 /// out left unwritten shows. The layouts: 0 apart; 1 `u`'s out on the direction's `x` (the test reads
 /// the direction after it writes `u`); 2 the point's out on the origin (the point is the origin plus the
-/// scaled direction); 3 `t`'s out on `v`'s.
+/// scaled direction); 3 `t`'s out on `v`'s; 4 `u`'s out on `v`'s (the test reads `u` back for
+/// `u + v` after it writes `v`); 5 `t`'s out on `u`'s.
 fn ray_words(e: &mut Engine, c: &Case, plant: Option<(usize, u32)>) -> Vec<u32> {
     ray_limits(e);
     let j = [3, 4, 5, 6].map(|i| jitter(c.f32(i).to_bits()));
@@ -2625,6 +2668,8 @@ fn ray_words(e: &mut Engine, c: &Case, plant: Option<(usize, u32)>) -> Vec<u32> 
         1 => u = blocks[1],
         2 => point = blocks[0],
         3 => t = v,
+        4 => u = v,
+        5 => t = u,
         _ => {}
     }
     vec![
@@ -2649,18 +2694,20 @@ const RAY_JITTERS: [Input; 4] = [
     Input::F32Swept(0x3f80_0000),
 ];
 
-/// `00eadb90` against its translation: every scene with every cull word (its low byte decides: 0x100
-/// does not cull, 0xffffff01 does) and every layout of the outs, under both control words, then 256 cases
-/// of swept jitters (full mantissas in the ray). The translation's dot products (`004b6190`), scaled
-/// direction (`004a3760`) and sum (`00439e90`) are done in place by the typed test; the back faces' cross
-/// product (`004b3800`) runs on both sides. The leaves family is named: the cross product makes its point
-/// through the typed constructor (`00416870`).
+/// The cull words: its low byte decides (0x100 does not cull, 0xffffff01 does), all of it (2 culls,
+/// though its bit 0 is clear).
+const RAY_CULL_WORDS: &[u32] = &[0, 1, 2, 0x0000_0100, 0xffff_ff01];
+
+/// `00eadb90` against its translation: every scene with every cull word and every layout of the outs,
+/// under both control words, then 256 cases of swept jitters (full mantissas in the ray). The
+/// translation's cross product (`004b3800`, the back faces'), dot products (`004b6190`), scaled
+/// direction (`004a3760`) and sum (`00439e90`) are done in place by the typed test.
 #[test]
 fn ray_hits_triangle() {
     let mut inputs = vec![
         Input::Of(RAY_SCENES),
-        Input::Of(&[0, 1, 0x0000_0100, 0xffff_ff01]),
-        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(RAY_CULL_WORDS),
+        Input::Of(&[0, 1, 2, 3, 4, 5]),
     ];
     inputs.extend(RAY_JITTERS);
     Diff::new(entry!(
@@ -2668,12 +2715,36 @@ fn ray_hits_triangle() {
         ray::ray_hits_triangle(Ptr, Ptr, Ptr, Ptr, Ptr, u32, Ptr, Ptr, Ptr, Ptr) -> bool
     ))
     .family(&dispatch::DISPATCH)
-    .family(&leaf::LEAVES)
-    .ignore_calls(&[0x004b_6190, 0x004a_3760, 0x0043_9e90])
+    .ignore_calls(&[0x004b_3800, 0x004b_6190, 0x004a_3760, 0x0043_9e90])
     .allow_nan_payloads()
     .inputs(&inputs)
-    .max_cases(500)
+    .max_cases(840)
     .float_sweep(256)
+    .setup(|e, c| ray_words(e, c, None))
+    .run()
+    .assert_same();
+}
+
+/// `00eadb90` on the limit scenes: `t`, `u`, `v`, `u + v` and the determinant exactly on the limits
+/// the exe compares them with, front faces and back faces, with every cull word and every layout of
+/// the outs.
+#[test]
+fn ray_hits_triangle_on_the_limits() {
+    let mut inputs = vec![
+        Input::Of(RAY_LIMIT_SCENES),
+        Input::Of(RAY_CULL_WORDS),
+        Input::Of(&[0, 1, 2, 3, 4, 5]),
+    ];
+    inputs.extend(RAY_JITTERS);
+    Diff::new(entry!(
+        0x00ea_db90,
+        ray::ray_hits_triangle(Ptr, Ptr, Ptr, Ptr, Ptr, u32, Ptr, Ptr, Ptr, Ptr) -> bool
+    ))
+    .family(&dispatch::DISPATCH)
+    .ignore_calls(&[0x004b_3800, 0x004b_6190, 0x004a_3760, 0x0043_9e90])
+    .allow_nan_payloads()
+    .inputs(&inputs)
+    .max_cases(360)
     .setup(|e, c| ray_words(e, c, None))
     .run()
     .assert_same();
@@ -2702,8 +2773,7 @@ fn ray_hits_triangle_special_floats() {
         ray::ray_hits_triangle(Ptr, Ptr, Ptr, Ptr, Ptr, u32, Ptr, Ptr, Ptr, Ptr) -> bool
     ))
     .family(&dispatch::DISPATCH)
-    .family(&leaf::LEAVES)
-    .ignore_calls(&[0x004b_6190, 0x004a_3760, 0x0043_9e90])
+    .ignore_calls(&[0x004b_3800, 0x004b_6190, 0x004a_3760, 0x0043_9e90])
     .allow_nan_payloads()
     .inputs(&inputs)
     .max_cases(1700)
@@ -2795,7 +2865,7 @@ fn pick_real_triangles() {
     .family(&leaf::LEAVES)
     .family(&dispatch::DISPATCH)
     .translation_calls_plainly(&[0x00e9_93d0, 0x00e9_a280, 0x00e9_9330])
-    .ignore_calls(&[0x004b_6190, 0x004a_3760, 0x0043_9e90])
+    .ignore_calls(&[0x004b_3800, 0x004b_6190, 0x004a_3760, 0x0043_9e90])
     .max_calls(MAX_CALLS)
     .inputs(PICK_REAL_INPUTS)
     .max_cases(800)

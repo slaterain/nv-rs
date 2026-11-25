@@ -15,27 +15,18 @@
 //! the running precision. Main's `f32` differs from the x87 only where an unstored step leaves the
 //! float's range (past 3.4e38 or under 1.2e-38), which no game coordinate reaches.
 //!
-//! The back faces' cross product stays the exe's function (`004b3800`, by address), read from a frame
-//! laid out as the exe's; the dot products, the scaled direction (`004a3760`) and the sum (`00439e90`)
-//! the exe calls are done in place.
+//! The functions the exe calls for its vector maths are done in place, each at the running precision
+//! as the exe's code computes it: the back faces' cross product (`004b3800`), the dot products
+//! (`004b6190`), the scaled direction (`004a3760`) and the sum (`00439e90`).
 
 use crate::native::{float_precision, Real};
 use engine_core::ptr::Ptr;
 use engine_core::x87::x87_quiet_bits;
-use engine_core::{args, Engine};
+use engine_core::Engine;
 
 /// `1e-5` (`010718c0`) and `-1e-5` (`010d5368`): the determinant's limits.
 const EPSILON: u32 = 0x0107_18c0;
 const MINUS_EPSILON: u32 = 0x010d_5368;
-/// `NiPoint3::operator%` (`004b3800`, `thiscall(this, out, other)`): the cross product.
-const POINT_CROSS: u32 = 0x004b_3800;
-/// The exe's frame (0x30 bytes) where the back faces' cross product reads its points: the edges (+0,
-/// +0xc), the ray origin less the first corner (+0x18), the product (+0x24).
-const FRAME: u32 = 0x30;
-const FRAME_EDGE1: u32 = 0x0;
-const FRAME_EDGE2: u32 = 0xc;
-const FRAME_DIFFERENCE: u32 = 0x18;
-const FRAME_CROSS: u32 = 0x24;
 
 /// The test's words: the ray, the corners and the outs.
 #[derive(Clone, Copy)]
@@ -59,9 +50,9 @@ struct Words {
 /// `u = (o - v0) . p` (to its out) must lie in `[0, det]`, `q = (o - v0) x e1`, `v = d . q` (to its out)
 /// must be at least 0 with `u + v <= det`, and `t = e2 . q` (to its out) at least 0. For
 /// `det <= -1e-5`, unless the cull word's low byte is set, the same tests mirrored (`u` in `[det, 0]`,
-/// `v <= 0`, `u + v >= det`, `t <= 0`), with `q` from the exe's cross product. On success `u`, `v`
-/// and `t` are scaled by `1 / det` and the point is `o + d t`; answers true. A NaN takes the branch
-/// the exe's flag tests give it.
+/// `v <= 0`, `u + v >= det`, `t <= 0`), with the same `q` (the exe's cross product, done in place).
+/// On success `u`, `v` and `t` are scaled by `1 / det` and the point is `o + d t`; answers true. A
+/// NaN takes the branch the exe's flag tests give it.
 #[allow(clippy::too_many_arguments)]
 pub fn ray_hits_triangle(
     e: &mut Engine,
@@ -163,15 +154,20 @@ fn hits<R: Real>(e: &mut Engine, w: Words) -> bool {
         if !(ld::<R>(e, MINUS_EPSILON) >= det) || w.cull & 0xff != 0 {
             return false;
         }
-        let difference = difference::<R>(e, o, a);
-        let [tx, ty, tz] = loaded::<R>(difference);
+        let [tx, ty, tz] = loaded::<R>(difference::<R>(e, o, a));
         let u_bits = (pz * tz + (py * ty + px * tx)).store();
         e.mem.set_u32(w.u, u_bits);
         let u = R::load(u_bits);
         if R::ZERO < u || u < det {
             return false;
         }
-        let [cx, cy, cz] = loaded::<R>(cross(e, edge1, edge2, difference));
+        // q = (o - v0) x e1 (`NiPoint3::operator%`, `004b3800`: each product at the running
+        // precision, each difference stored).
+        let [cx, cy, cz] = loaded::<R>([
+            (ty * e1z - tz * e1y).store(),
+            (tz * e1x - tx * e1z).store(),
+            (e1y * tx - e1x * ty).store(),
+        ]);
         // v = d . q and t = e2 . q (`004b6190`: each sum stored).
         let v_bits = (ld::<R>(e, d) * cx + ld::<R>(e, d + 4) * cy + ld::<R>(e, d + 8) * cz).store();
         e.mem.set_u32(w.v, v_bits);
@@ -204,26 +200,4 @@ fn hits<R: Real>(e: &mut Engine, w: Words) -> bool {
         e.mem.set_u32(w.point + 4 * i, value.to_bits());
     }
     true
-}
-
-/// `(o - v0) x e1` through the exe's cross product (`004b3800`), from a frame laid out as the exe's:
-/// the edges, the difference, and the product read back.
-fn cross(e: &mut Engine, edge1: [u32; 3], edge2: [u32; 3], difference: [u32; 3]) -> [u32; 3] {
-    e.with_stack(FRAME, |e, frame| {
-        let f = frame.addr();
-        for (at, words) in [
-            (FRAME_EDGE1, edge1),
-            (FRAME_EDGE2, edge2),
-            (FRAME_DIFFERENCE, difference),
-        ] {
-            for (i, word) in (0u32..).zip(words) {
-                e.mem.set_u32(f + at + 4 * i, word);
-            }
-        }
-        e.call(
-            POINT_CROSS,
-            &args![f + FRAME_DIFFERENCE, f + FRAME_CROSS, f + FRAME_EDGE1],
-        );
-        [0u32, 4, 8].map(|i| e.mem.u32(f + FRAME_CROSS + i))
-    })
 }
