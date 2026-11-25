@@ -1,10 +1,10 @@
-//! The menu manager unit (`fallout/interface/menumanager.cpp`, Xbox PDB) from its start up to
-//! `00721060` (the translation is engine-fallout-interface's `menumanager.rs`, which these functions
-//! replace at the same addresses): `MenuManager` (its instance, constructor, destructors, the menu
-//! factory, `ReloadMenu`, `DeleteMenu`, `GetFrontmostMenu`, `IsMenuOpen`) and the constructors,
-//! destructors, `GetClass` and `AttachTileByID` of the menus the factory makes that the compiler
-//! emitted here (tutorial, stats, text edit, surgery, VATS, S.P.E.C.I.A.L. book, love tester and
-//! quantity menus).
+//! The menu manager unit (the Xbox PDB's `fallout/interface/menumanager` source) from its start
+//! up to `00721060` (the translation is engine-fallout-interface's `menumanager.rs`, which these
+//! functions replace at the same addresses): `MenuManager` (its instance, constructor, destructors,
+//! the menu factory, `ReloadMenu`, `DeleteMenu`, `GetFrontmostMenu`, `IsMenuOpen`) and
+//! the constructors, destructors, `GetClass` and `AttachTileByID` of the menus the factory makes
+//! that the compiler emitted here (tutorial, stats, text edit, surgery, VATS, S.P.E.C.I.A.L. book,
+//! love tester and quantity menus).
 //!
 //! **Native.** The exe's order of work: its calls by address of functions no family types (the
 //! `Menu` base, the list boxes and simple arrays of the unit's second half, the lists, the smart
