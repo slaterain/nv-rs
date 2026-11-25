@@ -58,9 +58,10 @@ fn funcs() -> Vec<(u32, AbiFn)> {
 
 /// `TESObjectCELL::Load3D` (Xbox PDB).
 const CELL_LOAD_3D: u32 = 0x0054_5cf0;
-/// The cell's scripts' run (`(cell, 0, 0)`), the test after it and the step its answer goes to.
+/// The cell's scripts' run (`(cell, 0, 0)`), the check of a cell loaded again after a detach
+/// (`0054df30`: whether the detach lasted long enough) and the step its answer goes to.
 const CELL_RUN_SCRIPTS: u32 = 0x0054_c740;
-const CELL_0054DF30: u32 = 0x0054_df30;
+const CELL_REATTACH_CHECK: u32 = 0x0054_df30;
 const CELL_AFTER_SCRIPTS: u32 = 0x0055_0c60;
 /// The `TES` object (a global) and its test of the cell (`(tes, cell)`).
 const TES_POINTER: u32 = 0x011d_ea10;
@@ -69,7 +70,7 @@ const TES_CELL_TEST: u32 = 0x0045_3490;
 const VECTOR3_CONSTRUCT: u32 = 0x0043_d410;
 const NODE_SET_LOCAL_TRANSLATE: u32 = 0x00a5_9c60;
 /// The pass the accepted cell runs instead (`0054bc10`).
-const CELL_0054BC10: u32 = 0x0054_bc10;
+const CELL_ACCEPTED_PASS: u32 = 0x0054_bc10;
 /// The cell's reference lock.
 const CELL_LOCK_ENTER: u32 = 0x0054_1ac0;
 const CELL_LOCK_LEAVE: u32 = 0x0054_1ae0;
@@ -210,7 +211,7 @@ fn reference_3d(e: &mut Engine, reference: u32) -> u32 {
 pub fn references_after_load(e: &mut Engine, this: u32, flag: u8) {
     let node_3d = e.call(CELL_LOAD_3D, &args![this]).u32();
     e.call(CELL_RUN_SCRIPTS, &args![this, 0u32, 0u32]);
-    let scripts = e.call(CELL_0054DF30, &args![this]).u8();
+    let scripts = e.call(CELL_REATTACH_CHECK, &args![this]).u8();
     e.call(CELL_AFTER_SCRIPTS, &args![this, u32::from(scripts)]);
     let tes = e.global::<u32>(TES_POINTER);
     if e.call(TES_CELL_TEST, &args![tes, this]).bool() {
@@ -220,7 +221,7 @@ pub fn references_after_load(e: &mut Engine, this: u32, flag: u8) {
                 e.call(NODE_SET_LOCAL_TRANSLATE, &args![node_3d, vector]);
             });
         }
-        e.call(CELL_0054BC10, &args![this]);
+        e.call(CELL_ACCEPTED_PASS, &args![this]);
     } else {
         e.call(CELL_LOCK_ENTER, &args![this]);
         let tes = e.global::<u32>(TES_POINTER);

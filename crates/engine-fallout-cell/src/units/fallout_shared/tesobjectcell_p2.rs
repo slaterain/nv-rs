@@ -632,8 +632,8 @@ const CELL_AFTER_SCRIPTS: u32 = 0x0055_0c60;
 /// ([`tes_object_cell_run_scripts`]), [`fn_0054df30`], [`fn_0054bc10`] and
 /// [`tes_object_cell_attach_reference_3d`].
 const CELL_RUN_SCRIPTS: u32 = 0x0054_c740;
-const CELL_0054DF30: u32 = 0x0054_df30;
-const CELL_0054BC10: u32 = 0x0054_bc10;
+const CELL_REATTACH_CHECK: u32 = 0x0054_df30;
+const CELL_ACCEPTED_PASS: u32 = 0x0054_bc10;
 const CELL_ATTACH_REFERENCE_3D: u32 = 0x0054_8880;
 /// The `TES` method that `fn_0054bcf0` asks about the cell (`(cell)`).
 const TES_CELL_TEST_453490: u32 = 0x0045_3490;
@@ -3714,7 +3714,7 @@ pub fn fn_0054bcf0(e: &mut Engine, this: Ptr<TESObjectCELL>, flag: u8) {
     let node_3d = e.call(CELL_LOAD_3D, &args![this]).u32();
     // By address, as the exe calls them (the cell_refs family types this function).
     e.call(CELL_RUN_SCRIPTS, &args![this, 0u32, 0u32]);
-    let scripts = e.call(CELL_0054DF30, &args![this]).u8();
+    let scripts = e.call(CELL_REATTACH_CHECK, &args![this]).u8();
     e.call(CELL_AFTER_SCRIPTS, &args![this, scripts as u32]);
     let tes = e.global::<u32>(TES_POINTER);
     if e.call(TES_CELL_TEST_453490, &args![tes, this]).bool() {
@@ -3724,7 +3724,7 @@ pub fn fn_0054bcf0(e: &mut Engine, this: Ptr<TESObjectCELL>, flag: u8) {
                 e.call(NODE_SET_LOCAL_TRANSLATE, &args![node_3d, vector]);
             });
         }
-        e.call(CELL_0054BC10, &args![this]);
+        e.call(CELL_ACCEPTED_PASS, &args![this]);
     } else {
         lock_enter(e, this);
         let tes = e.global::<u32>(TES_POINTER);
