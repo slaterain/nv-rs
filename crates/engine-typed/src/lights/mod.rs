@@ -20,8 +20,16 @@
 //! - [`queue`]: the scene node's queue drain (`00b5fd60`, once a frame from `00b60040`) and its
 //!   object half, which redoes the light lists of every object that moved or animated:
 //!   `UpdateQueuedObjectLightingStart` (`00b5dac0`), the object walks (`00b5c490`, `00b5c5c0`) and
-//!   the per-geometry updates (`00b5b260`, `00b5b410`), reaching the typed bound test and add
-//!   directly.
+//!   the per-geometry updates (`00b5b260`, `00b5b410`), reaching the typed bound test, add and
+//!   luminance directly.
+//! - [`scene_light`]: the light's own functions beside the walk: its constructor (`00b9fda0`),
+//!   `SetLight` (`00b9dda0`), its luminances (`GetLuminanceToBound` `00b9dbe0`, at a point
+//!   `00b9bc50`, at a point facing a direction `00b9bdf0`), its shadow flag (`00b9dcb0`), its
+//!   geometry list's fence clear, head and tail removals and `RemoveTriGeom` (`00b9e770`,
+//!   `00b9e7c0`, `00b9e850`, `00ba01a0`), an accumulator's `NiPointer` (`00b9cfd0`) and the cull of
+//!   its geometries (`00b9d020`). The luminances also run on other threads (the light sort of the
+//!   render passes, the AI's light queries): written once over `native::Real`, their Diff tests
+//!   run both control words.
 //!
 //! The objects' `IsNode` and `IsTriBasedGeom` slots and the lights' RTTI slot are answered in place
 //! when they hold the exe's constant bodies (`walk::slot_word`), through the vtable otherwise.
@@ -40,6 +48,7 @@
 use crate::image;
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
+use engine_core::types::NiTPointerList;
 use engine_core::{entry, AbiFn};
 
 pub mod dead;
@@ -47,6 +56,7 @@ pub mod dominant;
 mod list;
 pub mod queue;
 pub mod resort;
+pub mod scene_light;
 pub mod walk;
 pub mod weighted;
 
@@ -69,25 +79,69 @@ pub static LIGHTS: Family = Family {
 };
 
 image! {
-    /// `ShadowSceneLight` (Xbox PDB), as far as the walk reads it (0x250 bytes on PC).
-    pub struct ShadowSceneLight / ShadowSceneLightImage: 0x1a8 {
-        0x000 unknown_000: [u32; 56],
-        /// `lGeomList` (Xbox PDB): an `NiTPointerList` of the lit geometries (head at +0).
+    /// `ShadowSceneLight` (Xbox PDB names; PC offsets as its constructor `00b9fda0` writes them).
+    pub struct ShadowSceneLight / ShadowSceneLightImage: 0x250 {
+        /// The `NiRefObject` part: its vtable and count.
+        0x000 vtable: u32,
+        0x004 m_uiRefCount: u32,
+        0x008 unknown_008: u32,
+        /// `fLuminance` (Xbox PDB): the last luminance asked of the light.
+        0x00c fLuminance: f32,
+        /// `kViewProjection`, `kShadowView` and `kShadowProj` (Xbox PDB): three 4x4 float matrices.
+        0x010 kViewProjection: [u32; 16],
+        0x050 kShadowView: [u32; 16],
+        0x090 kShadowProj: [u32; 16],
+        0x0d0 fLODDimmer: f32,
+        0x0d4 fShadowLODDimmer: f32,
+        0x0d8 fShadowLODDimmerTarget: f32,
+        0x0dc fShadowLODDimmerElapsed: f32,
+        /// `lGeomList` (Xbox PDB): an `NiTPointerList` of the lit geometries (head, tail, count).
         0x0e0 lGeomList: [u32; 3],
         0x0ec bCastShadow: u8,
-        0x0ed unknown_0ed: [u8; 11],
+        0x0ed bCubeShadowMap: u8,
+        0x0ee unknown_0ee: [u8; 2],
+        0x0f0 spSpecularAttenuationTexture: u32,
+        0x0f4 bPointLight: u8,
+        0x0f5 bAmbientLight: u8,
+        0x0f6 unknown_0f6: [u8; 2],
         /// `spLight` (Xbox PDB): the `NiLight`.
         0x0f8 spLight: u32,
-        0x0fc unknown_0fc: [u32; 11],
+        0x0fc bDynamicLight: u8,
+        0x0fd unknown_0fd: [u8; 3],
+        /// `bPointPosition` (Xbox PDB): an `NiPoint3`.
+        0x100 bPointPosition: [u32; 3],
+        0x10c spDynamicShadowMap: u32,
+        0x110 usFrustumCull: u16,
+        0x112 unknown_112: u16,
+        0x114 spFrustumVis: u32,
+        0x118 bShadowSpotlight: u8,
+        0x119 unknown_119: [u8; 3],
+        0x11c fSpotlightFOV: f32,
+        0x120 fSpotlightFalloff: f32,
+        0x124 bShowDebugTexture: u8,
+        0x125 unknown_125: [u8; 3],
         /// `spShadowScene` (Xbox PDB).
         0x128 spShadowScene: u32,
-        0x12c unknown_12c: [u32; 3],
+        /// `lRootList` (Xbox PDB): an `NiTPointerList`.
+        0x12c lRootList: [u32; 3],
         /// `kGeomListFence` (Xbox PDB): the list item the geometries found again are moved before.
         0x138 kGeomListFence: u32,
-        0x13c unknown_13c: [u32; 2],
+        0x13c kGeomListFenceObject: u32,
+        0x140 spShadowCamera: u32,
         /// `kShadowCameraPlanes` (Xbox PDB): six planes (normal, distance), then their active mask.
         0x144 planes: [u32; 24],
         0x1a4 planes_active: u32,
+        /// `pfClipSpacePlanes` (Xbox PDB): 0x60 bytes of floats.
+        0x1a8 pfClipSpacePlanes: [u32; 24],
+        0x208 bClipSpacePlanesReady: u8,
+        0x209 unknown_209: [u8; 3],
+        0x20c spShadowAccumulator: u32,
+        /// `kMultiboundRooms`, `kPortals` and `kProcessedNodes` (Xbox PDB): `BSSimpleArray`s (vtable,
+        /// buffer, size, reserved size).
+        0x210 kMultiboundRooms: [u32; 4],
+        0x220 kPortals: [u32; 4],
+        0x230 kProcessedNodes: [u32; 4],
+        0x240 unknown_240: [u32; 4],
     }
 }
 
@@ -110,5 +164,17 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b5_b410, queue::update_geometry_list(u32, u32, u32, u32) -> u8),
         entry!(0x00b5_c490, queue::update_tree(u32, u32, u32, u32, u32) -> u8),
         entry!(0x00b5_c5c0, queue::update_tree_list(u32, u32, u32, u32) -> u8),
+        entry!(0x00b9_dda0, scene_light::set_light(Ptr<ShadowSceneLight>, Ptr)),
+        entry!(0x00b9_fda0, scene_light::construct(Ptr<ShadowSceneLight>) -> Ptr<ShadowSceneLight>),
+        entry!(0x00b9_e7c0, scene_light::pop_head(Ptr<NiTPointerList>, Ptr) -> Ptr),
+        entry!(0x00b9_e850, scene_light::pop_tail(Ptr<NiTPointerList>, Ptr) -> Ptr),
+        entry!(0x00b9_cfd0, scene_light::set_held_1a0(Ptr, u32)),
+        entry!(0x00b9_dbe0, scene_light::luminance_to_bound(Ptr<ShadowSceneLight>, Ptr) -> f32),
+        entry!(0x00b9_bc50, scene_light::luminance_at(Ptr<ShadowSceneLight>, u32, u32, u32, u32) -> f32),
+        entry!(0x00b9_bdf0, scene_light::facing_luminance(Ptr<ShadowSceneLight>, u32, u32, u32, u32, u32, u32, u32) -> f32),
+        entry!(0x00b9_dcb0, scene_light::set_cast_shadow(Ptr<ShadowSceneLight>, u8)),
+        entry!(0x00b9_e770, scene_light::clear_fence(Ptr<ShadowSceneLight>)),
+        entry!(0x00ba_01a0, scene_light::remove_tri_geom(Ptr<ShadowSceneLight>, u32, u32)),
+        entry!(0x00b9_d020, scene_light::cull_geometries(Ptr<ShadowSceneLight>, u32) -> bool),
     ]
 }
