@@ -1,16 +1,26 @@
-//! The Settings screen's rows, with no window in them: the twelve rows of the old Settings.cmd
-//! (its distribution/Settings.ps1) by the same names, choices, defaults and keys (the census in
-//! the launcher track's notes), read from and written to the profile's own `Fallout.ini` and
-//! `FalloutPrefs.ini` through the shared code the game's side uses (`game_profile`). A row that is
-//! changed writes only its own keys, as Settings.ps1 saves only the options changed in it; "Game's
-//! setting" writes nothing. Our keys' defaults are the host's table's (`crates/host/data/
-//! game_ini.tsv`), so what the screen shows for a key that is missing is what the game does.
+//! The Settings screen's rows, with no window in them. The main list: the twelve rows of the old
+//! Settings.cmd (its distribution/Settings.ps1) by the same names, choices, defaults and keys (the
+//! census in the launcher track's notes). Every other key of the host's table (`crates/host/data/
+//! game_ini.tsv`) is a row of its own, made from the table's line, so a key added there shows
+//! here with nothing else to change ([`List`]): the fix rows (`[nv-rs Fixes]`) in "Fixes one by
+//! one", the rest (the new lighting, the background row) in "New lighting and more". All are read
+//! from and written to the profile's own `Fallout.ini` and `FalloutPrefs.ini` through the shared
+//! code the game's side uses (`game_profile`). A row that is changed writes only its own keys, as
+//! Settings.ps1 saves only the options changed in it; "Game's setting" writes nothing. Our keys'
+//! defaults are the host's table's, so what the screen shows for a key that is missing is what
+//! the game does; a fix row follows the preset ("Game fixes") as the game does, until it is
+//! chosen here, and choosing the preset's value hands it back.
 
-use game_profile::game_ini::set_key;
+use game_profile::game_ini::{set_key, unset_key};
 use game_profile::settings::ini_value;
+use std::sync::OnceLock;
 
 /// The host's table: section, key, variable, default, note.
 const TABLE: &str = include_str!("../../host/data/game_ini.tsv");
+
+/// The fix rows' section (the host's `game_ini::FIXES_SECTION`): each key turns one fix on or
+/// off, over the preset.
+pub const FIXES_SECTION: &str = "nv-rs Fixes";
 
 /// "Game's setting": keeps what the game's own file says (Settings.ps1's `$own`).
 pub const OWN: &str = "Game's setting";
@@ -20,6 +30,42 @@ pub const OWN: &str = "Game's setting";
 pub struct Files {
     pub ini: String,
     pub prefs: String,
+}
+
+/// One line of the host's table.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Key {
+    pub section: &'static str,
+    pub key: &'static str,
+    /// The environment variable over it (tests and scripts), and its settings.ini line's name.
+    pub variable: &'static str,
+    /// The value a play run takes when the file says nothing (for a fix row: with the fixes
+    /// preset).
+    pub default: &'static str,
+    /// The one note the generated sections write above the key.
+    pub note: &'static str,
+}
+
+fn parse(text: &'static str) -> Vec<Key> {
+    text.lines()
+        .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+        .filter_map(|l| {
+            let mut f = l.split('\t');
+            Some(Key {
+                section: f.next()?,
+                key: f.next()?,
+                variable: f.next()?,
+                default: f.next()?,
+                note: f.next().unwrap_or(""),
+            })
+        })
+        .collect()
+}
+
+/// The host's table, line by line in its order.
+pub fn table() -> &'static [Key] {
+    static KEYS: OnceLock<Vec<Key>> = OnceLock::new();
+    KEYS.get_or_init(|| parse(TABLE))
 }
 
 /// A row of the Settings screen.
@@ -37,47 +83,282 @@ pub enum Row {
     FrameRateCounter,
     GameThreads,
     DrawingThread,
-    // The Testing list (the lead's pick, DESIGN.md: its own list under Settings, so the main
-    // list stays Settings.cmd's twelve): switches still being proven, each one key of ours.
-    AmbientOcclusion,
-    SunShadows,
-    SunLightFromSky,
-    SunShadowsCharacters,
-    JipBuiltIn,
+    /// A key of the host's table that none of the twelve reads: on or off for a `b` key, a number
+    /// for an `f` key, its own value otherwise.
+    Key(&'static Key),
 }
 
-/// The Testing list's rows: the new lighting (Vulkan only, off by default) and JIP LN built in (on
-/// by default with the fixes preset since the turn-on; "Off" here turns it off).
-pub const TESTING: [Row; 5] = [
-    Row::AmbientOcclusion,
-    Row::SunShadows,
-    Row::SunLightFromSky,
-    Row::SunShadowsCharacters,
-    Row::JipBuiltIn,
+/// The lists of the Settings screen: the main one, and the two it opens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum List {
+    Main,
+    /// The table's keys outside the fix rows that none of the twelve reads: the new lighting and
+    /// the background row.
+    More,
+    /// The table's fix rows, every one.
+    Fixes,
+}
+
+/// Keys that change nothing off Windows, so their rows show on Windows only: Windows' background
+/// slowdown (`crates/qos`: `apply_at_start` does nothing on other systems).
+const WINDOWS_ONLY: [&str; 1] = ["bNotBackground"];
+
+impl List {
+    /// Its rows on this system.
+    pub fn rows(self) -> &'static [Row] {
+        static MORE: OnceLock<Vec<Row>> = OnceLock::new();
+        static FIXES: OnceLock<Vec<Row>> = OnceLock::new();
+        match self {
+            List::Main => &ROWS,
+            List::More => MORE.get_or_init(|| self.rows_on(cfg!(windows))),
+            List::Fixes => FIXES.get_or_init(|| self.rows_on(cfg!(windows))),
+        }
+    }
+
+    /// [`List::rows`] as on Windows (`windows`) or not: for the two others, the table's keys in its
+    /// order.
+    pub fn rows_on(self, windows: bool) -> Vec<Row> {
+        let mine = |k: &Key| match self {
+            List::Main => false,
+            List::More => {
+                k.section != FIXES_SECTION
+                    && !ROWS.iter().any(|r| r.table_key() == Some(k.key))
+                    && (windows || !WINDOWS_ONLY.contains(&k.key))
+            }
+            List::Fixes => k.section == FIXES_SECTION,
+        };
+        match self {
+            List::Main => ROWS.to_vec(),
+            _ => table().iter().filter(|k| mine(k)).map(Row::Key).collect(),
+        }
+    }
+
+    /// Its name: the main list's entry that opens it (the start screen's for the main list).
+    pub fn name(self) -> &'static str {
+        match self {
+            List::Main => "Settings",
+            List::More => "New lighting and more",
+            List::Fixes => "Fixes one by one",
+        }
+    }
+
+    /// The lines above its rows, after the line that says where choices are saved.
+    pub fn notes(self) -> Vec<String> {
+        match self {
+            List::Main => Vec::new(),
+            List::More => vec![format!(
+                "The new lighting is still being tried ({} only).",
+                OWN_RENDERER.split(" (").next().unwrap_or(OWN_RENDERER)
+            )],
+            List::Fixes => vec![format!(
+                "Each follows {} until chosen here.",
+                Row::GameFixes.label()
+            )],
+        }
+    }
+}
+
+/// Labels for keys whose note gives no name that fits a row ([`LABEL_MAX`]): the note has none
+/// (`1 = ...`), or its name is too long, or the key's own words would read badly.
+const LABELS: [(&str, &str); 12] = [
+    ("bSunLightFromSky", "Sun light from the sun and moon"),
+    ("bSunShadowsCharacters", "Characters' sun shadows"),
+    ("bNotBackground", "Full speed in the background"),
+    ("bShaderWarm", "Shaders compiled before use"),
+    ("bHalfLoadedMove", "Half-loaded actor level change"),
+    ("bTextureReadFirst", "Textures read before the lock"),
+    ("bCellEntryWait", "Cell entry waits for its cell"),
+    ("bStripLodWater", "No distant water under Strip"),
+    ("bNVSESizeCaps", "Script array and string caps"),
+    ("bNVSEUISortPaths", "Script UI sort by nested paths"),
+    ("bNVSEExtractArgs", "xNVSE argument expressions"),
+    ("bHavokRefCounts", "Havok counts without the lock"),
 ];
 
+/// The longest label a row of the table may have: its row, `"> "`, the label, `": "` and `Off`,
+/// fits the highlight (695 wide) in the plain look, 18 a character (a test measures it).
+pub const LABEL_MAX: usize = 31;
+
+/// The name a note starts with (`Uncapped frame rate: ...`), without a part in brackets (`JIP LN
+/// NVSE built in (on in the fixes preset, ...): ...`); none for a note that says what a value
+/// does (`1 = ...`) or has no name.
+fn name_in(note: &str) -> Option<&str> {
+    let (name, _) = note.split_once(':')?;
+    let name = name.split(" (").next().unwrap_or(name).trim();
+    (!name.is_empty() && !name.contains('=')).then_some(name)
+}
+
+/// A key's own words (`bCellEntryWait`: "Cell entry wait"), its type letter left out, at most
+/// [`LABEL_MAX`] long (whole words).
+fn words_of(key: &str) -> String {
+    let chars: Vec<char> = key.chars().skip(1).collect();
+    let mut words: Vec<String> = Vec::new();
+    for (i, &c) in chars.iter().enumerate() {
+        let after_lower = i > 0 && chars[i - 1].is_ascii_lowercase();
+        let before_lower = i > 0 && chars.get(i + 1).is_some_and(char::is_ascii_lowercase);
+        if words.is_empty() || (c.is_ascii_uppercase() && (after_lower || before_lower)) {
+            words.push(String::new());
+        }
+        if let Some(w) = words.last_mut() {
+            w.push(c);
+        }
+    }
+    let mut out = String::new();
+    for (i, w) in words.iter().enumerate() {
+        // A word in capitals (JIP, NVSE) stays as it is; the others in small letters after the first.
+        let caps = w.chars().filter(char::is_ascii_uppercase).count() > 1;
+        let w = if i == 0 || caps {
+            w.clone()
+        } else {
+            w.to_ascii_lowercase()
+        };
+        let next = if out.is_empty() {
+            w
+        } else {
+            format!("{out} {w}")
+        };
+        if next.chars().count() > LABEL_MAX {
+            break;
+        }
+        out = next;
+    }
+    out
+}
+
+/// Each table key's label: [`LABELS`]' own, else its note's name when it fits and no other key's
+/// note has the same name, else its own words.
+fn labels_of(keys: &[Key]) -> Vec<String> {
+    keys.iter()
+        .map(|k| {
+            if let Some((_, label)) = LABELS.iter().find(|(key, _)| *key == k.key) {
+                return label.to_string();
+            }
+            match name_in(k.note) {
+                Some(name)
+                    if name.chars().count() <= LABEL_MAX
+                        && keys
+                            .iter()
+                            .filter(|o| name_in(o.note) == Some(name))
+                            .count()
+                            == 1 =>
+                {
+                    name.to_string()
+                }
+                _ => words_of(k.key),
+            }
+        })
+        .collect()
+}
+
+/// [`labels_of`] the host's table, in its order.
+fn labels() -> &'static [String] {
+    static LABELS_NOW: OnceLock<Vec<String>> = OnceLock::new();
+    LABELS_NOW.get_or_init(|| labels_of(table()))
+}
+
+/// The longest title a choices screen takes: `-NAME-` across the 960-wide screen, 18 a character.
+const TITLE_MAX: usize = 51;
+
 impl Row {
-    /// A Testing row's own key: its section and name in the host's table.
-    fn switch(self) -> Option<(&'static str, &'static str)> {
+    /// One of the twelve's key in the host's table, for the ones that write one.
+    fn table_key(self) -> Option<&'static str> {
         Some(match self {
-            Row::AmbientOcclusion => ("nv-rs Display", "bAmbientOcclusion"),
-            Row::SunShadows => ("nv-rs Display", "bSunShadows"),
-            Row::SunLightFromSky => ("nv-rs Display", "bSunLightFromSky"),
-            Row::SunShadowsCharacters => ("nv-rs Display", "bSunShadowsCharacters"),
-            Row::JipBuiltIn => ("nv-rs Fixes", "bJIPInstalled"),
+            Row::Renderer => "sRenderer",
+            Row::DisplayMode => "bBorderless",
+            Row::GameFixes => "sPreset",
+            Row::FrameLimit => "iFrameLimit",
+            Row::MenuFrameLimit => "iMenuFrameLimit",
+            Row::FrameRateCounter => "bShowFrameRate",
+            Row::GameThreads => "bSteppedThreads",
+            Row::DrawingThread => "bRenderThread",
             _ => return None,
         })
     }
 
-    /// A Testing row's variable in the host's table (its settings.ini line's name).
+    /// The row of a table key that none of the twelve reads (the tests pick rows by key).
+    #[cfg(test)]
+    pub fn of(key: &str) -> Option<Row> {
+        table().iter().find(|k| k.key == key).map(Row::Key)
+    }
+
+    /// A table row's variable (its settings.ini line's name).
     pub fn variable(self) -> Option<&'static str> {
-        let (_, key) = self.switch()?;
-        TABLE.lines().filter(|l| !l.starts_with('#')).find_map(|l| {
-            let f: Vec<&str> = l.split('\t').collect();
-            (f.len() >= 4 && f[1] == key).then_some(f[2])
-        })
+        match self {
+            Row::Key(k) => Some(k.variable),
+            _ => None,
+        }
+    }
+
+    /// A table row's note (what it does), as the generated sections write it above the key.
+    pub fn note(self) -> Option<&'static str> {
+        match self {
+            Row::Key(k) => Some(k.note),
+            _ => None,
+        }
+    }
+
+    /// The name its choices screen shows: a table row's whole name where it fits, else its label.
+    pub fn title(self) -> &'static str {
+        match self {
+            Row::Key(k) => name_in(k.note)
+                .filter(|n| n.chars().count() <= TITLE_MAX)
+                .unwrap_or_else(|| self.label()),
+            _ => self.label(),
+        }
     }
 }
+
+/// Whether a table key is on or off (a `b` key).
+fn is_flag(k: &Key) -> bool {
+    k.key.starts_with('b')
+}
+
+/// A table key's value as the game plays it when the file gives none it can use: a fix row's
+/// follows the preset (off under `sPreset=vanilla`, the host's rule for a fix row without its
+/// line), any other the host table's default.
+fn key_default(files: &Files, k: &Key) -> &'static str {
+    if k.section == FIXES_SECTION
+        && ours(files, "nv-rs General", "sPreset").eq_ignore_ascii_case("vanilla")
+    {
+        "0"
+    } else {
+        k.default
+    }
+}
+
+/// A table key's value in the profile's Fallout.ini when the game can use it (a `b` key 0 or 1,
+/// an `f` key a finite number, anything not empty otherwise), as the host reads it.
+fn key_value<'a>(files: &'a Files, k: &Key) -> Option<&'a str> {
+    let raw = ini_value(&files.ini, k.section, k.key)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())?;
+    match k.key.as_bytes().first() {
+        Some(b'b') => ["0", "1"].contains(&raw).then_some(raw),
+        Some(b'f') => raw.parse::<f32>().is_ok_and(f32::is_finite).then_some(raw),
+        _ => Some(raw),
+    }
+}
+
+/// The value of a table key the game plays with: the file's, else [`key_default`].
+fn key_now(files: &Files, k: &Key) -> String {
+    key_value(files, k)
+        .unwrap_or_else(|| key_default(files, k))
+        .to_string()
+}
+
+/// "On" for 1, "Off" for anything else.
+fn on_off(flag: &str) -> &'static str {
+    if flag == "1" {
+        "On"
+    } else {
+        "Off"
+    }
+}
+
+/// The lighting strength's choices: the host's range (`d3d9_wgpu::scene_light::STRENGTH_RANGE`,
+/// 0.1 to 1.0) in four steps, its default (`STRENGTH`, 0.7) among them.
+const NUMBERS: [(&str, &[&str]); 1] =
+    [("fAmbientOcclusionStrength", &["0.1", "0.4", "0.7", "1.0"])];
 
 /// The Renderer row's choice for the game's own renderer (wgpu): on Windows Vulkan, recommended
 /// over the original's Direct3D 9; on Linux Vulkan and on macOS Metal, the only renderer there.
@@ -110,39 +391,13 @@ pub const ROWS: [Row; 12] = [
 
 /// The host table's default for one of our keys.
 fn default_of(key: &str) -> &'static str {
-    TABLE
-        .lines()
-        .filter(|l| !l.starts_with('#'))
-        .find_map(|l| {
-            let f: Vec<&str> = l.split('\t').collect();
-            (f.len() >= 4 && f[1] == key).then_some(f[3])
-        })
-        .unwrap_or("")
+    table()
+        .iter()
+        .find(|k| k.key == key)
+        .map_or("", |k| k.default)
 }
 
 /// Our key's value in the profile's Fallout.ini, else the table's default.
-/// A Testing row's default as the game plays it: an `[nv-rs Fixes]` key follows the preset (off
-/// under `sPreset=vanilla`, the host's rule for a fix row without its line), any other key the
-/// host table's default.
-fn testing_default(files: &Files, section: &str, key: &str) -> &'static str {
-    if section == "nv-rs Fixes"
-        && ours(files, "nv-rs General", "sPreset").eq_ignore_ascii_case("vanilla")
-    {
-        "0"
-    } else {
-        default_of(key)
-    }
-}
-
-/// A Testing row's value: its key in the profile's Fallout.ini, else [`testing_default`].
-fn testing_value(files: &Files, section: &str, key: &str) -> String {
-    ini_value(&files.ini, section, key)
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| testing_default(files, section, key))
-        .trim()
-        .to_string()
-}
-
 fn ours(files: &Files, section: &str, key: &str) -> String {
     ini_value(&files.ini, section, key)
         .filter(|v| !v.trim().is_empty())
@@ -176,12 +431,65 @@ impl Row {
             Row::FrameRateCounter => "Frame rate counter",
             Row::GameThreads => "Game threads",
             Row::DrawingThread => "Drawing thread",
-            Row::AmbientOcclusion => "Ambient occlusion (new lighting)",
-            Row::SunShadows => "Sun shadows (new lighting)",
-            Row::SunLightFromSky => "Sun light from the sun and moon",
-            Row::SunShadowsCharacters => "Characters' sun shadows",
-            Row::JipBuiltIn => "JIP LN built in",
+            // A table row's label ([`labels_of`]); the key itself for one not in the table.
+            Row::Key(k) => table()
+                .iter()
+                .position(|t| std::ptr::eq(t, k))
+                .and_then(|i| labels().get(i))
+                .map_or(k.key, String::as_str),
         }
+    }
+
+    /// A fix row's value when the file chooses it here (its key there, with a value the game can
+    /// use), and so does not follow the preset; none for one that follows it, and for any other row.
+    pub fn chosen_here(self, files: &Files) -> Option<&'static str> {
+        match self {
+            Row::Key(k) if k.section == FIXES_SECTION => {
+                key_value(files, k).map(|v| if v == "1" { "1" } else { "0" })
+            }
+            _ => None,
+        }
+    }
+
+    /// The choices screen's first line: what the row is now, and for a fix row, whether that
+    /// comes from the preset or was chosen here.
+    pub fn now_line(self, files: &Files) -> String {
+        let now = self.current(files);
+        let Row::Key(k) = self else {
+            return format!("Now: {now}");
+        };
+        let preset = Row::GameFixes.label();
+        match self.chosen_here(files) {
+            None if k.section == FIXES_SECTION => format!("Now: {now}, from {preset}"),
+            None => format!("Now: {now}"),
+            Some(v) if v == key_default(files, k) => format!("Now: {now}, chosen here"),
+            Some(_) => format!(
+                "Now: {now}, chosen here ({preset} would give {})",
+                on_off(key_default(files, k))
+            ),
+        }
+    }
+
+    /// The settings.ini line that carries this table row's choice in `chosen` (what the files
+    /// say once it is made) while a profile is not ready yet: a fix row's only when it is chosen
+    /// here or `held` (a profile's own Fallout.ini has the key, which only the line can change),
+    /// since a fix with no line follows the preset.
+    pub fn pending_line(self, chosen: &Files, held: bool) -> Option<String> {
+        let Row::Key(k) = self else {
+            return None;
+        };
+        let value = if is_flag(k) {
+            (if self.current(chosen) == "On" {
+                "1"
+            } else {
+                "0"
+            })
+            .to_string()
+        } else {
+            self.current(chosen)
+        };
+        (k.section != FIXES_SECTION || held || self.chosen_here(chosen).is_some())
+            .then(|| format!("{}={value}", k.variable))
     }
 
     /// Its choices, the recommended one first where Settings.ps1 marks one; `desktop` is the
@@ -208,13 +516,21 @@ impl Row {
             Row::FrameRateCounter => &["Hidden (F11 shows it)", "Shown (F11 hides it)"],
             Row::GameThreads => &["Side by side (recommended)", "One at a time (slower)"],
             Row::DrawingThread => &["Own thread (recommended)", "Main thread (slower)"],
-            // The Testing rows: the default the game plays with first.
-            r => match r.switch() {
-                Some((section, key)) if testing_default(files, section, key) == "1" => {
+            // A table row on or off: the value the game plays with when nothing chooses it first
+            // (a fix row's preset value).
+            Row::Key(k) if is_flag(k) => {
+                if key_default(files, k) == "1" {
                     &["On", "Off"]
+                } else {
+                    &["Off", "On"]
                 }
-                _ => &["Off", "On"],
-            },
+            }
+            // A number or a word: its listed steps, else its default (the file's own value is
+            // added below).
+            Row::Key(k) => NUMBERS
+                .iter()
+                .find(|(key, _)| *key == k.key)
+                .map_or(std::slice::from_ref(&k.default), |(_, steps)| *steps),
         };
         let mut list: Vec<String> = if self == Row::Resolution {
             // The monitor's own size first, when it is known (never 0x0).
@@ -318,10 +634,8 @@ impl Row {
                     "Own thread (recommended)".into()
                 }
             }
-            r => match r.switch() {
-                Some((section, key)) if testing_value(files, section, key) == "1" => "On".into(),
-                _ => "Off".into(),
-            },
+            Row::Key(k) if is_flag(k) => on_off(&key_now(files, k)).into(),
+            Row::Key(k) => key_now(files, k),
         }
     }
 
@@ -338,6 +652,13 @@ impl Row {
             Row::Resolution => choice
                 .split_once('x')
                 .is_some_and(|(w, h)| [w, h].iter().all(|v| v.parse::<u32>().is_ok_and(|n| n > 0))),
+            // A table row: a value the game can read there ([`key_value`]'s rule).
+            Row::Key(k) => match k.key.as_bytes().first() {
+                Some(b'b') => choice == "On" || choice == "Off",
+                Some(b'f') => choice.trim().parse::<f32>().is_ok_and(f32::is_finite),
+                Some(b'i') => choice.trim().parse::<u32>().is_ok(),
+                _ => !choice.trim().is_empty() && !choice.chars().any(char::is_control),
+            },
             _ => true,
         }
     }
@@ -429,13 +750,18 @@ impl Row {
                     out.prefs = set_key(&out.prefs, "Display", "iSize H", h);
                 }
             }
-            Row::AmbientOcclusion
-            | Row::SunShadows
-            | Row::SunLightFromSky
-            | Row::SunShadowsCharacters
-            | Row::JipBuiltIn => {
-                if let Some((section, key)) = self.switch() {
-                    ini(section, key, if choice == "On" { "1" } else { "0" });
+            Row::Key(k) => {
+                let value = match (is_flag(k), choice) {
+                    (true, "On") => "1",
+                    (true, _) => "0",
+                    (false, c) => c.trim(),
+                };
+                // A fix row given the preset's value follows the preset again: its line back
+                // to the generated note, so a later change of "Game fixes" moves it too.
+                if k.section == FIXES_SECTION && value == key_default(files, k) {
+                    out.ini = unset_key(&out.ini, k.section, k.key, k.default);
+                } else {
+                    ini(k.section, k.key, value);
                 }
             }
             Row::AntiAliasing | Row::Anisotropy => {
@@ -590,36 +916,344 @@ mod tests {
         }
     }
 
-    /// The Testing rows: each one key of ours, shown as the host table's default when missing
-    /// (the new lighting off, the sun light from the sky and characters' shadows on with it, JIP
-    /// on with the fixes preset), the default offered first, and a change writes only that key.
+    /// A fresh profile's Fallout.ini: the generated sections (the fix lines notes, so the preset
+    /// decides) above a line of the game's own.
+    fn generated(preset: &str) -> Files {
+        let text = game_profile::game_ini::with_sections("[Display]\r\niPresentInterval=1\r\n")
+            .unwrap()
+            .text;
+        files(&set_key(&text, "nv-rs General", "sPreset", preset), "")
+    }
+
+    /// The table row of `key`.
+    fn row(key: &str) -> Row {
+        Row::of(key).unwrap_or_else(|| panic!("{key} is not in the host's table"))
+    }
+
+    /// Every line of the host's table is one row, in one list: one of the twelve reads it, or
+    /// it is a fix row (Fixes one by one), or it is in New lighting and more, in the table's
+    /// order; only a key that changes nothing off Windows is left out there. The launcher's own
+    /// lists name only keys the table has.
     #[test]
-    fn the_testing_rows_are_one_key_each() {
-        let f = files("[nv-rs Display]\r\nsRenderer=vulkan\r\n", "");
-        let shown: Vec<String> = TESTING.iter().map(|r| r.current(&f)).collect();
-        assert_eq!(shown, ["Off", "Off", "On", "On", "On"]);
-        assert_eq!(Row::AmbientOcclusion.choices(&f, (1, 1)), ["Off", "On"]);
-        assert_eq!(Row::SunLightFromSky.choices(&f, (1, 1)), ["On", "Off"]);
-        let r = Row::SunShadows.apply(&f, "On");
-        assert_eq!(r.ini, set_key(&f.ini, "nv-rs Display", "bSunShadows", "1"));
-        assert_eq!(Row::SunShadows.current(&r), "On");
-        assert_eq!(Row::JipBuiltIn.choices(&f, (1, 1)), ["On", "Off"]);
-        let r = Row::JipBuiltIn.apply(&f, "Off");
-        assert_eq!(r.ini, set_key(&f.ini, "nv-rs Fixes", "bJIPInstalled", "0"));
-        assert_eq!(Row::JipBuiltIn.current(&r), "Off");
-        // Under the vanilla preset with no key, JIP is off as the game plays it: the row shows
-        // Off, offers Off first, and On writes the key.
-        let v = files("[nv-rs General]\r\nsPreset=vanilla\r\n", "");
-        assert_eq!(Row::JipBuiltIn.current(&v), "Off");
-        assert_eq!(Row::JipBuiltIn.choices(&v, (1, 1)), ["Off", "On"]);
-        let r = Row::JipBuiltIn.apply(&v, "On");
-        assert_eq!(r.ini, set_key(&v.ini, "nv-rs Fixes", "bJIPInstalled", "1"));
-        assert_eq!(Row::JipBuiltIn.current(&r), "On");
-        assert_eq!(Row::JipBuiltIn.apply(&v, "Off"), v, "already off");
-        // The display rows keep the table's default under vanilla.
-        assert_eq!(Row::SunLightFromSky.current(&v), "On");
-        assert_eq!(r.prefs, f.prefs);
-        assert_eq!(Row::SunLightFromSky.apply(&f, "On"), f);
-        assert!(TESTING.iter().all(|r| !ROWS.contains(r)));
+    fn every_line_of_the_table_is_one_row() {
+        let keys: Vec<&str> = TABLE
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+            .map(|l| l.split('\t').nth(1).unwrap())
+            .collect();
+        assert_eq!(keys.len(), table().len());
+        assert!(keys.len() > 40, "{}", keys.len());
+        for windows in [true, false] {
+            let more = List::More.rows_on(windows);
+            let fixes = List::Fixes.rows_on(windows);
+            let mut seen: Vec<&str> = ROWS.iter().filter_map(|r| r.table_key()).collect();
+            for r in more.iter().chain(&fixes) {
+                let Row::Key(k) = r else {
+                    panic!("{r:?} is not a table row");
+                };
+                seen.push(k.key);
+            }
+            let mut left: Vec<&str> = keys.clone();
+            if !windows {
+                left.retain(|k| !WINDOWS_ONLY.contains(k));
+            }
+            let mut sorted = seen.clone();
+            sorted.sort_unstable();
+            left.sort_unstable();
+            assert_eq!(sorted, left, "windows {windows}");
+            // In the table's order, fix rows only in their own list.
+            let order = |rows: &[Row]| -> Vec<usize> {
+                rows.iter()
+                    .map(|r| match r {
+                        Row::Key(k) => keys.iter().position(|x| x == &k.key).unwrap(),
+                        _ => unreachable!(),
+                    })
+                    .collect()
+            };
+            assert!(order(&more).is_sorted() && order(&fixes).is_sorted());
+            assert!(fixes
+                .iter()
+                .all(|r| matches!(r, Row::Key(k) if k.section == FIXES_SECTION)));
+            assert!(more
+                .iter()
+                .all(|r| matches!(r, Row::Key(k) if k.section != FIXES_SECTION)));
+        }
+        let fix_lines = TABLE
+            .lines()
+            .filter(|l| l.starts_with("nv-rs Fixes\t"))
+            .count();
+        assert_eq!(List::Fixes.rows().len(), fix_lines);
+        assert_eq!(
+            List::More.rows().len(),
+            List::More.rows_on(cfg!(windows)).len()
+        );
+        assert_eq!(List::Main.rows(), ROWS);
+        for key in LABELS
+            .iter()
+            .map(|(k, _)| *k)
+            .chain(NUMBERS.iter().map(|(k, _)| *k))
+            .chain(WINDOWS_ONLY)
+        {
+            assert!(keys.contains(&key), "{key} is not in the host's table");
+        }
+        // The new lighting's switches and the background row are there (the last on Windows only).
+        let more_keys: Vec<&str> = List::More
+            .rows_on(true)
+            .iter()
+            .filter_map(|r| match r {
+                Row::Key(k) => Some(k.key),
+                _ => None,
+            })
+            .collect();
+        for key in [
+            "bAmbientOcclusion",
+            "fAmbientOcclusionStrength",
+            "bSunShadows",
+            "bSunLightFromSky",
+            "bSunShadowsCharacters",
+            "bNotBackground",
+        ] {
+            assert!(more_keys.contains(&key), "{key}: {more_keys:?}");
+        }
+        assert!(!List::More.rows_on(false).contains(&row("bNotBackground")));
+    }
+
+    /// Each table row reads its own key as the game plays it and writes that key alone: with
+    /// none, the table's default (a fix row's preset value, off under vanilla), offered first;
+    /// the other choice written in place, everything else byte for byte; and a fix row chosen
+    /// back to the preset's value is the generated note again, the file as it was.
+    #[test]
+    fn each_table_row_reads_and_writes_its_own_key() {
+        for preset in ["fixes", "vanilla"] {
+            let fresh = generated(preset);
+            for &r in List::More.rows_on(true).iter().chain(List::Fixes.rows()) {
+                let Row::Key(k) = r else { unreachable!() };
+                assert_eq!(r.variable(), Some(k.variable));
+                assert_eq!(r.note(), Some(k.note));
+                let fix = k.section == FIXES_SECTION;
+                let plays = if fix && preset == "vanilla" {
+                    "0"
+                } else {
+                    k.default
+                };
+                let shown = r.current(&fresh);
+                let choices = r.choices_on(&fresh, (1920, 1080), true);
+                if !is_flag(k) {
+                    assert_eq!(shown, plays, "{}", k.key);
+                    assert!(choices.contains(&shown), "{}: {choices:?}", k.key);
+                    continue;
+                }
+                assert_eq!(shown, on_off(plays), "{} under {preset}", k.key);
+                assert_eq!(choices[0], shown, "{}: the default first", k.key);
+                assert_eq!(choices.len(), 2);
+                let other = &choices[1];
+                let changed = r.apply(&fresh, other);
+                assert_eq!(r.current(&changed), *other, "{}", k.key);
+                let value = if other == "On" { "1" } else { "0" };
+                assert_eq!(
+                    changed.ini,
+                    set_key(&fresh.ini, k.section, k.key, value),
+                    "{}: its key alone",
+                    k.key
+                );
+                assert_eq!(changed.prefs, fresh.prefs);
+                assert_eq!(r.chosen_here(&changed), fix.then_some(value));
+                // Back to the value the game played: a fix row follows the preset again.
+                let back = r.apply(&changed, &shown);
+                assert_eq!(r.current(&back), shown, "{}", k.key);
+                if fix {
+                    assert_eq!(back, fresh, "{}: the generated note again", k.key);
+                    assert_eq!(r.chosen_here(&back), None);
+                } else {
+                    assert_eq!(
+                        back.ini,
+                        set_key(&fresh.ini, k.section, k.key, plays),
+                        "{}",
+                        k.key
+                    );
+                }
+                // The value already there, "Game's setting" and a word the row cannot take
+                // write nothing.
+                assert_eq!(r.apply(&fresh, &shown), fresh);
+                assert_eq!(r.apply(&fresh, OWN), fresh);
+                assert_eq!(r.apply(&fresh, "Maybe"), fresh);
+            }
+        }
+    }
+
+    /// A fix row follows "Game fixes" while the file has no usable line of its own: a vanilla
+    /// preset turns it off, a value written here wins over either preset (as the host's
+    /// `Choice::is_on` takes the line first), and the choices screen's first line says which.
+    #[test]
+    fn a_fix_row_follows_the_preset_until_chosen_here() {
+        let uncap = row("bUncap");
+        let fixes = generated("fixes");
+        let vanilla = generated("vanilla");
+        assert_eq!(uncap.current(&fixes), "On");
+        assert_eq!(uncap.current(&vanilla), "Off");
+        assert_eq!(uncap.now_line(&fixes), "Now: On, from Game fixes");
+        let off = uncap.apply(&fixes, "Off");
+        assert_eq!(
+            uncap.now_line(&off),
+            "Now: Off, chosen here (Game fixes would give On)"
+        );
+        // The preset changed afterwards: the choice made here stays.
+        let off_vanilla = Row::GameFixes.apply(&off, "Vanilla (the original game)");
+        assert_eq!(uncap.current(&off_vanilla), "Off");
+        assert_eq!(uncap.now_line(&off_vanilla), "Now: Off, chosen here");
+        let on_vanilla = uncap.apply(&vanilla, "On");
+        let on_fixes = Row::GameFixes.apply(&on_vanilla, "Fixes (recommended)");
+        assert_eq!(uncap.current(&on_fixes), "On");
+        assert_eq!(uncap.now_line(&on_fixes), "Now: On, chosen here");
+        // A line the game cannot use (2, empty, a word) is no choice: the preset's value.
+        for bad in ["2", "", "yes"] {
+            let f = files(
+                &format!("[nv-rs General]\r\nsPreset=vanilla\r\n[nv-rs Fixes]\r\nbUncap={bad}\r\n"),
+                "",
+            );
+            assert_eq!(uncap.current(&f), "Off", "{bad:?}");
+            assert_eq!(uncap.chosen_here(&f), None);
+        }
+        // A row off in every preset (the table's 0) is off with either.
+        let havok = row("bHavokRefCounts");
+        assert_eq!(havok.current(&fixes), "Off");
+        assert_eq!(havok.choices(&fixes, (1, 1)), ["Off", "On"]);
+        // Rows outside the fixes keep the table's default under vanilla: no preset of theirs.
+        let sky = row("bSunLightFromSky");
+        assert_eq!(sky.current(&vanilla), "On");
+        assert_eq!(sky.now_line(&vanilla), "Now: On");
+        assert_eq!(sky.chosen_here(&sky.apply(&vanilla, "Off")), None);
+    }
+
+    /// The lighting strength is a number: four steps of the host's range with its default, the
+    /// file's own number kept as a choice, a word the game cannot read shown as the default.
+    #[test]
+    fn the_lighting_strength_is_a_number() {
+        let s = row("fAmbientOcclusionStrength");
+        let f = generated("fixes");
+        assert_eq!(s.current(&f), "0.7");
+        assert_eq!(s.choices(&f, (1, 1)), ["0.1", "0.4", "0.7", "1.0"]);
+        let r = s.apply(&f, "0.4");
+        assert_eq!(
+            r.ini,
+            f.ini.replace(
+                "fAmbientOcclusionStrength=0.7",
+                "fAmbientOcclusionStrength=0.4"
+            )
+        );
+        assert_eq!(s.current(&r), "0.4");
+        assert_eq!(s.apply(&f, "strong"), f);
+        assert_eq!(s.apply(&f, "inf"), f);
+        let own = s.apply(&f, "0.65");
+        assert_eq!(s.current(&own), "0.65");
+        assert_eq!(
+            s.choices(&own, (1, 1)).last().map(String::as_str),
+            Some("0.65")
+        );
+        let word = files(
+            "[nv-rs Display]\r\nfAmbientOcclusionStrength=strong\r\n",
+            "",
+        );
+        assert_eq!(s.current(&word), "0.7");
+        assert_eq!(
+            s.pending_line(&r, false).as_deref(),
+            Some("NV_AO_STRENGTH=0.4")
+        );
+    }
+
+    /// A row's label comes from its note's name when that fits and is no other row's, else the
+    /// launcher's own, else the key's words; each list's labels differ, every one fits its row
+    /// and every title its line.
+    #[test]
+    fn labels_come_from_the_table() {
+        assert_eq!(
+            name_in("Uncapped frame rate: the game's frame step"),
+            Some("Uncapped frame rate")
+        );
+        assert_eq!(
+            name_in("JIP LN NVSE built in (on in the fixes preset): mods"),
+            Some("JIP LN NVSE built in")
+        );
+        assert_eq!(name_in("1 = new lighting: ambient occlusion"), None);
+        assert_eq!(
+            name_in("How strong the shade is; 0.7 is the default."),
+            None
+        );
+        assert_eq!(words_of("bCellEntryWait"), "Cell entry wait");
+        assert_eq!(words_of("bNVSEListGuard"), "NVSE list guard");
+        assert_eq!(
+            words_of("fAmbientOcclusionStrength"),
+            "Ambient occlusion strength"
+        );
+        assert_eq!(
+            words_of("bTheVeryLongKeyNameThatGoesOnAndOnPastTheRow"),
+            "The very long key name that"
+        );
+        // Two notes with one name (and a name too long): each takes its key's words.
+        let made_up = parse(concat!(
+            "nv-rs Fixes\tbCrashFixInventoryUse\tNV_A\t1\tCrash fix: a click does nothing.\n",
+            "nv-rs Fixes\tbCrashFixQuantityDrop\tNV_B\t1\tCrash fix: a drop drops nothing.\n",
+            "nv-rs Fixes\tbShort\tNV_C\t1\tA short name: yes.\n",
+            "nv-rs Fixes\tbLongOne\tNV_D\t0\tA name far too long to fit in its row at all: no.\n",
+        ));
+        assert_eq!(
+            labels_of(&made_up),
+            [
+                "Crash fix inventory use",
+                "Crash fix quantity drop",
+                "A short name",
+                "Long one"
+            ]
+        );
+        assert_eq!(row("bUncap").label(), "Uncapped frame rate");
+        assert_eq!(row("bJIPInstalled").label(), "JIP LN NVSE built in");
+        assert_eq!(row("bAmbientOcclusion").label(), "Ambient occlusion");
+        assert_eq!(
+            row("bTextureReadFirst").title(),
+            "Texture files read before the renderer's lock"
+        );
+        assert_eq!(
+            row("bTextureReadFirst").label(),
+            "Textures read before the lock"
+        );
+        for list in [List::More, List::Fixes] {
+            let rows = list.rows_on(true);
+            let labels: Vec<&str> = rows.iter().map(|r| r.label()).collect();
+            for (i, l) in labels.iter().enumerate() {
+                assert!(!l.is_empty() && l.chars().count() <= LABEL_MAX, "{l:?}");
+                assert!(!labels[..i].contains(l), "{l:?} twice in {list:?}");
+                assert!(!ROWS.iter().any(|r| r.label() == *l), "{l:?}");
+            }
+            for r in rows {
+                assert!(r.title().chars().count() <= TITLE_MAX, "{:?}", r.title());
+            }
+        }
+    }
+
+    /// While a profile is not ready, a table row's choice is its settings.ini line: always for a
+    /// row outside the fixes, for a fix row only when chosen here or when a profile's own file
+    /// holds the key (no line follows the preset).
+    #[test]
+    fn a_pending_line_carries_a_table_rows_choice() {
+        let fixes = generated("fixes");
+        let ao = row("bAmbientOcclusion");
+        assert_eq!(ao.pending_line(&fixes, false).as_deref(), Some("NV_AO=0"));
+        assert_eq!(
+            ao.pending_line(&ao.apply(&fixes, "On"), false).as_deref(),
+            Some("NV_AO=1")
+        );
+        let uncap = row("bUncap");
+        assert_eq!(uncap.pending_line(&fixes, false), None);
+        assert_eq!(
+            uncap.pending_line(&fixes, true).as_deref(),
+            Some("NV_UNCAP=1")
+        );
+        assert_eq!(
+            uncap
+                .pending_line(&uncap.apply(&fixes, "Off"), false)
+                .as_deref(),
+            Some("NV_UNCAP=0")
+        );
+        assert_eq!(Row::FrameLimit.pending_line(&fixes, true), None);
     }
 }

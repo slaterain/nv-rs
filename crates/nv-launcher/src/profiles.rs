@@ -429,10 +429,16 @@ impl Profiles {
                         _ => format!("{name}={value}"),
                     }),
             );
-            // A Testing row: its own switch, as the game reads it from settings.ini.
-            if let Some(variable) = row.variable() {
-                let on = row.current(&chosen) == "On";
-                lines.push(format!("{variable}={}", u8::from(on)));
+            // A table row: its own switch's line, which Play (or the game's first start) moves
+            // into the key. A fix row has one only when chosen here, or when a profile's own
+            // Fallout.ini holds the key (only a line can change it there); with none it follows
+            // the preset.
+            let held = self
+                .dirs
+                .iter()
+                .any(|d| Self::files(d).is_ok_and(|f| row.chosen_here(&f).is_some()));
+            if let Some(line) = row.pending_line(&chosen, held) {
+                lines.push(line);
             }
             lines.extend(kept);
             if let Some(dir) = path.parent() {
@@ -545,6 +551,71 @@ mod tests {
         std::fs::remove_dir_all(&own).unwrap();
     }
 
+    /// A fix row chosen in both profiles made ready: its key in place in each file; chosen back
+    /// to the preset's value, each file byte for byte as it was (the generated note again). Before
+    /// Play made them ready, the same choices go into settings.ini as the row's own line, which
+    /// Play moves into the key, and choosing the preset's value again takes the line out; a line
+    /// of another fix stays.
+    #[test]
+    fn a_fix_row_is_its_own_key_and_hands_back_to_the_preset() {
+        let own = scratch("fix-row");
+        let p = ready(&own);
+        let fixes = "[nv-rs Fixes]\r\n; Uncapped.\r\n;bUncap=1\r\n";
+        let text = format!("{SECTIONS}{fixes}");
+        for dir in &p.dirs {
+            std::fs::write(dir.join("Fallout.ini"), &text).unwrap();
+        }
+        let uncap = Row::of("bUncap").unwrap();
+        p.save(uncap, "Off").unwrap();
+        for dir in &p.dirs {
+            let ini = std::fs::read_to_string(dir.join("Fallout.ini")).unwrap();
+            assert_eq!(ini, text.replace(";bUncap=1", "bUncap=0"));
+        }
+        assert_eq!(uncap.current(&p.shown().unwrap()), "Off");
+        p.save(uncap, "On").unwrap();
+        for dir in &p.dirs {
+            assert_eq!(
+                std::fs::read_to_string(dir.join("Fallout.ini")).unwrap(),
+                text
+            );
+        }
+        std::fs::remove_dir_all(&own).unwrap();
+        // Not ready (Windows' rule: one shared settings.ini).
+        let own = scratch("fix-row-pending");
+        let mut p = Profiles::at(&own);
+        p.own_pending = None;
+        std::fs::create_dir_all(own.join("game")).unwrap();
+        std::fs::write(&p.pending, "Preset=fixes\r\nNV_GRAB_PUSH=0\r\n").unwrap();
+        assert!(!p.in_files().unwrap());
+        p.save(uncap, "Off").unwrap();
+        let pending = std::fs::read_to_string(&p.pending).unwrap();
+        assert!(pending.contains("\r\nNV_UNCAP=0\r\n"), "{pending}");
+        assert!(pending.contains("\r\nNV_GRAB_PUSH=0\r\n"), "{pending}");
+        assert_eq!(uncap.current(&p.shown().unwrap()), "Off");
+        let moved = game_ini::apply_choices(&text, Some(&usable(&Settings::parse(&pending)))).0;
+        assert_eq!(
+            profile_settings::ini_value(&moved, "nv-rs Fixes", "bUncap"),
+            Some("0")
+        );
+        p.save(uncap, "On").unwrap();
+        let pending = std::fs::read_to_string(&p.pending).unwrap();
+        assert!(!pending.contains("NV_UNCAP"), "{pending}");
+        assert!(pending.contains("\r\nNV_GRAB_PUSH=0\r\n"), "{pending}");
+        assert_eq!(uncap.current(&p.shown().unwrap()), "On");
+        // A profile's own file that holds the key: the line says the choice, so the move changes it.
+        std::fs::create_dir_all(&p.dirs[1]).unwrap();
+        std::fs::write(
+            p.dirs[1].join("Fallout.ini"),
+            text.replace(";bUncap=1", "bUncap=0"),
+        )
+        .unwrap();
+        p.save(uncap, "Off").unwrap();
+        p.save(uncap, "On").unwrap();
+        let pending = std::fs::read_to_string(&p.pending).unwrap();
+        assert!(pending.contains("\r\nNV_UNCAP=1\r\n"), "{pending}");
+        std::fs::remove_dir_all(&own).unwrap();
+    }
+
     /// Before Play made both profiles ready (one has no sections), the choices go into
     /// settings.ini, every option a line, and the files are left as they are; while a
     /// settings.ini is there it is the settings, its lines shown over the files and lines of other
@@ -616,7 +687,7 @@ mod tests {
     }
 
     /// Off Windows only the profile the game started first is ready: a choice goes into its files
-    /// in place, and into the other profile's own settings.ini (every option a line; a Testing row
+    /// in place, and into the other profile's own settings.ini (every option a line; a table row
     /// as its own switch's line), which that profile's first start moves in; nothing shared is
     /// written. Once both are ready, both take it in place.
     #[test]
@@ -629,7 +700,7 @@ mod tests {
         std::fs::write(p.dirs[0].join("FalloutPrefs.ini"), PREFS).unwrap();
         assert!(!p.in_files().unwrap());
         p.save(Row::FrameLimit, "90").unwrap();
-        p.save(Row::AmbientOcclusion, "On").unwrap();
+        p.save(Row::of("bAmbientOcclusion").unwrap(), "On").unwrap();
         let game = std::fs::read_to_string(p.dirs[0].join("Fallout.ini")).unwrap();
         assert!(game.contains("iFrameLimit=90"), "{game}");
         assert!(game.contains("bAmbientOcclusion=1"), "{game}");
