@@ -572,6 +572,29 @@ fn ternary_evaluates_only_the_branch_it_picks() {
     assert_eq!(run_expr(&mut e, 0x166e, 0, &failing).1, 0.0);
 }
 
+/// xNVSE 0ccd23a ScriptTokens.cpp::GetBool has no AssignableString case.
+/// Exercise the raw runtime argument accepted by TernaryEvaluator; this does not
+/// claim that the compiler accepts AssignableString for a Boolean parameter.
+#[test]
+fn ternary_string_subscript_uses_raw_token_boolean() {
+    let mut e = setup();
+    let string = vars::add_string(&mut e, 0, b"abc", false);
+    local(&mut e, LIST, 1, f64::from(string));
+    let variable = vec![b'V', 2, 0, 0, 1, 0];
+    for index in [0.0, 99.0] {
+        let condition = [
+            variable.clone(),
+            num(index),
+            vec![crate::expr::op::LEFT_BRACKET],
+        ]
+        .concat();
+        assert_eq!(
+            run_expr(&mut e, 0x166e, 0, &[condition, num(1.0), num(2.0)]).1,
+            2.0
+        );
+    }
+}
+
 /// A function script `at` (id its address) taking no parameters.
 fn function_script(e: &mut Engine, at: u32) {
     let data = at + 0x100;
