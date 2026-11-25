@@ -834,7 +834,7 @@ pub fn fn_0041b180(
 /// it.
 pub fn fn_0041b1e0(e: &mut Engine, this: Ptr<ExtraDataList>, form: u32) {
     if form == 0 {
-        fn_0041b350(e, this);
+        e.call(0x0041_b350, &args![this]);
         return;
     }
     let mut extra = find_extra(e, this, EXTRA_STARTING_WORLD_OR_CELL);
@@ -861,9 +861,9 @@ pub fn extra_data_list_set_starting_world_or_cell_for_ref(
     if cell != 0 {
         let world = e.call(CELL_GET_WORLD_SPACE, &args![cell]).u32();
         if world != 0 {
-            fn_0041b1e0(e, this, world);
+            e.call(0x0041_b1e0, &args![this, world]);
         } else {
-            fn_0041b1e0(e, this, cell);
+            e.call(0x0041_b1e0, &args![this, cell]);
         }
     } else {
         let form_id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, reference));
@@ -912,7 +912,7 @@ pub fn fn_0041b370(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
 /// Whether `eAction` of the list (`fn_0041b370`) has any bit of `mask`.
 /// The engine map has no name for it.
 pub fn fn_0041b3a0(e: &mut Engine, this: Ptr<ExtraDataList>, mask: u32) -> bool {
-    fn_0041b370(e, this) & mask != 0
+    e.call(0x0041_b370, &args![this]).u32() & mask != 0
 }
 
 // Translated from 0041b3d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -941,16 +941,16 @@ pub fn fn_0041b3d0(e: &mut Engine, this: Ptr<ExtraDataList>, action: u32) {
 /// Sets the bits of `mask` in `eAction`: `fn_0041b3d0(fn_0041b370 | mask)`.
 /// The engine map has no name for it.
 pub fn fn_0041b440(e: &mut Engine, this: Ptr<ExtraDataList>, mask: u32) {
-    let action = fn_0041b370(e, this) | mask;
-    fn_0041b3d0(e, this, action);
+    let action = e.call(0x0041_b370, &args![this]).u32() | mask;
+    e.call(0x0041_b3d0, &args![this, action]);
 }
 
 // Translated from 0041b470 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Clears the bits of `mask` in `eAction`: `fn_0041b3d0(fn_0041b370 & !mask)`.
 /// The engine map has no name for it.
 pub fn fn_0041b470(e: &mut Engine, this: Ptr<ExtraDataList>, mask: u32) {
-    let action = fn_0041b370(e, this) & !mask;
-    fn_0041b3d0(e, this, action);
+    let action = e.call(0x0041_b370, &args![this]).u32() & !mask;
+    e.call(0x0041_b3d0, &args![this, action]);
 }
 
 // Translated from 0041b4b0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1010,7 +1010,9 @@ pub fn fn_0041b580(e: &mut Engine, this: Ptr<ExtraDataList>, health_perc: f32) {
         remove_extra(e, this, extra);
     } else {
         if extra.is_null() {
-            extra = add_extra_built_by(e, this, 0x10, fn_0041b650);
+            extra = add_extra_built_by(e, this, 0x10, |e, block| {
+                e.call(0x0041_b650, &args![block]).ptr()
+            });
         }
         e.mem
             .set_u32(extra.addr() + 0x0c, x87_float_bits(health_perc));
@@ -1059,11 +1061,15 @@ pub fn extra_data_list_get_object_health(e: &mut Engine, this: Ptr<ExtraDataList
 /// Sets the `fHealth` (+0x0C) of the type `0x56` extra data
 /// (`ExtraObjectHealth`, `0x10` bytes, built by `fn_0041b790`): stored in the
 /// existing one, else a new one made from `health` is added. The engine map
-/// has no name for it.
+/// has no name for it. The constructor is handed `health` through the x87
+/// (`FLD`/`FSTP` to the stack), so a signalling NaN reaches it quiet.
 pub fn fn_0041b6e0(e: &mut Engine, this: Ptr<ExtraDataList>, health: f32) {
     let extra = find_extra(e, this, EXTRA_OBJECT_HEALTH);
     if extra.is_null() {
-        add_extra_built_by(e, this, 0x10, |e, block| fn_0041b790(e, block, health));
+        let moved = f32::from_bits(x87_float_bits(health));
+        add_extra_built_by(e, this, 0x10, |e, block| {
+            e.call(0x0041_b790, &args![block, moved]).ptr()
+        });
     } else {
         e.mem.set_u32(extra.addr() + 0x0c, x87_float_bits(health));
     }
@@ -1229,13 +1235,15 @@ pub fn extra_data_list_set_terminal_state(e: &mut Engine, this: Ptr<ExtraDataLis
     if state == 0 {
         if !extra.is_null() {
             e.mem.set_u8(extra.addr() + 0x0c, 0);
-            if fn_0041bf20(e, extra.cast()) {
+            if e.call(0x0041_bf20, &args![extra]).bool() {
                 remove_extra(e, this, extra);
             }
         }
     } else {
         if extra.is_null() {
-            extra = add_extra_built_by(e, this, 0x10, fn_0041bef0);
+            extra = add_extra_built_by(e, this, 0x10, |e, block| {
+                e.call(0x0041_bef0, &args![block]).ptr()
+            });
         }
         e.mem.set_u8(extra.addr() + 0x0c, state);
     }
@@ -1287,13 +1295,15 @@ pub fn fn_0041bf80(e: &mut Engine, this: Ptr<ExtraDataList>, lock_override: u8) 
     if lock_override as i8 == 0 {
         if !extra.is_null() {
             e.mem.set_u8(extra.addr() + 0x0d, 0);
-            if fn_0041bf20(e, extra.cast()) {
+            if e.call(0x0041_bf20, &args![extra]).bool() {
                 remove_extra(e, this, extra);
             }
         }
     } else {
         if extra.is_null() {
-            extra = add_extra_built_by(e, this, 0x10, fn_0041bef0);
+            extra = add_extra_built_by(e, this, 0x10, |e, block| {
+                e.call(0x0041_bef0, &args![block]).ptr()
+            });
         }
         e.mem.set_u8(extra.addr() + 0x0d, lock_override);
     }
@@ -1484,7 +1494,7 @@ pub fn fn_0041c5e0(e: &mut Engine, this: Ptr, editor_id: u32) -> Ptr {
 /// `0101519c`): runs `fn_0041c690`, then `operator delete` when bit 0 of
 /// `flags` is set. Returns `this`. The engine map has no name for it.
 pub fn fn_0041c660(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_0041c690(e, this);
+    e.call(0x0041_c690, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -1514,7 +1524,9 @@ pub fn fn_0041c6f0(e: &mut Engine, this: Ptr<ExtraDataList>, editor_id: u32) {
             remove_extra(e, this, extra);
         }
     } else if extra.is_null() {
-        add_extra_built_by(e, this, 0x14, |e, block| fn_0041c5e0(e, block, editor_id));
+        add_extra_built_by(e, this, 0x14, |e, block| {
+            e.call(0x0041_c5e0, &args![block, editor_id]).ptr()
+        });
     } else {
         e.call(BS_STRING_SET, &args![extra.addr() + 0x0c, editor_id, 0u32]);
     }
@@ -1615,12 +1627,12 @@ pub fn extra_data_list_set_package_extra(
 ) {
     if !package.is_null() {
         let created = e.call(PACKAGE_GET_IS_CREATED, &args![package]).bool();
-        if created && fn_0041ca90(e, package) != 1 {
+        if created && e.call(0x0041_ca90, &args![package]).i32() != 1 {
             return;
         }
         if e.call(PACKAGE_IS_NEVER_TO_RUN, &args![package]).bool()
-            || fn_0041ca90(e, package) == 0x18
-            || fn_0041ca90(e, package) == 0x17
+            || e.call(0x0041_ca90, &args![package]).i32() == 0x18
+            || e.call(0x0041_ca90, &args![package]).i32() == 0x17
         {
             return;
         }
@@ -1628,7 +1640,7 @@ pub fn extra_data_list_set_package_extra(
     let extra = find_extra(e, this, EXTRA_PACKAGE);
     if package.is_null() {
         if !extra.is_null() {
-            extra_data_list_remove_package_extra(e, this);
+            e.call(0x0041_cc60, &args![this]);
         }
     } else if extra.is_null() {
         add_new_extra(
@@ -2195,7 +2207,7 @@ pub fn fn_0041d7b0(e: &mut Engine, this: Ptr<ExtraDataList>, flag: i8) {
         let mut expired = false;
         if entry != 0 && e.mem.u32(entry) != 0 {
             let package = e.mem.u32(entry);
-            let time_stamp = fn_0041d8a0(e, Ptr::new(package)).addr();
+            let time_stamp = e.call(0x0041_d8a0, &args![package]).u32();
             let high_byte = e.call(TIME_STAMP_BYTE, &args![time_stamp]).u8() as i8 as i32;
             let word =
                 typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, time_stamp)) as i32;
@@ -3684,6 +3696,19 @@ mod tests {
         });
         assert!(calls_to(&log, OPERATOR_NEW).is_empty());
         assert_eq!(e.mem.f32(extra.addr() + 0x0c), 7.0);
+    }
+
+    #[test]
+    fn object_health_setter_hands_its_constructor_the_health_through_the_x87() {
+        let mut e = engine();
+        let (list, _) = list_with(&mut e, &[]);
+        let signalling = f32::from_bits(0x7fa0_0001);
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_b6e0, &args![list, signalling]);
+        });
+        let built = calls_to(&log, 0x0041_b790);
+        assert_eq!(built.len(), 1);
+        assert_eq!(built[0][1], 0x7fe0_0001);
     }
 
     #[test]
