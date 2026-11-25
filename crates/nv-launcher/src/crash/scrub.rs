@@ -483,11 +483,10 @@ fn extent(text: &[char], start: usize, body: usize, sep: Option<char>) -> usize 
             }
             let from = k + 1;
             let stop = word_end(from);
-            // Another path's start ends this one (`... and G:\x`, `... or /tmp/y`).
+            // Another path's start ends this one (`... and G:\x`, `... or /tmp/y`). A web address
+            // never extends it: its word ends at `:` before `//` (`word_end`), holding no separator.
             let word = &text[from..stop];
-            let url = word.windows(3).any(|w| w == [':', '/', '/']);
             if word.is_empty()
-                || url
                 || is_separator(word[0])
                 || (word.len() > 2 && word[0].is_ascii_alphabetic() && word[1] == ':')
             {
