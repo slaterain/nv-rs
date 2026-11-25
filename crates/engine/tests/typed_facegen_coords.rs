@@ -8,10 +8,13 @@
 //! The translation asks the float vector's size (`00662820`), capacity (`0060b860`) and one-float
 //! fill (`0060b8a0`) for each element; the typed sum reads and stores those words itself, so those
 //! three are left out of the call comparison (`ignore_calls`). Every other call, every byte of
-//! memory and the heap compare. The cases take shapes a face's blocks have (1 by 50, 1 by 30) and
-//! small odd ones, a second block shorter than the first (each missing element a checked
-//! element's `_invalid_parameter_noinfo`), a destination that is one of the sources, the copy of
-//! row 1, a single source, and limits that scale, do not, or are NaN.
+//! memory and the heap compare; `_invalid_parameter_noinfo` is a counter of the test's own (the
+//! CRT's handler words are not mapped here). The cases take the shapes a face's blocks have (50 by
+//! 1 and 30 by 1, as `InitFaceGenCoord` sizes them, and their transposes), matrices with one
+//! dimension 0, small odd ones, a second block shorter than the first (each missing element a
+//! checked element's `_invalid_parameter_noinfo`), a destination that is one of the sources, the
+//! copy of row 1, a single source, limits that scale, do not, or are NaN, and values that are
+//! quiet and signalling NaNs.
 
 use engine as _;
 use engine_core::prelude::*;
@@ -27,7 +30,8 @@ const MATRIX_RESIZE: u32 = 0x0060_b340;
 const IGNORED: [u32; 3] = [0x0066_2820, 0x0060_b860, 0x0060_b8a0];
 
 /// The first block's four matrices' dimensions, by shape.
-const SHAPES: [[(u32, u32); 4]; 4] = [
+const SHAPES: [[(u32, u32); 4]; 5] = [
+    [(50, 1), (30, 1), (50, 1), (0, 0)],
     [(1, 50), (1, 30), (1, 50), (0, 0)],
     [(1, 3), (2, 2), (0, 4), (1, 1)],
     [(3, 2), (1, 0), (2, 1), (1, 4)],
@@ -40,12 +44,17 @@ fn value(i: u32, k: u32, pattern: u32) -> u32 {
         .wrapping_mul(2_654_435_761)
         .wrapping_add(k * 97 + pattern * 13);
     match n % 23 {
-        0 => 0x8000_0000,                 // -0.0
-        1 => 0,                           // 0.0
-        2 => 0x0000_0001,                 // the smallest subnormal
-        3 => 0x7f7f_ffff,                 // the largest float
-        4 if pattern == 1 => 0x7fc0_0000, // a NaN
-        5 if pattern == 1 => 0xff80_0000, // negative infinity
+        0 => 0x8000_0000,                  // -0.0
+        1 => 0,                            // 0.0
+        2 => 0x0000_0001,                  // the smallest subnormal
+        3 => 0x7f7f_ffff,                  // the largest float
+        4 if pattern == 1 => 0x7fc0_0000,  // a quiet NaN
+        5 if pattern == 1 => 0xff80_0000,  // negative infinity
+        10 if pattern == 1 => 0xffc0_0042, // a quiet NaN of another payload
+        // A signalling NaN: the second block's word wherever the first block's is the quiet NaN
+        // (its salt moves the category on by 12), so a sum meets both NaNs, the signalling one
+        // quieted first: the larger payload wins.
+        16 if pattern == 1 => 0x7f80_0001,
         _ => ((n % 2001) as f32 / 97.0 - 10.0).to_bits(),
     }
 }
@@ -76,6 +85,10 @@ fn block(e: &mut Engine, shape: &[(u32, u32); 4], extra: i32, salt: u32, pattern
             e.mem.set_u32(matrix + 0x1c, columns);
             let data = e.mem.u32(matrix + 0xc);
             e.mem.set_u32(matrix + 0x10, data);
+        } else {
+            // A dimension 0: no storage, the shape's dimensions as they are (1 by 0 is not 0 by 0).
+            e.mem.set_u32(matrix + 0x18, rows);
+            e.mem.set_u32(matrix + 0x1c, columns);
         }
     }
     block
@@ -91,7 +104,7 @@ fn facegen_coords_sum() {
     .family(&leaf::LEAVES)
     .ignore_calls(&IGNORED)
     .inputs(&[
-        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&[0, 1, 2, 3, 4]),
         // The second block's length against the first's: the same, 3 or 20 longer, one shorter.
         Input::Of(&[0, 1, 2, 3]),
         // The destination: a new block, a used one (longer, so its storage is reused), the first
