@@ -103,6 +103,8 @@ fn facegen_colours_assign() {
         .family(&facegen::FACEGEN)
         .family(&leaf::LEAVES)
         .ignore_calls(&IGNORED)
+        // The translation calls its erase plainly; the typed assignment through `typed_call!`.
+        .translation_calls_plainly(&[0x0064_dc50])
         .inputs(&[
             Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7]),
             // The count: none, within, exactly, one past, past half again, more than two writes of
