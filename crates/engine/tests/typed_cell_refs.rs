@@ -6769,6 +6769,23 @@ fn xe_stand_ins(e: &mut Engine) {
     e.register(XE_CELL_FN, |e, _| ret(e.mem.u32(XE_CELL)));
 }
 
+/// The extra data of `kind` the lookup can answer in the world besides the placed one: the entry the
+/// thread's cache holds for the type (the world's decoy in some seeds), or 0.
+fn xe_cached(e: &mut Engine, kind: u32) -> u32 {
+    let tls = e.tls();
+    e.mem.u32(tls + 0x10 + 4 * kind)
+}
+
+/// The payload word `held` stored in the placed extra data and in the one the cache holds for `kind`.
+fn xe_hold(e: &mut Engine, placed: u32, kind: u32, held: u32) {
+    let cached = xe_cached(e, kind);
+    for x in [placed, cached] {
+        if x != 0 {
+            e.mem.set_u32(x + 0xc, held);
+        }
+    }
+}
+
 /// An object whose every vtable slot is [`XE_SLOT_FN`].
 fn xe_object(e: &mut Engine) -> u32 {
     let vtable = e.mem.alloc(0x200);
@@ -6831,14 +6848,12 @@ impl XeShapes for Diff {
             .setup(move |e, case| {
                 let w = xd_world(e, case.word(0));
                 let x = place_kind(e, &w, case.word(0), kind);
-                if x != 0 {
-                    let held = match case.word(0) % 3 {
-                        0 => 0,
-                        2 if equal_too => case.word(1),
-                        _ => xe_object(e),
-                    };
-                    e.mem.set_u32(x + 0xc, held);
-                }
+                let held = match case.word(0) % 3 {
+                    0 => 0,
+                    2 if equal_too => case.word(1),
+                    _ => xe_object(e),
+                };
+                xe_hold(e, x, kind, held);
                 vec![w.list, case.word(1)]
             })
     }
@@ -6967,7 +6982,7 @@ impl XeShapes for Diff {
                 let seed = case.word(0);
                 let w = xd_world(e, seed);
                 let x = place_kind(e, &w, seed, 0x35);
-                if x != 0 {
+                {
                     let mut d = Draw(seed ^ 0x0041_cf30);
                     let n = d.next(4);
                     let mut next = 0;
@@ -6982,7 +6997,7 @@ impl XeShapes for Diff {
                         e.mem.set_u32(node + 4, next);
                         next = node;
                     }
-                    e.mem.set_u32(x + 0xc, next);
+                    xe_hold(e, x, 0x35, next);
                 }
                 vec![w.list, case.word(1)]
             })
@@ -7038,7 +7053,7 @@ impl XeShapes for Diff {
                 let x = place_kind(e, &w, seed, 0x1b);
                 let mut d = Draw(seed.wrapping_mul(0x0041_d7b0) ^ 0x7e57);
                 let mut packages = vec![0x4321];
-                if x != 0 {
+                {
                     let head = e.mem.alloc(8);
                     let mut node = head;
                     for i in 0..d.next(5) {
@@ -7070,7 +7085,7 @@ impl XeShapes for Diff {
                         }
                         e.mem.set_u32(node, entry);
                     }
-                    e.mem.set_u32(x + 0xc, head);
+                    xe_hold(e, x, 0x1b, head);
                 }
                 let second = if flags {
                     [0, 1, 0xff][case.word(1) as usize]
