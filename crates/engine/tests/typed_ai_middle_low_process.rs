@@ -223,7 +223,6 @@ const IN_PLACE: &[u32] = &[
     0x0042_80f0, // their test
     0x0042_ce30, // the buffer's revert flags
     0x0086_7da0, // Calendar::GetHour
-    0x0086_7d60, // Calendar::GetDay
     0x0052_6ac0, // a global's value
     0x0040_3e20, // a float setting's value
     0x0040_8d60, // a byte setting's value
@@ -889,7 +888,8 @@ fn save_and_load() {
         0x0092_e730,
         middle_low_process::load_game(Ptr, u32, u32, u32)
     ))
-    .in_world(&MOST, |w| {
+    // Every seed: the block's clean end needs a run of reader answers that few seeds give.
+    .in_world(&ALL, |w| {
         let flags = w.pick(&[0, 0x0010_0000, 0xffff_ffff]);
         vec![w.process(), flags, w.word(), w.word()]
     })
@@ -945,6 +945,16 @@ fn update_words(w: &mut World) -> Vec<u32> {
 /// The callees `Update` leaves out besides the ones done in place: the travel's form lookup and the
 /// process's hour (the seconds they give are never read).
 const UPDATE_LEFT_OUT: &[u32] = &[0x0048_39c0, 0x007d_f1f0];
+
+/// `Calendar::GetDay`: the day global's value or the default day (days, a signalling NaN, 2^32),
+/// truncated.
+#[test]
+fn calendar_day() {
+    Diff::new(entry!(0x0086_7d60, middle_low_process::calendar_day(Ptr) -> u32))
+        .in_world(&MANY, |_| vec![CALENDAR])
+        .run()
+        .assert_same();
+}
 
 #[test]
 fn update() {
@@ -1082,7 +1092,7 @@ fn the_seeds_reach_every_branch() {
     );
     reaches(
         0x0092_e730,
-        &MOST,
+        &ALL,
         |w| vec![w.process(), 0x0010_0000, 0, 0],
         &[
             "bad header",

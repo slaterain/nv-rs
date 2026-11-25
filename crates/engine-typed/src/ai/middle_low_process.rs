@@ -21,9 +21,9 @@
 //!
 //! The callees whose bodies are one load, store or test are done in place: the actor value's flag
 //! (`00406d70`), the buffers' change flags (`00428110`, `0042ce30`, `004280f0`), the calendar's hour
-//! and day (`00867da0` and `00867d60`, with `00526ac0`; the day truncated as `_ftol2` does), the
-//! settings' value addresses (`00403e20`, `00408d60`, `0043d4d0`), the save/load object's version,
-//! position and records, the package and location getters and the leaves. The values the exe works out and never reads (the hours `Update` stores, the seconds of
+//! (`00867da0` with `00526ac0`), the settings' value addresses (`00403e20`, `00408d60`, `0043d4d0`),
+//! the save/load object's version, position and records, the package and location getters and the
+//! leaves. The values the exe works out and never reads (the hours `Update` stores, the seconds of
 //! the travel's hours, the reach distance) are not worked out.
 
 use super::base_process::{
@@ -163,10 +163,13 @@ pub(super) fn calendar_hour(e: &Engine) -> u32 {
     x87_quiet_bits(bits)
 }
 
-/// `Calendar::GetDay` (`00867d60`): the day global's value, or the default day without one, stored
-/// as a float, loaded again (`FLD`, which quiets a signalling NaN) and truncated (`_ftol2`).
-fn calendar_day(e: &mut Engine) -> u32 {
-    let global = e.mem.u32(CALENDAR + CALENDAR_DAY_GLOBAL);
+// Typed from 00867d60
+/// `Calendar::GetDay` (engine map; typed in this family, whose processes ask it): the day global's
+/// value (`pGameDay`, +8; a global's value done in place, `00526ac0`), or the default day
+/// (`01018f8c`) without one, stored as a float, loaded again (`FLD`, which quiets a signalling NaN)
+/// and truncated (`_ftol2`).
+pub fn calendar_day(e: &mut Engine, this: Ptr) -> u32 {
+    let global = e.mem.u32(this.addr().wrapping_add(CALENDAR_DAY_GLOBAL));
     let bits = if global != 0 {
         e.mem.u32(global.wrapping_add(GLOBAL_VALUE))
     } else {
@@ -1188,7 +1191,7 @@ fn update_finish_package(e: &mut Engine, process: u32, actor: u32, package: &mut
     if current_package(e, process) != 0 {
         let current = current_package(e, process);
         if package_flag(e, current, 0x400) {
-            let day = calendar_day(e) & 0xff;
+            let day = typed_call!(FAMILY, 0x0086_7d60, calendar_day(e, Ptr::new(CALENDAR))) & 0xff;
             let current = current_package(e, process);
             e.vcall(actor, 0x28c, &args![current, day]);
         }

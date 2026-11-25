@@ -18,7 +18,7 @@
 //! - [`middle_low_process`]: `MiddleLowProcess` (its Xbox PDB source unit): the temporary and
 //!   damage modifiers on top of `LowProcess`'s actor values, the hourly package check, the combat
 //!   rounds, `Update` (the package's procedure actions), the destructors, the copy and the save,
-//!   load and revert of its part of the process.
+//!   load and revert of its part of the process; and `Calendar::GetDay`, which the processes ask.
 //!
 //! Reached: each stays registered at its exe address, so the translations' calls by address and
 //! the vtable slots that hold them reach the typed functions; between them the calls are typed
@@ -63,6 +63,7 @@ pub static AI: Family = Family {
 fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0040_1280, base_process::empty_name(Ptr) -> u32),
+        entry!(0x0086_7d60, middle_low_process::calendar_day(Ptr) -> u32),
         entry!(0x008c_5e70, actor_package::destroy_data(Ptr)),
         entry!(0x008c_5ec0, actor_package::handle_deleted_reference(Ptr, u32)),
         entry!(0x008c_5ef0, actor_package::clear(Ptr)),
