@@ -462,10 +462,12 @@ fn overlaps(a: u64, a_len: u64, b: u64, b_len: u64) -> bool {
 
 /// One morph of [`apply_coordinates`] in one pass: the offsets read at once, every point morphed
 /// in host memory and written back, the points block left as [`morph_by_element`] leaves it.
-/// Answers the offsets iterator's end position, or `None` (nothing read or written) when a step
-/// could take a check's failing side (no proxy, a position at or past the proxy's last element)
-/// or when what the loops write could change what they read later (overlapping arrays, a stride
-/// below a point, an address past 4 GB): then the element loops run, as the exe's do.
+/// Answers the offsets iterator's end position, or `None` when a step could take a check's
+/// failing side (no proxy, a position at or past the proxy's last element) or when what the loops
+/// write could change what they read later (overlapping arrays, a stride below a point, an address
+/// past 4 GB): then the element loops run, as the exe's do. Before a `None` nothing is written;
+/// at most the words the element loops read anyway are read (the additional vertices' count, the
+/// proxy's container and its end word).
 fn morph_in_host(
     e: &mut Engine,
     offsets: &Offsets,
@@ -1299,5 +1301,198 @@ fn compress_pixels(
         e.mem.set_u32(iterator + 4, at.wrapping_add(0x10));
         e.mem.set_u32(scratch, proxy);
         e.mem.set_u32(scratch + 4, at);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A morph of `vertices` packed points at `stride` with `total` additional vertices (none at
+    /// 0) and offsets for every step, each in a block of its own, every check passing: the
+    /// one-pass path's own case. Answers the engine-side words: the offsets iterator, the layout,
+    /// the points block.
+    fn morph(
+        e: &mut Engine,
+        vertices: u32,
+        stride: u32,
+        total: u32,
+    ) -> (Offsets, MorphLayout, u32) {
+        let base = e.mem.alloc(stride * vertices + 64);
+        for v in 0..vertices {
+            for k in 0..3 {
+                e.mem
+                    .set_f32(base + stride * v + 4 * k, (v * 3 + k) as f32 + 0.5);
+            }
+        }
+        let steps = vertices.max(total);
+        let data = e.mem.alloc(6 * steps + 8);
+        for k in 0..3 * steps {
+            e.mem
+                .set_i16(data + 2 * k, i16::try_from(k).unwrap() * 37 - 500);
+        }
+        // The offsets vector (its proxy at +0, first +0xc, last +0x10) and its proxy.
+        let vector = e.mem.alloc(0x18);
+        let proxy = e.mem.alloc(8);
+        e.mem.set_u32(proxy, vector);
+        e.mem.set_u32(vector, proxy);
+        e.mem.set_u32(vector + 0xc, data);
+        e.mem.set_u32(vector + 0x10, data + 6 * steps);
+        let (first_extra, extra_data) = if total == 0 {
+            (0, 0)
+        } else {
+            let extra = e.mem.alloc(12 * total + 8);
+            for k in 0..3 * total {
+                e.mem.set_f32(extra + 4 * k, k as f32 - 7.25);
+            }
+            let extra_data = e.mem.alloc(0x18);
+            e.mem.set_u32(extra_data + 0xc, extra);
+            e.mem.set_u32(extra_data + 0x10, total);
+            (extra, extra_data)
+        };
+        let offsets = Offsets { proxy, at: data };
+        let layout = MorphLayout {
+            base,
+            stride,
+            first_extra,
+            extra_data,
+            count: vertices,
+        };
+        (offsets, layout, e.mem.alloc(0x40))
+    }
+
+    /// The bytes of the points and the additional vertices, to see that a refused pass wrote
+    /// nothing.
+    fn written(e: &Engine, layout: &MorphLayout, total: u32) -> Vec<u8> {
+        let mut bytes = e.mem.bytes(layout.base, layout.stride * layout.count + 12);
+        if layout.first_extra != 0 {
+            bytes.extend(e.mem.bytes(layout.first_extra, 12 * total));
+        }
+        bytes
+    }
+
+    /// Runs the pass and answers whether it was taken; a refused one must leave the points.
+    fn taken(
+        e: &mut Engine,
+        offsets: &Offsets,
+        layout: &MorphLayout,
+        block: u32,
+        total: u32,
+    ) -> bool {
+        let before = written(e, layout, total);
+        let answer = morph_in_host(e, offsets, -0.25, layout, block);
+        if answer.is_none() {
+            assert_eq!(written(e, layout, total), before, "a refused pass wrote");
+        }
+        answer.is_some()
+    }
+
+    /// The one-pass path runs only when the element loops' result cannot differ: each guard that
+    /// sends a morph back to them, alone.
+    #[test]
+    fn the_one_pass_morph_steps_aside_for_each_guard() {
+        // The plain cases run it: with and without additional vertices, a multiple of four.
+        for (vertices, total) in [(8u32, 0u32), (8, 11), (9, 0)] {
+            let mut e = Engine::new();
+            let (offsets, layout, block) = morph(&mut e, vertices, 12, total);
+            assert!(
+                taken(&mut e, &offsets, &layout, block, total),
+                "{vertices} {total}"
+            );
+        }
+        // A stride below a point: the points overlap each other.
+        let mut e = Engine::new();
+        let (offsets, layout, block) = morph(&mut e, 8, 8, 0);
+        assert!(!taken(&mut e, &offsets, &layout, block, 0), "stride 8");
+        // No proxy; a last check at the proxy's last element.
+        let mut e = Engine::new();
+        let (mut offsets, layout, block) = morph(&mut e, 8, 12, 0);
+        let proxy = offsets.proxy;
+        offsets.proxy = 0;
+        assert!(!taken(&mut e, &offsets, &layout, block, 0), "no proxy");
+        offsets.proxy = proxy;
+        let vector = e.mem.u32(proxy);
+        let last = e.mem.u32(vector + 0x10);
+        e.mem.set_u32(vector + 0x10, last - 6);
+        assert!(
+            !taken(&mut e, &offsets, &layout, block, 0),
+            "a failing check"
+        );
+        // The offsets inside the written points (copied there, the vector's words moved).
+        let mut e = Engine::new();
+        let (mut offsets, layout, block) = morph(&mut e, 8, 12, 0);
+        let vector = e.mem.u32(offsets.proxy);
+        let bytes = e.mem.bytes(offsets.at, 48);
+        e.mem.write(layout.base + 12, &bytes);
+        offsets.at = layout.base + 12;
+        e.mem.set_u32(vector + 0xc, offsets.at);
+        e.mem.set_u32(vector + 0x10, offsets.at + 48);
+        assert!(
+            !taken(&mut e, &offsets, &layout, block, 0),
+            "offsets in the points"
+        );
+        // The proxy's word inside the written points.
+        let mut e = Engine::new();
+        let (mut offsets, layout, block) = morph(&mut e, 8, 12, 0);
+        let vector = e.mem.u32(offsets.proxy);
+        offsets.proxy = layout.base + 20;
+        e.mem.set_u32(offsets.proxy, vector);
+        assert!(
+            !taken(&mut e, &offsets, &layout, block, 0),
+            "the proxy in the points"
+        );
+        // The container's end word inside the written points (the container read through a
+        // proxy whose word points 0x10 before it).
+        let mut e = Engine::new();
+        let (offsets, layout, block) = morph(&mut e, 8, 12, 0);
+        let vector = e.mem.u32(offsets.proxy);
+        let last = e.mem.u32(vector + 0x10);
+        let owner = layout.base + 36 - 0x10;
+        e.mem.set_u32(offsets.proxy, owner);
+        e.mem.set_u32(owner + 0x10, last);
+        assert!(
+            !taken(&mut e, &offsets, &layout, block, 0),
+            "the end word in the points"
+        );
+        // The additional vertices' count inside the written points, and inside the additional
+        // vertices themselves.
+        for inside_extra in [false, true] {
+            let mut e = Engine::new();
+            let (offsets, mut layout, block) = morph(&mut e, 8, 12, 11);
+            let first = layout.first_extra;
+            let at = if inside_extra {
+                first + 24
+            } else {
+                layout.base + 48
+            };
+            layout.extra_data = at - 0x10;
+            e.mem.set_u32(at - 4, first);
+            e.mem.set_u32(at, 11);
+            assert!(
+                !taken(&mut e, &offsets, &layout, block, 11),
+                "the count {inside_extra}"
+            );
+        }
+        // The additional vertices overlapping the points, and the offsets inside them.
+        let mut e = Engine::new();
+        let (offsets, mut layout, block) = morph(&mut e, 8, 12, 11);
+        layout.first_extra = layout.base + 12;
+        assert!(
+            !taken(&mut e, &offsets, &layout, block, 11),
+            "the additional vertices in the points"
+        );
+        let mut e = Engine::new();
+        let (mut offsets, layout, block) = morph(&mut e, 8, 12, 11);
+        let vector = e.mem.u32(offsets.proxy);
+        let bytes = e.mem.bytes(offsets.at, 66);
+        let inside = layout.first_extra + 12;
+        e.mem.write(inside, &bytes);
+        offsets.at = inside;
+        e.mem.set_u32(vector + 0xc, inside);
+        e.mem.set_u32(vector + 0x10, inside + 66);
+        assert!(
+            !taken(&mut e, &offsets, &layout, block, 11),
+            "offsets in the additional vertices"
+        );
     }
 }
