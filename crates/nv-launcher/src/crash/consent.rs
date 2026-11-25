@@ -47,7 +47,7 @@ impl Consent {
     /// The Settings row's words for it.
     pub fn label(self) -> &'static str {
         match self {
-            Consent::Unanswered => "Not answered (none sent)",
+            Consent::Unanswered => "Not answered",
             Consent::Send => "Send automatically",
             Consent::Ask => "Ask each time",
             Consent::Never => "Never send",
@@ -77,7 +77,15 @@ pub fn read(own: &Path) -> Consent {
     Consent::from_value(game_profile::settings::ini_value(&text, "Launcher", KEY))
 }
 
-/// `answer` kept in nv-rs's own folder `own` (the launcher's file's other lines stay).
+/// `answer` kept in nv-rs's own folder `own`: at once where `now`, else held until Play's first
+/// write (Windows: `crate::place::write_held_keys`).
+pub fn keep(own: &Path, answer: Consent, now: bool) -> std::io::Result<()> {
+    crate::place::set_key_when_allowed(own, now, KEY, answer.value())
+}
+
+/// `answer` kept in nv-rs's own folder `own` at once (the launcher's file's other lines stay):
+/// the tests' shorthand for [`keep`].
+#[cfg(test)]
 pub fn write(own: &Path, answer: Consent) -> std::io::Result<()> {
     crate::place::set_launcher_key(own, KEY, answer.value())
 }
@@ -128,6 +136,13 @@ mod tests {
         write(&own, Consent::Never).unwrap();
         assert_eq!(read(&own), Consent::Never);
         assert!(!crate::place::sounds_on(&own));
+        // Held (Windows before Play's first write): nothing on disk until the held keys go.
+        keep(&own, Consent::Send, false).unwrap();
+        assert_eq!(read(&own), Consent::Never);
+        crate::place::write_held_keys(&own).unwrap();
+        assert_eq!(read(&own), Consent::Send);
+        keep(&own, Consent::Ask, true).unwrap();
+        assert_eq!(read(&own), Consent::Ask);
         let _ = std::fs::remove_dir_all(&own);
     }
 }

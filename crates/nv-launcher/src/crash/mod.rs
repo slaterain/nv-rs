@@ -611,8 +611,20 @@ pub fn utc(t: SystemTime) -> (String, String) {
 }
 
 impl Report {
-    /// The report as the player reads it (`report.txt`).
+    /// The report as the player reads it (`report.txt`): [`Report::body`] and where its log is.
     pub fn text(&self) -> String {
+        let mut t = self.body();
+        t.push_str(&format!(
+            "
+The log's last {} lines are in log.txt beside this file.
+",
+            self.log.len()
+        ));
+        t
+    }
+
+    /// Everything the report says but where its log is.
+    pub fn body(&self) -> String {
         let mut t = String::new();
         let mut line = |s: &str| {
             t.push_str(s);
@@ -681,11 +693,6 @@ impl Report {
                 None => line("  Your note: (not written)"),
             }
         }
-        line("");
-        line(&format!(
-            "The log's last {} lines are in log.txt beside this file.",
-            self.log.len()
-        ));
         t
     }
 
@@ -782,9 +789,17 @@ fn newest_log(logs: &Path) -> Option<PathBuf> {
 }
 
 /// What a crash report holds, for the player to read before answering whether reports may be
-/// sent: one made now from this PC (its system, the game profile's settings, the newest game
-/// log's end), around an example stop line, scrubbed as a real one is. Nothing is written.
-pub fn sample(own: &Path, program: &Path, game: Option<&Path>) -> String {
+/// sent: one made now from this PC around an example stop line, as a real one is made and
+/// scrubbed: its system, the played profile's settings and mods (`mods`: the mods profile, when
+/// mods are installed), the card the machine table names (`card`), the newest game log's end, and
+/// the newest F12 report's note and place when there is one. Nothing is written.
+pub fn sample(
+    own: &Path,
+    program: &Path,
+    game: Option<&Path>,
+    mods: bool,
+    card: Option<String>,
+) -> String {
     let log = newest_log(&own.join("logs")).unwrap_or_default();
     let run = Run {
         status: Some(3),
@@ -794,12 +809,13 @@ pub fn sample(own: &Path, program: &Path, game: Option<&Path>) -> String {
             Shell::Unix
         },
         log: &log,
-        started: SystemTime::now(),
-        mods: false,
+        // Any F12 report counts here: the example shows what one adds.
+        started: SystemTime::UNIX_EPOCH,
+        mods,
         own,
         program,
         games: game.into_iter().map(Path::to_path_buf).collect(),
-        table_card: None,
+        table_card: card,
     };
     let games: Vec<&Path> = game.into_iter().collect();
     let scrubber = Scrubber::new(&Known::from_system(&games, program, own));
@@ -813,15 +829,19 @@ pub fn sample(own: &Path, program: &Path, game: Option<&Path>) -> String {
     sample_text(&report)
 }
 
-/// [`sample`]'s text: the report as `report.txt` has it, then the end of its log.
+/// [`sample`]'s text: the report as `report.txt` has it, then the end of its log (a report keeps
+/// its last [`LOG_LINES`]; the last [`SAMPLE_LOG_LINES`] show here).
 fn sample_text(report: &Report) -> String {
-    let mut text = report.text();
+    let mut text = report.body();
     let shown = report.log.len().min(SAMPLE_LOG_LINES);
     if shown == 0 {
-        text.push_str("\n(No game log yet: a real report has the log's last lines here.)\n");
+        text.push_str(&format!(
+            "\nThe game's log: a report keeps its last {LOG_LINES} lines (there is no game log here yet).\n"
+        ));
     } else {
         text.push_str(&format!(
-            "\nThe last {shown} lines of your newest game log, as a report would hold them:\n"
+            "\nThe game's log: a report keeps its last {} lines; the last {shown} of your newest log, as a report holds them:\n",
+            report.log.len()
         ));
         for line in &report.log[report.log.len() - shown..] {
             text.push_str(line);
@@ -835,20 +855,24 @@ fn sample_text(report: &Report) -> String {
 mod tests {
     use super::*;
 
-    /// The example is made from this PC and says it is an example; it writes nothing, shows
-    /// the newest log's end scrubbed, and says so when there is no log yet.
+    /// The example is made from this PC and says it is an example; it writes nothing, shows the
+    /// newest log's end scrubbed (and how much of it a report keeps), says so when there is no
+    /// log yet, and shows mods, the machine table's card and an F12 report's note when there are
+    /// some.
     #[test]
     fn the_example_report_is_made_from_this_pc_and_writes_nothing() {
         let own = std::env::temp_dir().join(format!("nv-launcher-sample-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&own);
         std::fs::create_dir_all(&own).unwrap();
-        let text = sample(&own, &own, None);
+        let text = sample(&own, &own, None, false, None);
         assert!(
             text.contains("(an example: what the game's code was doing)"),
             "{text}"
         );
         assert!(text.contains("System:"));
-        assert!(text.contains("No game log yet"));
+        assert!(text.contains("Mods: played without mods"));
+        assert!(text.contains("there is no game log here yet"), "{text}");
+        assert!(!text.contains("log.txt"), "{text}");
         let logs = own.join("logs");
         std::fs::create_dir_all(&logs).unwrap();
         std::fs::write(logs.join("game-1.log"), "an older run's line\n").unwrap();
@@ -856,14 +880,29 @@ mod tests {
             .or_else(|_| std::env::var("HOME"))
             .unwrap();
         std::fs::write(logs.join("game-2.log"), format!("first\nat {home}/x.ini\n")).unwrap();
-        let text = sample(&own, &own, None);
+        let plugins = own
+            .join("mods")
+            .join("AppData")
+            .join("Local")
+            .join("FalloutNV");
+        std::fs::create_dir_all(&plugins).unwrap();
+        std::fs::write(plugins.join("plugins.txt"), "FalloutNV.esm\nSome Mod.esp\n").unwrap();
+        let f12 = own.join("reports").join("001");
+        std::fs::create_dir_all(&f12).unwrap();
+        std::fs::write(f12.join("note.txt"), "the door would not open\n").unwrap();
+        let text = sample(&own, &own, None, true, Some("Table Card".into()));
         assert!(
-            text.contains("The last 2 lines of your newest game log"),
+            text.contains("a report keeps its last 2 lines; the last 2 of your newest log"),
             "{text}"
         );
         assert!(text.contains("at <home>/x.ini"), "{text}");
         assert!(!text.contains("an older run's line"));
-        assert!(!own.join("reports").exists());
+        assert!(text.contains("  Some Mod.esp"), "{text}");
+        assert!(text.contains("Graphics card: Table Card"), "{text}");
+        assert!(text.contains("    the door would not open"), "{text}");
+        assert!(!text.contains("log.txt"), "{text}");
+        let made: Vec<_> = std::fs::read_dir(own.join("reports")).unwrap().collect();
+        assert_eq!(made.len(), 1, "only the F12 report: nothing written");
         let _ = std::fs::remove_dir_all(&own);
     }
 
