@@ -325,8 +325,9 @@ fn facegen_head_apply_coordinates() {
     .ignore_calls(&MESH_IGNORED)
     .inputs(&[
         Input::Of(&[0, 1, 2, 3, 4, 5]),
-        // Strides: 8 is below a point (the points overlap: the element loops), the rest hold one.
-        Input::Of(&[8, 12, 16, 32]),
+        // Strides: 12, 16 and 32 hold a point (12 first: the plain case and its variations take the
+        // one pass); 8 is below a point (the points overlap: the element loops).
+        Input::Of(&[12, 16, 32, 8]),
         Input::Of(&[0, 1]),
         Input::Of(&[0, 1, 2]),
         Input::Flag,

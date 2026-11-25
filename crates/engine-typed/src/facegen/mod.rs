@@ -15,6 +15,9 @@
 //!   (`BSFaceGenImage::GetCompressedImage`, `0064ceb0`).
 //! - [`coords`]: the sum of two face coordinate blocks (`00652af0`), which the race menu runs once
 //!   a slider at every click.
+//! - [`colours`]: the face image's colour vector's `assign` (`0064dcf0`) and range `erase` (`0064dc50`),
+//!   which fill a new tint image with a copy a texel (65,536 for a face) and empty it again, every
+//!   click in the race menu.
 //! - [`apply`]: the head's morph pass (`00663050`) with its appliers, the morph data's apply and tables,
 //!   the animation data's weight getters, and the exact skip of a reshape that would change nothing.
 //!
@@ -38,6 +41,7 @@ use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 
 pub mod apply;
+pub mod colours;
 pub mod coords;
 pub mod head;
 pub mod keyframe;
@@ -93,5 +97,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0065_b410, head::apply_coordinate_texturing(Ptr, u32, u32, u32) -> bool),
         entry!(0x0064_ceb0, head::get_compressed_image(Ptr, f32, f32, f32, u32) -> u32),
         entry!(0x0065_2af0, coords::sum_coordinates(u32, u32, u32, u8, f32)),
+        entry!(0x0064_dcf0, colours::assign(Ptr, u32, u32)),
+        entry!(0x0064_dc50, colours::erase(Ptr, u32, u32, u32, u32, u32) -> u32),
     ]
 }

@@ -1,8 +1,9 @@
 //! The sum of two face coordinate blocks (`00652af0`): what the race's face data and the face
 //! menu's slider refresh build a face's coordinates with. The race menu's slider refresh
 //! (`007b16d0`) runs it once a slider, about 150 times a click on a preset or a hair (a 2026-11-24
-//! profile of the menu), and each element of each matrix went through four or five calls by
-//! address in the translation (the vector's size, its capacity, the uninitialised fill). Here
+//! profile of the menu), and each element of each matrix went through five calls by address in
+//! the translation (the vector's size in each source's checked element, then its size, capacity
+//! and uninitialised fill in the append). Here
 //! the elements of a matrix are summed and appended in one loop with plain loads and stores when
 //! nothing can differ from the exe's steps; else element by element as the exe goes.
 //!
@@ -10,7 +11,9 @@
 //! `006529a0`, `FR2MatrixVTC<float>::operator=` `006581e0`, the vector's checked element `006578b0`
 //! and its append `006578e0`) runs here in place, with the same calls by address; the vector's
 //! size (`00662820`), capacity (`0060b860`) and one-float fill (`0060b8a0`), which only read the
-//! vector's words or store the float, are plain loads and stores.
+//! vector's words or copy the float, are plain loads and stores. The fill copies with `FLD`/`FSTP`,
+//! which would quiet a signalling NaN; a plain store is the same here because every float appended
+//! is an x87 sum, never a signalling NaN.
 //!
 //! **Floats.** The block sums are reached on main and on loading threads (a head made for an NPC),
 //! so the family's [`Threads::Both`] holds: each sum keeps the translation's x87 steps (one
@@ -232,7 +235,8 @@ fn overlaps(a: u64, a_len: u64, b: u64, b_len: u64) -> bool {
 }
 
 /// The element loop in one pass: `count` sums of the two sources' floats appended to `to`.
-/// Answers false, having read and written nothing, unless every checked element is within its
+/// Answers false, having written nothing (it reads the three vectors' words, as the element loop
+/// does), unless every checked element is within its
 /// source (no `_invalid_parameter_noinfo`), every append is within `to`'s capacity (none
 /// inserts), the floats it writes overlap nothing the loop reads (both sources' floats, the
 /// three vectors' words) and nothing passes 4 GB.
@@ -327,5 +331,144 @@ fn limit_matrix(e: &mut Engine, matrix: u32, rows: u32, limit: u32) {
     if x87_load32(limit) < x87_load32(root) {
         let scale = x87_store32(x87_div(x87_load32(limit), x87_m32(root)));
         e.call(MATRIX_SCALE, &args![matrix, scale]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A float vector (a matrix's words) of `size` floats at `data` in storage of `capacity`.
+    fn vector_at(e: &mut Engine, matrix: u32, data: u32, size: u32, capacity: u32) -> u32 {
+        for i in 0..size {
+            e.mem
+                .set_f32(data.wrapping_add(4 * i), i as f32 * 0.5 - 3.0);
+        }
+        e.mem.set_u32(matrix + FIRST, data);
+        e.mem.set_u32(matrix + LAST, data.wrapping_add(4 * size));
+        e.mem.set_u32(matrix + END, data.wrapping_add(4 * capacity));
+        matrix
+    }
+
+    /// The same with the matrix and its storage in blocks of their own.
+    fn vector(e: &mut Engine, size: u32, capacity: u32) -> u32 {
+        let matrix = e.mem.alloc(0x20);
+        let data = e.mem.alloc(4 * capacity.max(1));
+        vector_at(e, matrix, data, size, capacity)
+    }
+
+    /// `to`'s words and its storage, below 4 GB.
+    fn destination(e: &Engine, to: u32) -> (Vec<u8>, Vec<u8>) {
+        let first = e.mem.u32(to + FIRST);
+        let end = e.mem.u32(to + END);
+        // Its storage as far as the top of memory (every destination here has storage).
+        let len = end.wrapping_sub(first).min(first.wrapping_neg());
+        (e.mem.bytes(to, 0x20), e.mem.bytes(first, len))
+    }
+
+    /// Runs the one pass and answers whether it was taken; a refused one must have written nothing.
+    fn taken(e: &mut Engine, from: u32, other: u32, to: u32, count: u32) -> bool {
+        let before = destination(e, to);
+        let answer = sum_in_place(e, from, other, to, count);
+        if !answer {
+            assert_eq!(destination(e, to), before, "a refused pass wrote");
+        }
+        answer
+    }
+
+    /// The one pass runs only when the element loop's result cannot differ: a face's block takes
+    /// it, and each guard that sends a matrix back to the element loop does, alone.
+    #[test]
+    fn the_one_pass_sum_steps_aside_for_each_guard() {
+        // A face's 50 by 1 matrix into an emptied destination with room: the pass, with the sums.
+        let mut e = Engine::new();
+        let (from, other, to) = (
+            vector(&mut e, 50, 50),
+            vector(&mut e, 50, 50),
+            vector(&mut e, 0, 50),
+        );
+        assert!(taken(&mut e, from, other, to, 50), "a face's matrix");
+        let data = e.mem.u32(to + FIRST);
+        assert_eq!(e.mem.u32(to + LAST), data + 200);
+        assert_eq!(e.mem.f32(data + 4 * 7), 7.0 - 6.0);
+        // Either source shorter than the count.
+        for (from_size, other_size) in [(49, 50), (50, 49)] {
+            let mut e = Engine::new();
+            let from = vector(&mut e, from_size, 50);
+            let other = vector(&mut e, other_size, 50);
+            let to = vector(&mut e, 0, 50);
+            assert!(
+                !taken(&mut e, from, other, to, 50),
+                "{from_size} {other_size}"
+            );
+        }
+        // The destination's room short by one: no storage left, or one element already there.
+        for (size, capacity) in [(0, 49), (1, 50)] {
+            let mut e = Engine::new();
+            let (from, other) = (vector(&mut e, 50, 50), vector(&mut e, 50, 50));
+            let to = vector(&mut e, size, capacity);
+            assert!(
+                !taken(&mut e, from, other, to, 50),
+                "room {size} {capacity}"
+            );
+        }
+        // The destination's storage over either source's floats (three different vectors).
+        for over_other in [false, true] {
+            let mut e = Engine::new();
+            let shared = e.mem.alloc(4 * 120);
+            let (source, to) = (e.mem.alloc(0x20), e.mem.alloc(0x20));
+            let source = vector_at(&mut e, source, shared, 50, 50);
+            let to = vector_at(&mut e, to, shared + 8, 0, 50);
+            let plain = vector(&mut e, 50, 50);
+            let (from, other) = if over_other {
+                (plain, source)
+            } else {
+                (source, plain)
+            };
+            assert!(
+                !taken(&mut e, from, other, to, 50),
+                "over the floats {over_other}"
+            );
+        }
+        // A vector's words inside the floats written: either source's, or the destination's own.
+        for which in 0..3 {
+            let mut e = Engine::new();
+            let storage = e.mem.alloc(4 * 60);
+            let inside = storage + 40 - FIRST;
+            let mut vectors = [vector(&mut e, 50, 50), vector(&mut e, 50, 50), 0];
+            if which < 2 {
+                let data = e.mem.u32(vectors[which] + FIRST);
+                vectors[which] = vector_at(&mut e, inside, data, 50, 50);
+                let to = e.mem.alloc(0x20);
+                vectors[2] = vector_at(&mut e, to, storage, 0, 60);
+            } else {
+                vectors[2] = vector_at(&mut e, inside, storage, 0, 60);
+            }
+            let [from, other, to] = vectors;
+            assert!(!taken(&mut e, from, other, to, 50), "the words of {which}");
+        }
+        // Floats read or written past 4 GB: either source's, or the destination's.
+        for which in 0..3 {
+            let mut e = Engine::new();
+            e.map(0xffff_f000, 0x1000);
+            let top = 0xffff_ffc0;
+            let mut vectors = [vector(&mut e, 50, 50), vector(&mut e, 50, 50), 0];
+            if which < 2 {
+                let matrix = e.mem.alloc(0x20);
+                e.mem.set_u32(matrix + FIRST, top);
+                e.mem.set_u32(matrix + LAST, top.wrapping_add(200));
+                e.mem.set_u32(matrix + END, top.wrapping_add(200));
+                vectors[which] = matrix;
+                vectors[2] = vector(&mut e, 0, 50);
+            } else {
+                let matrix = e.mem.alloc(0x20);
+                e.mem.set_u32(matrix + FIRST, top);
+                e.mem.set_u32(matrix + LAST, top);
+                e.mem.set_u32(matrix + END, top.wrapping_add(200));
+                vectors[2] = matrix;
+            }
+            let [from, other, to] = vectors;
+            assert!(!taken(&mut e, from, other, to, 50), "past 4 GB {which}");
+        }
     }
 }
