@@ -461,9 +461,10 @@ fn sharp_corner(m: &mut TestMesh, at: [f32; 2], angle: f32) {
 /// 0. two triangles linked across an edge they both run the same way: their boundary edges at the
 ///    shared vertices don't chain, so pass 2 leaves them out;
 /// 1. a right triangle whose circumcenter has exactly 180 between it and a portal vertex placed
-///    under it, a second portal vertex there with a NaN height, a triangle with a NaN corner (a NaN
-///    circumcenter), corners whose sines sit near the corner test's 0.1, a zero-area triangle and
-///    one with two corners at the same point (a zero edge);
+///    under it and a second 180 above it (a NaN height would take the C runtime's error path in
+///    `fabs`, which needs the kernel), a triangle with a NaN corner (a NaN circumcenter), corners
+///    whose sines sit near the corner test's 0.1, a zero-area triangle and one with two corners at
+///    the same point (a zero edge);
 /// 2. a tiny triangle far from every pair, beyond its reach: no preferred vertex.
 fn special(k: u32) -> TestMesh {
     let mut m: TestMesh = (Vec::new(), Vec::new());
@@ -487,11 +488,7 @@ fn special(k: u32) -> TestMesh {
             );
             portal_triangle(
                 &mut m,
-                [
-                    [50.0, 50.0, 20.0],
-                    [50.0, 50.0, f32::NAN],
-                    [400.0, 90.0, 20.0],
-                ],
+                [[50.0, 50.0, 20.0], [50.0, 50.0, 380.0], [400.0, 90.0, 20.0]],
             );
             portal_triangle(
                 &mut m,
@@ -633,6 +630,7 @@ fn both_ways(
     let mut result = (0, 0);
     for word in [OTHER_THREADS, MAIN_THREAD] {
         let mut sides = Vec::new();
+        let mut after = Vec::new();
         for families in [a, b] {
             let mut e = Engine::new_untyped_for_test();
             stand_ins(&mut e);
@@ -644,6 +642,7 @@ fn both_ways(
             // The word for the call alone, as the Diff sets it: the set-up's calls reset it.
             engine_core::x87::set_control_word(word);
             e.call(0x0069_9b60, &[mesh]);
+            after.push(engine_core::x87::control_word());
             engine_core::x87::set_control_word(engine_core::x87::DEFAULT_CONTROL_WORD);
             sides.push((e, mesh));
         }
@@ -654,8 +653,16 @@ fn both_ways(
         }
         let differences = memory_differences_beside_stack(a, b, 8);
         if !differences.is_empty() {
+            let words: Vec<(u32, u32)> = differences
+                .iter()
+                .map(|&at| (a.mem.u32(at & !3), b.mem.u32(at & !3)))
+                .collect();
+            let blocks: Vec<u32> = [0x2c, 0x3c, 0x90, 0x9c]
+                .iter()
+                .map(|&k| a.mem.u32(mesh + k))
+                .collect();
             return Err(format!(
-                "memory differs at {differences:08x?} (mesh at {mesh:08x}), control word {word:04x}"
+                "memory differs at {differences:08x?} ({words:08x?}; mesh at {mesh:08x}, vertices, triangles, pair buckets, preferred at {blocks:08x?}), control word {word:04x}, after the call {after:04x?}"
             ));
         }
         result = outcome(a, *mesh);
