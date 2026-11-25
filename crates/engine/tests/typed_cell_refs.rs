@@ -12,7 +12,9 @@
 //!
 //! What stands in: the work the pass hands on (`Load3D`, the cell's scripts and the steps after
 //! them, the lock, `TES`'s test and priority, `SetActionFlag`, the cast, the process lists, the
-//! model loader's queue, the attach, the cell's state) and `Script::InitActionList`'s callees.
+//! attach, the cell's state) and `Script::InitActionList`'s callees. The model loader's queue
+//! (`00444850`, this family's) runs as itself on a loader with two stand-in maps, its own callees
+//! standing in as in its test below.
 
 use engine as _;
 use engine_core::prelude::*;
@@ -45,7 +47,7 @@ const ANSWER_3D: u32 = 0x108;
 const ANSWER_CAST: u32 = 0x10c;
 
 /// The callees that stand in.
-const DOUBLES: [u32; 20] = [
+const DOUBLES: [u32; 19] = [
     0x0054_5cf0, // TESObjectCELL::Load3D
     0x0054_c740, // the cell's scripts
     0x0054_df30, // the test after them
@@ -60,7 +62,6 @@ const DOUBLES: [u32; 20] = [
     0x005a_c750, // Script::SetActionFlag
     0x00ec_43fb, // __RTDynamicCast
     0x0096_f400, // ProcessLists::RemoveActorFromTempChangeList
-    0x0044_4850, // ModelLoader::QueueReference
     0x0054_8880, // TESObjectCELL::AttachReference3D
     0x0055_35f0, // the flagged cell's step
     0x0045_12a0, // the cell's state
@@ -136,7 +137,6 @@ fn stand_ins(e: &mut Engine) {
         e.mem.set_u8(a[0] + 0x26, a[1] as u8);
         Ret::default()
     });
-    e.register(0x0044_4850, queue_reference);
     e.register(0x0054_8880, counted::<ATTACHED>);
     e.register(0x005a_c750, counted::<ACTION_FLAGS>);
     // `ScriptLocals` of a list: the word after the list's own.
@@ -205,6 +205,11 @@ fn reference(e: &mut Engine, d: &mut Draw, vtables: [u32; 2], markers: [u32; 2])
         }
     };
     e.mem.set_u32(r + 0x20, base);
+    if base == 0 {
+        // No base form: its form flag stops it before the queue, which reads the base form's type
+        // (as the exe does: the game's references always have one).
+        e.mem.set_u32(r + 8, 0x20);
+    }
     // The extra list's `ScriptLocals`: none, fresh, or with an action list.
     let locals = match d.next(3) {
         0 => 0,
@@ -245,7 +250,14 @@ fn world(e: &mut Engine, seed: u32) -> u32 {
     e.set_global(GAME_LOADER_POINTER, loader);
     e.set_global(TES_POINTER, 0x7000u32);
     e.set_global(SAVE_GAME_POINTER, 0x7100u32);
-    e.set_global(MODEL_LOADER_POINTER, 0x7200u32);
+    // The model loader with two stand-in maps, so its queue (`00444850`) runs as itself.
+    queue_doubles(e);
+    let model_loader = e.mem.alloc(0x20);
+    let queued = test_map(e, false, true);
+    let later_map = test_map(e, false, true);
+    e.mem.set_u32(model_loader + 8, queued);
+    e.mem.set_u32(model_loader + 0xc, later_map);
+    e.set_global(MODEL_LOADER_POINTER, model_loader);
     let markers = [base_form(e, 0x20, 0), base_form(e, 0x20, 0)];
     e.set_global(ROOM_MARKER_FORM, markers[0]);
     e.set_global(MARKER_FORM, markers[1]);
@@ -286,6 +298,10 @@ fn references_after_load() {
     .family(&CELL_REFS)
     .family(&leaf::LEAVES)
     .goes_by_address(&[0x0047_c850, 0x0043_fcd0])
+    // The model loader's queue runs as itself: its other families' calls by address, its in-place
+    // calls ignored.
+    .goes_by_address(&[0x0040_b460, 0x008d_6f30])
+    .ignore_calls(QUEUE_INLINED)
     // Read in place: the game loader's flag, the extra list, the form type, the base form's flag
     // test and its two steps, the cell's list.
     .ignore_calls(&[
@@ -316,6 +332,8 @@ fn the_seeds_reach_every_branch() {
     for &seed in SEEDS {
         let mut e = Engine::new_untyped_for_test();
         let cell = world(&mut e, seed);
+        // The pass's queue calls counted by a double here (the queue has its own test below).
+        e.register(0x0044_4850, queue_reference);
         e.call(0x0054_bcf0, &args![cell, 0u32]);
         if e.mem.u32(TES_ACCEPTS) != 0 {
             accepted += 1;
@@ -445,7 +463,7 @@ const PLAYER_POINTER: u32 = 0x011d_ea3c;
 const OWNER_THREAD_OBJECT: u32 = 0x011d_ea0c;
 
 /// The test's map: its vtable, the number of keys, the add's answer, the last replace flag, then
-/// up to four (key, task) pairs.
+/// up to eight (key, task) pairs.
 const MAP_COUNT: u32 = 4;
 const MAP_ADD_ANSWER: u32 = 8;
 const MAP_LAST_FLAG: u32 = 0xc;
@@ -477,10 +495,10 @@ fn map_add(e: &mut Engine, a: &[u32]) -> Ret {
     let (map, key, holder, flag) = (a[0], a[1], a[2], a[3]);
     e.mem.set_u32(map + MAP_LAST_FLAG, 0x100 | flag);
     let task = e.mem.u32(holder);
-    if e.mem.u32(map + MAP_ADD_ANSWER) == 0 || task == 0 {
+    let n = e.mem.u32(map + MAP_COUNT);
+    if e.mem.u32(map + MAP_ADD_ANSWER) == 0 || task == 0 || n == 8 {
         return ret(0);
     }
-    let n = e.mem.u32(map + MAP_COUNT);
     e.mem.set_u32(map + MAP_PAIRS + 8 * n, key);
     e.mem.set_u32(map + MAP_PAIRS + 8 * n + 4, task);
     e.mem.set_u32(map + MAP_COUNT, n + 1);
@@ -511,10 +529,26 @@ fn constructor<const KIND: u32>(e: &mut Engine, a: &[u32]) -> Ret {
 }
 
 fn queue_stand_ins(e: &mut Engine) {
-    e.map(Q_CONTROL, 0x1000);
     for page in [0x011c_3000, 0x011d_d000, 0x011d_e000] {
         e.map(page, 0x1000);
     }
+    queue_doubles(e);
+}
+
+/// The queue's doubles, and the page of their answers.
+fn queue_doubles(e: &mut Engine) {
+    e.map(Q_CONTROL, 0x1000);
+    // The interlocked increment and decrement, plainly.
+    e.register(0x0040_b460, |e, a| {
+        let n = e.mem.u32(a[0]).wrapping_add(1);
+        e.mem.set_u32(a[0], n);
+        ret(n)
+    });
+    e.register(0x0040_19a0, |e, a| {
+        let n = e.mem.u32(a[0]).wrapping_sub(1);
+        e.mem.set_u32(a[0], n);
+        ret(n)
+    });
     for addr in [0x0044_bd60, MAP_VT_FN + 8] {
         e.register(addr, map_find);
     }
@@ -574,7 +608,7 @@ fn test_map(e: &mut Engine, own: bool, accepts: bool) -> u32 {
     };
     e.mem.set_u32(vt + 8, find);
     e.mem.set_u32(vt + 0x10, add);
-    let map = e.mem.alloc(MAP_PAIRS + 8 * 4);
+    let map = e.mem.alloc(MAP_PAIRS + 8 * 8);
     e.mem.set_u32(map, vt);
     e.mem.set_u32(map + MAP_ADD_ANSWER, u32::from(accepts));
     map
