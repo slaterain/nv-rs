@@ -656,7 +656,7 @@ const QUEUE_INLINED: &[u32] = &[
 
 /// The queue against its translation, over the seeds' worlds and both values of `later`.
 #[test]
-fn queue_reference() {
+fn model_loader_queue_reference() {
     Diff::new(entry!(
         0x0044_4850,
         cell_refs::queue::queue_reference(u32, u32, u32, u8)

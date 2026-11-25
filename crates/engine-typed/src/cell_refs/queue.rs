@@ -236,8 +236,8 @@ fn parent_cell(e: &mut Engine, reference: u32) -> u32 {
 // Typed from 00444850
 /// `ModelLoader::QueueReference` (Xbox PDB), `thiscall(loader, reference, priority, later)`, `ret
 /// 0xc`. Nothing happens when the game loader's flag 2 is set and its flag 8 clear, when the base
-/// form has type `0xd`, or when the reference's slot 0x224 says yes and its word at +0xc8 has bit
-/// 1. A task already in the queued map only gets the new priority (its slot 0x1c) when its own
+/// form has type `0xd`, or when the reference's slot 0x224 says yes and its word at +0xc8 has the
+/// bit 2. A task already in the queued map only gets the new priority (its slot 0x1c) when its own
 /// differs. Otherwise, inside the memory context `0x31`, the task is built by the reference's kind
 /// (the player in the context `0x34`; base form type `0x25`; `0x2a` and `0x2b` in the context
 /// `0x32`; any other) and added to the queued map (flag 0); refused, the task pointer is cleared.

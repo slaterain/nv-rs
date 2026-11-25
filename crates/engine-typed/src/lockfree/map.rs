@@ -268,7 +268,7 @@ pub fn add(e: &mut Engine, this: Ptr<LockFreeMap>, key: u32, value: u32, replace
         iface::insert(e, face, key, value, replace)
     );
     e.call(LOCK_LEAVE, &args![lock(this)]);
-    added as u8
+    added.to_le_bytes()[0]
 }
 
 /// The line `0044c480` names in its scope.
