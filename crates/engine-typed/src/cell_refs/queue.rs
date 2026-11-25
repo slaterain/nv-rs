@@ -71,7 +71,8 @@ const SLOT_QUEUE_ME: u32 = 0x20;
 /// object's slot 0 with 1.
 const RELEASE: u32 = 0x0044_dd60;
 /// The memory manager's allocation (`cdecl(size)`) and its context scope (`thiscall(scope, context,
-/// 1, source file, line)` .. `thiscall(scope)`), named by `ModelLoader.cpp` and a line.
+/// 1, source file, line)` .. `thiscall(scope)`), named by the model loader's source file and a
+/// line.
 const OPERATOR_NEW: u32 = 0x0040_1000;
 const SCOPE_BEGIN: u32 = 0x0040_4eb0;
 const SCOPE_END: u32 = 0x0040_4ee0;
@@ -168,8 +169,8 @@ fn assign(e: &mut Engine, holder: u32, object: u32) {
     }
 }
 
-/// `body` inside the memory context `context` (named by `ModelLoader.cpp` and `line`), its scope a
-/// 4-byte local.
+/// `body` inside the memory context `context` (named by the model loader's source file and `line`),
+/// its scope a 4-byte local.
 #[inline]
 fn in_context(e: &mut Engine, context: u32, line: u32, body: impl FnOnce(&mut Engine)) {
     e.with_stack(4, |e, scope| {
@@ -182,11 +183,11 @@ fn in_context(e: &mut Engine, context: u32, line: u32, body: impl FnOnce(&mut En
     });
 }
 
-/// A task of `size` bytes from the memory manager, built by `construct` (the constructor by
-/// address, with the block first) and given to the task pointer; a block of 0 gives 0.
-fn build(e: &mut Engine, holder: u32, size: u32, construct: impl FnOnce(&mut Engine, u32) -> u32) {
+/// A task of `size` bytes from the memory manager, built by `make` (the constructor by address,
+/// with the block first) and given to the task pointer; a block of 0 gives 0.
+fn build(e: &mut Engine, holder: u32, size: u32, make: impl FnOnce(&mut Engine, u32) -> u32) {
     let block = e.call(OPERATOR_NEW, &args![size]).u32();
-    let object = if block == 0 { 0 } else { construct(e, block) };
+    let object = if block == 0 { 0 } else { make(e, block) };
     assign(e, holder, object);
 }
 
