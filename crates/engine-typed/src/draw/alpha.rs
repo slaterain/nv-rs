@@ -270,8 +270,16 @@ pub fn draw_holder(e: &mut Engine, holder: u32, flag: u32) {
 
 /// The double `RenderNextAlpha` takes off its limit (`01016978`, 0.001).
 const LIMIT_STEP: u32 = 0x0101_6978;
-/// `_isnan` (CRT, `cdecl(double)`).
-const ISNAN: u32 = 0x00ec_75b1;
+/// `_isnan` (`00ec75b1`, the CRT family's, `cdecl(double)`) of a distance as the exe passes it: the float loaded
+/// as a double, its two words.
+fn is_nan_distance(e: &mut Engine, distance: u32) -> bool {
+    let (low, high) = crate::crt::words(x87_load32(distance).to_bits());
+    typed_call!(
+        crate::crt::FAMILY,
+        0x00ec_75b1,
+        crate::crt::math::isnan(e, low, high)
+    ) != 0
+}
 
 /// The distance of `pass` along `d` as `RenderNextAlpha` first takes it (the direction kept on the x87
 /// stack: each product the direction first, x then y, z last).
@@ -415,7 +423,7 @@ pub fn render_next_alpha(
                 }
             }
             if check_pass && limit_value <= x87_load32(current) {
-                if e.call(ISNAN, &args![x87_load32(current)]).u32() != 0 {
+                if is_nan_distance(e, current) {
                     return;
                 }
                 continue;
@@ -428,7 +436,7 @@ pub fn render_next_alpha(
         if beyond(limit_value, distance) {
             return;
         }
-        if e.call(ISNAN, &args![x87_load32(current)]).u32() != 0 {
+        if is_nan_distance(e, current) {
             return;
         }
     }
