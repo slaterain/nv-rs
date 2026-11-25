@@ -9,6 +9,10 @@
 //!   load of its flags, the components' `DATA` chunk, the copy and compare of its components, the
 //!   form copier, and the record writer (`StartForm`, `CloseForm`, the `AddChunk` family,
 //!   `__AddChunkData`, `CompressSaveBuffer`).
+//! - [`actor_base_data`]: every function of `TESActorBaseData`'s unit (the component at +0x30 of
+//!   `TESNPC` and `TESCreature`) but the save/load stub `0047c850` (the draw family's): its
+//!   constructor and destructor, the flag getters and setters, the statistics' getters and
+//!   setters, the faction list, the template forms, the record and save game chunks, the karma.
 //!
 //! Reached: each function stays registered at its exe address, so the translations' calls by
 //! address and the vtable slots that hold them (`TESForm`'s vtable `0101c794` and the form classes
@@ -45,6 +49,7 @@
 use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 
+pub mod actor_base_data;
 pub mod tesform;
 
 /// This family's bit: what each `typed_call!` of it names. Id 45: past the families in main
@@ -163,6 +168,69 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0048_6e50, tesform::char_key_map_base_scalar_deleting_destructor(u32, u32) -> u32),
         entry!(0x0048_6e80, tesform::char_key_map_scalar_deleting_destructor(u32, u32) -> u32),
         entry!(0x0048_6eb0, tesform::string_template_map_scalar_deleting_destructor(u32, u32) -> u32),
+        entry!(0x0047_c700, actor_base_data::construct(u32) -> u32),
+        entry!(0x0047_c770, actor_base_data::no_vats_melee(u32) -> bool),
+        entry!(0x0047_c790, actor_base_data::allow_pc_dialogue(u32) -> bool),
+        entry!(0x0047_c7b0, actor_base_data::allow_pick_pocket(u32) -> bool),
+        entry!(0x0047_c7d0, actor_base_data::is_ghost(u32) -> bool),
+        entry!(0x0047_c7f0, actor_base_data::invulnerable(u32) -> bool),
+        entry!(0x0047_c810, actor_base_data::cant_open_doors(u32) -> bool),
+        entry!(0x0047_c830, actor_base_data::auto_calc_service_flags(u32) -> bool),
+        entry!(0x0047_c860, actor_base_data::karma(u32) -> f32),
+        entry!(0x0047_c880, actor_base_data::destructor(u32)),
+        entry!(0x0047_c8e0, actor_base_data::initialize_data_component(u32)),
+        entry!(0x0047_c9b0, actor_base_data::clear_data_component(u32)),
+        entry!(0x0047_c9d0, actor_base_data::clear_faction_list(u32)),
+        entry!(0x0047_ca20, actor_base_data::copy_faction_list(u32, u32)),
+        entry!(0x0047_cac0, actor_base_data::save(u32)),
+        entry!(0x0047_cb90, actor_base_data::swap_data(u32)),
+        entry!(0x0047_cca0, actor_base_data::template_use_flag_15(u32) -> bool),
+        entry!(0x0047_ccc0, actor_base_data::set_template_use_flag_15(u32, u8)),
+        entry!(0x0047_cce0, actor_base_data::set_template_use_flag(u32, i32, u8)),
+        entry!(0x0047_cd40, actor_base_data::template_use_flag(u32, i32) -> bool),
+        entry!(0x0047_cd90, actor_base_data::set_template_use_flags(u32, u16)),
+        entry!(0x0047_cdb0, actor_base_data::has_actor_template_again(u32) -> bool),
+        entry!(0x0047_cdd0, actor_base_data::has_actor_template(u32) -> bool),
+        entry!(0x0047_ce10, actor_base_data::apply_template(u32, u32)),
+        entry!(0x0047_d0b0, actor_base_data::path_manager_instance() -> u32),
+        entry!(0x0047_d130, actor_base_data::create_template_actor_base(u32, u32) -> u32),
+        entry!(0x0047_d1a0, actor_base_data::template_chain_mask(u32, u32) -> u32),
+        entry!(0x0047_d220, actor_base_data::copy_component(u32, u32)),
+        entry!(0x0047_d370, actor_base_data::level(u32) -> u16),
+        entry!(0x0047_d390, actor_base_data::calc_level_min(u32) -> u16),
+        entry!(0x0047_d3b0, actor_base_data::calc_level_max(u32) -> u16),
+        entry!(0x0047_d3d0, actor_base_data::base_disposition(u32) -> u16),
+        entry!(0x0047_d3f0, actor_base_data::bartergold(u32) -> u16),
+        entry!(0x0047_d410, actor_base_data::compare_component(u32, u32) -> bool),
+        entry!(0x0047_d680, actor_base_data::faction_rank(u32, u32, u8) -> i32),
+        entry!(0x0047_d720, actor_base_data::faction_flag_8(u32) -> bool),
+        entry!(0x0047_d740, actor_base_data::in_evil_factions_only(u32) -> bool),
+        entry!(0x0047_d7c0, actor_base_data::faction_flag_2(u32) -> bool),
+        entry!(0x0047_d7e0, actor_base_data::faction_flag_4(u32) -> bool),
+        entry!(0x0047_d800, actor_base_data::set_faction_rank(u32, u32, i8)),
+        entry!(0x0047_d8b0, actor_base_data::init_item(u32, u32)),
+        entry!(0x0047_dd30, actor_base_data::set_base_flags(u32, u32)),
+        entry!(0x0047_dd50, actor_base_data::set_flag_bit(u32, u32, u8, u8)),
+        entry!(0x0047_de40, actor_base_data::set_calc_level_min(u32, u16)),
+        entry!(0x0047_de70, actor_base_data::set_calc_level_max(u32, u16)),
+        entry!(0x0047_dea0, actor_base_data::set_base_disposition(u32, u16)),
+        entry!(0x0047_ded0, actor_base_data::calculated_level(u32) -> u16),
+        entry!(0x0047_dfe0, actor_base_data::set_level(u32, u16)),
+        entry!(0x0047_e010, actor_base_data::set_fatigue(u32, u16)),
+        entry!(0x0047_e040, actor_base_data::alignment_for_karma(f32) -> i32),
+        entry!(0x0047_e0e0, actor_base_data::karmic_title(u32) -> u32),
+        entry!(0x0047_e1c0, actor_base_data::set_karma(u32, f32)),
+        entry!(0x0047_e240, actor_base_data::set_bartergold(u32, u16)),
+        entry!(0x0047_e270, actor_base_data::set_speed_mult(u32, u16)),
+        entry!(0x0047_e2a0, actor_base_data::mark_changed(u32, u32)),
+        entry!(0x0047_e2f0, actor_base_data::mark_unchanged(u32, u32)),
+        entry!(0x0047_e340, actor_base_data::set_change_flags(u32, u32)),
+        entry!(0x0047_e360, actor_base_data::clear_change_flags(u32, u32)),
+        entry!(0x0047_e380, actor_base_data::save_size(u32, u32) -> u16),
+        entry!(0x0047_e4a0, actor_base_data::save_game(u32, u32)),
+        entry!(0x0047_e6f0, actor_base_data::load_game(u32, u32, u32)),
+        entry!(0x004a_8ae0, actor_base_data::fatigue(u32) -> u16),
+
     ]
 }
 

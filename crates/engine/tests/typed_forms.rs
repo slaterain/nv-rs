@@ -1,5 +1,6 @@
 //! The differential test of every typed function of the forms family (`engine_typed::forms`)
-//! against its translation: `TESForm`'s own functions (`tesform`).
+//! against its translation: `TESForm`'s own functions (`tesform`) and `TESActorBaseData`'s
+//! (`actor_base_data`, whose world adds the settings, the save/load game and the template walk).
 //!
 //! One world serves the whole unit: the unit's globals (the registries, the record writer's buffer,
 //! the save games, the data handler, the form-type table and the group tag, the big-endian byte);
@@ -15,7 +16,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Diff, Input};
 use engine_typed::crt::CRT;
-use engine_typed::forms::{tesform, FORMS};
+use engine_typed::forms::{actor_base_data, tesform, FORMS};
 
 /// The stand-in slots: `VT_FN + slot`, each answering the word at `SLOT_ANSWERS + slot`.
 const VT_FN: u32 = 0x00ff_4000;
@@ -149,7 +150,7 @@ const SAVE_KIND_AT: u32 = 0x17;
 const HANDLER_NO_IDS: u32 = 0x620;
 
 /// Every callee answered by a word of its own.
-const ANSWERED: [u32; 49] = [
+const ANSWERED: [u32; 71] = [
     0x0047_0470, // the source file list's destructor
     0x0046_ffb0, // and its wrapper
     0x0048_6b80, // the form array's remove
@@ -199,6 +200,28 @@ const ANSWERED: [u32; 49] = [
     0x0048_6dc0, // the char key map base's
     0x0048_6d60, // NiTMap's
     0x0048_6ca0, // the string template map's
+    0x0041_8520, // the actor base data's callee
+    0x0041_aeb0, // the actor base data's callee
+    0x0041_af50, // the actor base data's callee
+    0x0041_21b0, // the actor base data's callee
+    0x0046_23f0, // the actor base data's callee
+    0x0048_1680, // the actor base data's callee
+    0x00ec_658f, // the actor base data's callee
+    0x0086_2110, // the actor base data's callee
+    0x0056_afc0, // the actor base data's callee
+    0x0048_8350, // the actor base data's callee
+    0x0088_4f80, // the actor base data's callee
+    0x0056_b020, // the actor base data's callee
+    0x0057_5690, // the actor base data's callee
+    0x0056_5730, // the actor base data's callee
+    0x004b_f220, // the actor base data's callee
+    0x004d_1440, // the actor base data's callee
+    0x004d_1610, // the actor base data's callee
+    0x004d_1960, // the actor base data's callee
+    0x006e_b820, // the actor base data's callee
+    0x006e_bd10, // the actor base data's callee
+    0x0087_f9f0, // the actor base data's callee
+    0x0084_a6d0, // the actor base data's callee
 ];
 
 fn ret(eax: u32) -> Ret {
@@ -2327,4 +2350,1382 @@ fn string_template_map_scalar_deleting_destructor() {
     .map_object()
     .run()
     .assert_same();
+}
+
+// ---- TESActorBaseData (`actor_base_data`) ----
+
+/// The buffer the save/load game's position (+0x14) points into: what the save writes and the
+/// load reads.
+const STREAM: u32 = 0x0300_6000;
+/// The save/load game's buffer position (`00825c00`), current save and load entries (`004fd3e0`,
+/// `004fd3c0`) and version byte (`008df040`).
+const SL_POSITION: u32 = 0x14;
+const SL_SAVE_ENTRY: u32 = 0x88;
+const SL_LOAD_ENTRY: u32 = 0x84;
+const SL_VERSION: u32 = 0x80;
+
+/// The one-line bodies the actor base data's native code does in place (see `actor_base_data`'s
+/// module comment): left out of the translation's calls, with no double, as [`IN_PLACE`].
+const ABD_IN_PLACE: &[u32] = &[
+    0x0046_1580, // the base flags' test
+    0x0046_1560, // and its 0x80 one
+    0x005d_8a70, // the faction list's head
+    0x0059_bb30, // the template form
+    0x0044_1110, // the death item
+    0x008f_21d0, // the speed multiplier
+    0x0050_f9a0, // the death item's setter
+    0x0050_f9c0, // the voice type's
+    0x0070_37c0, // the template form's
+    0x0071_7e50, // the address +4
+    0x005d_43c0, // the address +0x44
+    0x0040_3e20, // a float setting's value pointer
+    0x0043_d4d0, // an integer setting's
+    0x0040_8d60, // a byte setting's
+    0x0040_3df0, // a string setting's string
+    0x0082_5c00, // the save/load game's buffer position
+    0x004f_d3e0, // its current save entry
+    0x004f_d3c0, // and load entry
+    0x008d_f040, // its version byte
+    0x0042_cde0, // the inventory changes' empty-list test
+];
+/// The pages of the settings, the karma tables and the constants the component reads.
+const ACTOR_PAGES: [u32; 5] = [
+    0x011c_4000,
+    0x0118_6000,
+    0x0101_7000,
+    0x0101_1000,
+    0x0101_b000,
+];
+
+/// The world plus what the actor base data reaches: the settings' value pointers, the faction
+/// list's head and count, the save buffer's stream, the template walk's callees.
+fn actor_world(e: &mut Engine) {
+    world(e);
+    for page in ACTOR_PAGES {
+        e.map(page, 0x1000);
+    }
+    answered!(
+        e,
+        0x0041_8520,
+        0x0041_aeb0,
+        0x0041_af50,
+        0x0041_21b0,
+        0x0046_23f0,
+        0x0048_1680,
+        0x00ec_658f,
+        0x0086_2110,
+        0x0056_afc0,
+        0x0048_8350,
+        0x0088_4f80,
+        0x0056_b020,
+        0x0057_5690,
+        0x0056_5730,
+        0x004b_f220,
+        0x004d_1440,
+        0x004d_1610,
+        0x004d_1960,
+        0x006e_b820,
+        0x006e_bd10,
+        0x0087_f9f0,
+        0x0084_a6d0,
+    );
+    e.register(0x0040_eb10, |_, a| {
+        let (x, y, tolerance) = (
+            f32::from_bits(a[0]),
+            f32::from_bits(a[1]),
+            f32::from_bits(a[2]),
+        );
+        ret(u32::from((x - y).abs() <= tolerance))
+    });
+    e.register(0x005a_e380, |e, a| {
+        let (mut node, mut count) = (a[0], 0);
+        while node != 0 {
+            if e.mem.u32(node) != 0 {
+                count += 1;
+            }
+            node = e.mem.u32(node + 4);
+        }
+        ret(count)
+    });
+    e.register(0x0048_1610, |e, a| {
+        let entry = e.mem.alloc(8);
+        e.mem.set_u32(entry + 4, 0x77);
+        e.mem.set_u32(a[0] + 4, entry);
+        ret(a[0])
+    });
+    // The save/load game's byte doubles move its buffer position (+0x14) over the stream.
+    fn advance(e: &mut Engine, from: u32, n: u32, to_stream: bool) {
+        let save_load = e.mem.u32(SAVE_LOAD_GAME);
+        let at = e.mem.u32(save_load + SL_POSITION);
+        if to_stream {
+            copy_bytes(e, at, from, n);
+        } else {
+            copy_bytes(e, from, at, n);
+        }
+        e.mem.set_u32(save_load + SL_POSITION, at + n);
+    }
+    e.register(0x0085_79b0, |e, a| {
+        advance(e, a[1], a[2], true);
+        ret(0)
+    });
+    e.register(0x0085_7a10, |e, a| {
+        advance(e, a[1], a[2], true);
+        ret(0)
+    });
+    e.register(0x0085_79e0, |e, a| {
+        advance(e, a[1], a[2], false);
+        ret(0)
+    });
+    e.register(0x0085_7aa0, |e, a| {
+        advance(e, a[1], a[2], false);
+        ret(1)
+    });
+}
+
+/// A `TESActorBaseData` at +0x30 of a form (both with the test vtable), its fields filled from
+/// `seed`, with no factions.
+fn actor_data(e: &mut Engine, seed: u32) -> u32 {
+    let form = e.mem.alloc(0x80);
+    e.mem.set_u32(form, VTABLE);
+    let c = form + 0x30;
+    e.mem.set_u32(c, VTABLE);
+    for i in 1..0x0b {
+        e.mem
+            .set_u32(c + 4 * i, seed.wrapping_mul(0x0101_0101).wrapping_add(i));
+    }
+    e.mem.set_f32(c + 0x14, 12.5);
+    e.mem.set_u32(c + 0x1c, 0);
+    e.mem.set_u32(c + 0x20, 0);
+    e.mem.set_u32(c + 0x24, 0);
+    c
+}
+
+/// A faction form with its flags (+0x34) and id.
+fn faction(e: &mut Engine, flags: u32, id: u32) -> u32 {
+    let f = form(e, 0x08, 0, id);
+    e.mem.set_u32(f + 0x34, flags);
+    f
+}
+
+/// The component's faction list: `(faction, rank)` entries; a 0 faction is a node without one.
+fn set_factions(e: &mut Engine, c: u32, entries: &[(u32, i8)]) {
+    let mut node = c + 0x2c;
+    for (i, (f, rank)) in entries.iter().enumerate() {
+        if i > 0 {
+            let next = e.mem.alloc(8);
+            e.mem.set_u32(node + 4, next);
+            node = next;
+        }
+        if *f != 0 {
+            let entry = e.mem.alloc(8);
+            e.mem.set_u32(entry, *f);
+            e.mem.set_i8(entry + 4, *rank);
+            e.mem.set_u32(node, entry);
+        }
+    }
+}
+
+/// A float setting: its value at +4.
+fn set_setting(e: &mut Engine, setting: u32, value: f32) {
+    e.mem.set_f32(setting + 4, value);
+}
+
+/// The settings and tables the karma functions read: thresholds -750, -250, 250, 750 and the
+/// default alignment values 0, -1000, -500, 1000, 500 (or, `consistent` false, a table that
+/// breaks the alignment check).
+fn karma_settings(e: &mut Engine, consistent: bool) {
+    set_setting(e, 0x011c_5144, -250.0);
+    set_setting(e, 0x011c_4f64, -750.0);
+    set_setting(e, 0x011c_4e54, 250.0);
+    set_setting(e, 0x011c_5090, 750.0);
+    set_setting(e, 0x011c_5108, 1000.0);
+    set_setting(e, 0x011c_5160, -1000.0);
+    set_setting(e, 0x011c_4fa4, 52.75);
+    set_setting(e, 0x011c_5074, 3.0);
+    e.mem.set_u16(0x011c_50d8 + 4, 35);
+    let defaults: [f32; 5] = if consistent {
+        [0.0, 500.0, -500.0, 1000.0, -1000.0]
+    } else {
+        [0.0, 600.0, -2.0, 1000.0, -1000.0]
+    };
+    for (i, v) in defaults.into_iter().enumerate() {
+        e.mem.set_f32(0x0118_6d08 + 4 * i as u32, v);
+    }
+    e.mem.set_i32(0x0118_6f78, -1);
+    e.mem.set_f32(0x0101_7d00, 0.001);
+    e.mem.set_f64(0x0101_1588, 0.5);
+    e.mem.set_f64(0x0101_7a40, 100.0);
+    e.mem.set_f64(0x0101_7b70, 1000.0);
+}
+
+/// Every actor base data test runs in [`actor_world`] with the karma settings.
+fn actor_cases(d: Diff) -> Diff {
+    // The script's set-up (`00565730`, the cell references family's) is a double here, so its
+    // typed call goes by address.
+    d.forms()
+        .ignore_calls(ABD_IN_PLACE)
+        .goes_by_address(&[0x0056_5730])
+}
+
+/// The actor base data tests' shared cases, as steps of the `Diff` chain.
+trait ActorCases {
+    fn actor(self) -> Diff;
+    fn abd_getter(self) -> Diff;
+    fn abd_setter(self) -> Diff;
+    fn template_flags(self) -> Diff;
+    fn faction_flags(self) -> Diff;
+    fn mark_call(self) -> Diff;
+}
+
+impl ActorCases for Diff {
+    fn actor(self) -> Diff {
+        actor_cases(self)
+    }
+    fn abd_getter(self) -> Diff {
+        abd_getter_cases(self)
+    }
+    fn abd_setter(self) -> Diff {
+        abd_setter_cases(self)
+    }
+    fn template_flags(self) -> Diff {
+        template_flags_cases(self)
+    }
+    fn faction_flags(self) -> Diff {
+        faction_flags_cases(self)
+    }
+    fn mark_call(self) -> Diff {
+        mark_call_cases(self)
+    }
+}
+
+/// A getter's cases: components filled from a few seeds.
+fn abd_getter_cases(d: Diff) -> Diff {
+    d.actor()
+        .inputs(&[Input::Of(&[0, 1, 0x7f, 0xfe, 0xff])])
+        .setup(|e, case| {
+            actor_world(e);
+            vec![actor_data(e, case.word(0))]
+        })
+}
+
+/// A setter's cases: a value, over components filled from two seeds.
+fn abd_setter_cases(d: Diff) -> Diff {
+    d.actor()
+        .inputs(&[
+            Input::Of(&[0, 1]),
+            Input::Of(&[0, 1, 0x8000, 0xffff, 0x1_2345]),
+        ])
+        .setup(|e, case| {
+            actor_world(e);
+            karma_settings(e, true);
+            vec![actor_data(e, case.word(0)), case.word(1)]
+        })
+}
+
+#[test]
+fn abd_construct() {
+    Diff::new(entry!(0x0047_c700, actor_base_data::construct(u32) -> u32))
+        .actor()
+        .inputs(&[Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            actor_world(e);
+            karma_settings(e, case.word(0) != 0);
+            vec![actor_data(e, 3)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_no_vats_melee() {
+    Diff::new(entry!(0x0047_c770, actor_base_data::no_vats_melee(u32) -> bool))
+        .abd_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_allow_pc_dialogue() {
+    Diff::new(entry!(0x0047_c790, actor_base_data::allow_pc_dialogue(u32) -> bool))
+        .abd_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_allow_pick_pocket() {
+    Diff::new(entry!(0x0047_c7b0, actor_base_data::allow_pick_pocket(u32) -> bool))
+        .abd_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_is_ghost() {
+    Diff::new(entry!(0x0047_c7d0, actor_base_data::is_ghost(u32) -> bool))
+        .abd_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_invulnerable() {
+    Diff::new(entry!(0x0047_c7f0, actor_base_data::invulnerable(u32) -> bool))
+        .abd_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_cant_open_doors() {
+    Diff::new(entry!(0x0047_c810, actor_base_data::cant_open_doors(u32) -> bool))
+        .abd_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_auto_calc_service_flags() {
+    Diff::new(entry!(
+        0x0047_c830,
+        actor_base_data::auto_calc_service_flags(u32) -> bool
+    ))
+    .abd_getter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_karma() {
+    Diff::new(entry!(0x0047_c860, actor_base_data::karma(u32) -> f32))
+        .abd_getter()
+        .run()
+        .assert_same();
+}
+
+/// A component with factions (one node without one) for the list functions.
+fn with_factions(e: &mut Engine, seed: u32) -> u32 {
+    actor_world(e);
+    karma_settings(e, true);
+    let c = actor_data(e, seed);
+    let (a, b) = (faction(e, 2, 0x10), faction(e, 0xa, 0x11));
+    match seed {
+        0 => {}
+        1 => set_factions(e, c, &[(a, 1)]),
+        _ => set_factions(e, c, &[(a, -1), (0, 0), (b, 4)]),
+    }
+    c
+}
+
+#[test]
+fn abd_destructor() {
+    Diff::new(entry!(0x0047_c880, actor_base_data::destructor(u32)))
+        .actor()
+        .inputs(&[Input::Of(&[0, 1, 2])])
+        .setup(|e, case| vec![with_factions(e, case.word(0))])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_initialize_data_component() {
+    Diff::new(entry!(
+        0x0047_c8e0,
+        actor_base_data::initialize_data_component(u32)
+    ))
+    .actor()
+    .inputs(&[Input::Of(&[0, 0x4780_0000, 0x7fc0_0000, 0xc2f0_0000])])
+    .setup(|e, case| {
+        actor_world(e);
+        karma_settings(e, true);
+        e.mem.set_u32(0x011c_4fa4 + 4, case.word(0));
+        vec![actor_data(e, 2)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_clear_data_component() {
+    Diff::new(entry!(
+        0x0047_c9b0,
+        actor_base_data::clear_data_component(u32)
+    ))
+    .actor()
+    .inputs(&[Input::Of(&[0, 1, 2])])
+    .setup(|e, case| vec![with_factions(e, case.word(0))])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_clear_faction_list() {
+    Diff::new(entry!(
+        0x0047_c9d0,
+        actor_base_data::clear_faction_list(u32)
+    ))
+    .actor()
+    .inputs(&[Input::Of(&[0, 1, 2])])
+    .setup(|e, case| vec![with_factions(e, case.word(0))])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_copy_faction_list() {
+    Diff::new(entry!(
+        0x0047_ca20,
+        actor_base_data::copy_faction_list(u32, u32)
+    ))
+    .actor()
+    .inputs(&[Input::Of(&[0, 1, 2]), Input::Of(&[0, 1, 2])])
+    .setup(|e, case| {
+        let this = with_factions(e, case.word(0));
+        let source = actor_data(e, 9);
+        let (a, b) = (faction(e, 0, 0x20), faction(e, 4, 0x21));
+        match case.word(1) {
+            0 => {}
+            1 => set_factions(e, source, &[(a, 3)]),
+            _ => set_factions(e, source, &[(a, 3), (0, 0), (b, -2)]),
+        }
+        vec![this, source]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_save() {
+    Diff::new(entry!(0x0047_cac0, actor_base_data::save(u32)))
+        .actor()
+        .inputs(&[Input::Flag, Input::Flag])
+        .setup(|e, case| {
+            actor_world(e);
+            record_buffer(e);
+            e.mem.set_u8(BIG_ENDIAN, case.word(0) as u8);
+            let c = actor_data(e, 4);
+            if case.word(1) != 0 {
+                for offset in [0x1c, 0x20, 0x24] {
+                    let f = form(e, 0x2a, 0, 0x300 + offset);
+                    e.mem.set_u32(c + offset, f);
+                }
+            }
+            vec![c]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_swap_data() {
+    Diff::new(entry!(0x0047_cb90, actor_base_data::swap_data(u32)))
+        .actor()
+        .inputs(&[Input::Of(&[0])])
+        .setup(|e, _| {
+            actor_world(e);
+            vec![actor_data(e, 5) + 4]
+        })
+        .run()
+        .assert_same();
+}
+
+/// Template-use flags cases: the flags and a bit index.
+fn template_flags_cases(d: Diff) -> Diff {
+    d.actor()
+        .inputs(&[
+            Input::Of(&[0, 0x8001, 0xffff]),
+            Input::Of(&[0, 1, 15, 16, 0xffff_ffff]),
+            Input::Flag,
+        ])
+        .setup(|e, case| {
+            actor_world(e);
+            let c = actor_data(e, 1);
+            e.mem.set_u16(c + 0x1a, case.word(0) as u16);
+            vec![c, case.word(1), case.word(2)]
+        })
+}
+
+#[test]
+fn abd_template_use_flag_15() {
+    Diff::new(entry!(0x0047_cca0, actor_base_data::template_use_flag_15(u32) -> bool))
+        .abd_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_set_template_use_flag_15() {
+    Diff::new(entry!(
+        0x0047_ccc0,
+        actor_base_data::set_template_use_flag_15(u32, u8)
+    ))
+    .abd_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_set_template_use_flag() {
+    Diff::new(entry!(
+        0x0047_cce0,
+        actor_base_data::set_template_use_flag(u32, i32, u8)
+    ))
+    .template_flags()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_template_use_flag() {
+    Diff::new(entry!(
+        0x0047_cd40,
+        actor_base_data::template_use_flag(u32, i32) -> bool
+    ))
+    .template_flags()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_set_template_use_flags() {
+    Diff::new(entry!(
+        0x0047_cd90,
+        actor_base_data::set_template_use_flags(u32, u16)
+    ))
+    .abd_setter()
+    .run()
+    .assert_same();
+}
+
+/// A component whose template is of `kind` (0: none).
+fn templated(e: &mut Engine, kind: u32) -> u32 {
+    actor_world(e);
+    karma_settings(e, true);
+    let c = actor_data(e, 6);
+    if kind != 0 {
+        let template = form(e, kind, 0, 0x400);
+        e.mem.set_u32(c + 0x24, template);
+    }
+    c
+}
+
+#[test]
+fn abd_has_actor_template_again() {
+    Diff::new(entry!(
+        0x0047_cdb0,
+        actor_base_data::has_actor_template_again(u32) -> bool
+    ))
+    .actor()
+    .inputs(&[Input::Of(&[0, 0x2b, 0x2c, 0x2d, 0x2e])])
+    .setup(|e, case| vec![templated(e, case.word(0))])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_has_actor_template() {
+    Diff::new(entry!(0x0047_cdd0, actor_base_data::has_actor_template(u32) -> bool))
+        .actor()
+        .inputs(&[Input::Of(&[0, 0x2b, 0x2c, 0x2d, 0x2e])])
+        .setup(|e, case| vec![templated(e, case.word(0))])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_apply_template() {
+    // The actor: none, blocked, or let through; the handler's flag; the actor's slots.
+    Diff::new(entry!(
+        0x0047_ce10,
+        actor_base_data::apply_template(u32, u32)
+    ))
+    .actor()
+    .inputs(&[
+        Input::Of(&[0, 0x2c, 0x2d, 0x2e]),
+        Input::Of(&[0, 1, 2]),
+        Input::Flag,
+        Input::Flag,
+    ])
+    .setup(|e, case| {
+        let c = templated(e, case.word(0));
+        let actor = match case.word(1) {
+            0 => 0,
+            kind => {
+                set_answer(e, 0x0056_afc0, u32::from(kind == 1));
+                let a = form(e, 0x2b, 0, 0x500);
+                let process = e.mem.alloc(8);
+                e.mem.set_u32(a + 0x68, process);
+                let base = form(e, 0x2a, 0, 0x501);
+                e.mem.set_u32(a + 0x20, base);
+                a
+            }
+        };
+        let flag = case.word(2);
+        e.mem.set_u32(SLOT_ANSWERS + 0xfc, flag);
+        e.mem.set_u32(SLOT_ANSWERS + 0x100, flag);
+        // The inventory changes: their list (the first word) empty or not (`0042cde0`).
+        let changes = e.mem.alloc(8);
+        let list = e.mem.alloc(8);
+        e.mem.set_u32(changes, list);
+        e.mem.set_u32(list, u32::from(case.word(3) == 0));
+        set_answer(e, 0x004b_f220, changes);
+        if case.word(3) != 0 {
+            let handler = e.mem.alloc(8);
+            e.mem.set_u32(BGS_SAVE_LOAD_GAME, handler);
+            set_answer(e, 0x0041_21b0, flag);
+            e.mem.set_u32(0x011c_5290, 0x55);
+        }
+        let created = actor_data(e, 8) - 0x30;
+        set_answer(e, 0x0046_5110, created);
+        vec![c, actor]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_path_manager_instance() {
+    Diff::new(entry!(0x0047_d0b0, actor_base_data::path_manager_instance() -> u32))
+        .actor()
+        .inputs(&[Input::Of(&[0, 1, 2, 3])])
+        .setup(|e, case| {
+            actor_world(e);
+            e.mem.set_u32(0x011c_5298, case.word(0));
+            vec![]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_create_template_actor_base() {
+    Diff::new(entry!(
+        0x0047_d130,
+        actor_base_data::create_template_actor_base(u32, u32) -> u32
+    ))
+    .actor()
+    .inputs(&[Input::Of(&[0, 1, 0x101])])
+    .setup(|e, case| {
+        actor_world(e);
+        set_answer(e, 0x0046_23f0, case.word(0));
+        let created = actor_data(e, 8) - 0x30;
+        set_answer(e, 0x0046_5110, created);
+        vec![form(e, 0x2a, 0, 0x600), 0x4321]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_template_chain_mask() {
+    // A chain of three forms; the slot 0xf8 says true for the first `depth` of them.
+    Diff::new(entry!(
+        0x0047_d1a0,
+        actor_base_data::template_chain_mask(u32, u32) -> u32
+    ))
+    .actor()
+    .inputs(&[Input::Of(&[0, 1, 2]), Input::Flag])
+    .setup(|e, case| {
+        actor_world(e);
+        e.mem.set_u32(SLOT_ANSWERS + 0xf8, case.word(1));
+        let third = actor_data(e, 3) - 0x30;
+        let second = actor_data(e, 2) - 0x30;
+        let first = actor_data(e, 1) - 0x30;
+        e.mem.set_u32(first + 0x30 + 0x24, second);
+        e.mem.set_u32(
+            second + 0x30 + 0x24,
+            if case.word(0) > 0 { third } else { 0 },
+        );
+        e.mem.set_u16(first + 0x4a, 0xf0f0);
+        e.mem.set_u16(second + 0x4a, 0x3c3c);
+        let mask = e.mem.alloc(4);
+        vec![first, mask]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_copy_component() {
+    Diff::new(entry!(
+        0x0047_d220,
+        actor_base_data::copy_component(u32, u32)
+    ))
+    .actor()
+    .inputs(&[Input::Flag, Input::Of(&[0, 1, 2])])
+    .setup(|e, case| {
+        let this = with_factions(e, case.word(1));
+        let other = actor_data(e, 0x44);
+        let rank = faction(e, 0, 0x30);
+        set_factions(e, other, &[(rank, 2)]);
+        set_cast(e, 0x0118_6cb4, if case.word(0) != 0 { other } else { 0 });
+        e.mem.set_u32(SLOT_ANSWERS + 0x60, 0x1_0033);
+        e.mem.set_u32(SLOT_ANSWERS + 0x64, 1234.5f32.to_bits());
+        e.mem.set_u32(SLOT_ANSWERS + 0x68, 0x0202_0202);
+        vec![this, other + 0x10]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_level() {
+    Diff::new(entry!(0x0047_d370, actor_base_data::level(u32) -> u16))
+        .abd_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_calc_level_min() {
+    Diff::new(entry!(0x0047_d390, actor_base_data::calc_level_min(u32) -> u16))
+        .abd_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_calc_level_max() {
+    Diff::new(entry!(0x0047_d3b0, actor_base_data::calc_level_max(u32) -> u16))
+        .abd_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_base_disposition() {
+    Diff::new(entry!(0x0047_d3d0, actor_base_data::base_disposition(u32) -> u16))
+        .abd_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_bartergold() {
+    Diff::new(entry!(0x0047_d3f0, actor_base_data::bartergold(u32) -> u16))
+        .abd_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_compare_component() {
+    // What differs: 0 nothing; 1 the flags; 2 a faction's rank; 3 the template use flags; 4 the
+    // karma (a NaN); 5 the faction count.
+    Diff::new(entry!(
+        0x0047_d410,
+        actor_base_data::compare_component(u32, u32) -> bool
+    ))
+    .actor()
+    .inputs(&[Input::Flag, Input::Of(&[0, 1, 2, 3, 4, 5])])
+    .setup(|e, case| {
+        actor_world(e);
+        karma_settings(e, true);
+        let this = actor_data(e, 7);
+        let other = actor_data(e, 7);
+        let (a, b) = (faction(e, 0, 0x40), faction(e, 0, 0x41));
+        set_factions(e, this, &[(a, 1), (b, 2)]);
+        let differ = case.word(1);
+        let rank = if differ == 2 { 3 } else { 2 };
+        if differ == 5 {
+            set_factions(e, other, &[(a, 1)]);
+        } else {
+            set_factions(e, other, &[(b, rank), (a, 1)]);
+        }
+        match differ {
+            1 => e.mem.set_u32(other + 4, 0xdead),
+            3 => e.mem.set_u16(other + 0x1a, 0x77),
+            _ => {}
+        }
+        let karma = if differ == 4 { f32::NAN } else { 2.0 };
+        e.mem.set_u32(SLOT_ANSWERS + 0x64, karma.to_bits());
+        set_cast(e, 0x0118_6cb4, if case.word(0) != 0 { other } else { 0 });
+        vec![this, other + 0x10]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_faction_rank() {
+    Diff::new(entry!(
+        0x0047_d680,
+        actor_base_data::faction_rank(u32, u32, u8) -> i32
+    ))
+    .actor()
+    .inputs(&[Input::Of(&[0, 1, 2]), Input::Of(&[0, 1, 2]), Input::Flag])
+    .setup(|e, case| {
+        let c = with_factions(e, case.word(0));
+        // The factions `with_factions` makes are the two forms it allocates first after the
+        // component: look them up through the list instead.
+        let first = e.mem.u32(c + 0x2c);
+        let wanted = match case.word(1) {
+            0 => 0x1234,
+            1 if first != 0 => e.mem.u32(first),
+            _ => {
+                let last = e.mem.u32(c + 0x30);
+                let last = if last != 0 { e.mem.u32(last + 4) } else { 0 };
+                if last != 0 {
+                    e.mem.u32(e.mem.u32(last))
+                } else {
+                    0x99
+                }
+            }
+        };
+        vec![c, wanted, case.word(2)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// A faction flag test's cases.
+fn faction_flags_cases(d: Diff) -> Diff {
+    d.actor()
+        .inputs(&[Input::Of(&[0, 2, 4, 8, 0xe, 0xffff_ffff])])
+        .setup(|e, case| {
+            actor_world(e);
+            vec![faction(e, case.word(0), 1)]
+        })
+}
+
+#[test]
+fn abd_faction_flag_8() {
+    Diff::new(entry!(0x0047_d720, actor_base_data::faction_flag_8(u32) -> bool))
+        .faction_flags()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_in_evil_factions_only() {
+    Diff::new(entry!(
+        0x0047_d740,
+        actor_base_data::in_evil_factions_only(u32) -> bool
+    ))
+    .actor()
+    .inputs(&[Input::Of(&[0, 1, 2]), Input::Flag])
+    .setup(|e, case| {
+        let c = with_factions(e, case.word(0));
+        if case.word(1) != 0 {
+            // Every listed faction evil.
+            let mut node = c + 0x2c;
+            while node != 0 {
+                let entry = e.mem.u32(node);
+                if entry != 0 {
+                    let f = e.mem.u32(entry);
+                    e.mem.set_u32(f + 0x34, 2);
+                }
+                node = e.mem.u32(node + 4);
+            }
+        }
+        vec![c]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_faction_flag_2() {
+    Diff::new(entry!(0x0047_d7c0, actor_base_data::faction_flag_2(u32) -> bool))
+        .faction_flags()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_faction_flag_4() {
+    Diff::new(entry!(0x0047_d7e0, actor_base_data::faction_flag_4(u32) -> bool))
+        .faction_flags()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_set_faction_rank() {
+    // The faction: 0 none; 1 the listed first one; 2 an unlisted one. The rank: -1 or 5.
+    Diff::new(entry!(
+        0x0047_d800,
+        actor_base_data::set_faction_rank(u32, u32, i8)
+    ))
+    .actor()
+    .inputs(&[
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0xff, 5]),
+    ])
+    .setup(|e, case| {
+        let c = with_factions(e, case.word(0));
+        let first = e.mem.u32(c + 0x2c);
+        let target = match case.word(1) {
+            0 => 0,
+            1 if first != 0 => e.mem.u32(first),
+            _ => faction(e, 0, 0x77),
+        };
+        vec![c, target, case.word(2)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_init_item() {
+    // The factions resolve (1) or not (0); the karma: a default value, or not; the table
+    // consistent or not; the template and its use flag 0.
+    Diff::new(entry!(0x0047_d8b0, actor_base_data::init_item(u32, u32)))
+        .actor()
+        .inputs(&[
+            Input::Flag,
+            Input::Of(&[0, 1, 2, 3, 4, 5]),
+            Input::Flag,
+            Input::Of(&[0, 1, 2]),
+        ])
+        .setup(|e, case| {
+            let c = with_factions(e, 2);
+            karma_settings(e, case.word(2) != 0);
+            let m = form(e, 0x7f, 0, 0);
+            e.mem.set_u32(FORM_MAP, m);
+            set_found(e, true);
+            let found = faction(e, 0, 0x88);
+            e.mem.set_u32(LOOKUP_VALUE, found);
+            let resolved = if case.word(0) != 0 { found } else { 0 };
+            for target in [0x0118_4704, 0x0118_6318, 0x0118_6f7c] {
+                set_cast(e, target, resolved);
+            }
+            e.mem.set_u32(c + 0x20, 0x0100_0020);
+            e.mem.set_u32(c + 0x1c, 0x0100_001c);
+            match case.word(3) {
+                0 => {}
+                use_flag => {
+                    e.mem.set_u32(c + 0x24, 0x0100_0024);
+                    e.mem.set_u16(c + 0x1a, (use_flag - 1) as u16);
+                }
+            }
+            let karma = [0.0005f32, 500.0, -500.0, 1000.0, -1000.0, 42.0][case.word(1) as usize];
+            e.mem.set_f32(c + 0x14, karma);
+            let owner = form(e, 0x2a, 0, 0x0100_0abc);
+            // Two source files with their compile indexes: the ids are remapped by the last one.
+            let (a, b) = (file(e, true), file(e, false));
+            e.mem.set_u8(a + FILE_COMPILE_INDEX_AT, 3);
+            e.mem.set_u8(b + FILE_COMPILE_INDEX_AT, 7);
+            set_files(e, owner, &[a, b]);
+            vec![c, owner]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_set_base_flags() {
+    Diff::new(entry!(
+        0x0047_dd30,
+        actor_base_data::set_base_flags(u32, u32)
+    ))
+    .abd_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_set_flag_bit() {
+    Diff::new(entry!(
+        0x0047_dd50,
+        actor_base_data::set_flag_bit(u32, u32, u8, u8)
+    ))
+    .actor()
+    .inputs(&[
+        Input::Of(&[1, 2, 0x80]),
+        Input::Flag,
+        Input::Flag,
+        Input::Of(&[0, 1, 2]),
+    ])
+    .setup(|e, case| {
+        actor_world(e);
+        let c = actor_data(e, 0);
+        e.mem.set_u32(c + 4, 0x0000_0082);
+        // The cast to a form: none (0), and the save game's change answer (1, 2).
+        let form = if case.word(3) != 0 { c - 0x30 } else { 0 };
+        set_cast(e, 0x0118_3028, form);
+        set_answer(e, 0x0084_a6d0, u32::from(case.word(3) == 2));
+        vec![c, case.word(0), case.word(1), case.word(2)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_set_calc_level_min() {
+    Diff::new(entry!(
+        0x0047_de40,
+        actor_base_data::set_calc_level_min(u32, u16)
+    ))
+    .abd_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_set_calc_level_max() {
+    Diff::new(entry!(
+        0x0047_de70,
+        actor_base_data::set_calc_level_max(u32, u16)
+    ))
+    .abd_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_set_base_disposition() {
+    Diff::new(entry!(
+        0x0047_dea0,
+        actor_base_data::set_base_disposition(u32, u16)
+    ))
+    .abd_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_calculated_level() {
+    // The level, flag 0x80, the player's base form there or not, the calculated range, the player's
+    // level (10 with 700 or 900: a product just under an integer, which 24 bits round up).
+    Diff::new(entry!(0x0047_ded0, actor_base_data::calculated_level(u32) -> u16))
+        .actor()
+        .inputs(&[
+            Input::Of(&[1, 500, 700, 900, 2000]),
+            Input::Flag,
+            Input::Flag,
+            Input::Of(&[0, 1, 2]),
+            Input::Of(&[37, 10]),
+        ])
+        .setup(|e, case| {
+            actor_world(e);
+            karma_settings(e, true);
+            let c = actor_data(e, 0);
+            e.mem
+                .set_u32(c + 4, if case.word(1) != 0 { 0x80 } else { 0 });
+            e.mem.set_u16(c + 0xc, case.word(0) as u16);
+            let (min, max) = [(0, 0), (30, 0), (0, 12)][case.word(3) as usize];
+            e.mem.set_u16(c + 0xe, min);
+            e.mem.set_u16(c + 0x10, max);
+            let player = e.mem.alloc(0x30);
+            e.mem.set_u32(0x011d_ea3c, player);
+            if case.word(2) != 0 {
+                let base = actor_data(e, 0) - 0x30;
+                e.mem.set_u16(base + 0x30 + 0xc, case.word(4) as u16);
+                e.mem.set_u32(player + 0x20, base);
+            }
+            vec![c]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_set_level() {
+    Diff::new(entry!(0x0047_dfe0, actor_base_data::set_level(u32, u16)))
+        .abd_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_set_fatigue() {
+    Diff::new(entry!(0x0047_e010, actor_base_data::set_fatigue(u32, u16)))
+        .abd_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_alignment_for_karma() {
+    Diff::new(entry!(
+        0x0047_e040,
+        actor_base_data::alignment_for_karma(f32) -> i32
+    ))
+    .actor()
+    .inputs(&[Input::Of(&[
+        0xc47a_0000, // -1000
+        0xc43b_8000, // -750
+        0xc3fa_0000, // -500
+        0xc37a_0000, // -250
+        0x0000_0000,
+        0x437a_0000, // 250
+        0x43fa_0000, // 500
+        0x443b_8000, // 750
+        0x447a_0000, // 1000
+        0x7fc0_0000, // NaN
+    ])])
+    .setup(|e, case| {
+        actor_world(e);
+        karma_settings(e, true);
+        vec![case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_karmic_title() {
+    Diff::new(entry!(0x0047_e0e0, actor_base_data::karmic_title(u32) -> u32))
+        .actor()
+        .inputs(&[
+            Input::Flag,
+            Input::Of(&[0, 1, 30, 50, 70]),
+            Input::Of(&[0xffff_fc18, 0xffff_ff9c, 0, 0x190, 0x3e8]),
+        ])
+        .setup(|e, case| {
+            actor_world(e);
+            karma_settings(e, true);
+            for row in 0..3u32 {
+                for level in 0..50u32 {
+                    let setting = if (row + level) % 3 == 0 {
+                        0
+                    } else {
+                        let s = e.mem.alloc(8);
+                        e.mem.set_u32(s + 4, 0x0200_0000 + row * 0x100 + level);
+                        s
+                    };
+                    e.mem.set_u32(0x0118_6d20 + row * 0xc8 + level * 4, setting);
+                }
+            }
+            set_answer(e, 0x0087_f9f0, case.word(1));
+            let actor = if case.word(0) != 0 {
+                let a = form(e, 0x2b, 0, 0x700);
+                e.mem.set_u32(a + 0xa4, VTABLE);
+                a
+            } else {
+                0
+            };
+            e.mem.set_u32(SLOT_ANSWERS + 8, case.word(2));
+            vec![actor]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_set_karma() {
+    Diff::new(entry!(0x0047_e1c0, actor_base_data::set_karma(u32, f32)))
+        .actor()
+        .inputs(&[Input::Of(&[
+            0,
+            0x447a_4000,
+            0xc47a_4000,
+            0x7fc0_0000,
+            0x3f80_0000,
+            0x7f80_0001,
+        ])])
+        .setup(|e, case| {
+            actor_world(e);
+            karma_settings(e, true);
+            vec![actor_data(e, 1), case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_set_bartergold() {
+    Diff::new(entry!(
+        0x0047_e240,
+        actor_base_data::set_bartergold(u32, u16)
+    ))
+    .abd_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_set_speed_mult() {
+    Diff::new(entry!(
+        0x0047_e270,
+        actor_base_data::set_speed_mult(u32, u16)
+    ))
+    .abd_setter()
+    .run()
+    .assert_same();
+}
+
+/// A mark call's cases: a component, or none.
+fn mark_call_cases(d: Diff) -> Diff {
+    d.actor()
+        .inputs(&[Input::Flag, Input::Of(&[2, 0x0100_0000])])
+        .setup(|e, case| {
+            actor_world(e);
+            let c = if case.word(0) != 0 {
+                actor_data(e, 1)
+            } else {
+                0
+            };
+            vec![c, case.word(1)]
+        })
+}
+
+#[test]
+fn abd_mark_changed() {
+    Diff::new(entry!(0x0047_e2a0, actor_base_data::mark_changed(u32, u32)))
+        .mark_call()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_mark_unchanged() {
+    Diff::new(entry!(
+        0x0047_e2f0,
+        actor_base_data::mark_unchanged(u32, u32)
+    ))
+    .mark_call()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_set_change_flags() {
+    Diff::new(entry!(
+        0x0047_e340,
+        actor_base_data::set_change_flags(u32, u32)
+    ))
+    .abd_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_clear_change_flags() {
+    Diff::new(entry!(
+        0x0047_e360,
+        actor_base_data::clear_change_flags(u32, u32)
+    ))
+    .abd_setter()
+    .run()
+    .assert_same();
+}
+
+/// The save's set-up: blocks in use or not, the debug switch, a current save entry or not.
+fn save_setup(e: &mut Engine, case: &engine_core::typed::diff::Case, factions: u32) -> u32 {
+    let c = with_factions(e, factions);
+    let save_load = e.mem.alloc(0x100);
+    e.mem.set_u32(SAVE_LOAD_GAME, save_load);
+    set_answer(e, 0x0086_2110, case.word(0));
+    e.mem.set_u8(0x011d_e4e8 + 4, case.word(1) as u8);
+    if case.word(2) != 0 {
+        let entry = e.mem.alloc(0x10);
+        e.mem.set_u32(entry, 0x0100_0abc);
+        e.mem.set_u32(entry + 5, 0x1234_5678);
+        e.mem.set_u8(entry + 9, 0x52);
+        e.mem.set_u32(save_load + SL_SAVE_ENTRY, entry);
+        e.mem.set_u32(save_load + SL_LOAD_ENTRY, entry);
+        let m = form(e, 0x7f, 0, 0);
+        e.mem.set_u32(FORM_MAP, m);
+        set_found(e, true);
+        let named = form(e, 0x2a, 0, 0x0100_0abc);
+        e.mem.set_u32(LOOKUP_VALUE, named);
+    }
+    e.mem.set_u8(save_load + SL_VERSION, 0x53);
+    e.mem.set_u32(save_load + SL_POSITION, STREAM);
+    c
+}
+
+#[test]
+fn abd_save_size() {
+    Diff::new(entry!(0x0047_e380, actor_base_data::save_size(u32, u32) -> u16))
+        .actor()
+        .inputs(&[Input::Flag, Input::Flag, Input::Flag, Input::Of(&[0, 2, 3])])
+        .setup(|e, case| {
+            let c = save_setup(e, case, 2);
+            vec![c, case.word(3)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_save_game() {
+    Diff::new(entry!(0x0047_e4a0, actor_base_data::save_game(u32, u32)))
+        .actor()
+        .inputs(&[
+            Input::Flag,
+            Input::Flag,
+            Input::Flag,
+            Input::Of(&[0, 2]),
+            Input::Of(&[0, 2]),
+        ])
+        .setup(|e, case| {
+            let c = save_setup(e, case, case.word(4));
+            vec![c, case.word(3)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn abd_load_game() {
+    // The stream: its block header right or wrong, the block's size against what is read, the
+    // factions that resolve.
+    Diff::new(entry!(
+        0x0047_e6f0,
+        actor_base_data::load_game(u32, u32, u32)
+    ))
+    .actor()
+    .inputs(&[
+        Input::Flag,
+        Input::Flag,
+        Input::Flag,
+        Input::Of(&[0, 2]),
+        Input::Of(&[0, 1, 2]),
+        Input::Flag,
+    ])
+    .setup(|e, case| {
+        let c = save_setup(e, case, 1);
+        let flags = case.word(3);
+        let mut bytes: Vec<u8> = Vec::new();
+        if case.word(0) != 0 {
+            let tag: u32 = if case.word(5) != 0 {
+                0x424c_4f4b
+            } else {
+                0x1111_1111
+            };
+            bytes.extend(tag.to_le_bytes());
+            let body = if flags != 0 { 0x18 } else { 0 } + 2 + 5 * 2;
+            let size = [body, body - 3, body + 3][case.word(4) as usize] as u16;
+            bytes.extend(size.to_le_bytes());
+        }
+        if flags != 0 {
+            bytes.extend((0..0x18u8).map(|i| i * 3 + 1));
+        }
+        bytes.extend(2u16.to_le_bytes());
+        for (id, rank) in [(0x0100_0041u32, 3u8), (0x0100_0042, 0xfe)] {
+            bytes.extend(id.to_le_bytes());
+            bytes.push(rank);
+        }
+        for (i, b) in bytes.into_iter().enumerate() {
+            e.mem.set_u8(STREAM + i as u32, b);
+        }
+        if case.word(5) == 0 && case.word(2) == 0 {
+            // Without a current load entry, no form resolves either. (With one, a wrong tag logs
+            // the header message naming the entry's form, which resolves.)
+            set_found(e, false);
+            let save_load = e.mem.u32(SAVE_LOAD_GAME);
+            e.mem.set_u32(save_load + SL_LOAD_ENTRY, 0);
+        } else if case.word(2) == 0 {
+            let m = form(e, 0x7f, 0, 0);
+            e.mem.set_u32(FORM_MAP, m);
+            set_found(e, true);
+            let f = faction(e, 0, 0x41);
+            e.mem.set_u32(LOOKUP_VALUE, f);
+        }
+        vec![c, flags, 0x99]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn abd_fatigue() {
+    Diff::new(entry!(0x004a_8ae0, actor_base_data::fatigue(u32) -> u16))
+        .abd_getter()
+        .run()
+        .assert_same();
 }
