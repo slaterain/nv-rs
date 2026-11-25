@@ -5,6 +5,7 @@
 //! badly (a good end closes the launcher). The picture is drawn again only when something on it
 //! changes: a typed character, the cursor's blink, an input.
 
+use crate::crash::consent::{self, Consent};
 use crate::gpu::{self, Gpu};
 use crate::intro::Intro;
 use crate::pacing;
@@ -533,6 +534,13 @@ pub enum Kind {
     Testing,
     /// One row's choices (and Back).
     Choices,
+    /// What a crash report holds, the first of the crash reports screens (at the first start,
+    /// until answered, and from Settings).
+    Consent,
+    /// The crash reports question: the three answers.
+    Question,
+    /// A crash report made from this PC as an example, from the first screen.
+    Sample,
 }
 
 /// What a choice does.
@@ -562,6 +570,19 @@ pub enum Act {
     BackToList,
     /// The Settings list's "Launcher sounds" row: on to off, or off to on.
     ToggleSounds,
+    /// Crash reports answered at the question.
+    Consent(Consent),
+    /// The example report, from the first crash reports screen.
+    ShowSample,
+    /// The first crash reports screen (back from the question or the example).
+    OpenConsent,
+    /// The question, from the first screen.
+    OpenQuestion,
+    /// The first screen opened from Settings' crash reports row (Enter or a click: one press
+    /// never answers).
+    OpenConsentFromSettings,
+    /// The crash reports screens left unanswered: to where they were opened from.
+    CloseConsent,
     Nothing,
 }
 
@@ -587,6 +608,160 @@ pub fn choice_sounds(typed: &str, entry: Option<&str>) -> &'static [crate::sound
 
 /// The Settings list's row for the terminal's sounds (the launcher's own setting).
 pub const SOUNDS_ROW: &str = "Launcher sounds";
+
+/// The Settings list's row for crash reports (`crate::crash::consent`), after the sounds row.
+pub const CRASH_ROW: &str = "Crash reports";
+/// Its place in the Settings list.
+pub const CRASH_ROW_INDEX: usize = settings::ROWS.len() + 1;
+
+/// The crash reports screens' entries. The first screen says what a report holds (Choose, the
+/// example, and Not now from the start screen or Back from Settings); the second asks (the
+/// three answers, Back). Two screens, so that in the launcher's own plain look every line and
+/// every choice shows at once.
+pub const CHOOSE_REPORTS: &str = "Choose what happens to them";
+pub const SHOW_REPORT: &str = "Show me what a report contains";
+pub const NOT_NOW: &str = "Not now";
+pub const SEND_REPORTS: &str = "Send them automatically";
+pub const ASK_REPORTS: &str = "Ask me each time";
+pub const NEVER_REPORTS: &str = "Never send them";
+
+/// The first crash reports screen's entries (`from_settings`: Back instead of Not now).
+pub fn about_entries(from_settings: bool) -> Vec<String> {
+    let last = if from_settings { BACK } else { NOT_NOW };
+    [CHOOSE_REPORTS, SHOW_REPORT, last]
+        .map(String::from)
+        .to_vec()
+}
+
+/// The question's entries.
+pub fn question_entries() -> Vec<String> {
+    [SEND_REPORTS, ASK_REPORTS, NEVER_REPORTS, BACK]
+        .map(String::from)
+        .to_vec()
+}
+
+/// The first crash reports screen's text: what a report holds and what is taken out of it; at the
+/// first start (`in_force`: none) that nothing is sent before an answer and what Not now does,
+/// from Settings the answer in force.
+pub fn about_text(in_force: Option<Consent>) -> Vec<String> {
+    let mut text: Vec<String> = vec![
+        "When the game stops or crashes, nv-rs writes a report: your system and card, settings, mods, where the game stopped, its log's end, and an F12 report's note and place from that run.".into(),
+        "Your user name and folders are taken out; no saves or pictures.".into(),
+    ];
+    text.push(match in_force {
+        None => "Nothing is sent until you choose. Not now asks at the next start.".into(),
+        Some(answer) => format!("Now: {}.", answer.label()),
+    });
+    text
+}
+
+/// The question: where reports go, that only the report goes, that nothing is sent before an
+/// answer, and, where this copy of nv-rs cannot send (`can_send`), that it cannot.
+pub fn question_text(can_send: bool) -> Vec<String> {
+    let mut text = vec![
+        "Send crash reports to Sentry (sentry.io), the crash-report service nv-rs's developers use? Only the report goes. Settings can change this.".into(),
+        "Nothing is sent until you choose.".into(),
+    ];
+    if !can_send {
+        text.push("This copy of nv-rs cannot send yet.".into());
+    }
+    text
+}
+
+/// The question's screen, opened on "Never send them": quick presses of Enter through the
+/// screens never choose sending.
+pub fn question_screen(can_send: bool) -> Screen {
+    let entries = question_entries();
+    let highlighted = entries.iter().position(|e| e == NEVER_REPORTS).unwrap_or(0);
+    Screen {
+        title: format!("-{CRASH_ROW}-"),
+        welcome: question_text(can_send),
+        entries,
+        highlighted,
+        ..Default::default()
+    }
+}
+
+/// Where the crash reports screens stand in the window: shown at this start yet, and opened from
+/// Settings (Back returns there, and an answer there is written at once).
+#[derive(Debug, Default)]
+pub struct ConsentFlow {
+    asked: bool,
+    from_settings: bool,
+}
+
+impl ConsentFlow {
+    /// What the start screen shows ([`start_kind`]); the screens count as shown at this start
+    /// when they open there.
+    pub fn at_start(&mut self, refused: bool, answer: Consent) -> Kind {
+        let kind = start_kind(refused, answer, self.asked);
+        if kind == Kind::Consent {
+            self.asked = true;
+            self.from_settings = false;
+        }
+        kind
+    }
+
+    /// The screens opened from Settings' row.
+    pub fn open_in_settings(&mut self) {
+        self.from_settings = true;
+    }
+
+    /// Whether the screens were opened from Settings.
+    pub fn in_settings(&self) -> bool {
+        self.from_settings
+    }
+
+    /// Whether an answer given now is written at once ([`keeps_at_once`]).
+    pub fn answer_now(&self) -> bool {
+        keeps_at_once(self.from_settings)
+    }
+
+    /// The screens left: whether to Settings (else the start screen).
+    pub fn close(&mut self) -> bool {
+        std::mem::take(&mut self.from_settings)
+    }
+}
+
+/// Whether the crash reports screens open at the start screen: not answered yet, and not asked
+/// already since the launcher started ("Not now" asks again at the next start).
+pub fn asks_consent(answer: Consent, asked: bool) -> bool {
+    answer == Consent::Unanswered && !asked
+}
+
+/// What the start screen shows: the refusal where nv-rs may not write in its own folder, else
+/// the crash reports screens while unanswered and not yet asked in this start, else itself.
+pub fn start_kind(refused: bool, answer: Consent, asked: bool) -> Kind {
+    if refused {
+        Kind::Refused
+    } else if asks_consent(answer, asked) {
+        Kind::Consent
+    } else {
+        Kind::Start
+    }
+}
+
+/// What Left or Right does on a Settings list's row at `index` (none: the row's own choices):
+/// the sounds row flips; the crash reports row opens its screens as Enter does, so no press
+/// there ever answers (sending is never switched on without the question).
+pub fn row_step_act(testing: bool, index: usize) -> Option<Act> {
+    if testing {
+        None
+    } else if index == settings::ROWS.len() {
+        Some(Act::ToggleSounds)
+    } else if index == CRASH_ROW_INDEX {
+        Some(Act::OpenConsentFromSettings)
+    } else {
+        None
+    }
+}
+
+/// Whether an answer is written into the launcher's own file at once: on Windows the first
+/// start's answer waits for Play's first-write checks (the package gets nothing before, as the
+/// intro's note waits); an answer from Settings is written at once, as Settings' other rows are.
+pub fn keeps_at_once(from_settings: bool) -> bool {
+    from_settings || cfg!(not(windows))
+}
 
 /// The Settings list's entry that opens the Testing list, and the start screen's for Settings.
 pub const TESTING_ENTRY: &str = "Testing";
@@ -914,11 +1089,20 @@ pub fn on_enter(kind: Kind, typed: &str, chosen: usize, entry: &str) -> Act {
         Kind::Output => Act::TypeLine(typed.to_string()),
         Kind::Settings if entry == TESTING_ENTRY => Act::OpenTesting,
         Kind::Settings if entry.starts_with(SOUNDS_ROW) => Act::ToggleSounds,
+        Kind::Settings if entry.starts_with(CRASH_ROW) => Act::OpenConsentFromSettings,
         Kind::Settings if entry == BACK => Act::BackToStart,
         Kind::Testing if entry == BACK => Act::OpenSettings,
         Kind::Settings | Kind::Testing => Act::OpenChoices(chosen),
         Kind::Choices if entry == BACK => Act::BackToList,
         Kind::Choices => Act::Save(entry.to_string()),
+        Kind::Consent if entry == CHOOSE_REPORTS => Act::OpenQuestion,
+        Kind::Consent if entry == SHOW_REPORT => Act::ShowSample,
+        // Not now or Back (and Esc): unanswered, asked again at the next start, nothing sent.
+        Kind::Consent => Act::CloseConsent,
+        Kind::Question if entry == SEND_REPORTS => Act::Consent(Consent::Send),
+        Kind::Question if entry == ASK_REPORTS => Act::Consent(Consent::Ask),
+        Kind::Question if entry == NEVER_REPORTS => Act::Consent(Consent::Never),
+        Kind::Question | Kind::Sample => Act::OpenConsent,
     }
 }
 
@@ -928,13 +1112,14 @@ pub fn short(choice: &str) -> &str {
 }
 
 /// The Settings list's (or the Testing list's) entries for what `shown` says: each row with its
-/// value, then (the main list) the launcher's sounds (`sounds`: on or off) and Testing, then
-/// Back.
+/// value, then (the main list) the launcher's sounds (`sounds`: on or off), crash reports
+/// (`crash`: the player's answer) and Testing, then Back.
 pub fn settings_entries(
     rows: &[settings::Row],
     shown: &settings::Files,
     testing: bool,
     sounds: bool,
+    crash: Consent,
 ) -> Vec<String> {
     let mut e: Vec<String> = rows
         .iter()
@@ -942,10 +1127,16 @@ pub fn settings_entries(
         .collect();
     if !testing {
         e.push(sounds_entry(sounds));
+        e.push(crash_entry(crash));
         e.push(TESTING_ENTRY.into());
     }
     e.push(BACK.into());
     e
+}
+
+/// The crash reports row as the list shows it.
+pub fn crash_entry(answer: Consent) -> String {
+    format!("{CRASH_ROW}: {}", answer.label())
 }
 
 /// The sounds row as the list shows it.
@@ -1015,6 +1206,10 @@ enum Mode {
         testing: bool,
         index: usize,
     },
+    /// One of the crash reports screens (`screen`: `Kind::Consent`, `Question` or `Sample`).
+    Consent {
+        screen: Kind,
+    },
 }
 
 impl Mode {
@@ -1031,6 +1226,7 @@ impl Mode {
             Mode::Settings { testing: false } => Kind::Settings,
             Mode::Settings { testing: true } => Kind::Testing,
             Mode::Choices { .. } => Kind::Choices,
+            Mode::Consent { screen } => *screen,
         }
     }
 }
@@ -1103,6 +1299,11 @@ struct App {
     beats_to: f64,
     /// The key whose press finished the typing (or the intro), while it is held.
     finisher: Option<winit::keyboard::PhysicalKey>,
+    /// Whether crash reports may be sent (`crate::crash::consent`), where their screens stand
+    /// ([`ConsentFlow`]), and a line for the start screen (an answer that could not be kept).
+    consent: Consent,
+    consent_flow: ConsentFlow,
+    start_note: Option<String>,
 }
 
 /// Starts Play's work on a thread of its own with `args` (Play.exe's, or play.sh's on Linux and
@@ -1301,14 +1502,23 @@ impl App {
     }
 
     fn show_start(&mut self) {
-        if let Some((why, code)) = self.place.refused.clone() {
+        let kind = self
+            .consent_flow
+            .at_start(self.place.refused.is_some(), self.consent);
+        if let (Kind::Refused, Some((why, code))) = (kind, self.place.refused.clone()) {
             // Play.exe's stop code for the refusal, as it ended with it.
             self.exit_code = code;
             let s = message_screen(&why, &[EXIT.to_string()]);
             self.show(Mode::Refused, s, true);
             return;
         }
-        let s = start_screen(&self.place, &self.card);
+        if kind == Kind::Consent {
+            return self.show_consent();
+        }
+        let mut s = start_screen(&self.place, &self.card);
+        if let Some(note) = self.start_note.take() {
+            s.welcome.push(note);
+        }
         self.show(Mode::Start, s, true);
     }
 
@@ -1602,6 +1812,12 @@ impl App {
                 }
             }
             Act::ToggleSounds => self.toggle_sounds(),
+            Act::Consent(answer) => self.answer_consent(answer),
+            Act::ShowSample => self.show_sample(),
+            Act::OpenConsent => self.show_consent(),
+            Act::OpenQuestion => self.show_question(),
+            Act::OpenConsentFromSettings => self.open_consent_from_settings(),
+            Act::CloseConsent => self.close_consent(None),
             Act::Nothing => {}
         }
     }
@@ -1620,6 +1836,110 @@ impl App {
         self.sounds_on = on;
         self.update_sound();
         self.show_settings(false, settings::ROWS.len(), note);
+    }
+
+    /// The crash reports screens opened from Settings' row (Enter, a click, Left or Right).
+    fn open_consent_from_settings(&mut self) {
+        self.consent_flow.open_in_settings();
+        self.show_consent();
+    }
+
+    /// The first crash reports screen: what a report holds; Choose, the example, Not now (from
+    /// the start screen) or Back (from Settings).
+    fn show_consent(&mut self) {
+        let s = Screen {
+            title: format!("-{CRASH_ROW}-"),
+            welcome: about_text(self.consent_flow.in_settings().then_some(self.consent)),
+            entries: about_entries(self.consent_flow.in_settings()),
+            ..Default::default()
+        };
+        let retype = !matches!(self.mode, Mode::Consent { .. });
+        self.show(
+            Mode::Consent {
+                screen: Kind::Consent,
+            },
+            s,
+            retype,
+        );
+    }
+
+    /// The question: where reports go, the three answers, Back.
+    fn show_question(&mut self) {
+        // No version of nv-rs sends yet (the sending comes in its own change).
+        let s = question_screen(false);
+        // Typed in like the first screen: a first press or click only finishes its text, so a
+        // double click on Choose never answers.
+        self.show(
+            Mode::Consent {
+                screen: Kind::Question,
+            },
+            s,
+            true,
+        );
+    }
+
+    /// The example report ([`crate::crash::sample`]: made from this PC now, nothing written),
+    /// long enough to scroll; Back to the first screen.
+    fn show_sample(&mut self) {
+        let program = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(Path::to_path_buf))
+            .unwrap_or_default();
+        let text = crate::crash::sample(
+            &self.place.own,
+            &program,
+            self.place.game.as_deref(),
+            self.place.mods,
+            self.place.adapter_card.clone(),
+        );
+        let s = Screen {
+            title: "-A crash report-".into(),
+            welcome: text.lines().map(str::to_string).collect(),
+            entries: vec![BACK.into()],
+            ..Default::default()
+        };
+        self.show(
+            Mode::Consent {
+                screen: Kind::Sample,
+            },
+            s,
+            true,
+        );
+    }
+
+    /// `answer` kept for crash reports in the launcher's own file: at once (`now`), or, for the
+    /// first start's answer on Windows, once Play's first-write checks pass ([`keeps_at_once`];
+    /// a first answer never kept so is asked again at the next start). What went wrong, if it
+    /// could not be kept.
+    fn set_consent(&mut self, answer: Consent, now: bool) -> Option<String> {
+        self.consent = answer;
+        if self.place.refused.is_some() {
+            return Some("Not saved: nv-rs may not write in its own folder".into());
+        }
+        consent::keep(&self.place.own, answer, now).err().map(|e| {
+            format!("Your crash reports answer was not saved ({e}): it holds until nv-rs closes.")
+        })
+    }
+
+    /// The question answered: kept, then back to where the screens were opened from.
+    fn answer_consent(&mut self, answer: Consent) {
+        self.log(&format!("crash reports: {}", answer.label()));
+        let note = self.set_consent(answer, self.consent_flow.answer_now());
+        if let Some(note) = &note {
+            self.log(&format!("crash reports: {note}"));
+        }
+        self.close_consent(note);
+    }
+
+    /// The crash reports screens left (answered or not), with what went wrong when the answer
+    /// was not kept: Settings on its row, or the start screen.
+    fn close_consent(&mut self, note: Option<String>) {
+        if self.consent_flow.close() {
+            self.show_settings(false, CRASH_ROW_INDEX, note);
+        } else {
+            self.start_note = note;
+            self.show_start();
+        }
     }
 
     /// The device open (and the hum playing) while the terminal is heard ([`sound::heard`]),
@@ -1727,7 +2047,13 @@ impl App {
         let mut s = Screen {
             title: if testing { "-Testing-" } else { "-Settings-" }.into(),
             welcome,
-            entries: settings_entries(rows_of(testing), &shown, testing, self.sounds_on),
+            entries: settings_entries(
+                rows_of(testing),
+                &shown,
+                testing,
+                self.sounds_on,
+                self.consent,
+            ),
             ..Default::default()
         };
         s.highlighted = highlight.min(s.entries.len() - 1);
@@ -1776,9 +2102,12 @@ impl App {
             return;
         };
         let index = self.screen.highlighted;
-        // The sounds row has two choices: either way flips it.
-        if !testing && index == settings::ROWS.len() {
-            return self.toggle_sounds();
+        // The sounds row has two choices: either way flips it. The crash reports row opens its
+        // screens ([`row_step_act`]).
+        match row_step_act(testing, index) {
+            Some(Act::ToggleSounds) => return self.toggle_sounds(),
+            Some(Act::OpenConsentFromSettings) => return self.open_consent_from_settings(),
+            _ => {}
         }
         let Some(&row) = rows_of(testing).get(index) else {
             return;
@@ -2515,6 +2844,9 @@ pub fn run(raw: Vec<String>) -> i32 {
         focused: true,
         beats_to: -1.0,
         finisher: None,
+        consent: consent::read(&app_own),
+        consent_flow: ConsentFlow::default(),
+        start_note: None,
     };
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: {e}");
@@ -3046,12 +3378,18 @@ mod tests {
 
     /// A press on each shown entry hits that entry and does not move the window; a press above
     /// the rows, left or right of their column, or below the last shown row hits none and moves
-    /// it. The start screen and the full Settings list (15 entries: it scrolls), at the top and
+    /// it. The start screen and the full Settings list (16 entries: it scrolls), at the top and
     /// scrolled to the end, in the 960x720 window, a smaller one and a wider one.
     #[test]
     fn a_press_hits_the_entry_under_it_and_drags_elsewhere() {
         let look = Look::plain();
-        let settings = settings_entries(&settings::ROWS, &settings::Files::default(), false, true);
+        let settings = settings_entries(
+            &settings::ROWS,
+            &settings::Files::default(),
+            false,
+            true,
+            Consent::Unanswered,
+        );
         let start = vec![PLAY.to_string(), MODS.into(), SETTINGS.into(), EXIT.into()];
         for entries in [start, settings] {
             for highlighted in [0, entries.len() - 1] {
@@ -3098,22 +3436,29 @@ mod tests {
     #[test]
     fn the_settings_lists_open_choose_and_go_back() {
         let shown = settings::Files::default();
-        let main = settings_entries(&settings::ROWS, &shown, false, true);
-        assert_eq!(main.len(), 15);
+        let main = settings_entries(&settings::ROWS, &shown, false, true, Consent::Ask);
+        assert_eq!(main.len(), 16);
         assert_eq!(main[0], "Renderer: Vulkan");
         assert_eq!(main[12], "Launcher sounds: On");
-        assert_eq!(main[13], TESTING_ENTRY);
-        assert_eq!(main[14], BACK);
+        assert_eq!(main[CRASH_ROW_INDEX], "Crash reports: Ask each time");
+        assert_eq!(main[14], TESTING_ENTRY);
+        assert_eq!(main[15], BACK);
         assert_eq!(
-            settings_entries(&settings::ROWS, &shown, false, false)[12],
+            settings_entries(&settings::ROWS, &shown, false, false, Consent::Never)[12],
             "Launcher sounds: Off"
+        );
+        // Enter on the crash reports row opens its screens (never answers on one press).
+        assert_eq!(
+            on_enter(Kind::Settings, "", CRASH_ROW_INDEX, &main[CRASH_ROW_INDEX]),
+            Act::OpenConsentFromSettings
         );
         // Enter on the sounds row turns them on or off at once.
         assert_eq!(
             on_enter(Kind::Settings, "", 12, &main[12]),
             Act::ToggleSounds
         );
-        let testing = settings_entries(&settings::TESTING, &shown, true, true);
+        let testing = settings_entries(&settings::TESTING, &shown, true, true, Consent::Send);
+        assert!(!testing.iter().any(|e| e.starts_with(CRASH_ROW)));
         assert_eq!(testing.len(), settings::TESTING.len() + 1);
         assert_eq!(testing.last().map(String::as_str), Some(BACK));
         assert_eq!(on_enter(Kind::Start, "", 1, SETTINGS), Act::OpenSettings);
@@ -3124,7 +3469,7 @@ mod tests {
             Act::OpenChoices(0)
         );
         assert_eq!(
-            on_enter(Kind::Settings, "", 13, TESTING_ENTRY),
+            on_enter(Kind::Settings, "", 14, TESTING_ENTRY),
             Act::OpenTesting
         );
         assert_eq!(on_escape(Kind::Settings, &main), Act::BackToStart);
@@ -3162,6 +3507,164 @@ mod tests {
         assert_eq!(short("Vulkan (recommended)"), "Vulkan");
     }
 
+    /// The crash reports screens: the first says what a report holds and leads to the question,
+    /// the example or back (Not now from the start screen, Back from Settings; Esc the same);
+    /// the question opens on Never, its answers are kept, its Back returns to the first screen;
+    /// the screens open at the start screen only while unanswered and not yet shown in this
+    /// start; from Settings, Enter, a click, Left and Right on the row all open them (no press
+    /// there answers), and an answer there is written at once ([`ConsentFlow`]).
+    #[test]
+    fn the_crash_reports_screens_answer_show_and_wait() {
+        for from_settings in [false, true] {
+            let e = about_entries(from_settings);
+            let pick = |entry: &str| {
+                let i = e.iter().position(|x| x == entry).unwrap();
+                on_enter(Kind::Consent, "", i, entry)
+            };
+            assert_eq!(pick(CHOOSE_REPORTS), Act::OpenQuestion);
+            assert_eq!(pick(SHOW_REPORT), Act::ShowSample);
+            assert_eq!(
+                pick(if from_settings { BACK } else { NOT_NOW }),
+                Act::CloseConsent
+            );
+            assert_eq!(on_escape(Kind::Consent, &e), Act::CloseConsent);
+        }
+        let q = question_entries();
+        let pick = |entry: &str| {
+            let i = q.iter().position(|x| x == entry).unwrap();
+            on_enter(Kind::Question, "", i, entry)
+        };
+        assert_eq!(pick(SEND_REPORTS), Act::Consent(Consent::Send));
+        assert_eq!(pick(ASK_REPORTS), Act::Consent(Consent::Ask));
+        assert_eq!(pick(NEVER_REPORTS), Act::Consent(Consent::Never));
+        assert_eq!(pick(BACK), Act::OpenConsent);
+        assert_eq!(on_escape(Kind::Question, &q), Act::OpenConsent);
+        let back = vec![BACK.to_string()];
+        assert_eq!(on_enter(Kind::Sample, "", 0, BACK), Act::OpenConsent);
+        assert_eq!(on_escape(Kind::Sample, &back), Act::OpenConsent);
+        // The start-up gate: the refusal first, then the screens while unanswered and not yet
+        // asked in this start, else the start screen.
+        assert!(asks_consent(Consent::Unanswered, false));
+        assert!(!asks_consent(Consent::Unanswered, true));
+        for answer in consent::ANSWERS {
+            assert!(!asks_consent(answer, false));
+            assert_eq!(start_kind(false, answer, false), Kind::Start);
+        }
+        assert_eq!(start_kind(false, Consent::Unanswered, false), Kind::Consent);
+        assert_eq!(start_kind(false, Consent::Unanswered, true), Kind::Start);
+        assert_eq!(start_kind(true, Consent::Unanswered, false), Kind::Refused);
+        // Settings' row: Enter, Left and Right all open the screens; no press there answers.
+        let main = settings_entries(
+            &settings::ROWS,
+            &settings::Files::default(),
+            false,
+            true,
+            Consent::Unanswered,
+        );
+        assert_eq!(main[CRASH_ROW_INDEX], "Crash reports: Not answered");
+        assert_eq!(
+            on_enter(Kind::Settings, "", CRASH_ROW_INDEX, &main[CRASH_ROW_INDEX]),
+            Act::OpenConsentFromSettings
+        );
+        assert_eq!(
+            row_step_act(false, CRASH_ROW_INDEX),
+            Some(Act::OpenConsentFromSettings)
+        );
+        assert_eq!(
+            row_step_act(false, settings::ROWS.len()),
+            Some(Act::ToggleSounds)
+        );
+        assert_eq!(row_step_act(false, 0), None);
+        assert_eq!(row_step_act(true, CRASH_ROW_INDEX), None);
+        // The question opens on Never: quick Enters never choose sending.
+        for can_send in [false, true] {
+            let q = question_screen(can_send);
+            assert_eq!(q.entries[q.highlighted], NEVER_REPORTS);
+        }
+        // Settings' answers are written at once; only the first start's waits on Windows.
+        assert!(keeps_at_once(true));
+        assert_eq!(keeps_at_once(false), cfg!(not(windows)));
+        // What a report holds (the F12 report's note and place too), where reports go, that only
+        // the report goes, that nothing goes before an answer, and that this version sends none.
+        let about = about_text(None).join(" ");
+        assert!(about.contains("an F12 report's note and place from that run"));
+        assert!(about.contains("no saves or pictures"));
+        assert!(about.contains("Nothing is sent until you choose. Not now asks at the next start."));
+        // From Settings: the answer in force, not what Not now does.
+        let in_settings = about_text(Some(Consent::Send)).join(" ");
+        assert!(in_settings.contains("Now: Send automatically."));
+        assert!(!in_settings.contains("Not now"));
+        let question = question_text(false).join(" ");
+        assert!(question.contains("Sentry (sentry.io)"));
+        assert!(question.contains("Only the report goes"));
+        assert!(question.contains("Nothing is sent until you choose."));
+        assert!(question.contains("cannot send yet"));
+        assert!(!question_text(true).join(" ").contains("cannot send"));
+    }
+
+    /// The window's state for the screens: at the start screen they open once a start and are
+    /// not from Settings; from Settings an answer is written at once and Back returns there;
+    /// leaving clears it.
+    #[test]
+    fn the_crash_reports_flow_opens_once_and_knows_where_from() {
+        let mut flow = ConsentFlow::default();
+        assert_eq!(flow.at_start(false, Consent::Unanswered), Kind::Consent);
+        assert!(!flow.in_settings());
+        assert_eq!(flow.answer_now(), cfg!(not(windows)));
+        assert!(!flow.close());
+        // Not twice in one start.
+        assert_eq!(flow.at_start(false, Consent::Unanswered), Kind::Start);
+        assert_eq!(flow.at_start(true, Consent::Unanswered), Kind::Refused);
+        // From Settings.
+        flow.open_in_settings();
+        assert!(flow.in_settings());
+        assert!(
+            flow.answer_now(),
+            "an answer from Settings is written at once"
+        );
+        assert!(flow.close(), "back to Settings");
+        assert!(!flow.in_settings());
+        assert!(!flow.close());
+        // A new start, answered: the start screen.
+        let mut fresh = ConsentFlow::default();
+        assert_eq!(fresh.at_start(false, Consent::Never), Kind::Start);
+        assert_eq!(fresh.at_start(false, Consent::Unanswered), Kind::Consent);
+    }
+
+    /// In the launcher's own plain look (the game not found yet), every line and every choice of
+    /// the crash reports screens shows at once, and the Settings row fits its highlight.
+    #[test]
+    fn the_crash_reports_screens_fit_the_plain_look() {
+        let look = Look::plain();
+        let screens = [
+            (about_text(None), about_entries(false)),
+            (about_text(Some(Consent::Unanswered)), about_entries(true)),
+            (about_text(Some(Consent::Send)), about_entries(true)),
+            (about_text(Some(Consent::Ask)), about_entries(true)),
+            (about_text(Some(Consent::Never)), about_entries(true)),
+            (question_text(false), question_entries()),
+            (question_text(true), question_entries()),
+        ];
+        for (welcome, entries) in screens {
+            let s = Screen {
+                title: format!("-{CRASH_ROW}-"),
+                welcome,
+                entries,
+                ..Default::default()
+            };
+            assert!(screen::shows_whole(&look, &s), "{:?}", s.welcome);
+        }
+        for answer in [
+            Consent::Unanswered,
+            Consent::Send,
+            Consent::Ask,
+            Consent::Never,
+        ] {
+            let row = format!("> {}", crash_entry(answer));
+            assert!(look.font.width(&row) <= 700 - 5, "{row}");
+        }
+    }
+
     /// Typing, and so a paste, reaches the prompt on the start screen, Play's folder question and
     /// play.sh's output only: every other kind of screen is listed and refuses it.
     #[test]
@@ -3178,6 +3681,9 @@ mod tests {
             Kind::Settings,
             Kind::Testing,
             Kind::Choices,
+            Kind::Consent,
+            Kind::Question,
+            Kind::Sample,
         ];
         let takes: Vec<Kind> = all.into_iter().filter(|k| takes_typing(*k)).collect();
         assert_eq!(takes, [Kind::Start, Kind::Folder, Kind::Output]);

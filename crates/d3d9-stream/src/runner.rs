@@ -342,8 +342,10 @@ impl Stream {
     /// A sync command whose caller takes its reply later ([`Stream::take_later`]), not waiting for it
     /// now: the threaded runner hands it over and goes on (the reply waits on the queue; a sync command
     /// submitted meanwhile first takes it aside, so each reply goes to its own caller). Carried out
-    /// at once, its reply kept, by the direct runner and while a cut is open or the commands are
-    /// recorded. One at a time: the reply is taken before the next.
+    /// at once, its reply kept, by the direct runner and while the commands are recorded. A cut whose
+    /// slot is closed is settled first; with its slot still open the command is a sync call made
+    /// while holding (the caller closes the slot first, as for any sync call). One at a time: the
+    /// reply is taken before the next.
     ///
     /// # Panics
     /// On a command that is not sync, or while an earlier one's reply has not been taken.
@@ -353,7 +355,8 @@ impl Stream {
             !self.later_waiting(),
             "a reply taken later before the next is asked for"
         );
-        if self.cut.is_none() && self.record.is_none() {
+        // A closed cut settled first (`holding`), so the threaded runner still hands the command over.
+        if !self.holding() && self.cut.is_none() && self.record.is_none() {
             if let Runner::Threaded(t) = &mut self.runner {
                 t.submit_later(cmd);
                 return;
