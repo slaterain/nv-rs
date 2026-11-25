@@ -31,14 +31,17 @@
 //! The finish of each task on main, once its files are in (`QueuedReference::PostProcess`,
 //! `0043fdf0`, and the attaches it reaches: `00440ba0`, `00441800`, `00441c30`), is typed in
 //! [`attach`] with `TES::IsCellLoaded`, the loader's word that a reference is done and the cell's
-//! two counters going down.
+//! two counters going down. `TES`'s load of each reference into the scene (`00451ef0`), which the
+//! attach and the cell's other loads call, is typed in [`scene`]; with it the actor classes' true
+//! body (`008d0360`) their slot 0x100 holds, so an actor's test is a typed call too.
 //!
-//! Stage 1: the objects stay in guest memory where the game made them. **Integers only** (the one
-//! float, the origin's 0.0 for the vector constructor, is a constant word), so the row is
-//! [`Threads::Both`].
+//! Stage 1: the objects stay in guest memory where the game made them. The row is
+//! [`Threads::Both`]: the code is integers (the origin's 0.0 for the vector constructor is a constant
+//! word) but for one product in [`scene`], which keeps the x87's exact helpers.
 
 pub mod attach;
 pub mod queue;
+pub mod scene;
 
 use crate::{dispatch, draw, slot_target};
 use engine_core::ptr::Ptr;
@@ -82,6 +85,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0044_09e0, attach::reference_done(u32, u32)),
         entry!(0x0044_0a10, attach::queued_count_down(u32)),
         entry!(0x0044_0a50, attach::critical_count_down(u32)),
+        entry!(0x0045_1ef0, scene::load_reference(u32, u32, u32, u32, u8)),
+        entry!(0x008d_0360, answers_true(u32) -> bool),
     ]
 }
 
@@ -176,18 +181,18 @@ fn node_next(e: &mut Engine, node: u32) -> u32 {
     typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node))
 }
 
-/// The reference's slot 0x100 (whether it is an actor): `TESObjectREFR`'s false body as its typed
-/// call, any other through the vtable.
+/// The reference's slot 0x100 (whether it is an actor): `TESObjectREFR`'s false body and the actor
+/// classes' true body ([`answers_true`]) as their typed calls, any other through the vtable.
 #[inline]
 fn is_actor(e: &mut Engine, reference: u32) -> bool {
-    if slot_target(e, reference, SLOT_IS_ACTOR) == 0x0047_c850 {
-        typed_call!(
+    match slot_target(e, reference, SLOT_IS_ACTOR) {
+        0x0047_c850 => typed_call!(
             draw::FAMILY,
             0x0047_c850,
             draw::shapes::answers_false(e, reference)
-        )
-    } else {
-        e.vcall(reference, SLOT_IS_ACTOR, &args![]).bool()
+        ),
+        0x008d_0360 => typed_call!(FAMILY, 0x008d_0360, answers_true(e, reference)),
+        _ => e.vcall(reference, SLOT_IS_ACTOR, &args![]).bool(),
     }
 }
 
@@ -205,7 +210,7 @@ fn kind_test(e: &mut Engine, reference: u32) -> bool {
 /// The reference's 3D (slot 0x1d0): `TESObjectREFR::Get3D` as its typed call when the slot holds
 /// it, any other through the vtable.
 #[inline]
-fn reference_3d(e: &mut Engine, reference: u32) -> u32 {
+fn slot_3d(e: &mut Engine, reference: u32) -> u32 {
     if slot_target(e, reference, SLOT_GET_3D) == 0x0043_fcd0 {
         typed_call!(
             dispatch::FAMILY,
@@ -333,7 +338,7 @@ fn bring_up(e: &mut Engine, cell: u32, item: u32, priority: u32) {
         MODEL_LOADER_QUEUE_REFERENCE,
         &args![model_loader, item, priority, 0u32],
     );
-    if reference_3d(e, item) != 0 {
+    if slot_3d(e, item) != 0 {
         let mut attach = true;
         let base = base_form(e, item);
         if e.mem.u8(base.wrapping_add(4)) == FORM_TYPE_23 {
@@ -377,4 +382,11 @@ pub fn init_action_list(e: &mut Engine, reference: u32, list: u32) {
 pub fn kind_3d_to_40_or_69(e: &mut Engine, this: u32) -> bool {
     let kind = e.mem.u8(this.wrapping_add(4));
     (0x3d..=0x40).contains(&kind) || kind == 0x69
+}
+
+// Typed from 008d0360
+/// A class's constant true body (`thiscall(this)`, `mov al, 1`): the slot 0x100 of the actor
+/// classes (`Actor`, `Character`, `Creature`, `PlayerCharacter`), among others.
+pub fn answers_true(_e: &mut Engine, _this: u32) -> bool {
+    true
 }

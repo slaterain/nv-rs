@@ -19,9 +19,10 @@
 //! through its slot 0, inside the context `0x31`. The pointer's release at the end (`0044cbf0`)
 //! lets go of whatever it still holds, which deletes only if every other count went meanwhile (a
 //! loader thread finished the task and the map let it go between the find or the add and that
-//! release). The task is allocated by the game's memory manager (`00401000`), inside the memory context `0x31` (and
-//! `0x34` for the player, `0x32` for an NPC or a creature, nested inside it), entered and left by
-//! address (`00404eb0`, `00404ee0`) since they set the context the allocator files the block under.
+//! release). The task is allocated by the game's memory manager (`00401000`), inside the memory
+//! context `0x31` (and `0x34` for the player, `0x32` for an NPC or a creature, nested inside it),
+//! entered and left by address (`00404eb0`, `00404ee0`) since they set the context the allocator
+//! files the block under.
 //!
 //! **Which thread.** Everything here runs on the calling thread, normally main. With `later` set
 //! and the calling thread the loader's owner thread (the word at +0x10 of `011dea0c`) outside menu
