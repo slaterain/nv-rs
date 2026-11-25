@@ -147,6 +147,8 @@ const DOUBLES: &[(u32, &[u32])] = &[
 /// The doubles that also write their answer into the bytes they were asked to read
 /// (`thiscall(buffer, to, size)`).
 const READS: [u32; 2] = [0x0085_79e0, 0x0086_4980];
+/// `TESSaveLoadGame::UseSaveGameBlocks`, whose answer is the same for every call of a world.
+const USE_SAVE_GAME_BLOCKS: u32 = 0x0086_2110;
 
 /// The globals the unit reads.
 const LARGEST_FLOAT: u32 = 0x0108_5df0;
@@ -202,8 +204,11 @@ impl World {
         e.map(BUFFER, 0x2_0000);
         for (k, (addr, answers)) in DOUBLES.iter().enumerate() {
             let block = CONTROL + 0x40 * k as u32;
+            // Whether the save uses blocks does not change within one save: one answer for all calls
+            // (the exe's save would write its length through a null placeholder otherwise).
+            let fixed = (*addr == USE_SAVE_GAME_BLOCKS).then(|| w.pick(answers));
             for i in 0..8 {
-                let answer = w.pick(answers);
+                let answer = fixed.unwrap_or_else(|| w.pick(answers));
                 e.mem.set_u32(block + 4 + 4 * i, answer);
             }
             let reads = READS.contains(addr);
@@ -219,6 +224,12 @@ impl World {
                 ret(answer)
             });
         }
+        // The import `InterlockedDecrement`, which the counted pointer's release reaches.
+        e.register(0x00fd_f1c4, |e, a| {
+            let n = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], n);
+            ret(n)
+        });
         let setting = w.pick(&[0, 1, 0x80]);
         e.mem.set_u8(SETTING_BYTE, setting as u8);
         for i in 0..5 {
