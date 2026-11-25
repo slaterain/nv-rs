@@ -745,32 +745,53 @@ mod tests {
         assert_eq!((e.mem.u32(LOCK), e.mem.u32(LOCK + 4)), (0, 0));
     }
 
-    /// Another real thread spinning on the owner word, as `0040fbf0`'s compare-exchange does, takes
-    /// the lock once this one gives it back, and reads what this one wrote under it.
+    /// Another real thread takes the lock as `0040fbf0` does (the owner word swapped from 0 to its
+    /// id, spinning on it, then a count of 1) once this one gives it back, and reads what this one
+    /// wrote under it. Its count of 1 stays: the release stores this thread's count before it clears
+    /// the owner, so no store of this thread's lands after the waiter's. Many rounds, each waiter
+    /// spinning before the release starts, so a release that cleared the owner first would let some
+    /// waiter's count be overwritten with 0.
     #[test]
     fn a_thread_waiting_on_shared_memory_takes_the_lock_given_back() {
         let mut e = shared();
-        e.mem.set_u32(LOCK, 7);
-        e.mem.set_u32(LOCK + 4, 1);
-        let other = e.mem.view();
-        let waiter = std::thread::spawn(move || {
-            let owner = other.atomic_u32(LOCK).expect("an aligned, mapped word");
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while owner
-                .compare_exchange(0, 9, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                if Instant::now() > deadline {
-                    return None;
+        for round in 0..200u32 {
+            e.mem.set_u32(LOCK, 7);
+            e.mem.set_u32(LOCK + 4, 1);
+            let other = e.mem.view();
+            let spinning = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let started = spinning.clone();
+            let waiter = std::thread::spawn(move || {
+                let owner = other.atomic_u32(LOCK).expect("an aligned, mapped word");
+                let deadline = Instant::now() + Duration::from_secs(5);
+                started.store(true, Ordering::Release);
+                while owner
+                    .compare_exchange(0, 9, Ordering::Acquire, Ordering::Relaxed)
+                    .is_err()
+                {
+                    if Instant::now() > deadline {
+                        return None;
+                    }
+                    std::hint::spin_loop();
                 }
-                std::thread::yield_now();
+                other.set_u32(LOCK + 4, 1);
+                Some(other.u32(GUARDED))
+            });
+            while !spinning.load(Ordering::Acquire) {
+                std::hint::spin_loop();
             }
-            Some(other.u32(GUARDED))
-        });
-        e.mem.set_u32(GUARDED, 0x1234_5678);
-        unlock_inline(&mut e, Ptr::new(LOCK));
-        let seen = waiter.join().expect("the waiting thread");
-        assert_eq!(seen, Some(0x1234_5678), "the waiter took the lock");
-        assert_eq!((e.mem.u32(LOCK), e.mem.u32(LOCK + 4)), (9, 0));
+            e.mem.set_u32(GUARDED, 0x1234_5678 + round);
+            unlock_inline(&mut e, Ptr::new(LOCK));
+            let seen = waiter.join().expect("the waiting thread");
+            assert_eq!(
+                seen,
+                Some(0x1234_5678 + round),
+                "round {round}: the waiter took the lock"
+            );
+            assert_eq!(
+                (e.mem.u32(LOCK), e.mem.u32(LOCK + 4)),
+                (9, 1),
+                "round {round}: the waiter's count stays after the release"
+            );
+        }
     }
 }
