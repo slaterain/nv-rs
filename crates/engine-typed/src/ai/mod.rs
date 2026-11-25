@@ -50,7 +50,6 @@ pub static AI: Family = Family {
 fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0040_1280, base_process::empty_name(Ptr) -> u32),
-        entry!(0x0071_7e50, base_process::address_4(Ptr) -> u32),
         entry!(0x008c_5e70, actor_package::destroy_data(Ptr)),
         entry!(0x008c_5ec0, actor_package::handle_deleted_reference(Ptr, u32)),
         entry!(0x008c_5ef0, actor_package::clear(Ptr)),
