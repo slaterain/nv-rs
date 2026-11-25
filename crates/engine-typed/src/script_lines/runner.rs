@@ -112,7 +112,11 @@ fn name_of(e: &mut Engine, form: u32) -> u32 {
 
 #[inline]
 fn header_of(e: &mut Engine, script: Ptr) -> u32 {
-    e.call(SCRIPT_HEADER_OF, &args![script]).u32()
+    typed_call!(
+        scripts::FAMILY,
+        SCRIPT_HEADER_OF,
+        scripts::run::plus_18(e, script)
+    )
 }
 
 /// JIP LN NVSE's `bNoFailedScriptLocks` (O7): its three jumps skip the clear of a failed script's

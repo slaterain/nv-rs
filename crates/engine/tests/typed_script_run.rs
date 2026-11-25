@@ -3,11 +3,13 @@
 //! the run manager's instance, run and action list build, a fresh runner and its busy test, the
 //! forgetting of a run's referenced objects, and the locals' variable set and action flags' clear.
 //!
-//! What stands in: the script's header, the elapsed time, the quest delay setting and a quest's
-//! delay, the referenced-object list, the run count's interlocked add and subtract, the allocator
-//! and its free, the fill, the manager's constructor and the exit queue, the runner's line loop and
-//! the action list's run (xNVSE's wrapped pair: by address in play too), the log, the save game's
-//! loading test and form, the form lookup, the cast and the names.
+//! The script's header (`00500940`) and the elapsed time (`0084d030`, the frame timer's float at
+//! +0xc) are the family's own getters, each with a test of its own here. What stands in: the quest
+//! delay setting and a quest's delay, the referenced-object list, the run count's interlocked add
+//! and subtract, the allocator and its free, the fill, the manager's constructor and the exit
+//! queue, the runner's line loop and the action list's run (xNVSE's wrapped pair: by address in
+//! play too), the log, the save game's loading test and form, the form lookup, the cast and the
+//! names.
 
 use engine as _;
 use engine_core::prelude::*;
@@ -16,10 +18,11 @@ use engine_core::typed::leaf;
 use engine_typed::scripts::{self, run};
 
 const CONFIG: u32 = 0x0300_0000;
-/// What the stand-ins answer: the elapsed time (a double), the quest's delay (a double), the line
-/// loop's result, whether a save loads, the form being loaded's header, the looked-up form, the cast,
-/// the name, whether the allocator answers null.
-const ANSWER_ELAPSED: u32 = CONFIG;
+/// The frame timer (`011f6394`) whose float at +0xc is the elapsed time.
+const ELAPSED_TIMER: u32 = 0x011f_6394;
+/// What the stand-ins answer: the quest's delay (a double), the line loop's result, whether a save
+/// loads, the form being loaded's header, the looked-up form, the cast, the name, whether the
+/// allocator answers null.
 const ANSWER_QUEST_DELAY: u32 = CONFIG + 8;
 const ANSWER_RUN: u32 = CONFIG + 0x10;
 const ANSWER_LOADING: u32 = CONFIG + 0x14;
@@ -62,8 +65,6 @@ fn world(e: &mut Engine) {
         e.map(page, 0x1000);
     }
     e.map(CONFIG, 0x1000);
-    e.register(0x0050_0940, |_, a| ret(a[0] + 0x18));
-    e.register(0x0084_d030, |e, _| ret_f(e.mem.f64(ANSWER_ELAPSED)));
     e.register(0x0040_3e20, |_, a| ret(a[0] - 0x011c_ac68 + SETTING));
     e.register(0x0079_2760, |e, _| ret_f(e.mem.f64(ANSWER_QUEST_DELAY)));
     e.register(0x005d_43c0, |e, a| ret(e.mem.u32(a[0] + 0x44)));
@@ -222,7 +223,8 @@ fn scripts_run() {
             f32::from_bits(case.word(2)),
             owner,
         );
-        e.mem.set_f64(ANSWER_ELAPSED, 2.5);
+        // The frame timer's elapsed seconds (`0084d030` reads its float at +0xc).
+        e.mem.set_f32(ELAPSED_TIMER + 0xc, 2.5);
         e.mem.set_f64(
             ANSWER_QUEST_DELAY,
             if case.word(3) == 2 { 0.0 } else { 1.75 },
@@ -549,6 +551,47 @@ fn scripts_set_variable_and_action_flags() {
                 _ => {}
             }
             vec![l]
+        })
+        .run()
+        .assert_same();
+}
+
+/// Words a getter hands back whole, and an object's address near the top of memory (the sum wraps).
+const WORDS: &[u32] = &[0, 1, 0x0012_3456, 0x7fff_ffff, 0x8000_0000, 0xffff_ffe0];
+
+#[test]
+fn scripts_plus_18() {
+    Diff::new(entry!(0x0050_0940, run::plus_18(Ptr) -> u32))
+        .common()
+        .inputs(&[Input::Of(WORDS)])
+        .run()
+        .assert_same();
+}
+
+/// The floats at +0xc: zeros, a subnormal, ordinary values, the largest float, an infinity, a quiet
+/// NaN and a signalling one (the `FLD` quiets it), with their signs.
+const FLOATS: &[u32] = &[
+    0,
+    0x8000_0000,
+    1,
+    0x3f80_0000,
+    0xc020_0000,
+    0x7f7f_ffff,
+    0xff80_0000,
+    0x7fc0_1234,
+    0x7f80_0001,
+    0xffa0_0000,
+];
+
+#[test]
+fn scripts_float_at_c() {
+    Diff::new(entry!(0x0084_d030, run::float_at_c(Ptr) -> f64))
+        .common()
+        .inputs(&[Input::Of(FLOATS)])
+        .setup(|e, case| {
+            let object = e.mem.alloc(0x10);
+            e.mem.set_u32(object + 0xc, case.word(0));
+            vec![object]
         })
         .run()
         .assert_same();
