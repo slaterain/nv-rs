@@ -155,8 +155,10 @@ Reporting a problem
 https://github.com/slaterain/nv-rs/issues
 
 Say that it is the macOS preview, your Mac's model and macOS version, and where your game's folder
-came from. Attach the newest game-*.log from the logs folder above, and the report folder from
-reports if you made one with F12. Logs can show your user name in folder paths: look through them
-first if that matters to you. Never attach game files.
+came from. If the game stopped, the launcher (nv-rs) keeps a crash report in the reports folder
+above (a crash-<date and time> folder, your user name and folder names taken out of it): attach
+its two files. Otherwise attach the newest game-*.log from the logs folder above. Attach the
+report folder from reports too if you made one with F12. Logs can show your user name in folder
+paths: look through them first if that matters to you. Never attach game files.
 
 Licence terms and notices are in LICENSE, LEGAL.md, THIRD-PARTY-NOTICES.txt and the licenses folder.
