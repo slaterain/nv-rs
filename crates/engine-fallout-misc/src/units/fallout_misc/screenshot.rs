@@ -390,6 +390,9 @@ pub fn screenshot_take_save_game_screen_shot(
         }
         let render_target_surface = e.mem.u32(base + FRAME_RENDER_TARGET_SURFACE);
         let staging_surface = e.mem.u32(base + FRAME_STAGING_SURFACE);
+        // Port-added (`NV_SAVE_PICTURE_LATER`, `engine_core::save_picture`): a save's picture may take
+        // the copy's rows after the save's body when every pixel converted below is in them.
+        engine_core::save_picture::allow(scaled_height <= current_height);
         e.vcall(
             device,
             DEVICE_COPY_SURFACE,
@@ -427,7 +430,12 @@ pub fn screenshot_take_save_game_screen_shot(
         let destination = e.call(IMAGE_PIXELS, &args![image, 0u32, 0u32]).u32();
         let image_width = e.mem.u32(width.addr());
         let image_height = e.mem.u32(height.addr());
-        convert_to_rgb(e, bits, destination, image_width, image_height);
+        if engine_core::save_picture::is_deferred() {
+            // The copy's rows come later: the save converts them at the end of its body.
+            engine_core::save_picture::shot(image_width, image_height);
+        } else {
+            convert_to_rgb(e, bits, destination, image_width, image_height);
+        }
         e.vcall(staging_surface, SURFACE_UNLOCK, &[]);
         e.vcall(staging_surface, RELEASE, &[]);
         e.call(SMART_POINTER_ASSIGN, &args![smart_pointer, 0u32]);
@@ -1011,5 +1019,65 @@ mod tests {
             e.mem.bytes(target, 6),
             vec![0x12, 0x11, 0x10, 0x16, 0x15, 0x14]
         );
+    }
+
+    /// The copy as the platform answers it with `NV_SAVE_PICTURE_LATER`: its reply asked for later when
+    /// the picture allows it.
+    fn copy_later(e: &mut Engine) {
+        e.register_double(SLOT_COPY_SURFACE, |_, _| {
+            if engine_core::save_picture::allowed() {
+                engine_core::save_picture::deferred(16);
+            }
+            word_ret(0)
+        });
+    }
+
+    #[test]
+    fn a_save_picture_read_back_later_is_converted_by_the_save_not_here() {
+        use engine_core::save_picture as later;
+        later::on_for_tests(Some(true));
+        // Half as high as wide: the image's height (1) is within the surface's 2 rows.
+        let (mut e, s) = scene(Options {
+            ratio: (1, 2),
+            ..Options::default()
+        });
+        copy_later(&mut e);
+        later::begin();
+        assert_eq!(e.call(0x0087_8f60, &[s.width, s.height, 0]).u32(), IMAGE);
+        assert_eq!(e.mem.u32(s.height), 1);
+        assert_eq!(e.mem.bytes(s.pixels, 12), vec![0; 12], "not converted");
+        assert!(later::end(), "its bytes are made at the end of the save");
+        // The default shape (3 rows of the surface's 2 converted): converted here, as without the switch.
+        let (mut e, s) = scene(Options::default());
+        copy_later(&mut e);
+        later::begin();
+        e.call(0x0087_8f60, &[s.width, s.height, 0]);
+        assert_eq!(e.mem.bytes(s.pixels, 6), vec![2, 1, 0, 6, 5, 4]);
+        assert!(!later::end());
+        // Not a save's picture (no `begin`): converted here.
+        let (mut e, s) = scene(Options {
+            ratio: (1, 2),
+            ..Options::default()
+        });
+        copy_later(&mut e);
+        e.call(0x0087_8f60, &[s.width, s.height, 0]);
+        assert_eq!(e.mem.bytes(s.pixels, 6), vec![2, 1, 0, 6, 5, 4]);
+        later::on_for_tests(None);
+    }
+
+    #[test]
+    fn the_saves_later_conversion_is_the_pictures_own() {
+        let mut e = Engine::new();
+        for (width, height) in [(5u32, 3u32), (1, 1), (16, 9)] {
+            let n = width * height;
+            let source = e.mem.alloc(n * 4);
+            let target = e.mem.alloc(n * 3);
+            let bytes: Vec<u8> = (0..n * 4).map(|i| (i * 37 + 11) as u8).collect();
+            e.mem.write(source, &bytes);
+            convert_to_rgb(&mut e, source, target, width, height);
+            let mut native = vec![0u8; (n * 3) as usize];
+            engine_core::save_picture::convert(&bytes, width, height, &mut native);
+            assert_eq!(native, e.mem.bytes(target, n * 3), "{width} by {height}");
+        }
     }
 }

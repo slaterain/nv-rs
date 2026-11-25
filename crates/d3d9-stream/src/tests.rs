@@ -332,6 +332,87 @@ fn a_sync_command_sees_every_command_before_it() {
     }
 }
 
+#[test]
+fn a_reply_taken_later_sees_the_commands_before_it_and_keeps_to_its_caller() {
+    let draw = || Cmd::DrawIndexedPrimitive {
+        device: 0x1000,
+        kind: 4,
+        base_vertex: 0,
+        min_index: 0,
+        vertices: 3,
+        start_index: 0,
+        count: 1,
+    };
+    let rows = |reply: Option<Reply>| match reply {
+        Some(Reply::Rows(Some(r))) => r.bytes,
+        other => panic!("{other:?}"),
+    };
+    let runners: [fn() -> Stream; 3] = [
+        || Stream::direct(Box::new(Log::default())),
+        || {
+            // The upload before the read-back is slow: its reply is still on its way when the query asks.
+            let log = Log {
+                slow_upload: Some(Duration::from_millis(30)),
+                ..Log::default()
+            };
+            Stream::threaded(Box::new(log), Settings::default())
+        },
+        || {
+            let tiny = Settings {
+                chunk_commands: 2,
+                chunk_bytes: 300,
+                ..Settings::default()
+            };
+            Stream::threaded(Box::new(Log::default()), tiny)
+        },
+    ];
+    for (i, make) in runners.iter().enumerate() {
+        let mut stream = make();
+        assert!(stream.take_later().is_none(), "{i}: none asked for");
+        // Two draws, the read-back (the backend answers rows of its draw count), three more draws and a
+        // query (it answers the draw count): the query's reply is its own, the read-back's keeps its place.
+        stream.submit(draw());
+        stream.submit(draw());
+        stream.submit(Cmd::UploadSurface {
+            surface: 0x7000,
+            row: 4,
+            rows: 1,
+            data: Data::Bytes(&[1, 2, 3, 4]),
+        });
+        stream.submit_later(Cmd::GetRenderTargetData {
+            device: 0x1000,
+            source: 0x2000,
+            destination: 0x7000,
+            pitch: 8,
+        });
+        assert!(stream.later_waiting(), "{i}");
+        for _ in 0..3 {
+            stream.submit(draw());
+        }
+        match stream.submit(Cmd::QueryGetData {
+            query: 0x8000,
+            flags: 1,
+        }) {
+            Reply::Query(Some((0, 5))) => {}
+            other => panic!("{i}: {other:?}"),
+        }
+        assert_eq!(rows(stream.take_later()), vec![2; 8], "{i}");
+        assert!(
+            !stream.later_waiting() && stream.take_later().is_none(),
+            "{i}: taken once"
+        );
+        // Taken before any other sync command: waited for.
+        stream.submit_later(Cmd::GetRenderTargetData {
+            device: 0x1000,
+            source: 0x2000,
+            destination: 0x7000,
+            pitch: 4,
+        });
+        stream.submit(draw());
+        assert_eq!(rows(stream.take_later()), vec![5; 4], "{i}");
+    }
+}
+
 /// Presents left to carry out each time `Present` returns, with a backend whose presents take
 /// 20 ms.
 fn ahead(frames_in_flight: u64) -> Vec<u64> {
