@@ -33,8 +33,9 @@ pub const CODE_COUNT: u32 = 0x100;
 /// The log page: its first word counts the words written after it.
 pub const LOG: u32 = 0x0510_0000;
 const LOG_SIZE: u32 = 0x4_0000;
-/// The exe's data the tested code reads: `.rdata` and `.data`/`.bss`.
-pub const DATA: [(u32, u32); 2] = [(0x0100_0000, 0x10_0000), (0x011c_0000, 0xc_0000)];
+/// The exe's data the tested code reads: `.rdata`, and the part of `.data`/`.bss` the menus' globals
+/// live in.
+pub const DATA: [(u32, u32); 2] = [(0x0100_0000, 0x10_0000), (0x0118_0000, 0x10_0000)];
 
 /// The world's seeds: each case builds the world from one.
 pub const SEEDS: &[u32] = &[1, 2, 3];
@@ -143,6 +144,9 @@ pub fn world(e: &mut Engine, seed: u32, callees: &[u32]) {
     for k in 0..CODE_COUNT {
         stand_in(e, CODE + 4 * k);
     }
+    // A virtual call on a word that is no object (a small number, a float, a stand-in's address) reads
+    // its slot from a zero page and calls address 0: a stand-in there too, so both sides go on.
+    stand_in(e, 0);
     for &at in callees {
         if at == LIST_STEP {
             list_step(e);

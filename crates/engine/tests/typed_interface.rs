@@ -730,7 +730,7 @@ fn interface_get_control_push_text_for_diff() {
         0x0070_39b0,
         interface::interface_cpp::interface_get_control_push_text_for(i32, u32, u8)
     ))
-    .in_arena(&[Arg::Int, Arg::Word, Arg::Byte], CALLEES, &[])
+    .in_arena(&[Arg::Int, Arg::Word, Arg::Byte], CALLEES, &[0x0070_3be0])
     .run()
     .assert_same();
 }
@@ -738,7 +738,7 @@ fn interface_get_control_push_text_for_diff() {
 #[test]
 fn fn_00703be0_diff() {
     Diff::new(engine_core::entry!(0x0070_3be0, interface::interface_cpp::fn_00703be0(u32, u32, u32) -> u8))
-        .in_arena(&[Arg::Word, Arg::Word, Arg::Word], CALLEES, &[])
+        .in_arena(&[Arg::Ptr, Arg::Byte, Arg::Byte], CALLEES, &[])
         .run()
         .assert_same();
 }
