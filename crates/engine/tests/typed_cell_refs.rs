@@ -3126,7 +3126,7 @@ fn extra_stand_ins(e: &mut Engine) {
     lighting_stand_ins(e);
     e.register(EXTRA_VT_FN, |e, a| {
         let n = e.mem.u32(a[0] + EXTRA_DELETES);
-        e.mem.set_u32(a[0] + EXTRA_DELETES, n + 1);
+        e.mem.set_u32(a[0] + EXTRA_DELETES, n.wrapping_add(1));
         Ret::default()
     });
     e.register(0x0040_1030, nothing);
@@ -4257,6 +4257,11 @@ fn xd_world(e: &mut Engine, seed: u32) -> ExtraWorld {
     e.mem.set_u32(vt + 4, XD_COMPARE_FN);
     e.mem.set_u32(vt + 0xc, XD_SLOT_3_FN);
     e.mem.set_u32(XD_VT, vt);
+    // A null extra data (a failed allocation's, which the exe adds and calls through as it is)
+    // reads the world's vtable from page 0, so its calls reach the stand-ins on both sides.
+    e.mem.set_u32(0, vt);
+    // The game loader's global `RemoveNonPersistentCellData` reads (its flag test ignores it).
+    e.map(0x011d_d000, 0x1000);
     let mut d = Draw(seed.wrapping_mul(0x2545_f491) ^ 0x0041_8200);
     e.mem.set_u32(XD_NEW_FAILS, u32::from(d.next(6) == 0));
     let tls = e.tls();
