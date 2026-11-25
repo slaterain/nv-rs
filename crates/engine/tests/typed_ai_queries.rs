@@ -289,7 +289,8 @@ fn is_running_run_once() {
 /// 0x22c the exe's functions, 1 a stand-in at 0x27c answering the package, 2 no package at all.
 /// `kind`: the package's procedure type. `controller`: the actor's slot 0x428 `008a02d0` (with the
 /// actor in combat and a combat package held: 1), `00acbb70` (2), or a stand-in answering a combat
-/// controller (3) or 0 (0). `answers`: bit 0 the process's slot 0x280 (1 or 0), bit 1
+/// controller (3) or 0 (0). `answers`: bits 0 and 1 pick what the process's slot
+/// 0x280 answers (1, 0, 2 or 0x101: the exe compares the whole word with 1), bit 2
 /// `CombatController::IsFleeing`. `player`: whether the actor is the player.
 struct FleeWorld {
     actor: u32,
@@ -311,7 +312,7 @@ fn flee_world(
         slot(e, p, 0x27c, 0x0085_9670);
     }
     answer(e, p, 0x27c, held);
-    answer(e, p, 0x280, answers & 1);
+    answer(e, p, 0x280, [1, 0, 2, 0x101][(answers & 3) as usize]);
     let a = actor(e, p, u32::from(controller == 1));
     match controller {
         1 => {
@@ -326,7 +327,7 @@ fn flee_world(
         }
         _ => answer(e, a, 0x428, 0),
     }
-    e.mem.set_u32(FLEEING_ANSWER, (answers >> 1) & 1);
+    e.mem.set_u32(FLEEING_ANSWER, (answers >> 2) & 1);
     let other = object(e);
     e.mem.set_u32(PLAYER, if player { a } else { other });
     FleeWorld {
@@ -344,11 +345,11 @@ fn is_fleeing() {
             Input::Of(&[0, 1, 2]),
             Input::Of(&[0x16, 0xa, 0x13, 0x12, 0]),
             Input::Of(&[0, 1, 2, 3]),
-            Input::Of(&[0, 1, 2, 3]),
+            Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7]),
             Input::Flag,
             Input::Flag,
         ])
-        .max_cases(300)
+        .max_cases(800)
         .setup(|e, case| {
             let w = flee_world(
                 e,
