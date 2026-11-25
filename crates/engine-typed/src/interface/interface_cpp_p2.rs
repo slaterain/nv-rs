@@ -1590,9 +1590,10 @@ const TILE_MENU_DESTRUCTOR: u32 = 0x00a1_eff0;
 const OPERATOR_DELETE: u32 = 0x0040_1030;
 /// Constructors the `Tile` constructor runs on its members: `0048f200`
 /// (at `+4`), `00709e80` (at `+0x10`), the string constructor (at
-/// `+0x20`), and `00633c90` and `0066b0d0` (both at `+0x2c`, one word 0).
+/// `+0x20`), and `00633c90` and `0066b0d0` (both at `+0x2c`, one word 0;
+/// the first done in place: with null it stores the null and adds no
+/// reference, the menu manager file's `IN_PLACE`).
 const TILE_MEMBER_AT_4: u32 = 0x0048_f200;
-const TILE_MEMBER_AT_2C_FIRST: u32 = 0x0063_3c90;
 const TILE_MEMBER_AT_2C_SECOND: u32 = 0x0066_b0d0;
 /// The `float` at `01016264`, returned by `00709ac0`.
 const RETURNED_SCALE: u32 = 0x0101_6264;
@@ -2904,7 +2905,8 @@ pub fn fn_00709840(e: &mut Engine, this: u32) -> u32 {
 // Typed from 00709860
 /// Constructor of `Tile` (vtable `0106ed9c`, RTTI `.?AVTile@@`): constructs
 /// the members at `+4` (`0048f200`), `+0x10` (`00709e80(0x10, 0)`), `+0x20`
-/// (a `BSStringT`) and `+0x2c` (`00633c90(0)` then `0066b0d0(0)`), and
+/// (a `BSStringT`) and `+0x2c` (`00633c90(0)`, in place: the null stored;
+/// then `0066b0d0(0)`), and
 /// clears the words at `+0x28` and `+0x30` and the byte at `+0x34`.
 /// Returns `this`. The compiler's exception-unwinding frame is not
 /// translated.
@@ -2917,7 +2919,7 @@ pub fn fn_00709860(e: &mut Engine, this: u32) -> u32 {
         super::interface_cpp_p3::fn_00709e80(e, this.wrapping_add(0x10), 0x10, 0)
     );
     in_place::empty_string(e, this.wrapping_add(0x20));
-    e.call(TILE_MEMBER_AT_2C_FIRST, &args![this + 0x2c, 0u32]);
+    e.mem.set_u32(this + 0x2c, 0);
     e.call(TILE_MEMBER_AT_2C_SECOND, &args![this + 0x2c, 0u32]);
     e.mem.set_u32(this + 0x28, 0);
     e.mem.set_u32(this + 0x30, 0);
