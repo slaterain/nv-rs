@@ -215,8 +215,9 @@ fn stand_ins_all(e: &mut Engine, render: bool, dispatch: bool, draw: bool) {
             ret(0)
         });
     }
-    // The shadow-pass test (the draw family's: real where a test names it): odd types.
-    if !draw {
+    // The shadow-pass test (the draw family's: stood in with its other members, real where a test names it): odd
+    // types.
+    if draw {
         e.register(0x00b6_30f0, |_, a| ret(a[0] & 1));
     }
     if !render {
