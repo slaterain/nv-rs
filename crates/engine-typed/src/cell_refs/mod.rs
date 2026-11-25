@@ -23,9 +23,15 @@
 //! addresses. `SetActionFlag` (`005ac750`) and the cell's state (`004512a0`) can be replaced by a
 //! fix or a built-in extender: called by address.
 //!
+//! The model loader's queue of each reference (`ModelLoader::QueueReference`, `00444850`, most of
+//! the pass's time) is typed in [`queue`] and registered at its address, so the pass, which calls
+//! it by address as the game's other callers do, reaches it through the registration.
+//!
 //! Stage 1: the objects stay in guest memory where the game made them. **Integers only** (the one
 //! float, the origin's 0.0 for the vector constructor, is a constant word), so the row is
 //! [`Threads::Both`].
+
+pub mod queue;
 
 use crate::{dispatch, draw, slot_target};
 use engine_core::ptr::Ptr;
@@ -53,6 +59,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0054_bcf0, references_after_load(u32, u8)),
         entry!(0x005a_c190, init_action_list(u32, u32)),
+        entry!(0x0044_4850, queue::queue_reference(u32, u32, u32, u8)),
         entry!(0x0057_25b0, kind_3d_to_40_or_69(u32) -> bool),
     ]
 }

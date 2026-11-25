@@ -825,6 +825,28 @@ fn map_find_word() {
 }
 
 #[test]
+fn map_add() {
+    // Every key (new, present, deleted), a plain or counted value, replacing or not, the thread's
+    // interface made already or not.
+    Diff::new(entry!(0x0052_8b60, map::add(Ptr<_>, u32, u32, u8) -> u8))
+        .family(&lockfree::LOCKFREE)
+        .family(&leaf::LEAVES)
+        .ignore_calls(INLINED)
+        .max_calls(MAX_CALLS)
+        .local_at(0x0040_4eb0, 0, 4)
+        .local_at(0x0040_4ee0, 0, 4)
+        .inputs(&[Input::Of(KEYS), Input::Flag, Input::Flag, Input::Flag])
+        .setup(|e, case| {
+            let w = world(e, case.word(3) != 0);
+            let value = if case.word(1) != 0 { w.spare } else { 0 };
+            let holder = holder_of(e, value);
+            vec![w.map, case.word(0), holder, case.word(2)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
 fn insert_in_bucket() {
     // Each key (its bucket from the map's rule), a counted value or an empty holder, replacing or
     // not. The scope's local is the typed version's only one: compared as a local.

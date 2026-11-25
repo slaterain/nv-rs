@@ -1,6 +1,7 @@
 //! The navmesh edges family (`NV_TYPED=navmesh_edges`): the rebuild of a navmesh's boundary-edge pairs
 //! and of its per-triangle preferred vertices, `00699b60`, which the game runs for every navmesh a cell
-//! brings in (`00693e60` after `NavMesh::Load`, and the two navmesh repairs, `0069a9ef` and its sibling).
+//! brings in (`00693e60` after `NavMesh::Load`, and two other navmesh functions, `0069a830` and
+//! `0069a9d0`).
 //!
 //! The exe's function has four passes:
 //!
