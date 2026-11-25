@@ -26,6 +26,9 @@
 //! on, its handler at `0x45234E` answers the node an NPC's reference ID is set on, as in the
 //! translation.
 //!
+//! The reference ID set on the node (`SetReferenceIDOnScenegraph`, `004b6dc0`) is
+//! [`super::scenegraph`]'s typed call.
+//!
 //! **Floats.** One product, on the path of a type 0x25 base form in a large cell: the radius its
 //! slot 0x1bc answers (stored as a `double`) times the reference's scale, made an integer toward
 //! zero (`FISTP qword` under the word with rounding control 3). The family runs on both threads'
@@ -97,7 +100,6 @@ const REFERENCE_INIT_SCRIPT: u32 = 0x0056_5730;
 const CELL_LARGE_STEP: u32 = 0x0054_7ad0;
 const ACTOR_UPDATE_ALPHA: u32 = 0x008c_4640;
 const REFERENCE_GET_SCALE: u32 = 0x0056_7400;
-const SET_REFERENCE_ID_ON_SCENEGRAPH: u32 = 0x004b_6dc0;
 /// The form types this tests: two whose node is only handed to its parent, the one with its own
 /// step, the one of the large cell's step.
 const FORM_TYPE_2C: u8 = 0x2c;
@@ -264,7 +266,11 @@ pub fn load_reference(
                 Some(node) => node,
                 None => get_3d(e, reference),
             };
-            e.call(SET_REFERENCE_ID_ON_SCENEGRAPH, &args![node, form_id]);
+            typed_call!(
+                FAMILY,
+                0x004b_6dc0,
+                super::scenegraph::set_reference_id_on_scenegraph(e, node, form_id)
+            );
         }
     }
 }

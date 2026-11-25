@@ -35,6 +35,11 @@
 //! attach and the cell's other loads call, is typed in [`scene`]; with it the actor classes' true
 //! body (`008d0360`) their slot 0x100 holds, so an actor's test is a typed call too.
 //!
+//! The reference's form id given to the geometry under its 3D (`SetReferenceIDOnScenegraph`,
+//! `004b6dc0`, a walk of the scene graph the game runs for every actor it loads) is typed in
+//! [`scenegraph`] with `NiAVObject::GetProperty` (`00a59d30`), which it asks of each geometry; both
+//! are registered at their addresses, so every caller by address reaches them.
+//!
 //! Stage 1: the objects stay in guest memory where the game made them. The row is
 //! [`Threads::Both`]: the code is integers (the origin's 0.0 for the vector constructor is a constant
 //! word) but for one product in [`scene`], which keeps the x87's exact helpers.
@@ -42,6 +47,7 @@
 pub mod attach;
 pub mod queue;
 pub mod scene;
+pub mod scenegraph;
 
 use crate::{dispatch, draw, slot_target};
 use engine_core::ptr::Ptr;
@@ -87,6 +93,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0044_0a50, attach::critical_count_down(u32)),
         entry!(0x0045_1ef0, scene::load_reference(u32, u32, u32, u32, u8)),
         entry!(0x008d_0360, answers_true(u32) -> bool),
+        entry!(0x004b_6dc0, scenegraph::set_reference_id_on_scenegraph(u32, u32)),
+        entry!(0x00a5_9d30, scenegraph::get_property(u32, i32) -> u32),
     ]
 }
 
