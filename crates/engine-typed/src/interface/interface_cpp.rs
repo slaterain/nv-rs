@@ -1,4 +1,4 @@
-//! The interface family: `fallout/interface/interface.cpp` typed (the translation is engine-fallout-interface's `interface.rs`, which
+//! The interface family: the interface unit typed (the translation is engine-fallout-interface's `interface.rs`, which
 //! these functions replace at the same addresses). Each function does what its translation does, read for read
 //! and write for write; the functions of the family call one another through `typed_call!`, the rest by address.
 
@@ -90,8 +90,8 @@ const MANAGER_INITIALIZE: u32 = 0x0070_9fd0;
 /// destructor (`00404ee0`); the guard is a 4-byte local.
 const SCOPE_GUARD_CTOR: u32 = 0x0040_4eb0;
 const SCOPE_GUARD_DTOR: u32 = 0x0040_4ee0;
-/// `"D:\_Fallout3\Platforms\Common\Code\Fallout\Interface\Interface.cpp"`.
-const INTERFACE_CPP_PATH: u32 = 0x0106_eb78;
+/// The interface's source file name, for the scope guard's report.
+const INTERFACE_SOURCE_NAME: u32 = 0x0106_eb78;
 
 /// Menu ids the visibility functions of this unit switch between.
 const MENU_STATS: i32 = 0x3eb;
@@ -115,7 +115,7 @@ const TRAIT_CURRENT_MENU: u32 = 0x1771;
 const FLOAT_TO_INT: u32 = 0x00ec_62c0;
 /// Getter on the manager for the word at `+0x174`; the object that
 /// `007f8a80` and `007fa010` work on (the engine map puts both in
-/// `fopipboymanager.cpp`).
+/// the Pip-Boy manager's file).
 const MANAGER_PIPBOY: u32 = 0x0070_4370;
 const PIPBOY_REFRESH: u32 = 0x007f_8a80;
 /// Takes the object and a tab number.
@@ -137,7 +137,7 @@ const CONSOLE_PRINT: u32 = 0x0071_d0a0;
 /// 8-byte string local.
 const STRING_CTOR: u32 = 0x0040_37b0;
 const STRING_DTOR: u32 = 0x0040_37d0;
-/// Message creation of `messagemenu.cpp` (`007a8e60`): fifteen words, the
+/// Message creation of the message menu (`007a8e60`): fifteen words, the
 /// seventh a `va_list`.
 const MESSAGE_CREATE: u32 = 0x007a_8e60;
 /// The byte the message-box loop of `00704010` waits on (`-1` until the
@@ -244,12 +244,12 @@ fn for_each_list_item(
 
 // Typed from 00702250
 /// `Interface::Init` (Xbox PDB): inside a scope guard (line 0xb0 of
-/// `Interface.cpp`), initializes the interface manager with `(1, flag)`.
+/// the interface's file), initializes the interface manager with `(1, flag)`.
 pub fn interface_init(e: &mut Engine, flag: u8) {
     e.with_stack(4, |e, guard| {
         e.call(
             SCOPE_GUARD_CTOR,
-            &args![guard, 0xdu32, 1u32, INTERFACE_CPP_PATH, 0xb0u32],
+            &args![guard, 0xdu32, 1u32, INTERFACE_SOURCE_NAME, 0xb0u32],
         );
         e.call(MANAGER_INITIALIZE, &args![1u32, flag]);
         e.call(SCOPE_GUARD_DTOR, &args![guard]);
@@ -262,7 +262,7 @@ pub fn fn_007022c0(e: &mut Engine) {
     e.with_stack(4, |e, guard| {
         e.call(
             SCOPE_GUARD_CTOR,
-            &args![guard, 0xdu32, 1u32, INTERFACE_CPP_PATH, 0xbdu32],
+            &args![guard, 0xdu32, 1u32, INTERFACE_SOURCE_NAME, 0xbdu32],
         );
         e.call(MANAGER_INITIALIZE, &args![2u32, 1u32]);
         e.call(SCOPE_GUARD_DTOR, &args![guard]);
@@ -1037,7 +1037,7 @@ pub fn interface_set_enemy_actor(e: &mut Engine, actor: u32) {
 }
 
 // Typed from 007038d0
-/// `007732b0` (in `hudmainmenu.cpp`), no arguments; answers its value (the
+/// `007732b0` (the HUD menu's), no arguments; answers its value (the
 /// exe ends on that call and leaves its `EAX`, which the callers compare).
 pub fn fn_007038d0(e: &mut Engine) -> Ptr {
     e.call(0x0077_32b0, &[]).ptr()
@@ -1190,11 +1190,10 @@ fn console_takes_text(e: &mut Engine) -> bool {
     console_visible(e) || e.call(CONSOLE_ACCEPTS_TEXT, &[]).bool()
 }
 
-// Typed from 00703c00
 /// Prints a formatted line on the console (`cdecl`, varargs: the format
 /// string pointer, then the words the format uses): when the manager is
 /// ready and the console takes text, `0071d0a0(console, format, va_list)`.
-pub fn fn_00703c00(e: &mut Engine, format: u32, va: &[u32]) {
+pub fn print_formatted(e: &mut Engine, format: u32, va: &[u32]) {
     if ready_manager(e).is_none() {
         return;
     }
@@ -1206,14 +1205,14 @@ pub fn fn_00703c00(e: &mut Engine, format: u32, va: &[u32]) {
     }
 }
 
+// Typed from 00703c00
 /// The registered form of `00703c00`: the format and the variable words.
-pub fn fn_00703c00_entry(e: &mut Engine, words: &[u32]) -> Ret {
+pub fn fn_00703c00(e: &mut Engine, words: &[u32]) -> Ret {
     assert!(!words.is_empty(), "00703c00 needs the format argument word");
-    fn_00703c00(e, words[0], &words[1..]);
+    print_formatted(e, words[0], &words[1..]);
     Ret::default()
 }
 
-// Typed from 00703c80
 /// `Interface::PrintLine` (Xbox PDB), `cdecl`, varargs: the first argument
 /// is a `BSString` passed by value (its two words, `text_pointer` and
 /// `text_length`; the function destroys it) and the variable words follow.
@@ -1221,7 +1220,7 @@ pub fn fn_00703c00_entry(e: &mut Engine, words: &[u32]) -> Ret {
 /// with the string's characters as format.
 ///
 /// The compiler's exception-unwinding frame is not translated.
-pub fn interface_print_line(e: &mut Engine, text_pointer: u32, text_length: u32, va: &[u32]) {
+pub fn print_line(e: &mut Engine, text_pointer: u32, text_length: u32, va: &[u32]) {
     e.with_stack(8, |e, text| {
         e.mem.set_u32(text.addr(), text_pointer);
         e.mem.set_u32(text.addr() + 4, text_length);
@@ -1236,13 +1235,14 @@ pub fn interface_print_line(e: &mut Engine, text_pointer: u32, text_length: u32,
     });
 }
 
+// Typed from 00703c80
 /// The registered form of `Interface::PrintLine`.
-pub fn interface_print_line_entry(e: &mut Engine, words: &[u32]) -> Ret {
+pub fn interface_print_line(e: &mut Engine, words: &[u32]) -> Ret {
     assert!(
         words.len() >= 2,
         "PrintLine needs the two words of its string"
     );
-    interface_print_line(e, words[0], words[1], &words[2..]);
+    print_line(e, words[0], words[1], &words[2..]);
     Ret::default()
 }
 
@@ -1288,13 +1288,12 @@ pub fn interface_open_console(e: &mut Engine) {
     e.call(ADD_TO_ENTER_STACK, &args![manager, 3u32]);
 }
 
-// Typed from 00703e80
 /// Creates a message (`cdecl`, varargs): when the manager is ready,
 /// `007a8e60(arg0, arg1, arg2, 0, arg3, arg4, arg5, arg8, &va_list, 1, -1,
 /// -1, 0.0, arg6, arg7)` and its byte answer; false otherwise. `arg6` and
 /// `arg7` are floats.
 #[allow(clippy::too_many_arguments)]
-pub fn fn_00703e80(
+pub fn show_message(
     e: &mut Engine,
     arg0: u32,
     arg1: u32,
@@ -1322,14 +1321,15 @@ pub fn fn_00703e80(
     })
 }
 
+// Typed from 00703e80
 /// The registered form of `00703e80`: nine fixed words and the variable ones.
-pub fn fn_00703e80_entry(e: &mut Engine, w: &[u32]) -> Ret {
+pub fn fn_00703e80(e: &mut Engine, w: &[u32]) -> Ret {
     assert!(
         w.len() >= 9,
         "00703e80 needs 9 argument words, got {}",
         w.len()
     );
-    let ok = fn_00703e80(
+    let ok = show_message(
         e,
         w[0],
         w[1],
@@ -1348,12 +1348,11 @@ pub fn fn_00703e80_entry(e: &mut Engine, w: &[u32]) -> Ret {
     }
 }
 
-// Typed from 00703f10
 /// The same as [`fn_00703e80`] with ten fixed words: `007a8e60(arg0, arg1,
 /// arg2, arg3, arg4, arg5, arg6, arg9, &va_list, 1, -1, -1, 0.0, arg7,
 /// arg8)`; `arg7` and `arg8` are floats.
 #[allow(clippy::too_many_arguments)]
-pub fn fn_00703f10(
+pub fn show_message_full(
     e: &mut Engine,
     arg0: u32,
     arg1: u32,
@@ -1382,14 +1381,15 @@ pub fn fn_00703f10(
     })
 }
 
+// Typed from 00703f10
 /// The registered form of `00703f10`: ten fixed words and the variable ones.
-pub fn fn_00703f10_entry(e: &mut Engine, w: &[u32]) -> Ret {
+pub fn fn_00703f10(e: &mut Engine, w: &[u32]) -> Ret {
     assert!(
         w.len() >= 10,
         "00703f10 needs 10 argument words, got {}",
         w.len()
     );
-    let ok = fn_00703f10(
+    let ok = show_message_full(
         e,
         w[0],
         w[1],
@@ -1422,7 +1422,7 @@ pub fn interface_get_message_menu_result(e: &mut Engine) -> u8 {
 }
 
 // Typed from 00703fd0
-/// `007aa5c0` (in `messagemenu.cpp`), no arguments.
+/// `007aa5c0` (the message menu's), no arguments.
 pub fn fn_00703fd0(e: &mut Engine) {
     e.call(0x007a_a5c0, &[]);
 }
@@ -1440,7 +1440,6 @@ pub fn interface_close_message_menu(e: &mut Engine) {
     e.call(0x007a_a530, &[]);
 }
 
-// Typed from 00704010
 /// Shows a message and waits for its answer (`cdecl`, varargs: four fixed
 /// words). It sets the result byte (`0119f349`) to `0xff`, removes the
 /// fader 1 (`FaderManager::RemoveFader(1, 1)`) and, when the manager is
@@ -1449,7 +1448,14 @@ pub fn interface_close_message_menu(e: &mut Engine) {
 /// answers 0; otherwise it runs the interface loop (pumps the window
 /// messages, `Controls::Poll`, the per-frame interface calls and a click)
 /// until [`fn_00704130`] stores the answer, and returns it.
-pub fn fn_00704010(e: &mut Engine, arg0: u32, arg1: u32, arg2: u32, arg3: u32, va: &[u32]) -> u8 {
+pub fn show_message_and_wait(
+    e: &mut Engine,
+    arg0: u32,
+    arg1: u32,
+    arg2: u32,
+    arg3: u32,
+    va: &[u32],
+) -> u8 {
     e.mem.set_u8(MESSAGE_RESULT, 0xff);
     let mut created = false;
     let fader_manager = e.global::<u32>(FADER_MANAGER_GLOBAL);
@@ -1506,14 +1512,15 @@ pub fn fn_00704010(e: &mut Engine, arg0: u32, arg1: u32, arg2: u32, arg3: u32, v
     e.mem.u8(MESSAGE_RESULT)
 }
 
+// Typed from 00704010
 /// The registered form of `00704010`: four fixed words and the variable ones.
-pub fn fn_00704010_entry(e: &mut Engine, w: &[u32]) -> Ret {
+pub fn fn_00704010(e: &mut Engine, w: &[u32]) -> Ret {
     assert!(
         w.len() >= 4,
         "00704010 needs 4 argument words, got {}",
         w.len()
     );
-    let answer = fn_00704010(e, w[0], w[1], w[2], w[3], &w[4..]);
+    let answer = show_message_and_wait(e, w[0], w[1], w[2], w[3], &w[4..]);
     Ret {
         eax: answer as u32,
         ..Ret::default()
@@ -2263,7 +2270,7 @@ pub fn interface_in_dialog_with(e: &mut Engine) -> u32 {
 /// `Interface::ShowSubtitle` (Xbox PDB), `cdecl`, nine words: a word
 /// (`speaker`), a 12-byte value by value (`text_a/b/c`: a word, a byte and
 /// a word), three words (`position_*`), a word and a byte. Inside a scope
-/// guard (line 0x8ec of `Interface.cpp`): when the manager is ready and the
+/// guard (line 0x8ec of the interface's file): when the manager is ready and the
 /// HUD main menu object (`011d96c0`) exists, copies the 12-byte value
 /// (`00418900`) and calls `HUDMainMenu::ShowSubtitle` on the object with the
 /// speaker, the copy, the three words, the word and the byte. The by-value
@@ -2285,7 +2292,7 @@ pub fn interface_show_subtitle(
     e.with_stack(4, |e, guard| {
         e.call(
             SCOPE_GUARD_CTOR,
-            &args![guard, 0xdu32, 1u32, INTERFACE_CPP_PATH, 0x8ecu32],
+            &args![guard, 0xdu32, 1u32, INTERFACE_SOURCE_NAME, 0x8ecu32],
         );
         e.with_stack(12, |e, text| {
             e.mem.set_u32(text.addr(), text_a);
@@ -2316,7 +2323,7 @@ pub fn interface_show_subtitle(
 
 // Typed from 007052f0
 /// `cdecl`, six words (the fifth a float, the sixth a byte): inside a scope
-/// guard (line 0x901 of `Interface.cpp`), when the manager is ready and the
+/// guard (line 0x901 of the interface's file), when the manager is ready and the
 /// HUD main menu object (`011d96c0`) exists, calls `00775380` on it with
 /// the six words. Always returns 0. The exception frame is not translated.
 pub fn fn_007052f0(
@@ -2331,7 +2338,7 @@ pub fn fn_007052f0(
     e.with_stack(4, |e, guard| {
         e.call(
             SCOPE_GUARD_CTOR,
-            &args![guard, 0xdu32, 1u32, INTERFACE_CPP_PATH, 0x901u32],
+            &args![guard, 0xdu32, 1u32, INTERFACE_SOURCE_NAME, 0x901u32],
         );
         let hud = e.global::<u32>(HUD_MAIN_MENU);
         if ready_manager(e).is_some() && hud != 0 {
@@ -2664,18 +2671,18 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             interface_get_control_push_text_for(i32, u32, u8)
         ),
         entry!(0x00703be0, fn_00703be0(u32, u32, u32) -> u8),
-        (0x00703c00, fn_00703c00_entry as AbiFn),
-        (0x00703c80, interface_print_line_entry as AbiFn),
+        (0x00703c00, fn_00703c00 as AbiFn),
+        (0x00703c80, interface_print_line as AbiFn),
         entry!(0x00703d50, interface_is_console_visible() -> bool),
         entry!(0x00703da0, interface_close_console()),
         entry!(0x00703e10, interface_open_console()),
-        (0x00703e80, fn_00703e80_entry as AbiFn),
-        (0x00703f10, fn_00703f10_entry as AbiFn),
+        (0x00703e80, fn_00703e80 as AbiFn),
+        (0x00703f10, fn_00703f10 as AbiFn),
         entry!(0x00703fa0, interface_get_message_menu_result() -> u8),
         entry!(0x00703fd0, fn_00703fd0()),
         entry!(0x00703fe0, fn_00703fe0(u8)),
         entry!(0x00704000, interface_close_message_menu()),
-        (0x00704010, fn_00704010_entry as AbiFn),
+        (0x00704010, fn_00704010 as AbiFn),
         entry!(0x00704130, fn_00704130()),
         entry!(0x00704140, fn_00704140() -> u32),
         entry!(0x00704170, interface_set_map_menu_visible(u8, u8)),

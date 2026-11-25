@@ -5,7 +5,7 @@
 //! while the family is direct), and every other function by address as before (a function a fix or a
 //! built-in may replace, `overridable.tsv`, always by address).
 //!
-//! - [`interface_cpp`] and [`interface_cpp_p3`]: `fallout/interface/interface.cpp`'s functions from
+//! - [`interface_cpp`] and [`interface_cpp_p3`]: the interface unit's functions from
 //!   the start up to `00705a90` and from `00709b50` on: the static `Interface::` wrappers over the interface
 //!   manager (menu ids on the stack, the Pip-Boy's state, the console, the faders, the HUD and map
 //!   menu forwards), the camera frustum set-up and a `BSSimpleArray<Tile::Value *>`'s constructor

@@ -745,20 +745,17 @@ fn fn_00703be0_diff() {
 
 #[test]
 fn fn_00703c00_diff() {
-    Diff::new((
-        0x0070_3c00,
-        interface::interface_cpp::fn_00703c00_entry as AbiFn,
-    ))
-    .in_arena(&[Arg::Word, Arg::Word, Arg::Word, Arg::Word], CALLEES, &[])
-    .run()
-    .assert_same();
+    Diff::new((0x0070_3c00, interface::interface_cpp::fn_00703c00 as AbiFn))
+        .in_arena(&[Arg::Word, Arg::Word, Arg::Word, Arg::Word], CALLEES, &[])
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn interface_print_line_diff() {
     Diff::new((
         0x0070_3c80,
-        interface::interface_cpp::interface_print_line_entry as AbiFn,
+        interface::interface_cpp::interface_print_line as AbiFn,
     ))
     .in_arena(&[Arg::Word, Arg::Word, Arg::Word, Arg::Word], CALLEES, &[])
     .run()
@@ -797,57 +794,51 @@ fn interface_open_console_diff() {
 
 #[test]
 fn fn_00703e80_diff() {
-    Diff::new((
-        0x0070_3e80,
-        interface::interface_cpp::fn_00703e80_entry as AbiFn,
-    ))
-    .in_arena(
-        &[
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-        ],
-        CALLEES,
-        &[],
-    )
-    .run()
-    .assert_same();
+    Diff::new((0x0070_3e80, interface::interface_cpp::fn_00703e80 as AbiFn))
+        .in_arena(
+            &[
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+            ],
+            CALLEES,
+            &[],
+        )
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn fn_00703f10_diff() {
-    Diff::new((
-        0x0070_3f10,
-        interface::interface_cpp::fn_00703f10_entry as AbiFn,
-    ))
-    .in_arena(
-        &[
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-        ],
-        CALLEES,
-        &[],
-    )
-    .run()
-    .assert_same();
+    Diff::new((0x0070_3f10, interface::interface_cpp::fn_00703f10 as AbiFn))
+        .in_arena(
+            &[
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+            ],
+            CALLEES,
+            &[],
+        )
+        .run()
+        .assert_same();
 }
 
 #[test]
@@ -893,31 +884,28 @@ fn interface_close_message_menu_diff() {
 
 #[test]
 fn fn_00704010_diff() {
-    Diff::new((
-        0x0070_4010,
-        interface::interface_cpp::fn_00704010_entry as AbiFn,
-    ))
-    .in_arena(
-        &[
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-            Arg::Word,
-        ],
-        CALLEES,
-        &[
-            0x0070_27e0,
-            0x0070_2810,
-            0x0070_2840,
-            0x0070_2940,
-            0x0070_2960,
-            0x0070_28b0,
-        ],
-    )
-    .run()
-    .assert_same();
+    Diff::new((0x0070_4010, interface::interface_cpp::fn_00704010 as AbiFn))
+        .in_arena(
+            &[
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+                Arg::Word,
+            ],
+            CALLEES,
+            &[
+                0x0070_27e0,
+                0x0070_2810,
+                0x0070_2840,
+                0x0070_2940,
+                0x0070_2960,
+                0x0070_28b0,
+            ],
+        )
+        .run()
+        .assert_same();
 }
 
 #[test]

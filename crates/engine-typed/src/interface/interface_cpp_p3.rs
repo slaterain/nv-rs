@@ -1,4 +1,4 @@
-//! The interface family: `fallout/interface/interface.cpp` typed (the translation is engine-fallout-interface's `interface_p3.rs`, which
+//! The interface family: the interface unit typed (the translation is engine-fallout-interface's `interface_p3.rs`, which
 //! these functions replace at the same addresses). Each function does what its translation does, read for read
 //! and write for write; the functions of the family call one another through `typed_call!`, the rest by address.
 
@@ -11,14 +11,14 @@ use engine_core::typed_call;
 const MANAGER: u32 = 0x004b_7210;
 /// `004b71d0`: whether the interface manager is ready (a `bool`).
 const MANAGER_IS_READY: u32 = 0x004b_71d0;
-/// `HUDMainMenu` functions (`hudmainmenu.cpp`) that the static wrappers
-/// forward to.
-const HUD_FN_0077F2F0: u32 = 0x0077_f2f0;
+/// `HUDMainMenu` functions that the static wrappers forward to: one word, a
+/// byte, a byte, nothing.
+const HUD_FORWARD_WORD: u32 = 0x0077_f2f0;
 /// `HUDMainMenu::SetGunScopeVisible` (Xbox PDB).
 const HUD_SET_GUN_SCOPE_VISIBLE: u32 = 0x0077_f3c0;
-const HUD_FN_0077F420: u32 = 0x0077_f420;
-const HUD_FN_0077F490: u32 = 0x0077_f490;
-const HUD_FN_0077F270: u32 = 0x0077_f270;
+const HUD_FORWARD_FLAG: u32 = 0x0077_f420;
+const HUD_FORWARD_SECOND_FLAG: u32 = 0x0077_f490;
+const HUD_FORWARD_CALL: u32 = 0x0077_f270;
 /// `MapMenu::SetRootMapSpace` (Xbox PDB).
 const MAP_MENU_SET_ROOT_MAP_SPACE: u32 = 0x007a_1880;
 
@@ -59,9 +59,9 @@ const FLOAT_SETTING_GET: u32 = 0x0040_3e20;
 const NI_CAMERA_SET_VIEW_FRUSTUM: u32 = 0x00a6_faf0;
 /// `NiFrustum::NiFrustum(bool ortho)` (Xbox PDB).
 const NI_FRUSTUM_NEW: u32 = 0x00a7_1b70;
-/// `00a6fb90` (`nicamera.cpp`), thiscall on the camera with a `float` and a
+/// `00a6fb90` (the camera's), thiscall on the camera with a `float` and a
 /// zero word.
-const NI_CAMERA_FN_00A6FB90: u32 = 0x00a6_fb90;
+const CAMERA_SET_UNIT: u32 = 0x00a6_fb90;
 /// `0057dd70`: one `float` in, a `float` in ST0 out (the frustum's tangent).
 const TANGENT: u32 = 0x0057_dd70;
 
@@ -124,7 +124,7 @@ pub fn fn_00709c00(e: &mut Engine) -> bool {
 // Typed from 00709c20
 /// Static wrapper (cdecl): forwards its argument to `0077f2f0`.
 pub fn fn_00709c20(e: &mut Engine, argument: u32) {
-    e.call(HUD_FN_0077F2F0, &args![argument]);
+    e.call(HUD_FORWARD_WORD, &args![argument]);
 }
 
 // Typed from 00709c40
@@ -137,19 +137,19 @@ pub fn interface_set_gun_scope_visible(e: &mut Engine, visible: u8) {
 // Typed from 00709c60
 /// Static wrapper (cdecl): forwards its byte argument to `0077f420`.
 pub fn fn_00709c60(e: &mut Engine, flag: u8) {
-    e.call(HUD_FN_0077F420, &args![flag]);
+    e.call(HUD_FORWARD_FLAG, &args![flag]);
 }
 
 // Typed from 00709c80
 /// Static wrapper (cdecl): forwards its byte argument to `0077f490`.
 pub fn fn_00709c80(e: &mut Engine, flag: u8) {
-    e.call(HUD_FN_0077F490, &args![flag]);
+    e.call(HUD_FORWARD_SECOND_FLAG, &args![flag]);
 }
 
 // Typed from 00709ca0
 /// Static wrapper: calls `0077f270`.
 pub fn fn_00709ca0(e: &mut Engine) {
-    e.call(HUD_FN_0077F270, &[]);
+    e.call(HUD_FORWARD_CALL, &[]);
 }
 
 // Typed from 00709cb0
@@ -210,7 +210,7 @@ pub fn fn_00709d50(e: &mut Engine, camera: u32, scale: f32) {
         return;
     }
     let unit = e.call(CAMERA_SCALE, &[]).f32();
-    e.call(NI_CAMERA_FN_00A6FB90, &args![camera, unit, 0u32]);
+    e.call(CAMERA_SET_UNIT, &args![camera, unit, 0u32]);
     let aspect =
         super::narrow(e.call(RENDERER_WIDTH, &[]).f64() / e.call(RENDERER_HEIGHT, &[]).f64());
     let factor_a = e.global::<f64>(ANGLE_FACTOR_A);
