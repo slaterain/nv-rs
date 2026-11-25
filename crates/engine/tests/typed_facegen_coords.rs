@@ -102,6 +102,18 @@ fn facegen_coords_sum() {
         Input::Of(&[0, 1]),
     ])
     .setup(|e, case: &Case| {
+        // The globals the helpers read: the limit's 0.0 and the SSE2 flag; the invalid-parameter
+        // report a counter of its own (the CRT's handler words are not mapped here).
+        e.map(0x0101_2000, 0x1000);
+        e.mem.set_f64(0x0101_2060, 0.0);
+        e.map(0x0127_0000, 0x1000);
+        e.mem.set_u32(0x0127_0a6c, 1);
+        e.map(0x0300_0000, 0x1000);
+        e.register(0x00ec_7c56, |e, _| {
+            let n = e.mem.u32(0x0300_0000);
+            e.mem.set_u32(0x0300_0000, n + 1);
+            Ret::default()
+        });
         let shape = SHAPES[case.word(0) as usize];
         let pattern = case.word(5);
         let first = block(e, &shape, 0, 0, pattern);
