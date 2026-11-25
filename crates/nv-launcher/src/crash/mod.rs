@@ -888,6 +888,11 @@ mod tests {
             panic_place("/r/wgpu-hal-26.0.0/src/mod.rs:12:1:")
         );
         assert_eq!(panic_place("/home/x/lone.rs:7:1:"), "lone.rs:7");
+        // A dependency's file outside its `src` (a build script): still from its crate on.
+        assert_eq!(
+            panic_place("/r/registry/src/index.crates.io-x/foo-1.2.3/build.rs:10:5:"),
+            "foo-1.2.3/build.rs:10"
+        );
         assert_eq!(fingerprint(&Ending::Signal(11)), vec!["signal", "11"]);
         assert_eq!(
             fingerprint(&Ending::Exit(0xc000_0005_u32 as i32)),
