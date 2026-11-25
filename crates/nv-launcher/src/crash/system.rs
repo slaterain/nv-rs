@@ -113,7 +113,10 @@ fn memory() -> Option<u64> {
 /// The computer's names, for the report to leave out (macOS: `name.local` and `name`).
 pub fn computer_names() -> Vec<String> {
     #[cfg(windows)]
-    let names: Vec<String> = std::env::var("COMPUTERNAME").into_iter().collect();
+    let names: Vec<String> = std::env::var("COMPUTERNAME")
+        .into_iter()
+        .chain(crate::play::win::dns_host_name())
+        .collect();
     #[cfg(target_os = "linux")]
     let names: Vec<String> = vec![read("/proc/sys/kernel/hostname")];
     #[cfg(target_os = "macos")]

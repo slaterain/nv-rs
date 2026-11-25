@@ -370,6 +370,19 @@ struct MemoryStatus {
 #[link(name = "kernel32")]
 extern "system" {
     fn GlobalMemoryStatusEx(status: *mut MemoryStatus) -> i32;
+    fn GetComputerNameExW(kind: i32, buffer: *mut u16, size: *mut u32) -> i32;
+}
+
+/// The computer's DNS host name (`ComputerNameDnsHostname`): not cut at 15 characters or put in
+/// capitals as `COMPUTERNAME` is.
+pub fn dns_host_name() -> Option<String> {
+    let mut buffer = [0u16; 256];
+    let mut size = buffer.len() as u32;
+    // SAFETY: the buffer and its size in characters; 1 is `ComputerNameDnsHostname`.
+    let ok = unsafe { GetComputerNameExW(1, buffer.as_mut_ptr(), &mut size) };
+    let name = from_wide(&buffer[..(size as usize).min(buffer.len())]);
+    let name = name.to_string_lossy().trim().to_string();
+    (ok != 0 && !name.is_empty()).then_some(name)
 }
 
 /// The memory installed, in bytes (what Windows can use).

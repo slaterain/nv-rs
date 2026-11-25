@@ -28,6 +28,10 @@ pub const STOP: &str = "Game's main stopped in frame";
 /// The lines of a clean end: main returned, or the game ended its own process.
 const CLEAN_ENDS: [&str; 2] = ["Game's main returned", "The game ended its process"];
 
+/// How near the log's end a panic must be to be the run's end: its line, its message, the
+/// backtrace note, the host's own last lines.
+const PANIC_LINES: usize = 12;
+
 /// play.sh's status for the expected stop on a processor nv-rs is not built for: no crash.
 const NOT_PROVIDED_STATUS: i32 = 69;
 
@@ -74,22 +78,31 @@ pub fn ending(tail: &str, status: Option<i32>, shell: Shell) -> Option<Ending> {
         .map(|l| l.trim_end_matches('\r'))
         .filter(|l| !l.trim().is_empty())
         .collect();
+    // The run's own end first: a clean end is one, whatever was said before it.
+    if lines
+        .last()
+        .is_some_and(|l| CLEAN_ENDS.iter().any(|c| l.trim_start().starts_with(c)))
+    {
+        return None;
+    }
+    // Main's stop ends the game's code for good: its line is the run's last word.
     if let Some(line) = lines.iter().rev().find(|l| l.contains(STOP)) {
         return Some(Ending::Stop(line.trim().to_string()));
     }
-    if let Some(at) = lines.iter().rposition(|l| l.contains(" panicked at ")) {
+    // A panic only as the run's end (its last lines): one caught and printed earlier (a save
+    // copy's, say) is not why a later end happened.
+    let last = lines.len().saturating_sub(PANIC_LINES);
+    if let Some(at) = lines[last..]
+        .iter()
+        .rposition(|l| l.contains(" panicked at "))
+    {
+        let at = last + at;
         let mut line = lines[at].trim().to_string();
         if let Some(message) = lines.get(at + 1) {
             line.push(' ');
             line.push_str(message.trim());
         }
         return Some(Ending::Panic(line));
-    }
-    if lines
-        .last()
-        .is_some_and(|l| CLEAN_ENDS.iter().any(|c| l.trim_start().starts_with(c)))
-    {
-        return None;
     }
     match (shell, status) {
         (Shell::Unix, Some(s)) if (129..=192).contains(&s) => Some(Ending::Signal(s - 128)),
@@ -216,19 +229,60 @@ pub fn fingerprint(ending: &Ending) -> Vec<String> {
         Ending::Panic(line) => {
             let place = line
                 .split_once(" panicked at ")
-                .map(|(_, rest)| {
-                    // `FILE:LINE:COLUMN:` (the message follows): the file and line.
-                    let mut parts = rest.splitn(3, ':');
-                    let file = parts.next().unwrap_or("");
-                    let number = parts.next().unwrap_or("");
-                    format!("{file}:{number}")
-                })
+                .map(|(_, rest)| panic_place(rest))
                 .unwrap_or_default();
             vec!["panic".to_string(), place]
         }
         Ending::Signal(n) => vec!["signal".to_string(), n.to_string()],
         Ending::Exit(c) => vec!["exit".to_string(), code_text(*c)],
     }
+}
+
+/// Where a panic happened, from its `FILE:LINE:COLUMN:` (`rest`, the message after it): the file
+/// from its crate on and the line, the same on every machine and with no folder of the
+/// player's: a dependency's `wgpu-core-30.0.1/src/device/mod.rs:123` (from the crate's
+/// versioned folder), nv-rs's own `host/src/lib.rs:12` (from the folder before `src`), else
+/// the file's name.
+pub fn panic_place(rest: &str) -> String {
+    // The first `:LINE:COLUMN` (a drive's `C:` has no digits after it).
+    let b = rest.as_bytes();
+    let digits = |from: usize| {
+        b[from.min(b.len())..]
+            .iter()
+            .take_while(|c| c.is_ascii_digit())
+            .count()
+    };
+    let at = (0..b.len()).find(|&i| {
+        b[i] == b':' && {
+            let n = digits(i + 1);
+            n > 0 && b.get(i + 1 + n) == Some(&b':') && digits(i + 2 + n) > 0
+        }
+    });
+    let (file, number) = match at {
+        Some(i) => (&rest[..i], &rest[i + 1..i + 1 + digits(i + 1)]),
+        None => (rest.split(':').next().unwrap_or(""), ""),
+    };
+    let parts: Vec<&str> = file.split(['\\', '/']).filter(|p| !p.is_empty()).collect();
+    let versioned = |p: &str| {
+        p.rsplit_once('-').is_some_and(|(name, v)| {
+            !name.is_empty()
+                && v.split('.').count() >= 3
+                && v.split('.')
+                    .all(|x| !x.is_empty() && x.bytes().all(|c| c.is_ascii_alphanumeric()))
+                && v.starts_with(|c: char| c.is_ascii_digit())
+        })
+    };
+    let from = parts
+        .iter()
+        .rposition(|p| versioned(p))
+        .or_else(|| {
+            parts
+                .iter()
+                .rposition(|p| *p == "src")
+                .map(|s| s.saturating_sub(1))
+        })
+        .unwrap_or(parts.len().saturating_sub(1));
+    format!("{}:{number}", parts[from.min(parts.len())..].join("/"))
 }
 
 /// One run of the game, as the launcher saw it end.
@@ -401,6 +455,16 @@ fn plugin_names(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// How much of an F12 report's note or place is read, and how much of it a report keeps
+/// (after scrubbing: a cut path would keep a part of a name).
+const READ_CHARS: usize = 64 * 1024;
+const NOTE_CHARS: usize = 4000;
+
+/// `text` scrubbed by `s`, then cut at `chars` characters.
+fn scrubbed_cut(s: &Scrubber, text: &str, chars: usize) -> String {
+    s.text(text).chars().take(chars).collect()
+}
+
 /// A file as text, at most `chars` characters, trimmed; none when missing or empty.
 fn short_text(path: &Path, chars: usize) -> Option<String> {
     let bytes = std::fs::read(path).ok()?;
@@ -430,13 +494,13 @@ fn f12_during(reports: &Path, started: SystemTime) -> Option<F12> {
         }
     }
     let (_, path) = found?;
-    let note = short_text(&path.join("note.txt"), 4000)
+    let note = short_text(&path.join("note.txt"), READ_CHARS)
         .map(|n| n.replacen(F12_NOTE_TEMPLATE, "", 1).trim().to_string())
         .filter(|n| !n.is_empty());
     Some(F12 {
         folder: path.file_name()?.to_string_lossy().into_owned(),
         note,
-        place: short_text(&path.join("place.txt"), 4000),
+        place: short_text(&path.join("place.txt"), READ_CHARS),
     })
 }
 
@@ -449,6 +513,7 @@ fn build(
     now: SystemTime,
 ) -> Report {
     let (head, tail) = ends_of(run.log, 1024 * 1024);
+    let raw = ending;
     let ending = ending.scrubbed(s);
     let (renderer, card) = renderer(&head, run.table_card.as_deref());
     let mut machine = vec![("System", facts.os.clone())];
@@ -464,7 +529,9 @@ fn build(
     }
     machine.push(("Graphics card", card.unwrap_or_else(|| "not named".into())));
     machine.push(("Renderer", renderer));
-    let system = machine.into_iter().map(|(k, v)| (k, s.text(&v))).collect();
+    // The system's own words (its name, the processor's, the card's), not scrubbed: a host named
+    // like the system ("fedora") would turn them into placeholders.
+    let system = machine;
     let profile = if run.mods { "mods" } else { "game" };
     let ini = std::fs::read(crate::profiles::profile_dir(run.own, profile).join("Fallout.ini"))
         .map(|b| b.iter().map(|&c| c as char).collect::<String>())
@@ -487,19 +554,21 @@ fn build(
     };
     let f12 = f12_during(&run.own.join("reports"), run.started).map(|f| F12 {
         folder: f.folder,
-        note: f.note.map(|n| s.text(&n)),
-        place: f.place.map(|p| s.text(&p)),
+        note: f.note.map(|n| scrubbed_cut(s, &n, NOTE_CHARS)),
+        place: f.place.map(|p| scrubbed_cut(s, &p, NOTE_CHARS)),
     });
     let lines: Vec<&str> = tail.lines().collect();
     let log = lines[lines.len().saturating_sub(LOG_LINES)..]
         .iter()
-        .map(|l| {
-            let l: String = l.trim_end_matches('\r').chars().take(LINE_CHARS).collect();
-            s.text(&l)
-        })
+        .map(|l| scrubbed_cut(s, l.trim_end_matches('\r'), LINE_CHARS))
         .collect();
     Report {
-        fingerprint: fingerprint(&ending),
+        // A panic's place from the line as it was, cut to its crate's part (scrubbing would turn a
+        // dependency's folder into `<path>` and group every crate's `mod.rs:12` together).
+        fingerprint: match raw {
+            Ending::Panic(_) => fingerprint(raw).iter().map(|p| s.text(p)).collect(),
+            _ => fingerprint(&ending),
+        },
         ending,
         status: run.status,
         when: now,
@@ -747,6 +816,36 @@ mod tests {
             None
         );
         assert_eq!(ending("x\n", None, Shell::Unix), None);
+        // A panic caught and printed long before the end is not the end: the run's own end is.
+        let mut caught = String::from(
+            "thread 'saves' panicked at nv-rs/crates/host/src/save_out.rs:871:9:\nfull disk\n",
+        );
+        for n in 0..PANIC_LINES {
+            caught.push_str(&format!("line {n}\n"));
+        }
+        assert_eq!(
+            ending(&caught, Some(0xc000_0005_u32 as i32), Shell::Windows),
+            Some(Ending::Exit(0xc000_0005_u32 as i32))
+        );
+        caught.push_str("Game's main returned 2 in frame 9\n");
+        assert_eq!(ending(&caught, Some(2), Shell::Windows), None);
+        // A clean end after a panic near the end is a clean end; a panic at the end is a panic.
+        assert_eq!(
+            ending(
+                "thread 'x' panicked at x.rs:1:2:\nboom\nGame's main returned 0 in frame 3\n",
+                Some(2),
+                Shell::Unix
+            ),
+            None
+        );
+        assert!(matches!(
+            ending(
+                "a\nthread 'main' panicked at x.rs:1:2:\nboom\n",
+                Some(101),
+                Shell::Windows
+            ),
+            Some(Ending::Panic(_))
+        ));
     }
 
     #[test]
@@ -777,8 +876,18 @@ mod tests {
             fingerprint(&Ending::Panic(
                 "thread 'main' panicked at nv-rs/crates/host/src/lib.rs:12:5: no table".into()
             )),
-            vec!["panic", "nv-rs/crates/host/src/lib.rs:12"]
+            vec!["panic", "host/src/lib.rs:12"]
         );
+        // A dependency's panic keeps its crate (from its versioned folder), never the folders above.
+        assert_eq!(
+            panic_place("C:\\x\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\wgpu-core-30.0.1\\src\\device\\mod.rs:123:4:\nmsg"),
+            "wgpu-core-30.0.1/src/device/mod.rs:123"
+        );
+        assert_ne!(
+            panic_place("/r/naga-26.0.0/src/mod.rs:12:1:"),
+            panic_place("/r/wgpu-hal-26.0.0/src/mod.rs:12:1:")
+        );
+        assert_eq!(panic_place("/home/x/lone.rs:7:1:"), "lone.rs:7");
         assert_eq!(fingerprint(&Ending::Signal(11)), vec!["signal", "11"]);
         assert_eq!(
             fingerprint(&Ending::Exit(0xc000_0005_u32 as i32)),
@@ -891,14 +1000,19 @@ mod tests {
             "nv-rs Windows preview 2026-11-16.1\nSource commit: 0123456789abcdef\n",
         )
         .unwrap();
-        // An F12 report of this run (its picture is never read) and an older one.
+        // An F12 report of this run (its picture is never read) between two of earlier runs (the
+        // newer number too): only this run's goes in.
         let started = SystemTime::now() - Duration::from_secs(5);
-        for (n, note) in [("001", "old"), ("002", "Write here what went wrong and what you did just before it:\r\n\r\nI was near jtest's house\r\n")] {
+        for (n, note) in [("001", "old one"), ("003", "older one"), ("002", "Write here what went wrong and what you did just before it:\r\n\r\nI was near jtest's house\r\n")] {
             let f = own.join("reports").join(n);
             std::fs::create_dir_all(&f).unwrap();
             std::fs::write(f.join("note.txt"), note).unwrap();
             std::fs::write(f.join("place.txt"), "Goodsprings 1 2 3\r\n").unwrap();
             std::fs::write(f.join("picture.bmp"), "BM").unwrap();
+            if n != "002" {
+                let note = std::fs::File::options().write(true).open(f.join("note.txt")).unwrap();
+                note.set_modified(started - Duration::from_secs(3600)).unwrap();
+            }
         }
         let log = own.join("logs").join("game-1.log");
         let mut text = String::from("NV_D3D9=wgpu: drawing with Some Card (Vulkan)\n");
@@ -907,6 +1021,9 @@ mod tests {
                 "line {n} at {home_text}\\AppData\\x.tmp by JTEST on JT-DESK\n"
             ));
         }
+        // A save's name (the character's name, place and time), and a user name at the line's cut.
+        text.push_str("NV_SAVE_OUT: copied Save 7   Jo Hero  Goodsprings  01 02 03.fos\n");
+        text.push_str(&format!("{} jtest-was-here\n", "x".repeat(LINE_CHARS - 3)));
         text.push_str(&format!(
             "Game's main stopped in frame 12: could not read {}\\Data\\x.esm (in 00a1b2c3 < 00400000)\n",
             game.display()
@@ -930,9 +1047,11 @@ mod tests {
         known.words.push(("jtest".into(), "<user>"));
         known.words.push(("Jo Tester".into(), "<user>"));
         known.words.push(("JT-DESK".into(), "<computer>"));
+        // A computer named like a word of the system's own name: the system line keeps it.
+        known.words.push(("Workstation".into(), "<computer>"));
         let s = Scrubber::new(&known);
         let facts = system::Facts {
-            os: "Some OS 1".into(),
+            os: "Some OS 1 (Workstation Edition)".into(),
             cpu: "Some CPU".into(),
             threads: Some(8),
             memory: Some(8 * 1024 * 1024 * 1024),
@@ -976,7 +1095,29 @@ mod tests {
         assert!(body.contains("    I was near <user>'s house"), "{body}");
         assert!(!body.contains("Write here"), "{body}");
         assert!(body.contains("    Goodsprings 1 2 3"));
-        assert!(!body.contains("BM"));
+        assert!(
+            !body.contains("older one") && !body.contains("old one"),
+            "{body}"
+        );
+        assert!(
+            body.contains("System:        Some OS 1 (Workstation Edition)"),
+            "{body}"
+        );
+        // Only the report and the log are written: nothing of the F12 report's picture.
+        let mut files: Vec<String> = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        files.sort();
+        assert_eq!(files, ["log.txt", "report.txt"]);
+        assert!(
+            log_copy.contains("NV_SAVE_OUT: copied <save>.fos"),
+            "{log_copy}"
+        );
+        assert!(!log_copy.contains("Jo Hero"));
+        // Scrubbed, then cut: no part of the name is left at the cut.
+        assert!(!log_copy.contains(" jt"), "{log_copy}");
+        assert!(log_copy.lines().all(|l| l.chars().count() <= LINE_CHARS));
         assert_eq!(log_copy.lines().count(), LOG_LINES);
         assert!(log_copy.contains("line 399 at <home>\\AppData\\x.tmp by <user> on <computer>"));
         // A second report the same second gets its own folder; the oldest go past the limit.
