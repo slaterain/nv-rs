@@ -859,11 +859,13 @@ fn shifted_mesh(e: &mut Engine, shift: u32) -> Vec<u32> {
     let (vertices, stride) = (9u32, 12u32);
     let total = vertices + 3;
     let points = vertices + total + 2;
+    // Plain finite points, morph scales and weights: a NaN or an infinity would spread to every
+    // point after a morph or two and hide in what order the points were written.
     let array = e.mem.alloc(stride * points + 16);
     for v in 0..points {
         for k in 0..3 {
-            e.mem
-                .set_u32(array + stride * v + 4 * k, value(v, k + 5, 2));
+            let point = (v * 3 + k) as f32 * 0.5 + 1.0;
+            e.mem.set_f32(array + stride * v + 4 * k, point);
         }
     }
     e.mem.set_u32(ARRAY, array);
@@ -874,8 +876,15 @@ fn shifted_mesh(e: &mut Engine, shift: u32) -> Vec<u32> {
     e.mem.set_u32(data + 0xc, array + stride * shift);
     e.mem.set_u32(data + 0x10, total);
     e.mem.set_u32(EXTRA_DATA, data);
-    let egm_data = egm(e, vertices, [3, 2], 0, 2);
-    let coords = coordinates(e, [3, 2, 0, 0], 2);
+    let egm_data = egm(e, vertices, [3, 2], 0, 1);
+    for (set, n) in [(0u32, 3u32), (1, 2)] {
+        let block = e.mem.u32(egm_data + 4 + 0x18 * set + 0xc);
+        for i in 0..n {
+            e.mem.set_f32(block + 0x1c * i, 0.25);
+        }
+    }
+    // Pattern 1's weights: -0.0, -0.52 and -1.0.
+    let coords = coordinates(e, [3, 2, 0, 0], 1);
     let mesh = e.mem.alloc(0x24);
     e.mem.set_u32(mesh + 8, egm_data);
     e.mem.set_u32(LOADED, 1);
