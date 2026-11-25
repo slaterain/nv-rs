@@ -1698,11 +1698,13 @@ fn scene_world(e: &mut Engine, seed: u32, flag: u32) -> Vec<u32> {
     // The player: the reference now and then.
     let player = if d.next(6) == 0 { r } else { 0x0700_1000 };
     e.set_global(PLAYER_POINTER, player);
-    // Two seeds take the large cell's step with the product past 2^63 whatever their draws: a plain
-    // reference (the exe's slots) with no form flags, a type 0x25 base form, a cast whose sizes
-    // pass, the radius 2^40 and the scale 2^30. The exe's store gives the integer indefinite, whose
-    // low word is 0, where a saturating cast would give 0xffffffff.
-    if seed % 48 == 21 {
+    // Four seeds take the large cell's step whatever their draws: a plain reference (the exe's
+    // slots) with no form flags, a type 0x25 base form, a cast whose sizes pass; two of them the
+    // radius 2^40 and the scale 2^30 (the product past 2^63), two a NaN radius. The exe's store
+    // gives the integer indefinite for both, whose low word is 0, where a saturating cast would
+    // give 0xffffffff past 2^63 (and 0 for the NaN).
+    if seed % 24 == 21 {
+        let past = seed % 48 == 21;
         let vt = scene_vtable(e, 0);
         e.mem.set_u32(r, vt);
         e.mem.set_u8(r + 4, 0x3b);
@@ -1715,11 +1717,14 @@ fn scene_world(e: &mut Engine, seed: u32, flag: u32) -> Vec<u32> {
         e.mem.set_u32(cast, vt);
         e.mem.set_f32(cast + 0x8c, 300.0);
         e.mem.set_f32(cast + 0x90, 250.0);
-        e.mem
-            .set_u32(cast + CAST_RADIUS, 1_099_511_627_776.0f32.to_bits());
+        let (radius, scale) = if past {
+            (1_099_511_627_776.0f32, 1_073_741_824.0f32)
+        } else {
+            (f32::NAN, 1.0)
+        };
+        e.mem.set_u32(cast + CAST_RADIUS, radius.to_bits());
         e.mem.set_u32(base + ANSWER_CAST, cast);
-        e.mem
-            .set_u32(r + ANSWER_SCALE, 1_073_741_824.0f32.to_bits());
+        e.mem.set_u32(r + ANSWER_SCALE, scale.to_bits());
     }
     let tes = e.mem.alloc(0x40);
     let r = if seed % 32 == 31 { 0 } else { r };
