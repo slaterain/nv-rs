@@ -109,6 +109,8 @@ fn facegen_coords_sum() {
         e.map(0x0127_0000, 0x1000);
         e.mem.set_u32(0x0127_0a6c, 1);
         e.map(0x0300_0000, 0x1000);
+        // `GetLastError` (the square root's error path for a NaN or a negative length): no error.
+        e.register(0x00fd_f094, |_, _| Ret::default());
         e.register(0x00ec_7c56, |e, _| {
             let n = e.mem.u32(0x0300_0000);
             e.mem.set_u32(0x0300_0000, n + 1);
