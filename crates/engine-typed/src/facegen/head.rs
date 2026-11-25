@@ -1137,7 +1137,7 @@ fn compress_channel(sse2: bool, bits: u32, min: f32, max: f32, scale: f32) -> u8
 /// Below this size every float the clamp can give is truncated exactly by both `_ftol2` bodies
 /// and comes back from the integer exactly, so the float floor is the plain integer floor.
 const FLOOR_EXACT: f32 = 16_777_216.0;
-/// The most entries a [`FloorTable`] holds (a face's range, 0 to 255, needs 256).
+/// The most entries a [`FloorTable`] holds (a face tint's range, -255 to 255, needs 511).
 const FLOOR_TABLE_ENTRIES: i32 = 4096;
 
 /// The integer floor of the float with the bits `word`, below [`FLOOR_EXACT`] in size: the whole
@@ -1220,6 +1220,30 @@ impl FloorTable {
     fn index(&self, k: i32) -> usize {
         (k - self.lowest) as usize
     }
+}
+
+/// The one pass's bytes: `channels` bytes a value into `out` from the values in `floats` (four
+/// floats a value), from the image's [`FloorTable`] when its `(min, max, scale)` allows one, else
+/// channel by channel through [`compress_channel`]. Answers whether the table made them.
+fn pack_values(
+    sse2: bool,
+    floats: &[u8],
+    channels: usize,
+    (min, max, scale): (f32, f32, f32),
+    out: &mut [u8],
+) -> bool {
+    let table = FloorTable::new(sse2, min, max, scale);
+    for (value, pixel) in floats.chunks_exact(16).zip(out.chunks_exact_mut(channels)) {
+        for (channel, byte) in pixel.iter_mut().enumerate() {
+            let at = 4 * channel;
+            let bits = u32::from_le_bytes([value[at], value[at + 1], value[at + 2], value[at + 3]]);
+            *byte = match &table {
+                Some(table) => table.byte(bits),
+                None => compress_channel(sse2, bits, min, max, scale),
+            };
+        }
+    }
+    table.is_some()
 }
 
 // Typed from 0064ceb0
@@ -1334,9 +1358,10 @@ pub fn get_compressed_image(
 /// at the checked iterator `{proxy, position}` at `iterator` (four floats a value), the
 /// iterator stepped after each pixel with its previous words left in `scratch` (`0064dbf0`). In
 /// one pass with one write of the bytes when every value lies before the end of the proxy's container (as a
-/// face's do), each byte from the image's [`FloorTable`] when its range allows one (a face's, 0 to
-/// 255, does: 256 entries made instead of a float floor for every channel of its 256 by 256
-/// texels); otherwise value by value with the iterator's checks, as the exe reads them.
+/// face's do), each byte from the image's [`FloorTable`] when its range allows one
+/// ([`pack_values`]; a face tint's, -255 to 255 at a scale of 0.5, does: 511 entries made instead
+/// of a float floor for every channel of its 256 by 256 texels); otherwise value by value with the
+/// iterator's checks, as the exe reads them.
 #[allow(clippy::too_many_arguments)]
 fn compress_pixels(
     e: &mut Engine,
@@ -1367,21 +1392,13 @@ fn compress_pixels(
         let mut out = vec![0u8; n * channels as usize];
         // No call between the channels here: `_ftol2`'s flag and the control word stay as read.
         let sse2 = e.mem.u32(SSE2_AVAILABLE) != 0;
-        let table = FloorTable::new(sse2, min, max, scale);
-        for (value, pixel) in floats
-            .chunks_exact(16)
-            .zip(out.chunks_exact_mut(channels as usize))
-        {
-            for (channel, byte) in pixel.iter_mut().enumerate() {
-                let at = 4 * channel;
-                let bits =
-                    u32::from_le_bytes([value[at], value[at + 1], value[at + 2], value[at + 3]]);
-                *byte = match &table {
-                    Some(table) => table.byte(bits),
-                    None => compress_channel(sse2, bits, min, max, scale),
-                };
-            }
-        }
+        pack_values(
+            sse2,
+            &floats,
+            channels as usize,
+            (min, max, scale),
+            &mut out,
+        );
         e.mem.write(bytes, &out);
         let last = start.wrapping_add(16 * (pixels - 1));
         e.mem.set_u32(iterator + 4, last.wrapping_add(16));
@@ -1544,11 +1561,13 @@ mod tests {
     }
 
     /// The table's byte is [`compress_channel`]'s for every value, under both control words and
-    /// both `_ftol2` bodies, in ranges with fractions at either end, a single value, signed
-    /// zeros, the most entries near 2^24, scales of every sign, an infinite and a NaN scale.
+    /// both `_ftol2` bodies, in the face tint's range (-255 to 255, scale 0.5) and ranges with
+    /// fractions at either end, a single value, signed zeros, the most entries near 2^24, scales of every sign, an infinite and a NaN scale.
     #[test]
     fn the_floor_table_gives_each_channel_the_float_steps_byte() {
-        let ranges: [(f32, f32, f32); 14] = [
+        let ranges: [(f32, f32, f32); 15] = [
+            // A face tint's (`ApplyCoordinateTexturingToMesh`, the one caller).
+            (-255.0, 255.0, 0.5),
             (0.0, 255.0, 1.0),
             (0.5, 255.0, 1.0),
             (-0.25, 0.5, 256.0),
@@ -1587,6 +1606,7 @@ mod tests {
     #[test]
     fn the_floor_table_is_made_for_a_face_and_refused_by_each_guard() {
         let made = |min: f32, max: f32| FloorTable::new(true, min, max, 1.0).map(|t| t.bytes.len());
+        assert_eq!(made(-255.0, 255.0), Some(511), "a face tint's");
         assert_eq!(made(0.0, 255.0), Some(256));
         assert_eq!(made(-0.25, 0.5), Some(2));
         assert_eq!(made(-0.0, 0.0), Some(1));
@@ -1603,6 +1623,45 @@ mod tests {
         assert_eq!(made(1.0, 0.0), None, "min above max");
         assert_eq!(made(0.0, 4096.0), None, "one entry past the most");
         assert_eq!(made(-0.5, 4095.0), None, "one entry past the most, below 0");
+    }
+
+    /// A face tint's values take the table in the one pass (its range from the one caller,
+    /// `ApplyCoordinateTexturingToMesh`: -255 to 255, scale 0.5), with the float steps' bytes, three
+    /// and four channels a value, both `_ftol2` bodies; a range the table cannot hold goes channel by
+    /// channel and says so.
+    #[test]
+    fn a_face_tint_takes_the_floor_table() {
+        let (min, max, scale) = (-255.0f32, 255.0f32, 0.5f32);
+        let mut words = channel_values(min, max);
+        words.truncate(words.len() / 4 * 4);
+        let floats: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+        for channels in [3usize, 4] {
+            for sse2 in [true, false] {
+                let mut out = vec![0u8; words.len() / 4 * channels];
+                assert!(
+                    pack_values(sse2, &floats, channels, (min, max, scale), &mut out),
+                    "the table, {channels} channels"
+                );
+                for (value, pixel) in words.chunks_exact(4).zip(out.chunks_exact(channels)) {
+                    for (channel, byte) in pixel.iter().enumerate() {
+                        let word = value[channel];
+                        assert_eq!(
+                            *byte,
+                            compress_channel(sse2, word, min, max, scale),
+                            "{word:08x}"
+                        );
+                    }
+                }
+            }
+        }
+        let mut out = [0u8; 3];
+        assert!(!pack_values(
+            true,
+            &floats[..16],
+            3,
+            (0.0, 100_000.0, 1.0),
+            &mut out
+        ));
     }
 
     /// The one-pass path runs only when the element loops' result cannot differ: each guard that
