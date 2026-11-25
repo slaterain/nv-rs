@@ -1,8 +1,9 @@
 //! The forms family (`NV_TYPED=forms`): the game's forms native, `TESForm` and the record classes
 //! built on it (`engine-fallout-forms`), file by file.
 //!
-//! - [`tesform`]: every function of `TESForm`'s own unit (`fallout shared/tesform.cpp`, Xbox PDB
-//!   source unit) but `GetFormByEditorID` (`00483a00`, which JohnnyGuitar NVSE replaces): the
+//! - [`tesform`]: every function of `TESForm`'s own unit (the Xbox PDB's `tesform` source
+//!   unit) but `GetFormByEditorID` (`00483a00`, which JohnnyGuitar NVSE replaces) and the empty
+//!   base destructor `00483710` (the dispatch family's; the typed callers leave its call out): the
 //!   constructor and destructors, the flag setters, the form registries and their maps, the source
 //!   file list (`GetFile`, `GetOwnerMaster`, `SetFile`), the save-change calls, the form's save and
 //!   load of its flags, the components' `DATA` chunk, the copy and compare of its components, the
@@ -58,7 +59,6 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0048_35e0, tesform::handler_loading_file(u32) -> u32),
         entry!(0x0048_3600, tesform::scalar_deleting_destructor(u32, u32) -> u32),
         entry!(0x0048_3630, tesform::destructor(u32)),
-        entry!(0x0048_3710, tesform::empty_destructor(u32)),
         entry!(0x0048_3720, tesform::each_component_slot_0(u32)),
         entry!(0x0048_3870, tesform::each_component_slot_1(u32)),
         entry!(0x0048_39c0, tesform::form_by_id(u32) -> u32),

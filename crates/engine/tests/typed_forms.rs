@@ -48,7 +48,10 @@ const COMPONENT_TYPES: [u32; 8] = [
     0x0118_6c74,
     0x0118_68d4,
 ];
-const SLOTS: [u32; 10] = [0, 0x10, 0x28, 0x2c, 0x48, 0x4c, 0xc8, 0xdc, 0xf0, 0x130];
+const SLOTS: [u32; 21] = [
+    0, 8, 0x10, 0x28, 0x2c, 0x48, 0x4c, 0x60, 0x64, 0x68, 0xc8, 0xdc, 0xf0, 0xf8, 0xfc, 0x100,
+    0x108, 0x130, 0x134, 0x1cc, 0x244,
+];
 
 // The unit's globals.
 const FORM_COUNT: u32 = 0x011c_54bc;
@@ -90,7 +93,6 @@ const LIST_PUSH_FRONT: u32 = 0x005a_e3d0;
 
 // Callees answered by a word.
 const FILE_ADD_FORM: u32 = 0x0047_2fe0;
-const GET_FORM_TYPE_FROM_FORM_STRING: u32 = 0x0048_6890;
 const COMPONENTS_COMPARE: u32 = 0x0047_c670;
 const SAVE_LOAD_STUB: u32 = 0x0047_c850;
 const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
@@ -103,7 +105,7 @@ const SAVE_LOAD_REMAP_ID: u32 = 0x0085_7bf0;
 const RECORD_VERSION: u32 = 0x0047_0bb0;
 
 /// Every callee answered by a word of its own.
-const ANSWERED: [u32; 76] = [
+const ANSWERED: [u32; 74] = [
     0x0047_0470, // the source file list's destructor
     0x0046_ffb0, // and its wrapper
     0x0047_0650, // FORM::Endian
@@ -111,7 +113,6 @@ const ANSWERED: [u32; 76] = [
     0x0047_0140, // its add
     0x0047_01d0, // its constructor
     0x0086_3db0, // its clear
-    0x0048_6930, // the form map's constructor
     0x0048_6ab0, // the editor id map's
     0x0043_8af0, // a map's clear
     0x0040_5430, // a map's remove
@@ -125,7 +126,6 @@ const ANSWERED: [u32; 76] = [
     0x0047_2e60, // TESFile::StartForm
     FILE_ADD_FORM,
     0x0047_3090, // the file's call after a deleted form's start
-    GET_FORM_TYPE_FROM_FORM_STRING,
     0x0047_c050, // the component collection's constructor
     0x0047_c070, // its fill
     0x0047_c560, // its visit of slot 0
@@ -253,7 +253,7 @@ fn world(e: &mut Engine) {
     ] {
         e.map(page, 0x1000);
     }
-    e.map(SLOT_ANSWERS, 0x5000);
+    e.map(SLOT_ANSWERS, 0x8000);
     for slot in SLOTS {
         e.mem.set_u32(VTABLE + slot, VT_FN + slot);
     }
@@ -267,6 +267,25 @@ fn world(e: &mut Engine) {
     e.register(VT_FN + 0xdc, slot_answer::<0xdc>);
     e.register(VT_FN + 0xf0, slot_answer::<0xf0>);
     e.register(VT_FN + 0x130, slot_answer::<0x130>);
+    e.register(VT_FN + 8, slot_answer::<8>);
+    e.register(VT_FN + 0x60, slot_answer::<0x60>);
+    e.register(VT_FN + 0x68, slot_answer::<0x68>);
+    e.register(VT_FN + 0xf8, slot_answer::<0xf8>);
+    e.register(VT_FN + 0xfc, slot_answer::<0xfc>);
+    e.register(VT_FN + 0x100, slot_answer::<0x100>);
+    e.register(VT_FN + 0x108, slot_answer::<0x108>);
+    e.register(VT_FN + 0x134, slot_answer::<0x134>);
+    e.register(VT_FN + 0x1cc, slot_answer::<0x1cc>);
+    e.register(VT_FN + 0x244, slot_answer::<0x244>);
+    // The slot answering a float (`ST0`) as well as its bits.
+    e.register(VT_FN + 0x64, |e, _| {
+        let bits = e.mem.u32(SLOT_ANSWERS + 0x64);
+        Ret {
+            eax: bits,
+            edx: 0,
+            st0: f64::from(f32::from_bits(bits)),
+        }
+    });
     // The form-type table's packed strings and the group tag.
     for t in 0..0x79u32 {
         e.mem.set_u32(FORM_ENUM_TABLE + 12 * t + 8, 0x4d52_0000 | t);
@@ -281,7 +300,6 @@ fn world(e: &mut Engine) {
         0x0047_0140,
         0x0047_01d0,
         0x0086_3db0,
-        0x0048_6930,
         0x0048_6ab0,
         0x0043_8af0,
         0x0040_5430,
@@ -295,7 +313,6 @@ fn world(e: &mut Engine) {
         0x0047_2e60,
         0x0047_2fe0,
         0x0047_3090,
-        0x0048_6890,
         0x0047_c050,
         0x0047_c070,
         0x0047_c560,
@@ -543,6 +560,7 @@ fn form_list(e: &mut Engine, count: u32, holds: Option<(u32, u32)>) -> u32 {
     if let Some((form, at)) = holds {
         e.mem.set_u32(items + 4 * at, form);
     }
+    e.mem.set_u32(list, VTABLE);
     e.mem.set_u32(list + 4, items);
     e.mem.set_u32(list + 0xc, count);
     list
@@ -584,7 +602,7 @@ fn registries(e: &mut Engine, map: bool, listed: u32, handler: bool, save_games:
 fn record_buffer(e: &mut Engine) {
     let buffer = heap_block(e, 0x18);
     for i in 0..0x18 {
-        e.mem.set_u8(buffer + i, 0x11 * (i as u8 + 1));
+        e.mem.set_u8(buffer + i, (i as u8 + 1).wrapping_mul(0x11));
     }
     e.mem.set_u32(SAVE_BUFFER, buffer);
     e.mem.set_u32(SAVE_BUFFER_SIZE, 0x18);
@@ -600,8 +618,44 @@ fn data(e: &mut Engine, size: u32) -> u32 {
 }
 
 /// Every test runs with this family and the leaves' family its calls reach.
-fn forms(d: Diff) -> Diff {
+fn forms_cases(d: Diff) -> Diff {
     d.family(&FORMS).family(&leaf::LEAVES)
+}
+
+/// The cases several tests share, as steps of the `Diff` chain, so that each test is one statement
+/// from its `Diff::new` to its `.run().assert_same()`.
+trait Cases {
+    fn forms(self) -> Diff;
+    fn flag_setter(self) -> Diff;
+    fn change_call(self) -> Diff;
+    fn forwarder(self) -> Diff;
+    fn value_chunk(self) -> Diff;
+    fn map_object(self) -> Diff;
+    fn chunk_writer(self, values: &'static [u32]) -> Diff;
+}
+
+impl Cases for Diff {
+    fn forms(self) -> Diff {
+        forms_cases(self)
+    }
+    fn flag_setter(self) -> Diff {
+        flag_setter_cases(self)
+    }
+    fn change_call(self) -> Diff {
+        change_call_cases(self)
+    }
+    fn forwarder(self) -> Diff {
+        forwarder_cases(self)
+    }
+    fn value_chunk(self) -> Diff {
+        value_chunk_cases(self)
+    }
+    fn map_object(self) -> Diff {
+        map_object_cases(self)
+    }
+    fn chunk_writer(self, values: &'static [u32]) -> Diff {
+        chunk_writer_cases(self, values)
+    }
 }
 
 const WORDS: &[u32] = &[0, 1, 0x7fff_ffff, 0x8000_0000, 0xffff_ffff];
@@ -610,18 +664,17 @@ const TEMPORARY: &[u32] = &[0, 0x4000];
 
 #[test]
 fn handler_loading_file() {
-    forms(Diff::new(
-        entry!(0x0048_35e0, tesform::handler_loading_file(u32) -> u32),
-    ))
-    .inputs(&[Input::Of(WORDS)])
-    .setup(|e, case| {
-        world(e);
-        let h = e.mem.alloc(0x210);
-        e.mem.set_u32(h + 0x20c, case.word(0));
-        vec![h]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_35e0, tesform::handler_loading_file(u32) -> u32))
+        .forms()
+        .inputs(&[Input::Of(WORDS)])
+        .setup(|e, case| {
+            world(e);
+            let h = e.mem.alloc(0x210);
+            e.mem.set_u32(h + 0x20c, case.word(0));
+            vec![h]
+        })
+        .run()
+        .assert_same();
 }
 
 /// A form with the registries, the save games and the handler around it, for the destructor's
@@ -636,10 +689,11 @@ fn dying_form(e: &mut Engine, flags: u32, count: u32, save_games: bool) -> u32 {
 
 #[test]
 fn scalar_deleting_destructor() {
-    forms(Diff::new(entry!(
+    Diff::new(entry!(
         0x0048_3600,
         tesform::scalar_deleting_destructor(u32, u32) -> u32
-    )))
+    ))
+    .forms()
     .inputs(&[
         Input::Of(&[0, 1, 3]),
         Input::Of(TEMPORARY),
@@ -656,86 +710,68 @@ fn scalar_deleting_destructor() {
 
 #[test]
 fn destructor() {
-    forms(Diff::new(entry!(0x0048_3630, tesform::destructor(u32))))
+    Diff::new(entry!(0x0048_3630, tesform::destructor(u32)))
+        .forms()
         .inputs(&[Input::Of(TEMPORARY), Input::Of(&[1, 2]), Input::Flag])
         .setup(|e, case| vec![dying_form(e, case.word(0), case.word(1), case.word(2) != 0)])
         .run()
         .assert_same();
 }
 
-#[test]
-fn empty_destructor() {
-    forms(Diff::new(entry!(
-        0x0048_3710,
-        tesform::empty_destructor(u32)
-    )))
-    .inputs(&[Input::Of(WORDS)])
-    .setup(|e, case| {
-        world(e);
-        vec![case.word(0)]
-    })
-    .run()
-    .assert_same();
-}
-
 /// The form types the component visits tell apart: none, the 0x39 sub-object, the rest.
-const COMPONENT_TYPES: &[u32] = &[
+const VISIT_TYPES: &[u32] = &[
     0x11, 0x3a, 0x3d, 0x40, 0x41, 0x42, 0x43, 0x49, 0x69, 0x39, 0x05, 0x6a,
 ];
 
 #[test]
 fn each_component_slot_0() {
-    forms(Diff::new(entry!(
-        0x0048_3720,
-        tesform::each_component_slot_0(u32)
-    )))
-    .inputs(&[Input::Of(COMPONENT_TYPES)])
-    .setup(|e, case| {
-        world(e);
-        vec![form(e, case.word(0), 0, 0x10)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_3720, tesform::each_component_slot_0(u32)))
+        .forms()
+        .inputs(&[Input::Of(VISIT_TYPES)])
+        .setup(|e, case| {
+            world(e);
+            vec![form(e, case.word(0), 0, 0x10)]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn each_component_slot_1() {
-    forms(Diff::new(entry!(
-        0x0048_3870,
-        tesform::each_component_slot_1(u32)
-    )))
-    .inputs(&[Input::Of(COMPONENT_TYPES)])
-    .setup(|e, case| {
-        world(e);
-        vec![form(e, case.word(0), 0, 0x10)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_3870, tesform::each_component_slot_1(u32)))
+        .forms()
+        .inputs(&[Input::Of(VISIT_TYPES)])
+        .setup(|e, case| {
+            world(e);
+            vec![form(e, case.word(0), 0, 0x10)]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn form_by_id() {
-    forms(Diff::new(
-        entry!(0x0048_39c0, tesform::form_by_id(u32) -> u32),
-    ))
-    .inputs(&[Input::Flag, Input::Flag, Input::Of(&[0, 0x14, 0xff00_0001])])
-    .setup(|e, case| {
-        world(e);
-        if case.word(0) != 0 {
-            let m = form(e, 0x7f, 0, 0);
-            e.mem.set_u32(FORM_MAP, m);
-        }
-        set_found(e, case.word(1) != 0);
-        e.mem.set_u32(LOOKUP_VALUE, 0x0bad_f00d);
-        vec![case.word(2)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_39c0, tesform::form_by_id(u32) -> u32))
+        .forms()
+        .inputs(&[Input::Flag, Input::Flag, Input::Of(&[0, 0x14, 0xff00_0001])])
+        .setup(|e, case| {
+            world(e);
+            if case.word(0) != 0 {
+                let m = form(e, 0x7f, 0, 0);
+                e.mem.set_u32(FORM_MAP, m);
+            }
+            set_found(e, case.word(1) != 0);
+            e.mem.set_u32(LOOKUP_VALUE, 0x0bad_f00d);
+            vec![case.word(2)]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn create_registries() {
-    forms(Diff::new(entry!(0x0048_3a50, tesform::create_registries())))
+    Diff::new(entry!(0x0048_3a50, tesform::create_registries()))
+        .forms()
         .inputs(&[Input::Flag, Input::Flag, Input::Flag, Input::Flag])
         .setup(|e, case| {
             world(e);
@@ -753,31 +789,30 @@ fn create_registries() {
 
 #[test]
 fn destroy_registries() {
-    forms(Diff::new(entry!(
-        0x0048_3b80,
-        tesform::destroy_registries()
-    )))
-    .inputs(&[Input::Flag, Input::Flag, Input::Flag])
-    .setup(|e, case| {
-        world(e);
-        for (i, global) in [FORM_MAP, EDITOR_ID_MAP, FORM_LIST].into_iter().enumerate() {
-            if case.word(i) != 0 {
-                let object = form(e, 0x7f, 0, i as u32);
-                e.mem.set_u32(global, object);
+    Diff::new(entry!(0x0048_3b80, tesform::destroy_registries()))
+        .forms()
+        .inputs(&[Input::Flag, Input::Flag, Input::Flag])
+        .setup(|e, case| {
+            world(e);
+            for (i, global) in [FORM_MAP, EDITOR_ID_MAP, FORM_LIST].into_iter().enumerate() {
+                if case.word(i) != 0 {
+                    let object = form(e, 0x7f, 0, i as u32);
+                    e.mem.set_u32(global, object);
+                }
             }
-        }
-        vec![]
-    })
-    .run()
-    .assert_same();
+            vec![]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn remove_from_data_structures() {
-    forms(Diff::new(entry!(
+    Diff::new(entry!(
         0x0048_3c70,
         tesform::remove_from_data_structures(u32)
-    )))
+    ))
+    .forms()
     .inputs(&[
         Input::Of(TEMPORARY),
         Input::Flag,
@@ -803,37 +838,35 @@ fn remove_from_data_structures() {
 
 #[test]
 fn save() {
-    forms(Diff::new(
-        entry!(0x0048_3d20, tesform::save(u32, u32) -> bool),
-    ))
-    .inputs(&[Input::Of(TEMPORARY), Input::Of(&[0, 1, 0x100])])
-    .setup(|e, case| {
-        world(e);
-        set_answer(e, FILE_ADD_FORM, case.word(1));
-        let f = form(e, 0x20, case.word(0), 0x14);
-        vec![f, file(e, true)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_3d20, tesform::save(u32, u32) -> bool))
+        .forms()
+        .inputs(&[Input::Of(TEMPORARY), Input::Of(&[0, 1, 0x100])])
+        .setup(|e, case| {
+            world(e);
+            set_answer(e, FILE_ADD_FORM, case.word(1));
+            let f = form(e, 0x20, case.word(0), 0x14);
+            vec![f, file(e, true)]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn write_to_file() {
-    forms(Diff::new(
-        entry!(0x0048_3fc0, tesform::write_to_file(u32, u32) -> u8),
-    ))
-    .inputs(&[
-        Input::Of(&[0, 0x4000, 0x20, 0x4020]),
-        Input::Of(&[0, 1, 0x1ff]),
-    ])
-    .setup(|e, case| {
-        world(e);
-        e.mem.set_u32(SLOT_ANSWERS + 0x28, case.word(1));
-        let f = form(e, 0x20, case.word(0), 0x14);
-        vec![f, file(e, false)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_3fc0, tesform::write_to_file(u32, u32) -> u8))
+        .forms()
+        .inputs(&[
+            Input::Of(&[0, 0x4000, 0x20, 0x4020]),
+            Input::Of(&[0, 1, 0x1ff]),
+        ])
+        .setup(|e, case| {
+            world(e);
+            e.mem.set_u32(SLOT_ANSWERS + 0x28, case.word(1));
+            let f = form(e, 0x20, case.word(0), 0x14);
+            vec![f, file(e, false)]
+        })
+        .run()
+        .assert_same();
 }
 
 /// Form types whose ranks the file order tells apart: the four ranked apart and some others.
@@ -841,58 +874,56 @@ const RANKED_TYPES: &[u32] = &[0, 1, 0x29, 0x67, 0x6c, 0x73, 0x74];
 
 #[test]
 fn type_ranks_before() {
-    forms(Diff::new(
-        entry!(0x0048_4020, tesform::type_ranks_before(u32, u32) -> bool),
-    ))
-    .inputs(&[Input::Of(RANKED_TYPES), Input::Of(RANKED_TYPES)])
-    .setup(|e, case| {
-        world(e);
-        let a = form(e, case.word(0), 0, 1);
-        let b = form(e, case.word(1), 0, 2);
-        vec![a, b]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4020, tesform::type_ranks_before(u32, u32) -> bool))
+        .forms()
+        .inputs(&[Input::Of(RANKED_TYPES), Input::Of(RANKED_TYPES)])
+        .setup(|e, case| {
+            world(e);
+            let a = form(e, case.word(0), 0, 1);
+            let b = form(e, case.word(1), 0, 2);
+            vec![a, b]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn goes_before_group() {
     // 100: no record; 101: a record that is not a group; else the group type.
-    forms(Diff::new(
-        entry!(0x0048_4150, tesform::goes_before_group(u32, u32) -> bool),
-    ))
-    .inputs(&[
-        Input::Of(&[100, 101, 0, 1, 2, 3, 4, 5, 6, 7, 8]),
-        Input::Of(&[0x23, 0x28, 0x3a, 0x41, 0x67]),
-    ])
-    .setup(|e, case| {
-        world(e);
-        set_answer(e, GET_FORM_TYPE_FROM_FORM_STRING, 0x30);
-        let f = form(e, case.word(1), 0, 1);
-        let record = match case.word(0) {
-            100 => 0,
-            kind => {
-                let r = e.mem.alloc(0x18);
-                let tag = if kind == 101 {
-                    0x4f4e_5055
-                } else {
-                    GROUP_TAG_VALUE
-                };
-                e.mem.set_u32(r, tag);
-                e.mem.set_u32(r + 8, 0x5452_4f46);
-                e.mem.set_u32(r + 0xc, kind);
-                r
-            }
-        };
-        vec![f, record]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4150, tesform::goes_before_group(u32, u32) -> bool))
+        .forms()
+        .inputs(&[
+            Input::Of(&[100, 101, 0, 1, 2, 3, 4, 5, 6, 7, 8]),
+            Input::Of(&[0x23, 0x28, 0x3a, 0x41, 0x67]),
+        ])
+        .setup(|e, case| {
+            world(e);
+            let f = form(e, case.word(1), 0, 1);
+            let record = match case.word(0) {
+                100 => 0,
+                kind => {
+                    let r = e.mem.alloc(0x18);
+                    let tag = if kind == 101 {
+                        0x4f4e_5055
+                    } else {
+                        GROUP_TAG_VALUE
+                    };
+                    e.mem.set_u32(r, tag);
+                    e.mem.set_u32(r + 8, 0x5452_4f46);
+                    e.mem.set_u32(r + 0xc, kind);
+                    r
+                }
+            };
+            vec![f, record]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_temporary() {
-    forms(Diff::new(entry!(0x0048_4490, tesform::set_temporary(u32))))
+    Diff::new(entry!(0x0048_4490, tesform::set_temporary(u32)))
+        .forms()
         .inputs(&[Input::Flag, Input::Of(TEMPORARY), Input::Of(&[0, 2])])
         .setup(|e, case| {
             world(e);
@@ -905,8 +936,8 @@ fn set_temporary() {
 }
 
 /// A flag setter's cases: on or off, over forms whose flags are all clear, all set or mixed.
-fn flag_setter(d: Diff) -> Diff {
-    forms(d)
+fn flag_setter_cases(d: Diff) -> Diff {
+    d.forms()
         .inputs(&[Input::Flag, Input::Of(FLAGS)])
         .setup(|e, case| {
             world(e);
@@ -916,199 +947,163 @@ fn flag_setter(d: Diff) -> Diff {
 
 #[test]
 fn set_flag_1() {
-    flag_setter(Diff::new(entry!(
-        0x0048_44f0,
-        tesform::set_flag_1(u32, bool)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_44f0, tesform::set_flag_1(u32, bool)))
+        .flag_setter()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_delete() {
-    flag_setter(Diff::new(entry!(
-        0x0048_4530,
-        tesform::set_delete(u32, bool)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4530, tesform::set_delete(u32, bool)))
+        .flag_setter()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_empty() {
-    forms(Diff::new(entry!(
-        0x0048_4580,
-        tesform::set_empty(u32, bool)
-    )))
-    .inputs(&[Input::Flag, Input::Of(FLAGS), Input::Flag])
-    .setup(|e, case| {
-        world(e);
-        set_answer(e, SAVE_LOAD_STUB, case.word(2));
-        vec![form(e, 0x20, case.word(1), 0x14), case.word(0)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4580, tesform::set_empty(u32, bool)))
+        .forms()
+        .inputs(&[Input::Flag, Input::Of(FLAGS), Input::Flag])
+        .setup(|e, case| {
+            world(e);
+            set_answer(e, SAVE_LOAD_STUB, case.word(2));
+            vec![form(e, 0x20, case.word(1), 0x14), case.word(0)]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_flag_2000() {
-    flag_setter(Diff::new(entry!(
-        0x0048_4610,
-        tesform::set_flag_2000(u32, bool)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4610, tesform::set_flag_2000(u32, bool)))
+        .flag_setter()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_flag_800000() {
-    flag_setter(Diff::new(entry!(
-        0x0048_4650,
-        tesform::set_flag_800000(u32, bool)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4650, tesform::set_flag_800000(u32, bool)))
+        .flag_setter()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_destructible() {
-    flag_setter(Diff::new(entry!(
-        0x0048_46a0,
-        tesform::set_destructible(u32, bool)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_46a0, tesform::set_destructible(u32, bool)))
+        .flag_setter()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_flag_4000000() {
-    flag_setter(Diff::new(entry!(
-        0x0048_46e0,
-        tesform::set_flag_4000000(u32, bool)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_46e0, tesform::set_flag_4000000(u32, bool)))
+        .flag_setter()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_listed_flag() {
-    forms(Diff::new(entry!(
-        0x0048_4730,
-        tesform::set_listed_flag(u32, bool)
-    )))
-    .inputs(&[
-        Input::Flag,
-        Input::Of(&[0, 2, 0x4000, 0x4002]),
-        Input::Of(&[0, 1, 2]),
-    ])
-    .setup(|e, case| {
-        world(e);
-        let f = form(e, 0x20, case.word(1), 0x14);
-        registries(e, false, case.word(2), false, false, f);
-        vec![f, case.word(0)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4730, tesform::set_listed_flag(u32, bool)))
+        .forms()
+        .inputs(&[
+            Input::Flag,
+            Input::Of(&[0, 2, 0x4000, 0x4002]),
+            Input::Of(&[0, 1, 2]),
+        ])
+        .setup(|e, case| {
+            world(e);
+            let f = form(e, 0x20, case.word(1), 0x14);
+            registries(e, false, case.word(2), false, false, f);
+            vec![f, case.word(0)]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_flag_400() {
-    flag_setter(Diff::new(entry!(
-        0x0048_4860,
-        tesform::set_flag_400(u32, bool)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4860, tesform::set_flag_400(u32, bool)))
+        .flag_setter()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_flag_40() {
-    flag_setter(Diff::new(entry!(
-        0x0048_48b0,
-        tesform::set_flag_40(u32, bool)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_48b0, tesform::set_flag_40(u32, bool)))
+        .flag_setter()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_flag_10000() {
-    flag_setter(Diff::new(entry!(
-        0x0048_4900,
-        tesform::set_flag_10000(u32, bool)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4900, tesform::set_flag_10000(u32, bool)))
+        .flag_setter()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_flag_20000() {
-    flag_setter(Diff::new(entry!(
-        0x0048_4950,
-        tesform::set_flag_20000(u32, bool)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4950, tesform::set_flag_20000(u32, bool)))
+        .flag_setter()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_flag_100000() {
-    flag_setter(Diff::new(entry!(
-        0x0048_4990,
-        tesform::set_flag_100000(u32, bool)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4990, tesform::set_flag_100000(u32, bool)))
+        .flag_setter()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_flag_200() {
-    flag_setter(Diff::new(entry!(
-        0x0048_49d0,
-        tesform::set_flag_200(u32, bool)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_49d0, tesform::set_flag_200(u32, bool)))
+        .flag_setter()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_flag_40_again() {
-    flag_setter(Diff::new(entry!(
-        0x0048_4a10,
-        tesform::set_flag_40_again(u32, bool)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4a10, tesform::set_flag_40_again(u32, bool)))
+        .flag_setter()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_fire_off() {
-    flag_setter(Diff::new(entry!(
-        0x0048_4a70,
-        tesform::set_fire_off(u32, bool)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4a70, tesform::set_fire_off(u32, bool)))
+        .flag_setter()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_flag_8() {
-    flag_setter(Diff::new(entry!(
-        0x0048_4ab0,
-        tesform::set_flag_8(u32, bool)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4ab0, tesform::set_flag_8(u32, bool)))
+        .flag_setter()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_disabled() {
-    flag_setter(Diff::new(entry!(
-        0x0048_4af0,
-        tesform::set_disabled(u32, bool)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4af0, tesform::set_disabled(u32, bool)))
+        .flag_setter()
+        .run()
+        .assert_same();
 }
 
 /// Ids on both sides of the low range's bounds.
@@ -1116,21 +1111,20 @@ const IDS: &[u32] = &[0, 1, 0x7ff, 0x800, 0x0100_0001, 0xffff_ffff];
 
 #[test]
 fn id_in_low_range() {
-    forms(Diff::new(
-        entry!(0x0048_4b40, tesform::id_in_low_range(u32) -> bool),
-    ))
-    .inputs(&[Input::Of(IDS)])
-    .setup(|e, case| {
-        world(e);
-        vec![case.word(0)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4b40, tesform::id_in_low_range(u32) -> bool))
+        .forms()
+        .inputs(&[Input::Of(IDS)])
+        .setup(|e, case| {
+            world(e);
+            vec![case.word(0)]
+        })
+        .run()
+        .assert_same();
 }
 
 /// A change call's cases: the change words, with the save game there.
-fn change_call(d: Diff) -> Diff {
-    forms(d).inputs(&[Input::Of(WORDS)]).setup(|e, case| {
+fn change_call_cases(d: Diff) -> Diff {
+    d.forms().inputs(&[Input::Of(WORDS)]).setup(|e, case| {
         world(e);
         let f = form(e, 0x20, 0, 0x14);
         registries(e, false, 0, false, true, f);
@@ -1140,89 +1134,78 @@ fn change_call(d: Diff) -> Diff {
 
 #[test]
 fn add_change() {
-    change_call(Diff::new(entry!(
-        0x0048_4b60,
-        tesform::add_change(u32, u32)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4b60, tesform::add_change(u32, u32)))
+        .change_call()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn force_change() {
-    change_call(Diff::new(entry!(
-        0x0048_4b90,
-        tesform::force_change(u32, u32)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4b90, tesform::force_change(u32, u32)))
+        .change_call()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn change_sibling() {
-    change_call(Diff::new(entry!(
-        0x0048_4bc0,
-        tesform::change_sibling(u32, u32)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4bc0, tesform::change_sibling(u32, u32)))
+        .change_call()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn flags_save_size() {
-    forms(Diff::new(
-        entry!(0x0048_4bf0, tesform::flags_save_size(u32, u32) -> u16),
-    ))
-    .inputs(&[Input::Of(&[0, 1, 2, 3, 0xffff_ffff])])
-    .setup(|e, case| {
-        world(e);
-        vec![form(e, 0x20, 0, 0x14), case.word(0)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4bf0, tesform::flags_save_size(u32, u32) -> u16))
+        .forms()
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 0xffff_ffff])])
+        .setup(|e, case| {
+            world(e);
+            vec![form(e, 0x20, 0, 0x14), case.word(0)]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn save_flags() {
-    change_call(Diff::new(entry!(
-        0x0048_4c20,
-        tesform::save_flags(u32, u32)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4c20, tesform::save_flags(u32, u32)))
+        .change_call()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn load_game() {
-    forms(Diff::new(entry!(
-        0x0048_4c50,
-        tesform::load_game(u32, u32, u32)
-    )))
-    .inputs(&[
-        Input::Of(&[0, 1, 3]),
-        Input::Flag,
-        Input::Of(&[0, 0xffff_ffff, 0x5a5a_5a5a]),
-        Input::Of(&[0, 0xffff_ffff]),
-    ])
-    .setup(|e, case| {
-        world(e);
-        let f = form(e, 0x20, case.word(3), 0x14);
-        registries(e, false, 0, false, true, f);
-        set_cast(
-            e,
-            TYPE_TES_OBJECT_REFR,
-            if case.word(1) != 0 { f } else { 0 },
-        );
-        e.mem.set_u32(READ_WORD, case.word(2));
-        vec![f, case.word(0), 0x77]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4c50, tesform::load_game(u32, u32, u32)))
+        .forms()
+        .inputs(&[
+            Input::Of(&[0, 1, 3]),
+            Input::Flag,
+            Input::Of(&[0, 0xffff_ffff, 0x5a5a_5a5a]),
+            Input::Of(&[0, 0xffff_ffff]),
+        ])
+        .setup(|e, case| {
+            world(e);
+            let f = form(e, 0x20, case.word(3), 0x14);
+            registries(e, false, 0, false, true, f);
+            set_cast(
+                e,
+                TYPE_TES_OBJECT_REFR,
+                if case.word(1) != 0 { f } else { 0 },
+            );
+            e.mem.set_u32(READ_WORD, case.word(2));
+            vec![f, case.word(0), 0x77]
+        })
+        .run()
+        .assert_same();
 }
 
 /// A forwarder's cases: two words, with the save game there.
-fn forwarder(d: Diff) -> Diff {
-    forms(d)
+fn forwarder_cases(d: Diff) -> Diff {
+    d.forms()
         .inputs(&[Input::Of(WORDS), Input::Of(&[0, 4, 0xffff_ffff])])
         .setup(|e, case| {
             world(e);
@@ -1234,10 +1217,11 @@ fn forwarder(d: Diff) -> Diff {
 
 #[test]
 fn save_game_data_old() {
-    forwarder(Diff::new(entry!(
+    Diff::new(entry!(
         0x0048_4ce0,
         tesform::save_game_data_old(u32, u32, u32)
-    )))
+    ))
+    .forwarder()
     .run()
     .assert_same();
 }
@@ -1245,10 +1229,11 @@ fn save_game_data_old() {
 #[test]
 fn load_game_data_old() {
     // The double writes the read word at the buffer: give it a real one.
-    forms(Diff::new(entry!(
+    Diff::new(entry!(
         0x0048_4d00,
         tesform::load_game_data_old(u32, u32, u32)
-    )))
+    ))
+    .forms()
     .inputs(&[Input::Of(&[0, 4, 0xffff_ffff])])
     .setup(|e, case| {
         world(e);
@@ -1264,81 +1249,72 @@ fn load_game_data_old() {
 
 #[test]
 fn save_numeric_id() {
-    forwarder(Diff::new(entry!(
-        0x0048_4d20,
-        tesform::save_numeric_id(u32, u32, u32)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4d20, tesform::save_numeric_id(u32, u32, u32)))
+        .forwarder()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn load_numeric_id() {
-    forwarder(Diff::new(entry!(
-        0x0048_4d40,
-        tesform::load_numeric_id(u32, u32, u32)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4d40, tesform::load_numeric_id(u32, u32, u32)))
+        .forwarder()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn write_flags() {
-    forms(Diff::new(entry!(
-        0x0048_4d60,
-        tesform::write_flags(u32, u32)
-    )))
-    .inputs(&[Input::Of(&[0, 1, 2, 3])])
-    .setup(|e, case| {
-        world(e);
-        e.mem.set_u32(SAVE_KIND, case.word(0));
-        let buffer = e.mem.alloc(0x20);
-        vec![form(e, 0x20, 0x1234_5678, 0x14), buffer]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4d60, tesform::write_flags(u32, u32)))
+        .forms()
+        .inputs(&[Input::Of(&[0, 1, 2, 3])])
+        .setup(|e, case| {
+            world(e);
+            e.mem.set_u32(SAVE_KIND, case.word(0));
+            let buffer = e.mem.alloc(0x20);
+            vec![form(e, 0x20, 0x1234_5678, 0x14), buffer]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn read_flags() {
-    forms(Diff::new(entry!(
-        0x0048_4da0,
-        tesform::read_flags(u32, u32)
-    )))
-    .inputs(&[
-        Input::Of(&[0, 1, 2]),
-        Input::Flag,
-        Input::Of(&[0, 0xffff_ffff, 0x5a5a_5a5a]),
-        Input::Of(&[0, 0xffff_ffff]),
-        Input::Flag,
-    ])
-    .setup(|e, case| {
-        world(e);
-        e.mem.set_u32(SAVE_KIND, case.word(0));
-        e.mem.set_u32(SLOT_ANSWERS + 0xf0, case.word(1));
-        e.mem.set_u32(READ_WORD, case.word(2));
-        if case.word(4) != 0 {
-            e.set_jip_patches(engine_core::extend::jip_patches::FIXES);
-        }
-        let buffer = e.mem.alloc(0x20);
-        vec![form(e, 0x20, case.word(3), 0x14), buffer]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4da0, tesform::read_flags(u32, u32)))
+        .forms()
+        .inputs(&[
+            Input::Of(&[0, 1, 2]),
+            Input::Flag,
+            Input::Of(&[0, 0xffff_ffff, 0x5a5a_5a5a]),
+            Input::Of(&[0, 0xffff_ffff]),
+            Input::Flag,
+        ])
+        .setup(|e, case| {
+            world(e);
+            e.mem.set_u32(SAVE_KIND, case.word(0));
+            e.mem.set_u32(SLOT_ANSWERS + 0xf0, case.word(1));
+            e.mem.set_u32(READ_WORD, case.word(2));
+            if case.word(4) != 0 {
+                e.set_jip_patches(engine_core::extend::jip_patches::FIXES);
+            }
+            let buffer = e.mem.alloc(0x20);
+            vec![form(e, 0x20, case.word(3), 0x14), buffer]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn has_low_id() {
-    forms(Diff::new(
-        entry!(0x0048_4e40, tesform::has_low_id(u32) -> bool),
-    ))
-    .inputs(&[Input::Of(IDS)])
-    .setup(|e, case| {
-        world(e);
-        vec![form(e, 0x20, 0, case.word(0))]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4e40, tesform::has_low_id(u32) -> bool))
+        .forms()
+        .inputs(&[Input::Of(IDS)])
+        .setup(|e, case| {
+            world(e);
+            vec![form(e, 0x20, 0, case.word(0))]
+        })
+        .run()
+        .assert_same();
 }
 
 /// A form whose source file list has this shape: 0 empty; 1 one file; 2 a file, a node without
@@ -1359,44 +1335,43 @@ fn form_with_files(e: &mut Engine, shape: u32) -> u32 {
 
 #[test]
 fn get_file() {
-    forms(Diff::new(
-        entry!(0x0048_4e60, tesform::get_file(u32, i32) -> u32),
-    ))
-    .inputs(&[
-        Input::Of(&[0, 1, 2, 3, 4]),
-        Input::Of(&[0, 1, 2, 5, 0xffff_ffff, 0xffff_fffe]),
-    ])
-    .setup(|e, case| vec![form_with_files(e, case.word(0)), case.word(1)])
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4e60, tesform::get_file(u32, i32) -> u32))
+        .forms()
+        .inputs(&[
+            Input::Of(&[0, 1, 2, 3, 4]),
+            Input::Of(&[0, 1, 2, 5, 0xffff_ffff, 0xffff_fffe]),
+        ])
+        .setup(|e, case| vec![form_with_files(e, case.word(0)), case.word(1)])
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn get_owner_master() {
-    forms(Diff::new(
-        entry!(0x0048_4ee0, tesform::get_owner_master(u32) -> u32),
-    ))
-    .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5])])
-    .setup(|e, case| {
-        if case.word(0) == 5 {
-            // Masters and other files mixed: master, file, master, file.
-            world(e);
-            let f = form(e, 0x20, 0, 1);
-            let files = [file(e, true), file(e, false), file(e, true), file(e, false)];
-            set_files(e, f, &files);
-            return vec![f];
-        }
-        vec![form_with_files(e, case.word(0))]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_4ee0, tesform::get_owner_master(u32) -> u32))
+        .forms()
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5])])
+        .setup(|e, case| {
+            if case.word(0) == 5 {
+                // Masters and other files mixed: master, file, master, file.
+                world(e);
+                let f = form(e, 0x20, 0, 1);
+                let files = [file(e, true), file(e, false), file(e, true), file(e, false)];
+                set_files(e, f, &files);
+                return vec![f];
+            }
+            vec![form_with_files(e, case.word(0))]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_file() {
     // The file: 0 none; 1 a master; 2 another file; 3 a file the list holds; 4 a file whose
     // chain ends in a master.
-    forms(Diff::new(entry!(0x0048_4f50, tesform::set_file(u32, u32))))
+    Diff::new(entry!(0x0048_4f50, tesform::set_file(u32, u32)))
+        .forms()
         .inputs(&[Input::Of(&[0, 1, 2, 3, 4]), Input::Of(&[0, 1, 2, 3, 4, 5])])
         .setup(|e, case| {
             world(e);
@@ -1429,7 +1404,8 @@ fn set_file() {
 
 #[test]
 fn load_form() {
-    forms(Diff::new(entry!(0x0048_5110, tesform::load_form(u32, u32))))
+    Diff::new(entry!(0x0048_5110, tesform::load_form(u32, u32)))
+        .forms()
         .inputs(&[Input::Of(WORDS)])
         .setup(|e, case| {
             world(e);
@@ -1441,7 +1417,8 @@ fn load_form() {
 
 #[test]
 fn copy() {
-    forms(Diff::new(entry!(0x0048_5130, tesform::copy(u32, u32))))
+    Diff::new(entry!(0x0048_5130, tesform::copy(u32, u32)))
+        .forms()
         .inputs(&[Input::Of(&[0, 0x0101_1584])])
         .setup(|e, case| {
             world(e);
@@ -1455,46 +1432,44 @@ fn copy() {
 
 #[test]
 fn compare() {
-    forms(Diff::new(
-        entry!(0x0048_5170, tesform::compare(u32, u32) -> bool),
-    ))
-    .inputs(&[Input::Of(&[0, 0x0101_1584])])
-    .setup(|e, case| {
-        world(e);
-        e.mem.set_u32(SLOT_ANSWERS + 0x130, case.word(0));
-        let other = form(e, 0x30, 0, 2);
-        vec![form(e, 0x20, 0, 1), other]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_5170, tesform::compare(u32, u32) -> bool))
+        .forms()
+        .inputs(&[Input::Of(&[0, 0x0101_1584])])
+        .setup(|e, case| {
+            world(e);
+            e.mem.set_u32(SLOT_ANSWERS + 0x130, case.word(0));
+            let other = form(e, 0x30, 0, 2);
+            vec![form(e, 0x20, 0, 1), other]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn copy_all_components() {
-    forms(Diff::new(entry!(
-        0x0048_51b0,
-        tesform::copy_all_components(u32, u32)
-    )))
-    .inputs(&[Input::Of(&[0, 1])])
-    .setup(|e, case| {
-        world(e);
-        let other = if case.word(0) != 0 {
-            form(e, 0x30, 0, 2)
-        } else {
-            0
-        };
-        vec![form(e, 0x20, 0, 1), other]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_51b0, tesform::copy_all_components(u32, u32)))
+        .forms()
+        .inputs(&[Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            world(e);
+            let other = if case.word(0) != 0 {
+                form(e, 0x30, 0, 2)
+            } else {
+                0
+            };
+            vec![form(e, 0x20, 0, 1), other]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn compare_all_components() {
-    forms(Diff::new(entry!(
+    Diff::new(entry!(
         0x0048_5270,
         tesform::compare_all_components(u32, u32) -> u8
-    )))
+    ))
+    .forms()
     .inputs(&[Input::Flag, Input::Of(&[0, 1, 0x101])])
     .setup(|e, case| {
         world(e);
@@ -1512,7 +1487,8 @@ fn compare_all_components() {
 
 #[test]
 fn copy_from() {
-    forms(Diff::new(entry!(0x0048_5340, tesform::copy_from(u32, u32))))
+    Diff::new(entry!(0x0048_5340, tesform::copy_from(u32, u32)))
+        .forms()
         .inputs(&[
             Input::Flag,
             Input::Of(&[0, 2, 0x4000, 0x4002]),
@@ -1533,41 +1509,40 @@ fn copy_from() {
 fn differs_from() {
     // The keys: 0 neither has one; 1 both the same; 2 they differ; 3 only the other has one.
     // The flags: 0 the same; 1 apart only in 0x4000 and 0xb; 2 apart elsewhere.
-    forms(Diff::new(
-        entry!(0x0048_53e0, tesform::differs_from(u32, u32) -> bool),
-    ))
-    .inputs(&[
-        Input::Flag,
-        Input::Flag,
-        Input::Of(&[0, 1, 2, 3]),
-        Input::Flag,
-        Input::Of(&[0, 1, 2]),
-    ])
-    .setup(|e, case| {
-        world(e);
-        let flags = 0x0000_1230;
-        let theirs = match case.word(4) {
-            0 => flags,
-            1 => flags ^ 0x400b,
-            _ => flags ^ 0x0010_0000,
-        };
-        let this = form(e, 0x20, flags, 1);
-        let kind = if case.word(1) != 0 { 0x20 } else { 0x21 };
-        let source = form(e, kind, theirs, 2);
-        let (mine_key, their_key) = match case.word(2) {
-            0 => (0, 0),
-            1 => (7, 7),
-            2 => (7, 8),
-            _ => (0, 9),
-        };
-        e.mem.set_u32(this + 0x30, mine_key);
-        e.mem.set_u32(source + 0x30, their_key);
-        set_answer(e, STRING_COMPARE, case.word(3));
-        set_cast(e, TYPE_TES_FORM, if case.word(0) != 0 { source } else { 0 });
-        vec![this, source + 0x18]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_53e0, tesform::differs_from(u32, u32) -> bool))
+        .forms()
+        .inputs(&[
+            Input::Flag,
+            Input::Flag,
+            Input::Of(&[0, 1, 2, 3]),
+            Input::Flag,
+            Input::Of(&[0, 1, 2]),
+        ])
+        .setup(|e, case| {
+            world(e);
+            let flags = 0x0000_1230;
+            let theirs = match case.word(4) {
+                0 => flags,
+                1 => flags ^ 0x400b,
+                _ => flags ^ 0x0010_0000,
+            };
+            let this = form(e, 0x20, flags, 1);
+            let kind = if case.word(1) != 0 { 0x20 } else { 0x21 };
+            let source = form(e, kind, theirs, 2);
+            let (mine_key, their_key) = match case.word(2) {
+                0 => (0, 0),
+                1 => (7, 7),
+                2 => (7, 8),
+                _ => (0, 9),
+            };
+            e.mem.set_u32(this + 0x30, mine_key);
+            e.mem.set_u32(source + 0x30, their_key);
+            set_answer(e, STRING_COMPARE, case.word(3));
+            set_cast(e, TYPE_TES_FORM, if case.word(0) != 0 { source } else { 0 });
+            vec![this, source + 0x18]
+        })
+        .run()
+        .assert_same();
 }
 
 /// A record for the top group tests: 0 none; 1 not a group; 2 a group of type 1; 3 a top group
@@ -1593,10 +1568,11 @@ fn top_record(e: &mut Engine, kind: u32, form_type: u32) -> u32 {
 
 #[test]
 fn is_own_top_group() {
-    forms(Diff::new(entry!(
+    Diff::new(entry!(
         0x0048_54e0,
         tesform::is_own_top_group(u32, u32, u32, u32) -> bool
-    )))
+    ))
+    .forms()
     .inputs(&[Input::Of(&[0, 1, 2, 3, 4]), Input::Of(&[0x20, 0x45])])
     .setup(|e, case| {
         world(e);
@@ -1610,32 +1586,31 @@ fn is_own_top_group() {
 
 #[test]
 fn fill_top_group() {
-    forms(Diff::new(entry!(
-        0x0048_5530,
-        tesform::fill_top_group(u32, u32, u32)
-    )))
-    .inputs(&[Input::Flag, Input::Of(&[0, 1, 0x100])])
-    .setup(|e, case| {
-        world(e);
-        let f = form(e, 0x2a, 0, 1);
-        let r = if case.word(0) != 0 {
-            let r = e.mem.alloc(0x18);
-            for i in 0..0x18 {
-                e.mem.set_u8(r + i, 0xcc);
-            }
-            r
-        } else {
-            0
-        };
-        vec![f, r, case.word(1)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_5530, tesform::fill_top_group(u32, u32, u32)))
+        .forms()
+        .inputs(&[Input::Flag, Input::Of(&[0, 1, 0x100])])
+        .setup(|e, case| {
+            world(e);
+            let f = form(e, 0x2a, 0, 1);
+            let r = if case.word(0) != 0 {
+                let r = e.mem.alloc(0x18);
+                for i in 0..0x18 {
+                    e.mem.set_u8(r + i, 0xcc);
+                }
+                r
+            } else {
+                0
+            };
+            vec![f, r, case.word(1)]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn start_form() {
-    forms(Diff::new(entry!(0x0048_55a0, tesform::start_form(u32))))
+    Diff::new(entry!(0x0048_55a0, tesform::start_form(u32)))
+        .forms()
         .inputs(&[
             Input::Of(&[0, 0x4000, 0xffff_bfff]),
             Input::Of(&[1, 2, 0x29]),
@@ -1650,7 +1625,8 @@ fn start_form() {
 
 #[test]
 fn close_form() {
-    forms(Diff::new(entry!(0x0048_5680, tesform::close_form(u32))))
+    Diff::new(entry!(0x0048_5680, tesform::close_form(u32)))
+        .forms()
         .inputs(&[Input::Of(TEMPORARY), Input::Flag])
         .setup(|e, case| {
             world(e);
@@ -1664,8 +1640,8 @@ fn close_form() {
 }
 
 /// A chunk writer's cases: big-endian or not, with the record buffer started.
-fn chunk_writer(d: Diff, values: &'static [u32]) -> Diff {
-    forms(d)
+fn chunk_writer_cases(d: Diff, values: &'static [u32]) -> Diff {
+    d.forms()
         .inputs(&[Input::Flag, Input::Of(values)])
         .setup(|e, case| {
             world(e);
@@ -1680,7 +1656,8 @@ const COUNTS: &[u32] = &[0, 1, 3];
 
 #[test]
 fn add_chunk() {
-    forms(Diff::new(entry!(0x0048_56d0, tesform::add_chunk(u32))))
+    Diff::new(entry!(0x0048_56d0, tesform::add_chunk(u32)))
+        .forms()
         .inputs(&[Input::Flag])
         .setup(|e, case| {
             world(e);
@@ -1694,69 +1671,59 @@ fn add_chunk() {
 
 #[test]
 fn add_chunk_array() {
-    chunk_writer(
-        Diff::new(entry!(0x0048_56f0, tesform::add_chunk_array(u32, u32, u32))),
-        &[0, 1, 6, 0x100],
-    )
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_56f0, tesform::add_chunk_array(u32, u32, u32)))
+        .chunk_writer(&[0, 1, 6, 0x100])
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn add_chunk_array_words() {
-    chunk_writer(
-        Diff::new(entry!(
-            0x0048_5710,
-            tesform::add_chunk_array_words(u32, u32, u32)
-        )),
-        COUNTS,
-    )
+    Diff::new(entry!(
+        0x0048_5710,
+        tesform::add_chunk_array_words(u32, u32, u32)
+    ))
+    .chunk_writer(COUNTS)
     .run()
     .assert_same();
 }
 
 #[test]
 fn add_chunk_array_halves() {
-    chunk_writer(
-        Diff::new(entry!(
-            0x0048_5730,
-            tesform::add_chunk_array_halves(u32, u32, u32)
-        )),
-        COUNTS,
-    )
+    Diff::new(entry!(
+        0x0048_5730,
+        tesform::add_chunk_array_halves(u32, u32, u32)
+    ))
+    .chunk_writer(COUNTS)
     .run()
     .assert_same();
 }
 
 #[test]
 fn add_chunk_array32() {
-    chunk_writer(
-        Diff::new(entry!(
-            0x0048_5750,
-            tesform::add_chunk_array32(u32, u32, u32)
-        )),
-        COUNTS,
-    )
+    Diff::new(entry!(
+        0x0048_5750,
+        tesform::add_chunk_array32(u32, u32, u32)
+    ))
+    .chunk_writer(COUNTS)
     .run()
     .assert_same();
 }
 
 #[test]
 fn add_chunk_array16() {
-    chunk_writer(
-        Diff::new(entry!(
-            0x0048_5820,
-            tesform::add_chunk_array16(u32, u32, u32)
-        )),
-        COUNTS,
-    )
+    Diff::new(entry!(
+        0x0048_5820,
+        tesform::add_chunk_array16(u32, u32, u32)
+    ))
+    .chunk_writer(COUNTS)
     .run()
     .assert_same();
 }
 
 /// A one-value chunk's cases: big-endian or not, the value.
-fn value_chunk(d: Diff) -> Diff {
-    forms(d)
+fn value_chunk_cases(d: Diff) -> Diff {
+    d.forms()
         .inputs(&[Input::Flag, Input::Of(&[0, 0x1234_5678, 0xffff_ffff])])
         .setup(|e, case| {
             world(e);
@@ -1768,117 +1735,106 @@ fn value_chunk(d: Diff) -> Diff {
 
 #[test]
 fn add_chunk_byte() {
-    value_chunk(Diff::new(entry!(
-        0x0048_58f0,
-        tesform::add_chunk_byte(u32, u32)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_58f0, tesform::add_chunk_byte(u32, u32)))
+        .value_chunk()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn add_chunk_word() {
-    value_chunk(Diff::new(entry!(
-        0x0048_5910,
-        tesform::add_chunk_word(u32, u32)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_5910, tesform::add_chunk_word(u32, u32)))
+        .value_chunk()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn add_chunk_half() {
-    value_chunk(Diff::new(entry!(
-        0x0048_5950,
-        tesform::add_chunk_half(u32, u32)
-    )))
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_5950, tesform::add_chunk_half(u32, u32)))
+        .value_chunk()
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn add_chunk_data() {
-    forms(Diff::new(entry!(
-        0x0048_5990,
-        tesform::add_chunk_data(u32, u32, u32)
-    )))
-    .inputs(&[Input::Flag, Input::Of(&[0, 1, 6, 0xffff, 0x1_0000])])
-    .setup(|e, case| {
-        world(e);
-        record_buffer(e);
-        e.mem.set_u8(BIG_ENDIAN, case.word(0) as u8);
-        let size = case.word(1);
-        vec![0x4c4c_5546, data(e, size), size]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_5990, tesform::add_chunk_data(u32, u32, u32)))
+        .forms()
+        .inputs(&[Input::Flag, Input::Of(&[0, 1, 6, 0xffff, 0x1_0000])])
+        .setup(|e, case| {
+            world(e);
+            record_buffer(e);
+            e.mem.set_u8(BIG_ENDIAN, case.word(0) as u8);
+            let size = case.word(1);
+            vec![0x4c4c_5546, data(e, size), size]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn grow_chunk() {
-    forms(Diff::new(
-        entry!(0x0048_5a70, tesform::grow_chunk(u32, u32, u16) -> bool),
-    ))
-    .inputs(&[
-        Input::Flag,
-        Input::Of(&[0, 1, 0xfff0, 0xffff]),
-        Input::Of(&[0, 1, 0x10, 0xffff]),
-    ])
-    .setup(|e, case| {
-        world(e);
-        record_buffer(e);
-        e.mem.set_u8(BIG_ENDIAN, case.word(0) as u8);
-        let chunk = e.mem.alloc(8);
-        e.mem.set_u32(chunk, 0x4c4c_5546);
-        e.mem.set_u16(chunk + 4, case.word(1) as u16);
-        vec![form(e, 0x20, 0, 1), chunk, case.word(2)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_5a70, tesform::grow_chunk(u32, u32, u16) -> bool))
+        .forms()
+        .inputs(&[
+            Input::Flag,
+            Input::Of(&[0, 1, 0xfff0, 0xffff]),
+            Input::Of(&[0, 1, 0x10, 0xffff]),
+        ])
+        .setup(|e, case| {
+            world(e);
+            record_buffer(e);
+            e.mem.set_u8(BIG_ENDIAN, case.word(0) as u8);
+            let chunk = e.mem.alloc(8);
+            e.mem.set_u32(chunk, 0x4c4c_5546);
+            e.mem.set_u16(chunk + 4, case.word(1) as u16);
+            vec![form(e, 0x20, 0, 1), chunk, case.word(2)]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn free_form_buffer() {
-    forms(Diff::new(entry!(
-        0x0048_5b30,
-        tesform::free_form_buffer(u32)
-    )))
-    .inputs(&[Input::Flag])
-    .setup(|e, case| {
-        world(e);
-        if case.word(0) != 0 {
-            record_buffer(e);
-        }
-        vec![form(e, 0x20, 0, 1)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_5b30, tesform::free_form_buffer(u32)))
+        .forms()
+        .inputs(&[Input::Flag])
+        .setup(|e, case| {
+            world(e);
+            if case.word(0) != 0 {
+                record_buffer(e);
+            }
+            vec![form(e, 0x20, 0, 1)]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn packed_id() {
-    forms(Diff::new(
-        entry!(0x0048_5b60, tesform::packed_id(u32) -> u32),
-    ))
-    .inputs(&[Input::Of(&[0, 1, 3]), Input::Flag])
-    .setup(|e, case| {
-        let f = form_with_files(e, case.word(0));
-        // The first file's masters: an empty list or one holding a master.
-        let masters = e.mem.alloc(8);
-        if case.word(1) != 0 {
-            let m = file(e, true);
-            e.mem.set_u32(masters, m);
-        }
-        set_answer(e, FILE_MASTER_LIST, masters);
-        vec![f]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_5b60, tesform::packed_id(u32) -> u32))
+        .forms()
+        .inputs(&[Input::Of(&[0, 1, 3]), Input::Flag])
+        .setup(|e, case| {
+            let f = form_with_files(e, case.word(0));
+            // The first file's masters: an empty list or one holding a master.
+            let masters = e.mem.alloc(8);
+            if case.word(1) != 0 {
+                let m = file(e, true);
+                e.mem.set_u32(masters, m);
+            }
+            set_answer(e, FILE_MASTER_LIST, masters);
+            vec![f]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn low_id() {
-    forms(Diff::new(entry!(0x0048_5bc0, tesform::low_id(u32) -> u32)))
+    Diff::new(entry!(0x0048_5bc0, tesform::low_id(u32) -> u32))
+        .forms()
         .inputs(&[Input::Of(IDS)])
         .setup(|e, case| {
             world(e);
@@ -1890,74 +1846,69 @@ fn low_id() {
 
 #[test]
 fn same_low_id() {
-    forms(Diff::new(
-        entry!(0x0048_5be0, tesform::same_low_id(u32, u32) -> bool),
-    ))
-    .inputs(&[Input::Of(IDS), Input::Of(&[1, 0x0200_0001, 0x800])])
-    .setup(|e, case| {
-        world(e);
-        vec![form(e, 0x20, 0, case.word(0)), case.word(1)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_5be0, tesform::same_low_id(u32, u32) -> bool))
+        .forms()
+        .inputs(&[Input::Of(IDS), Input::Of(&[1, 0x0200_0001, 0x800])])
+        .setup(|e, case| {
+            world(e);
+            vec![form(e, 0x20, 0, case.word(0)), case.word(1)]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_form_id() {
     // The new id: 0 the same as the old; 1 another; 2 none.
-    forms(Diff::new(entry!(
-        0x0048_5c10,
-        tesform::set_form_id(u32, u32, bool)
-    )))
-    .inputs(&[
-        Input::Of(&[0, 1, 2]),
-        Input::Of(TEMPORARY),
-        Input::Of(&[0, 0x0100_0abc]),
-        Input::Flag,
-    ])
-    .setup(|e, case| {
-        world(e);
-        let old = case.word(2);
-        let f = form(e, 0x20, case.word(1), old);
-        registries(e, true, 0, true, false, f);
-        let new = match case.word(0) {
-            0 => old,
-            1 => 0x0200_0def,
-            _ => 0,
-        };
-        vec![f, new, case.word(3)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_5c10, tesform::set_form_id(u32, u32, bool)))
+        .forms()
+        .inputs(&[
+            Input::Of(&[0, 1, 2]),
+            Input::Of(TEMPORARY),
+            Input::Of(&[0, 0x0100_0abc]),
+            Input::Flag,
+        ])
+        .setup(|e, case| {
+            world(e);
+            let old = case.word(2);
+            let f = form(e, 0x20, case.word(1), old);
+            registries(e, true, 0, true, false, f);
+            let new = match case.word(0) {
+                0 => old,
+                1 => 0x0200_0def,
+                _ => 0,
+            };
+            vec![f, new, case.word(3)]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn add_compile_index() {
-    forms(Diff::new(entry!(
-        0x0048_5d50,
-        tesform::add_compile_index(u32, u32)
-    )))
-    .inputs(&[
-        Input::Flag,
-        Input::Of(&[0x5, 0x0100_0abc, 0xff00_0001]),
-        Input::Flag,
-        Input::Flag,
-    ])
-    .setup(|e, case| {
-        world(e);
-        registries(e, false, 0, false, true, 0);
-        set_answer(e, SAVE_LOAD_STUB, case.word(0));
-        set_answer(e, SAVE_LOAD_REMAP_ID, 0x0300_0123);
-        set_answer(e, FILE_COMPILE_INDEX, 0x1_0004);
-        let id = e.mem.alloc(4);
-        e.mem.set_u32(id, case.word(1));
-        let f = if case.word(2) != 0 { file(e, false) } else { 0 };
-        let indexed = if case.word(3) != 0 { file(e, true) } else { 0 };
-        set_answer(e, FILE_GET_INDEX_FILE, indexed);
-        vec![id, f]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_5d50, tesform::add_compile_index(u32, u32)))
+        .forms()
+        .inputs(&[
+            Input::Flag,
+            Input::Of(&[0x5, 0x0100_0abc, 0xff00_0001]),
+            Input::Flag,
+            Input::Flag,
+        ])
+        .setup(|e, case| {
+            world(e);
+            registries(e, false, 0, false, true, 0);
+            set_answer(e, SAVE_LOAD_STUB, case.word(0));
+            set_answer(e, SAVE_LOAD_REMAP_ID, 0x0300_0123);
+            set_answer(e, FILE_COMPILE_INDEX, 0x1_0004);
+            let id = e.mem.alloc(4);
+            e.mem.set_u32(id, case.word(1));
+            let f = if case.word(2) != 0 { file(e, false) } else { 0 };
+            let indexed = if case.word(3) != 0 { file(e, true) } else { 0 };
+            set_answer(e, FILE_GET_INDEX_FILE, indexed);
+            vec![id, f]
+        })
+        .run()
+        .assert_same();
 }
 
 /// The form-type table as the exe holds it before the constructor packs it: each entry's type
@@ -1986,79 +1937,76 @@ fn fresh_form_table(e: &mut Engine, table: u32) {
 fn construct() {
     // The table: 0 packed already; 1 fresh; 2 fresh with faults. The handler: 0 none; 1 its flag
     // set; 2 a low next id and no file; 3 a high next id and its loading file.
-    forms(Diff::new(
-        entry!(0x0048_3370, tesform::construct(u32) -> u32),
-    ))
-    .inputs(&[
-        Input::Of(&[0, 1, 2]),
-        Input::Of(&[0, 1, 2, 3]),
-        Input::Of(&[0, 5]),
-    ])
-    .setup(|e, case| {
-        world(e);
-        match case.word(0) {
-            0 => e.mem.set_u8(0x011c_54b8, 1),
-            table => fresh_form_table(e, table - 1),
-        }
-        let f = e.mem.alloc(0x40);
-        e.mem.set_u32(FORM_COUNT, case.word(2));
-        let handler = case.word(1);
-        if handler != 0 {
-            registries(e, false, 0, true, false, f);
-            let h = e.mem.u32(DATA_HANDLER);
-            set_answer(e, 0x0048_2f20, u32::from(handler == 1));
-            set_answer(
-                e,
-                0x0046_9800,
-                if handler == 2 { 0x10 } else { 0x0100_0abc },
-            );
-            if handler == 3 {
-                let loading = file(e, false);
-                e.mem.set_u32(h + 0x20c, loading);
+    Diff::new(entry!(0x0048_3370, tesform::construct(u32) -> u32))
+        .forms()
+        .inputs(&[
+            Input::Of(&[0, 1, 2]),
+            Input::Of(&[0, 1, 2, 3]),
+            Input::Of(&[0, 5]),
+        ])
+        .setup(|e, case| {
+            world(e);
+            match case.word(0) {
+                0 => e.mem.set_u8(0x011c_54b8, 1),
+                table => fresh_form_table(e, table - 1),
             }
-            let m = form(e, 0x7f, 0, 0);
-            e.mem.set_u32(FORM_MAP, m);
-        }
-        vec![f]
-    })
-    .run()
-    .assert_same();
+            let f = e.mem.alloc(0x40);
+            e.mem.set_u32(FORM_COUNT, case.word(2));
+            let handler = case.word(1);
+            if handler != 0 {
+                registries(e, false, 0, true, false, f);
+                let h = e.mem.u32(DATA_HANDLER);
+                set_answer(e, 0x0048_2f20, u32::from(handler == 1));
+                set_answer(
+                    e,
+                    0x0046_9800,
+                    if handler == 2 { 0x10 } else { 0x0100_0abc },
+                );
+                if handler == 3 {
+                    let loading = file(e, false);
+                    e.mem.set_u32(h + 0x20c, loading);
+                }
+                let m = form(e, 0x7f, 0, 0);
+                e.mem.set_u32(FORM_MAP, m);
+            }
+            vec![f]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn compress_save_buffer() {
     // The buffer: 0 none; 1 a header only; 2 already compressed; 3 a body to pack.
-    forms(Diff::new(entry!(
-        0x0048_3d70,
-        tesform::compress_save_buffer()
-    )))
-    .inputs(&[
-        Input::Of(&[0, 1, 2, 3]),
-        Input::Flag,
-        Input::Flag,
-        Input::Of(&[0, 0xffff_fffe]),
-    ])
-    .setup(|e, case| {
-        world(e);
-        match case.word(0) {
-            0 => {}
-            kind => {
-                let size = if kind == 1 { 0x18 } else { 0x40 };
-                let buffer = data(e, size);
-                let flags = if kind == 2 { 0x0004_0000 } else { 0x0000_0800 };
-                e.mem.set_u32(buffer + 8, flags);
-                e.mem.set_u32(SAVE_BUFFER, buffer);
-                e.mem.set_u32(SAVE_BUFFER_SIZE, size);
+    Diff::new(entry!(0x0048_3d70, tesform::compress_save_buffer()))
+        .forms()
+        .inputs(&[
+            Input::Of(&[0, 1, 2, 3]),
+            Input::Flag,
+            Input::Flag,
+            Input::Of(&[0, 0xffff_fffe]),
+        ])
+        .setup(|e, case| {
+            world(e);
+            match case.word(0) {
+                0 => {}
+                kind => {
+                    let size = if kind == 1 { 0x18 } else { 0x40 };
+                    let buffer = data(e, size);
+                    let flags = if kind == 2 { 0x0004_0000 } else { 0x0000_0800 };
+                    e.mem.set_u32(buffer + 8, flags);
+                    e.mem.set_u32(SAVE_BUFFER, buffer);
+                    e.mem.set_u32(SAVE_BUFFER_SIZE, size);
+                }
             }
-        }
-        e.mem.set_u8(BIG_ENDIAN, case.word(1) as u8);
-        set_answer(e, 0x00b4_6360, case.word(2));
-        e.mem.set_u32(DEFLATED, 0x1c);
-        e.mem.set_u32(DEFLATE_STATUS, case.word(3));
-        vec![]
-    })
-    .run()
-    .assert_same();
+            e.mem.set_u8(BIG_ENDIAN, case.word(1) as u8);
+            set_answer(e, 0x00b4_6360, case.word(2));
+            e.mem.set_u32(DEFLATED, 0x1c);
+            e.mem.set_u32(DEFLATE_STATUS, case.word(3));
+            vec![]
+        })
+        .run()
+        .assert_same();
 }
 
 /// The form's components, by bit of `mask` in [`COMPONENT_TYPES`]' order, each a small object
@@ -2085,7 +2033,8 @@ fn components(e: &mut Engine, mask: u32) {
 
 #[test]
 fn save_data() {
-    forms(Diff::new(entry!(0x0048_5e00, tesform::save_data(u32))))
+    Diff::new(entry!(0x0048_5e00, tesform::save_data(u32)))
+        .forms()
         .inputs(&[Input::Flag, Input::Of(&[0, 0xff])])
         .setup(|e, case| {
             world(e);
@@ -2100,151 +2049,141 @@ fn save_data() {
 
 #[test]
 fn save_data_chunk() {
-    forms(Diff::new(entry!(
-        0x0048_5e20,
-        tesform::save_data_chunk(u32, u32, u32)
-    )))
-    .inputs(&[
-        Input::Of(&[0, 3, 0x1_0000]),
-        Input::Of(&[0, 0xff, 0x41, 0x18, 0x24]),
-        Input::Flag,
-    ])
-    .setup(|e, case| {
-        world(e);
-        record_buffer(e);
-        e.mem.set_u8(BIG_ENDIAN, case.word(2) as u8);
-        components(e, case.word(1));
-        let size = case.word(0);
-        let d = data(e, size.min(8));
-        vec![form(e, 0x28, 0, 1), d, size]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_5e20, tesform::save_data_chunk(u32, u32, u32)))
+        .forms()
+        .inputs(&[
+            Input::Of(&[0, 3, 0x1_0000]),
+            Input::Of(&[0, 0xff, 0x41, 0x18, 0x24]),
+            Input::Flag,
+        ])
+        .setup(|e, case| {
+            world(e);
+            record_buffer(e);
+            e.mem.set_u8(BIG_ENDIAN, case.word(2) as u8);
+            components(e, case.word(1));
+            let size = case.word(0);
+            let d = data(e, size.min(8));
+            vec![form(e, 0x28, 0, 1), d, size]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn load_data() {
-    forms(Diff::new(entry!(
-        0x0048_61f0,
-        tesform::load_data(u32, u32, u32, u16)
-    )))
-    .inputs(&[
-        Input::Of(&[0, 4, 0x20]),
-        Input::Of(&[0, 2, 0x30]),
-        Input::Of(&[0, 0xff, 0x05, 0x58]),
-        Input::Flag,
-    ])
-    .setup(|e, case| {
-        world(e);
-        set_answer(e, 0x0040_1660, case.word(0));
-        set_answer(e, 0x0040_1680, case.word(3));
-        components(e, case.word(2));
-        let destination = e.mem.alloc(0x40);
-        vec![
-            form(e, 0x28, 0, 1),
-            file(e, false),
-            destination,
-            case.word(1),
-        ]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_61f0, tesform::load_data(u32, u32, u32, u16)))
+        .forms()
+        .inputs(&[
+            Input::Of(&[0, 4, 0x20]),
+            Input::Of(&[0, 2, 0x30]),
+            Input::Of(&[0, 0xff, 0x05, 0x58]),
+            Input::Flag,
+        ])
+        .setup(|e, case| {
+            world(e);
+            set_answer(e, 0x0040_1660, case.word(0));
+            set_answer(e, 0x0040_1680, case.word(3));
+            components(e, case.word(2));
+            let destination = e.mem.alloc(0x40);
+            vec![
+                form(e, 0x28, 0, 1),
+                file(e, false),
+                destination,
+                case.word(1),
+            ]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn smaller_half() {
-    forms(Diff::new(
-        entry!(0x0048_65f0, tesform::smaller_half(u16, u16) -> u16),
-    ))
-    .inputs(&[
-        Input::Of(&[0, 1, 0xffff, 0x1_0002]),
-        Input::Of(&[0, 2, 0xfffe, 0x8000_0001]),
-    ])
-    .setup(|e, case| {
-        world(e);
-        vec![case.word(0), case.word(1)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_65f0, tesform::smaller_half(u16, u16) -> u16))
+        .forms()
+        .inputs(&[
+            Input::Of(&[0, 1, 0xffff, 0x1_0002]),
+            Input::Of(&[0, 2, 0xfffe, 0x8000_0001]),
+        ])
+        .setup(|e, case| {
+            world(e);
+            vec![case.word(0), case.word(1)]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn components_data_size() {
-    forms(Diff::new(
-        entry!(0x0048_6620, tesform::components_data_size(u32) -> u32),
-    ))
-    .inputs(&[Input::Of(&[0, 0xff, 0x40, 0x81, 0x3e])])
-    .setup(|e, case| {
-        world(e);
-        components(e, case.word(0));
-        vec![form(e, 0x28, 0, 1)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_6620, tesform::components_data_size(u32) -> u32))
+        .forms()
+        .inputs(&[Input::Of(&[0, 0xff, 0x40, 0x81, 0x3e])])
+        .setup(|e, case| {
+            world(e);
+            components(e, case.word(0));
+            vec![form(e, 0x28, 0, 1)]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn copy_form() {
-    forms(Diff::new(
-        entry!(0x0048_67a0, tesform::copy_form(u32, u32, u32) -> u32),
-    ))
-    .inputs(&[Input::Flag, Input::Of(&[0, 0x0101_2345]), Input::Flag])
-    .setup(|e, case| {
-        world(e);
-        let created = if case.word(0) != 0 {
-            form(e, 0x28, 0, 2)
-        } else {
-            0
-        };
-        set_answer(e, 0x0046_5110, created);
-        set_answer(e, 0x0040_1280, case.word(1));
-        let map = if case.word(2) != 0 {
-            form(e, 0x7f, 0, 0)
-        } else {
-            0
-        };
-        vec![form(e, 0x28, 0, 1), 9, map]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_67a0, tesform::copy_form(u32, u32, u32) -> u32))
+        .forms()
+        .inputs(&[Input::Flag, Input::Of(&[0, 0x0101_2345]), Input::Flag])
+        .setup(|e, case| {
+            world(e);
+            let created = if case.word(0) != 0 {
+                form(e, 0x28, 0, 2)
+            } else {
+                0
+            };
+            set_answer(e, 0x0046_5110, created);
+            set_answer(e, 0x0040_1280, case.word(1));
+            let map = if case.word(2) != 0 {
+                form(e, 0x7f, 0, 0)
+            } else {
+                0
+            };
+            vec![form(e, 0x28, 0, 1), 9, map]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn form_type_from_string() {
-    forms(Diff::new(
-        entry!(0x0048_6890, tesform::form_type_from_string(u32) -> u32),
-    ))
-    .inputs(&[Input::Of(&[0x1234, 0x4d52_0005, 0x4d52_0078, 0x9999, 0])])
-    .setup(|e, case| {
-        world(e);
-        e.mem.set_u32(0x011c_54f4, 0x1234);
-        e.mem.set_u32(0x011c_54f0, 7);
-        vec![case.word(0)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_6890, tesform::form_type_from_string(u32) -> u32))
+        .forms()
+        .inputs(&[Input::Of(&[0x1234, 0x4d52_0005, 0x4d52_0078, 0x9999, 0])])
+        .setup(|e, case| {
+            world(e);
+            e.mem.set_u32(0x011c_54f4, 0x1234);
+            e.mem.set_u32(0x011c_54f0, 7);
+            vec![case.word(0)]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn detailed_string() {
-    forms(Diff::new(entry!(
-        0x0048_68f0,
-        tesform::detailed_string(u32, u32)
-    )))
-    .inputs(&[Input::Of(&[0, 0x0101_2345])])
-    .setup(|e, case| {
-        world(e);
-        set_answer(e, 0x0040_1280, case.word(0));
-        let buffer = e.mem.alloc(0x40);
-        vec![form(e, 0x28, 0, 0x0100_0abc), buffer]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_68f0, tesform::detailed_string(u32, u32)))
+        .forms()
+        .inputs(&[Input::Of(&[0, 0x0101_2345])])
+        .setup(|e, case| {
+            world(e);
+            set_answer(e, 0x0040_1280, case.word(0));
+            let buffer = e.mem.alloc(0x40);
+            vec![form(e, 0x28, 0, 0x0100_0abc), buffer]
+        })
+        .run()
+        .assert_same();
 }
 
 /// A map destructor's cases: the release bit and others in `flags`.
-fn map_object(d: Diff) -> Diff {
-    forms(d)
+fn map_object_cases(d: Diff) -> Diff {
+    d.forms()
         .inputs(&[Input::Of(&[0, 1, 2, 3])])
         .setup(|e, case| {
             world(e);
@@ -2255,120 +2194,120 @@ fn map_object(d: Diff) -> Diff {
 
 #[test]
 fn form_map_construct() {
-    forms(Diff::new(
-        entry!(0x0048_6930, tesform::form_map_construct(u32, u32) -> u32),
-    ))
-    .inputs(&[Input::Of(&[0, 1, 0x2008d])])
-    .setup(|e, case| {
-        world(e);
-        set_answer(e, 0x00aa_1070, 0x0123_4000);
-        vec![e.mem.alloc(0x10), case.word(0)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_6930, tesform::form_map_construct(u32, u32) -> u32))
+        .forms()
+        .inputs(&[Input::Of(&[0, 1, 0x2008d])])
+        .setup(|e, case| {
+            world(e);
+            set_answer(e, 0x00aa_1070, 0x0123_4000);
+            vec![e.mem.alloc(0x10), case.word(0)]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn form_map_scalar_deleting_destructor() {
-    map_object(Diff::new(entry!(
+    Diff::new(entry!(
         0x0048_6960,
         tesform::form_map_scalar_deleting_destructor(u32, u32) -> u32
-    )))
+    ))
+    .map_object()
     .run()
     .assert_same();
 }
 
 #[test]
 fn map_base_construct() {
-    forms(Diff::new(
-        entry!(0x0048_6990, tesform::map_base_construct(u32, u32) -> u32),
-    ))
-    .inputs(&[Input::Of(&[0, 1, 0x2008d, 0x4000_0001])])
-    .setup(|e, case| {
-        world(e);
-        set_answer(e, 0x00aa_1070, 0x0123_4000);
-        vec![e.mem.alloc(0x10), case.word(0)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_6990, tesform::map_base_construct(u32, u32) -> u32))
+        .forms()
+        .inputs(&[Input::Of(&[0, 1, 0x2008d, 0x4000_0001])])
+        .setup(|e, case| {
+            world(e);
+            set_answer(e, 0x00aa_1070, 0x0123_4000);
+            vec![e.mem.alloc(0x10), case.word(0)]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn form_map_destructor() {
-    forms(Diff::new(entry!(
-        0x0048_6a00,
-        tesform::form_map_destructor(u32)
-    )))
-    .inputs(&[Input::Of(&[0])])
-    .setup(|e, _| {
-        world(e);
-        vec![form(e, 0x7f, 0, 0)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_6a00, tesform::form_map_destructor(u32)))
+        .forms()
+        .inputs(&[Input::Of(&[0])])
+        .setup(|e, _| {
+            world(e);
+            vec![form(e, 0x7f, 0, 0)]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn map_base_scalar_deleting_destructor() {
-    map_object(Diff::new(entry!(
+    Diff::new(entry!(
         0x0048_6c00,
         tesform::map_base_scalar_deleting_destructor(u32, u32) -> u32
-    )))
+    ))
+    .map_object()
     .run()
     .assert_same();
 }
 
 #[test]
 fn string_map_scalar_deleting_destructor() {
-    map_object(Diff::new(entry!(
+    Diff::new(entry!(
         0x0048_6c30,
         tesform::string_map_scalar_deleting_destructor(u32, u32) -> u32
-    )))
+    ))
+    .map_object()
     .run()
     .assert_same();
 }
 
 #[test]
 fn string_map_destructor() {
-    forms(Diff::new(entry!(
-        0x0048_6c60,
-        tesform::string_map_destructor(u32)
-    )))
-    .inputs(&[Input::Of(&[0])])
-    .setup(|e, _| {
-        world(e);
-        vec![form(e, 0x7f, 0, 0)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0048_6c60, tesform::string_map_destructor(u32)))
+        .forms()
+        .inputs(&[Input::Of(&[0])])
+        .setup(|e, _| {
+            world(e);
+            vec![form(e, 0x7f, 0, 0)]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn char_key_map_base_scalar_deleting_destructor() {
-    map_object(Diff::new(entry!(
+    Diff::new(entry!(
         0x0048_6e50,
         tesform::char_key_map_base_scalar_deleting_destructor(u32, u32) -> u32
-    )))
+    ))
+    .map_object()
     .run()
     .assert_same();
 }
 
 #[test]
 fn char_key_map_scalar_deleting_destructor() {
-    map_object(Diff::new(entry!(
+    Diff::new(entry!(
         0x0048_6e80,
         tesform::char_key_map_scalar_deleting_destructor(u32, u32) -> u32
-    )))
+    ))
+    .map_object()
     .run()
     .assert_same();
 }
 
 #[test]
 fn string_template_map_scalar_deleting_destructor() {
-    map_object(Diff::new(entry!(
+    Diff::new(entry!(
         0x0048_6eb0,
         tesform::string_template_map_scalar_deleting_destructor(u32, u32) -> u32
-    )))
+    ))
+    .map_object()
     .run()
     .assert_same();
 }

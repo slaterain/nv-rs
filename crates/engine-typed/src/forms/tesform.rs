@@ -1,4 +1,4 @@
-//! `TESForm`'s own functions (`fallout shared/tesform.cpp`, Xbox PDB source unit), each as the exe
+//! `TESForm`'s own functions (the Xbox PDB's `tesform` source unit), each as the exe
 //! does it.
 //!
 //! A form is `TESForm`'s layout: the vtable at +0, the form type byte at +4, the flags word at +8,
@@ -313,11 +313,6 @@ pub fn destructor(e: &mut Engine, this: u32) {
     }
     e.call(SIMPLE_LIST_DESTROY_WRAPPER, &args![this.wrapping_add(0x10)]);
 }
-
-// Typed from 00483710
-/// An empty base-class destructor the exe still calls; the typed callers leave the call out.
-#[inline]
-pub fn empty_destructor(_e: &mut Engine, _this: u32) {}
 
 /// Whether forms of this type have no components to visit.
 fn has_no_components(form_type: u32) -> bool {
@@ -1805,7 +1800,7 @@ fn read_float(e: &mut Engine, file: u32, buffer: u32, offset: u16) -> (f32, u16)
 /// indefinite out of range), its low byte.
 fn quality_byte(value: f32) -> u32 {
     let chopped = engine_core::x87::fistp_chop(f64::from(value));
-    chopped as u32 & 0xff
+    u32::from_ne_bytes(chopped.to_ne_bytes()) & 0xff
 }
 
 // Typed from 004861f0
