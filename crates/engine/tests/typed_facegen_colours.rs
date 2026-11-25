@@ -21,12 +21,20 @@
 //! freed). The erase's
 //! own cases: everything (the image's clear), the middle, the tail, the head, nothing, and
 //! iterators outside the elements (their checks call `_invalid_parameter_noinfo`).
+//!
+//! Also here: the face data's 6-byte element vector's `_Tidy` (`engine_typed::facegen::vectors`,
+//! `0065f430`) against its translation, which calls the iterator tag (`0065e750`) and the empty
+//! element destroy (`0065e9a0`, one call an element) that the typed version leaves out
+//! (`ignore_calls`); the allocator's `deallocate` (`0064df10`, then `operator delete`) and its
+//! words compare. The vectors: no storage (the pointers 0, or other words left in the last and
+//! end), storage of 8 elements holding none, one, five or eight, its end at an odd byte (the count
+//! rounded toward zero) or below the first (a negative count).
 
 use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::leaf;
-use engine_typed::facegen::{self, colours};
+use engine_typed::facegen::{self, colours, vectors};
 
 /// The colour vector's constructor (`thiscall`) and its `_Buy` (`thiscall`: the element count).
 const VECTOR_CONSTRUCT: u32 = 0x0065_c750;
@@ -193,4 +201,55 @@ fn facegen_colours_erase() {
     })
     .run()
     .assert_same();
+}
+
+/// The callees the typed `_Tidy` of the 6-byte element vector does not call: the iterator tag and
+/// the empty element destroy (with the empty `0040fbe0` it calls).
+const TIDY_IGNORED: [u32; 2] = [0x0065_e750, 0x0065_e9a0];
+
+/// A 6-byte element vector (0x18 bytes) by its storage state: none (the three pointers 0 or left
+/// with other words), storage of 8 elements holding `size` of them (at most 8), end of storage at
+/// an odd byte (a count rounded toward zero), or below the first (a negative count). The storage
+/// comes from `operator new`, so the deallocate's `operator delete` frees a real block.
+fn six_vector(e: &mut Engine, state: u32, size: u32) -> u32 {
+    let this = e.mem.alloc(0x18);
+    e.mem.set_u32(this, 0x0700_0000);
+    e.mem.set_u32(this + 4, 0x0700_0004);
+    e.mem.set_u32(this + 8, 0x0700_0008);
+    if state < 2 {
+        let other = if state == 1 { 0x0700_1234 } else { 0 };
+        e.mem.set_u32(this + 0x10, other);
+        e.mem.set_u32(this + 0x14, other.wrapping_mul(3));
+        return this;
+    }
+    let storage = e.call(0x0040_1000, &args![6 * 9]).u32();
+    for i in 0..6 * 9 {
+        e.mem.set_u8(storage + i, (i * 7 + 3) as u8);
+    }
+    let size = size.min(8);
+    let end = match state {
+        2 => storage + 6 * 8,
+        3 => storage + 6 * 8 + 5,
+        _ => storage.wrapping_sub(7),
+    };
+    e.mem.set_u32(this + 0xc, storage);
+    e.mem.set_u32(this + 0x10, storage + 6 * size);
+    e.mem.set_u32(this + 0x14, end);
+    this
+}
+
+#[test]
+fn facegen_six_vector_tidy() {
+    Diff::new(entry!(0x0065_f430, vectors::tidy(Ptr)))
+        .family(&facegen::FACEGEN)
+        .family(&leaf::LEAVES)
+        .ignore_calls(&TIDY_IGNORED)
+        .inputs(&[
+            Input::Of(&[0, 1, 2, 3, 4]),
+            // The elements: none, one, some, the storage full.
+            Input::Of(&[0, 1, 5, 8]),
+        ])
+        .setup(|e, case: &Case| vec![six_vector(e, case.word(0), case.word(1))])
+        .run()
+        .assert_same();
 }

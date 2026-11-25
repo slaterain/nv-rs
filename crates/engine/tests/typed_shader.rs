@@ -2409,6 +2409,9 @@ fn group_append() {
 
 // The accumulator and the shaders' set-ups.
 
+/// Word 6: the thread's batch renderer holds its own `AddPass` (`00b99c90`) in slot 0x8c (0), or
+/// another function there (1, the slot's stand-in): the typed accumulator calls
+/// `add_to_group` for the first and goes through the slot, as the translation does, for the second.
 #[test]
 fn process_commands() {
     Diff::new(entry!(
@@ -2423,6 +2426,7 @@ fn process_commands() {
         Input::Of(&[0, 1]),
         Input::Of(&[0, 1, 4, 14]),
         Input::F32,
+        Input::Of(&[0, 1]),
     ])
     .translation_calls_plainly(&[
         0x00b9_9840,
@@ -2453,6 +2457,10 @@ fn process_commands() {
         set(e, a + 0x168, 2);
         let bound = e.mem.u32(w.geometry + 0x20);
         set(e, bound + 8, bits(c, 5));
+        if c.word(6) != 0 {
+            let other = vtable(e, &[]);
+            set(e, w.br, other);
+        }
         vec![a, w.geometry, w.geometry + 0x9c, w.property, w.shader]
     })
     .run()
