@@ -5,7 +5,7 @@
 //! actor's and the creature's), `QueuedCharacter`'s (`00441800`, the NPC's) and `QueuedPlayer`'s
 //! (`00441c30`), both of which come down to `00440ba0`. In a profiled load window `00440ba0` took
 //! 1.62 ms a frame with what it calls; most of it is `TES`'s load of the reference into the scene
-//! (`00451ef0`), which stays by address here.
+//! (`00451ef0`), typed in [`super::scene`] and called here as its typed call.
 //!
 //! **Which attach runs.** With JIP LN NVSE built in and answering "installed" (the default preset),
 //! JIP writes its own attach into the slot 0x3c of four of the six vtables (`QueuedReference`,
@@ -23,14 +23,14 @@
 //! `TES::IsCellLoaded` (`004511e0`), the loader's word that a reference is done (`004409e0`: the
 //! queued map's slot 0x14, the lock-free family's removal when the slot holds it) and the cell's
 //! two counters going down (`00440a10`, `00440a50`). Called by address: the memory context's scope,
-//! the cell's lock (`00541ac0`, `00541ae0`), the model loader's addon nodes (`004489b0`) and the
-//! load into the scene (`00451ef0`). The exe reads the task's reference again for every call that
-//! takes it, and so does this.
+//! the cell's lock (`00541ac0`, `00541ae0`) and the model loader's addon nodes (`004489b0`). The
+//! load into the scene (`00451ef0`) is this family's. The exe reads the task's reference again for
+//! every call that takes it, and so does this.
 //!
 //! **Which thread.** Main: the loader's queue of finished tasks runs the post-process there.
 
 use super::queue::{in_context, is_3d_critical, parent_cell};
-use super::{CELL_LOCK_ENTER, CELL_LOCK_LEAVE, FAMILY, MODEL_LOADER_POINTER, TES_POINTER};
+use super::{scene, CELL_LOCK_ENTER, CELL_LOCK_LEAVE, FAMILY, MODEL_LOADER_POINTER, TES_POINTER};
 use crate::{dispatch, lockfree, slot_target};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
@@ -58,10 +58,8 @@ const FORM_FLAG_800: u32 = 0x800;
 const FORM_FLAG_20: u32 = 0x20;
 /// A model's root node (a counted pointer at +0xc).
 const MODEL_NODE: u32 = 0xc;
-/// `ModelLoader::LoadAddonNodes` (`(loader, reference, node)`) and `TES`'s load of a reference into
-/// the scene (`(tes, reference, cell, source task, 0)`).
+/// `ModelLoader::LoadAddonNodes` (`(loader, reference, node)`).
 const LOAD_ADDON_NODES: u32 = 0x0044_89b0;
-const TES_LOAD_REFERENCE: u32 = 0x0045_1ef0;
 /// The loader's map of queued references (+8), its slot 0x14 and the lock-free family's removal it
 /// holds for the loader's map.
 const QUEUED_MAP: u32 = 8;
@@ -154,7 +152,11 @@ pub fn attach(e: &mut Engine, this: u32) {
                 let cell = parent_cell(e, task_reference(e, this));
                 let reference = task_reference(e, this);
                 let tes = e.global::<u32>(TES_POINTER);
-                e.call(TES_LOAD_REFERENCE, &args![tes, reference, cell, this, 0u32]);
+                typed_call!(
+                    FAMILY,
+                    0x0045_1ef0,
+                    scene::load_reference(e, tes, reference, cell, this, 0)
+                );
             }
         }
         let reference = task_reference(e, this);

@@ -17,7 +17,11 @@
 //! standing in as in its test below.
 //!
 //! The finish of a task on main (`0043fdf0` and the attaches it reaches, `00440ba0`) runs on a task,
-//! a reference and its cells from a seed, `TES`'s load and the cell's lock standing in.
+//! a reference and its cells from a seed, the cell's lock standing in; `TES`'s load runs as itself
+//! and hands the reference to a stand-in slot.
+//!
+//! `TES`'s load of a reference into the scene (`00451ef0`) runs on a reference, its base form, its
+//! cell and the source task from a seed, the work it hands on standing in.
 
 use engine as _;
 use engine_core::prelude::*;
@@ -169,8 +173,8 @@ impl Draw {
 
 /// A vtable: `TESObjectREFR`'s slots as the exe holds them, or every slot a stand-in.
 fn vtable(e: &mut Engine, own: bool) -> u32 {
-    let vt = e.mem.alloc(0x300);
-    for slot in [0x100, 0x224, 0x1d0, 0x240, 0x260] {
+    let vt = e.mem.alloc(0x310);
+    for slot in [0x100, 0x224, 0x1d0, 0x240, 0x260, 0x308] {
         e.mem.set_u32(vt + slot, VT_FN + slot);
     }
     if own {
@@ -443,13 +447,12 @@ fn kind_3d_to_40_or_69() {
 //
 // Its world, from a seed: the game loader's word (its flags 2 and 8), the reference's base form
 // type (0xd, one below it, the tree, NPC and creature types, two others) or the player, the
-// reference's class
-// (`TESObjectREFR`'s own slots 0x100 and 0x224, or stand-ins answering words kept in the
-// reference), its word at +0xc8 (with bit 0 alone and a bit past the low word too), a cell or none; the loader's two maps with their slots the
-// lock-free family's addresses or stand-ins (the same doubles behind both: a small table of keys
-// and tasks), the reference already queued (its task's priority byte the same or not), the
-// allocation refused, the add refused, the owner thread and menu mode. The priority is one of four
-// (one above a byte), `later` both ways.
+// reference's class (`TESObjectREFR`'s own slots 0x100 and 0x224, or stand-ins answering words
+// kept in the reference), its word at +0xc8 (with bit 0 alone and a bit past the low word too), a
+// cell or none; the loader's two maps with their slots the lock-free family's addresses or
+// stand-ins (the same doubles behind both: a small table of keys and tasks), the reference already
+// queued (its task's priority byte the same or not), the allocation refused, the add refused, the
+// owner thread and menu mode. The priority is one of four (one above a byte), `later` both ways.
 
 /// The queue's answers, on a page of their own.
 const Q_CONTROL: u32 = 0x0310_0000;
@@ -999,16 +1002,15 @@ fn attach_stand_ins(e: &mut Engine) {
         e.mem.set_u32(A_ADDON_NODES + 8, a[2]);
         Ret::default()
     });
-    // TES's load of the reference (tes, reference, cell, task, 0), counted; it moves the reference
-    // into the world's other cell when the world says so.
-    e.register(0x0045_1ef0, |e, a| {
+    // TES's load of the reference (`00451ef0`, this family's) runs as itself: the reference's slot
+    // 0x224 says so (its type 0x3d, or the stand-in's word), so the load hands it to its slot 0x308,
+    // which counts and moves the reference into the world's other cell when the world says so.
+    e.register(VT_FN + 0x308, |e, a| {
         e.mem.set_u32(A_LOADED, e.mem.u32(A_LOADED) + 1);
-        for (i, word) in a.iter().enumerate().take(5).skip(1) {
-            e.mem.set_u32(A_LOADED + 4 * i as u32, *word);
-        }
+        e.mem.set_u32(A_LOADED + 4, a[0]);
         let to = e.mem.u32(A_MOVE_TO);
         if to != 0 {
-            e.mem.set_u32(a[1] + 0x40, to);
+            e.mem.set_u32(a[0] + 0x40, to);
         }
         Ret::default()
     });
@@ -1044,6 +1046,10 @@ fn attach_world(e: &mut Engine, seed: u32, attach: u32) -> u32 {
     let r = e.mem.alloc(0x120);
     let vt = vtable(e, d.next(2) == 0);
     e.mem.set_u32(r, vt);
+    // `TES`'s load hands the reference to its slot 0x308: the type for the exe's slot 0x224, the
+    // word for a stand-in's.
+    e.mem.set_u8(r + 4, 0x3d);
+    e.mem.set_u32(r + ANSWER_KIND, 1);
     e.mem.set_u32(
         r + 8,
         [0, 0x800, 0x20, 0x820, 0x10, 0x1000][d.next(6) as usize],
@@ -1097,8 +1103,9 @@ fn attach_world(e: &mut Engine, seed: u32, attach: u32) -> u32 {
     task
 }
 
-/// The calls the attach's typed version does in place: the task's state test.
-const ATTACH_INLINED: &[u32] = &[0x0044_9130];
+/// The calls the attach's typed version does in place: the task's state test, and the form type the
+/// reference class's slot 0x224 (`005725b0`, reached in `TES`'s load) reads in place.
+const ATTACH_INLINED: &[u32] = &[0x0044_9130, 0x0040_1170];
 
 /// The other families' typed calls the attach makes: the reference's cell, the class's false body,
 /// the interlocked decrement, the map's removal.
@@ -1265,7 +1272,9 @@ fn critical_3d(e: &Engine, r: u32) -> bool {
     e.mem.u32(vt + 0x100) == 0x0047_c850 || e.mem.u32(r + ANSWER_IS_ACTOR) == 0
 }
 
-/// `TES::IsCellLoaded` against its translation: no cell, each load state, both flags.
+/// `TES::IsCellLoaded` against its translation: no cell, each load state, and the flag as the game
+/// passes it: 0 or 1, and a process level up to 3 (`MobileObject::ChangeProcessLevel`, `00931920`,
+/// pushes its level byte as the flag), with a word whose low byte is 0 (the flag is a byte).
 #[test]
 fn tes_is_cell_loaded() {
     Diff::new(entry!(
@@ -1275,7 +1284,7 @@ fn tes_is_cell_loaded() {
     .family(&CELL_REFS)
     .inputs(&[
         Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 0xff, 0x100]),
-        Input::Flag,
+        Input::Of(&[0, 1, 2, 3, 0x100]),
     ])
     .setup(|e, case| {
         let tes = e.mem.alloc(0x40);
@@ -1365,4 +1374,479 @@ fn cell_critical_count_goes_down() {
     .count_down_case()
     .run()
     .assert_same();
+}
+
+// `TES`'s load of a reference into the scene (`00451ef0`).
+//
+// Its world, from a seed: the reference's class (`TESObjectREFR`'s own slots, an actor's with the
+// true body at 0x100, an `Explosion`'s with it at 0x220, or stand-ins answering words kept in the
+// reference) and its type byte (what the exe's slot 0x224 tests), its form flags (seen from a
+// distance, `0x80000`, the particles' `0x1000000`, `0x20`, `0x800`), its base form (type 0x2c,
+// 0x2d, 0x23 with or without its flag `0x40000000`, 0x1e, 0x25 and others; seen from a distance or
+// not; cast or not), its loaded data (none, or one with a 3D or none, a count from -1 to 2, flags),
+// the 3D's parent; the cell's state and its count of references seen from a distance (0xffff too:
+// it wraps); the source task (none, with a node or not, its slot 0x40 the empty body or a
+// stand-in); the game loader's flag, the player, the large cell's byte, the cast's sizes, its
+// radius and the reference's scale (the product just below 5 that 24 bits round to 5, one past
+// 2^63, a NaN); JIP's patches and its handler's answer; now and then a null reference.
+
+/// A reference's words the load's stand-ins answer from (past the pass's): its scale (a float's
+/// bits), its slot 0x220, its own `Load3D`, JIP's handler.
+const ANSWER_SCALE: u32 = 0x110;
+const ANSWER_OTHER: u32 = 0x114;
+const ANSWER_LOAD_3D: u32 = 0x118;
+const ANSWER_JIP: u32 = 0x11c;
+/// A cast's radius, its slot 0x1bc's answer (a float's bits).
+const CAST_RADIUS: u32 = 0x100;
+/// The node JIP's handler answers.
+const JIP_NODE: u32 = 0x0712_0000;
+
+/// The globals the load reads: the shadow scene nodes, the large cell's byte and its limit.
+const SHADOW_SCENE_NODES: u32 = 0x011f_91c8;
+const LARGE_STEP_ON: u32 = 0x0119_b8c8;
+const LARGE_LIMIT: u32 = 0x0101_79e0;
+
+/// The work the load hands on, standing in (the call log holds each call with its words).
+const SCENE_DOUBLES: [u32; 11] = [
+    0x0056_5210, // TESActorBase::SetStartsDead
+    0x00b5_eeb0, // ShadowSceneNode::AddObject
+    0x00b5_cbd0, // its actors' add
+    0x00b5_d9f0, // ShadowSceneNode::UpdateObjectLighting
+    0x0056_f700, // the step after the attach
+    0x0057_8170, // the master particle addon nodes' removal
+    0x0057_8060, // and addition
+    0x0056_5730, // TESObjectREFR::InitScript
+    0x008c_4640, // Actor::UpdateAlpha
+    0x0054_7ad0, // the large cell's step
+    0x004b_6dc0, // SetReferenceIDOnScenegraph
+];
+
+/// A float's bits in ST0.
+fn float_ret(bits: u32) -> Ret {
+    Ret {
+        st0: f64::from(f32::from_bits(bits)),
+        ..Ret::default()
+    }
+}
+
+/// The reference's 3D set (`00570f70(reference, node)`): kept where both the exe's slot 0x1d0 (the
+/// loaded data's +0x14) and the stand-in's word read it.
+fn set_3d(e: &mut Engine, a: &[u32]) -> Ret {
+    let data = e.mem.u32(a[0] + 0x64);
+    if data != 0 {
+        e.mem.set_u32(data + 0x14, a[1]);
+    }
+    e.mem.set_u32(a[0] + ANSWER_3D, a[1]);
+    Ret::default()
+}
+
+/// JIP's handler at `0x45234E`: the reference's word, when it has one.
+fn jip_on_load_actor(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let node = e.mem.u32(a[0] + ANSWER_JIP);
+    (node != 0).then_some(node)
+}
+
+fn scene_stand_ins(e: &mut Engine) {
+    use engine_core::extend::{Owner, SiteSlot};
+    stand_ins(e);
+    for page in [0x011f_9000, 0x0119_b000, 0x0101_7000] {
+        e.map(page, 0x1000);
+    }
+    for addr in SCENE_DOUBLES {
+        e.register(addr, nothing);
+    }
+    e.register(0x0057_0f70, set_3d);
+    e.register(0x0056_7400, |e, a| {
+        float_ret(e.mem.u32(a[0] + ANSWER_SCALE))
+    });
+    e.register(VT_FN + 0x1bc, |e, a| {
+        float_ret(e.mem.u32(a[0] + CAST_RADIUS))
+    });
+    e.register(VT_FN + 0x220, answer_of::<ANSWER_OTHER>);
+    e.register(VT_FN + 0x1c8, answer_of::<ANSWER_LOAD_3D>);
+    e.register(VT_FN + 0x1f4, |_, a| ret(a[0] + 0x30));
+    for slot in [0x304, 0x308, 0x40, 0xe8] {
+        e.register(VT_FN + slot, nothing);
+    }
+    e.on_site(SiteSlot::new(Owner::Jip, 0x0045_234e), jip_on_load_actor);
+    e.set_global(SHADOW_SCENE_NODES, 0x0333_0000u32);
+    e.set_global(LARGE_LIMIT, 200.0f64);
+}
+
+/// A reference class's vtable for the load: 0 `TESObjectREFR`'s own slots, 1 an actor's (the true
+/// body at 0x100), 2 an `Explosion`'s (the true body at 0x220), 3 every slot a stand-in.
+fn scene_vtable(e: &mut Engine, class: u32) -> u32 {
+    let vt = e.mem.alloc(0x310);
+    for slot in [
+        0x100, 0x1c8, 0x1d0, 0x1f4, 0x220, 0x224, 0x260, 0x304, 0x308,
+    ] {
+        e.mem.set_u32(vt + slot, VT_FN + slot);
+    }
+    if class != 3 {
+        let (is_actor, other) = match class {
+            1 => (0x008d_0360, 0x0047_c850),
+            2 => (0x0047_c850, 0x008d_0360),
+            _ => (0x0047_c850, 0x0047_c850),
+        };
+        e.mem.set_u32(vt + 0x100, is_actor);
+        e.mem.set_u32(vt + 0x220, other);
+        e.mem.set_u32(vt + 0x224, 0x0057_25b0);
+        e.mem.set_u32(vt + 0x1d0, 0x0043_fcd0);
+        if class == 0 {
+            e.mem.set_u32(vt + 0x1f4, 0x0043_6aa0);
+        }
+    }
+    vt
+}
+
+/// A node, with a parent (whose slot 0xe8 takes it) or none.
+fn scene_node(e: &mut Engine, d: &mut Draw) -> u32 {
+    let node = e.mem.alloc(0x40);
+    if d.next(3) != 0 {
+        let vt = e.mem.alloc(0x100);
+        e.mem.set_u32(vt + 0xe8, VT_FN + 0xe8);
+        let parent = e.mem.alloc(0x20);
+        e.mem.set_u32(parent, vt);
+        e.mem.set_u32(node + 0x18, parent);
+    }
+    node
+}
+
+/// The load's world of a seed: its words (`TES`, the reference, the cell, the source, `flag`).
+fn scene_world(e: &mut Engine, seed: u32, flag: u32) -> Vec<u32> {
+    use engine_core::extend::jip_patches::{NPC_PERKS, NPC_WEAPON_MODS};
+    scene_stand_ins(e);
+    let mut d = Draw(seed.wrapping_mul(0x9e37_79b9) ^ 0x5ce4);
+    e.set_jip_patches([0, 0, NPC_PERKS, NPC_WEAPON_MODS][d.next(4) as usize]);
+    e.mem.set_u8(LARGE_STEP_ON, u8::from(d.next(4) != 0));
+    let loader = e.mem.alloc(0x250);
+    e.mem
+        .set_u32(loader + 0x244, [0, 0, 2, 6][d.next(4) as usize]);
+    e.set_global(GAME_LOADER_POINTER, loader);
+    // The reference: its class, type byte, flags, form id and position.
+    let class = d.next(4);
+    let vt = scene_vtable(e, class);
+    let r = e.mem.alloc(0x140);
+    e.mem.set_u32(r, vt);
+    e.mem
+        .set_u8(r + 4, if d.next(10) == 0 { 0x3d } else { 0x3b });
+    e.mem.set_u32(
+        r + 8,
+        [
+            0,
+            0,
+            0x8000,
+            0x0008_8000,
+            0x0100_0000,
+            0x0108_8000,
+            0x20,
+            0x800,
+        ][d.next(8) as usize],
+    );
+    e.mem.set_u32(r + 0xc, 0x0001_2300 + seed);
+    for (i, value) in [1.5f32, -2.0, 3.25].into_iter().enumerate() {
+        e.mem.set_f32(r + 0x30 + 4 * i as u32, value);
+    }
+    // The base form, and its cast for type 0x25: the sizes, the radius, the reference's scale.
+    let base = e.mem.alloc(0x120);
+    // The seed takes part, so every type meets every other draw (the sequence alone pairs them).
+    let kind = [0x2c, 0x2d, 0x23, 0x23, 0x1e, 0x25, 0x25, 0x25, 0x15, 0x2a]
+        [((d.next(10) + seed) % 10) as usize];
+    e.mem.set_u8(base + 4, kind);
+    e.mem.set_u32(base + 8, [0, 0, 0x8000][d.next(3) as usize]);
+    e.mem
+        .set_u32(base + 0x48, [0, 0x4000_0000][d.next(2) as usize]);
+    e.mem.set_u32(r + 0x20, base);
+    let cast = if d.next(5) == 0 {
+        0
+    } else {
+        let vt = e.mem.alloc(0x200);
+        e.mem.set_u32(vt + 0x1bc, VT_FN + 0x1bc);
+        let cast = e.mem.alloc(0x120);
+        e.mem.set_u32(cast, vt);
+        let (first, second) = [
+            (300.0f32, 250.0f32),
+            (300.0, 250.0),
+            (200.0, 300.0),
+            (300.0, f32::NAN),
+        ][d.next(4) as usize];
+        e.mem.set_f32(cast + 0x8c, first);
+        e.mem.set_f32(cast + 0x90, second);
+        cast
+    };
+    e.mem.set_u32(base + ANSWER_CAST, cast);
+    let (radius, scale) = [
+        (2.5f32, 2.0f32),
+        (5.0 / 3.0, 3.0),
+        (1_099_511_627_776.0, 1_073_741_824.0),
+        (-2.5, 3.0),
+        (f32::NAN, 1.0),
+    ][d.next(5) as usize];
+    if cast != 0 {
+        e.mem.set_u32(cast + CAST_RADIUS, radius.to_bits());
+    }
+    e.mem.set_u32(r + ANSWER_SCALE, scale.to_bits());
+    // The extra list's `ScriptLocals` (the word after the list's own): none, fresh or built.
+    let locals = match d.next(3) {
+        0 => 0,
+        n => {
+            let l = e.mem.alloc(0x10);
+            e.mem.set_u32(l, 0x0500_0000 + d.next(0x100));
+            e.mem.set_u32(l + 8, n - 1);
+            l
+        }
+    };
+    e.mem.set_u32(r + 0x48, locals);
+    // The 3D, the loaded data with its count and flags.
+    let node = if d.next(4) == 0 {
+        0
+    } else {
+        scene_node(e, &mut d)
+    };
+    let data = if d.next(5) == 0 {
+        0
+    } else {
+        let data = e.mem.alloc(0x20);
+        e.mem
+            .set_u32(data + 4, [-1i32, 0, 1, 2][d.next(4) as usize] as u32);
+        e.mem
+            .set_u32(data + 0x10, [0, 2, 6, 4, 2][d.next(5) as usize]);
+        e.mem.set_u32(data + 0x14, node);
+        data
+    };
+    e.mem.set_u32(r + 0x64, data);
+    // The stand-ins' answers.
+    e.mem.set_u32(r + ANSWER_IS_ACTOR, d.next(2));
+    e.mem.set_u32(r + ANSWER_KIND, u32::from(d.next(10) == 0));
+    e.mem.set_u32(r + ANSWER_OTHER, u32::from(d.next(10) == 0));
+    e.mem.set_u32(r + ANSWER_3D, node);
+    let own_3d = if d.next(4) == 0 {
+        0
+    } else {
+        scene_node(e, &mut d)
+    };
+    e.mem.set_u32(r + ANSWER_LOAD_3D, own_3d);
+    e.mem
+        .set_u32(r + ANSWER_JIP, if d.next(2) == 0 { 0 } else { JIP_NODE });
+    // The cell.
+    let cell = e.mem.alloc(0x100);
+    e.mem
+        .set_u8(cell + 0x26, [0, 2, 4, 5, 6, 6, 5, 7][d.next(8) as usize]);
+    e.mem
+        .set_u16(cell + 0xaa, [0, 5, 0xffff][d.next(3) as usize]);
+    // The source task.
+    let source = if d.next(3) == 0 {
+        0
+    } else {
+        let vt = e.mem.alloc(0x48);
+        e.mem
+            .set_u32(vt + 0x40, [0x0048_3710, VT_FN + 0x40][d.next(2) as usize]);
+        let task = e.mem.alloc(0x48);
+        e.mem.set_u32(task, vt);
+        let model_node = if d.next(3) == 0 {
+            0
+        } else {
+            scene_node(e, &mut d)
+        };
+        e.mem.set_u32(task + 0x34, model_node);
+        task
+    };
+    // The player: the reference now and then.
+    let player = if d.next(6) == 0 { r } else { 0x0700_1000 };
+    e.set_global(PLAYER_POINTER, player);
+    let tes = e.mem.alloc(0x40);
+    let r = if seed % 32 == 31 { 0 } else { r };
+    vec![tes, r, cell, source, flag]
+}
+
+/// The calls the load's typed version does in place: the form type, the game loader's flag, the
+/// extra data and the extra data list, the base form's flag test, the large cell's byte and the
+/// cast's sizes, the two empty bodies, the reference's flag tests, the loaded data's count, the
+/// source's node, the node's parent.
+const SCENE_INLINED: &[u32] = &[
+    0x0040_1170,
+    0x0042_ce10,
+    0x0043_0830,
+    0x0045_2440,
+    0x0045_2480,
+    0x0045_bb80,
+    0x0048_3710,
+    0x0045_34f0,
+    0x0056_4e60,
+    0x0056_51e0,
+    0x0057_b200,
+    0x005d_43c0,
+    0x005d_8710,
+    0x0096_11e0,
+];
+
+/// `TES`'s load of a reference into the scene against its translation, over the seeds' worlds and
+/// `flag` 0, 1 and a word whose low byte is 0.
+#[test]
+fn tes_load_reference() {
+    Diff::new(entry!(
+        0x0045_1ef0,
+        cell_refs::scene::load_reference(u32, u32, u32, u32, u8)
+    ))
+    .family(&CELL_REFS)
+    .family(&leaf::LEAVES)
+    .goes_by_address(&[0x0047_c850, 0x0043_fcd0])
+    .ignore_calls(SCENE_INLINED)
+    .inputs(&[Input::Of(SEEDS), Input::Of(&[0, 1, 0x100])])
+    .setup(|e, case| scene_world(e, case.word(0), case.word(1)))
+    .run()
+    .assert_same();
+}
+
+/// The actor classes' true body against its translation.
+#[test]
+fn answers_true() {
+    Diff::new(entry!(0x008d_0360, cell_refs::answers_true(u32) -> bool))
+        .family(&CELL_REFS)
+        .inputs(&[Input::Of(&[0, 0x0700_0000])])
+        .run()
+        .assert_same();
+}
+
+/// The branches [`the_scene_seeds_reach_every_branch`] asks the seeds to reach.
+const SCENE_BRANCHES: &[&str] = &[
+    "a null reference",
+    "handed to slot 0x308",
+    "handed to slot 0x304",
+    "its distant 3D given up",
+    "not loaded: form flag 0x20 or 0x800",
+    "off the temp-change list",
+    "the source's node set as its 3D",
+    "its own Load3D",
+    "the source's slot 0x40",
+    "the source's empty body",
+    "a type 0x2c or 0x2d node to its parent",
+    "put in the scene",
+    "kept from the attach",
+    "an actor's node",
+    "attached",
+    "particles removed",
+    "particles added",
+    "lighting updated",
+    "type 0x1e's step",
+    "the action list set up",
+    "the game loader's flag",
+    "counted as seen from a distance",
+    "the distant count wraps",
+    "the large cell's step",
+    "a product just below 5",
+    "a product past 2^63 or a NaN",
+    "an actor's alpha",
+    "an ID set on the scene graph",
+    "the player's ID not set",
+    "JIP's node",
+];
+
+/// The load's worlds reach every branch it has, checked on the translation (under the other
+/// threads' word; the Diff runs both).
+#[test]
+fn the_scene_seeds_reach_every_branch() {
+    let mut reached = std::collections::BTreeMap::<&str, u32>::new();
+    for &seed in SEEDS {
+        for flag in [0u8, 1] {
+            let mut e = Engine::new_untyped_for_test();
+            let w = scene_world(&mut e, seed, u32::from(flag));
+            let (r, cell) = (w[1], w[2]);
+            let distant_before = e.mem.u16(cell + 0xaa);
+            e.call_log = Some(Vec::new());
+            e.call(0x0045_1ef0, &args![w[0], r, cell, w[3], flag]);
+            let log = e.call_log.take().unwrap_or_default();
+            let words = |addr: u32| -> Vec<Vec<u32>> {
+                log.iter()
+                    .filter(|(a, _)| *a == addr)
+                    .map(|(_, w)| w.clone())
+                    .collect()
+            };
+            let called = |addr: u32| !words(addr).is_empty();
+            let mut hit = |name| *reached.entry(name).or_default() += 1;
+            if r == 0 {
+                hit("a null reference");
+                continue;
+            }
+            if called(VT_FN + 0x308) {
+                hit("handed to slot 0x308");
+                continue;
+            }
+            if called(VT_FN + 0x304) {
+                hit("handed to slot 0x304");
+                continue;
+            }
+            if called(0x0056_5210) {
+                hit("its distant 3D given up");
+            }
+            if !called(0x0056_5730) {
+                hit("not loaded: form flag 0x20 or 0x800");
+                continue;
+            }
+            let base = e.mem.u32(r + 0x20);
+            let kind = e.mem.u8(base + 4);
+            for (addr, name) in [
+                (0x0096_f400, "off the temp-change list"),
+                (VT_FN + 0x1c8, "its own Load3D"),
+                (VT_FN + 0x40, "the source's slot 0x40"),
+                (0x0048_3710, "the source's empty body"),
+                (0x00b5_eeb0, "put in the scene"),
+                (0x00b5_cbd0, "an actor's node"),
+                (0x0054_8880, "attached"),
+                (0x0057_8170, "particles removed"),
+                (0x0057_8060, "particles added"),
+                (0x00b5_d9f0, "lighting updated"),
+                (0x0045_34f0, "type 0x1e's step"),
+                (0x005a_c750, "the action list set up"),
+                (0x008c_4640, "an actor's alpha"),
+                (0x004b_6dc0, "an ID set on the scene graph"),
+            ] {
+                if called(addr) {
+                    hit(name);
+                }
+            }
+            if words(0x0057_0f70).iter().any(|w| w[1] != 0) {
+                hit("the source's node set as its 3D");
+            }
+            if (kind == 0x2c || kind == 0x2d) && called(VT_FN + 0xe8) {
+                hit("a type 0x2c or 0x2d node to its parent");
+            }
+            if called(0x00b5_eeb0) && !called(0x0054_8880) {
+                hit("kept from the attach");
+            }
+            if !called(0x005a_c750) {
+                hit("the game loader's flag");
+            }
+            let distant_after = e.mem.u16(cell + 0xaa);
+            if distant_after != distant_before {
+                hit(if distant_after == 0 {
+                    "the distant count wraps"
+                } else {
+                    "counted as seen from a distance"
+                });
+            }
+            for step in words(0x0054_7ad0) {
+                hit("the large cell's step");
+                let scale = f32::from_bits(e.mem.u32(r + ANSWER_SCALE));
+                if scale == 3.0 && step[4] == 4 {
+                    hit("a product just below 5");
+                }
+                if step[4] == 0 {
+                    hit("a product past 2^63 or a NaN");
+                }
+            }
+            if called(0x008c_4640) && !called(0x004b_6dc0) {
+                hit("the player's ID not set");
+            }
+            if words(0x004b_6dc0).iter().any(|w| w[0] == JIP_NODE) {
+                hit("JIP's node");
+            }
+        }
+    }
+    for name in SCENE_BRANCHES {
+        assert!(
+            reached.contains_key(name),
+            "no seed reaches {name}: {reached:?}"
+        );
+    }
 }
