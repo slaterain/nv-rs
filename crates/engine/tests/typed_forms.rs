@@ -3,11 +3,13 @@
 //!
 //! One world serves the whole unit: the unit's globals (the registries, the record writer's buffer,
 //! the save games, the data handler, the form-type table and the group tag, the big-endian byte);
-//! forms with one vtable whose slots are stand-ins, each answering a word the case sets; files whose
-//! first byte says whether `TESFile::GetMaster` accepts them; and doubles for the callees by
-//! address. Most doubles answer a word the case sets; the allocator, `memcpy`, the resize, the
-//! simple getters and the source file list's operations do their work on the test's own objects,
-//! so the loops over the list run as they do in the game.
+//! forms with one vtable whose slots are stand-ins, each answering a word the case sets; files,
+//! save buffers and components with the real fields the one-line bodies read; handlers at the
+//! unit's seams; and doubles for the callees by address that do real work. Most doubles answer a
+//! word the case sets; the allocator, the resize and the source file list's operations do their
+//! work on the test's own objects, so the loops over the list run as they do in the game. The
+//! bodies the typed code does in place have no double ([`IN_PLACE`]): their translations run, and
+//! `memcpy` and `memset` run as they are.
 
 use engine as _;
 use engine_core::prelude::*;
