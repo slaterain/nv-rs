@@ -655,15 +655,16 @@ pub fn about_text(in_force: Option<Consent>) -> Vec<String> {
     text
 }
 
-/// The question: where reports go, that only the report goes, that nothing is sent before an
-/// answer, and, where this copy of nv-rs cannot send (`can_send`), that it cannot.
+/// The question: where reports go, that only the report goes (an F12 report's note and place
+/// stay on this PC), that nothing is sent before an answer, and, where this copy of nv-rs cannot
+/// send (`can_send`), that it cannot.
 pub fn question_text(can_send: bool) -> Vec<String> {
     let mut text = vec![
-        "Send crash reports to Sentry (sentry.io), the crash-report service nv-rs's developers use? Only the report goes. Settings can change this.".into(),
+        "Send crash reports to Sentry (sentry.io), the crash-report service nv-rs's developers use? Only the report goes, not an F12 report's note or place. Settings can change this.".into(),
         "Nothing is sent until you choose.".into(),
     ];
     if !can_send {
-        text.push("This copy of nv-rs cannot send yet.".into());
+        text.push("This copy cannot send yet.".into());
     }
     text
 }
@@ -3589,7 +3590,8 @@ mod tests {
         assert!(keeps_at_once(true));
         assert_eq!(keeps_at_once(false), cfg!(not(windows)));
         // What a report holds (the F12 report's note and place too), where reports go, that only
-        // the report goes, that nothing goes before an answer, and that this version sends none.
+        // the report goes (no F12 note or place), that nothing goes before an answer, and where
+        // this copy cannot send, that it cannot.
         let about = about_text(None).join(" ");
         assert!(about.contains("an F12 report's note and place from that run"));
         assert!(about.contains("no saves or pictures"));
@@ -3600,7 +3602,7 @@ mod tests {
         assert!(!in_settings.contains("Not now"));
         let question = question_text(false).join(" ");
         assert!(question.contains("Sentry (sentry.io)"));
-        assert!(question.contains("Only the report goes"));
+        assert!(question.contains("Only the report goes, not an F12 report's note or place."));
         assert!(question.contains("Nothing is sent until you choose."));
         assert!(question.contains("cannot send yet"));
         assert!(!question_text(true).join(" ").contains("cannot send"));

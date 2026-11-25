@@ -659,6 +659,23 @@ The log's last {} lines are in log.txt beside this file.
 
     /// Everything the report says but where its log is.
     pub fn body(&self) -> String {
+        self.body_with(true)
+    }
+
+    /// What of it is sent ([`send`]): the body without an F12 report's note and place, which
+    /// stay on this PC (said when there is one).
+    pub fn sent_body(&self) -> String {
+        let mut t = self.body_with(false);
+        if self.f12.is_some() {
+            t.push_str(
+                "\nThe note and place of the F12 report made during this run stay on this PC.\n",
+            );
+        }
+        t
+    }
+
+    /// The body, with the F12 report's part or without it.
+    fn body_with(&self, with_f12: bool) -> String {
         let mut t = String::new();
         let mut line = |s: &str| {
             t.push_str(s);
@@ -706,7 +723,7 @@ The log's last {} lines are in log.txt beside this file.
         } else {
             line("Mods: played without mods");
         }
-        if let Some(f12) = &self.f12 {
+        if let Some(f12) = self.f12.as_ref().filter(|_| with_f12) {
             line("");
             line(&format!(
                 "F12 report made during this run: reports/{}",
@@ -839,11 +856,13 @@ pub fn next_step(answer: consent::Consent, can_send: bool) -> Next {
     }
 }
 
-/// The question after a crash with "Ask me each time": the report itself under it.
+/// The question after a crash with "Ask me each time": what would go under it (the report
+/// without an F12 report's note and place, and its log's last lines).
 fn question(report: &Report) -> String {
     format!(
-        "The game stopped, and nv-rs kept the crash report below. Send it to nv-rs's developers?\n\n{}",
-        report.text()
+        "The game stopped, and nv-rs kept the crash report below. Send it to nv-rs's developers?\n\n{}\nThe log's last {} lines go with it.\n",
+        report.sent_body(),
+        report.log.len()
     )
 }
 

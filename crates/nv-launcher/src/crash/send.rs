@@ -9,9 +9,10 @@
 //! project's DSN, a public client key. Without that file (a build from source, a fork's run)
 //! sending is off.
 //!
-//! Nothing personal is sent: the report is the scrubbed one kept on disk; the event has no user,
-//! no IP address field and no computer name, and its tags name only the system, the renderer,
-//! the kind of end and the profile.
+//! Nothing personal is sent: the report is the scrubbed one kept on disk, without an F12
+//! report's note and place (they stay on this PC); the event has no user, no IP address field
+//! and no computer name, and its tags name only the system, the renderer, the kind of end and
+//! the profile.
 
 use super::Report;
 use std::ffi::OsString;
@@ -453,6 +454,37 @@ mod tests {
         for personal in ["\"user\"", "ip_address", "server_name", "\"device\""] {
             assert!(!event.contains(personal), "{personal} in {event}");
         }
+    }
+
+    /// An F12 report's note and place stay on this PC: not in the envelope, and the question
+    /// before sending shows the report without them and says so.
+    #[test]
+    fn an_f12_reports_note_and_place_are_not_sent() {
+        let mut r = report();
+        r.f12 = Some(crate::crash::F12 {
+            folder: "717".into(),
+            note: Some("the door would not open".into()),
+            place: Some("Goodsprings, by the saloon".into()),
+        });
+        let d = Dsn::parse(DSN).unwrap();
+        let id = "0123456789abcdef0123456789abcdef";
+        let text = String::from_utf8(envelope(&r, &d, id, "2001-09-09T01:46:40Z")).unwrap();
+        let asked = crate::crash::question(&r);
+        for f12 in ["door would not open", "Goodsprings", "reports/717"] {
+            assert!(!text.contains(f12), "{f12} in {text}");
+            assert!(!asked.contains(f12), "{f12} in {asked}");
+        }
+        assert!(r.text().contains("the door would not open"));
+        assert!(
+            asked.contains(
+                "The note and place of the F12 report made during this run stay on this PC."
+            ),
+            "{asked}"
+        );
+        assert!(
+            asked.contains("The log's last 2 lines go with it."),
+            "{asked}"
+        );
     }
 
     #[test]

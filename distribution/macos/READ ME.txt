@@ -156,7 +156,8 @@ https://github.com/slaterain/nv-rs/issues
 
 At its first start the launcher asks whether crash reports may be sent to nv-rs's developers
 through Sentry (sentry.io): nothing is sent without your yes, and Settings, Crash reports, changes
-the answer. A report sent is the same one kept in the reports folder.
+the answer. A report sent is the one kept in the reports folder, without an F12 report's note
+and place.
 
 Say that it is the macOS preview, your Mac's model and macOS version, and where your game's folder
 came from. If the game stopped, the launcher (nv-rs) keeps a crash report in the reports folder
