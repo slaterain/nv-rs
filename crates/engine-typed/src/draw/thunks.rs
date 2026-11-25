@@ -1,80 +1,68 @@
 //! The D3DX import thunks the typed families call (group E): each is the exe's `JMP dword ptr [slot]` to a
 //! `d3dx9_38.dll` function, which the platform layer answers (`engine-platform`'s D3DX, bound to the
 //! import slot by its name). Typed, a typed caller reaches the import in one call instead of two (the
-//! thunk's own call is gone); the platform's function stays behind the slot, since part crates do not
-//! depend on `engine-platform`. Every word goes to the import unchanged and its answer comes back
-//! (`stdcall`: the import pops them).
+//! thunk's own call is gone), and that call is a plain Rust call of the platform's function while the
+//! slot holds it ([`engine_core::d3dx_direct`]; by address when anything else is registered there or
+//! a diagnostic is on). Every word goes to the import unchanged and its answer comes back (`stdcall`:
+//! the import pops them).
 
 use super::FAMILY;
 use engine_core::abi::OneWord;
 use engine_core::ptr::Ptr;
-use engine_core::{args, typed_call, Engine};
-
-/// The import slots: `D3DXMatrixMultiplyTranspose`, `D3DXVec3Normalize`, `D3DXVec3TransformNormal`,
-/// `D3DXVec3TransformCoord`, `D3DXMatrixTranspose`, `D3DXMatrixInverse`, `D3DXMatrixMultiply`,
-/// `D3DXPlaneNormalize` and `D3DXPlaneTransform` (the platform layer's names for them).
-const MATRIX_MULTIPLY_TRANSPOSE: u32 = 0x00fd_f410;
-const VEC3_NORMALIZE: u32 = 0x00fd_f41c;
-const VEC3_TRANSFORM_NORMAL: u32 = 0x00fd_f420;
-const VEC3_TRANSFORM_COORD: u32 = 0x00fd_f414;
-const MATRIX_TRANSPOSE: u32 = 0x00fd_f42c;
-const MATRIX_INVERSE: u32 = 0x00fd_f428;
-const MATRIX_MULTIPLY: u32 = 0x00fd_f424;
-const PLANE_NORMALIZE: u32 = 0x00fd_f430;
-const PLANE_TRANSFORM: u32 = 0x00fd_f418;
+use engine_core::{d3dx_direct, typed_call, Engine};
 
 // Typed from 00ee6dfe
 /// `D3DXMatrixMultiplyTranspose(out, m1, m2)`'s thunk: answers the import's answer.
 pub fn matrix_multiply_transpose(e: &mut Engine, out: Ptr, m1: Ptr, m2: Ptr) -> Ptr {
-    e.call(MATRIX_MULTIPLY_TRANSPOSE, &args![out, m1, m2]).ptr()
+    d3dx_direct::matrix_multiply_transpose(e, out, m1, m2)
 }
 
 // Typed from 00ee6dec
 /// `D3DXVec3Normalize(out, v)`'s thunk.
 pub fn vec3_normalize(e: &mut Engine, out: Ptr, v: Ptr) -> Ptr {
-    e.call(VEC3_NORMALIZE, &args![out, v]).ptr()
+    d3dx_direct::vec3_normalize(e, out, v)
 }
 
 // Typed from 00ee6df2
 /// `D3DXVec3TransformNormal(out, v, m)`'s thunk.
 pub fn vec3_transform_normal(e: &mut Engine, out: Ptr, v: Ptr, m: Ptr) -> Ptr {
-    e.call(VEC3_TRANSFORM_NORMAL, &args![out, v, m]).ptr()
+    d3dx_direct::vec3_transform_normal(e, out, v, m)
 }
 
 // Typed from 00ee6df8
 /// `D3DXVec3TransformCoord(out, v, m)`'s thunk.
 pub fn vec3_transform_coord(e: &mut Engine, out: Ptr, v: Ptr, m: Ptr) -> Ptr {
-    e.call(VEC3_TRANSFORM_COORD, &args![out, v, m]).ptr()
+    d3dx_direct::vec3_transform_coord(e, out, v, m)
 }
 
 // Typed from 00ee6dd4
 /// `D3DXMatrixTranspose(out, m)`'s thunk.
 pub fn matrix_transpose(e: &mut Engine, out: Ptr, m: Ptr) -> Ptr {
-    e.call(MATRIX_TRANSPOSE, &args![out, m]).ptr()
+    d3dx_direct::matrix_transpose(e, out, m)
 }
 
 // Typed from 00ee6dda
 /// `D3DXMatrixInverse(out, determinant, m)`'s thunk (the determinant's word may be 0).
 pub fn matrix_inverse(e: &mut Engine, out: Ptr, determinant: u32, m: Ptr) -> Ptr {
-    e.call(MATRIX_INVERSE, &args![out, determinant, m]).ptr()
+    d3dx_direct::matrix_inverse(e, out, Ptr::new(determinant), m)
 }
 
 // Typed from 00ee6de0
 /// `D3DXMatrixMultiply(out, m1, m2)`'s thunk.
 pub fn matrix_multiply(e: &mut Engine, out: Ptr, m1: Ptr, m2: Ptr) -> Ptr {
-    e.call(MATRIX_MULTIPLY, &args![out, m1, m2]).ptr()
+    d3dx_direct::matrix_multiply(e, out, m1, m2)
 }
 
 // Typed from 00ee6dce
 /// `D3DXPlaneNormalize(out, plane)`'s thunk.
 pub fn plane_normalize(e: &mut Engine, out: Ptr, plane: Ptr) -> Ptr {
-    e.call(PLANE_NORMALIZE, &args![out, plane]).ptr()
+    d3dx_direct::plane_normalize(e, out, plane)
 }
 
 // Typed from 00ee6dc8
 /// `D3DXPlaneTransform(out, plane, m)`'s thunk.
 pub fn plane_transform(e: &mut Engine, out: Ptr, plane: Ptr, m: Ptr) -> Ptr {
-    e.call(PLANE_TRANSFORM, &args![out, plane, m]).ptr()
+    d3dx_direct::plane_transform(e, out, plane, m)
 }
 
 // ---- The typed families' calls: through the typed thunk directly while the draw family is on. ----

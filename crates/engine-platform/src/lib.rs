@@ -362,6 +362,7 @@ pub static LAYER: Layer = Layer {
     file_closed,
     proc_address: library::proc_address,
     device_calls: &d3d9::DEVICE_CALLS,
+    d3dx: &d3dx::DIRECT,
 };
 
 /// This crate's registered functions, as the `engine` facade takes each engine crate's.
@@ -435,56 +436,20 @@ fn layer_imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, library::load_library_a(Ptr) -> u32).1,
         ),
         (k, "FreeLibrary", entry!(0, library::free_library(u32) -> u32).1),
-        (
-            "d3dx9_38.dll",
-            "D3DXMatrixMultiply",
-            entry!(0, d3dx::matrix_multiply(Ptr, Ptr, Ptr) -> u32).1,
-        ),
-        (
-            "d3dx9_38.dll",
-            "D3DXMatrixMultiplyTranspose",
-            entry!(0, d3dx::matrix_multiply_transpose(Ptr, Ptr, Ptr) -> u32).1,
-        ),
+        ("d3dx9_38.dll", "D3DXMatrixMultiply", d3dx::DIRECT.matrix_multiply.0),
+        ("d3dx9_38.dll", "D3DXMatrixMultiplyTranspose", d3dx::DIRECT.matrix_multiply_transpose.0),
         (
             "d3dx9_38.dll",
             "D3DXMatrixRotationYawPitchRoll",
             entry!(0, d3dx::matrix_rotation_yaw_pitch_roll(Ptr, u32, u32, u32) -> u32).1,
         ),
-        (
-            "d3dx9_38.dll",
-            "D3DXMatrixTranspose",
-            entry!(0, d3dx::matrix_transpose(Ptr, Ptr) -> u32).1,
-        ),
-        (
-            "d3dx9_38.dll",
-            "D3DXVec3TransformNormal",
-            entry!(0, d3dx::vec3_transform_normal(Ptr, Ptr, Ptr) -> u32).1,
-        ),
-        (
-            "d3dx9_38.dll",
-            "D3DXVec3Normalize",
-            entry!(0, d3dx::vec3_normalize(Ptr, Ptr) -> u32).1,
-        ),
-        (
-            "d3dx9_38.dll",
-            "D3DXVec3TransformCoord",
-            entry!(0, d3dx::vec3_transform_coord(Ptr, Ptr, Ptr) -> u32).1,
-        ),
-        (
-            "d3dx9_38.dll",
-            "D3DXMatrixInverse",
-            entry!(0, d3dx::matrix_inverse(Ptr, Ptr, Ptr) -> u32).1,
-        ),
-        (
-            "d3dx9_38.dll",
-            "D3DXPlaneNormalize",
-            entry!(0, d3dx::plane_normalize(Ptr, Ptr) -> u32).1,
-        ),
-        (
-            "d3dx9_38.dll",
-            "D3DXPlaneTransform",
-            entry!(0, d3dx::plane_transform(Ptr, Ptr, Ptr) -> u32).1,
-        ),
+        ("d3dx9_38.dll", "D3DXMatrixTranspose", d3dx::DIRECT.matrix_transpose.0),
+        ("d3dx9_38.dll", "D3DXVec3TransformNormal", d3dx::DIRECT.vec3_transform_normal.0),
+        ("d3dx9_38.dll", "D3DXVec3Normalize", d3dx::DIRECT.vec3_normalize.0),
+        ("d3dx9_38.dll", "D3DXVec3TransformCoord", d3dx::DIRECT.vec3_transform_coord.0),
+        ("d3dx9_38.dll", "D3DXMatrixInverse", d3dx::DIRECT.matrix_inverse.0),
+        ("d3dx9_38.dll", "D3DXPlaneNormalize", d3dx::DIRECT.plane_normalize.0),
+        ("d3dx9_38.dll", "D3DXPlaneTransform", d3dx::DIRECT.plane_transform.0),
         (
             "d3dx9_38.dll",
             "D3DXVec4Transform",
