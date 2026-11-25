@@ -1264,6 +1264,15 @@ mod queue {
             self.family(&lights::LIGHTS)
                 .family(&leaf::LEAVES)
                 .ignore_calls(&[0x00ec_6040])
+                // The scene node family's members the drain and the object walk call typed.
+                .goes_by_address(&[
+                    0x00b5_cd00,
+                    0x00b5_eca0,
+                    0x00b5_d930,
+                    0x00b5_ef90,
+                    0x00e7_4d40,
+                    0x00b5_aa40,
+                ])
                 .max_calls(50_000)
                 .float_sweep(64)
         }

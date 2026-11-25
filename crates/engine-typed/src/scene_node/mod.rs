@@ -14,9 +14,15 @@
 //!   `RemoveObjectRecurse` `00b5b150`, `RemoveObject` `00b5b1c0`); the portal graph's add of a
 //!   missing room (`00b5c6e0`); the light's point, shadow map and shadow scene setters (`00b5a9d0`,
 //!   `00b5aee0`, `00b5af30`), the luminance sort comparison (`00b5aa70`), a node's indexed child
-//!   (`00b5aa40`), `GetRTTI` (`00b5e590`); the list move after an item (`00b5a8d0`); and the arrays'
+//!   (`00b5aa40`), `GetRTTI` (`00b5e590`); the list move after an item (`00b5a8d0`); the arrays'
 //!   slot reservation (`00b5c360`), search (`00b5a930`), removals (`00b5ade0`, `00b5aea0`) and clear
-//!   (`00b5af80`).
+//!   (`00b5af80`); and the counted list's `RemoveAll` (`00e74d40`), which every `NiPointer` list of
+//!   the exe shares, and the arrays' growth (`00cb9ce0`).
+//! - [`node`]: the sun light (`SetSunLight` `00b5aac0`), the occlusion planes' visibility
+//!   (`00b5ac90`), a light listed (`00b5eca0`), the queued lights removed (`RemoveQueuedLight`
+//!   `00b5d040` and `00b5ef90`), the light value at a point (`00b5b4d0`), the dynamic shadow maps
+//!   (`UpdateDynamicShadows` `00b5b880`), the destructor (`00b5e5a0`) and its deleting form
+//!   (`00b5f980`), and the jump to `RemoveAll` (`00b5c7c0`).
 //!
 //! The node's functions the other families already hold stay there: the queue drain and the object
 //! lighting updates (lights), the shadow light walk and sort (set-up), the object queue (cell
@@ -25,9 +31,10 @@
 //!
 //! **Which threads.** The main thread (the frame's light passes, the cell's attach, the moved
 //! lights) and the loading thread (a cell's lights added and removed under the queues' lock), so
-//! [`Threads::Both`]. **Floats.** None worked out: only compares of loaded floats and a float
-//! stored as the exe's `FLD`/`FSTP` stores it (see [`lists`]); the Diff tests run both control
-//! words.
+//! [`Threads::Both`]. **Floats.** Only the light value at a point (`00b5b4d0`, which the actors'
+//! light value reaches on the AI threads too) works one out: over `native::Real`, at the running
+//! thread's precision. The rest only compare loaded floats or store a float as the exe's
+//! `FLD`/`FSTP` stores it (see [`lists`]); the Diff tests run both control words.
 //!
 //! Stage 1: the objects stay in guest memory; each function stays registered at its exe address.
 
@@ -37,6 +44,7 @@ use engine_core::types::NiTPointerList;
 use engine_core::{entry, AbiFn};
 
 pub mod lists;
+pub mod node;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(47);
@@ -89,5 +97,17 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b5_b150, lists::remove_object_recurse(Ptr, u32)),
         entry!(0x00b5_b1c0, lists::remove_object(Ptr, u32)),
         entry!(0x00b5_c6e0, lists::add_unique(Ptr, u32)),
+        entry!(0x00e7_4d40, lists::remove_all(Ptr<NiTPointerList>)),
+        entry!(0x00cb_9ce0, lists::grow(Ptr, u32, u32)),
+        entry!(0x00b5_c7c0, node::remove_all_jump(Ptr<NiTPointerList>)),
+        entry!(0x00b5_aac0, node::set_sun_light(Ptr, u32)),
+        entry!(0x00b5_ac90, node::update_occlusion_plane_visibility(Ptr, u32)),
+        entry!(0x00b5_eca0, node::add_listed_light(Ptr, u32) -> u32),
+        entry!(0x00b5_d040, node::remove_queued_light(Ptr, Ptr, u32)),
+        entry!(0x00b5_ef90, node::remove_queued_light_of(Ptr, Ptr)),
+        entry!(0x00b5_b4d0, node::light_value_at(Ptr, u32, u32, u32, Ptr, Ptr, Ptr, u32) -> f32),
+        entry!(0x00b5_b880, node::update_dynamic_shadows(Ptr, u32)),
+        entry!(0x00b5_e5a0, node::destruct(Ptr)),
+        entry!(0x00b5_f980, node::delete(Ptr, u32) -> Ptr),
     ]
 }

@@ -1254,7 +1254,7 @@ pub fn shadow_scene_node_add_object(e: &mut Engine, this: Ptr<ShadowSceneNode>, 
 /// `RET 4` (the flags): the destructor (`00b5e5a0`), then the 0x200-byte block freed
 /// (`00aa1460`) when bit 0 is set; answers `this`.
 pub fn fn_00b5f980(e: &mut Engine, this: Ptr<ShadowSceneNode>, flags: u32) -> Ptr<ShadowSceneNode> {
-    fn_00b5e5a0(e, this);
+    e.call(0x00b5_e5a0, &args![this]);
     if flags & 1 != 0 {
         e.call(SIZED_FREE, &args![this, 0x200u32]);
     }
@@ -2099,10 +2099,12 @@ pub fn fn_00b5eca0(e: &mut Engine, this: Ptr<ShadowSceneNode>, light: u32) -> u3
                 )
                 .u32();
             let target = e.call(RENDERED_TEXTURE_STOP_OFFSCREEN, &args![map]).u32();
-            // The slot is read before `00b6d120` runs.
-            let function = e.mem.u32(e.mem.u32(target).wrapping_add(0xac));
+            // The vtable is read before `00b6d120` runs (`MOV ESI,[EBX]; ADD ESI,0xac`), the
+            // slot's word after it (`MOV EDX,[ESI]`).
+            let vtable = e.mem.u32(target);
             let renderer = e.global::<u32>(RENDERER_011F91A8);
             let value = e.call(RENDERER_00B6D120, &args![renderer]).u32();
+            let function = e.mem.u32(vtable.wrapping_add(0xac));
             e.call(function, &args![target, value]);
             map
         } else {
@@ -2208,7 +2210,7 @@ pub fn shadow_scene_node_remove_queued_light_ov2(
     if found != 0 {
         e.with_stack(4, |e, slot| {
             e.mem.set_u32(slot.addr(), found);
-            shadow_scene_node_remove_queued_light(e, this, light_pointer, slot.addr());
+            e.call(0x00b5_d040, &args![this, light_pointer, slot]);
         });
     }
 }
@@ -3302,7 +3304,7 @@ pub fn shadow_scene_node_pre_on_visible(e: &mut Engine, this: Ptr<ShadowSceneNod
                 } else {
                     e.mem.set_u32(held, light);
                     e.call(IMPORT_INTERLOCKED_INCREMENT, &args![light.wrapping_add(4)]);
-                    shadow_scene_node_remove_queued_light(e, this, Ptr::new(held), item_slot);
+                    e.call(0x00b5_d040, &args![this, held, item_slot]);
                     let held_light = e.mem.u32(held);
                     if held_light != 0 {
                         release(e, held_light);
@@ -6794,6 +6796,39 @@ mod b064_tests {
         assert_eq!(elements(&e, this.addr() + LIGHT_LIST), vec![listed, caster]);
         assert_eq!(e.mem.u32(caster + 0x10c), map);
         assert_eq!(e.mem.u32(map + 4), 2);
+    }
+
+    #[test]
+    fn fn_00b5eca0_reads_the_target_slot_after_the_renderer_call() {
+        let mut e = rig();
+        light_update_doubles(&mut e);
+        let this = scene(&mut e);
+        let caster = object(&mut e, 0x250);
+        let ni_light = e.mem.alloc(0x100);
+        e.mem.set_u32(caster + 0xf8, ni_light);
+        e.mem.set_u8(caster + 0xec, 1);
+        e.map(0, 0x1000);
+        e.mem.set_u8(0xed, 1);
+        let map = object(&mut e, 0x10);
+        let target = e.mem.alloc(0x10);
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(target, vtable);
+        e.mem.set_u32(vtable + 0xac, 0x0f00_4000);
+        e.register_double(RENDERER_00B6E110, move |_, _| map.into_ret());
+        e.register_double(RENDERED_TEXTURE_STOP_OFFSCREEN, move |_, _| {
+            target.into_ret()
+        });
+        // `00b6d120` puts another function in the slot: the exe reads the slot after it.
+        e.register_double(RENDERER_00B6D120, move |e, _| {
+            e.mem.set_u32(vtable + 0xac, 0x0f00_4010);
+            7u32.into_ret()
+        });
+        e.register(0x0f00_4000, |_, _| Ret::default());
+        e.register(0x0f00_4010, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_eca0, &args![this, caster]);
+        assert!(calls(&e, 0x0f00_4000).is_empty());
+        assert_eq!(calls(&e, 0x0f00_4010), vec![vec![target, 7]]);
     }
 
     #[test]
