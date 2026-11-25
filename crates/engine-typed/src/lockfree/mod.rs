@@ -1,6 +1,7 @@
 //! The lock-free map family (T4 of the migration plan, stage 1): the game's `LockFreeMap` (Xbox PDB),
 //! its per-thread interfaces, its iterators and its counted-pointer holder. The model, texture, lip
-//! sync, pathing and cell loaders keep their tasks in these maps, and every frame walks them.
+//! sync, pathing and cell loaders keep their tasks in these maps, and every frame walks them; the task
+//! manager keeps its own in a map with 64-bit keys ([`task_map`]).
 //!
 //! Stage 1: the objects stay in guest memory where the game made them, and are read through their
 //! [`layout`]. Each function stays registered at its exe address, so the translations, the vtables
@@ -30,6 +31,7 @@ pub mod map;
 pub mod node;
 pub mod queue;
 pub(crate) mod store;
+pub mod task_map;
 
 /// The memory-context scope the family's allocating functions run in (`thiscall(scope, context,
 /// mode, source file, line)` .. `thiscall(scope)`), a 4-byte local: the context for the allocations,
@@ -353,5 +355,14 @@ fn funcs() -> Vec<(u32, AbiFn)> {
             manager::delete_counted(Ptr<InterfaceManager>, u32) -> Ptr
         ),
         entry!(0x0052_8e40, map::clear_counted(Ptr<LockFreeMap>, u8)),
+        // The task manager's map with 64-bit keys: its bucket search and the key compare it calls.
+        entry!(
+            0x00c4_16a0,
+            task_map::search(Ptr, u32, u32, u32) -> bool
+        ),
+        entry!(
+            0x00c3_f6b0,
+            task_map::key_not_below(Ptr, u32, u32, u32, u32) -> bool
+        ),
     ]
 }
