@@ -105,6 +105,10 @@ pub fn alpha_function_of(e: &mut Engine, _this: u32, block: u32) {
     );
 }
 
+/// `00b97ed0` (the alpha test's setter, the shader family's): called by address with the whole word,
+/// whose upper bytes the exe leaves as the state block's (the setter reads its low byte).
+const SET_ALPHA_TEST_ENABLE: u32 = 0x00b9_7ed0;
+
 // Typed from 00be20e0
 /// The alpha test and cull mode of a geometry's state (a shader's slot 0x88), `thiscall(shader, state
 /// block, flag)`: the renderer's cull mode 3 when the block's second property (+0x10) has both bits 10
@@ -135,12 +139,9 @@ pub fn alpha_test_of(e: &mut Engine, _this: u32, block: u32, flag: bool) {
         0x00b9_84d0,
         state::set_cull_mode_of_renderer(e, u32::from(both) * 2 + 1, 0u32)
     );
-    // The alpha test's setter (`00b97ed0`, the shader family's) with the whole word, whose upper bytes the exe leaves
-    // as the state block's (the setter reads its low byte).
-    typed_call!(
-        shader::FAMILY,
-        0x00b9_7ed0,
-        state::set_alpha_test_enable_word(e, (block & 0xffff_ff00) | low, 0u32)
+    e.call(
+        SET_ALPHA_TEST_ENABLE,
+        &args![(block & 0xffff_ff00) | low, 0u32],
     );
 }
 

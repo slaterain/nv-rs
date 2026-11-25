@@ -232,13 +232,6 @@ pub fn set_alpha_test_enable(e: &mut Engine, enable: u8, lock: u32) {
     counted(e, INDEX_ALPHA_TEST, 0xf, u32::from(enable), lock);
 }
 
-/// [`set_alpha_test_enable`] as the exe calls it with a whole word (the draw family's `alpha_test_of`, `00be20e0`,
-/// leaves the upper bytes as the state block's): the setter reads the low byte, as its registration does.
-#[inline(always)]
-pub fn set_alpha_test_enable_word(e: &mut Engine, word: u32, lock: u32) {
-    set_alpha_test_enable(e, low8(word), lock);
-}
-
 // Typed from 00b97fa0
 /// `BSRenderStateManager::SetDepthBufferEnabled` (engine map), `cdecl(enable, lock)`:
 /// `D3DRS_ALPHABLENDENABLE` (0x1b).
