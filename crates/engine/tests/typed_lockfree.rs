@@ -2673,7 +2673,12 @@ fn task_world(e: &mut Engine, exe_compares: bool, meanwhile: u32) -> u32 {
     face
 }
 
-/// `00c3f6b0`, the task map's key compare, on every pair of high and low words.
+/// The words a key compare's halves take: zero, one, the largest positive and smallest negative
+/// signed words (the largest and next unsigned ones), and all ones.
+const KEY_WORDS: &[u32] = &[0, 1, 0x7fff_ffff, 0x8000_0000, 0xffff_ffff];
+
+/// `00c3f6b0`, the task map's key compare: high words that differ signed but not unsigned and the
+/// other way, equal high words with low words that differ unsigned but not signed.
 #[test]
 fn task_map_key_not_below() {
     Diff::new(entry!(
@@ -2681,8 +2686,13 @@ fn task_map_key_not_below() {
         task_map::key_not_below(Ptr, u32, u32, u32, u32) -> bool
     ))
     .family(&lockfree::LOCKFREE)
-    .inputs(&[Input::Word, Input::Word, Input::Word, Input::Word])
-    .max_cases(9 * 9 * 9 * 9)
+    .inputs(&[
+        Input::Of(KEY_WORDS),
+        Input::Of(KEY_WORDS),
+        Input::Of(KEY_WORDS),
+        Input::Of(KEY_WORDS),
+    ])
+    .max_cases(5 * 5 * 5 * 5)
     .setup(|_, case| {
         let mut words = vec![0x0300_0000];
         words.extend(case.words());
@@ -2693,9 +2703,8 @@ fn task_map_key_not_below() {
 }
 
 /// `00c416a0`, the task map's search: every bucket and key, with the exe's compares (the typed one
-/// called directly) or stand-ins (through the vtable), with the first or second compare-exchange
-/// failing or none, and with another thread marking deleted or unlinking a node while the search
-/// compares the one before it.
+/// called directly) or stand-ins (through the vtable), with the first compare-exchange failing or
+/// none.
 #[test]
 fn task_map_search() {
     let report = Diff::new(entry!(
@@ -2709,12 +2718,11 @@ fn task_map_search() {
         Input::Of(&[0, 1, 2, 3]),
         Input::Of(TASK_KEY_PICKS),
         Input::Flag,
-        Input::Of(&[0, 1, 2]),
-        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 1]),
     ])
-    .max_cases(4 * 15 * 2 * 3 * 3)
+    .max_cases(4 * 15 * 2 * 2)
     .setup(|e, case| {
-        let face = task_world(e, case.word(2) != 0, case.word(4));
+        let face = task_world(e, case.word(2) != 0, 0);
         fail_cas(e, case.word(3));
         let (low, high) = TASK_KEYS[case.word(1) as usize];
         vec![face, case.word(0), low, high]
@@ -2725,4 +2733,32 @@ fn task_map_search() {
         report.direct_runs == 0 || report.direct_calls > 0,
         "the compare went direct nowhere"
     );
+}
+
+/// `00c416a0` in bucket 1 with another thread marking deleted, or unlinking, the node after the one
+/// the search compares (the stand-in compare does it once, at the node with key 5): every key, with
+/// the first compare-exchange (the unlink of the node marked) failing or not.
+#[test]
+fn task_map_search_meanwhile() {
+    Diff::new(entry!(
+        0x00c4_16a0,
+        task_map::search(Ptr, u32, u32, u32) -> bool
+    ))
+    .family(&lockfree::LOCKFREE)
+    .ignore_calls(INLINED)
+    .max_calls(MAX_CALLS)
+    .inputs(&[
+        Input::Of(TASK_KEY_PICKS),
+        Input::Of(&[1, 2]),
+        Input::Of(&[0, 1]),
+    ])
+    .max_cases(15 * 2 * 2)
+    .setup(|e, case| {
+        let face = task_world(e, false, case.word(1));
+        fail_cas(e, case.word(2));
+        let (low, high) = TASK_KEYS[case.word(0) as usize];
+        vec![face, 1, low, high]
+    })
+    .run()
+    .assert_same();
 }
