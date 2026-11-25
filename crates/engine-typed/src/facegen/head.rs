@@ -534,7 +534,10 @@ fn morph_in_host(
     {
         return None;
     }
-    let mut deltas = vec![0u8; (6 * steps) as usize];
+    // Both below 4 GB (tested above).
+    let delta_bytes = u32::try_from(6 * steps).ok()?;
+    let extra_bytes = u32::try_from(12 * extras).ok()?;
+    let mut deltas = vec![0u8; delta_bytes as usize];
     e.mem.read(offsets.at, &mut deltas);
     let delta = |k: usize| i16::from_le_bytes([deltas[2 * k], deltas[2 * k + 1]]);
     let n = count as usize;
@@ -543,7 +546,7 @@ fn morph_in_host(
     let mut points = vec![0u32; 3 * n];
     let mut bytes = vec![0u8; 12];
     if first_extra != 0 {
-        let mut all = vec![0u8; (12 * extras) as usize];
+        let mut all = vec![0u8; extra_bytes as usize];
         e.mem.read(first_extra, &mut all);
         let mut tail: Vec<u32> = all
             .chunks_exact(4)
@@ -588,7 +591,7 @@ fn morph_in_host(
     if n % 4 != 0 {
         write_words(e, points_block, &points[3 * (n - 1)..3 * n]);
     }
-    Some(offsets.at.wrapping_add((6 * steps) as u32))
+    Some(offsets.at.wrapping_add(delta_bytes))
 }
 
 /// The morphed points written to the strided vertex array: in one write when the points are packed
