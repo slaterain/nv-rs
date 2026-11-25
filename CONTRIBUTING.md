@@ -52,15 +52,22 @@ $env:NV_D3D9 = 'wgpu'; $env:NV_SOUND = 'out'
 ```
 
 `NV_D3D9=wgpu` draws with wgpu (Vulkan, Direct3D 12 or Metal); on Windows, `real` uses the
-system's Direct3D 9 instead. On Windows the game also reads a table of this machine's graphics
-adapter, which the launcher makes at every start. Without the launcher, make it once with
-`cargo run --release --manifest-path scripts/d3d9-capture/Cargo.toml > d3d9_adapter.tsv` and point
-`NV_D3D9_ADAPTER` at the file (or put it at `%LOCALAPPDATA%\nv-rs\d3d9_adapter.tsv`). If a table
-the run needs is missing, it stops and its last line says how to make it.
+system's Direct3D 9 instead.
+
+On Windows the game also reads tables that describe this machine (its graphics adapter, the
+graphics driver's answers, the sound device). The launcher, `Play.exe`, makes them at every start
+with the capture tools in `scripts/` (`d3d9-capture`, `nvapi-capture`, `dsound-capture`; two of them
+build for 32-bit Windows, so run `rustup target add i686-pc-windows-msvc` once). Started without the
+launcher, a run that lacks a table stops, and its last line names the tool to run and the variable
+that points at its file. Write a table from `cmd`, for example
+`cmd /c "cargo run --release --manifest-path scripts/d3d9-capture/Cargo.toml > d3d9_adapter.tsv"`
+for the adapter (`NV_D3D9_ADAPTER`, default `%LOCALAPPDATA%\nv-rs\d3d9_adapter.tsv`): Windows
+PowerShell's `>` writes UTF-16, which the game cannot read.
 
 nv-rs never changes the game's folder, your saves or your settings. On Linux and macOS,
 `distribution/unix/play.sh` finds the game and starts it (`--check` checks your game's version
-first); for a source build, point it at your program with `NV_RS_PROGRAM=target/play/nv-viewer`.
+first); for a source build, give it your program's full path:
+`NV_RS_PROGRAM="$PWD/target/play/nv-viewer" distribution/unix/play.sh`.
 
 ## Checks
 

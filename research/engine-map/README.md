@@ -11,7 +11,7 @@ are in its history.
 `engine_map.tsv` here is the committed result, with `frame.tsv` (the
 per-frame call tree, "Frame table" below). They hold only addresses,
 sizes, Xbox PDB names, Xbox addresses, source-unit paths and subsystems
-(ADR-0002). No decompiled code, strings, bytes or databases. Everything
+(Xbox PDB names may be used, marked as such). No decompiled code, strings, bytes or databases. Everything
 below runs on private inputs, and its intermediate files stay in the private
 research tree (`%USERPROFILE%\nv-re\work\phase0` on the maintainer's
 machine).
