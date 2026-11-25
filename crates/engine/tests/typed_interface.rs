@@ -2112,6 +2112,8 @@ fn fn_00706ae0_diff() {
         CALLEES,
         &[0x0070_5100, 0x0070_6ac0, 0x0070_6b90, 0x0070_6320],
     )
+    // CloseAllSupportMenus's tile word: the native code's one local there.
+    .local_at(0x0057_c730, 1, 4)
     .run()
     .assert_same();
 }

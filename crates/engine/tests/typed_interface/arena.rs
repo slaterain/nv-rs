@@ -81,16 +81,26 @@ fn word(seed: u32, at: u32, first_later: u32) -> u32 {
     }
 }
 
-/// Appends `words` to the log under `tag`.
+/// What the log holds for a word that points into the stack for locals: the harness compares those
+/// words itself (by their offset in their frame, or as the local they are), and a local the native
+/// code places differently has another address.
+const STACK_WORD: u32 = 0x5ac0_0000;
+
+/// Appends `words` to the log under `tag` (a stack address as [`STACK_WORD`]).
 fn log(e: &mut Engine, tag: u32, words: &[u32]) {
+    let stack = e.guest_stack_region();
     let n = e.mem.u32(LOG);
     if 4 * (n + 2 + words.len() as u32) >= LOG_SIZE - 16 {
         return;
     }
     e.mem.set_u32(LOG + 4 + 4 * n, tag);
     e.mem.set_u32(LOG + 8 + 4 * n, words.len() as u32);
-    for (i, w) in (2u32..).zip(words) {
-        e.mem.set_u32(LOG + 4 + 4 * (n + i), *w);
+    for (i, &w) in (2u32..).zip(words) {
+        let w = match stack {
+            Some((low, end)) if (low..end).contains(&w) => STACK_WORD,
+            _ => w,
+        };
+        e.mem.set_u32(LOG + 4 + 4 * (n + i), w);
     }
     e.mem.set_u32(LOG, n + 2 + words.len() as u32);
 }
