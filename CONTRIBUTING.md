@@ -119,7 +119,10 @@ cargo test -p nvinspect --test repo_hygiene
 ## Rules for game code
 
 **Provenance.** Every behaviour comes from the original game: translated from `FalloutNV.exe`
-1.4.0.525, read from the game's data, or measured in the original game.
+1.4.0.525, read from the game's data, or measured in the original game. A built-in mod's
+behaviour comes from its source, or, for compatibility with mods that expect lStewieAl's Tweaks,
+from those mods' files and observed behaviour (see
+[What can and can't be accepted](#what-can-and-cant-be-accepted)).
 
 - Mark each translated function with its address:
   `// Translated from 007b5400 (decompiled, FalloutNV.exe 1.4.0.525)`.
@@ -266,10 +269,16 @@ Welcome:
   licence notice kept (a `NOTICE` in the crate, `LEGAL.md`, `distribution/THIRD-PARTY-NOTICES.txt`
   and `distribution/notices.txt`).
 - Fixes taken from data mods, credited.
+- Compatibility with mods that expect lStewieAl's Tweaks, as fix rows: reading their drop-in files
+  (`Data\NVSE\Plugins\Tweaks\INIs`, `Data\NVSE\Plugins\Tweaks\GameSettings`), doing the behaviours
+  those files name, and answering the commands and checks such mods use (`StewieGetValue`,
+  `GetPluginVersion "lStewieAl's Tweaks"`). It is built only from those mods' own files and
+  download pages and from behaviour observed in the original game with those mods and Tweaks
+  installed, never from any of Tweaks' own files (its code, DLL, readme or its own INI).
 
 Not accepted:
 
-- lStewieAl's Tweaks, or code written from it.
+- Code written from lStewieAl's Tweaks itself (its code, DLL, readme or its own INI).
 - Code written from a closed-source plugin (its DLL's disassembly) or from source published without
   an open-source licence.
 - Behaviour that wasn't traced, however good it looks.
@@ -298,8 +307,9 @@ Not accepted:
 Follow everything above. These rules matter most:
 
 1. Work only on what the task asks. Don't reformat, rename or "tidy" unrelated code.
-2. Never invent game behaviour. Translate from the executable at a named address, or leave the
-   part out and say so.
+2. Never invent game behaviour. Translate from the executable at a named address (a mod's
+   behaviour: from the sources [What can and can't be accepted](#what-can-and-cant-be-accepted)
+   names), or leave the part out and say so.
 3. Mark every translated function with its address and `FalloutNV.exe 1.4.0.525`. Never write
    Ghidra's automatic names (`FUN_…`, `DAT_…`, `LAB_…`).
 4. Never commit game files, executable bytes, decompiler output, fnv_decomp's C++, saves, logs,
@@ -309,8 +319,10 @@ Follow everything above. These rules matter most:
    unless you ran it and saw it pass; say what you could not run.
 7. Keep code working on Windows, Linux and macOS. No Windows-only code without the other systems'
    path in the same change.
-8. Don't add external crates. Don't port lStewieAl's Tweaks, closed-source plugins or unlicensed
-   code.
+8. Don't add external crates. Don't write code from lStewieAl's Tweaks itself (its code, DLL,
+   readme or its own INI), closed-source plugins or unlicensed code. Compatibility with mods that
+   expect Tweaks is fine when it is built only from those mods' own files and from behaviour
+   observed in the game.
 9. Say in the pull request that an AI agent helped and with what. A person reviews it and owns it.
 
 ## Licence
