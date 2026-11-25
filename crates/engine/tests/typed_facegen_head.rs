@@ -420,13 +420,15 @@ fn facegen_head_apply_coordinates() {
 
 /// The shapes: (width, height, morphs, the row padding, a morph of another size at this index or
 /// none).
-const TINT_SHAPES: [(u32, u32, u32, u32, Option<u32>); 6] = [
+const TINT_SHAPES: [(u32, u32, u32, u32, Option<u32>); 7] = [
     (1, 1, 1, 0, None),
     (4, 3, 3, 0, None),
     (5, 2, 4, 3, None),
     (8, 8, 2, 1, None),
     (4, 3, 3, 0, Some(1)),
     (0, 3, 2, 0, None),
+    // A larger face of rows with no padding: each channel's bytes read at once.
+    (16, 9, 3, 0, None),
 ];
 
 /// The EGT data: set 0 with `morphs` morphs (0x58 bytes: the scale, width, height, padding, then
@@ -526,7 +528,7 @@ fn facegen_head_apply_coordinate_texturing() {
     .family(&leaf::LEAVES)
     .ignore_calls(&TINT_IGNORED)
     .inputs(&[
-        Input::Of(&[0, 1, 2, 3, 4, 5]),
+        Input::Of(&[0, 1, 2, 3, 4, 5, 6]),
         Input::Of(&[0, 1, 2]),
         // The morph limit: all, one, more than there are.
         Input::Of(&[0, 1, 9]),
