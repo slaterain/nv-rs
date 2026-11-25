@@ -4450,8 +4450,9 @@ fn a_caster_switching_to_a_slow_kind_keeps_its_shadow_past_the_grace() {
 /// A cut-out cable geometry (a round wire's ribbon and a cut-out geometry with cables in it) casting
 /// through one kind whose draws move to another (another vertex shader), each of its new pipelines
 /// (its own, its ribbons', its list's, sent one after another) taking longer than the let-go's
-/// grace on its thread: where it cast stays meanwhile, through each of the three waits, and after
-/// the hand-over; the same shadows in every frame (review of #994's round).
+/// grace on its thread: the same shadows in every frame, through each of the three waits and after
+/// the hand-over (review of #994's round). (In this scene the grace's let-go never removes this
+/// geometry's places, the hold or not: the box's test is the one that covers the hold.)
 #[test]
 fn a_cable_switching_to_a_slow_kind_keeps_its_shadows_past_the_grace() {
     let first = Extra {
