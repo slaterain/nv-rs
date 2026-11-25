@@ -152,6 +152,10 @@ Reporting a problem
 -------------------
 https://github.com/slaterain/nv-rs/issues
 
+At its first start the launcher asks whether crash reports may be sent to nv-rs's developers
+through Sentry (sentry.io): nothing is sent without your yes, and Settings, Crash reports, changes
+the answer. A report sent is the same one kept in the reports folder.
+
 Say that it is the Linux preview, your distribution and its version, your graphics card and
 driver, and how you installed the game (Steam, Flathub or Snap Steam, Heroic, Lutris, copied).
 If the game stopped, the launcher (nv-rs) keeps a crash report in the reports folder above (a

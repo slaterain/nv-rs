@@ -17,6 +17,7 @@
 
 pub mod consent;
 mod scrub;
+pub mod send;
 mod system;
 
 use scrub::{Known, Scrubber};
@@ -787,20 +788,104 @@ fn tidy(reports: &Path, keep: usize) {
     }
 }
 
-/// After a run: when it ended badly, its report built from this system and kept in nv-rs's own
-/// reports folder. None for a good end; else the report's folder, or why it could not be kept.
-pub fn after_run(run: &Run) -> Option<Result<PathBuf, String>> {
+/// What became of a bad end's report: the folder it was kept in (or why it was not), and what
+/// became of sending it (a line for the player; none when nothing was to be sent).
+pub struct Outcome {
+    pub kept: Result<PathBuf, String>,
+    pub sent: Option<String>,
+}
+
+/// After a run: when it ended badly, its report built from this system, kept in nv-rs's own
+/// reports folder, and sent as the player chose ([`deliver`]). None for a good end.
+pub fn after_run(run: &Run) -> Option<Outcome> {
     let (_, tail) = ends_of(run.log, 1024 * 1024);
     let ending = ending(&tail, run.status, run.shell)?;
     let games: Vec<&Path> = run.games.iter().map(PathBuf::as_path).collect();
     let scrubber = Scrubber::new(&Known::from_system(&games, run.program, run.own));
     let report = build(run, &ending, &system::facts(), &scrubber, SystemTime::now());
     let reports = run.own.join("reports");
-    Some(
-        report
-            .save(&reports)
-            .map_err(|e| format!("{}: {e}", reports.display())),
+    let kept = report
+        .save(&reports)
+        .map_err(|e| format!("{}: {e}", reports.display()));
+    let sent = kept.as_ref().ok().and_then(|folder| {
+        deliver(
+            &report,
+            folder,
+            run.own,
+            run.program,
+            &send::curl(),
+            ask_player,
+        )
+    });
+    Some(Outcome { kept, sent })
+}
+
+/// What happens to a kept report.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Next {
+    Send,
+    Ask,
+    /// Kept on this PC only.
+    Keep,
+}
+
+/// What happens to a report with the player's `answer`, where the package can send
+/// (`can_send`: it has the crash service's file): nothing is sent without one, or without a yes.
+pub fn next_step(answer: consent::Consent, can_send: bool) -> Next {
+    match (can_send, answer) {
+        (true, consent::Consent::Send) => Next::Send,
+        (true, consent::Consent::Ask) => Next::Ask,
+        _ => Next::Keep,
+    }
+}
+
+/// The question after a crash with "Ask me each time": the report itself under it.
+fn question(report: &Report) -> String {
+    format!(
+        "The game stopped, and nv-rs kept the crash report below. Send it to nv-rs's developers?\n\n{}",
+        report.text()
     )
+}
+
+/// The player asked in the launcher's window, Send or Don't send: a yes only for Send. Esc and a
+/// closed window answer the last entry (Don't send); no window at all is a no.
+fn ask_player(text: &str) -> bool {
+    let (reply, answer) = std::sync::mpsc::channel();
+    let asked = crate::session::send(crate::session::Event::Message {
+        tone: crate::session::Tone::Question,
+        text: text.to_string(),
+        entries: vec!["Send".into(), "Don't send".into()],
+        reply,
+    });
+    asked && answer.recv() == Ok(0)
+}
+
+/// `report`, kept in `folder`, sent or not as the player answered (nv-rs's own folder `own`
+/// holds the answer, the launcher's folder `program` the crash service's file), by the program
+/// `curl`, `ask` asking first where the answer is "ask each time". The line for the player, none
+/// when nothing was to be sent.
+pub fn deliver(
+    report: &Report,
+    folder: &Path,
+    own: &Path,
+    program: &Path,
+    curl: &Path,
+    ask: impl FnOnce(&str) -> bool,
+) -> Option<String> {
+    let dsn = send::package_dsn(program);
+    match next_step(consent::read(own), dsn.is_some()) {
+        Next::Keep => return None,
+        Next::Ask if !ask(&question(report)) => {
+            return Some("The crash report was not sent: it stays on this PC.".into())
+        }
+        Next::Ask | Next::Send => {}
+    }
+    Some(match send::send(report, folder, dsn.as_ref()?, curl) {
+        Ok(_) => "The crash report was sent to nv-rs's developers. Thank you.".into(),
+        Err(why) => {
+            format!("The crash report could not be sent ({why}); it stays on this PC.")
+        }
+    })
 }
 
 /// The example stop line of [`sample`]: said to be an example, with made-up addresses.
@@ -1465,7 +1550,10 @@ mod tests {
             table_card: None,
         };
         assert!(after_run(&run(0)).is_none());
-        let kept = after_run(&run(139)).unwrap().unwrap();
+        let outcome = after_run(&run(139)).unwrap();
+        // No crash service file beside the launcher (a build from source): nothing sent.
+        assert_eq!(outcome.sent, None);
+        let kept = outcome.kept.unwrap();
         assert!(kept.starts_with(root.join("reports")));
         let body = std::fs::read_to_string(kept.join("report.txt")).unwrap();
         assert!(body.contains("signal 11, SIGSEGV"), "{body}");

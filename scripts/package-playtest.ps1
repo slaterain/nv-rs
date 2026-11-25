@@ -91,7 +91,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $x86 'nvapi-capture.exe') -Destination (Join-Path $stage 'app/tools/nvapi-capture.exe')
     Copy-Item -LiteralPath (Join-Path $x86 'dsound-capture.exe') -Destination (Join-Path $stage 'app/tools/dsound-capture.exe')
     # The READ MEs (Play with mods, Mods, Import saves and Settings are the launcher's own entries).
-    foreach ($file in @('READ ME.txt', 'THIRD-PARTY-NOTICES.txt')) {
+    foreach ($file in @('READ ME.txt', 'THIRD-PARTY-NOTICES.txt', 'crash-reports.txt')) {
         Copy-Item -LiteralPath (Join-Path $root "distribution/$file") -Destination $stage
     }
     New-Item -ItemType Directory -Path (Join-Path $stage 'mods') | Out-Null
@@ -145,6 +145,8 @@ try {
     $checkArguments += @('--game', $Game, '--max-run', '4096')
     # Every notice of distribution/notices.txt in licenses/ under its name.
     $checkArguments += @('--notices', $noticeList)
+    # The crash service's file beside Play.exe, as the repository has it (a public key only).
+    $checkArguments += @('--crash-reports', (Join-Path $root 'distribution/crash-reports.txt'))
     & (Join-Path $x64 'package-check.exe') @checkArguments
     if ($LASTEXITCODE) { throw 'package-check found something that must not be in the package.' }
 

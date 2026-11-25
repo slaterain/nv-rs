@@ -167,6 +167,9 @@ linux-*) cp -- "distribution/linux/READ ME.txt" "$stage/READ ME.txt" ;;
 macos-*) cp -- "distribution/macos/READ ME.txt" "$stage/READ ME.txt" ;;
 esac
 cp -- distribution/THIRD-PARTY-NOTICES.txt LICENSE LEGAL.md "$stage/"
+# The crash service's address beside the launcher (crash reports are sent only when the player
+# agrees; a build from source has no such file and sends none).
+cp -- distribution/crash-reports.txt "$stage/crash-reports.txt"
 # Only the files Git tracks: a .DS_Store or other ignored file left in the folder stays out.
 git ls-files -- distribution/licenses | while IFS= read -r file; do
     rel=${file#distribution/licenses/}
@@ -267,6 +270,7 @@ if [ -n "$game" ]; then
     set -- "$@" --game "$game" --max-run 4096
 fi
 set -- "$@" --notices distribution/notices.txt
+set -- "$@" --crash-reports distribution/crash-reports.txt
 "$checker" "$@" || fail "package-check found something that must not be in the package"
 
 # The archive: entries under the package's name, owned by nobody in particular.

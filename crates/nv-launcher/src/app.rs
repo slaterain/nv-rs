@@ -723,6 +723,14 @@ impl ConsentFlow {
     }
 }
 
+/// The launcher's own folder (the package's: `BUILD.txt` and `crash-reports.txt` are beside it).
+fn program_folder() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+        .unwrap_or_default()
+}
+
 /// Whether the crash reports screens open at the start screen: not answered yet, and not asked
 /// already since the launcher started ("Not now" asks again at the next start).
 pub fn asks_consent(answer: Consent, asked: bool) -> bool {
@@ -1865,8 +1873,8 @@ impl App {
 
     /// The question: where reports go, the three answers, Back.
     fn show_question(&mut self) {
-        // No version of nv-rs sends yet (the sending comes in its own change).
-        let s = question_screen(false);
+        // This copy can send when its package has the crash service's file.
+        let s = question_screen(crate::crash::send::package_dsn(&program_folder()).is_some());
         // Typed in like the first screen: a first press or click only finishes its text, so a
         // double click on Choose never answers.
         self.show(
@@ -1881,13 +1889,9 @@ impl App {
     /// The example report ([`crate::crash::sample`]: made from this PC now, nothing written),
     /// long enough to scroll; Back to the first screen.
     fn show_sample(&mut self) {
-        let program = std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(Path::to_path_buf))
-            .unwrap_or_default();
         let text = crate::crash::sample(
             &self.place.own,
-            &program,
+            &program_folder(),
             self.place.game.as_deref(),
             self.place.mods,
             self.place.adapter_card.clone(),

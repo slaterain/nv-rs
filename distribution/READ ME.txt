@@ -224,7 +224,9 @@ Press F12 in the game when you see something wrong. You hear a beep, and a numbe
 in userdata\reports with a picture and the log so far. Add your words to its note.txt and attach the
 folder, zipped. If the game stopped, the launcher keeps a crash report in userdata\reports (a
 crash-<date and time> folder, your user name and folder names taken out of it): attach its two
-files, and launcher.log from userdata\logs.
+files, and launcher.log from userdata\logs. At its first start the launcher asks whether crash
+reports may be sent to nv-rs's developers through Sentry (sentry.io): nothing is sent without your
+yes, and Settings, Crash reports, changes the answer.
 Say what you did just before, and your graphics card, Windows version and game store.
 
 Logs can show your Windows user name in folder paths: look through them first if that matters to you.
