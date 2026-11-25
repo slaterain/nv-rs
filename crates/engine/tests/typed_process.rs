@@ -196,6 +196,17 @@ impl Common for Diff {
             .family(&dispatch::DISPATCH)
             .family(&multibound::MULTIBOUND)
             .family(&leaf::LEAVES)
+            // The AI queries family's functions the clean-up and the passes call: by address here,
+            // to the stand-ins these worlds give them; their own differential tests are in
+            // `typed_ai_queries.rs`.
+            .goes_by_address(&[
+                0x0041_ca90,
+                0x0049_3bb0,
+                0x0055_b980,
+                0x0067_f390,
+                0x0093_44a0,
+                0x008a_6650,
+            ])
             // The translation's 64-bit multiply and divide of the time budget, which the typed pass
             // computes natively.
             .ignore_calls(&[0x00ec_c300, 0x00ec_c250])

@@ -344,7 +344,11 @@ fn middle_low_actor(e: &mut Engine, actor: u32, actor_slot: u32, list: u32, time
     }
     if typed_call!(leaf::FAMILY, 0x0043_7bb0, leaf::byte_at_87(e, actor)) == 0
         && character
-        && !e.call(0x0049_3bb0, &args![actor]).bool()
+        && typed_call!(
+            crate::ai_queries::FAMILY,
+            0x0049_3bb0,
+            crate::ai_queries::queries::byte_at_104(e, actor)
+        ) == 0
     {
         let process = process_of(e, actor);
         e.vcall(process, 0x28, &args![]);
