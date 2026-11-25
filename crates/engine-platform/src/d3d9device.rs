@@ -5386,6 +5386,79 @@ pub(crate) mod tests {
         );
     }
 
+    /// A device over the test table with what a 4 by 2 X8R8G8B8 render target asks too
+    /// (`CheckDeviceFormat` with usage 1, `D3DRTYPE_SURFACE`), such a render target and a system-memory
+    /// surface of the same size, and a direct stream to `backend`: (engine, device, target, surface).
+    fn save_picture_device(backend: Box<dyn d3d9_stream::Backend>) -> (Engine, u32, u32, u32) {
+        let (mut e, device) = device_with(
+            "\nDomain\td1\t15,16\nCheckDeviceFormat\t0 1 16 0 1\t0\t\td1\
+             \nCheckDeviceFormat\t0 1 16 1 1\t0\t\td1",
+            0x40,
+        );
+        let out = e.mem.alloc(4);
+        let (target, system) = {
+            let mut make = |slot: u32, args: &[u32]| {
+                assert_eq!(e.vcall(device, slot, args).u32(), D3D_OK, "{slot:#x}");
+                e.mem.u32(out)
+            };
+            (
+                make(0x70, &[4, 2, 0x16, 0, 0, 0, out, 0]),
+                make(0x90, &[4, 2, 0x16, 2, out, 0]),
+            )
+        };
+        super::super::d3d9real::test_stream(&mut e, device, d3d9_stream::Stream::direct(backend));
+        (e, device, target, system)
+    }
+
+    /// `NV_SAVE_PICTURE_LATER`'s safety paths (review of #1037): a reply asked for later and never
+    /// taken (a save that stopped before its end) is let go at the next save's copy, which gets its
+    /// own rows; a copy made while the drawing side's slot is open closes the slot first, and its
+    /// reply comes after the slot's commands.
+    #[test]
+    fn a_save_pictures_later_copy_lets_a_stale_reply_go_and_closes_the_drawing_slot() {
+        use d3d9_stream::{Backend, Cmd, Data, Reply, Rows};
+        use engine_core::save_picture as later;
+        // A backend whose copies answer two rows of their own number (1, 2, ...).
+        struct Counted(u8);
+        impl Backend for Counted {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                match cmd {
+                    Cmd::GetRenderTargetData { pitch, .. } => {
+                        self.0 += 1;
+                        Reply::Rows(Some(Rows {
+                            row: pitch,
+                            bytes: vec![self.0; 2 * pitch as usize],
+                        }))
+                    }
+                    _ => Reply::None,
+                }
+            }
+        }
+        let (mut e, device, target, system) = save_picture_device(Box::new(Counted(0)));
+        later::on_for_tests(Some(true));
+        let copy_later = |e: &mut Engine| {
+            later::begin();
+            later::allow(true);
+            assert_eq!(e.vcall(device, 0x80, &[target, system]).u32(), D3D_OK);
+            assert!(later::is_deferred(), "asked for later");
+            assert!(!later::end());
+        };
+        copy_later(&mut e);
+        copy_later(&mut e);
+        assert_eq!(
+            super::super::d3d9real::take_rows_later(&mut e),
+            Some((16, vec![2; 32])),
+            "the second copy's own rows"
+        );
+        super::super::d3d9real::cut(&mut e, device);
+        copy_later(&mut e);
+        assert_eq!(
+            super::super::d3d9real::take_rows_later(&mut e),
+            Some((16, vec![3; 32]))
+        );
+        later::on_for_tests(None);
+    }
+
     /// `NV_SAVE_PICTURE_LATER`: a save's picture's copy (`GetRenderTargetData`, +0x80) asked for later
     /// leaves the destination's memory as it is; its rows come at the take, once. Not allowed, the copy
     /// reads back at once as before.
@@ -5406,29 +5479,7 @@ pub(crate) mod tests {
                 }
             }
         }
-        // The test table with what the render target asks too: `CheckDeviceFormat` of an X8R8G8B8
-        // render target surface (usage 1, `D3DRTYPE_SURFACE`).
-        let (mut e, device) = device_with(
-            "\nDomain\td1\t15,16\nCheckDeviceFormat\t0 1 16 0 1\t0\t\td1\
-             \nCheckDeviceFormat\t0 1 16 1 1\t0\t\td1",
-            0x40,
-        );
-        let out = e.mem.alloc(4);
-        let (target, system) = {
-            let mut make = |slot: u32, args: &[u32]| {
-                assert_eq!(e.vcall(device, slot, args).u32(), D3D_OK, "{slot:#x}");
-                e.mem.u32(out)
-            };
-            (
-                make(0x70, &[4, 2, 0x16, 0, 0, 0, out, 0]),
-                make(0x90, &[4, 2, 0x16, 2, out, 0]),
-            )
-        };
-        super::super::d3d9real::test_stream(
-            &mut e,
-            device,
-            d3d9_stream::Stream::direct(Box::new(Sevens)),
-        );
+        let (mut e, device, target, system) = save_picture_device(Box::new(Sevens));
         let locked = e.mem.alloc(8);
         assert_eq!(e.vcall(system, 4 * 13, &[locked, 0, 0]).u32(), D3D_OK);
         let (pitch, bits) = (e.mem.u32(locked), e.mem.u32(locked + 4));
