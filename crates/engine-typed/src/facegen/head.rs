@@ -24,9 +24,14 @@
 //! leave (scratch blocks included) is left the same.
 //!
 //! **Floats.** Heads are made on loading threads and on main (the race menu), so the float steps
-//! keep the exact x87 helpers at the running thread's precision ([`Threads::Both`]): each is a
-//! short Rust function, not a call by address, so they cost little against what the loops lose.
-//! Integer sums are integer sums (wrapping, so their order does not matter).
+//! give the x87's bits at the running thread's precision ([`Threads::Both`]). The morphs' one pass
+//! (`morph_words`) reads the control word once a morph and takes plain steps (`f32` at main's 24
+//! bits, `f64` at the loading threads' 53) wherever they give the same bits, the x87 helpers
+//! elsewhere (a NaN, an infinity, a result outside the normal floats at 24 bits, another rounding
+//! mode): a 2026-11-25 profile of the race menu still put this function's own time first in a
+//! preset click (about 5 ms), when every coordinate went through two helpers (each reading the
+//! control word and testing its result's range). The other loops keep the helpers, each a short
+//! Rust function. Integer sums are integer sums (wrapping, so their order does not matter).
 //!
 //! **Checks.** The game's checked iterators call `_invalid_parameter_noinfo` (`00ec7c56`) when
 //! read past their end; the loops here make that call at the same points (a head's data never
@@ -256,6 +261,123 @@ fn morphed(offset: i16, weight: f64, coordinate: u32) -> u32 {
         x87_mul(f64::from(offset), weight),
         x87_m32(coordinate),
     ))
+}
+
+/// How many coordinates [`morph_words`] takes at a time: its plain steps go into a block of this
+/// many on the stack, kept when every one of them was exact.
+const MORPH_BLOCK: usize = 64;
+
+/// [`morphed`] for every word of `words`, with the offset of the same index in `offsets` (the
+/// `i16`s as little-endian byte pairs). The x87 helpers read the control word twice a coordinate;
+/// here it is read once, and when it rounds to nearest and the weight is finite the steps are
+/// plain ones that give the same bits ([`single_step`] at 24-bit precision, main's;
+/// [`double_step`] at 53-bit, the loading threads'). A coordinate whose plain step is not exact
+/// takes [`morphed`]: a block of [`MORPH_BLOCK`] is kept only when all its steps were exact.
+/// Answers how many coordinates took [`morphed`].
+fn morph_words(words: &mut [u32], offsets: &[u8], weight: f64) -> usize {
+    let control = engine_core::x87::control_word();
+    if control & 0x0c00 != 0 || !weight.is_finite() {
+        let mut helped = 0;
+        for (word, offset) in words.iter_mut().zip(offsets.chunks_exact(2)) {
+            *word = morphed(i16::from_le_bytes([offset[0], offset[1]]), weight, *word);
+            helped += 1;
+        }
+        return helped;
+    }
+    if control & 0x0300 == 0 {
+        // Exact: a finite weight is a float widened.
+        let single = f32::from_bits(x87_store32(weight));
+        morph_blocks(words, offsets, weight, |offset, word| {
+            single_step(offset, single, word)
+        })
+    } else {
+        morph_blocks(words, offsets, weight, |offset, word| {
+            double_step(offset, weight, word)
+        })
+    }
+}
+
+/// [`morph_words`]' blocks with one plain step: each block's steps into a block on the stack, kept
+/// when all were exact; else each coordinate whose step was not exact takes [`morphed`] (answered:
+/// how many did).
+#[inline(always)]
+fn morph_blocks(
+    words: &mut [u32],
+    offsets: &[u8],
+    weight: f64,
+    step: impl Fn(i16, u32) -> (u32, bool),
+) -> usize {
+    let mut helped = 0;
+    let offset_at = |pair: &[u8]| i16::from_le_bytes([pair[0], pair[1]]);
+    for (words, offsets) in words
+        .chunks_mut(MORPH_BLOCK)
+        .zip(offsets.chunks(2 * MORPH_BLOCK))
+    {
+        let mut out = [0u32; MORPH_BLOCK];
+        let mut exact = true;
+        for ((out, &word), pair) in out
+            .iter_mut()
+            .zip(words.iter())
+            .zip(offsets.chunks_exact(2))
+        {
+            let (value, ok) = step(offset_at(pair), word);
+            *out = value;
+            exact &= ok;
+        }
+        if exact {
+            let n = words.len().min(offsets.len() / 2);
+            words[..n].copy_from_slice(&out[..n]);
+            continue;
+        }
+        for ((word, &value), pair) in words
+            .iter_mut()
+            .zip(out.iter())
+            .zip(offsets.chunks_exact(2))
+        {
+            let offset = offset_at(pair);
+            *word = if step(offset, *word).1 {
+                value
+            } else {
+                helped += 1;
+                morphed(offset, weight, *word)
+            };
+        }
+    }
+    helped
+}
+
+/// Whether a float step's result is one the x87 gives too at 24-bit precision: zero, or a normal
+/// float above the smallest (a float rounded up to the smallest normal may have been below it,
+/// where the x87, whose exponent goes further, keeps 24 bits a float can't), not infinite or a NaN.
+#[inline(always)]
+fn normal_or_zero(value: f32) -> bool {
+    let size = value.abs();
+    (value == 0.0) | ((size > f32::MIN_POSITIVE) & (size <= f32::MAX))
+}
+
+/// [`morphed`] at 24-bit precision, rounding to nearest, with a finite float weight: `FILD` of the
+/// `i16` is exact, `FMUL` rounds the exact product to 24 bits and `FADD` the exact sum, which is
+/// what a float multiply and add do whenever the result is a zero or a normal float (then `FSTP`
+/// keeps it). With the answer, whether that held for the product and the sum (the coordinate not
+/// infinite or a NaN either): else the x87's wider exponent or its NaN choice decides.
+#[inline(always)]
+fn single_step(offset: i16, weight: f32, word: u32) -> (u32, bool) {
+    let coordinate = f32::from_bits(word);
+    let product = f32::from(offset) * weight;
+    let sum = product + coordinate;
+    let ok = coordinate.is_finite() & normal_or_zero(product) & normal_or_zero(sum);
+    (sum.to_bits(), ok)
+}
+
+/// [`morphed`] at 53-bit precision, rounding to nearest, with a finite weight: the product of an
+/// `i16` and a float is exact in an `f64` (40 bits at most), `FADD` is the `f64` sum and `FSTP` its
+/// rounding to a float, which are the helpers' own steps when no operand is a NaN (the weight is
+/// finite; the coordinate is tested).
+#[inline(always)]
+fn double_step(offset: i16, weight: f64, word: u32) -> (u32, bool) {
+    let coordinate = f32::from_bits(word);
+    let sum = f64::from(offset) * weight + f64::from(coordinate);
+    (x87_store32(sum), !coordinate.is_nan())
 }
 
 // Typed from 0065a970
@@ -547,7 +669,6 @@ fn morph_in_host(
     let extra_bytes = u32::try_from(12 * extras).ok()?;
     let mut deltas = vec![0u8; delta_bytes as usize];
     e.mem.read(offsets.at, &mut deltas);
-    let delta = |k: usize| i16::from_le_bytes([deltas[2 * k], deltas[2 * k + 1]]);
     let n = count as usize;
     // The points the vertex loops read: the additional vertices' first `count` when there are
     // any, else the vertex array's.
@@ -560,9 +681,7 @@ fn morph_in_host(
             .chunks_exact(4)
             .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
             .collect();
-        for (k, word) in tail.iter_mut().enumerate() {
-            *word = morphed(delta(k), weight, *word);
-        }
+        morph_words(&mut tail, &deltas, weight);
         points.copy_from_slice(&tail[..3 * n]);
         let mut out = vec![0u8; tail.len() * 4];
         for (chunk, word) in out.chunks_exact_mut(4).zip(&tail) {
@@ -585,9 +704,7 @@ fn morph_in_host(
                 }
             }
         }
-        for (k, word) in points.iter_mut().enumerate() {
-            *word = morphed(delta(k), weight, *word);
-        }
+        morph_words(&mut points, &deltas, weight);
         write_points(e, base, stride, &points, &mut bytes);
     }
     // The points block as the element loops leave it: the last group of four, then the last
@@ -1771,5 +1888,141 @@ mod tests {
             !taken(&mut e, &offsets, &layout, block, 11),
             "offsets in the additional vertices"
         );
+    }
+
+    /// Runs `f` with the running thread's x87 control word set to `word`, then sets it back.
+    fn under(word: u16, f: impl FnOnce()) {
+        let before = engine_core::x87::control_word();
+        engine_core::x87::set_control_word(word);
+        f();
+        engine_core::x87::set_control_word(before);
+    }
+
+    /// Float words over every sign, exponent and fraction (NaNs and infinities among them).
+    fn spread(seed: u32, n: usize) -> Vec<u32> {
+        let mut x = seed;
+        (0..n)
+            .map(|_| {
+                x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                x ^ (x >> 13)
+            })
+            .collect()
+    }
+
+    /// [`morph_words`] and [`morphed`] coordinate by coordinate on the same words, under the
+    /// running control word: the same bits everywhere. Answers how many took the helpers.
+    fn morph_both(offsets: &[i16], weight: u32, words: &[u32]) -> usize {
+        let bytes: Vec<u8> = offsets.iter().flat_map(|o| o.to_le_bytes()).collect();
+        let weight_value = x87_m32(weight);
+        let mut plain = words.to_vec();
+        let helped = morph_words(&mut plain, &bytes, weight_value);
+        let control = engine_core::x87::control_word();
+        for (k, ((&word, &offset), &got)) in words.iter().zip(offsets).zip(&plain).enumerate() {
+            let want = morphed(offset, weight_value, word);
+            assert_eq!(
+                got, want,
+                "coordinate {k}: offset {offset}, weight {weight:08x}, word {word:08x}, \
+                 control word {control:04x}"
+            );
+        }
+        helped
+    }
+
+    /// The plain steps give the helpers' bits under every precision and rounding mode: weights and
+    /// coordinates over every exponent (the awkward ones named), the offsets' ends, and
+    /// coordinates near the product's negation (sums near zero, where whether the product was
+    /// rounded to 24 bits before the sum shows, and the subnormal sums).
+    #[test]
+    fn the_plain_morph_steps_give_the_helpers_bits() {
+        let named = [
+            0,
+            0x8000_0000,
+            1,
+            0x8000_0001,
+            0x007f_ffff,
+            0x0080_0000,
+            0x0080_0001,
+            0x0700_0000,
+            0x3f80_0000,
+            0xbf80_0000,
+            0x3eaa_aaab,
+            0x4f00_0000,
+            0x7f00_0000,
+            0x7f7f_ffff,
+            0xff7f_ffff,
+            0x7f80_0000,
+            0x7fc0_0000,
+            0x7f80_0001,
+        ];
+        let weights: Vec<u32> = named.into_iter().chain(spread(7, 150)).collect();
+        let offsets: Vec<i16> = (0..300u32)
+            .map(|k| match k % 11 {
+                0 => i16::MAX,
+                1 => i16::MIN,
+                2 => 0,
+                3 => 1,
+                4 => -1,
+                _ => i16::try_from(k.wrapping_mul(2_654_435_761) % 65_536 / 2).unwrap() - 16_384,
+            })
+            .collect();
+        let head = |k: u32| ((k % 2001) as f32 / 97.0 - 10.0).to_bits();
+        // The plain steps were taken somewhere under each word that rounds to nearest.
+        for control in [0x027f, 0x007f, 0x037f, 0x0c7f, 0x047f, 0x0e7f, 0x087f] {
+            under(control, || {
+                let mut plain = 0;
+                for (i, &weight) in (0u32..).zip(weights.iter()) {
+                    let w = x87_m32(weight);
+                    let scattered = spread(i + 11, offsets.len());
+                    let words: Vec<u32> = (0u32..)
+                        .zip(offsets.iter())
+                        .zip(scattered.iter())
+                        .map(|((k, &offset), &bits)| match k % 4 {
+                            0 => bits,
+                            1 => head(k + i),
+                            _ => (morphed(offset, w, 0) ^ 0x8000_0000)
+                                .wrapping_add(k % 5)
+                                .wrapping_sub(2),
+                        })
+                        .collect();
+                    plain += words.len() - morph_both(&offsets, weight, &words);
+                }
+                assert_eq!(
+                    plain > 0,
+                    control & 0x0c00 == 0,
+                    "control word {control:04x}"
+                );
+            });
+        }
+    }
+
+    /// A head's morph takes the plain steps for every coordinate at both of the game's control
+    /// words; a NaN coordinate takes the helpers for itself alone, a NaN weight or another
+    /// rounding mode for all.
+    #[test]
+    fn a_heads_morph_takes_the_plain_steps() {
+        let offsets: Vec<i16> = (0..1500u32)
+            .map(|k| i16::try_from(k * 37 % 4001).unwrap() - 2000)
+            .collect();
+        let words: Vec<u32> = (0..1500u32)
+            .map(|k| ((k % 2001) as f32 / 97.0 - 10.0).to_bits())
+            .collect();
+        let mut with_nan = words.clone();
+        with_nan[70] = 0x7fc0_0001;
+        for control in [0x027f, 0x007f] {
+            under(control, || {
+                for weight in [0.000_123f32, -0.5, 1.0e-4, 0.031, 0.0, -0.0] {
+                    assert_eq!(
+                        morph_both(&offsets, weight.to_bits(), &words),
+                        0,
+                        "weight {weight}, control word {control:04x}"
+                    );
+                }
+                assert_eq!(morph_both(&offsets, 0.25f32.to_bits(), &with_nan), 1);
+                assert_eq!(morph_both(&offsets, 0x7fc0_0000, &words), words.len());
+            });
+        }
+        under(0x0c7f, || {
+            assert_eq!(morph_both(&offsets, 0.25f32.to_bits(), &words), words.len());
+        });
     }
 }
