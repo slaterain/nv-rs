@@ -3228,7 +3228,7 @@ mod tests {
             (0x0200_0002, 1366),
             (0x0200_0003, 768),
         ] {
-            e.register(at, move |_, _| Ret {
+            e.register_double(at, move |_, _| Ret {
                 eax: answer,
                 ..Ret::default()
             });

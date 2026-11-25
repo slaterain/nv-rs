@@ -900,9 +900,9 @@ const DEBUG_TEXT_Y: u32 = 0x011d_ebb0;
 /// `005bd5b0`, `005bd5c0`, `005bd580`, `_ftol2`) that it never uses: reads and
 /// a conversion with no effect, left out here.
 pub fn fn_007031e0(e: &mut Engine, reference: u32) {
-    let Some(manager) = ready_manager(e) else {
+    if ready_manager(e).is_none() {
         return;
-    };
+    }
     e.with_stack(8, |e, text| {
         in_place::empty_string(e, text.addr());
         if reference != 0 {
