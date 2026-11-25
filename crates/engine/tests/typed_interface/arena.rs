@@ -24,6 +24,8 @@ pub const ARENA: u32 = 0x0500_0000;
 /// Objects and their size.
 pub const OBJECTS: u32 = 256;
 pub const OBJECT: u32 = 0x200;
+/// The zero bytes mapped after the last object.
+pub const ARENA_PAD: u32 = 0x1_0000;
 /// The vtables: [`VTABLE_COUNT`] of 0x400 bytes, each slot a stand-in.
 pub const VTABLES: u32 = 0x0504_0000;
 pub const VTABLE_COUNT: u32 = 8;
@@ -131,6 +133,9 @@ pub fn world(e: &mut Engine, seed: u32, callees: &[u32]) {
         e.map(base, 0x1_0000);
     }
     e.map(ARENA, OBJECTS * OBJECT);
+    // Past the last object, zeros: a field read at a large offset of a late object (the controls'
+    // byte table at +0x1b94) reads zero instead of stopping both sides.
+    e.map(ARENA + OBJECTS * OBJECT, ARENA_PAD);
     e.map(VTABLES, 0x400 * VTABLE_COUNT);
     e.map(LOG, LOG_SIZE);
     e.mem.set_u32(SEED, seed);
