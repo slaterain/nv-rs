@@ -1488,11 +1488,6 @@ const MANAGER_IS_IN_PIPBOY_MENU: u32 = 0x0071_78a0;
 const MANAGER_IS_CURRENT_RENDERED_MENU_TOPMOST: u32 = 0x0071_7990;
 /// `00726070`: returns the word at `+4` of its object (a list's first node,
 /// an item's count, a menu's tile).
-/// `MenuManager::Instance` (Xbox PDB), `cdecl`: the create flag.
-const MENU_MANAGER_INSTANCE: u32 = 0x0071_e290;
-/// `MenuManager::CreateMenuByClass` (Xbox PDB), on the menu manager: the
-/// menu class id.
-const MENU_MANAGER_CREATE_MENU_BY_CLASS: u32 = 0x0071_e420;
 /// `BSAnimGroupSequence::PlaySounds` (Xbox PDB), `cdecl`.
 const ANIM_GROUP_PLAY_SOUNDS: u32 = 0x004e_ef00;
 /// Trait ids of a menu tile that `Interface::IsRenderedMenu` reads
@@ -1590,9 +1585,10 @@ const TILE_MENU_DESTRUCTOR: u32 = 0x00a1_eff0;
 const OPERATOR_DELETE: u32 = 0x0040_1030;
 /// Constructors the `Tile` constructor runs on its members: `0048f200`
 /// (at `+4`), `00709e80` (at `+0x10`), the string constructor (at
-/// `+0x20`), and `00633c90` and `0066b0d0` (both at `+0x2c`, one word 0).
+/// `+0x20`), and `00633c90` and `0066b0d0` (both at `+0x2c`, one word 0;
+/// the first done in place: with null it stores the null and adds no
+/// reference, the menu manager file's `IN_PLACE`).
 const TILE_MEMBER_AT_4: u32 = 0x0048_f200;
-const TILE_MEMBER_AT_2C_FIRST: u32 = 0x0063_3c90;
 const TILE_MEMBER_AT_2C_SECOND: u32 = 0x0066_b0d0;
 /// The `float` at `01016264`, returned by `00709ac0`.
 const RETURNED_SCALE: u32 = 0x0101_6264;
@@ -1825,12 +1821,17 @@ pub fn fn_00707970(e: &mut Engine, sequence: u32) -> bool {
 /// `class_id` and answers what that gives (the exe ends on that call and
 /// leaves its `EAX`, which the caller keeps).
 pub fn interface_create_menu_by_class(e: &mut Engine, class_id: u32) -> u32 {
-    let menu_manager = e.call(MENU_MANAGER_INSTANCE, &args![1u32]).u32();
-    e.call(
-        MENU_MANAGER_CREATE_MENU_BY_CLASS,
-        &args![menu_manager, class_id],
+    let menu_manager = typed_call!(
+        super::FAMILY,
+        0x0071_e290,
+        super::menu_manager::menu_manager_instance(e, true)
+    );
+    let manager = Ptr::new(menu_manager);
+    typed_call!(
+        super::FAMILY,
+        0x0071_e420,
+        super::menu_manager::menu_manager_create_menu_by_class(e, manager, class_id)
     )
-    .u32()
 }
 
 // Typed from 007079b0
@@ -2904,7 +2905,8 @@ pub fn fn_00709840(e: &mut Engine, this: u32) -> u32 {
 // Typed from 00709860
 /// Constructor of `Tile` (vtable `0106ed9c`, RTTI `.?AVTile@@`): constructs
 /// the members at `+4` (`0048f200`), `+0x10` (`00709e80(0x10, 0)`), `+0x20`
-/// (a `BSStringT`) and `+0x2c` (`00633c90(0)` then `0066b0d0(0)`), and
+/// (a `BSStringT`) and `+0x2c` (`00633c90(0)`, in place: the null stored;
+/// then `0066b0d0(0)`), and
 /// clears the words at `+0x28` and `+0x30` and the byte at `+0x34`.
 /// Returns `this`. The compiler's exception-unwinding frame is not
 /// translated.
@@ -2917,7 +2919,7 @@ pub fn fn_00709860(e: &mut Engine, this: u32) -> u32 {
         super::interface_cpp_p3::fn_00709e80(e, this.wrapping_add(0x10), 0x10, 0)
     );
     in_place::empty_string(e, this.wrapping_add(0x20));
-    e.call(TILE_MEMBER_AT_2C_FIRST, &args![this + 0x2c, 0u32]);
+    e.mem.set_u32(this + 0x2c, 0);
     e.call(TILE_MEMBER_AT_2C_SECOND, &args![this + 0x2c, 0u32]);
     e.mem.set_u32(this + 0x28, 0);
     e.mem.set_u32(this + 0x30, 0);

@@ -37,6 +37,7 @@ const CALLEES: &[u32] = &[
     0x0040_6d00,
     0x0040_6d30,
     0x0040_6d50,
+    0x0040_6de0,
     0x0040_6f60,
     0x0040_8b20,
     0x0040_9480,
@@ -49,6 +50,7 @@ const CALLEES: &[u32] = &[
     0x0043_cfd0,
     0x0043_d090,
     0x0044_31f0,
+    0x0044_59e0,
     0x0044_7080,
     0x0044_a670,
     0x0044_f560,
@@ -56,7 +58,9 @@ const CALLEES: &[u32] = &[
     0x0045_6a20,
     0x0045_7ba0,
     0x0045_a5e0,
+    0x0045_cec0,
     0x0046_9880,
+    0x0046_ffb0,
     0x0047_0470,
     0x0047_6b20,
     0x0048_3a00,
@@ -92,9 +96,9 @@ const CALLEES: &[u32] = &[
     0x0057_85e0,
     0x0057_c730,
     0x0057_dd70,
+    0x005b_5e40,
     0x005e_02b0,
     0x005e_58f0,
-    0x0063_3c90,
     0x0064_50f0,
     0x0064_5380,
     0x0064_6360,
@@ -136,6 +140,8 @@ const CALLEES: &[u32] = &[
     0x0071_6320,
     0x0071_64c0,
     0x0071_65d0,
+    0x0071_6980,
+    0x0071_6a10,
     0x0071_7280,
     0x0071_7600,
     0x0071_78a0,
@@ -147,24 +153,58 @@ const CALLEES: &[u32] = &[
     0x0071_b160,
     0x0071_d0a0,
     0x0071_d580,
-    0x0071_e290,
-    0x0071_e420,
+    0x0072_1060,
+    0x0072_1150,
+    0x0072_1850,
+    0x0072_1920,
+    0x0072_2000,
+    0x0072_20d0,
+    0x0072_27b0,
+    0x0072_2880,
+    0x0072_2f60,
+    0x0072_3070,
+    0x0072_3750,
+    0x0072_3f00,
+    0x0072_3f30,
+    0x0072_3f50,
+    0x0072_3f80,
+    0x0072_3fa0,
+    0x0072_3fd0,
+    0x0072_3ff0,
+    0x0072_4020,
+    0x0072_4040,
+    0x0072_4070,
+    0x0072_6df0,
     0x0072_6ff0,
     0x0072_8a30,
+    0x0072_ceb0,
     0x0072_d250,
     0x0073_0690,
+    0x0073_15e0,
     0x0073_3500,
+    0x0073_acb0,
+    0x0073_ad50,
+    0x0073_b7e0,
     0x0074_0f30,
+    0x0075_3230,
     0x0075_3420,
+    0x0075_4b40,
     0x0075_4cf0,
+    0x0075_77f0,
     0x0075_7b70,
+    0x0075_b0d0,
     0x0075_b310,
     0x0075_b750,
     0x0075_c280,
+    0x0075_f070,
+    0x0076_17a0,
     0x0076_1a20,
     0x0076_3ff0,
     0x0076_4200,
+    0x0076_54f0,
     0x0076_5b80,
+    0x0076_bb40,
+    0x0076_bfe0,
     0x0077_1700,
     0x0077_28f0,
     0x0077_2d10,
@@ -180,17 +220,23 @@ const CALLEES: &[u32] = &[
     0x0077_f3c0,
     0x0077_f420,
     0x0077_f490,
+    0x0077_fa00,
     0x0077_fc10,
     0x0077_ffd0,
     0x0078_2470,
     0x0078_2a90,
+    0x0078_3310,
     0x0078_3440,
     0x0078_46a0,
+    0x0078_4a40,
     0x0078_4c80,
+    0x0078_8440,
     0x0078_8cc0,
+    0x0078_d930,
     0x0078_db00,
     0x0078_e7c0,
     0x0079_17a0,
+    0x0079_6740,
     0x0079_6b90,
     0x0079_8bf0,
     0x0079_aba0,
@@ -202,6 +248,7 @@ const CALLEES: &[u32] = &[
     0x007a_1820,
     0x007a_1850,
     0x007a_1880,
+    0x007a_8a10,
     0x007a_8ba0,
     0x007a_8e60,
     0x007a_a480,
@@ -209,16 +256,23 @@ const CALLEES: &[u32] = &[
     0x007a_a5c0,
     0x007a_a6b0,
     0x007a_b690,
+    0x007a_c1f0,
     0x007a_c730,
+    0x007b_5400,
     0x007b_5520,
     0x007b_6fb0,
+    0x007b_7400,
     0x007b_7570,
+    0x007b_8d30,
     0x007b_bcf0,
+    0x007b_fb30,
     0x007b_fc30,
     0x007c_01b0,
     0x007c_0580,
+    0x007c_06f0,
     0x007c_19c0,
     0x007c_6120,
+    0x007c_b330,
     0x007c_b7d0,
     0x007c_e7a0,
     0x007d_a2c0,
@@ -233,9 +287,14 @@ const CALLEES: &[u32] = &[
     0x007d_fc90,
     0x007d_fcd0,
     0x007d_fd00,
+    0x007e_07f0,
+    0x007e_09b0,
     0x007e_41f0,
     0x007e_47a0,
     0x007e_5890,
+    0x007e_6780,
+    0x007e_7a80,
+    0x007e_9130,
     0x007e_9200,
     0x007e_bd50,
     0x007f_6920,
@@ -252,9 +311,13 @@ const CALLEES: &[u32] = &[
     0x008c_7aa0,
     0x0090_5820,
     0x0095_3060,
+    0x0096_a2d0,
+    0x0096_ad30,
+    0x009c_a4a0,
     0x009f_f340,
     0x009f_f690,
     0x00a0_11b0,
+    0x00a0_1230,
     0x00a0_12d0,
     0x00a0_1350,
     0x00a0_1860,
@@ -266,6 +329,8 @@ const CALLEES: &[u32] = &[
     0x00a0_8b20,
     0x00a0_d9e0,
     0x00a0_f8b0,
+    0x00a1_c4a0,
+    0x00a1_c520,
     0x00a1_d910,
     0x00a1_db20,
     0x00a1_dc70,
@@ -281,8 +346,10 @@ const CALLEES: &[u32] = &[
     0x00c3_a8a0,
     0x00ec_17c0,
     0x00ec_43fb,
+    0x00ec_5fce,
     0x00ec_623a,
     0x00ec_62c0,
+    0x00ec_782f,
     0x00fd_f294,
     0x00fd_f298,
     0x00fd_f29c,
@@ -2549,7 +2616,13 @@ fn fn_00707970_diff() {
 #[test]
 fn interface_create_menu_by_class_diff() {
     Diff::new(engine_core::entry!(0x0070_7990, interface::interface_cpp_p2::interface_create_menu_by_class(u32) -> u32))
-        .in_arena(&[Arg::Word], CALLEES, &[])
+        .in_arena_without(
+            &[Arg::Class],
+            CALLEES,
+            &[0x0071_e340, 0x0071_e400, 0x0071_f540, 0x0071_f5d0, 0x0072_07a0],
+            &[0x00ec_782f],
+        )
+        .max_cases(96)
         .run()
         .assert_same();
 }
@@ -2952,11 +3025,850 @@ fn fn_00709b40_diff() {
     .assert_same();
 }
 
+#[test]
+fn menu_manager_instance_diff() {
+    Diff::new(engine_core::entry!(0x0071_e290, interface::menu_manager::menu_manager_instance(bool) -> u32))
+    .in_arena(&[Arg::Byte], CALLEES, &[0x0071_e340, 0x0071_e400])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071e340_diff() {
+    Diff::new(engine_core::entry!(0x0071_e340, interface::menu_manager::fn_0071e340(Ptr) -> Ptr))
+        .in_arena(&[Arg::Ptr], CALLEES, &[0x0071_e400])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn fn_0071e360_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_e360,
+        interface::menu_manager::fn_0071e360()
+    ))
+    .in_arena(&[], CALLEES, &[0x0071_e3b0, 0x0071_e3e0, 0x0071_e3f0])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071e3b0_diff() {
+    Diff::new(
+        engine_core::entry!(0x0071_e3b0, interface::menu_manager::fn_0071e3b0(Ptr, u32) -> Ptr),
+    )
+    .in_arena(&[Arg::Ptr, Arg::Word], CALLEES, &[0x0071_e3e0, 0x0071_e3f0])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071e3e0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_e3e0,
+        interface::menu_manager::fn_0071e3e0(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[0x0071_e3f0])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071e3f0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_e3f0,
+        interface::menu_manager::fn_0071e3f0()
+    ))
+    .in_arena(&[], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071e400_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_e400,
+        interface::menu_manager::fn_0071e400(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn menu_manager_create_menu_by_class_diff() {
+    Diff::new(engine_core::entry!(0x0071_e420, interface::menu_manager::menu_manager_create_menu_by_class(Ptr, u32) -> u32))
+    .in_arena_without(&[Arg::Ptr, Arg::Class], CALLEES, &[0x0071_f540, 0x0071_f5d0, 0x0072_07a0], &[0x00ec_782f])
+    .max_cases(96)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071f240_diff() {
+    Diff::new(engine_core::entry!(0x0071_f240, interface::menu_manager::fn_0071f240(Ptr) -> Ptr))
+        .in_arena(&[Arg::Ptr], CALLEES, &[])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn tutorial_menu_get_class_diff() {
+    Diff::new(engine_core::entry!(0x0071_f2d0, interface::menu_manager::tutorial_menu_get_class(Ptr) -> u32))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn tutorial_menu_scalar_deleting_destructor_diff() {
+    Diff::new(engine_core::entry!(0x0071_f2e0, interface::menu_manager::tutorial_menu_scalar_deleting_destructor(Ptr, u32) -> Ptr))
+    .in_arena(&[Arg::Ptr, Arg::Word], CALLEES, &[0x0071_f310])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071f310_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_f310,
+        interface::menu_manager::fn_0071f310(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071f340_diff() {
+    Diff::new(engine_core::entry!(0x0071_f340, interface::menu_manager::fn_0071f340(Ptr) -> Ptr))
+        .in_arena_without(
+            &[Arg::Ptr],
+            CALLEES,
+            &[0x0071_f540, 0x0071_f5d0],
+            &[0x00ec_782f],
+        )
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn fn_0071f4a0_diff() {
+    Diff::new(engine_core::entry!(0x0071_f4a0, interface::menu_manager::fn_0071f4a0(Ptr) -> Ptr))
+        .in_arena(&[Arg::Ptr], CALLEES, &[])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn fn_0071f4e0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_f4e0,
+        interface::menu_manager::fn_0071f4e0(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071f520_diff() {
+    Diff::new(engine_core::entry!(0x0071_f520, interface::menu_manager::fn_0071f520(Ptr) -> bool))
+        .in_arena(&[Arg::Ptr], CALLEES, &[])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn fn_0071f540_diff() {
+    Diff::new(engine_core::entry!(0x0071_f540, interface::menu_manager::fn_0071f540(Ptr) -> Ptr))
+        .in_arena(&[Arg::Ptr], CALLEES, &[])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn fn_0071f570_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_f570,
+        interface::menu_manager::fn_0071f570(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071f5d0_diff() {
+    Diff::new(engine_core::entry!(0x0071_f5d0, interface::menu_manager::fn_0071f5d0(Ptr) -> Ptr))
+        .in_arena(&[Arg::Ptr], CALLEES, &[])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn fn_0071f600_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_f600,
+        interface::menu_manager::fn_0071f600(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_get_class_diff() {
+    Diff::new(
+        engine_core::entry!(0x0071_f660, interface::menu_manager::stats_menu_get_class(Ptr) -> u32),
+    )
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_named_effects_list_scalar_deleting_destructor_diff() {
+    Diff::new(engine_core::entry!(0x0071_f670, interface::menu_manager::stats_menu_named_effects_list_scalar_deleting_destructor(Ptr, u32) -> Ptr))
+    .in_arena(&[Arg::Ptr, Arg::Word], CALLEES, &[0x0071_f570])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_status_effect_list_scalar_deleting_destructor_diff() {
+    Diff::new(engine_core::entry!(0x0071_f6a0, interface::menu_manager::stats_menu_status_effect_list_scalar_deleting_destructor(Ptr, u32) -> Ptr))
+    .in_arena(&[Arg::Ptr, Arg::Word], CALLEES, &[0x0071_f600])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_scalar_deleting_destructor_diff() {
+    Diff::new(engine_core::entry!(0x0071_f6d0, interface::menu_manager::stats_menu_scalar_deleting_destructor(Ptr, u32) -> Ptr))
+    .in_arena(&[Arg::Ptr, Arg::Word], CALLEES, &[0x0071_f700, 0x0071_f9c0, 0x0071_f9f0, 0x0071_f570, 0x0071_f8c0, 0x0071_f900, 0x0071_f930, 0x0071_f600])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071f700_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_f700,
+        interface::menu_manager::fn_0071f700(Ptr)
+    ))
+    .in_arena(
+        &[Arg::Ptr],
+        CALLEES,
+        &[
+            0x0071_f9c0,
+            0x0071_f9f0,
+            0x0071_f570,
+            0x0071_f8c0,
+            0x0071_f900,
+            0x0071_f930,
+            0x0071_f600,
+        ],
+    )
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071f8c0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_f8c0,
+        interface::menu_manager::fn_0071f8c0()
+    ))
+    .in_arena(&[], CALLEES, &[0x0071_f900, 0x0071_f930])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071f900_diff() {
+    Diff::new(
+        engine_core::entry!(0x0071_f900, interface::menu_manager::fn_0071f900(Ptr, u32) -> Ptr),
+    )
+    .in_arena(&[Arg::Ptr, Arg::Word], CALLEES, &[0x0071_f930])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071f930_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_f930,
+        interface::menu_manager::fn_0071f930(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071f9c0_diff() {
+    Diff::new(
+        engine_core::entry!(0x0071_f9c0, interface::menu_manager::fn_0071f9c0(Ptr, u32) -> Ptr),
+    )
+    .in_arena(&[Arg::Ptr, Arg::Word], CALLEES, &[0x0071_f9f0, 0x0071_f570])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071f9f0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_f9f0,
+        interface::menu_manager::fn_0071f9f0(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[0x0071_f570])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_attach_tile_by_id_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_fa50,
+        interface::menu_manager::stats_menu_attach_tile_by_id(Ptr, i32, u32)
+    ))
+    .in_arena(&[Arg::Ptr, Arg::TileId, Arg::Word], CALLEES, &[])
+    .max_cases(96)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071fa80_diff() {
+    Diff::new(engine_core::entry!(0x0071_fa80, interface::menu_manager::fn_0071fa80(Ptr) -> Ptr))
+        .in_arena(&[Arg::Ptr], CALLEES, &[])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn fn_0071fb20_diff() {
+    Diff::new(engine_core::entry!(0x0071_fb20, interface::menu_manager::fn_0071fb20(Ptr) -> u32))
+        .in_arena(&[Arg::Ptr], CALLEES, &[])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn fn_0071fb30_diff() {
+    Diff::new(
+        engine_core::entry!(0x0071_fb30, interface::menu_manager::fn_0071fb30(Ptr, u32) -> Ptr),
+    )
+    .in_arena(&[Arg::Ptr, Arg::Word], CALLEES, &[0x0071_fb60])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071fb60_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_fb60,
+        interface::menu_manager::fn_0071fb60(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071fbc0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_fbc0,
+        interface::menu_manager::fn_0071fbc0(Ptr, i32, u32)
+    ))
+    .in_arena(&[Arg::Ptr, Arg::TileId, Arg::Word], CALLEES, &[])
+    .max_cases(96)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071fbf0_diff() {
+    Diff::new(engine_core::entry!(0x0071_fbf0, interface::menu_manager::fn_0071fbf0(Ptr) -> Ptr))
+        .in_arena_without(&[Arg::Ptr], CALLEES, &[], &[0x00ec_782f])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn surgery_menu_get_class_diff() {
+    Diff::new(engine_core::entry!(0x0071_feb0, interface::menu_manager::surgery_menu_get_class(Ptr) -> u32))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn surgery_menu_scalar_deleting_destructor_diff() {
+    Diff::new(engine_core::entry!(0x0071_fec0, interface::menu_manager::surgery_menu_scalar_deleting_destructor(Ptr, u32) -> Ptr))
+    .in_arena(&[Arg::Ptr, Arg::Word], CALLEES, &[0x0071_fef0])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_0071fef0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_fef0,
+        interface::menu_manager::fn_0071fef0(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn surgery_menu_attach_tile_by_id_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_ffe0,
+        interface::menu_manager::surgery_menu_attach_tile_by_id(Ptr, i32, u32)
+    ))
+    .in_arena(&[Arg::Ptr, Arg::TileId, Arg::Word], CALLEES, &[0x0072_0010])
+    .max_cases(96)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_00720010_diff() {
+    Diff::new(
+        engine_core::entry!(0x0072_0010, interface::menu_manager::fn_00720010(Ptr, i32) -> i32),
+    )
+    .in_arena(&[Arg::Ptr, Arg::TileId], CALLEES, &[])
+    .max_cases(96)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_00720040_diff() {
+    Diff::new(engine_core::entry!(0x0072_0040, interface::menu_manager::fn_00720040(Ptr) -> Ptr))
+        .in_arena(&[Arg::Ptr], CALLEES, &[])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn vats_menu_get_class_diff() {
+    Diff::new(
+        engine_core::entry!(0x0072_0100, interface::menu_manager::vats_menu_get_class(Ptr) -> u32),
+    )
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn vats_menu_scalar_deleting_destructor_diff() {
+    Diff::new(engine_core::entry!(0x0072_0110, interface::menu_manager::vats_menu_scalar_deleting_destructor(Ptr, u32) -> Ptr))
+    .in_arena(&[Arg::Ptr, Arg::Word], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn vats_menu_attach_tile_by_id_diff() {
+    Diff::new(engine_core::entry!(
+        0x0072_0140,
+        interface::menu_manager::vats_menu_attach_tile_by_id(Ptr, i32, u32)
+    ))
+    .in_arena(&[Arg::Ptr, Arg::TileId, Arg::Word], CALLEES, &[])
+    .max_cases(96)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_00720170_diff() {
+    Diff::new(engine_core::entry!(0x0072_0170, interface::menu_manager::fn_00720170(Ptr) -> Ptr))
+        .in_arena(&[Arg::Ptr], CALLEES, &[])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn special_book_menu_get_class_diff() {
+    Diff::new(engine_core::entry!(0x0072_0320, interface::menu_manager::special_book_menu_get_class(Ptr) -> u32))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn special_book_menu_scalar_deleting_destructor_diff() {
+    Diff::new(engine_core::entry!(0x0072_0330, interface::menu_manager::special_book_menu_scalar_deleting_destructor(Ptr, u32) -> Ptr))
+    .in_arena(&[Arg::Ptr, Arg::Word], CALLEES, &[0x0072_0420])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_00720360_diff() {
+    Diff::new(engine_core::entry!(0x0072_0360, interface::menu_manager::fn_00720360(Ptr) -> Ptr))
+        .in_arena(&[Arg::Ptr], CALLEES, &[])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn fn_007203c0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0072_03c0,
+        interface::menu_manager::fn_007203c0(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_00720420_diff() {
+    Diff::new(engine_core::entry!(
+        0x0072_0420,
+        interface::menu_manager::fn_00720420(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_00720550_diff() {
+    Diff::new(engine_core::entry!(0x0072_0550, interface::menu_manager::fn_00720550(Ptr) -> Ptr))
+        .in_arena(&[Arg::Ptr], CALLEES, &[0x0072_07a0])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn love_tester_menu_get_class_diff() {
+    Diff::new(engine_core::entry!(0x0072_0760, interface::menu_manager::love_tester_menu_get_class(Ptr) -> u32))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn love_tester_menu_scalar_deleting_destructor_diff() {
+    Diff::new(engine_core::entry!(0x0072_0770, interface::menu_manager::love_tester_menu_scalar_deleting_destructor(Ptr, u32) -> Ptr))
+    .in_arena(&[Arg::Ptr, Arg::Word], CALLEES, &[0x0072_0860, 0x0072_0800])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_007207a0_diff() {
+    Diff::new(engine_core::entry!(0x0072_07a0, interface::menu_manager::fn_007207a0(Ptr) -> Ptr))
+        .in_arena(&[Arg::Ptr], CALLEES, &[])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn fn_00720800_diff() {
+    Diff::new(engine_core::entry!(
+        0x0072_0800,
+        interface::menu_manager::fn_00720800(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_00720860_diff() {
+    Diff::new(engine_core::entry!(
+        0x0072_0860,
+        interface::menu_manager::fn_00720860(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[0x0072_0800])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn tutorial_menu_attach_tile_by_id_diff() {
+    Diff::new(engine_core::entry!(
+        0x0072_09e0,
+        interface::menu_manager::tutorial_menu_attach_tile_by_id(Ptr, i32, u32)
+    ))
+    .in_arena(&[Arg::Ptr, Arg::TileId, Arg::Word], CALLEES, &[])
+    .max_cases(96)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_00720a10_diff() {
+    Diff::new(engine_core::entry!(0x0072_0a10, interface::menu_manager::fn_00720a10(Ptr) -> Ptr))
+        .in_arena(&[Arg::Ptr], CALLEES, &[])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn quantity_menu_get_class_diff() {
+    Diff::new(engine_core::entry!(0x0072_0a30, interface::menu_manager::quantity_menu_get_class(Ptr) -> u32))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn quantity_menu_scalar_deleting_destructor_diff() {
+    Diff::new(engine_core::entry!(0x0072_0a40, interface::menu_manager::quantity_menu_scalar_deleting_destructor(Ptr, u32) -> Ptr))
+    .in_arena(&[Arg::Ptr, Arg::Word], CALLEES, &[0x0072_0a70])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_00720a70_diff() {
+    Diff::new(engine_core::entry!(
+        0x0072_0a70,
+        interface::menu_manager::fn_00720a70(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn menu_manager_reload_menu_diff() {
+    Diff::new(engine_core::entry!(0x0072_0aa0, interface::menu_manager::menu_manager_reload_menu(Ptr, u32) -> u32))
+    .in_arena_and(
+        &[Arg::Ptr, Arg::Class],
+        CALLEES,
+        &[],
+        &RELOAD_VARIANTS,
+        put_reload_casts,
+    )
+    .max_cases(240)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fn_00720df0_diff() {
+    Diff::new(engine_core::entry!(0x0072_0df0, interface::menu_manager::fn_00720df0() -> u32))
+        .in_arena(&[], CALLEES, &[])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn menu_manager_delete_menu_diff() {
+    Diff::new(engine_core::entry!(0x0072_0e00, interface::menu_manager::menu_manager_delete_menu(Ptr, u32) -> bool))
+    .in_arena(&[Arg::Ptr, Arg::Class], CALLEES, &[])
+    .max_cases(96)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn menu_manager_get_frontmost_menu_diff() {
+    Diff::new(engine_core::entry!(0x0072_0e60, interface::menu_manager::menu_manager_get_frontmost_menu(Ptr) -> u32))
+    .in_arena_and(&[Arg::Ptr], CALLEES, &[], &MENU_LIST_VARIANTS, put_menu_list)
+    .max_cases(48)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn menu_manager_is_menu_open_diff() {
+    Diff::new(engine_core::entry!(0x0072_0f90, interface::menu_manager::menu_manager_is_menu_open(Ptr, u32) -> bool))
+    .in_arena_and(
+        &[Arg::Ptr, Arg::Int],
+        CALLEES,
+        &[],
+        &MENU_LIST_VARIANTS,
+        put_menu_list,
+    )
+    .max_cases(160)
+    .run()
+    .assert_same();
+}
+
+/// The variants of [`put_menu_list`]'s world.
+const MENU_LIST_VARIANTS: [u32; 4] = [0, 1, 2, 3];
+
+/// A world for `GetFrontmostMenu` and `IsMenuOpen` that reaches each of their tests: the manager
+/// (`011d8a80`) with a menus root whose tile list has six nodes (the second's tile null, the third's
+/// tile with no menu, the fourth's menu with no tile); `Tile::GetMenu` answering a tile's `+0x10`;
+/// each menu's class (its vtable's `+0x34`) its `+0x30`, its state its `+0x24`; the tile float
+/// getter answering the depth (`0xfad`) from a menu tile's `+0x40`, the kind (`0xfa7`) from its
+/// `+0x44`; `Tile::IsTrue` its `+0x48`. The variant picks the six depths, kinds, states, classes and
+/// enabled bits: a deeper menu of the passed-over kind (6008.0), equal depths, a NaN depth and
+/// kind, states 2, 3 and 4, a matching menu enabled or not.
+fn put_menu_list(e: &mut Engine, variant: u32) {
+    use arena::object;
+    const NAN: f32 = f32::NAN;
+    let v = variant as usize;
+    let depths: [[f32; 6]; 4] = [
+        [1.0, 9.0, 9.0, 9.0, 3.0, 2.0],
+        [5.0, 9.0, 9.0, 9.0, 5.0, 5.0],
+        [NAN, 9.0, 9.0, 9.0, 1.0, 0.5],
+        [-2.0e8, 9.0, 9.0, 9.0, -3.0e8, 7.0],
+    ];
+    let kinds: [[f32; 6]; 4] = [
+        [0.0, 0.0, 0.0, 0.0, 6008.0, 0.0],
+        [6008.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [NAN, 0.0, 0.0, 0.0, 6008.0, 1.0],
+        [0.0, 0.0, 0.0, 0.0, 0.0, 6008.0],
+    ];
+    let states: [[u32; 6]; 4] = [
+        [0, 0, 0, 0, 1, 4],
+        [2, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 2, 3],
+        [4, 0, 0, 0, 3, 2],
+    ];
+    let classes: [[u32; 6]; 4] = [
+        [0x3e9, 1, 1, 1, 0x3ef, 1],
+        [1, 2, 2, 2, 1, 1],
+        [2, 0x3e9, 0x3e9, 0x3e9, 0x3e9, 2],
+        [0x43d, 0, 0, 0, 0x3e9, 1],
+    ];
+    let enabled: [[u32; 6]; 4] = [
+        [1, 1, 1, 1, 1, 0],
+        [1, 1, 1, 1, 0, 1],
+        [0, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1],
+    ];
+    let manager = object(70);
+    e.mem.set_u32(0x011d_8a80, manager);
+    e.mem.set_u32(manager + 0x9c, object(71));
+    e.mem.set_u32(object(71) + 4, object(72));
+    let vtable = object(79);
+    e.mem.set_u32(vtable + 0x34, 0x7d00_2000);
+    for k in 0..6u32 {
+        let node = object(72 + k);
+        e.mem.set_u32(node, if k < 5 { object(73 + k) } else { 0 });
+        let tile = if k == 1 { 0 } else { object(80 + k) };
+        e.mem.set_u32(node + 8, tile);
+        let menu = if k == 2 { 0 } else { object(90 + k) };
+        if tile != 0 {
+            e.mem.set_u32(tile + 0x10, menu);
+        }
+        let menu_tile = if k == 3 { 0 } else { object(100 + k) };
+        let i = k as usize;
+        if menu == 0 {
+            continue;
+        }
+        e.mem.set_u32(menu, vtable);
+        e.mem.set_u32(menu + 4, menu_tile);
+        e.mem.set_u32(menu + 0x24, states[v][i]);
+        e.mem.set_u32(menu + 0x30, classes[v][i]);
+        if menu_tile != 0 {
+            e.mem.set_f32(menu_tile + 0x40, depths[v][i]);
+            e.mem.set_f32(menu_tile + 0x44, kinds[v][i]);
+            e.mem.set_u32(menu_tile + 0x48, enabled[v][i]);
+        }
+    }
+    e.mem.set_f32(0x0107_0218, -1.0e8);
+    e.mem.set_u64(0x0107_0210, 6008.0f64.to_bits());
+    e.register_double(0x00a0_3c90, |e, words| Ret {
+        eax: e.mem.u32(words[0] + 0x10),
+        ..Ret::default()
+    });
+    e.register_double(0x7d00_2000, |e, words| Ret {
+        eax: e.mem.u32(words[0] + 0x30),
+        ..Ret::default()
+    });
+    e.register_double(0x00a0_11b0, |e, words| {
+        let at = match words[1] {
+            0xfad => 0x40,
+            0xfa7 => 0x44,
+            _ => 0x4c,
+        };
+        Ret {
+            st0: f64::from(e.mem.f32(words[0] + at)),
+            ..Ret::default()
+        }
+    });
+    e.register_double(0x00a0_1230, |e, words| Ret {
+        eax: e.mem.u32(words[0] + 0x48) & 1,
+        ..Ret::default()
+    });
+}
+
+/// The variants of [`put_reload_casts`]'s world.
+const RELOAD_VARIANTS: [u32; 2] = [0, 1];
+
+/// A world for `ReloadMenu`'s container and book menus: the menu of class 0x3f0 (an object whose
+/// `+0x70` and `+0x74` differ, its `+0x30` a reference whose `+0x20` is an object), and
+/// `__RTDynamicCast` answering the object it is given (variant 0) or null (variant 1).
+fn put_reload_casts(e: &mut Engine, variant: u32) {
+    use arena::object;
+    let menu = object(140);
+    e.mem
+        .set_u32(e.mem.u32(0x011f_350c) + 4 * (0x3f0 - 0x3e9), menu);
+    e.mem.set_u32(menu + 0x70, 0x0bad_0070);
+    e.mem.set_u32(menu + 0x74, 0x0bad_0074);
+    e.mem.set_u32(menu + 0x30, object(141));
+    e.mem.set_u32(object(141) + 0x20, object(142));
+    let succeeds = variant == 0;
+    e.register_double(0x00ec_43fb, move |_, words| Ret {
+        eax: if succeeds { words[0] } else { 0 },
+        ..Ret::default()
+    });
+}
+
 /// Every family the program has: the core's and the ones each crate provides when the engine is put
 /// together (`engine_core::typed::provide`, run by `Engine::new`).
 fn every_family() -> Vec<&'static engine_core::typed::Family> {
     drop(Engine::new_untyped_for_test());
     engine_core::typed::all_families()
+}
+
+/// `every_family` sees each crate's families, not the core's alone: one or more of the core's
+/// (`leaves`), `engine-typed`'s (`interface`, `dispatch`, `ai`, `forms`) and the forms crate's
+/// (`topic_search`).
+#[test]
+fn every_family_holds_each_crates_families() {
+    let names: Vec<&str> = every_family().iter().map(|f| f.name).collect();
+    for name in [
+        "leaves",
+        "interface",
+        "dispatch",
+        "ai",
+        "forms",
+        "topic_search",
+    ] {
+        assert!(names.contains(&name), "no family `{name}` among {names:?}");
+    }
+}
+
+/// An address is in one family at most, whichever families are on by default: `NV_TYPED` can turn
+/// any on, and two families holding one address stop `Engine::new` once both are (on 2026-11-25
+/// `00717e50` was in `ai` and in `topic_search`). This names both families.
+#[test]
+fn no_address_is_in_two_families() {
+    let mut holder = std::collections::HashMap::new();
+    let mut twice = Vec::new();
+    for family in every_family() {
+        for (addr, _) in (family.funcs)() {
+            if let Some(first) = holder.insert(addr, family.name) {
+                twice.push((addr, first, family.name));
+            }
+        }
+    }
+    assert!(
+        twice.is_empty(),
+        "addresses in two typed families, or twice in one (address, family, family): {twice:x?}"
+    );
+}
+
+/// The engine as a run makes it (`Engine::new`: every family on by default on, as `NV_TYPED` leaves
+/// them): it starts, with no address in two families that are on and no name or number twice.
+#[test]
+fn the_engine_starts_with_its_families_on() {
+    drop(Engine::new());
 }
 
 /// The families built around xNVSE's wraps (`script_lines`: the script runner's functions xNVSE
@@ -3103,9 +4015,16 @@ fn family_sources(name: &str) -> Vec<String> {
 
 /// Whether the typed body of `start` (its text from its `Typed from` mark to the next mark) calls
 /// `e.site` at `seam`: with the address or a constant holding it, or through a function of the
-/// family's sources that calls `e.site` and is given the address or holds it.
+/// family's sources that calls `e.site` and is given the address or holds it. Comments don't count:
+/// the text read is each line's code up to its `//`.
 fn body_calls_site(sources: &[String], start: u32, seam: u32) -> bool {
-    let bare = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    let bare = |s: &str| {
+        s.lines()
+            .map(|line| line.find("//").map_or(line, |at| &line[..at]))
+            .flat_map(str::chars)
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+    };
     let mut names = vec![
         format!("0x{:04x}_{:04x}", seam >> 16, seam & 0xffff),
         format!("0x{seam:08x}"),
@@ -3137,13 +4056,14 @@ fn body_calls_site(sources: &[String], start: u32, seam: u32) -> bool {
     for text in sources {
         let lines: Vec<&str> = text.lines().collect();
         for (i, line) in lines.iter().enumerate() {
-            let Some(at) = line.find("fn ") else {
+            let code = line.find("//").map_or(*line, |at| &line[..at]);
+            let Some(at) = code.find("fn ") else {
                 continue;
             };
-            let Some(open) = line[at..].find('(') else {
+            let Some(open) = code[at..].find('(') else {
                 continue;
             };
-            let name = &line[at + 3..at + open];
+            let name = &code[at + 3..at + open];
             if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
                 continue;
             }
