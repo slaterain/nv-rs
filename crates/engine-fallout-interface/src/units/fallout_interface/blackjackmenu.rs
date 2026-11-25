@@ -364,6 +364,7 @@ pub fn fn_00739970(e: &mut Engine, this: Ptr, flag: u8) {
     e.call(SET_FLOATS_004BC1F0, &args![geometry, zero, zero, last]);
 }
 
+/// The shoe's count after a shuffle: 0x34 a deck.
 fn shoe_count(_e: &Engine, decks: u32) -> u32 {
     decks.wrapping_mul(0x34)
 }

@@ -9690,6 +9690,7 @@ fn unequip_refreshes_worn(e: &mut Engine, biped: u32) -> bool {
     e.call(BIPED_IS_POWER_ARMOR, &args![biped]).bool() || fn_004c0bd0(e, Ptr::new(biped))
 }
 
+/// The weight `004d0900` caches (`FLD`/`FSTP` at `0x4D0EDA`).
 fn stored_weight(_e: &mut Engine, total: f32) -> f32 {
     total
 }
