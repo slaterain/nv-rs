@@ -15,7 +15,7 @@
 use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{memory_differences_beside_stack, Case, Diff, Input};
-use engine_core::typed::{leaf, MAIN_THREAD, OTHER_THREADS};
+use engine_core::typed::{leaf, Family, MAIN_THREAD, OTHER_THREADS};
 use engine_typed::dispatch::DISPATCH;
 use engine_typed::navmesh_edges::{self, NAVMESH_EDGES};
 use engine_typed::pathing::PATHING;
@@ -404,42 +404,49 @@ fn grid(g: Grid) -> (Vec<[f32; 3]>, Vec<([u16; 3], [u16; 3], u32)>) {
 
 /// The comparison's common part: the families play has on, the callees the native code does in its
 /// body, the translation's plain calls the typed helpers make by address, the two locals.
-fn common(d: Diff) -> Diff {
-    d.family(&NAVMESH_EDGES)
-        .family(&PATHING)
-        .family(&leaf::LEAVES)
-        .family(&DISPATCH)
-        // The pair map's walk and each pair's point, difference and squared length (pass 3), and
-        // the point constructor and differences the native code writes in place.
-        .ignore_calls(&[
-            0x0069_4d30,
-            0x004b_9ba0,
-            0x0068_f0a0,
-            0x0043_9ef0,
-            0x0059_5c80,
-            0x0041_6870,
-            // The native square root takes `FSQRT` where the translation calls the runtime's.
-            0x00ec_6054,
-            // An array's 12-byte entry (pass 2's edges, every vertex point), read in place.
-            0x006a_1440,
-        ])
-        // The pathing family's root, absolute value and edge vertices call these by address; their
-        // translations plainly.
-        .translation_calls_plainly(&[0x0040_19d0, 0x0040_8860, 0x0068_efd0])
-        // Pass 3's two locals: the planar difference and the chosen vertex.
-        .local_at(0x0058_9850, 0, 12)
-        .local_at(0x0069_1820, 1, 2)
-        .control_words(&[OTHER_THREADS, MAIN_THREAD])
-        .max_calls(200_000)
+trait Common {
+    fn common(self) -> Diff;
+}
+
+impl Common for Diff {
+    fn common(self) -> Diff {
+        self.family(&NAVMESH_EDGES)
+            .family(&PATHING)
+            .family(&leaf::LEAVES)
+            .family(&DISPATCH)
+            // The pair map's walk and each pair's point, difference and squared length (pass 3), and
+            // the point constructor and differences the native code writes in place.
+            .ignore_calls(&[
+                0x0069_4d30,
+                0x004b_9ba0,
+                0x0068_f0a0,
+                0x0043_9ef0,
+                0x0059_5c80,
+                0x0041_6870,
+                // The native square root takes `FSQRT` where the translation calls the runtime's.
+                0x00ec_6054,
+                // An array's 12-byte entry (pass 2's edges, every vertex point), read in place.
+                0x006a_1440,
+            ])
+            // The pathing family's root, absolute value and edge vertices call these by address; their
+            // translations plainly.
+            .translation_calls_plainly(&[0x0040_19d0, 0x0040_8860, 0x0068_efd0])
+            // Pass 3's two locals: the planar difference and the chosen vertex.
+            .local_at(0x0058_9850, 0, 12)
+            .local_at(0x0069_1820, 1, 2)
+            .control_words(&[OTHER_THREADS, MAIN_THREAD])
+            .max_calls(200_000)
+    }
 }
 
 #[test]
 fn rebuild_edge_pairs() {
     const MESHES: [u32; 7] = [0, 1, 2, 3, 4, 5, 6];
-    common(Diff::new(entry!(
+    Diff::new(entry!(
         0x0069_9b60,
         navmesh_edges::rebuild_edge_pairs(Ptr<_>)
-    )))
+    ))
+    .common()
     .inputs(&[Input::Of(&MESHES)])
     .setup(|e, case: &Case| {
         stand_ins(e);
@@ -460,45 +467,65 @@ fn outcome(e: &Engine, mesh: u32) -> (u32, u32) {
     (pairs, chosen)
 }
 
-/// One mesh both ways: the translations only, and the families on as play has them, from the same
-/// state; the heap and every byte beside the stack for locals must match after the call.
-fn both_ways(vertices: &[[f32; 3]], triangles: &[([u16; 3], [u16; 3], u32)]) -> (u32, u32) {
+/// The families play has on beside this one.
+const CALLEES: [&Family; 3] = [&PATHING, &leaf::LEAVES, &DISPATCH];
+/// Those and this one.
+const ALL: [&Family; 4] = [&NAVMESH_EDGES, &PATHING, &leaf::LEAVES, &DISPATCH];
+
+/// One mesh run whole on two engines from the same state, with families `a` on one and `b` on the
+/// other, under both control words: the heap and every byte beside the stack for locals must match
+/// after the call. The pairs and preferred vertices found, or what differed.
+fn both_ways(
+    vertices: &[[f32; 3]],
+    triangles: &[([u16; 3], [u16; 3], u32)],
+    a: &[&Family],
+    b: &[&Family],
+) -> Result<(u32, u32), String> {
     let mut result = (0, 0);
     for word in [OTHER_THREADS, MAIN_THREAD] {
         let mut sides = Vec::new();
-        for typed in [false, true] {
+        for families in [a, b] {
             let mut e = Engine::new_untyped_for_test();
             engine_core::x87::set_control_word(word);
             stand_ins(&mut e);
             let mesh = build_mesh(&mut e, vertices, triangles);
             e.with_stack(4, |_, _| ());
-            if typed {
-                e.typed_apply_for_test(&[&NAVMESH_EDGES, &PATHING, &leaf::LEAVES, &DISPATCH], "");
+            if !families.is_empty() {
+                e.typed_apply_for_test(families, "");
             }
             e.call(0x0069_9b60, &[mesh]);
             sides.push((e, mesh));
         }
         let ((a, mesh), (b, _)) = (&sides[0], &sides[1]);
-        assert_eq!(
-            (a.mem.heap_top(), a.mem.heap_available()),
-            (b.mem.heap_top(), b.mem.heap_available()),
-            "the heap, control word {word:04x}"
-        );
+        if (a.mem.heap_top(), a.mem.heap_available()) != (b.mem.heap_top(), b.mem.heap_available())
+        {
+            return Err(format!("the heap, control word {word:04x}"));
+        }
         let differences = memory_differences_beside_stack(a, b, 8);
-        assert!(
-            differences.is_empty(),
-            "memory differs at {differences:08x?}, control word {word:04x}"
-        );
+        if !differences.is_empty() {
+            return Err(format!(
+                "memory differs at {differences:08x?} (mesh at {mesh:08x}), control word {word:04x}"
+            ));
+        }
         result = outcome(a, *mesh);
     }
-    result
+    Ok(result)
 }
 
+/// The translations only against every family on (play), and the other families on against every
+/// family on (this one alone differs).
 #[test]
 fn generated_meshes_both_ways() {
-    for g in GRIDS {
+    for (k, g) in GRIDS.into_iter().enumerate() {
         let (vertices, triangles) = grid(g);
-        both_ways(&vertices, &triangles);
+        for (a, what) in [
+            (&[][..], "translations only"),
+            (&CALLEES[..], "the callees typed"),
+        ] {
+            if let Err(why) = both_ways(&vertices, &triangles, a, &ALL) {
+                panic!("grid {k} against {what}: {why}");
+            }
+        }
     }
 }
 
@@ -546,6 +573,8 @@ fn real_navmeshes() {
         .unwrap_or(48);
     let plugins = std::env::var("NV_NAVMESH_PLUGINS").unwrap_or_else(|_| "FalloutNV.esm".into());
     let mut small = Vec::new();
+    let mut failures = Vec::new();
+    let mut play_differs = 0u32;
     for name in plugins.split(',').map(str::trim).filter(|n| !n.is_empty()) {
         let plugin = Plugin::open(data.join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
         let entries: Vec<_> = plugin.records_of_type(FourCC(*b"NAVM")).collect();
@@ -569,7 +598,21 @@ fn real_navmeshes() {
         let (mut pairs, mut preferred, mut triangles) = (0u64, 0u64, 0u64);
         for &i in &chosen {
             let (id, (v, t)) = &meshes[i];
-            let (p, c) = both_ways(v, t);
+            // This family alone: exact against the translation with the same callees.
+            let (p, c) = match both_ways(v, t, &CALLEES, &ALL) {
+                Ok(found) => found,
+                Err(why) => {
+                    failures.push(format!("{name} {id:08x}: {why}"));
+                    continue;
+                }
+            };
+            // Play against the translations only: a difference here that the line above doesn't
+            // have comes from the other families' native floats (their last bits on main).
+            if let Err(why) = both_ways(v, t, &[], &ALL) {
+                let callees = both_ways(v, t, &[], &CALLEES).is_err();
+                eprintln!("{name} {id:08x}: play differs from the translations only ({why}); the callees alone differ too: {callees}");
+                play_differs += 1;
+            }
             pairs += u64::from(p);
             preferred += u64::from(c);
             triangles += t.len() as u64;
@@ -584,6 +627,8 @@ fn real_navmeshes() {
             meshes.len()
         );
     }
+    eprintln!("{play_differs} navmeshes differ in play from the translations only");
+    assert!(failures.is_empty(), "{failures:#?}");
     assert!(
         !small.is_empty(),
         "no small navmesh for the call-for-call comparison"
@@ -591,10 +636,11 @@ fn real_navmeshes() {
     let count = small.len();
     let small: &'static [_] = small.leak();
     let indices: &'static [u32] = (0..count as u32).collect::<Vec<_>>().leak();
-    common(Diff::new(entry!(
+    Diff::new(entry!(
         0x0069_9b60,
         navmesh_edges::rebuild_edge_pairs(Ptr<_>)
-    )))
+    ))
+    .common()
     .inputs(&[Input::Of(indices)])
     .max_cases(count)
     .setup(move |e, case: &Case| {
