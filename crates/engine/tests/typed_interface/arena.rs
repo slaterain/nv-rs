@@ -11,7 +11,7 @@
 //! - **The callees**: every function the tested code calls by address is a logging stand-in: it
 //!   writes its address and words to the log page ([`LOG`]), so the memory compare sees them as well
 //!   as the harness's call log, and answers a word, a float in ST0 and a word in EDX from a sequence
-//!   (by the call's number), the same on both sides.
+//!   (by the call's number and the seed), the same on both sides.
 //!
 //! What it can't see: behaviour that needs real objects (a callee's real effect, a vtable slot
 //! holding a typed function), which the files' own tests in `engine-fallout-interface` keep.
@@ -78,7 +78,7 @@ fn word(seed: u32, at: u32, first_later: u32) -> u32 {
 /// Appends `words` to the log under `tag`.
 fn log(e: &mut Engine, tag: u32, words: &[u32]) {
     let n = e.mem.u32(LOG);
-    if 4 * (n + 2 + words.len() as u32) >= LOG_SIZE {
+    if 4 * (n + 2 + words.len() as u32) >= LOG_SIZE - 16 {
         return;
     }
     e.mem.set_u32(LOG + 4 + 4 * n, tag);
@@ -89,13 +89,22 @@ fn log(e: &mut Engine, tag: u32, words: &[u32]) {
     e.mem.set_u32(LOG, n + 2 + words.len() as u32);
 }
 
-/// A logging stand-in at `at`: its answer by the number of calls so far (a word on the log page).
+/// The log page's last words: the number of stand-in calls so far, and the world's seed.
+const CALLS: u32 = LOG + LOG_SIZE - 4;
+const SEED: u32 = LOG + LOG_SIZE - 8;
+
+/// A logging stand-in at `at`: its answer by the number of calls so far and the world's seed (words on
+/// the log page), so the same call answers differently in each seed's world: a function that leaves
+/// early on its first callee's answer goes on in another seed.
 fn stand_in(e: &mut Engine, at: u32) {
     e.register_double(at, move |e, words| {
-        let calls = e.mem.u32(LOG + LOG_SIZE - 4);
-        e.mem.set_u32(LOG + LOG_SIZE - 4, calls + 1);
+        let calls = e.mem.u32(CALLS);
+        e.mem.set_u32(CALLS, calls + 1);
         log(e, at, words);
-        let n = calls.wrapping_mul(7).wrapping_add(at >> 2);
+        let n = calls
+            .wrapping_mul(7)
+            .wrapping_add(at >> 2)
+            .wrapping_add(e.mem.u32(SEED));
         let eax = match n % 5 {
             0 => 0,
             1 => 1,
@@ -124,6 +133,7 @@ pub fn world(e: &mut Engine, seed: u32, callees: &[u32]) {
     e.map(ARENA, OBJECTS * OBJECT);
     e.map(VTABLES, 0x400 * VTABLE_COUNT);
     e.map(LOG, LOG_SIZE);
+    e.mem.set_u32(SEED, seed);
     for k in 0..OBJECTS {
         let base = object(k);
         e.mem.set_u32(base, VTABLES + 0x400 * (k % VTABLE_COUNT));
@@ -224,7 +234,7 @@ impl InArena for Diff {
             .family(&engine_core::typed::leaf::LEAVES)
             .translation_calls_plainly(plain)
             .inputs(&inputs)
-            .max_cases(12)
+            .max_cases(24)
             .max_calls(400)
             .setup(move |e, case: &Case| {
                 world(e, case.word(0), callees);
