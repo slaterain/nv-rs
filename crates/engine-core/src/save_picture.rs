@@ -177,35 +177,47 @@ pub fn at(offset: u32, bytes: Vec<u8>) {
 }
 
 /// The save, at the end of its body: the picture's place and its bytes, made from the copy's rows
-/// (`None` when no picture waits).
-///
-/// # Panics
-/// When the copy gave no rows: the copy itself stops the run then, as without the switch.
+/// (`None` when no picture waits). A copy that gave no rows (a backend without surfaces) leaves the
+/// destination's memory as it was made, zero: a black picture, and the save goes on (the game does
+/// not look at `GetRenderTargetData`'s result either; review of #1037).
 pub fn take(e: &mut Engine) -> Option<Picture> {
     let Step::Placed {
         width,
         height,
         pitch,
         offset,
-        mut bytes,
+        bytes,
     } = step(std::mem::take)
     else {
         return None;
     };
     let rows = TAKE.get().and_then(|take| take(e));
-    let Some((row, rows)) = rows else {
-        panic!(
-            "IDirect3DDevice9::GetRenderTargetData of a save's picture: no pixels to read back \
-             (not provided)"
-        )
-    };
+    Some(picture(width, height, pitch, offset, bytes, rows))
+}
+
+/// The picture of `width` by `height` pixels whose bytes `bytes` are at `offset`, made from the copy's
+/// rows (`row` bytes each, `pitch` apart in the destination; none: zero). As many of the
+/// destination's rows as the conversion reads (`width * height` pixels, the rows packed) are placed.
+pub fn picture(
+    width: u32,
+    height: u32,
+    pitch: u32,
+    offset: u32,
+    mut bytes: Vec<u8>,
+    rows: Option<(u32, Vec<u8>)>,
+) -> Picture {
+    let (row, rows) = rows.unwrap_or((0, Vec::new()));
+    let read = u64::from(width) * u64::from(height) * 4;
+    let surface_rows = read
+        .div_ceil(u64::from(pitch.max(1)))
+        .min(u64::from(u32::MAX)) as u32;
     convert(
-        &placed(&rows, row, pitch, height),
+        &placed(&rows, row, pitch, surface_rows),
         width,
         height,
         &mut bytes,
     );
-    Some(Picture { offset, bytes })
+    Picture { offset, bytes }
 }
 
 /// The destination's first `height` rows `pitch` bytes apart, as the copy writes them into its memory
@@ -278,6 +290,18 @@ mod tests {
         at(40, vec![]);
         assert!(take(&mut e).is_none());
         on_for_tests(None);
+    }
+
+    #[test]
+    fn a_copy_without_rows_is_a_black_picture_and_every_row_read_is_placed() {
+        // No rows (a backend without surfaces): black, the save goes on.
+        let p = picture(2, 1, 8, 40, vec![9; 6], None);
+        assert_eq!((p.offset, p.bytes), (40, vec![0; 6]));
+        // A picture 4 pixels wide of a destination 2 pixels wide (8 bytes a row): its one row of pixels
+        // is the destination's first two rows, as the picture's conversion reads them.
+        let rows: Vec<u8> = (1..=16).collect();
+        let p = picture(4, 1, 8, 0, vec![9; 12], Some((8, rows)));
+        assert_eq!(p.bytes, vec![3, 2, 1, 7, 6, 5, 11, 10, 9, 15, 14, 13]);
     }
 
     #[test]

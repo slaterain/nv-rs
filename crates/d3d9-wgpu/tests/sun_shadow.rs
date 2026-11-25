@@ -37,6 +37,8 @@ const CUT_DECL: u32 = 0x1580;
 const CUT_TEX: u32 = 0x1590;
 /// [`CUT_PS`] as a character's face's pixel shader (its constant table names `FaceGenMap0`).
 const FACE_CUT_PS: u32 = 0x1760;
+/// [`CUT_VS`] with an instruction more that changes nothing drawn: another kind of caster.
+const CUT_VS_KIND: u32 = 0x1770;
 /// The lit pixel shader: ambient (c1) plus the sun's light colour (c3), as the game's lit shaders add
 /// them.
 const LIT_PS: u32 = 0x1320;
@@ -52,6 +54,12 @@ fn far_plane() -> f64 {
         10_000.0
     }
 }
+thread_local! {
+    /// The vertex shader the cut-out draws ([`draw_textured_through`], [`MIXED_CUT`]) go through in
+    /// this frame of [`lit_sequence_with`]: [`CUT_VS`], or [`CUT_VS_KIND`] in a frame with `cut_kind`.
+    static CUT_VS_NOW: std::cell::Cell<u32> = const { std::cell::Cell::new(CUT_VS) };
+}
+
 thread_local! {
     /// The far scene (distant shadows): the camera high over a wide land, looking far ahead; on
     /// for this test's thread while a [`FarScene`] lives (each test runs on a thread of its own).
@@ -927,6 +935,9 @@ struct Extra {
     /// [`RIBBON_ROUND`] and [`MIXED_CUT`] (`ribbon_round`, `mixed_cut`) drawn through a face's pixel
     /// shader ([`FACE_CUT_PS`]): a character's casters.
     face_cutouts: bool,
+    /// [`RIBBON_ROUND`] and [`MIXED_CUT`] drawn through [`CUT_VS_KIND`] (another kind of the same
+    /// draws: another vertex shader, the same positions).
+    cut_kind: bool,
     /// The cable of `cable` written again (the same bytes) before it is drawn.
     rewrite_cable: bool,
     /// The pipe of [`CABLES`] drawn after `cable` (another buffer of the same layout and count).
@@ -1067,7 +1078,7 @@ fn draw_textured_through(
     count: u32,
     test: bool,
 ) {
-    set_shaders(b, CUT_VS, ps, CUT_DECL);
+    set_shaders(b, CUT_VS_NOW.get(), ps, CUT_DECL);
     run(
         b,
         Cmd::SetTexture {
@@ -1567,6 +1578,11 @@ fn extras(b: &mut WgpuBackend) {
     }
     vs.extend(ins(1, &[0xE00F_0001, 0x90E4_0001]));
     vs.push(END);
+    // The same with `mov r1, c0` before its end: another shader, nothing drawn changes.
+    let mut kind = vs.clone();
+    kind.pop();
+    kind.extend(ins(1, &[0x800F_0001, 0xA0E4_0000]));
+    kind.push(END);
     // ps_3_0: dcl_texcoord0 v0; dcl_2d s0; texld r0, v0, s0; mov oC0, r0.
     let mut ps = vec![0xFFFF_0300];
     ps.extend(ins(31, &[0x8000_0005, 0x900F_0000]));
@@ -1580,6 +1596,7 @@ fn extras(b: &mut WgpuBackend) {
     face.extend_from_slice(&ps[1..]);
     for (shader, pixel, tokens) in [
         (CUT_VS, false, vs),
+        (CUT_VS_KIND, false, kind),
         (CUT_PS, true, ps),
         (FACE_CUT_PS, true, face),
     ] {
@@ -1777,6 +1794,7 @@ fn lit_sequence_with(
     // What the tubes' index buffer holds (made with the first list).
     let mut tubes_written = Some(MixedIndexed::TwoWiresAPipe);
     for (f, e) in frames.iter().enumerate() {
+        CUT_VS_NOW.set(if e.cut_kind { CUT_VS_KIND } else { CUT_VS });
         let (view, frame) = match (e.sun, e.camera_shift) {
             (None, None) => words_here,
             (sun, shift) => hook_words_at(sun.unwrap_or_else(to_sun), shift.unwrap_or([0.0; 3])),
@@ -1929,7 +1947,7 @@ fn lit_sequence_with(
         }
         let cut_ps = if e.face_cutouts { FACE_CUT_PS } else { CUT_PS };
         if e.mixed_cut {
-            set_shaders(b, CUT_VS, cut_ps, CUT_DECL);
+            set_shaders(b, CUT_VS_NOW.get(), cut_ps, CUT_DECL);
             run(
                 b,
                 Cmd::SetTexture {
@@ -4414,6 +4432,85 @@ fn a_caster_switching_to_a_slow_kind_keeps_its_shadow_past_the_grace() {
         for p in IN_SHADOW {
             assert_eq!(at(&px, pixel(p)), at(&at_once, pixel(p)), "frame {f} {p:?}");
         }
+    }
+    // Then kind 2's pipeline is there (waited for: no thread outlives the test with the device):
+    // the hand-over, the old place let go as the new one comes in, the shadow in every frame.
+    if let Some(d) = b.device() {
+        d.wait_for_sun_variants();
+    }
+    for f in frames + 1..=frames + 4 {
+        let px = kind_frame(&mut b, 2);
+        present(&mut b, f);
+        for p in IN_SHADOW {
+            assert_eq!(at(&px, pixel(p)), at(&at_once, pixel(p)), "frame {f} {p:?}");
+        }
+    }
+}
+
+/// A cut-out cable geometry (a round wire's ribbon and a cut-out geometry with cables in it) casting
+/// through one kind whose draws move to another (another vertex shader), each of its new pipelines
+/// (its own, its ribbons', its list's, sent one after another) taking longer than the let-go's
+/// grace on its thread: the same shadows in every frame, through each of the three waits and after
+/// the hand-over (review of #994's round). (In this scene the grace's let-go never removes this
+/// geometry's places, the hold or not: the box's test is the one that covers the hold.)
+#[test]
+fn a_cable_switching_to_a_slow_kind_keeps_its_shadows_past_the_grace() {
+    let first = Extra {
+        ribbon_round: true,
+        mixed_cut: true,
+        ..Extra::default()
+    };
+    let second = Extra {
+        cut_kind: true,
+        ..first
+    };
+    let Some(off) = lit_sequence_picture(1, true, &[first; 6]) else {
+        return;
+    };
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    sun_shadow::enable(true);
+    sun_shadow::casters_ahead_for_tests(Some(true));
+    let b = backend(1);
+    sun_shadow::enable(false);
+    sun_shadow::casters_ahead_for_tests(None);
+    let mut b = b.expect("the adapter");
+    struct Delay;
+    impl Drop for Delay {
+        fn drop(&mut self) {
+            sun_shadow::caster_delay_for_tests(0);
+        }
+    }
+    let _delay = Delay;
+    // 12 frames of the first kind (its pipelines come one after another), then the second kind's,
+    // each of its three pipelines 0.25 s on its thread (more than the grace's frames here: about 11
+    // frames each), 60 frames; then all of them waited for, and 4 frames more.
+    const WARM: usize = 12;
+    const SLOW: usize = 60;
+    let mut frames = vec![first; WARM];
+    frames.extend([second; SLOW + 4]);
+    let px = lit_sequence_with(&mut b, &frames, true, &mut |f, b| {
+        if f + 1 == WARM {
+            sun_shadow::caster_delay_for_tests(250);
+        }
+        if f + 1 == WARM + SLOW {
+            if let Some(d) = b.device() {
+                d.wait_for_sun_variants();
+            }
+        } else if f + 1 < WARM + SLOW {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    });
+    let apart = |a: &[[u8; 4]]| {
+        a.iter()
+            .zip(&off[5])
+            .flat_map(|(a, b)| a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)))
+            .max()
+            .unwrap_or(0)
+    };
+    assert!(apart(&px[WARM - 1]) <= 1, "the first kind casts");
+    for (f, frame) in px.iter().enumerate().skip(WARM) {
+        let worst = apart(frame);
+        assert!(worst <= 1, "frame {f}: the shadows {worst} apart");
     }
 }
 

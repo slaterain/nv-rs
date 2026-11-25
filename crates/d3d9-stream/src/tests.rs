@@ -366,7 +366,7 @@ fn a_reply_taken_later_sees_the_commands_before_it_and_keeps_to_its_caller() {
             Stream::threaded(Box::new(Log::default()), tiny)
         },
     ];
-    for (i, make) in runners.iter().enumerate() {
+    let case = move |i: usize, make: fn() -> Stream| {
         let mut stream = make();
         assert!(stream.take_later().is_none(), "{i}: none asked for");
         // Two draws, the read-back (the backend answers rows of its draw count), three more draws and a
@@ -410,6 +410,24 @@ fn a_reply_taken_later_sees_the_commands_before_it_and_keeps_to_its_caller() {
         });
         stream.submit(draw());
         assert_eq!(rows(stream.take_later()), vec![5; 4], "{i}");
+    };
+    for (i, make) in runners.into_iter().enumerate() {
+        // On a thread of its own, waited for a bounded time: a reply lost fails the test (review of
+        // #1037), not hangs it.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            case(i, make);
+            let _ = tx.send(());
+        });
+        match rx.recv_timeout(Duration::from_secs(20)) {
+            Ok(()) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("{i}: failed (its thread's panic above)")
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                panic!("{i}: no answer in 20 s: a reply lost")
+            }
+        }
     }
 }
 
