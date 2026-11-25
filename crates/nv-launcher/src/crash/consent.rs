@@ -20,7 +20,8 @@ pub enum Consent {
     Never,
 }
 
-/// The three answers, in the order the question and the Settings row show them.
+/// The three answers, in the order the question shows them (the tests' list).
+#[cfg(test)]
 pub const ANSWERS: [Consent; 3] = [Consent::Send, Consent::Ask, Consent::Never];
 
 impl Consent {
@@ -51,18 +52,6 @@ impl Consent {
             Consent::Send => "Send automatically",
             Consent::Ask => "Ask each time",
             Consent::Never => "Never send",
-        }
-    }
-
-    /// The answer after (or before) this one, round the three; from no answer, the first
-    /// (or the last).
-    pub fn stepped(self, forward: bool) -> Consent {
-        let n = ANSWERS.len();
-        match ANSWERS.iter().position(|&a| a == self) {
-            Some(i) if forward => ANSWERS[(i + 1) % n],
-            Some(i) => ANSWERS[(i + n - 1) % n],
-            None if forward => ANSWERS[0],
-            None => ANSWERS[n - 1],
         }
     }
 }
@@ -107,16 +96,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_settings_row_steps_round_the_three_answers() {
-        assert_eq!(Consent::Send.stepped(true), Consent::Ask);
-        assert_eq!(Consent::Ask.stepped(true), Consent::Never);
-        assert_eq!(Consent::Never.stepped(true), Consent::Send);
-        assert_eq!(Consent::Send.stepped(false), Consent::Never);
-        assert_eq!(Consent::Unanswered.stepped(true), Consent::Send);
-        assert_eq!(Consent::Unanswered.stepped(false), Consent::Never);
-    }
-
     /// The answer is kept in the launcher's own file, its other lines stay; none there is no
     /// answer.
     #[test]
@@ -143,6 +122,12 @@ mod tests {
         assert_eq!(read(&own), Consent::Send);
         keep(&own, Consent::Ask, true).unwrap();
         assert_eq!(read(&own), Consent::Ask);
+        // A first answer held, then a change written at once (Settings): the change stays, the
+        // held answer is dropped (Play's first write later must not bring it back).
+        keep(&own, Consent::Send, false).unwrap();
+        keep(&own, Consent::Never, true).unwrap();
+        crate::place::write_held_keys(&own).unwrap();
+        assert_eq!(read(&own), Consent::Never);
         let _ = std::fs::remove_dir_all(&own);
     }
 }

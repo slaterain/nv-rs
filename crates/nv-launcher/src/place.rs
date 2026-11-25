@@ -65,37 +65,45 @@ pub fn note_intro_if_shown(own: &Path) -> std::io::Result<()> {
 
 /// The launcher's own file's keys chosen where nothing may be written yet (Windows, before Play's
 /// first write: the package gets nothing before Play's own checks, as the intro's note waits),
-/// written by [`write_held_keys`] then. An answer held and never written (the launcher closed
-/// without playing) is simply asked again at the next start.
-static HELD_KEYS: std::sync::Mutex<Vec<(&'static str, String)>> = std::sync::Mutex::new(Vec::new());
+/// written by [`write_held_keys`] then, each for nv-rs's own folder it was chosen for. A first
+/// answer held and never written (the launcher closed without playing) is simply asked again at
+/// the next start.
+type HeldKeys = Vec<(std::path::PathBuf, &'static str, String)>;
+static HELD_KEYS: std::sync::Mutex<HeldKeys> = std::sync::Mutex::new(Vec::new());
 
-/// `key` set to `value` in the launcher's own file: at once where `now`, else held for Play's
-/// first write ([`write_held_keys`]).
+/// `key` set to `value` in the launcher's own file in `own`: at once where `now` (and a value
+/// held for it before is dropped), else held for Play's first write ([`write_held_keys`]).
 pub fn set_key_when_allowed(
     own: &Path,
     now: bool,
     key: &'static str,
     value: &str,
 ) -> std::io::Result<()> {
-    if now {
-        return set_launcher_key(own, key, value);
-    }
     let mut held = HELD_KEYS
         .lock()
         .map_err(|_| std::io::Error::other("held keys poisoned"))?;
-    held.retain(|(k, _)| *k != key);
-    held.push((key, value.to_string()));
+    held.retain(|(dir, k, _)| !(dir == own && *k == key));
+    if now {
+        return set_launcher_key(own, key, value);
+    }
+    held.push((own.to_path_buf(), key, value.to_string()));
     Ok(())
 }
 
-/// Play's first write has passed its checks: the keys held until now are written.
+/// Play's first write has passed its checks: the keys held until now for `own` are written.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn write_held_keys(own: &Path) -> std::io::Result<()> {
-    let held = HELD_KEYS
-        .lock()
-        .map(|mut h| std::mem::take(&mut *h))
-        .unwrap_or_default();
-    for (key, value) in held {
+    let mine: HeldKeys = match HELD_KEYS.lock() {
+        Ok(mut h) => {
+            let (mine, rest) = std::mem::take(&mut *h)
+                .into_iter()
+                .partition(|(dir, _, _)| dir == own);
+            *h = rest;
+            mine
+        }
+        Err(_) => Vec::new(),
+    };
+    for (_, key, value) in mine {
         set_launcher_key(own, key, &value)?;
     }
     Ok(())

@@ -1850,10 +1850,17 @@ mod tests {
         // The intro ended at the start screen, as the window ends it: kept until Play's check
         // passes, then noted by Play's own first write.
         crate::place::intro_ended(&p.own, false).unwrap();
+        // The first start's crash reports answer waits the same way.
+        crate::crash::consent::keep(&p.own, crate::crash::consent::Consent::Ask, false).unwrap();
         assert!(!p.own.exists(), "the intro was noted before Play's check");
         let package = Package::at(root.clone());
         first_write(&package, &dir.join("somewhere else")).unwrap();
         assert!(crate::place::intro_shown(&package.userdata));
+        assert_eq!(
+            crate::crash::consent::read(&package.userdata),
+            crate::crash::consent::Consent::Ask,
+            "Play's first write keeps the held answer"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

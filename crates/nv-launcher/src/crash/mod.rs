@@ -832,7 +832,11 @@ pub fn sample(
 /// [`sample`]'s text: the report as `report.txt` has it, then the end of its log (a report keeps
 /// its last [`LOG_LINES`]; the last [`SAMPLE_LOG_LINES`] show here).
 fn sample_text(report: &Report) -> String {
-    let mut text = report.body();
+    // Any F12 report is the example's: said so (a real report holds only that run's).
+    let mut text = report.body().replace(
+        "F12 report made during this run:",
+        "Your newest F12 report, as an example (a report holds only one made in its run):",
+    );
     let shown = report.log.len().min(SAMPLE_LOG_LINES);
     if shown == 0 {
         text.push_str(&format!(
@@ -900,6 +904,11 @@ mod tests {
         assert!(text.contains("  Some Mod.esp"), "{text}");
         assert!(text.contains("Graphics card: Table Card"), "{text}");
         assert!(text.contains("    the door would not open"), "{text}");
+        assert!(
+            text.contains("Your newest F12 report, as an example"),
+            "{text}"
+        );
+        assert!(!text.contains("made during this run"), "{text}");
         assert!(!text.contains("log.txt"), "{text}");
         let made: Vec<_> = std::fs::read_dir(own.join("reports")).unwrap().collect();
         assert_eq!(made.len(), 1, "only the F12 report: nothing written");
