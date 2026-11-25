@@ -745,6 +745,22 @@ mod tests {
         assert_eq!((e.mem.u32(LOCK), e.mem.u32(LOCK + 4)), (0, 0));
     }
 
+    /// The release stores its count before it clears the owner word (at `0040fbc7`), seen on one
+    /// thread with both words watched: whatever the timing of other threads, a release that cleared
+    /// the owner first would let a waiter's count, stored between the two, be overwritten with 0.
+    #[test]
+    fn the_release_stores_the_count_before_it_clears_the_owner() {
+        let mut e = Engine::new();
+        e.map(LOCK, 0x1000);
+        e.mem.set_u32(LOCK, 7);
+        e.mem.set_u32(LOCK + 4, 1);
+        e.mem.watch(LOCK, 8, false);
+        unlock_inline(&mut e, Ptr::new(LOCK));
+        let order: Vec<u32> = e.mem.take_watch_hits().iter().map(|hit| hit.addr).collect();
+        assert_eq!(order, [LOCK + 4, LOCK]);
+        assert_eq!((e.mem.u32(LOCK), e.mem.u32(LOCK + 4)), (0, 0));
+    }
+
     /// Another real thread takes the lock as `0040fbf0` does (the owner word swapped from 0 to its
     /// id, spinning on it, then a count of 1) once this one gives it back, and reads what this one
     /// wrote under it. Its count of 1 stays: the release stores this thread's count before it clears

@@ -1116,10 +1116,10 @@ pub(crate) fn get_or_add_extra(
     size: u32,
     construct: impl FnOnce(&mut Engine, u32) -> u32,
 ) -> Ptr<BSExtraData> {
-    let mut existing = base_extra_list_get_extra_data(e, list.cast(), extra_type);
+    let mut existing = e.call(0x0041_0220, &args![list, extra_type]).ptr();
     if existing.is_null() {
         existing = Ptr::new(new_object(e, size, construct));
-        base_extra_list_add_extra(e, list.cast(), existing);
+        e.call(0x0040_ff60, &args![list, existing]);
     }
     existing
 }
@@ -1315,7 +1315,7 @@ pub(crate) fn add_extra_copy_from(
         0x2a => {
             // ExtraLock: a copy of the 0x14-byte lock structure.
             let source = payload(e, extra, 0x0c);
-            let object = new_object(e, 0x14, |e, block| fn_00411b00(e, Ptr::new(block)).addr());
+            let object = new_object(e, 0x14, |e, block| e.call(0x0041_1b00, &args![block]).u32());
             e.call(MEMCPY, &args![object, source, 0x14u32]);
             e.call(0x0041_9050, &args![list, object]);
         }
@@ -1395,13 +1395,13 @@ pub(crate) fn add_extra_copy_from(
         }
         0x65 => {
             let existing = get_or_add_extra(e, this, 0x65, 0x14, |e, block| {
-                fn_00411b40(e, Ptr::new(block)).addr()
+                e.call(0x0041_1b40, &args![block]).u32()
             });
             e.call(0x0043_46f0, &args![existing, extra]);
         }
         0x66 => {
             let existing = get_or_add_extra(e, this, 0x66, 0x14, |e, block| {
-                fn_00411be0(e, Ptr::new(block)).addr()
+                e.call(0x0041_1be0, &args![block]).u32()
             });
             e.call(0x0043_4c80, &args![existing, extra]);
         }
@@ -1416,7 +1416,7 @@ pub(crate) fn add_extra_copy_from(
         }
         0x72 => {
             let word = payload(e, extra, 0x0c);
-            let object = new_object(e, 4, |e, block| fn_00411e00(e, Ptr::new(block)).addr());
+            let object = new_object(e, 4, |e, block| e.call(0x0041_1e00, &args![block]).u32());
             let read = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, word));
             e.call(0x0053_7e90, &args![object, read]);
             e.call(0x0042_0fd0, &args![list, object]);
@@ -1436,7 +1436,7 @@ pub(crate) fn add_extra_copy_from(
         }
         0x76 => {
             let source = payload(e, extra, 0x0c);
-            let object = new_object(e, 0x10, |e, block| fn_00411dc0(e, Ptr::new(block)).addr());
+            let object = new_object(e, 0x10, |e, block| e.call(0x0041_1dc0, &args![block]).u32());
             copy_words(e, source, object, 0, 0x10);
             e.call(0x0041_fec0, &args![list, object]);
         }
@@ -1484,13 +1484,13 @@ pub(crate) fn add_extra_copy_from(
         }
         0x84 => {
             let existing = get_or_add_extra(e, this, 0x84, 0x14, |e, block| {
-                fn_00411c80(e, Ptr::new(block)).addr()
+                e.call(0x0041_1c80, &args![block]).u32()
             });
             e.call(0x0043_4a70, &args![existing, extra]);
         }
         0x85 => {
             let existing = get_or_add_extra(e, this, 0x85, 0x14, |e, block| {
-                fn_00411d20(e, Ptr::new(block)).addr()
+                e.call(0x0041_1d20, &args![block]).u32()
             });
             e.call(0x0043_4ee0, &args![existing, extra]);
         }
@@ -1517,14 +1517,14 @@ pub(crate) fn add_extra_copy_from(
         0x8d => {
             // Each weapon mod slot that is active in the source is set here.
             for mask in [1u8, 2, 4] {
-                if fn_00411e20(e, extra, mask) {
+                if e.call(0x0041_1e20, &args![extra, mask]).bool() {
                     e.call(0x0042_e380, &args![list, mask as u32]);
                 }
             }
         }
         0x92 => {
             let existing = get_or_add_extra(e, this, 0x92, 0x14, |e, block| {
-                fn_00411e40(e, Ptr::new(block)).addr()
+                e.call(0x0041_1e40, &args![block]).u32()
             });
             e.vcall(existing.addr(), 0x0c, &args![extra]);
         }
@@ -1706,12 +1706,12 @@ pub fn extra_data_list_copy_list(
     this: Ptr<ExtraDataList>,
     source: Ptr<ExtraDataList>,
 ) {
-    extra_data_list_remove_all_copyable_extra(e, this, true);
+    e.call(0x0041_1fd0, &args![this, true]);
     lock(e, NAME_COPY_LIST);
     if !source.is_null() {
         let mut current: Ptr<BSExtraData> = e.get(source, ExtraDataList::pHead).cast();
         while !current.is_null() {
-            extra_data_list_add_extra_copy(e, this, current);
+            e.call(0x0041_03d0, &args![this, current]);
             current = get_next(e, current);
         }
     }
@@ -1764,11 +1764,11 @@ pub fn extra_data_list_remove_all_copyable_extra(
     lock(e, NAME_REMOVE_ALL_COPYABLE);
     let mut next: Ptr<BSExtraData> = e.get(this, ExtraDataList::pHead).cast();
     let mut kept: Ptr<BSExtraData> = Ptr::NULL;
-    base_extra_list_clear_last_extra_all(e, this.cast());
+    e.call(0x0040_f860, &args![this]);
     while !next.is_null() {
         let current = next;
         next = get_next(e, current);
-        if !extra_data_list_is_copyable_extra(e, this, current) {
+        if !e.call(0x0041_1f20, &args![this, current]).bool() {
             kept = current;
         } else {
             if current == e.get(this, ExtraDataList::pHead).cast() {
@@ -1793,7 +1793,7 @@ pub fn extra_data_list_remove_all_copyable_extra(
 /// deleted. The type bitmap is not touched.
 pub fn extra_data_list_remove_non_persistent_cell_data(e: &mut Engine, this: Ptr<ExtraDataList>) {
     lock(e, NAME_REMOVE_NON_PERSISTENT);
-    base_extra_list_clear_last_extra_all(e, this.cast());
+    e.call(0x0040_f860, &args![this]);
     let mut kept: Ptr<BSExtraData> = Ptr::NULL;
     let mut next: Ptr<BSExtraData> = e.get(this, ExtraDataList::pHead).cast();
     while !next.is_null() {
@@ -1803,7 +1803,7 @@ pub fn extra_data_list_remove_non_persistent_cell_data(e: &mut Engine, this: Ptr
         let keep = match extra_type {
             1 | 2 => {
                 let thread_state = e.global::<u32>(THREAD_STATE_OWNER);
-                fn_004121b0(e, thread_state)
+                e.call(0x0041_21b0, &args![thread_state]).bool()
             }
             4 => true,
             _ => false,
@@ -1853,9 +1853,9 @@ pub fn extra_data_list_copy_list_for_container(
         let extra_type = get_type(e, current);
         match extra_type {
             0x0d => {
-                extra_data_list_add_extra_copy(e, this, current);
+                e.call(0x0041_03d0, &args![this, current]);
                 if !copy_only {
-                    base_extra_list_remove_extra(e, source.cast(), current, false);
+                    e.call(0x0041_0020, &args![source, current, false]);
                     current = e.get(source, ExtraDataList::pHead).cast();
                     advance = false;
                 }
@@ -1865,7 +1865,7 @@ pub fn extra_data_list_copy_list_for_container(
                 // The call returning to `0x412250`.
                 add_extra_copy_from(e, this, current, 0x0041_2250, copy_only as u32);
                 if get_type(e, current) != 0x30 && !copy_only {
-                    base_extra_list_remove_extra(e, source.cast(), current, true);
+                    e.call(0x0041_0020, &args![source, current, true]);
                     current = e.get(source, ExtraDataList::pHead).cast();
                     advance = false;
                 }
@@ -1913,7 +1913,7 @@ pub fn extra_data_list_duplicate_extra_list_for_container(
                 | 0x4a
                 | 0x8d
         ) {
-            extra_data_list_add_extra_copy(e, this, current);
+            e.call(0x0041_03d0, &args![this, current]);
         }
         current = get_next(e, current);
     }
@@ -1952,13 +1952,13 @@ pub fn extra_data_list_copy_list_for_reference(
                     } else {
                         e.call(EXTRA_SCRIPT_INIT, &args![block, script]).u32()
                     };
-                    base_extra_list_add_extra(e, this.cast(), Ptr::new(created));
+                    e.call(0x0040_ff60, &args![this, created]);
                     let script = e.call(GET_SCRIPT, &args![source]).u32();
                     let compiled = e.call(SCRIPT_GET_RESULT, &args![script]).u32();
                     e.call(EXTRA_DATA_LIST_SET_SCRIPT_RESULT, &args![this, compiled]);
                 } else {
-                    extra_data_list_add_extra_copy(e, this, current);
-                    base_extra_list_remove_extra(e, source.cast(), current, false);
+                    e.call(0x0041_03d0, &args![this, current]);
+                    e.call(0x0041_0020, &args![source, current, false]);
                     current = e.get(source, ExtraDataList::pHead).cast();
                     advance = false;
                 }
@@ -2010,7 +2010,7 @@ fn copy_for_reference(
 ) {
     add_extra_copy_from(e, this, *current, 0x0041_2523, remove_from_source as u32);
     if remove_from_source {
-        base_extra_list_remove_extra(e, source.cast(), *current, true);
+        e.call(0x0041_0020, &args![source, *current, true]);
         *current = e.get(source, ExtraDataList::pHead).cast();
     }
     *advance = !remove_from_source;
@@ -2024,7 +2024,7 @@ pub(crate) fn differs_from_extra_in(
     extra: Ptr<BSExtraData>,
 ) -> bool {
     let extra_type = get_type(e, extra);
-    let found = base_extra_list_get_extra_data(e, list.cast(), extra_type);
+    let found: Ptr<BSExtraData> = e.call(0x0041_0220, &args![list, extra_type]).ptr();
     if found.is_null() {
         return true;
     }
@@ -2072,7 +2072,7 @@ pub fn extra_data_list_compare_list_for_container(
         }
         if get_type(e, current) != 0x24 && get_type(e, current) != 0x4a {
             let extra_type = get_type(e, current);
-            let found = base_extra_list_get_extra_data(e, this.cast(), extra_type);
+            let found: Ptr<BSExtraData> = e.call(0x0041_0220, &args![this, extra_type]).ptr();
             if found.is_null() {
                 differs = true;
                 break;
@@ -2103,7 +2103,7 @@ pub fn extra_data_list_compare_list(
     let mut differs = false;
     let mut current: Ptr<BSExtraData> = e.get(other, ExtraDataList::pHead).cast();
     while !current.is_null() {
-        if extra_data_list_is_copyable_extra(e, this, current)
+        if e.call(0x0041_1f20, &args![this, current]).bool()
             && differs_from_extra_in(e, this, current)
         {
             differs = true;
@@ -2114,7 +2114,7 @@ pub fn extra_data_list_compare_list(
     if !differs {
         let mut current: Ptr<BSExtraData> = e.get(this, ExtraDataList::pHead).cast();
         while !current.is_null() {
-            if extra_data_list_is_copyable_extra(e, this, current)
+            if e.call(0x0041_1f20, &args![this, current]).bool()
                 && differs_from_extra_in(e, other, current)
             {
                 differs = true;
@@ -2123,14 +2123,14 @@ pub fn extra_data_list_compare_list(
             current = get_next(e, current);
         }
     }
-    let this_count = base_extra_list_items_in_list(e, this.cast());
-    let other_count = base_extra_list_items_in_list(e, other.cast());
+    let this_count = e.call(0x0040_fe20, &args![this]).i32();
+    let other_count = e.call(0x0040_fe20, &args![other]).i32();
     if this_count != other_count {
         let mut current: Ptr<BSExtraData> = e.get(this, ExtraDataList::pHead).cast();
         while !current.is_null() {
-            if extra_data_list_is_copyable_extra(e, this, current) {
+            if e.call(0x0041_1f20, &args![this, current]).bool() {
                 let extra_type = get_type(e, current);
-                if base_extra_list_get_extra_data(e, other.cast(), extra_type).is_null() {
+                if e.call(0x0041_0220, &args![other, extra_type]).u32() == 0 {
                     differs = true;
                     break;
                 }
@@ -2266,7 +2266,10 @@ pub fn fn_004143c0(e: &mut Engine, this: Ptr) -> Ptr {
 /// does nothing, the colour's (`00414430`) stores four zeros. Returns `this`.
 pub fn fn_004143f0(e: &mut Engine, this: Ptr) -> Ptr {
     typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, this));
-    fn_00414430(e, this.byte_add(0x0c), 0.0, 0.0, 0.0, 0.0);
+    e.call(
+        0x0041_4430,
+        &args![this.byte_add(0x0c), 0.0f32, 0.0f32, 0.0f32, 0.0f32],
+    );
     this
 }
 
@@ -2645,7 +2648,7 @@ pub(crate) fn save_extra_data(
         0x28 => add_chunk_word(e, chunk_tag(b"XCHG"), x87_quiet_bits(value)),
         // EXTRA_LOCK: a REFR_LOCK (0x14 bytes) with the key as a form id.
         0x2a => e.with_stack(0x14, |e, record| {
-            fn_00411b00(e, record);
+            e.call(0x0041_1b00, &args![record]);
             let lock_data = value;
             let flags = e.mem.u8(lock_data + 8);
             e.mem.set_u8(record.addr() + 8, flags);
@@ -2780,14 +2783,14 @@ pub(crate) fn save_extra_data(
         }
         // EXTRA_PRIMITIVE: radii, colour and type of the BGSPrimitive.
         0x6b => e.with_stack(0x20, |e, record| {
-            fn_004143f0(e, record);
-            let primitive = Ptr::new(value);
+            e.call(0x0041_43f0, &args![record]);
+            let primitive: Ptr = Ptr::new(value);
             e.with_stack(12, |e, radii| {
-                let radii = fn_00413fc0(e, primitive, radii);
+                let radii: Ptr = e.call(0x0041_3fc0, &args![primitive, radii]).ptr();
                 copy_block(e, radii.addr(), record.addr(), 12);
             });
             e.with_stack(16, |e, color| {
-                let color = fn_00413f90(e, primitive, color);
+                let color: Ptr = e.call(0x0041_3f90, &args![primitive, color]).ptr();
                 copy_block(e, color.addr(), record.addr() + 0x0c, 16);
             });
             let primitive_type = list_next(e, value);
@@ -2805,7 +2808,7 @@ pub(crate) fn save_extra_data(
         // PackageEventAction (`0067dc80`, tag `XPPA`).
         0x6f => {
             e.with_stack(4, |e, record| {
-                fn_00413ff0(e, record, Ptr::new(value));
+                e.call(0x0041_3ff0, &args![record, value]);
                 add_swapped_chunk_data(e, chunk_tag(b"XPRD"), record, 4, swap_word_at);
             });
             e.call(
@@ -2832,7 +2835,7 @@ pub(crate) fn save_extra_data(
         0x74 => add_optional_form_chunk(e, chunk_tag(b"XEZN"), value),
         // EXTRA_OCCLUSION_PLANE_REF_DATA: four linked references.
         0x76 => e.with_stack(16, |e, record| {
-            fn_00411dc0(e, record);
+            e.call(0x0041_1dc0, &args![record]);
             for index in 0..4 {
                 let reference = e.mem.u32(value + index * 4);
                 let id = if reference == 0 {
@@ -2846,7 +2849,7 @@ pub(crate) fn save_extra_data(
         }),
         // EXTRA_PORTAL_REF_DATA: two linked references.
         0x77 => e.with_stack(8, |e, record| {
-            fn_004143c0(e, record);
+            e.call(0x0041_43c0, &args![record]);
             for index in 0..2 {
                 let reference = e.mem.u32(value + index * 4);
                 let id = if reference == 0 {
@@ -2929,7 +2932,7 @@ pub(crate) fn save_activate_ref(e: &mut Engine, list: Ptr<ExtraDataList>, extra:
         let data = list_item(e, node);
         node = list_next(e, node);
         e.with_stack(8, |e, record| {
-            fn_00414010(e, record);
+            e.call(0x0041_4010, &args![record]);
             e.call(MEMCPY, &args![record, data, 8u32]);
             let reference = e.mem.u32(record.addr());
             let id = form_id(e, reference);
@@ -2965,7 +2968,7 @@ pub(crate) fn save_activate_ref(e: &mut Engine, list: Ptr<ExtraDataList>, extra:
 /// axis (three floats) and an angle from `NiMatrix3` (`00a58550`).
 pub(crate) fn save_plane(e: &mut Engine, extra: Ptr<BSExtraData>, tag: u32) {
     e.with_stack(0x24, |e, record| {
-        fn_00414470(e, record);
+        e.call(0x0041_4470, &args![record]);
         let plane = typed_call!(
             leaf::FAMILY,
             0x0055_9450,
@@ -2973,10 +2976,10 @@ pub(crate) fn save_plane(e: &mut Engine, extra: Ptr<BSExtraData>, tag: u32) {
         );
         let half_extents = e.call(PLANE_HALF_EXTENTS, &args![plane]).u32();
         copy_block(e, half_extents, record.addr(), 8);
-        let center = fn_00413f40(e, plane);
+        let center = e.call(0x0041_3f40, &args![plane]).u32();
         copy_block(e, center, record.addr() + 8, 12);
         e.with_stack(0x24, |e, matrix| {
-            let matrix = fn_00413f60(e, Ptr::new(plane), matrix);
+            let matrix: Ptr = e.call(0x0041_3f60, &args![plane, matrix]).ptr();
             e.call(
                 MATRIX_TO_AXIS_ANGLE,
                 &args![
@@ -3139,16 +3142,16 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
         }
         // EXTRA_LOCK: a REFR_LOCK (0x14 bytes) read into the ExtraLock's.
         b"XLOC" => {
-            let mut extra = base_extra_list_get_extra_data(e, this.cast(), 0x2a);
+            let mut extra: Ptr<BSExtraData> = e.call(0x0041_0220, &args![this, 0x2a]).ptr();
             let lock_data;
             if extra.is_null() {
-                let made = new_object(e, 0x14, |e, block| fn_00411b00(e, Ptr::new(block)).addr());
+                let made = new_object(e, 0x14, |e, block| e.call(0x0041_1b00, &args![block]).u32());
                 lock_data = made;
                 let created = new_object(e, 0x10, |e, block| {
                     e.call(EXTRA_LOCK_INIT, &args![block, made]).u32()
                 });
                 extra = Ptr::new(created);
-                base_extra_list_add_extra(e, this.cast(), extra);
+                e.call(0x0040_ff60, &args![this, extra]);
             } else {
                 lock_data = e.mem.u32(extra.addr() + 0x0c);
             }
@@ -3160,10 +3163,10 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
         }
         // EXTRA_RADIO_DATA: a RADIO_DATA (0x10 bytes) given to the setter.
         b"XRDO" => e.with_stack(0x10, |e, radio| {
-            fn_00416b40(e, radio);
+            e.call(0x0041_6b40, &args![radio]);
             read_chunk_data(e, file, radio.addr(), 0x10);
             if file_needs_swap(e, file) {
-                fn_00414220(e, radio);
+                e.call(0x0041_4220, &args![radio]);
             }
             e.call(SET_RADIO_DATA, &args![this, radio]);
         }),
@@ -3268,7 +3271,7 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
             e.call(MEMSET, &args![record, 0u32, 0x14u32]);
             read_chunk_data(e, file, record.addr(), 0x14);
             if file_needs_swap(e, file) {
-                fn_00414220(e, record);
+                e.call(0x0041_4220, &args![record]);
             }
             let location = e.mem.u32(record.addr());
             let z_rotation = x87_quiet_bits(e.mem.u32(record.addr() + 0x10));
@@ -3285,7 +3288,7 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
         }),
         // EXTRA_RAGDOLLDATA (the two chunk names share the arm).
         b"XRGD" | b"XRGB" => {
-            let mut extra = base_extra_list_get_extra_data(e, this.cast(), 0x14);
+            let mut extra: Ptr<BSExtraData> = e.call(0x0041_0220, &args![this, 0x14]).ptr();
             if extra.is_null() {
                 let created = new_object(e, 0x10, |e, block| {
                     e.call(EXTRA_RAGDOLL_DATA_INIT, &args![block]).u32()
@@ -3295,19 +3298,22 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
                     e.call(RAGDOLL_DATA_INIT, &args![block]).u32()
                 });
                 e.mem.set_u32(extra.addr() + 0x0c, data);
-                base_extra_list_add_extra(e, this.cast(), extra);
+                e.call(0x0040_ff60, &args![this, extra]);
             }
             let ragdoll = e.mem.u32(extra.addr() + 0x0c);
             if !e.call(RAGDOLL_DATA_LOAD, &args![ragdoll, file]).bool() {
                 e.call(LOG_MESSAGE, &args![MESSAGE_BAD_RAGDOLL]);
-                base_extra_list_remove_extra(e, this.cast(), extra, true);
+                e.call(0x0041_0020, &args![this, extra, true]);
             }
         }
         // EXTRA_DISTANTDATA: three floats (the first two zero, the third the
         // constant at `010145a8` unless the chunk gives it).
         b"XLOD" => e.with_stack(12, |e, local| {
             let third = x87_quiet_bits(e.global::<u32>(LOD_DEFAULT));
-            fn_00416870(e, local, 0.0, 0.0, f32::from_bits(third));
+            e.call(
+                0x0041_6870,
+                &args![local, 0.0f32, 0.0f32, f32::from_bits(third)],
+            );
             read_chunk_data(e, file, local.addr(), 12);
             if file_needs_swap(e, file) {
                 for index in 0..3 {
@@ -3352,7 +3358,7 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
         // EXTRA_ACTIVATE_REF, one REF_ACTIVATE_DATA of the parent list.
         b"XAPR" => {
             let extra = get_or_add_activate_ref(e, this);
-            let data = new_object(e, 8, |e, block| fn_00414010(e, Ptr::new(block)).addr());
+            let data = new_object(e, 8, |e, block| e.call(0x0041_4010, &args![block]).u32());
             read_chunk_data(e, file, data, 8);
             if file_needs_swap(e, file) {
                 swap_two_words(e, Ptr::new(data));
@@ -3372,7 +3378,7 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
                     swap_dword_at(e, old.addr());
                     swap_dword_at(e, old.addr() + 4);
                 }
-                let node = new_object(e, 8, |e, block| fn_00414010(e, Ptr::new(block)).addr());
+                let node = new_object(e, 8, |e, block| e.call(0x0041_4010, &args![block]).u32());
                 let reference = e.mem.u32(old.addr());
                 e.mem.set_u32(node, reference);
                 let delay = x87_quiet_bits(e.mem.u32(old.addr() + 4));
@@ -3391,7 +3397,7 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
             e.call(MEMSET, &args![decal, 0u32, 0x1cu32]);
             read_chunk_data(e, file, decal.addr(), 0x1c);
             if file_needs_swap(e, file) {
-                fn_00414030(e, decal);
+                e.call(0x0041_4030, &args![decal]);
             }
             let reference = e.mem.u32(decal.addr());
             e.call(
@@ -3424,15 +3430,15 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
         // EXTRA_NAVMESH_PORTAL, the old form: an 8-byte value turned into a
         // type `0x5A` extra data on the stack and given to `0042e2c0`.
         b"XNDP" => e.with_stack(8, |e, value| {
-            fn_00416ab0(e, value);
+            e.call(0x0041_6ab0, &args![value]);
             read_chunk_data(e, file, value.addr(), 8);
             if file_needs_swap(e, file) {
-                fn_004141e0(e, value);
+                e.call(0x0041_41e0, &args![value]);
             }
             let first = e.mem.u32(value.addr());
             let second = e.mem.u16(value.addr() + 4) as u32;
             e.with_stack(0x14, |e, extra| {
-                fn_00416ad0(e, extra, first, second);
+                e.call(0x0041_6ad0, &args![extra, first, second]);
                 e.call(SET_NAVMESH_PORTAL, &args![this, extra]);
                 e.call(NAVMESH_PORTAL_EXTRA_DESTROY, &args![extra]);
             });
@@ -3468,11 +3474,11 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
         }
         // EXTRA_PRIMITIVE: radii, colour and type.
         b"XPRM" => e.with_stack(0x20, |e, record| {
-            fn_004143f0(e, record);
+            e.call(0x0041_43f0, &args![record]);
             e.call(MEMSET, &args![record, 0u32, 0x20u32]);
             read_chunk_data(e, file, record.addr(), 0x20);
             if file_needs_swap(e, file) {
-                fn_00414290(e, record);
+                e.call(0x0041_4290, &args![record]);
             }
             let primitive_type = e.mem.u32(record.addr() + 0x1c);
             let primitive = e
@@ -3488,11 +3494,11 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
         // EXTRA_OCCLUSION_PLANE: half extents, centre and axis-angle rotation
         // build a BSOcclusionPlane (`0xFC` bytes) given to the setter.
         b"XOCP" => e.with_stack(0x24, |e, record| {
-            fn_00414470(e, record);
+            e.call(0x0041_4470, &args![record]);
             e.call(MEMSET, &args![record, 0u32, 0x24u32]);
             read_chunk_data(e, file, record.addr(), 0x24);
             if file_needs_swap(e, file) {
-                fn_004140f0(e, record);
+                e.call(0x0041_40f0, &args![record]);
             }
             let block = e.call(ALLOCATE_ALIGNED, &args![0xfcu32]).u32();
             let plane = if block == 0 {
@@ -3500,8 +3506,8 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
             } else {
                 e.call(OCCLUSION_PLANE_INIT, &args![block]).u32()
             };
-            fn_00416a30(e, Ptr::new(plane), record);
-            fn_004169f0(e, Ptr::new(plane), record.byte_add(8));
+            e.call(0x0041_6a30, &args![plane, record]);
+            e.call(0x0041_69f0, &args![plane, record.byte_add(8)]);
             e.with_stack(0x24, |e, matrix| {
                 typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, matrix));
                 let angle = x87_quiet_bits(e.mem.u32(record.addr() + 0x20));
@@ -3518,17 +3524,17 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
                         f32::from_bits(axis_z)
                     ],
                 );
-                fn_00416a70(e, Ptr::new(plane), matrix);
+                e.call(0x0041_6a70, &args![plane, matrix]);
             });
             e.call(SET_OCCLUSION_PLANE, &args![this, plane]);
         }),
         // EXTRA_PORTAL: the record is read and dropped.
         b"XPTL" => e.with_stack(0x24, |e, record| {
-            fn_00414470(e, record);
+            e.call(0x0041_4470, &args![record]);
             e.call(MEMSET, &args![record, 0u32, 0x24u32]);
             read_chunk_data(e, file, record.addr(), 0x24);
             if file_needs_swap(e, file) {
-                fn_004140f0(e, record);
+                e.call(0x0041_40f0, &args![record]);
             }
         }),
         // EXTRA_PATROL_REF_DATA, the time at the reference.
@@ -3545,16 +3551,16 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
         }),
         // EXTRA_OCCLUSION_PLANE_REF_DATA: four form ids.
         b"XORD" => {
-            let data = new_object(e, 0x10, |e, block| fn_00411dc0(e, Ptr::new(block)).addr());
+            let data = new_object(e, 0x10, |e, block| e.call(0x0041_1dc0, &args![block]).u32());
             read_chunk_data(e, file, data, 0x10);
             if file_needs_swap(e, file) {
-                fn_00414370(e, Ptr::new(data));
+                e.call(0x0041_4370, &args![data]);
             }
             e.call(SET_OCCLUSION_PLANE_REF_DATA, &args![this, data]);
         }
         // EXTRA_PORTAL_REF_DATA: two form ids.
         b"XPOD" => {
-            let data = new_object(e, 8, |e, block| fn_004143c0(e, Ptr::new(block)).addr());
+            let data = new_object(e, 8, |e, block| e.call(0x0041_43c0, &args![block]).u32());
             read_chunk_data(e, file, data, 8);
             if file_needs_swap(e, file) {
                 swap_two_words(e, Ptr::new(data));
@@ -3564,7 +3570,7 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
         // EXTRA_ROOM_REF_DATA: the count of linked portals with the master
         // flag in bit 16, then that many form ids (each in its own chunk).
         b"XRMR" => {
-            let data = new_object(e, 0x14, |e, block| fn_00416b80(e, Ptr::new(block)).addr());
+            let data = new_object(e, 0x14, |e, block| e.call(0x0041_6b80, &args![block]).u32());
             let word = read_chunk_word(e, file);
             e.mem.set_u8(data + 0x10, (word >> 16) as u8);
             let count = word & 0xffff;
@@ -3582,7 +3588,7 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
         }
         // EXTRA_COLLISION_DATA: one word.
         b"XTRI" => {
-            let data = new_object(e, 4, |e, block| fn_00411e00(e, Ptr::new(block)).addr());
+            let data = new_object(e, 4, |e, block| e.call(0x0041_1e00, &args![block]).u32());
             read_chunk_data(e, file, data, 4);
             if file_needs_swap(e, file) {
                 swap_word_at(e, Ptr::new(data));
@@ -3631,12 +3637,12 @@ pub(crate) fn get_or_add_special_render_flags(
     e: &mut Engine,
     list: Ptr<ExtraDataList>,
 ) -> Ptr<BSExtraData> {
-    let existing = base_extra_list_get_extra_data(e, list.cast(), 0x92);
+    let existing = e.call(0x0041_0220, &args![list, 0x92]).ptr();
     if !existing.is_null() {
         return existing;
     }
-    let created = new_object(e, 0x14, |e, block| fn_00411e40(e, Ptr::new(block)).addr());
-    base_extra_list_add_extra(e, list.cast(), Ptr::new(created))
+    let created = new_object(e, 0x14, |e, block| e.call(0x0041_1e40, &args![block]).u32());
+    e.call(0x0040_ff60, &args![list, created]).ptr()
 }
 
 /// Whether the form of the save buffer (`BGSSaveFormBuffer::GetForm`,
@@ -3734,7 +3740,7 @@ pub(crate) fn resolve_form_id(
 
 /// `RemoveExtra(extra, destroy)` on the list being fixed up.
 pub(crate) fn remove_and_delete(e: &mut Engine, list: Ptr<ExtraDataList>, extra: Ptr<BSExtraData>) {
-    base_extra_list_remove_extra(e, list.cast(), extra, true);
+    e.call(0x0041_0020, &args![list, extra, true]);
 }
 
 /// The `TESObjectREFR` embedded `ExtraDataList` (`005d43c0` gives
@@ -4209,7 +4215,7 @@ pub(crate) fn find_extra(
     list: Ptr<ExtraDataList>,
     extra_type: u8,
 ) -> Ptr<BSExtraData> {
-    base_extra_list_get_extra_data(e, list.cast(), extra_type)
+    e.call(0x0041_0220, &args![list, extra_type]).ptr()
 }
 
 /// The word at +0x0C of the first extra data of `extra_type`, or `default`
@@ -4252,9 +4258,9 @@ pub(crate) fn extra_sound_or_empty(
 ) -> Ptr {
     let extra = find_extra(e, list, extra_type);
     if extra.is_null() {
-        fn_004188d0(e, out)
+        e.call(0x0041_88d0, &args![out]).ptr()
     } else {
-        fn_00418900(e, out, Ptr::new(extra.addr() + 0x0c))
+        e.call(0x0041_8900, &args![out, extra.addr() + 0x0c]).ptr()
     }
 }
 
@@ -4267,7 +4273,7 @@ pub(crate) fn extra_sound_or_empty(
 /// in `f64` and rounds at the same stores.
 pub fn fn_004168a0(e: &mut Engine, this: Ptr, angle: f32, x: f32, y: f32, z: f32) {
     let (sine, cosine) = e.with_stack(8, |e, scratch| {
-        fn_004169a0(e, angle, scratch, Ptr::new(scratch.addr() + 4));
+        e.call(0x0041_69a0, &args![angle, scratch, scratch.addr() + 4]);
         (
             e.mem.f32(scratch.addr()) as f64,
             e.mem.f32(scratch.addr() + 4) as f64,
@@ -4374,7 +4380,7 @@ pub fn fn_004182e0(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
 /// list. The compiler's exception-unwinding frame is not translated.
 pub fn fn_00418310(e: &mut Engine, this: Ptr<ExtraDataList>, data: Ptr) {
     if data.is_null() {
-        base_extra_list_remove_extra_ov2(e, this.cast(), EXTRA_RADIO_DATA);
+        e.call(0x0041_0140, &args![this, EXTRA_RADIO_DATA]);
         return;
     }
     let existing = find_extra(e, this, EXTRA_RADIO_DATA);
@@ -4386,10 +4392,10 @@ pub fn fn_00418310(e: &mut Engine, this: Ptr<ExtraDataList>, data: Ptr) {
     let extra = if block == 0 {
         0
     } else {
-        fn_004183e0(e, Ptr::new(block)).addr()
+        e.call(0x0041_83e0, &args![block]).u32()
     };
     e.call(RADIO_DATA_COPY, &args![extra.wrapping_add(0x0c), data]);
-    base_extra_list_add_extra(e, this.cast(), Ptr::new(extra));
+    e.call(0x0040_ff60, &args![this, extra]);
 }
 
 // Translated from 004183e0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4401,7 +4407,7 @@ pub fn fn_00418310(e: &mut Engine, this: Ptr<ExtraDataList>, data: Ptr) {
 pub fn fn_004183e0(e: &mut Engine, this: Ptr) -> Ptr {
     e.call(BS_EXTRA_DATA_INIT, &args![this, EXTRA_RADIO_DATA as u32]);
     e.mem.set_u32(this.addr(), VTABLE_EXTRA_RADIO_DATA);
-    fn_00416b40(e, Ptr::new(this.addr() + 0x0c));
+    e.call(0x0041_6b40, &args![this.addr() + 0x0c]);
     e.call(MEMSET, &args![this.addr() + 0x0c, 0u32, 0x10u32]);
     this
 }
@@ -4459,7 +4465,7 @@ pub fn fn_00418550(e: &mut Engine, this: Ptr<ExtraDataList>, reference: u32) {
         e.call(EXTRA_ORIGINAL_REFERENCE_INIT, &args![block, reference])
             .u32()
     };
-    base_extra_list_add_extra(e, this.cast(), Ptr::new(extra));
+    e.call(0x0040_ff60, &args![this, extra]);
 }
 
 // Translated from 00418600 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4468,7 +4474,7 @@ pub fn fn_00418550(e: &mut Engine, this: Ptr<ExtraDataList>, reference: u32) {
 pub fn extra_data_list_remove_original_reference_extra(e: &mut Engine, this: Ptr<ExtraDataList>) {
     let extra = find_extra(e, this, EXTRA_ORIGINAL_REFERENCE);
     if !extra.is_null() {
-        base_extra_list_remove_extra(e, this.cast(), extra, true);
+        e.call(0x0041_0020, &args![this, extra, true]);
     }
 }
 
@@ -4523,7 +4529,7 @@ pub fn extra_data_list_get_leveled_item(
 /// `ExtraDataList::HasLeveledItem` (Xbox PDB): whether the list has a type
 /// `0x2F` extra data (`BaseExtraList::HasExtra`; the result is `AL`).
 pub fn extra_data_list_has_leveled_item(e: &mut Engine, this: Ptr<ExtraDataList>) -> bool {
-    base_extra_list_has_extra(e, this.cast(), EXTRA_LEVELED_ITEM)
+    e.call(0x0040_fe80, &args![this, EXTRA_LEVELED_ITEM]).bool()
 }
 
 // Translated from 00418770 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4672,7 +4678,7 @@ pub fn extra_data_list_get_activate_loop_sound(
 /// Whether the list has a type `0x1F` extra data (`EXTRA_GHOST` in the Xbox
 /// enum): `BaseExtraList::HasExtra`, as a `bool`.
 pub fn fn_00418a80(e: &mut Engine, this: Ptr<ExtraDataList>) -> bool {
-    base_extra_list_has_extra(e, this.cast(), EXTRA_GHOST)
+    e.call(0x0040_fe80, &args![this, EXTRA_GHOST]).bool()
 }
 
 // ---------------------------------------------------------------------------
@@ -4778,7 +4784,7 @@ pub(crate) fn add_new_extra(
         words.extend_from_slice(construct_args);
         e.call(construct, &words).u32()
     });
-    base_extra_list_add_extra(e, list.cast(), Ptr::new(extra));
+    e.call(0x0040_ff60, &args![list, extra]);
     Ptr::new(extra)
 }
 
@@ -4820,7 +4826,7 @@ pub(crate) fn set_or_remove_extra(
             add_new_extra(e, list, 0x10, construct, &[value]);
         }
     } else if value == none {
-        base_extra_list_remove_extra(e, list.cast(), extra, true);
+        e.call(0x0041_0020, &args![list, extra, true]);
     } else {
         e.mem.set_u32(extra.addr() + 0x0c, value);
     }
@@ -4849,7 +4855,7 @@ pub(crate) fn set_owned_pointer_extra(
         return add_new_extra(e, list, 0x10, construct, &[value]);
     }
     if value == 0 {
-        base_extra_list_remove_extra(e, list.cast(), extra, true);
+        e.call(0x0041_0020, &args![list, extra, true]);
         return if keep_deleted { extra } else { Ptr::NULL };
     }
     let old = payload(e, extra, 0x0c);
@@ -4866,17 +4872,17 @@ pub(crate) fn set_owned_pointer_extra(
 /// a type `0x16` (`EXTRA_WORN`) or a type `0x17` one.
 pub fn extra_data_list_get_worn(e: &mut Engine, this: Ptr<ExtraDataList>, left_only: bool) -> bool {
     if left_only {
-        return base_extra_list_has_extra(e, this.cast(), EXTRA_WORN_LEFT);
+        return e.call(0x0040_fe80, &args![this, EXTRA_WORN_LEFT]).bool();
     }
-    base_extra_list_has_extra(e, this.cast(), EXTRA_WORN)
-        || base_extra_list_has_extra(e, this.cast(), EXTRA_WORN_LEFT)
+    e.call(0x0040_fe80, &args![this, EXTRA_WORN]).bool()
+        || e.call(0x0040_fe80, &args![this, EXTRA_WORN_LEFT]).bool()
 }
 
 // Translated from 00418b10 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ExtraDataList::GetCanNotWear` (Xbox PDB): whether the list has a type
 /// `0x3E` extra data (`EXTRA_CANNOTWEAR` in the Xbox enum).
 pub fn extra_data_list_get_can_not_wear(e: &mut Engine, this: Ptr<ExtraDataList>) -> bool {
-    base_extra_list_has_extra(e, this.cast(), EXTRA_CAN_NOT_WEAR)
+    e.call(0x0040_fe80, &args![this, EXTRA_CAN_NOT_WEAR]).bool()
 }
 
 // Translated from 00418b40 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4913,7 +4919,7 @@ pub fn extra_data_list_has_weapon_mods(e: &mut Engine, this: Ptr<ExtraDataList>)
     if extra.is_null() {
         false
     } else {
-        fn_00418be0(e, extra)
+        e.call(0x0041_8be0, &args![extra]).bool()
     }
 }
 
@@ -4936,7 +4942,7 @@ pub fn extra_data_list_get_weapon_mod_slot_active(
     if extra.is_null() {
         false
     } else {
-        fn_00411e20(e, extra, slot)
+        e.call(0x0041_1e20, &args![extra, slot]).bool()
     }
 }
 
@@ -5021,7 +5027,7 @@ pub fn fn_00419120(e: &mut Engine, this: Ptr<ExtraDataList>, data: u32) -> Ptr<B
         data,
         true,
         |e, old| {
-            fn_00419220(e, Ptr::new(old), 1);
+            e.call(0x0041_9220, &args![old, 1]);
         },
     )
 }
@@ -5054,7 +5060,7 @@ pub fn fn_00419250(e: &mut Engine, this: Ptr<ExtraDataList>, data: u32) -> Ptr<B
         data,
         false,
         |e, old| {
-            fn_00419350(e, Ptr::new(old), 1);
+            e.call(0x0041_9350, &args![old, 1]);
         },
     )
 }
@@ -5088,7 +5094,7 @@ pub fn fn_00419380(e: &mut Engine, this: Ptr<ExtraDataList>, data: u32) -> Ptr<B
         data,
         false,
         |e, old| {
-            fn_00419480(e, Ptr::new(old), 1);
+            e.call(0x0041_9480, &args![old, 1]);
         },
     )
 }
@@ -5237,7 +5243,7 @@ pub fn extra_data_list_set_count(e: &mut Engine, this: Ptr<ExtraDataList>, count
     let extra = find_extra(e, this, EXTRA_COUNT);
     if count == 0 || count == 1 {
         if !extra.is_null() {
-            base_extra_list_remove_extra(e, this.cast(), extra, true);
+            e.call(0x0041_0020, &args![this, extra, true]);
         }
     } else if extra.is_null() {
         add_new_extra(e, this, 0x10, EXTRA_COUNT_INIT, &[count as u16 as u32]);
@@ -5312,7 +5318,7 @@ pub fn fn_00419d10(e: &mut Engine, this: Ptr<ExtraDataList>, poison: u32) {
 pub fn extra_data_list_set_item_dropper(e: &mut Engine, this: Ptr<ExtraDataList>, dropper: u32) {
     let extra = find_extra(e, this, EXTRA_TYPE_46);
     if dropper == 0 && !extra.is_null() {
-        base_extra_list_remove_extra(e, this.cast(), extra, true);
+        e.call(0x0041_0020, &args![this, extra, true]);
         return;
     }
     if extra.is_null() {
@@ -5386,7 +5392,7 @@ pub fn extra_data_list_set_scale(e: &mut Engine, this: Ptr<ExtraDataList>, scale
             add_new_extra(e, this, 0x10, EXTRA_SCALE_INIT, &[bits]);
         }
     } else if is_one {
-        base_extra_list_remove_extra(e, this.cast(), extra, true);
+        e.call(0x0041_0020, &args![this, extra, true]);
     } else {
         e.mem.set_u32(extra.addr() + 0x0c, bits);
     }
@@ -5411,21 +5417,21 @@ pub(crate) fn set_sound_extra(
     let extra = find_extra(e, list, extra_type);
     if !extra.is_null() {
         let is_empty = e.with_stack(0x0c, |e, empty| {
-            fn_0041a250(e, empty);
-            let equal = fn_0041a1f0(e, sound.cast(), empty);
+            e.call(0x0041_a250, &args![empty]);
+            let equal = e.call(0x0041_a1f0, &args![sound, empty]).bool();
             e.call(SOUND_HANDLE_DESTRUCTOR, &args![empty]);
             equal
         });
         if is_empty {
-            base_extra_list_remove_extra(e, list.cast(), extra, true);
+            e.call(0x0041_0020, &args![list, extra, true]);
         } else {
-            fn_00418900(e, Ptr::new(extra.addr() + 0x0c), sound.cast());
+            e.call(0x0041_8900, &args![extra.addr() + 0x0c, sound]);
         }
         return;
     }
     let differs = e.with_stack(0x0c, |e, empty| {
-        fn_0041a250(e, empty);
-        let differs = fn_0041a220(e, sound.cast(), empty);
+        e.call(0x0041_a250, &args![empty]);
+        let differs = e.call(0x0041_a220, &args![sound, empty]).bool();
         e.call(SOUND_HANDLE_DESTRUCTOR, &args![empty]);
         differs
     });
@@ -5438,7 +5444,7 @@ pub(crate) fn set_sound_extra(
     } else {
         // The handle is passed by value: a copy on the stack, three words.
         let words = e.with_stack(0x0c, |e, copy| {
-            fn_00418900(e, copy, sound.cast());
+            e.call(0x0041_8900, &args![copy, sound]);
             [
                 e.mem.u32(copy.addr()),
                 e.mem.u32(copy.addr() + 4),
@@ -5448,7 +5454,7 @@ pub(crate) fn set_sound_extra(
         e.call(construct, &args![block, words[0], words[1], words[2]])
             .u32()
     };
-    base_extra_list_add_extra(e, list.cast(), Ptr::new(new_extra));
+    e.call(0x0040_ff60, &args![list, new_extra]);
 }
 
 // Translated from 0041a090 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -7558,6 +7564,14 @@ mod tests {
     #[test]
     fn copy_list_empties_the_copyable_extra_data_then_copies_the_sources() {
         let mut e = list_engine();
+        // `RemoveAllCopyableExtra` asks `IsCopyableExtra` by address: the real one, not the stand-in
+        // the copies' tests answer with.
+        let is_copyable = funcs()
+            .into_iter()
+            .find(|(addr, _)| *addr == IS_COPYABLE)
+            .map(|(_, f)| f)
+            .unwrap();
+        e.register(IS_COPYABLE, is_copyable);
         // 0x01 is not copyable and stays; 0x20 and 0x30 are removed.
         let (list, extras) = list_with(&mut e, &[0x01, 0x20, 0x30]);
         let (source, _) = list_with_payloads(&mut e, &[(0x03, 0x111), (0x07, 0x222)]);
