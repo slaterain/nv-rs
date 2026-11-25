@@ -1867,6 +1867,14 @@ mod tests {
                 "<nv-rs-data>/game/Documents/My Games/FalloutNV/Saves/<save>",
             ),
             (
+                "could not read F:\\Games\\nv-rs\\userdata\\game\\Documents\\My Games\\FalloutNV\\Saves\\Jo Hero (in 00a1b2c3 < 00400000)",
+                "could not read <nv-rs>\\userdata\\game\\Documents\\My Games\\FalloutNV\\Saves\\<save> (in 00a1b2c3 < 00400000)",
+            ),
+            (
+                "G:\\x\\Saves\\Jo Hero mailed jo@example.com",
+                "<path>\\Saves\\<save> <e-mail>",
+            ),
+            (
                 "NV_SAVE_OUT=D:\\Backup\\Saves\\Jo Hero: refused (a link); saves are not copied.",
                 "NV_SAVE_OUT=<path>\\Saves\\<save>: refused (a link); saves are not copied.",
             ),
