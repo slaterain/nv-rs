@@ -7869,6 +7869,7 @@ mod tests {
             mix_now: stand_in_mix,
             start: stand_in_start,
             in_place: true,
+            ..DeviceSeam::default()
         };
     }
 
