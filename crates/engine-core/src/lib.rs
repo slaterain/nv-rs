@@ -82,6 +82,7 @@ pub mod ptr;
 pub mod queue_check;
 pub mod race_census;
 pub mod real_threads;
+pub mod save_picture;
 pub mod sse;
 pub mod stage_time;
 pub mod static_exit;
