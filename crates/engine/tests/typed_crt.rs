@@ -218,24 +218,87 @@ fn with(
 
 // ---- The square roots and the error machinery ----
 
+/// [`CONTROL_WORDS`] as the words a case runs under: a square root holds the caller's word.
+fn saved_words() -> Vec<u16> {
+    CONTROL_WORDS.iter().map(|&w| w as u16).collect()
+}
+
+/// A square root's argument that gives a number, from a case's double: its magnitude (-0 kept), and
+/// for a NaN or an infinity the double with its exponent's top bit cleared (a number from 1 up).
+fn root_argument(x: f64) -> f64 {
+    if !x.is_finite() {
+        f64::from_bits(x.to_bits() & 0x3fff_ffff_ffff_ffff)
+    } else if x == 0.0 {
+        x
+    } else {
+        x.abs()
+    }
+}
+
+/// A square root's argument that takes the body: a NaN or an infinity as it is, any other double
+/// negative and nonzero (both zeros become -1).
+fn body_argument(x: f64) -> f64 {
+    if !x.is_finite() {
+        x
+    } else if x == 0.0 {
+        -1.0
+    } else {
+        -x.abs()
+    }
+}
+
+/// `_CIsqrt` of a number, computed in place: the body and the error machinery it ends in are left
+/// out of the translation's calls, and the result, memory and control word (held through the call
+/// under every word a caller may have saved) compare.
 #[test]
-fn ci_sqrt() {
+fn ci_sqrt_root() {
     Diff::new(entry!(0x00ec_6040, math::ci_sqrt(f64) -> f64))
         .common()
+        .ignore_calls(&[0x00ed_2808, 0x00ec_605d])
+        .control_words(&saved_words())
         .inputs(&[Input::F64, Input::Of(GLOBALS)])
         .float_sweep(FLOAT_SWEEP)
-        .setup(with(|_, case| words(case.f64(0)).to_vec()))
+        .setup(with(|_, case| words(root_argument(case.f64(0))).to_vec()))
         .run()
         .assert_same();
 }
 
+/// `_CIsqrt` of a NaN, an infinity or a negative number: the body and the machinery, call for call.
 #[test]
-fn sqrt() {
-    Diff::new(entry!(0x00ec_6054, math::sqrt(f64) -> f64))
+fn ci_sqrt_body() {
+    Diff::new(entry!(0x00ec_6040, math::ci_sqrt(f64) -> f64))
         .common()
+        .control_words(&saved_words())
         .inputs(&[Input::F64, Input::Of(GLOBALS)])
         .float_sweep(FLOAT_SWEEP)
-        .setup(with(|_, case| words(case.f64(0)).to_vec()))
+        .setup(with(|_, case| words(body_argument(case.f64(0))).to_vec()))
+        .run()
+        .assert_same();
+}
+
+/// `sqrt` of a number, computed in place, as [`ci_sqrt_root`].
+#[test]
+fn sqrt_root() {
+    Diff::new(entry!(0x00ec_6054, math::sqrt(f64) -> f64))
+        .common()
+        .ignore_calls(&[0x00ed_27c5, 0x00ec_605d])
+        .control_words(&saved_words())
+        .inputs(&[Input::F64, Input::Of(GLOBALS)])
+        .float_sweep(FLOAT_SWEEP)
+        .setup(with(|_, case| words(root_argument(case.f64(0))).to_vec()))
+        .run()
+        .assert_same();
+}
+
+/// `sqrt` of a NaN, an infinity or a negative number, as [`ci_sqrt_body`].
+#[test]
+fn sqrt_body_path() {
+    Diff::new(entry!(0x00ec_6054, math::sqrt(f64) -> f64))
+        .common()
+        .control_words(&saved_words())
+        .inputs(&[Input::F64, Input::Of(GLOBALS)])
+        .float_sweep(FLOAT_SWEEP)
+        .setup(with(|_, case| words(body_argument(case.f64(0))).to_vec()))
         .run()
         .assert_same();
 }

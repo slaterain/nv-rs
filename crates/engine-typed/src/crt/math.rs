@@ -8,6 +8,11 @@
 //! `__startOneArgErrorHandling` and `__87except`; `__handle_exc` sees the exception masked and
 //! answers that it is handled; `_ctrlfp` loads the word back. The precision flag is taken as set: the
 //! engine keeps no x87 status word, and the flag is sticky and set by nearly every x87 result.
+//!
+//! That report changes nothing but the control word, which it loads back, so a square root that gives
+//! a number (a finite non-negative argument, or -0) is computed in place by the two entries
+//! ([`root_in_place`]): the same root and the same word, with none of the ten calls. Only the domain
+//! errors and the NaNs take the body and the machinery.
 
 use super::{low_byte, low_half, low_word, signed, unsigned, words, FAMILY, SSE2_AVAILABLE};
 use engine_core::abi::{Ret, RetVal};
@@ -114,10 +119,15 @@ fn restore_control_word(e: &mut Engine, saved: u16) {
 
 // Typed from 00ec6040
 /// `_CIsqrt`, `ST0` in and out: `ST0` stored as a double (`FST`), its exponent taken (`00ed2808`,
-/// whose `ZF` says all ones), and the shared body with them.
+/// whose `ZF` says all ones), and the shared body with them. An argument that [`gives_a_root`] takes
+/// its root in place ([`root_in_place`]): the double stored is the argument, and `00ed2808` only
+/// reads it.
 pub fn ci_sqrt(e: &mut Engine, st0: f64) -> f64 {
     let stored = x87_load64(st0.to_bits());
     let (low, high) = words(stored.to_bits());
+    if gives_a_root(low, high) {
+        return root_in_place(e, stored, high);
+    }
     typed_call!(
         leaf::FAMILY,
         0x00ed_2808,
@@ -129,10 +139,14 @@ pub fn ci_sqrt(e: &mut Engine, st0: f64) -> f64 {
 
 // Typed from 00ec6054
 /// `sqrt`, cdecl, the double on the stack: loaded by `__fload_withFB` (`LEA EDX, [ESP+4]`), then the
-/// shared body, which the code falls into.
+/// shared body, which the code falls into. An argument that [`gives_a_root`] takes its root in place
+/// ([`root_in_place`]): `__fload_withFB` loads a number as it is and writes nothing but its own stack.
 pub fn sqrt(e: &mut Engine, value: f64) -> f64 {
     let bits = value.to_bits();
     let (low, high) = words(bits);
+    if gives_a_root(low, high) {
+        return root_in_place(e, value, high);
+    }
     let st0 = e.with_stack(8, |e, slot| {
         e.mem.set_u64(slot.addr(), bits);
         let loaded: EaxSt0 = typed_call!(FAMILY, 0x00ed_27c5, fload_with_fb(e, 0u32, slot));
@@ -140,6 +154,42 @@ pub fn sqrt(e: &mut Engine, value: f64) -> f64 {
     });
     let zf = high & 0x7ff0_0000 == 0x7ff0_0000;
     typed_call!(FAMILY, 0x00ec_605d, sqrt_body(e, zf, st0, low, high))
+}
+
+/// Whether the square roots' argument, as its two words, gives a number: a finite exponent and the
+/// sign clear, or -0. The body then runs `FSQRT` (none for -0) and goes to [`sqrt_exit`]; every other
+/// argument is a NaN, an infinity or a domain error.
+#[inline(always)]
+fn gives_a_root(low: u32, high: u32) -> bool {
+    high & 0x7ff0_0000 != 0x7ff0_0000
+        && (high & 0x8000_0000 == 0 || (high & 0x7fff_ffff == 0 && low == 0))
+}
+
+/// The root of an argument that [`gives_a_root`] (`high` its high word) as the body and its exit
+/// leave it, with no call: the word saved; unless it is `0x027f`, `00ed2795`'s word loaded (the
+/// caller's precision, rounding to nearest), `FSQRT` (-0 stays as it is) and the saved word loaded
+/// back. The exit loads it back in each of its ways: at once with the error switch set; in
+/// `__math_exit` with the precision exception unmasked; and with it masked through the inexact
+/// report ([`start_one_arg_error_handling`] of type 8), where [`except_87`] has flags 0x10 alone,
+/// which [`handle_exc`] finds masked (handled: nothing raised, the result kept), `_ctrlfp` and the
+/// report's end load the word, type 8 leaves `_matherr` out and sets no `errno`, and the result
+/// comes back as stored (`FSTP`/`FLD` of a double, which a number keeps).
+#[inline(always)]
+fn root_in_place(e: &mut Engine, x: f64, high: u32) -> f64 {
+    let saved = x87_control_word(e);
+    let plain = saved == PLAIN_CONTROL_WORD;
+    if !plain {
+        set_x87_control_word(e, (saved & 0x300) | 0x7f);
+    }
+    let root = if high & 0x8000_0000 == 0 {
+        x87_sqrt(x)
+    } else {
+        x
+    };
+    if !plain {
+        set_x87_control_word(e, saved);
+    }
+    root
 }
 
 // Typed from 00ec605d

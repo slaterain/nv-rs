@@ -2169,6 +2169,11 @@ mod tests {
         // With the scales 0x3f800003 and 0x3f800005: products 0x371556a0000001 and 0x2c266820000001
         // (times 2^-23), the 30 bits below their 24 a half and one more.
         sums.extend([1_848_289_963, -1_848_289_963, 1_481_428_173]);
+        // Sums between 2^29 and 2^30 whose products meet that point too, rounding both ways (with the
+        // scales 0x3ed499a3, 0x3ef7561f and 0x3eb8efbf below): a cut at 2^30 would differ there.
+        for sum in [915_366_411, 592_009_761, 750_977_087] {
+            sums.extend([sum, -sum]);
+        }
         for edge in [1i32 << 24, 1 << 29] {
             for step in -2..=2 {
                 sums.push(edge + step);
@@ -2183,6 +2188,9 @@ mod tests {
             0x3780_0000,
             0x3f80_0003,
             0x3f80_0005,
+            0x3ed4_99a3,
+            0x3ef7_561f,
+            0x3eb8_efbf,
             0x3eaa_aaab,
             0x3f80_0000,
             0xbf80_0000,
@@ -2210,6 +2218,19 @@ mod tests {
                 );
             });
         }
+        // The x87's bits at 24 bits for those three, and what a product rounded to a double first
+        // would give.
+        under(0x007f, || {
+            for (sum, scale, exe, twice) in [
+                (915_366_411, 0x3ed4_99a3, 0x4db5_3def, 0x4db5_3dee),
+                (592_009_761, 0x3ef7_561f, 0x4d88_5e93, 0x4d88_5e94),
+                (750_977_087, 0x3eb8_efbf, 0x4d81_584f, 0x4d81_584e),
+            ] {
+                let product = f64::from(sum) * f64::from(f32::from_bits(scale));
+                assert_eq!(x87_store32(x87_mul(f64::from(sum), x87_m32(scale))), exe);
+                assert_eq!(x87_store32(product), twice);
+            }
+        });
     }
 
     /// A face's colours take the plain steps for every sum at both of the game's control words

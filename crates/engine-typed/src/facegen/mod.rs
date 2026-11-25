@@ -22,6 +22,8 @@
 //!   (`00652230`), which the race menu's slider refresh reads every slider's value with.
 //! - [`vectors`]: the 6-byte element vector's `_Tidy` (`0065f430`) without its empty per-element
 //!   destroys, which every record of the face data that holds one runs when it goes.
+//! - [`sizes`]: the byte sizes of a face model's loaded EGM and EGT data (`0065c110`, `0065c490`), which
+//!   the face model map adds up over every model it holds when it checks its memory budget.
 //! - [`apply`]: the head's morph pass (`00663050`) with its appliers, the morph data's apply and tables,
 //!   the animation data's weight getters, and the exact skip of a reshape that would change nothing.
 //!
@@ -51,6 +53,7 @@ pub mod head;
 pub mod keyframe;
 pub mod matrix;
 pub mod morph;
+pub mod sizes;
 pub mod vectors;
 
 /// This family's bit: what each `typed_call!` of it names.
@@ -108,5 +111,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0065_8360, matrix::product(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x0065_2230, matrix::shape_statistic(u32, u32, u32, u32) -> f32),
         entry!(0x0065_f430, vectors::tidy(Ptr)),
+        entry!(0x0065_c110, sizes::egm_size(Ptr) -> u32),
+        entry!(0x0065_c490, sizes::egt_size(Ptr) -> u32),
     ]
 }
