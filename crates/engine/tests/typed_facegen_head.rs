@@ -232,7 +232,7 @@ fn coordinates(e: &mut Engine, counts: [u32; 4], pattern: u32) -> u32 {
 // ------------------------------------------------------------------------------------------------
 
 /// The shapes: (vertices, morphs in each set, the offsets of the last morph of set 0 short by).
-const MESH_SHAPES: [(u32, [u32; 2], u32); 6] = [
+const MESH_SHAPES: [(u32, [u32; 2], u32); 7] = [
     (0, [1, 1], 0),
     (3, [2, 1], 0),
     (9, [3, 2], 0),
@@ -240,6 +240,9 @@ const MESH_SHAPES: [(u32, [u32; 2], u32); 6] = [
     (22, [4, 1], 0),
     // A multiple of four: the points block's last group of four, with no single point after it.
     (12, [3, 2], 0),
+    // Past the plain steps' block of 64 coordinates: three whole blocks and a part one (219 words
+    // with the additional vertices).
+    (70, [2, 1], 0),
 ];
 
 /// The EGM data: two sets of morphs (0x1c bytes: the scale, then the offsets vector at +4) with
@@ -324,7 +327,7 @@ fn facegen_head_apply_coordinates() {
     .family(&leaf::LEAVES)
     .ignore_calls(&MESH_IGNORED)
     .inputs(&[
-        Input::Of(&[0, 1, 2, 3, 4, 5]),
+        Input::Of(&[0, 1, 2, 3, 4, 5, 6]),
         // Strides: 12, 16 and 32 hold a point (12 first: the plain case and its variations take the
         // one pass); 8 is below a point (the points overlap: the element loops).
         Input::Of(&[12, 16, 32, 8]),
