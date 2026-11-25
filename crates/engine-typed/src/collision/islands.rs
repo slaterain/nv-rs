@@ -51,11 +51,7 @@ fn body_at(e: &Engine, bodies: Ptr, index: i32) -> u32 {
 
 /// A body's world (`0044ddc0`: its word +8).
 fn world_of(e: &mut Engine, body: u32) -> u32 {
-    typed_call!(
-        leaf::FAMILY,
-        0x0044_ddc0,
-        leaf::word_at_8(e, Ptr::new(body))
-    )
+    typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, body))
 }
 
 /// A body's simulation island (`009ad610`: its word +0xcc).
