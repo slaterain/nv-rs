@@ -1868,8 +1868,7 @@ fn typed_findings(rel: &str, text: &str) -> Vec<(usize, String)> {
         {
             found.push((
                 i + 1,
-                "an x86 assumption in typed code (it stays portable)"
-                    .to_string(),
+                "an x86 assumption in typed code (it stays portable)".to_string(),
             ));
         }
         if !tests[i] {
