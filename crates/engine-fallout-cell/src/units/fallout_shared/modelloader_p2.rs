@@ -2618,6 +2618,9 @@ const QUEUE_REFERENCE_SOURCE_LINE: u32 = 0xc4e;
 const QUEUE_REFERENCE_PLAYER_SOURCE_LINE: u32 = 0xc53;
 const QUEUE_REFERENCE_CREATURE_SOURCE_LINE: u32 = 0xc6b;
 const QUEUE_REFERENCE_ACTOR_SOURCE_LINE: u32 = 0xc72;
+/// The cell's two counters `QueueReference` adds to (`00444cc0`, `00444ce0`, `thiscall(cell)`).
+const CELL_COUNT_QUEUED: u32 = 0x0044_4cc0;
+const CELL_COUNT_CRITICAL: u32 = 0x0044_4ce0;
 /// The visual distance `00444dc0` passes for a reference that `00564f00`
 /// accepts (a float at `01016970`), and the size of the path buffer.
 const VISUAL_DISTANCE_LIMIT: u32 = 0x0101_6970;
@@ -3505,7 +3508,8 @@ pub fn fn_004446a0(
 /// `0xc4e`), the task is built by the kind of the reference: the player
 /// (global `011dea3c`, context `0x34`) `00441b20`; base form type `0x25`
 /// `00440e50`; `0x2a` (context `0x32`) `00441440`; `0x2b` (context `0x32`)
-/// `00441920`; any other `0043fd40`. It is added to the queued map
+/// `00441920`; any other `0043fd40`; the task pointer takes it inside the
+/// kind's own context. It is added to the queued map
 /// (virtual function `0x10` with flag 0); if that refused, the task pointer is
 /// cleared. Otherwise, when `on_loader_thread_only` is set, the thread is the
 /// owner thread (`0044edb0` of `011dea0c`) and not in menu mode (`00702360`),
@@ -3546,38 +3550,51 @@ pub fn model_loader_queue_reference(
             return;
         }
         in_context(e, 0x31, QUEUE_REFERENCE_SOURCE_LINE, |e| {
-            let object = if reference.addr() == e.global::<u32>(SPECIAL_REFERENCE) {
+            // The task pointer takes the new task inside the kind's own context, where it has one
+            // (`004449ea`, `00444ad9`, `00444b4d`: before that context's `00404ee0`).
+            let assign = |e: &mut Engine, object: u32| {
+                e.call(TASK_POINTER_ASSIGN, &args![holder, object]);
+            };
+            if reference.addr() == e.global::<u32>(SPECIAL_REFERENCE) {
                 in_context(e, 0x34, QUEUE_REFERENCE_PLAYER_SOURCE_LINE, |e| {
-                    construct_object(e, 0x48, |e, block| {
+                    let object = construct_object(e, 0x48, |e, block| {
                         e.call(REFERENCE_TASK_PLAYER, &args![block, priority]).u32()
-                    })
-                })
+                    });
+                    assign(e, object);
+                });
             } else {
                 let form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
                 match e.call(FORM_TYPE, &args![form]).u32() {
-                    0x25 => construct_object(e, 0x40, |e, block| {
-                        e.call(REFERENCE_TASK_TREE, &args![block, reference, priority])
-                            .u32()
-                    }),
+                    0x25 => {
+                        let object = construct_object(e, 0x40, |e, block| {
+                            e.call(REFERENCE_TASK_TREE, &args![block, reference, priority])
+                                .u32()
+                        });
+                        assign(e, object);
+                    }
                     0x2a => in_context(e, 0x32, QUEUE_REFERENCE_CREATURE_SOURCE_LINE, |e| {
-                        construct_object(e, 0x48, |e, block| {
+                        let object = construct_object(e, 0x48, |e, block| {
                             e.call(REFERENCE_TASK_CREATURE, &args![block, reference, priority])
                                 .u32()
-                        })
+                        });
+                        assign(e, object);
                     }),
                     0x2b => in_context(e, 0x32, QUEUE_REFERENCE_ACTOR_SOURCE_LINE, |e| {
-                        construct_object(e, 0x40, |e, block| {
+                        let object = construct_object(e, 0x40, |e, block| {
                             e.call(REFERENCE_TASK_ACTOR, &args![block, reference, priority])
                                 .u32()
-                        })
+                        });
+                        assign(e, object);
                     }),
-                    _ => construct_object(e, 0x40, |e, block| {
-                        e.call(REFERENCE_TASK_DEFAULT, &args![block, reference, priority])
-                            .u32()
-                    }),
+                    _ => {
+                        let object = construct_object(e, 0x40, |e, block| {
+                            e.call(REFERENCE_TASK_DEFAULT, &args![block, reference, priority])
+                                .u32()
+                        });
+                        assign(e, object);
+                    }
                 }
-            };
-            e.call(TASK_POINTER_ASSIGN, &args![holder, object]);
+            }
             let queued_map = e.get(this, ModelLoader::pQueuedReferencesMap);
             if !map_add(e, queued_map, reference.addr(), holder, 0) {
                 e.call(TASK_POINTER_ASSIGN, &args![holder, 0u32]);
@@ -3600,10 +3617,11 @@ pub fn model_loader_queue_reference(
                 let cell = e.call(REFERENCE_CELL, &args![reference]).u32();
                 if cell != 0 {
                     let cell = e.call(REFERENCE_CELL, &args![reference]).u32();
-                    fn_00444cc0(e, Ptr::new(cell));
+                    // By address, as the exe calls them (typed in `cell_refs`).
+                    e.call(CELL_COUNT_QUEUED, &args![cell]);
                     if e.call(REFERENCE_IS_3D_CRITICAL, &args![reference]).bool() {
                         let cell = e.call(REFERENCE_CELL, &args![reference]).u32();
-                        fn_00444ce0(e, Ptr::new(cell));
+                        e.call(CELL_COUNT_CRITICAL, &args![cell]);
                     }
                 }
             }
@@ -8648,6 +8666,30 @@ mod tests {
                 let entered = calls_to(&q.e, MEMORY_CONTEXT_ENTER);
                 assert_eq!(entered[1][1..], [context, 1, MODEL_LOADER_SOURCE, line]);
             }
+        }
+    }
+
+    #[test]
+    fn queue_reference_assigns_the_task_inside_its_own_context() {
+        // The exe stores the new task in the pointer before it leaves the
+        // context of the player, a type 0x2a or a type 0x2b.
+        for (kind, player) in [(0x2au8, false), (0x2b, false), (0x10, true)] {
+            let mut q = queue_reference_setup(kind, None, true);
+            if player {
+                q.e.set_global(SPECIAL_REFERENCE, q.reference.addr());
+            }
+            q.e.call_log = Some(vec![]);
+            run_queue_reference(&mut q, 4, 0);
+            let (enter, assign, leave) = (
+                MEMORY_CONTEXT_ENTER,
+                TASK_POINTER_ASSIGN,
+                MEMORY_CONTEXT_LEAVE,
+            );
+            assert_eq!(
+                order_of(&q.e, &[enter, assign, leave]),
+                [enter, enter, assign, leave, leave],
+                "type {kind:#x}"
+            );
         }
     }
 

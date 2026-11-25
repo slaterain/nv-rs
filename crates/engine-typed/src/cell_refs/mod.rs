@@ -23,9 +23,16 @@
 //! addresses. `SetActionFlag` (`005ac750`) and the cell's state (`004512a0`) can be replaced by a
 //! fix or a built-in extender: called by address.
 //!
+//! The model loader's queue of each reference (`ModelLoader::QueueReference`, `00444850`, most of
+//! the pass's time) is typed in [`queue`] and registered at its address, so the pass, which calls
+//! it by address as the game's other callers do, reaches it through the registration. The small
+//! functions it calls on its task pointer and the cell are typed there too.
+//!
 //! Stage 1: the objects stay in guest memory where the game made them. **Integers only** (the one
 //! float, the origin's 0.0 for the vector constructor, is a constant word), so the row is
 //! [`Threads::Both`].
+
+pub mod queue;
 
 use crate::{dispatch, draw, slot_target};
 use engine_core::ptr::Ptr;
@@ -53,6 +60,13 @@ fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0054_bcf0, references_after_load(u32, u8)),
         entry!(0x005a_c190, init_action_list(u32, u32)),
+        entry!(0x0044_4850, queue::queue_reference(u32, u32, u32, u8)),
+        entry!(0x006f_74f0, queue::task_pointer_assign(u32, u32) -> u32),
+        entry!(0x0092_c870, queue::add_ref(u32)),
+        entry!(0x0044_cbf0, queue::task_pointer_release(u32)),
+        entry!(0x0044_4cc0, queue::count_queued(u32)),
+        entry!(0x0044_4ce0, queue::count_critical(u32)),
+        entry!(0x0057_2350, queue::is_3d_critical(u32) -> bool),
         entry!(0x0057_25b0, kind_3d_to_40_or_69(u32) -> bool),
     ]
 }

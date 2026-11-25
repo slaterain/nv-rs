@@ -12,7 +12,9 @@
 //!
 //! What stands in: the work the pass hands on (`Load3D`, the cell's scripts and the steps after
 //! them, the lock, `TES`'s test and priority, `SetActionFlag`, the cast, the process lists, the
-//! model loader's queue, the attach, the cell's state) and `Script::InitActionList`'s callees.
+//! attach, the cell's state) and `Script::InitActionList`'s callees. The model loader's queue
+//! (`00444850`, this family's) runs as itself on a loader with two stand-in maps, its own callees
+//! standing in as in its test below.
 
 use engine as _;
 use engine_core::prelude::*;
@@ -45,7 +47,7 @@ const ANSWER_3D: u32 = 0x108;
 const ANSWER_CAST: u32 = 0x10c;
 
 /// The callees that stand in.
-const DOUBLES: [u32; 20] = [
+const DOUBLES: [u32; 19] = [
     0x0054_5cf0, // TESObjectCELL::Load3D
     0x0054_c740, // the cell's scripts
     0x0054_df30, // the test after them
@@ -60,7 +62,6 @@ const DOUBLES: [u32; 20] = [
     0x005a_c750, // Script::SetActionFlag
     0x00ec_43fb, // __RTDynamicCast
     0x0096_f400, // ProcessLists::RemoveActorFromTempChangeList
-    0x0044_4850, // ModelLoader::QueueReference
     0x0054_8880, // TESObjectCELL::AttachReference3D
     0x0055_35f0, // the flagged cell's step
     0x0045_12a0, // the cell's state
@@ -136,7 +137,6 @@ fn stand_ins(e: &mut Engine) {
         e.mem.set_u8(a[0] + 0x26, a[1] as u8);
         Ret::default()
     });
-    e.register(0x0044_4850, queue_reference);
     e.register(0x0054_8880, counted::<ATTACHED>);
     e.register(0x005a_c750, counted::<ACTION_FLAGS>);
     // `ScriptLocals` of a list: the word after the list's own.
@@ -205,6 +205,11 @@ fn reference(e: &mut Engine, d: &mut Draw, vtables: [u32; 2], markers: [u32; 2])
         }
     };
     e.mem.set_u32(r + 0x20, base);
+    if base == 0 {
+        // No base form: its form flag stops it before the queue, which reads the base form's type
+        // (as the exe does: the game's references always have one).
+        e.mem.set_u32(r + 8, 0x20);
+    }
     // The extra list's `ScriptLocals`: none, fresh, or with an action list.
     let locals = match d.next(3) {
         0 => 0,
@@ -245,7 +250,14 @@ fn world(e: &mut Engine, seed: u32) -> u32 {
     e.set_global(GAME_LOADER_POINTER, loader);
     e.set_global(TES_POINTER, 0x7000u32);
     e.set_global(SAVE_GAME_POINTER, 0x7100u32);
-    e.set_global(MODEL_LOADER_POINTER, 0x7200u32);
+    // The model loader with two stand-in maps, so its queue (`00444850`) runs as itself.
+    queue_doubles(e);
+    let model_loader = e.mem.alloc(0x20);
+    let queued = test_map(e, false, true);
+    let later_map = test_map(e, false, true);
+    e.mem.set_u32(model_loader + 8, queued);
+    e.mem.set_u32(model_loader + 0xc, later_map);
+    e.set_global(MODEL_LOADER_POINTER, model_loader);
     let markers = [base_form(e, 0x20, 0), base_form(e, 0x20, 0)];
     e.set_global(ROOM_MARKER_FORM, markers[0]);
     e.set_global(MARKER_FORM, markers[1]);
@@ -286,6 +298,10 @@ fn references_after_load() {
     .family(&CELL_REFS)
     .family(&leaf::LEAVES)
     .goes_by_address(&[0x0047_c850, 0x0043_fcd0])
+    // The model loader's queue runs as itself: its other families' calls by address, its in-place
+    // calls ignored.
+    .goes_by_address(&[0x0040_b460, 0x008d_6f30])
+    .ignore_calls(QUEUE_INLINED)
     // Read in place: the game loader's flag, the extra list, the form type, the base form's flag
     // test and its two steps, the cell's list.
     .ignore_calls(&[
@@ -316,6 +332,8 @@ fn the_seeds_reach_every_branch() {
     for &seed in SEEDS {
         let mut e = Engine::new_untyped_for_test();
         let cell = world(&mut e, seed);
+        // The pass's queue calls counted by a double here (the queue has its own test below).
+        e.register(0x0044_4850, queue_reference);
         e.call(0x0054_bcf0, &args![cell, 0u32]);
         if e.mem.u32(TES_ACCEPTS) != 0 {
             accepted += 1;
@@ -412,6 +430,509 @@ fn kind_3d_to_40_or_69() {
     .setup(|e, case| {
         let r = e.mem.alloc(0x10);
         e.mem.set_u32(r + 4, 0xaabb_cc00 | case.word(0));
+        vec![r]
+    })
+    .run()
+    .assert_same();
+}
+
+// The model loader's queue of a reference (`00444850`).
+//
+// Its world, from a seed: the game loader's word (its flags 2 and 8), the reference's base form
+// type (0xd, the tree, creature and actor types, two others) or the player, the reference's class
+// (`TESObjectREFR`'s own slots 0x100 and 0x224, or stand-ins answering words kept in the
+// reference), its word at +0xc8, a cell or none; the loader's two maps with their slots the
+// lock-free family's addresses or stand-ins (the same doubles behind both: a small table of keys
+// and tasks), the reference already queued (its task's priority byte the same or not), the
+// allocation refused, the add refused, the owner thread and menu mode. The priority is one of four
+// (one above a byte), `later` both ways.
+
+/// The queue's answers, on a page of their own.
+const Q_CONTROL: u32 = 0x0310_0000;
+const Q_ALLOC_FAILS: u32 = Q_CONTROL;
+const Q_MENU_MODE: u32 = Q_CONTROL + 4;
+const Q_SCOPE_DEPTH: u32 = Q_CONTROL + 8;
+const Q_ALLOCATED: u32 = Q_CONTROL + 0xc;
+/// What the current thread is, in the queue's world.
+const Q_THREAD: u32 = 0x77;
+/// Where the stand-in slots of the maps and the tasks are registered.
+const MAP_VT_FN: u32 = 0x00ff_6000;
+const TASK_VT_FN: u32 = 0x00ff_7000;
+/// The player and the loader's owner thread object (globals).
+const PLAYER_POINTER: u32 = 0x011d_ea3c;
+const OWNER_THREAD_OBJECT: u32 = 0x011d_ea0c;
+
+/// The test's map: its vtable, the number of keys, the add's answer, the last replace flag, then
+/// up to eight (key, task) pairs.
+const MAP_COUNT: u32 = 4;
+const MAP_ADD_ANSWER: u32 = 8;
+const MAP_LAST_FLAG: u32 = 0xc;
+const MAP_PAIRS: u32 = 0x10;
+
+/// The test's task: its vtable, count (+8), key (+0x10), then what its doubles keep.
+const TASK_KIND: u32 = 0x2c;
+const TASK_NEW_PRIORITY: u32 = 0x30;
+const TASK_QUEUED: u32 = 0x34;
+const TASK_DELETED: u32 = 0x38;
+
+/// The map's find: the task of the key into the holder, counted, as the lock-free map's find does.
+fn map_find(e: &mut Engine, a: &[u32]) -> Ret {
+    let (map, key, holder) = (a[0], a[1], a[2]);
+    for i in 0..e.mem.u32(map + MAP_COUNT) {
+        if e.mem.u32(map + MAP_PAIRS + 8 * i) == key {
+            let task = e.mem.u32(map + MAP_PAIRS + 8 * i + 4);
+            e.mem.set_u32(holder, task);
+            e.mem.set_u32(task + 8, e.mem.u32(task + 8) + 1);
+            return ret(1);
+        }
+    }
+    ret(0)
+}
+
+/// The map's add: refused when the map says so or the holder is empty; else the pair kept and the
+/// task counted.
+fn map_add(e: &mut Engine, a: &[u32]) -> Ret {
+    let (map, key, holder, flag) = (a[0], a[1], a[2], a[3]);
+    e.mem.set_u32(map + MAP_LAST_FLAG, 0x100 | flag);
+    let task = e.mem.u32(holder);
+    let n = e.mem.u32(map + MAP_COUNT);
+    if e.mem.u32(map + MAP_ADD_ANSWER) == 0 || task == 0 || n == 8 {
+        return ret(0);
+    }
+    e.mem.set_u32(map + MAP_PAIRS + 8 * n, key);
+    e.mem.set_u32(map + MAP_PAIRS + 8 * n + 4, task);
+    e.mem.set_u32(map + MAP_COUNT, n + 1);
+    e.mem.set_u32(task + 8, e.mem.u32(task + 8) + 1);
+    ret(1)
+}
+
+/// A task as a constructor leaves it: the task vtable, no count, the priority in its key's byte 2.
+fn new_task(e: &mut Engine, block: u32, kind: u32, reference: u32, priority: u32) {
+    let vt = e.mem.alloc(0x40);
+    for slot in [0, 0x1c, 0x20] {
+        e.mem.set_u32(vt + slot, TASK_VT_FN + slot);
+    }
+    e.mem.set_u32(block, vt);
+    e.mem.set_u32(block + 8, 0);
+    e.mem
+        .set_u32(block + 0x10, (priority & 0xff) << 16 | 0x1234);
+    e.mem.set_u32(block + 0x14, 0x8000_0001);
+    e.mem.set_u32(block + 0x28, reference);
+    e.mem.set_u32(block + TASK_KIND, kind);
+}
+
+fn constructor<const KIND: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+    // The player's takes the priority only.
+    let (reference, priority) = if KIND == 0 { (0, a[1]) } else { (a[1], a[2]) };
+    new_task(e, a[0], KIND, reference, priority);
+    ret(a[0])
+}
+
+fn queue_stand_ins(e: &mut Engine) {
+    for page in [0x011c_3000, 0x011d_d000, 0x011d_e000] {
+        e.map(page, 0x1000);
+    }
+    queue_doubles(e);
+}
+
+/// The queue's doubles, and the page of their answers.
+fn queue_doubles(e: &mut Engine) {
+    e.map(Q_CONTROL, 0x1000);
+    // The interlocked increment and decrement, plainly.
+    e.register(0x0040_b460, |e, a| {
+        let n = e.mem.u32(a[0]).wrapping_add(1);
+        e.mem.set_u32(a[0], n);
+        ret(n)
+    });
+    e.register(0x0040_19a0, |e, a| {
+        let n = e.mem.u32(a[0]).wrapping_sub(1);
+        e.mem.set_u32(a[0], n);
+        ret(n)
+    });
+    for addr in [0x0044_bd60, MAP_VT_FN + 8] {
+        e.register(addr, map_find);
+    }
+    for addr in [0x0052_8b60, MAP_VT_FN + 0x10] {
+        e.register(addr, map_add);
+    }
+    e.register(0x0044_1b20, constructor::<0>);
+    e.register(0x0044_0e50, constructor::<1>);
+    e.register(0x0044_1440, constructor::<2>);
+    e.register(0x0044_1920, constructor::<3>);
+    e.register(0x0043_fd40, constructor::<4>);
+    // The memory manager: a block, or none when the world says so.
+    e.register(0x0040_1000, |e, a| {
+        if e.mem.u32(Q_ALLOC_FAILS) != 0 {
+            return ret(0);
+        }
+        e.mem.set_u32(Q_ALLOCATED, e.mem.u32(Q_ALLOCATED) + a[0]);
+        ret(e.mem.alloc(a[0]))
+    });
+    // The memory contexts: their depth kept, each scope given the context it entered.
+    e.register(0x0040_4eb0, |e, a| {
+        e.mem.set_u32(Q_SCOPE_DEPTH, e.mem.u32(Q_SCOPE_DEPTH) + 1);
+        e.mem.set_u32(a[0], a[1]);
+        ret(a[0])
+    });
+    e.register(0x0040_4ee0, |e, a| {
+        e.mem.set_u32(Q_SCOPE_DEPTH, e.mem.u32(Q_SCOPE_DEPTH) - 1);
+        e.mem.set_u32(a[0], 0xdead);
+        Ret::default()
+    });
+    e.register(0x0040_fc90, |_, _| ret(Q_THREAD));
+    e.register(0x0070_2360, |e, _| ret(e.mem.u32(Q_MENU_MODE)));
+    e.register(TASK_VT_FN, |e, a| {
+        e.mem.set_u32(a[0] + TASK_DELETED, 0x100 | a[1]);
+        ret(a[0])
+    });
+    e.register(TASK_VT_FN + 0x1c, |e, a| {
+        e.mem.set_u32(a[0] + TASK_NEW_PRIORITY, 0x100 | a[1]);
+        Ret::default()
+    });
+    e.register(TASK_VT_FN + 0x20, |e, a| {
+        let n = e.mem.u32(a[0] + TASK_QUEUED);
+        e.mem.set_u32(a[0] + TASK_QUEUED, n + 1);
+        Ret::default()
+    });
+    e.register(VT_FN + 0x100, answer_of::<ANSWER_IS_ACTOR>);
+    e.register(VT_FN + 0x224, answer_of::<ANSWER_KIND>);
+}
+
+/// A map with the lock-free family's slots or stand-ins, and its add's answer.
+fn test_map(e: &mut Engine, own: bool, accepts: bool) -> u32 {
+    let vt = e.mem.alloc(0x40);
+    let (find, add) = if own {
+        (0x0044_bd60, 0x0052_8b60)
+    } else {
+        (MAP_VT_FN + 8, MAP_VT_FN + 0x10)
+    };
+    e.mem.set_u32(vt + 8, find);
+    e.mem.set_u32(vt + 0x10, add);
+    let map = e.mem.alloc(MAP_PAIRS + 8 * 8);
+    e.mem.set_u32(map, vt);
+    e.mem.set_u32(map + MAP_ADD_ANSWER, u32::from(accepts));
+    map
+}
+
+/// The queue's world of a seed and `later`: the call's words (loader, reference, priority, later).
+fn queue_world(e: &mut Engine, seed: u32, later: u32) -> Vec<u32> {
+    queue_stand_ins(e);
+    let mut d = Draw(seed.wrapping_mul(0x85eb_ca6b) ^ 0x2c1b);
+    let game_loader = e.mem.alloc(0x250);
+    e.mem
+        .set_u32(game_loader + 0x244, [0, 1, 8, 10, 2, 6][d.next(6) as usize]);
+    e.set_global(GAME_LOADER_POINTER, game_loader);
+    let priority = [0, 0x32, 0xff, 0x132][d.next(4) as usize];
+    // The reference.
+    let r = e.mem.alloc(0x120);
+    let vt = vtable(e, d.next(2) == 0);
+    e.mem.set_u32(r, vt);
+    e.mem
+        .set_u8(r + 4, [0x3a, 0x3d, 0x40, 0x69][d.next(4) as usize]);
+    let kind = [0xd, 0x25, 0x2a, 0x2b, 0x1e, 0x15, 0x25, 0x2a][d.next(8) as usize];
+    let base = base_form(e, kind, 0);
+    e.mem.set_u32(r + 0x20, base);
+    e.mem.set_u32(r + 0xc8, [0, 2, 3, 4][d.next(4) as usize]);
+    e.mem.set_u32(r + ANSWER_IS_ACTOR, d.next(2));
+    e.mem.set_u32(r + ANSWER_KIND, d.next(2));
+    let cell = if d.next(4) == 0 {
+        0
+    } else {
+        e.mem.alloc(0x100)
+    };
+    e.mem.set_u32(r + 0x40, cell);
+    let player = if d.next(6) == 0 { r } else { 0x7300 };
+    e.set_global(PLAYER_POINTER, player);
+    // The loader and its maps.
+    let maps_own = d.next(2) == 0;
+    let queued = test_map(e, maps_own, d.next(5) != 0);
+    let later_map = test_map(e, maps_own, d.next(2) == 0);
+    if d.next(4) == 0 {
+        // Already queued: a task whose priority byte is the call's or not, counted by the map.
+        let task = e.mem.alloc(0x48);
+        let byte = if d.next(2) == 0 {
+            priority
+        } else {
+            priority + 7
+        };
+        new_task(e, task, 9, r, byte);
+        e.mem.set_u32(task + 8, 1);
+        e.mem.set_u32(queued + MAP_PAIRS, r);
+        e.mem.set_u32(queued + MAP_PAIRS + 4, task);
+        e.mem.set_u32(queued + MAP_COUNT, 1);
+    }
+    let loader = e.mem.alloc(0x20);
+    e.mem.set_u32(loader + 8, queued);
+    e.mem.set_u32(loader + 0xc, later_map);
+    e.mem.set_u32(Q_ALLOC_FAILS, u32::from(d.next(8) == 0));
+    e.mem.set_u32(Q_MENU_MODE, u32::from(d.next(3) == 0));
+    let owner = e.mem.alloc(0x20);
+    let owner_thread = if d.next(2) == 0 { Q_THREAD } else { 0x78 };
+    e.mem.set_u32(owner + 0x10, owner_thread);
+    e.set_global(OWNER_THREAD_OBJECT, owner);
+    vec![loader, r, priority, later]
+}
+
+/// The calls `00444850`'s typed version does in place.
+const QUEUE_INLINED: &[u32] = &[
+    0x0042_ce10, // the game loader's flag 2
+    0x0040_1170, // the form type
+    0x0052_8cb0, // the task pointer's set-up
+    0x0055_9450, // the task the pointer holds
+    0x0043_cc60, // the task's priority
+];
+
+/// The queue against its translation, over the seeds' worlds and both values of `later`.
+#[test]
+fn model_loader_queue_reference() {
+    Diff::new(entry!(
+        0x0044_4850,
+        cell_refs::queue::queue_reference(u32, u32, u32, u8)
+    ))
+    .family(&CELL_REFS)
+    .family(&leaf::LEAVES)
+    // The other families' typed calls: the maps' find and add, the current thread, the interlocked
+    // increment, the owner's thread word, the reference's cell, the class's false body.
+    .goes_by_address(&[
+        0x0044_bd60,
+        0x0052_8b60,
+        0x0040_fc90,
+        0x0040_b460,
+        0x0044_edb0,
+        0x008d_6f30,
+        0x0047_c850,
+    ])
+    .ignore_calls(QUEUE_INLINED)
+    .inputs(&[Input::Of(SEEDS), Input::Flag])
+    .setup(|e, case| queue_world(e, case.word(0), case.word(1)))
+    .run()
+    .assert_same();
+}
+
+/// The queue's worlds reach every branch it has, checked on the translation: each of the three
+/// early ends, a task found with the same and with another priority, each kind's task, an
+/// allocation refused, an add refused (the task deleted), the later map, a started task, a cell
+/// counting a reference and a critical one.
+#[test]
+fn the_queue_seeds_reach_every_branch() {
+    let mut reached = std::collections::BTreeMap::<&str, u32>::new();
+    for &seed in SEEDS {
+        for later in [0, 1] {
+            let mut e = Engine::new_untyped_for_test();
+            let words = queue_world(&mut e, seed, later);
+            let (loader, r, priority) = (words[0], words[1], words[2]);
+            let queued = e.mem.u32(loader + 8);
+            let later_map = e.mem.u32(loader + 0xc);
+            let before = e.mem.u32(queued + MAP_COUNT);
+            let old = e.mem.u32(queued + MAP_PAIRS + 4);
+            e.call(0x0044_4850, &args![loader, r, priority, later]);
+            assert_eq!(e.mem.u32(Q_SCOPE_DEPTH), 0, "seed {seed}");
+            let mut hit = |name| *reached.entry(name).or_default() += 1;
+            if e.mem.u32(queued + MAP_LAST_FLAG) == 0 {
+                // No add: an early end, or the reference found (its task's count back to the
+                // map's alone).
+                let flags = e.mem.u32(e.global::<u32>(GAME_LOADER_POINTER) + 0x244);
+                let base = e.mem.u32(r + 0x20);
+                let kind = if e.mem.u32(e.mem.u32(r) + 0x224) == 0x0057_25b0 {
+                    let k = e.mem.u8(r + 4);
+                    (0x3d..=0x40).contains(&k) || k == 0x69
+                } else {
+                    e.mem.u32(r + ANSWER_KIND) != 0
+                };
+                hit(if flags & 2 != 0 && flags & 8 == 0 {
+                    "loader flag"
+                } else if e.mem.u8(base + 4) == 0xd {
+                    "type 0xd"
+                } else if kind && e.mem.u32(r + 0xc8) & 2 != 0 {
+                    "slot 0x224 and +0xc8"
+                } else {
+                    assert_eq!((before, e.mem.u32(old + 8)), (1, 1), "seed {seed}");
+                    if e.mem.u32(old + TASK_NEW_PRIORITY) != 0 {
+                        "found, another priority"
+                    } else {
+                        "found, same priority"
+                    }
+                });
+                continue;
+            }
+            if e.mem.u32(Q_ALLOC_FAILS) != 0 {
+                hit("allocation refused");
+                continue;
+            }
+            let count = e.mem.u32(queued + MAP_COUNT);
+            if count == before {
+                hit("add refused");
+                continue;
+            }
+            let task = e.mem.u32(queued + MAP_PAIRS + 8 * (count - 1) + 4);
+            hit(["player", "tree", "creature", "actor", "other"]
+                [e.mem.u32(task + TASK_KIND) as usize]);
+            if e.mem.u32(later_map + MAP_LAST_FLAG) != 0 {
+                hit("later map");
+            } else if e.mem.u32(task + TASK_QUEUED) != 0 {
+                hit("started");
+            }
+            let cell = e.mem.u32(r + 0x40);
+            if cell != 0 && e.mem.u32(cell + 0xa4) == 1 {
+                hit("cell counts");
+                if e.mem.u32(cell + 0xa0) == 1 {
+                    hit("critical");
+                }
+            }
+        }
+    }
+    for name in [
+        "loader flag",
+        "type 0xd",
+        "slot 0x224 and +0xc8",
+        "found, same priority",
+        "found, another priority",
+        "allocation refused",
+        "add refused",
+        "player",
+        "tree",
+        "creature",
+        "actor",
+        "other",
+        "later map",
+        "started",
+        "cell counts",
+        "critical",
+    ] {
+        assert!(
+            reached.contains_key(name),
+            "no seed reaches {name}: {reached:?}"
+        );
+    }
+}
+
+/// A task of the queue's doubles, its count `count`.
+fn counted_task(e: &mut Engine, count: u32) -> u32 {
+    let t = e.mem.alloc(0x48);
+    new_task(e, t, 4, 0, 0x32);
+    e.mem.set_u32(t + 8, count);
+    t
+}
+
+/// The task pointer's assignment against its translation: the held task none, one or another, the
+/// new one none, the same or another, the first task's count 1 (released to its deletion) or 2.
+#[test]
+fn task_pointer_assign() {
+    Diff::new(entry!(
+        0x006f_74f0,
+        cell_refs::queue::task_pointer_assign(u32, u32) -> u32
+    ))
+    .family(&CELL_REFS)
+    .goes_by_address(&[0x0040_b460])
+    .inputs(&[
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[1, 2]),
+    ])
+    .setup(|e, case| {
+        queue_stand_ins(e);
+        let first = counted_task(e, case.word(2));
+        let second = counted_task(e, 1);
+        let pick = |k: u32| [0, first, second][k as usize];
+        let holder = e.mem.alloc(4);
+        e.mem.set_u32(holder, pick(case.word(0)));
+        vec![holder, pick(case.word(1))]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The task pointer's release against its translation: empty, or a task of count 1 (deleted) or 2.
+#[test]
+fn task_pointer_release() {
+    Diff::new(entry!(
+        0x0044_cbf0,
+        cell_refs::queue::task_pointer_release(u32)
+    ))
+    .family(&CELL_REFS)
+    .inputs(&[Input::Of(&[0, 1, 2])])
+    .setup(|e, case| {
+        queue_stand_ins(e);
+        let task = match case.word(0) {
+            0 => 0,
+            n => counted_task(e, n),
+        };
+        let holder = e.mem.alloc(4);
+        e.mem.set_u32(holder, task);
+        vec![holder]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The count taken against its translation.
+#[test]
+fn add_ref() {
+    Diff::new(entry!(0x0092_c870, cell_refs::queue::add_ref(u32)))
+        .family(&CELL_REFS)
+        .goes_by_address(&[0x0040_b460])
+        .inputs(&[Input::Of(&[0, 1, 0xffff_ffff])])
+        .setup(|e, case| {
+            queue_stand_ins(e);
+            vec![counted_task(e, case.word(0))]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The cell's two counters against their translations.
+#[test]
+fn count_queued() {
+    Diff::new(entry!(0x0044_4cc0, cell_refs::queue::count_queued(u32)))
+        .family(&CELL_REFS)
+        .goes_by_address(&[0x0040_b460])
+        .inputs(&[Input::Of(&[0, 5])])
+        .setup(|e, case| {
+            queue_stand_ins(e);
+            let cell = e.mem.alloc(0x100);
+            e.mem.set_u32(cell + 0xa0, case.word(0));
+            e.mem.set_u32(cell + 0xa4, case.word(0) + 1);
+            vec![cell]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn count_critical() {
+    Diff::new(entry!(0x0044_4ce0, cell_refs::queue::count_critical(u32)))
+        .family(&CELL_REFS)
+        .goes_by_address(&[0x0040_b460])
+        .inputs(&[Input::Of(&[0, 5])])
+        .setup(|e, case| {
+            queue_stand_ins(e);
+            let cell = e.mem.alloc(0x100);
+            e.mem.set_u32(cell + 0xa0, case.word(0));
+            e.mem.set_u32(cell + 0xa4, case.word(0) + 1);
+            vec![cell]
+        })
+        .run()
+        .assert_same();
+}
+
+/// `TESObjectREFR::Is3DCritical` against its translation: the class's own slot 0x100 (the false
+/// body), or a stand-in answering no or yes.
+#[test]
+fn is_3d_critical() {
+    Diff::new(entry!(
+        0x0057_2350,
+        cell_refs::queue::is_3d_critical(u32) -> bool
+    ))
+    .family(&CELL_REFS)
+    .goes_by_address(&[0x0047_c850])
+    .inputs(&[Input::Of(&[0, 1, 2])])
+    .setup(|e, case| {
+        queue_stand_ins(e);
+        let r = e.mem.alloc(0x120);
+        let vt = vtable(e, case.word(0) == 0);
+        e.mem.set_u32(r, vt);
+        e.mem
+            .set_u32(r + ANSWER_IS_ACTOR, u32::from(case.word(0) == 2));
         vec![r]
     })
     .run()
