@@ -13,8 +13,8 @@
 //!   into a new head part's vertices (`0065a970`), the face tint summed from the EGT morphs
 //!   (`ApplyCoordinateTexturingToMesh`, `0065b410`) and packed into pixel bytes
 //!   (`BSFaceGenImage::GetCompressedImage`, `0064ceb0`).
-//! - [`coords`]: the sum of two face coordinate blocks (`00652af0`), which the race menu runs once a
-//!   slider at every click.
+//! - [`coords`]: the sum of two face coordinate blocks (`00652af0`), which the race menu runs once
+//!   a slider at every click.
 //! - [`apply`]: the head's morph pass (`00663050`) with its appliers, the morph data's apply and tables,
 //!   the animation data's weight getters, and the exact skip of a reshape that would change nothing.
 //!
