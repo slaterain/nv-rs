@@ -93,6 +93,9 @@ pub struct Stream {
     cut_done: Arc<Mutex<Option<(u64, Instant)>>>,
     /// The direct runner's last Present carried out: its number and when ([`Stream::last_present_carried_out`]).
     presented: Option<(u32, Instant)>,
+    /// [`Stream::submit_later`]'s reply when it was carried out at once (not by the threaded runner), until
+    /// [`Stream::take_later`] takes it.
+    later: Option<Reply>,
 }
 
 // One stream a run, made once and never moved on the way of a call: kept unboxed, so each
@@ -186,6 +189,7 @@ impl Stream {
             cut: None,
             cut_done: Arc::new(Mutex::new(None)),
             presented: None,
+            later: None,
         }
     }
 
@@ -333,6 +337,50 @@ impl Stream {
             self.presented = Some((frame, Instant::now()));
         }
         reply
+    }
+
+    /// A sync command whose caller takes its reply later ([`Stream::take_later`]), not waiting for it
+    /// now: the threaded runner hands it over and goes on (the reply waits on the queue; a sync command
+    /// submitted meanwhile first takes it aside, so each reply goes to its own caller). Carried out
+    /// at once, its reply kept, by the direct runner and while the commands are recorded. A cut whose
+    /// slot is closed is settled first; with its slot still open the command is a sync call made
+    /// while holding (the caller closes the slot first, as for any sync call). One at a time: the
+    /// reply is taken before the next.
+    ///
+    /// # Panics
+    /// On a command that is not sync, or while an earlier one's reply has not been taken.
+    pub fn submit_later(&mut self, cmd: Cmd<Data<'_>>) {
+        assert!(cmd.is_sync(), "a reply taken later is a sync command's");
+        assert!(
+            !self.later_waiting(),
+            "a reply taken later before the next is asked for"
+        );
+        // A closed cut settled first (`holding`), so the threaded runner still hands the command over.
+        if !self.holding() && self.cut.is_none() && self.record.is_none() {
+            if let Runner::Threaded(t) = &mut self.runner {
+                t.submit_later(cmd);
+                return;
+            }
+        }
+        self.later = Some(self.submit(cmd));
+    }
+
+    /// [`Stream::submit_later`]'s reply, once every command before it is carried out (waiting for it
+    /// on the threaded runner if it is not in yet); `None` when none is waiting.
+    pub fn take_later(&mut self) -> Option<Reply> {
+        if let Some(reply) = self.later.take() {
+            return Some(reply);
+        }
+        match &mut self.runner {
+            Runner::Threaded(t) => t.take_later(),
+            Runner::Direct(_) | Runner::Shared(_) => None,
+        }
+    }
+
+    /// Whether a reply of [`Stream::submit_later`] is still to be taken.
+    pub fn later_waiting(&self) -> bool {
+        self.later.is_some()
+            || matches!(&self.runner, Runner::Threaded(t) if t.later || t.later_reply.is_some())
     }
 
     /// A cut of main's stream: what the drawing side records through the returned [`Slot`] is
@@ -748,6 +796,12 @@ struct Threaded {
     encoded: Vec<u8>,
     thread: Option<std::thread::JoinHandle<()>>,
     stats: Stats,
+    /// [`Stream::submit_later`]: a sync command handed over whose reply is still on the queue (`Queue::reply`).
+    later: bool,
+    /// Its reply, taken off the queue before a later sync command's ([`Threaded::submit`]).
+    later_reply: Option<Reply>,
+    /// Its command's name (the reply wait's stats).
+    later_name: &'static str,
 }
 
 /// What both sides share.
@@ -894,6 +948,9 @@ impl Threaded {
             hash: wire::HASH_START,
             encoded: Vec::new(),
             thread: Some(thread),
+            later: false,
+            later_reply: None,
+            later_name: "",
         }
     }
 
@@ -939,23 +996,15 @@ impl Threaded {
         let sync = cmd.is_sync();
         let present = matches!(cmd, Cmd::Present { .. });
         let name = cmd.name();
+        if sync && self.later {
+            // The queue keeps one reply: a reply taken later goes aside before this one is asked for.
+            self.later_reply = self.take_later();
+        }
         self.chunk.push(cmd);
         if sync {
             self.chunk.reply_wanted = true;
             self.hand_over(holding);
-            crate::hitch::note_wait(1);
-            let t = Instant::now();
-            let reply = self
-                .wait(|q| q.reply.is_some())
-                .reply
-                .take()
-                .expect("the reply waited for");
-            crate::hitch::note_wait(0);
-            let d = t.elapsed();
-            self.stats.reply(name, d);
-            crate::hitch::add_time(crate::hitch::Count::ReplyWaitNs, d);
-            crate::hitch::add(crate::hitch::Count::ReplyWaits, 1);
-            reply
+            self.reply(name)
         } else if present {
             self.presents += 1;
             self.hand_over(holding);
@@ -982,6 +1031,53 @@ impl Threaded {
             }
             Reply::None
         }
+    }
+
+    /// The reply of the sync command handed over last, once it is in (counted as a reply wait).
+    fn reply(&mut self, name: &'static str) -> Reply {
+        crate::hitch::note_wait(1);
+        let t = Instant::now();
+        let reply = self
+            .wait(|q| q.reply.is_some())
+            .reply
+            .take()
+            .expect("the reply waited for");
+        crate::hitch::note_wait(0);
+        let d = t.elapsed();
+        self.stats.reply(name, d);
+        crate::hitch::add_time(crate::hitch::Count::ReplyWaitNs, d);
+        crate::hitch::add(crate::hitch::Count::ReplyWaits, 1);
+        reply
+    }
+
+    /// [`Stream::submit_later`] on this runner: the command handed over with its reply wanted, not waited
+    /// for.
+    fn submit_later(&mut self, cmd: Cmd<Data<'_>>) {
+        if self.shared.dead.load(Ordering::Relaxed) {
+            stopped(&lock(&self.shared.queue));
+        }
+        if self.settings.check {
+            self.encoded.clear();
+            wire::encode(&cmd, &mut self.encoded);
+            self.hash = wire::hash(self.hash, &self.encoded);
+        }
+        self.stats.commands += 1;
+        self.later_name = cmd.name();
+        self.chunk.push(cmd);
+        self.chunk.reply_wanted = true;
+        self.hand_over(false);
+        self.later = true;
+    }
+
+    /// [`Stream::take_later`] on this runner: the reply taken aside, else the one on its way, waited for.
+    fn take_later(&mut self) -> Option<Reply> {
+        if let Some(reply) = self.later_reply.take() {
+            return Some(reply);
+        }
+        if !std::mem::take(&mut self.later) {
+            return None;
+        }
+        Some(self.reply(self.later_name))
     }
 
     /// The chunk being recorded goes to the render thread (waking it if it sleeps); past the

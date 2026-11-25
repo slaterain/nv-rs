@@ -322,6 +322,87 @@ pub fn windows_build() -> String {
     format!("{build}.{}", key.word("UBR").unwrap_or(0))
 }
 
+/// Windows' name, release and build, for a crash report: `Windows 11 Home 24H2 (build
+/// 26200.7171)`. Windows 11 still says "Windows 10" in `ProductName`; its builds start at 22000.
+pub fn windows_version() -> String {
+    let Some(key) = Key::open(HKLM, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion") else {
+        return "Windows (version not read)".into();
+    };
+    let text = |name: &str| {
+        key.string(name)
+            .map(|v| v.to_string_lossy().trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    let build: Option<u32> = text("CurrentBuildNumber").and_then(|b| b.parse().ok());
+    let mut name = text("ProductName").unwrap_or_else(|| "Windows".into());
+    if build.is_some_and(|b| b >= 22000) {
+        name = name.replacen("Windows 10", "Windows 11", 1);
+    }
+    if let Some(release) = text("DisplayVersion") {
+        name = format!("{name} {release}");
+    }
+    format!("{name} (build {})", windows_build())
+}
+
+/// The processor's name as Windows keeps it: `AMD Ryzen 9 7950X 16-Core Processor`.
+pub fn processor_name() -> Option<String> {
+    let name = Key::open(HKLM, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0")?
+        .string("ProcessorNameString")?;
+    let name = name.to_string_lossy().trim().to_string();
+    (!name.is_empty()).then_some(name)
+}
+
+/// `MEMORYSTATUSEX` (the call fills every field; only the total is read).
+#[repr(C)]
+#[allow(dead_code)]
+struct MemoryStatus {
+    length: u32,
+    load: u32,
+    total_physical: u64,
+    available_physical: u64,
+    total_page_file: u64,
+    available_page_file: u64,
+    total_virtual: u64,
+    available_virtual: u64,
+    available_extended_virtual: u64,
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn GlobalMemoryStatusEx(status: *mut MemoryStatus) -> i32;
+    fn GetComputerNameExW(kind: i32, buffer: *mut u16, size: *mut u32) -> i32;
+}
+
+/// The computer's DNS host name (`ComputerNameDnsHostname`): not cut at 15 characters or put in
+/// capitals as `COMPUTERNAME` is.
+pub fn dns_host_name() -> Option<String> {
+    let mut buffer = [0u16; 256];
+    let mut size = buffer.len() as u32;
+    // SAFETY: the buffer and its size in characters; 1 is `ComputerNameDnsHostname`.
+    let ok = unsafe { GetComputerNameExW(1, buffer.as_mut_ptr(), &mut size) };
+    let name = from_wide(&buffer[..(size as usize).min(buffer.len())]);
+    let name = name.to_string_lossy().trim().to_string();
+    (ok != 0 && !name.is_empty()).then_some(name)
+}
+
+/// The memory installed, in bytes (what Windows can use).
+pub fn memory_bytes() -> Option<u64> {
+    let mut status = MemoryStatus {
+        length: std::mem::size_of::<MemoryStatus>() as u32,
+        load: 0,
+        total_physical: 0,
+        available_physical: 0,
+        total_page_file: 0,
+        available_page_file: 0,
+        total_virtual: 0,
+        available_virtual: 0,
+        available_extended_virtual: 0,
+    };
+    // SAFETY: the structure is MEMORYSTATUSEX's layout with its length set, as the call asks.
+    let ok = unsafe { GlobalMemoryStatusEx(&mut status) };
+    (ok != 0 && status.total_physical > 0).then_some(status.total_physical)
+}
+
 /// A file's version from its version resource: `1.4.0.525`.
 pub fn file_version(path: &Path) -> Option<String> {
     let name = wide(path.as_os_str());
