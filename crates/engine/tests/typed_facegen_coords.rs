@@ -1,8 +1,9 @@
 //! The differential test of the face family's coordinate sum (`engine_typed::facegen::coords`,
 //! `00652af0`) against its translation, on real face coordinate blocks: each block's four
 //! matrices made by their constructor (`00449610`) and sized by the game's resize (`0060b340`),
-//! every helper the sum reaches the game's own translation but the square root, a double (the copy, the assignment, the clear,
-//! the storage's resize, `memcpy`, the limit's length, root and scale).
+//! every helper the sum reaches the game's own translation (the copy, the assignment, the clear,
+//! the storage's resize, `memcpy`, the limit's length and scale) but the square root, a double:
+//! its CRT error path for a NaN or a negative length reads CRT words not mapped here.
 //!
 //! The translation asks the float vector's size (`00662820`), capacity (`0060b860`) and one-float
 //! fill (`0060b8a0`) for each element; the typed sum reads and stores those words itself, so those
