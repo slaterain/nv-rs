@@ -1151,6 +1151,10 @@ fn first_write(package: &Package, game_folder: &Path) -> Result<(), Stop> {
     if let Err(e) = crate::place::note_intro_if_shown(&package.userdata) {
         package.log(&format!("launcher.ini: {e}"));
     }
+    // The launcher's own choices held until now (the crash reports answer).
+    if let Err(e) = crate::place::write_held_keys(&package.userdata) {
+        package.log(&format!("launcher.ini: {e}"));
+    }
     // The window's lines kept until now (the terminal's sounds, say).
     for line in crate::place::take_held_lines() {
         package.log(&line);
@@ -1846,10 +1850,17 @@ mod tests {
         // The intro ended at the start screen, as the window ends it: kept until Play's check
         // passes, then noted by Play's own first write.
         crate::place::intro_ended(&p.own, false).unwrap();
+        // The first start's crash reports answer waits the same way.
+        crate::crash::consent::keep(&p.own, crate::crash::consent::Consent::Ask, false).unwrap();
         assert!(!p.own.exists(), "the intro was noted before Play's check");
         let package = Package::at(root.clone());
         first_write(&package, &dir.join("somewhere else")).unwrap();
         assert!(crate::place::intro_shown(&package.userdata));
+        assert_eq!(
+            crate::crash::consent::read(&package.userdata),
+            crate::crash::consent::Consent::Ask,
+            "Play's first write keeps the held answer"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

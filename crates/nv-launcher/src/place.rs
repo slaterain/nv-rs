@@ -63,6 +63,52 @@ pub fn note_intro_if_shown(own: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The launcher's own file's keys chosen where nothing may be written yet (Windows, before Play's
+/// first write: the package gets nothing before Play's own checks, as the intro's note waits),
+/// written by [`write_held_keys`] then, each for nv-rs's own folder it was chosen for. A first
+/// answer held and never written (the launcher closed without playing) is simply asked again at
+/// the next start.
+type HeldKeys = Vec<(std::path::PathBuf, &'static str, String)>;
+static HELD_KEYS: std::sync::Mutex<HeldKeys> = std::sync::Mutex::new(Vec::new());
+
+/// `key` set to `value` in the launcher's own file in `own`: at once where `now` (and a value
+/// held for it before is dropped), else held for Play's first write ([`write_held_keys`]).
+pub fn set_key_when_allowed(
+    own: &Path,
+    now: bool,
+    key: &'static str,
+    value: &str,
+) -> std::io::Result<()> {
+    let mut held = HELD_KEYS
+        .lock()
+        .map_err(|_| std::io::Error::other("held keys poisoned"))?;
+    held.retain(|(dir, k, _)| !(dir == own && *k == key));
+    if now {
+        return set_launcher_key(own, key, value);
+    }
+    held.push((own.to_path_buf(), key, value.to_string()));
+    Ok(())
+}
+
+/// Play's first write has passed its checks: the keys held until now for `own` are written.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn write_held_keys(own: &Path) -> std::io::Result<()> {
+    let mine: HeldKeys = match HELD_KEYS.lock() {
+        Ok(mut h) => {
+            let (mine, rest) = std::mem::take(&mut *h)
+                .into_iter()
+                .partition(|(dir, _, _)| dir == own);
+            *h = rest;
+            mine
+        }
+        Err(_) => Vec::new(),
+    };
+    for (_, key, value) in mine {
+        set_launcher_key(own, key, &value)?;
+    }
+    Ok(())
+}
+
 /// Whether the mods folder `dir` holds anything but its READ ME.
 pub fn has_mods(dir: &Path) -> bool {
     std::fs::read_dir(dir).is_ok_and(|entries| {
@@ -122,7 +168,7 @@ pub fn set_sounds(own: &Path, on: bool) -> std::io::Result<()> {
 
 /// Sets `key` in the launcher's own file's `[Launcher]` section, keeping its other lines; never
 /// through a link; written beside it and moved over it.
-fn set_launcher_key(own: &Path, key: &str, value: &str) -> std::io::Result<()> {
+pub fn set_launcher_key(own: &Path, key: &str, value: &str) -> std::io::Result<()> {
     let file = launcher_ini(own);
     if std::fs::symlink_metadata(&file).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err(std::io::Error::other("the launcher's file is a link"));
