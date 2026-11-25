@@ -9609,6 +9609,9 @@ fn current_ammo_or_godmode(e: &mut Engine, weapon: u32, player: u32) -> u32 {
     e.call(0x0052_5980, &args![weapon, player]).u32()
 }
 
+/// Whether `PlayerCharacter::Update` lets the player's held attack go on (the tests around `0x941DD4`):
+/// the attack control held (`00a24660` with 4 and 0), the byte `011e07aa` set, the ammunition test
+/// ([`has_ammo_or_godmode_automatic`]) and `008a6970`.
 fn held_attack_goes_on(e: &mut Engine, this: Ptr<PlayerCharacter>, main_state: u32) -> bool {
     let process = process_of(e, this);
     e.call(0x00a2_4660, &args![main_state, 4u32, 0u32]).u32() != 0
@@ -9693,6 +9696,10 @@ fn beam_attack_released(e: &mut Engine, main_state: u32) -> bool {
     e.call(0x00a2_4660, &args![main_state, 4u32, 2u32]).u32() != 0
 }
 
+/// The player's continuous beam in `PlayerCharacter::Update` (`0x9440A3` to `0x944174`): with a
+/// beam (+0x1A0), a clip that no longer holds ([`beam_clip_holds`]), a released attack
+/// ([`beam_attack_released`]) or the attack control not held (`00a24660` with 4 and 0) stops it
+/// (`009ab9a0`); then the beam, read again, is fired on (slot `0x310` with 0.0).
 fn update_player_beam(
     e: &mut Engine,
     this: Ptr<PlayerCharacter>,
@@ -10095,6 +10102,9 @@ fn ranged_attack_reaction(
     *group = weapon_attack_group(e, weapon).unwrap_or(0x20);
 }
 
+/// The held attack's burst end (`00948310`, the test at `0x94928F`): with a VATS action (`action`), a weapon
+/// and its ammunition (`00525980`), the action's counter (+8) is cleared when the magazine entry
+/// (the process' slot `0x14c`) holds no rounds ([`burst_magazine_empty`]).
 fn end_burst_without_rounds(
     e: &mut Engine,
     this: Ptr<PlayerCharacter>,
@@ -10111,6 +10121,9 @@ fn end_burst_without_rounds(
     }
 }
 
+/// Whether the held weapon fires on (`00948310`, the "main" weapon cases after `0x9492B5`): with
+/// no ammunition (`00525980`) for an automatic weapon (`00524b40`); else, with ammunition, while the
+/// magazine entry (the process' slot `0x14c`) is there.
 fn held_weapon_fires_on(
     e: &mut Engine,
     this: Ptr<PlayerCharacter>,

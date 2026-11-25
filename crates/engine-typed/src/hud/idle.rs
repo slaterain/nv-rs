@@ -164,6 +164,8 @@ fn visible(e: &mut Engine, offset: u32) -> bool {
     is_true(e, tile, VISIBLE)
 }
 
+/// The enemy health bar's test of the action prompt (`0x770E62`..`0x770E78`): the prompt tile's
+/// (+0x9C) visibility is asked; shown, it hides the bar.
 fn prompt_hides_health_bar(e: &mut Engine) -> bool {
     visible(e, 0x9c)
 }

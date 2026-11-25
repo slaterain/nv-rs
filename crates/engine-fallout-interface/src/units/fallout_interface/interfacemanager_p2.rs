@@ -4069,12 +4069,6 @@ mod tests {
 
     #[test]
     fn fn_00719580_refreshes_children_before_the_matching_tile() {
-        for on in [false, true] {
-            fn_00719580_refreshes_children_before_the_matching_tile_row(on);
-        }
-    }
-
-    fn fn_00719580_refreshes_children_before_the_matching_tile_row(_on: bool) {
         let mut e = base_engine();
         e.register(0x0055_9450, |e, a| ret(e.mem.u32(a[0])));
         e.register(0x0057_cbe0, |e, a| {

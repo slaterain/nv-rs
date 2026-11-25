@@ -5,12 +5,34 @@
 //! calling it with `typed_call!` doesn't. The list with each function's calls a frame is
 //! `measure/typed/hand/batchD1.tsv` (private).
 //!
-//! The value's own `SetFloat` and `SetString` stay translated and are called by address
-//! (overridable). `CalculateValue` (`00a09410`) is typed here too and is still always called by
-//! address, its translated callers included, since it is overridable: a built-in or plugin that
-//! registers over it is what runs. Such a registration over a member sends the whole family's
-//! `typed_call!`s by address for the rest of the run (`State::replaced` in engine-core), so it
-//! costs the family its direct calls, not only this function; no built-in replaces it today.
+//! - [`math`]: the transforms' and matrices' arithmetic (compose, invert, transpose, matrix times
+//!   matrix and vector), points scaled and normalised, the multi-bound box's corners, the 4x4
+//!   inverse for the shaders, the Havok vector scale, float closeness;
+//! - [`scene`]: the scene graph's walks and getters: an object's controllers, children and their
+//!   updates, the collision object and its RTTI cast, a reference's 3D, the frustum test of a bound,
+//!   the geometry's immediate render;
+//! - [`refs`]: the counted references, the recursive spin lock, lists, arrays and the small getters
+//!   the AI, the inventory, the HUD's compass and the process levels call on every actor; and the
+//!   word map's lookup (`00853130`), which a quicksave makes about 230,000 times in its one frame
+//!   (2026-11-10: about 30 ms of the 120 ms save frame by address), registered too at `00a1e380`,
+//!   the exe's second copy of the same body (the menus' maps and the threads' scrap heaps).
+//! - [`extra`]: the extra data lookup (`00410220`) and four getters over it, which the process lists
+//!   ask for every actor when a reference goes away.
+//! - [`saveload`]: the clean-up of expired cells' data that every save runs first (`0084ab20`), its
+//!   expiry queue a native hash map.
+//! - [`tile`]: the menus' tile values (the sorted trait array's find, with the C runtime's
+//!   `bsearch`, and insert, `GetValue`, `GetOrCreateValue`), the reaction map's `AddReaction` and
+//!   `ClearActions`, the pointer maps' `SetAt` and the menu string map's and integer maps' hash and
+//!   compare, which the map lookup calls directly; and the tiles' trait getters and setters
+//!   (`GetFloat`, `GetString`, `IsTrue`, `SetFloat`, `SetString`, `SetInt`, `Poke`, the absolute
+//!   position sums, `Lock`/`Unlock`) and `ValueChangeEvent`, which the HUD's update calls on every
+//!   frame (its compass alone about 1,700 calls a frame on the street). The value's own `SetFloat`
+//!   and `SetString` stay translated and are called by address (overridable). `CalculateValue`
+//!   (`00a09410`) is typed here too and is still always called by address, its translated callers
+//!   included, since it is overridable: a built-in or plugin that registers over it is what runs.
+//!   Such a registration over a member sends the whole family's `typed_call!`s by address for the
+//!   rest of the run (`State::replaced` in engine-core), so it costs the family its direct calls,
+//!   not only this function; no built-in replaces it today.
 //!
 //! Stage 1: the objects stay in guest memory where the game made them. Each function stays
 //! registered at its exe address; a call inside the family, or into another family, is a

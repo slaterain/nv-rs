@@ -70,7 +70,7 @@ shows what's left.
 | 🔨 | **Built-in script extender: xNVSE** | All 654 of its script commands and both its script languages, with nothing to install. |
 | 🔨 | **Built-in script extender: JIP LN:** | All its script commands (JIP LN: 1,116 and its two version commands) and all of its game patches that do something on this port (174 of 183; three more are folded into others, six do nothing here); on in the default fixes preset, off in vanilla (`bJIPInstalled=0` turns it off). |
 | 🔨 | **UI Organizer (UIO)** | UI mods' HUD and menu additions; on in the default fixes preset (`bUIO=0` turns it off). |
-| 🔨 | **lStewieAl's Tweaks** | lStewieAl's Tweaks is no longer built in; its fixes are being rebuilt as nv-rs's own. |
+| ⬜ | **lStewieAl's Tweaks** | lStewieAl's Tweaks is no longer built in; its fixes are to be rebuilt as nv-rs's own. |
 | 🔨 | **Mod installers (FOMOD)** | Mods with an installer, from .zip or .7z, installed into nv-rs's own folder, never the game's. |
 | 🔨 | **One launcher** | `Play.exe` opens a window like the game's terminals to play, install mods, import saves and change settings. |
 | 🔨 | **Modern graphics (wgpu)** | The default renderer, on Vulkan; in the places compared, on one NVIDIA card, its pictures nearly match Direct3D 9's, and at 8x antialiasing it is about 8% slower. |

@@ -2704,6 +2704,7 @@ fn place_words(e: &mut Engine, this: Ptr<HackingMenu>, buffer: u32, garbage_coun
     }
 }
 
+/// Whether the file's first character becomes the selection: a gamepad in use (`004b71d0`).
 fn selection_follows_the_gamepad(e: &mut Engine) -> bool {
     e.call(GAMEPAD_IN_USE, &args![]).bool()
 }

@@ -1045,6 +1045,7 @@ const WEAPON_TYPE_BADGE: u32 = 0x0066_ea20;
 const GET_EQUIP_TYPE: u32 = 0x0047_9430;
 const GET_EQUIP_TYPE_ICON: u32 = 0x0047_9540;
 
+/// The hotkey icon's equip type for `form`: `BGSEquipType::GetEquipType`'s answer.
 pub(crate) fn equip_type_for_hotkey_icon(e: &mut Engine, form: u32) -> u32 {
     e.call(GET_EQUIP_TYPE, &args![form]).u32()
 }
@@ -3302,12 +3303,6 @@ mod n054_tests {
 
     #[test]
     fn drop_uses_the_extra_list_only_when_it_holds_enough() {
-        for on in [false, true] {
-            drop_uses_the_extra_list_only_when_it_holds_enough_row(on);
-        }
-    }
-
-    fn drop_uses_the_extra_list_only_when_it_holds_enough_row(_on: bool) {
         let mut e = Engine::new();
         let this = menu(&mut e);
         e.set_global(CURRENT_ITEM, 0x7000u32);
@@ -3347,12 +3342,6 @@ mod n054_tests {
 
     #[test]
     fn select_equips_or_unequips() {
-        for on in [false, true] {
-            select_equips_or_unequips_row(on);
-        }
-    }
-
-    fn select_equips_or_unequips_row(_on: bool) {
         let mut e = Engine::new();
         let this = menu(&mut e);
         e.set_global(CURRENT_ITEM, 0x7000u32);
