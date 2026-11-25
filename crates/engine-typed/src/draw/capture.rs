@@ -1893,7 +1893,13 @@ mod tests {
         assert!(begin(&e));
         take(&e, at, 0, 4);
         poison(&mut e, SCRIBBLE);
-        let _ = word(&e, at, 4);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| word(&e, at, 4)));
+        // Close the packet even on the expected panic. Otherwise its run key
+        // stays in OPEN_RUNS after this test frees the kernel address.
+        let _ = end(&mut e);
+        if let Err(error) = stopped {
+            std::panic::resume_unwind(error);
+        }
     }
 
     /// The copy and its counts as [`the_packet_answers_its_copy_and_counts_what_it_lacks`] has them, with the

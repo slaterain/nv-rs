@@ -3008,7 +3008,7 @@ mod tests {
         let mut e = engine();
         let manager = manager(&mut e);
         e.register(GET_USER_NAME, |e, a| {
-            put(e, a[0], "alexa");
+            put(e, a[0], "Courier");
             rv(1)
         });
         e.register(GET_LOCAL_TIME, |e, a| {
@@ -3022,7 +3022,7 @@ mod tests {
         e.call(0x0085_1120, &args![manager, out, 0x200u32]);
         assert_eq!(
             text(&e, out),
-            "alexa - 10/9/2026 14:05:09, EXE Version: 1.4.0.525, Save Version 48.27"
+            "Courier - 10/9/2026 14:05:09, EXE Version: 1.4.0.525, Save Version 48.27"
         );
     }
 

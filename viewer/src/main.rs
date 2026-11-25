@@ -41,7 +41,8 @@ Other arguments (the removed viewer's place name, --walk, --physics, --wait, --b
 ENVIRONMENT:
     NV_D3D9=real    the game's own window through the real Direct3D 9 (the play build)
     NV_SOUND=out    the game's sound through DirectSound
-    docs/PLAYTESTING.md lists the rest (read by crates/host and crates/engine-core).
+    The other NV_ variables are a switch for each fix (crates/host/src/fixes.rs), the machine
+    tables' files, and switches for tests and measurements.
 ";
 
 /// Linux and macOS: what `play.sh` asks the program before a start.

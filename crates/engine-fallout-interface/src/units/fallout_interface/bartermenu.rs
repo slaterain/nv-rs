@@ -39,9 +39,6 @@ const NODE_SET_NEXT: u32 = 0x006e_cd40;
 const NODE_DELETE: u32 = 0x0047_02f0;
 /// `004459e0` (`thiscall`, `RET 4`): the item data's deleting call, given 1.
 const ITEM_DATA_DELETE: u32 = 0x0044_59e0;
-/// `RepairMenu::GetSelection` (xNVSE's `GameUI.h`): the repair menu's target entry, 0 with no repair
-/// under way.
-const REPAIR_MENU_SELECTION: u32 = 0x011d_a760;
 /// The byte that keeps item tiles alive when set (`011d8909`).
 const KEEP_ITEM_TILES: u32 = 0x011d_8909;
 /// `007242c0` (`thiscall`, `RET 4`): whether the list box has a flag (by bit number).
@@ -216,15 +213,10 @@ pub fn fn_007308e0(e: &mut Engine, this: Ptr<ListBox>) {
 /// Deletes the `ListBoxItem` (`pTile` +0, `data` +4) that `item` reads each time: the
 /// tile through its deleting destructor (vtable slot 0, flag 1) unless `KEEP_ITEM_TILES`
 /// is set, the data (`004459e0` with 1) when flag bit 1 is set, then the item freed.
-///
-/// `in_loop`: the loop's delete (the data's delete at `0x730A00`), where lStewieAl's Tweaks'
-/// S0022.48 (`MenuFixes`, `OnClearItemListPreventIfRepairTarget`) leaves the repair menu's
-/// target entry (`RepairMenu::GetSelection`, the word at `011da760`) undeleted: Tweaks' own
-/// trade, that entry leaks instead of being used after it is freed.
 fn delete_item(
     e: &mut Engine,
     this: Ptr<ListBox>,
-    in_loop: bool,
+    _in_loop: bool,
     item: impl Fn(&mut Engine) -> u32,
 ) {
     if e.global::<u8>(KEEP_ITEM_TILES) == 0 {
@@ -237,10 +229,7 @@ fn delete_item(
     if e.call(LIST_BOX_HAS_FLAG, &args![this, 1u32]).bool() {
         let entry = item(e);
         let data = e.mem.u32(entry + 4);
-        let repair_target = in_loop
-            && e.stewie(engine_core::extend::stewie::REPAIR_TARGET_KEPT)
-            && data == e.global::<u32>(REPAIR_MENU_SELECTION);
-        if data != 0 && !repair_target {
+        if data != 0 {
             e.call(ITEM_DATA_DELETE, &args![data, 1u32]);
         }
     }
@@ -815,8 +804,6 @@ const REFERENCE_NAME: u32 = 0x0055_d520;
 const REFRESH_REQUESTED_011D8FC0: u32 = 0x011d_8fc0;
 /// `00719790` (cdecl, five words, `interfacemanager.cpp`): the item stats display.
 const SHOW_ITEM_STATS_00719790: u32 = 0x0071_9790;
-/// `004be060` and `004be180` (`thiscall` on an object, `ST0`; `inventorychanges.cpp`).
-const STAT_004BE060: u32 = 0x004b_e060;
 const STAT_004BE180: u32 = 0x004b_e180;
 
 /// `"Barter menu called with NULL vendor!  Oh, noes!"` (`010707d0`),
@@ -2858,11 +2845,7 @@ pub fn barter_menu_do_idle(e: &mut Engine, this: Ptr<BarterMenu>) {
     };
     let has_dt = stat_shown(e, STAT_004BE180);
     let second = if has_dt { e.mem.u32(base + 0x70) } else { 0 };
-    // `0x7307A4` (lStewieAl's Tweaks' S0105 writes `XOR EAX,EAX; MOV [EBP-8],EAX; JMP` over the
-    // zero DT's store): without a DT the DR tile is passed without its own test.
-    let first = if (!has_dt && e.stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS))
-        || stat_shown(e, STAT_004BE060)
-    {
+    let first = if stat_shown(e, STAT_004BE060) {
         e.mem.u32(base + 0x6c)
     } else {
         0
@@ -3129,6 +3112,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     ]
 }
 
+/// `004be060` and `004be180` (`thiscall` on an object, `ST0`; `inventorychanges.cpp`).
+const STAT_004BE060: u32 = 0x004b_e060;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3324,56 +3310,6 @@ mod tests {
         e.call(0x0073_0950, &args![this]);
         assert!(calls_to(&e, 0x0000_7000).is_empty());
         assert_eq!(calls_to(&e, FREE), vec![vec![first]]);
-    }
-
-    /// lStewieAl's Tweaks' row S0022.48: the list holds the repair menu's target entry (`011da760`)
-    /// in its second node and another entry first. Row off, both entries are deleted; row on, the
-    /// loop's delete passes over the target and the first entry is still deleted (Tweaks patches
-    /// the loop's call only), even when the first is the target.
-    #[test]
-    fn s0022_48_the_repair_target_is_not_deleted_while_repairing() {
-        for (on, first_is_target) in [(false, false), (true, false), (true, true)] {
-            let mut e = engine();
-            e.set_stewie(engine_core::extend::stewie::REPAIR_TARGET_KEPT, on);
-            stub(
-                &mut e,
-                &[
-                    FREE,
-                    NODE_SET_NEXT,
-                    NODE_DELETE,
-                    ITEM_DATA_DELETE,
-                    TILE_SET_FLOAT,
-                ],
-            );
-            e.register(LIST_BOX_HAS_FLAG, |_, a| u32::from(a[1] == 1).into_ret());
-            e.register(TEXT_TO_TRAIT, |_, _| 0x55u32.into_ret());
-            e.map(REPAIR_MENU_SELECTION & !0xfff, 0x1000);
-            e.set_global(REPAIR_MENU_SELECTION, 0x9000u32);
-            let this = list_box(&mut e);
-            let first = item(&mut e, 0, if first_is_target { 0x9000 } else { 0x8000 }, 0);
-            let second = item(&mut e, 0, 0x9000, 0);
-            let node = e.mem.alloc(8);
-            e.mem.set_u32(node, second);
-            e.mem.set_u32(this.addr() + 4, first);
-            e.mem.set_u32(this.addr() + 8, node);
-            e.call_log = Some(vec![]);
-            e.call(0x0073_0950, &args![this]);
-            let deleted: Vec<u32> = calls_to(&e, ITEM_DATA_DELETE)
-                .iter()
-                .map(|a| a[0])
-                .collect();
-            let expected = match (on, first_is_target) {
-                (false, _) => vec![0x9000, 0x8000],
-                (true, false) => vec![0x8000],
-                (true, true) => vec![0x9000],
-            };
-            assert_eq!(deleted, expected, "row {on}");
-            assert_eq!(
-                calls_to(&e, FREE),
-                vec![vec![second], vec![first]],
-                "the items still go"
-            );
-        }
     }
 
     #[test]
@@ -4745,43 +4681,6 @@ mod n051_tests {
         e.call_log = Some(vec![]);
         e.call(0x0073_06d0, &args![this]);
         assert!(calls_to(&e, SHOW_ITEM_STATS_00719790).is_empty());
-    }
-
-    /// Row S0105 (lStewieAl's Tweaks, `0x7307A4`): armour with DT 0 and DR 0 passes the DR tile
-    /// (+0x6C) with the row on, without asking the DR (`004be060`); off, neither tile. With a DT
-    /// the exe's DR test stays, even when the DT tile (+0x70) itself is 0 (the patch is on the
-    /// DT test's path, not on the tile's value).
-    #[test]
-    fn s0105_no_dt_passes_the_dr_tile() {
-        for (on, dt, dr, dt_tile, wanted, dr_asked) in [
-            (false, 0.0f64, 0.0f64, 0x70u32, [0u32, 0], 1usize),
-            (true, 0.0, 0.0, 0x70, [0x6c, 0], 0),
-            (true, 3.0, 0.0, 0x70, [0, 0x70], 1),
-            (true, 3.0, 2.0, 0x70, [0x6c, 0x70], 1),
-            (true, 3.0, 0.0, 0, [0, 0], 1),
-        ] {
-            let mut e = engine();
-            let this = menu(&mut e);
-            for offset in [0x60u32, 0x64, 0x68, 0x6c] {
-                e.mem.set_u32(this.addr() + offset, offset);
-            }
-            e.mem.set_u32(this.addr() + 0x70, dt_tile);
-            let it = item(&mut e, 0, 1, 0x8000);
-            e.set_global(BARTER_CURRENT_ITEM, it);
-            e.set_global(ITEM_ENTERED_0119FDB0, 1u8);
-            answer(&mut e, FORM_TYPE, 0x18);
-            e.register_double(STAT_004BE060, move |_, _| st0(dr));
-            e.register_double(STAT_004BE180, move |_, _| st0(dt));
-            e.set_stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS, on);
-            e.call_log = Some(vec![]);
-            e.call(0x0073_06d0, &args![this]);
-            assert_eq!(
-                calls_to(&e, SHOW_ITEM_STATS_00719790),
-                vec![vec![wanted[0], wanted[1], 0, it, 0]],
-                "row {on} dt {dt} dr {dr}"
-            );
-            assert_eq!(calls_to(&e, STAT_004BE060).len(), dr_asked);
-        }
     }
 
     #[test]

@@ -6,8 +6,8 @@ name: Preview packages (Linux, macOS)
 # data of the game's FalloutNV.exe is in the program (package-check --game --max-run 4096, which the
 # Windows package always makes) is made by the maintainer on the downloaded archive, unchanged, with
 # scripts/check-unix-package.ps1, which also refuses an archive built from any branch but main and
-# writes the CHECKED.txt published beside it (docs/MAINTAINING.md, "Releasing a Linux or macOS
-# preview"); package-playtest.sh refuses a package without the game unless made that way.
+# writes the CHECKED.txt published beside it; package-playtest.sh refuses a package without the
+# game unless made that way.
 # Nothing here makes a release, a tag or anything public, and it never runs by itself: only by
 # hand (Actions > this workflow > Run workflow, or `gh workflow run preview-packages.yml --ref BRANCH -f version=...`).
 #
@@ -21,7 +21,7 @@ name: Preview packages (Linux, macOS)
 # A workflow run by hand can only be started once it is on the default branch. NOT YET PROVEN as
 # written: the proving runs before the merge (43845435955) built the quick play profile; the first
 # hand-started run after the merge is the first release-profile build from scratch on these runners.
-# docs/MAINTAINING.md says what to record from it (each job's time against timeout-minutes).
+# Record from it each job's time against timeout-minutes.
 #
 # Each job uses runners from the account's shared limit (20 jobs at a time); one run is two jobs.
 on:
@@ -56,7 +56,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     # The optimised release build, as the Windows package, from scratch (no cache). Its time is not
     # measured yet (the proving runs built the quick play profile): generous until the first run
-    # after the merge is recorded (docs/MAINTAINING.md), then about twice the slower job's time.
+    # after the merge is recorded, then about twice the slower job's time.
     timeout-minutes: 240
     env:
       CARGO_BUILD_JOBS: ${{ matrix.jobs }}

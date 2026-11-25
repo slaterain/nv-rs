@@ -3,9 +3,9 @@ name: Other systems
 # starts on both (Linux x86-64 is played by volunteers; Apple silicon has not been started with the
 # game yet). Nothing here is a check of play.
 #
-# Since 2026-11-17 no new code is written for one system only (AGENTS.md, "Every system from the
-# start"): the Linux job therefore runs on EVERY pull request, so a change that does not build or
-# pass its tests on Linux is seen before it merges.
+# Since 2026-11-17 no new code is written for one system only: the Linux job therefore runs on
+# EVERY pull request, so a change that does not build or pass its tests on Linux is seen before it
+# merges.
 #
 # Its own workflow, so CI's Windows job (ci.yml, "check") is untouched. These jobs take runners
 # from the account's shared limit (20 jobs at a time, 5 of them macOS), and the Windows job's runs
@@ -75,8 +75,7 @@ jobs:
       # cfg(windows) or an ignore with its reason). Left out: the `engine` crate's 21 integration
       # suites (tests/typed_*.rs and the others: the typed families' Diff tests against the
       # translation, about 6,500 s of the 7,900 s the whole workspace took on this runner,
-      # typed_shader alone 2,450 s); its library tests run. The launcher and the ledger are
-      # workspaces of their own (Windows-only and tooling) and are not built here.
+      # typed_shader alone 2,450 s); its library tests run.
       - name: Test the workspace
         if: ${{ !cancelled() }}
         run: |
@@ -147,5 +146,5 @@ jobs:
           cargo test --locked --no-fail-fast
           -p engine-core -p engine-platform -p ds-mix -p engine-havok -p host
           -p d3d9-wgpu -p d3d9-stream -p d3dx-tex -p frame-model
-          -p esm -p bsa -p fos -p mp3 -p vorbis -p bink -p game-folders
+          -p esm -p bsa -p mp3 -p vorbis -p bink -p game-folders
           -p jip -p uio -p fomod -p mod-archive -p mod-install -p mod-chooser

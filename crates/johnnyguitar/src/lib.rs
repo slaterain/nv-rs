@@ -1,5 +1,5 @@
 //! JohnnyGuitar NVSE (`JohnnyGuitarNVSE.dll` 5.28), the NVSE plugin VNV installs, built in piece
-//! by piece, with its authors' permission (credits and licence in `NOTICE`). Its DLL patches the
+//! by piece (credits and licence in `NOTICE`). Its DLL patches the
 //! old 32-bit program, so it cannot load into nv-rs: its changes are rebuilt here.
 //!
 //! The first piece is its editor-id restoration (`internal/JG/EditorIDRestoration.cpp`). The game
@@ -171,10 +171,9 @@ fn plugin() -> nvse::plugins::BuiltIn {
 
 // Translated from JohnnyGuitar NVSE 5.28 (c87905e), internal/JG/EditorIDRestoration.cpp:
 // InitHooks.
-/// With the row on: the store answers; JG's getter and setter in each listed class's slots that
-/// are still the stubs; the nine storing classes' setters wrapped; the seams and the two wraps;
-/// JG's record in xNVSE's list (not listed). Off: nothing (the exe's path everywhere). After JIP
-/// (its light slots stay its own, as JG finds them not stubs), before lStewieAl's Tweaks.
+/// With the row on: the store answers; JG's getter and setter in each listed class's slots that are
+/// still the stubs; the nine storing classes' setters wrapped; the seams and the two wraps; JG's
+/// record in xNVSE's list (not listed). Off: nothing (the exe's path everywhere).
 pub fn install(e: &mut Engine) {
     // Made before the threads start, row on or off, so every thread's engine shares them (xNVSE's
     // removal and JIP's two readers ask the store whether it is on from any thread).

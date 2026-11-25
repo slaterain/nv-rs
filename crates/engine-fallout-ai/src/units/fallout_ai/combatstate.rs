@@ -1763,18 +1763,9 @@ pub fn fn_009993c0(e: &mut Engine, this: Ptr<CombatState>) {
 
         if target != 0 && e.get(this, CombatState::pCombatWeapons) != 0 {
             let weapon = e.get(this, CombatState::pCombatWeapons);
-            // lStewieAl's Tweaks' row S0126 (`patchFixNullProjectileInCombatStateUpdateInventory`):
-            // the weapon's projectile asked without the owner (`0x99A1C8`), as
-            // `TESObjectWEAP::GetCombatWeaponType` asks it, and no explosion for no projectile
-            // (`ProjectileGetExplosionNullCheck` at `0x99A1DC`).
-            let fixed = e.stewie(engine_core::extend::stewie::COMBAT_STATE_NULL_PROJECTILE);
-            let owner = if fixed { 0 } else { attacker };
+            let owner = attacker;
             let ammo = e.call(0x0052_5a90, &args![weapon, owner]).u32();
-            let projectile = if fixed && ammo == 0 {
-                0
-            } else {
-                e.call(0x004f_d3c0, &args![ammo]).u32()
-            };
+            let projectile = e.call(0x004f_d3c0, &args![ammo]).u32();
             let radius = constant_bits(e, TWO);
             let location = e.vcall(target, 0x1f4, &args![]).u32();
             let manager: u32 = e.global(COMBAT_MANAGER);
@@ -2316,38 +2307,6 @@ pub fn fn_0099a840(e: &mut Engine, this: Ptr<CombatState>, item: u32) {
 pub const COMBAT_ITEM_RESTORE_TIMER: u32 = 0x011c_fdd8;
 /// `fCombatItemBuffTimer` (`Setting`, value at +4; the exe's default 45.0).
 pub const COMBAT_ITEM_BUFF_TIMER: u32 = 0x011c_f480;
-/// The game's timer clock (`0x11F1BF0`), the start time `AITimer::Reset` stores.
-const TIMER_CLOCK: u32 = 0x011f_1bf0;
-
-/// Row S0214's routine, Tweaks' `CombatState__SetRestoreAndBuffItemTimersForAlchemyItem`
-/// (`Fixes/CombatItemCooldownFix.cpp`), in place of [`fn_0099a840`]: the combat item slot
-/// (+0x1A4, two words) holding `item` restarts its timer (+0x1AC, 8 bytes each) with
-/// `fCombatItemRestoreTimer` for the restore slot (0) and `fCombatItemBuffTimer` for the buff slot
-/// (1), each read straight from its `Setting` (`Setting::Float`); the timer is reset as Tweaks'
-/// `AITimer::Reset` does it, the start time from the clock and the cooldown stored. The exe's
-/// switch falls through, so the restore slot took the buff timer too.
-pub fn combat_state_set_restore_and_buff_item_timers(
-    e: &mut Engine,
-    this: Ptr<CombatState>,
-    item: u32,
-) {
-    for index in 0u32..2 {
-        if e.mem.u32(member(this, 0x1a4) + 4 * index) != item {
-            continue;
-        }
-        let setting = if index == 0 {
-            COMBAT_ITEM_RESTORE_TIMER
-        } else {
-            COMBAT_ITEM_BUFF_TIMER
-        };
-        let cooldown = e.mem.u32(setting + 4);
-        let timer = member(this, 0x1ac) + 8 * index;
-        let start = e.mem.u32(TIMER_CLOCK);
-        e.mem.set_u32(timer, start);
-        e.mem.set_u32(timer + 4, cooldown);
-        return;
-    }
-}
 
 // Translated from 0099a8d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The attacker's cover was hit or the situation changed: with a cover
@@ -9068,80 +9027,6 @@ mod tests {
         assert_eq!(e.get(f.state, CombatState::iHasCombatWeapon), 2);
     }
 
-    /// An inventory update with a target and one combat weapon (0x900, forced, kind 0), whose
-    /// projectile is `projectile`; `004fd3c0` reads the projectile's explosion at +0x84, as the
-    /// exe's does.
-    fn projectile_fixture(e: &mut Engine, projectile: u32) -> Fixture {
-        let f = fixture(e, true);
-        let acquired = object(e, 0x40);
-        stub(e, SLOTS + 0x148, acquired);
-        let extra = e.mem.alloc(4);
-        e.mem.set_u32(extra, 0x77);
-        stub(e, 0x0055_9450, extra);
-        stub(e, 0x0041_8b10, 1);
-        stub(e, ARRAY_SIZE, 0x900);
-        stub(e, 0x0052_2c80, 0);
-        stub(e, 0x0052_5a90, projectile);
-        e.register_double(0x004f_d3c0, |e, a| ret(e.mem.u32(a[0] + 0x84)));
-        f
-    }
-
-    /// lStewieAl's Tweaks' row S0126: the combat weapon's projectile is null: the exe asks it for
-    /// its explosion (+0x84 of the null page) and stops; with the row on there is no explosion
-    /// (none asked), and the projectile is asked without the owner (`0x99A1C8`).
-    #[test]
-    fn s0126_a_combat_weapon_with_no_projectile() {
-        for on in [false, true] {
-            let mut e = engine();
-            let f = projectile_fixture(&mut e, 0);
-            e.set_stewie(
-                engine_core::extend::stewie::COMBAT_STATE_NULL_PROJECTILE,
-                on,
-            );
-            e.call_log = Some(vec![]);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                fn_009993c0(&mut e, f.state);
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            let asked = calls(e.call_log.as_ref().unwrap(), 0x0052_5a90);
-            assert_eq!(asked, vec![vec![0x900, if on { 0 } else { f.attacker }]]);
-            if on {
-                let log = e.call_log.take().unwrap();
-                assert!(calls(&log, 0x004f_d3c0).is_empty());
-                assert_eq!(calls(&log, 0x0099_2720)[0][2], 0, "no explosion");
-            }
-        }
-    }
-
-    /// Row S0126 with a projectile (ordinary input): the same explosion weighed, with the row off
-    /// and on; the one difference is the owner the projectile is asked with (none with the row).
-    #[test]
-    fn s0126_row_on_with_a_projectile_asks_without_the_owner() {
-        let mut logs = vec![];
-        for on in [false, true] {
-            let mut e = engine();
-            let projectile = e.mem.alloc(0x100);
-            e.mem.set_u32(projectile + 0x84, 0x4444);
-            let f = projectile_fixture(&mut e, projectile);
-            e.set_stewie(
-                engine_core::extend::stewie::COMBAT_STATE_NULL_PROJECTILE,
-                on,
-            );
-            let log = logged(&mut e, |e| fn_009993c0(e, f.state));
-            assert_eq!(calls(&log, 0x004f_d3c0), vec![vec![projectile]]);
-            assert_eq!(calls(&log, 0x0099_2720)[0][2], 0x4444);
-            let asked = calls(&log, 0x0052_5a90);
-            assert_eq!(asked, vec![vec![0x900, if on { 0 } else { f.attacker }]]);
-            logs.push(
-                log.into_iter()
-                    .filter(|(a, _)| *a != 0x0052_5a90)
-                    .collect::<Vec<_>>(),
-            );
-        }
-        assert_eq!(logs[0], logs[1]);
-    }
-
     #[test]
     fn clearing_weapons_fills_and_empties() {
         let mut e = engine();
@@ -9335,47 +9220,6 @@ mod tests {
             vec![vec![state.addr() + 0x1ac, 2.0f32.to_bits()]]
         );
         assert_eq!(calls(&log, SETTING_VALUE).len(), 2);
-    }
-
-    /// S0214 (`CombatItemCooldownFix`), with the exe's defaults (`fCombatItemRestoreTimer` 30.0,
-    /// `fCombatItemBuffTimer` 45.0): off, the exe's `0099a840` gives a restore item (slot 0) the
-    /// buff timer, 45 s; on, Tweaks' routine gives it the restore timer, 30 s, and a buff item
-    /// (slot 1) keeps 45 s. Tweaks resets the timer itself: start time from the clock, cooldown.
-    #[test]
-    fn s0214_a_restore_item_waits_the_restore_timer() {
-        let mut e = engine();
-        let state: Ptr<CombatState> = e.new_object();
-        put_f32(&mut e, COMBAT_ITEM_RESTORE_TIMER + 4, 30.0);
-        put_f32(&mut e, COMBAT_ITEM_BUFF_TIMER + 4, 45.0);
-        put_f32(&mut e, 0x011f_1bf0, 100.0);
-        e.mem.set_u32(state.addr() + 0x1a4, 0x30);
-        e.mem.set_u32(state.addr() + 0x1a8, 0x31);
-        let timers = state.addr() + 0x1ac;
-        let log = logged(&mut e, |e| fn_0099a840(e, state, 0x30));
-        assert_eq!(
-            calls(&log, TIMER_START),
-            vec![vec![timers, 45.0f32.to_bits()]]
-        );
-        let log = logged(&mut e, |e| {
-            combat_state_set_restore_and_buff_item_timers(e, state, 0x30);
-        });
-        assert!(calls(&log, TIMER_START).is_empty());
-        assert!(calls(&log, SETTING_VALUE).is_empty());
-        assert_eq!((e.mem.f32(timers), e.mem.f32(timers + 4)), (100.0, 30.0));
-        assert_eq!(e.mem.u32(timers + 8), 0);
-        put_f32(&mut e, 0x011f_1bf0, 101.0);
-        combat_state_set_restore_and_buff_item_timers(&mut e, state, 0x31);
-        assert_eq!(
-            (e.mem.f32(timers + 8), e.mem.f32(timers + 12)),
-            (101.0, 45.0)
-        );
-        assert_eq!(e.mem.f32(timers), 100.0);
-        // An item in neither slot restarts nothing.
-        combat_state_set_restore_and_buff_item_timers(&mut e, state, 0x32);
-        assert_eq!(e.mem.f32(timers + 12), 45.0);
-        put_f32(&mut e, 0x011f_1bf0, 102.0);
-        combat_state_set_restore_and_buff_item_timers(&mut e, state, 0x32);
-        assert_eq!((e.mem.f32(timers), e.mem.f32(timers + 8)), (100.0, 101.0));
     }
 
     #[test]

@@ -3,7 +3,6 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use engine_core::extend::stewie;
 
 /// Callees: a flag test `004fd420` (`thiscall`, `(mask)`, answers a byte), the list at
 /// `this + 0x88` (`008256d0` "empty", `006815c0` its first item; `thiscall`, no arguments),
@@ -345,16 +344,9 @@ const STATIC_FLOAT: u32 = 0x011f_2018;
 const STATIC_GUARD: u32 = 0x011f_201c;
 
 /// The impale depth `fn_009b90b0` reads at `0x9B9624` and `0x9B9AE1`: the copy cached once in
-/// [`STATIC_FLOAT`]. lStewieAl's Tweaks' row S0074 (`patchFixCombatMissileDepthGamesettings`,
-/// `SafeWrite32` at `0x9B9626` and `0x9B9AE3`): those two reads take
-/// `fCombatMissileImpaleDepth`'s own value (the setting at `011ce1e8`, value at +4) instead, so a
-/// change of the setting after the first projectile counts.
+/// [`STATIC_FLOAT`].
 fn impale_depth_word(e: &mut Engine) -> u32 {
-    if e.stewie(engine_core::extend::stewie::COMBAT_MISSILE_DEPTH_SETTINGS) {
-        e.mem.u32(SETTING_011CE1E8 + 4)
-    } else {
-        e.mem.u32(STATIC_FLOAT)
-    }
+    e.mem.u32(STATIC_FLOAT)
 }
 /// `0042ce10` (unnamed, `extradatalist.cpp`): `thiscall` on the object at `0x011ddf38`; a
 /// `bool`.
@@ -925,13 +917,6 @@ fn fn_009b90b0_cut(e: &mut Engine, this: Ptr, in_vats: bool) -> CutEnd {
         };
         if name_constructed {
             e.call(FIXED_STRING_DESTRUCT, &args![at(0x50)]);
-        }
-        // 009b9387: lStewieAl's Tweaks' row S0106 (`patchFixNullHitLocationNodeExplosionCrash`):
-        // with no limb node the scale is not asked (the exe asks the null node's scale first, then
-        // takes this branch).
-        if e.stewie(stewie::NULL_HIT_LOCATION_NODE_EXPLOSION) && limb == 0 {
-            e.mem.set_u8(p + 0x90, 0);
-            return CutEnd::Done;
         }
         let scale = x87_store32(e.call(NODE_SCALE, &args![limb]).f64());
         if limb == 0 {
@@ -1954,56 +1939,6 @@ mod n029_tests {
         assert_eq!(calls(&e, STATE_4_UPDATE_009BA660), vec![vec![s.this]]);
     }
 
-    /// lStewieAl's Tweaks' row S0106: a limb cut off a body whose model has no node for it. The
-    /// exe asks the null node's world scale first (`008d01e0` reads `+0x98`, as its stand-in here
-    /// does) and stops; with the row on the projectile's limb state is cleared and nothing is
-    /// cloned.
-    #[test]
-    fn s0106_cut_without_a_limb_node() {
-        for on in [false, true] {
-            let mut e = Engine::new();
-            cut_doubles(&mut e);
-            e.register(NODE_SCALE, |e, a| st0(f64::from(e.mem.f32(a[0] + 0x98))));
-            let s = scene(&mut e);
-            let actor_node = e.mem.u32(s.actor + 0x1f0);
-            e.mem.set_u32(actor_node + 0x1f8, 0);
-            e.mem.set_u8(s.this + 0x90, 1);
-            e.set_stewie(stewie::NULL_HIT_LOCATION_NODE_EXPLOSION, on);
-            e.call_log = Some(vec![]);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                e.call(0x009b_90b0, &args![s.this]);
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                assert_eq!(e.mem.u8(s.this + 0x90), 0);
-                assert!(calls(&e, CLONE).is_empty());
-                assert!(calls(&e, NODE_SCALE).is_empty());
-            }
-        }
-    }
-
-    /// lStewieAl's Tweaks' row S0106 with a limb node (ordinary input): the row changes nothing,
-    /// the same calls as with it off (the limb's scale asked, the limb cloned and thrown).
-    #[test]
-    fn s0106_row_on_with_a_limb_node_changes_nothing() {
-        let run = |on: bool| {
-            let mut e = Engine::new();
-            cut_doubles(&mut e);
-            let s = scene(&mut e);
-            e.mem.set_u32(0x7e00, s.this);
-            e.set_stewie(stewie::NULL_HIT_LOCATION_NODE_EXPLOSION, on);
-            e.call_log = Some(vec![]);
-            e.call(0x009b_90b0, &args![s.this]);
-            (e.mem.u8(s.impact + 0x28), e)
-        };
-        let ((off_byte, off), (on_byte, on)) = (run(false), run(true));
-        assert_eq!(on.call_log, off.call_log);
-        assert_eq!((on_byte, off_byte), (1, 1));
-        assert_eq!(calls(&on, NODE_SCALE).len(), 1);
-        assert_eq!(calls(&on, CLONE).len(), 1);
-    }
-
     #[test]
     fn fn_009b90b0_cuts_the_limb_and_throws_it() {
         let mut e = Engine::new();
@@ -2042,72 +1977,6 @@ mod n029_tests {
         // The first ray: 512 below to 1024 ahead.
         let scaled: Vec<u32> = calls(&e, POINT_SCALED).iter().map(|c| c[2]).collect();
         assert_eq!(scaled[..2], [512.0f32.to_bits(), 1024.0f32.to_bits()]);
-    }
-
-    /// S0074 (`patchFixCombatMissileDepthGamesettings`): the cut limb is placed lowered by the
-    /// impale depth. The copy cached at the first projectile is 3.0 and `fCombatMissileImpaleDepth`
-    /// is now 5.0 (a mod or script changed it). Off, the limb is lowered by the cached 3.0; on, by
-    /// the setting's own 5.0, so it sits 2.0 lower. With the game's own data both are the same.
-    #[test]
-    fn s0074_the_impale_depth_follows_the_setting() {
-        use std::cell::Cell;
-        use std::rc::Rc;
-        let mut placed_z = [0.0f32; 2];
-        for (index, on) in [false, true].into_iter().enumerate() {
-            let mut e = Engine::new();
-            cut_doubles(&mut e);
-            let s = scene(&mut e);
-            e.mem.set_u32(0x7e00, s.this);
-            e.mem.set_u32(STATIC_GUARD, 1);
-            e.mem.set_f32(STATIC_FLOAT, 3.0);
-            e.mem.set_f32(SETTING_011CE1E8 + 4, 5.0);
-            e.set_stewie(
-                engine_core::extend::stewie::COMBAT_MISSILE_DEPTH_SETTINGS,
-                on,
-            );
-            // The clone's skin has a first child (`0045bc00`), so the limb is placed.
-            e.register(CHILD_PRESENT, |_, _| ret(1));
-            e.register(WORLD_TRANSFORM, |_, a| ret(a[0] + 0x68));
-            e.register(TRANSFORM_MULTIPLY, |_, a| ret(a[2]));
-            stub(&mut e, &[TRANSFORM_CONSTRUCT, TRANSFORM_INVERT]);
-            let seen = Rc::new(Cell::new(f32::NAN));
-            let record = seen.clone();
-            e.register_double(SET_LOCAL_TRANSLATE, move |e, a| {
-                if a[1] != ZERO_POINT {
-                    record.set(e.mem.f32(a[1] + 4));
-                }
-                Ret::default()
-            });
-            e.call_log = Some(vec![]);
-            e.call(0x009b_90b0, &args![s.this]);
-            assert_eq!(e.mem.f32(STATIC_FLOAT), 3.0, "the cache is kept either way");
-            placed_z[index] = seen.get();
-        }
-        assert!(placed_z[0].is_finite(), "the limb was placed");
-        assert_eq!(placed_z[0] - placed_z[1], 2.0);
-    }
-
-    /// S0074 (`patchFixCombatMissileDepthGamesettings`, `0x9B9AE3`): the hinge's pivot is moved by
-    /// the impale depth (`POINT_SCALED`'s factor). The copy cached at the first projectile is 3.0
-    /// and `fCombatMissileImpaleDepth` is now 5.0: off the pivot moves by 3.0, on by 5.0.
-    #[test]
-    fn s0074_the_hinge_pivot_follows_the_impale_setting() {
-        for (on, depth) in [(false, 3.0f32), (true, 5.0)] {
-            let e = hinge_run(|e| {
-                e.mem.set_u32(STATIC_GUARD, 1);
-                e.mem.set_f32(STATIC_FLOAT, 3.0);
-                e.mem.set_f32(SETTING_011CE1E8 + 4, 5.0);
-                e.set_stewie(
-                    engine_core::extend::stewie::COMBAT_MISSILE_DEPTH_SETTINGS,
-                    on,
-                );
-            })
-            .0;
-            let factors: Vec<u32> = calls(&e, POINT_SCALED).iter().map(|c| c[2]).collect();
-            assert!(factors.contains(&depth.to_bits()), "on {on}: {factors:x?}");
-            let other = if on { 3.0f32 } else { 5.0 };
-            assert!(!factors.contains(&other.to_bits()), "on {on}: {factors:x?}");
-        }
     }
 
     #[test]
