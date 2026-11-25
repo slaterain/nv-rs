@@ -1,0 +1,2 @@
+# nv-rs's crash service (Sentry): where the launcher sends the crash reports a player agreed to send (a public client key).
+https://d8a67ef5d350d008c8c361c3802b1f4e@o4512489882976256.ingest.us.sentry.io/4512489960964096

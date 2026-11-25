@@ -385,9 +385,12 @@ pub fn box_kind(tone: Tone, entries: usize) -> u32 {
     icon | if entries >= 2 { MB_YESNO } else { MB_OK }
 }
 
-/// Whether `entries` are [`ask_default_no`]'s (No first).
+/// Whether `entries` are [`ask_default_no`]'s (No first) or the crash question's (Don't send
+/// first, [`crate::crash::ASK_ENTRIES`]): a no first, the yes second.
 fn no_first(entries: &[String]) -> bool {
-    entries.len() == 2 && entries[0] == NO_FIRST[0] && entries[1] == NO_FIRST[1]
+    [NO_FIRST, crate::crash::ASK_ENTRIES]
+        .iter()
+        .any(|e| entries.len() == 2 && entries[0] == e[0] && entries[1] == e[1])
 }
 
 /// A question of Play's as Play.exe asked it, in a message box: the entry chosen. Two entries are
@@ -467,6 +470,9 @@ mod tests {
         assert!(no_first(&entries));
         assert_eq!(entries[0], "No");
         assert!(!no_first(&["Yes".to_string(), "No".to_string()]));
+        // The crash question too: its box's default button is No (Don't send).
+        assert!(no_first(&crate::crash::ASK_ENTRIES.map(String::from)));
+        assert!(!no_first(&["Send".to_string(), "Don't send".to_string()]));
         assert_eq!(MB_DEFBUTTON2 & box_kind(Tone::Question, 2), 0);
     }
 

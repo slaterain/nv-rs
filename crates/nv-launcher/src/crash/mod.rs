@@ -17,6 +17,7 @@
 
 pub mod consent;
 mod scrub;
+pub mod send;
 mod system;
 
 use scrub::{Known, Scrubber};
@@ -643,6 +644,32 @@ pub fn utc(t: SystemTime) -> (String, String) {
     )
 }
 
+/// A log line as it is sent: a `hitch:` line (the host's `hitch_log`: `hitch: <ms> ms[ big]
+/// (typical <ms>) frame <n> at <s> s[ in a menu][, first frame after a load], <place>[; ...]`)
+/// with its place (`interior <cell> (<form id>)`, `<worldspace> (<form id>) grid (x, y)`, `no
+/// cell`) as `<place>`, the timings and causes after it kept; a `hitch:` line in another form
+/// left out (none: it might hold a place); any other line as it is. Where the player was stays on
+/// this PC until the maintainer says it may go.
+fn without_place(line: &str) -> Option<String> {
+    if !line.trim_start().starts_with("hitch:") {
+        return Some(line.to_string());
+    }
+    let after_frame = line.find(" frame ")?;
+    let at = after_frame + line[after_frame..].find(" at ")?;
+    let mut k = at + line[at..].find(" s")? + 2;
+    for part in [" in a menu", ", first frame after a load"] {
+        if line[k..].starts_with(part) {
+            k += part.len();
+        }
+    }
+    if !line[k..].starts_with(", ") {
+        return None;
+    }
+    k += 2;
+    let end = line[k..].find("; ").map_or(line.len(), |p| k + p);
+    Some(format!("{}<place>{}", &line[..k], &line[end..]))
+}
+
 impl Report {
     /// The report as the player reads it (`report.txt`): [`Report::body`] and where its log is.
     pub fn text(&self) -> String {
@@ -658,6 +685,34 @@ The log's last {} lines are in log.txt beside this file.
 
     /// Everything the report says but where its log is.
     pub fn body(&self) -> String {
+        self.body_with(true)
+    }
+
+    /// What of it is sent ([`send`]): the body without an F12 report's note and place, which
+    /// stay on this PC (said when there is one).
+    pub fn sent_body(&self) -> String {
+        let mut t = self.body_with(false);
+        if self.f12.is_some() {
+            t.push_str(
+                "\nThe note and place of the F12 report made during this run stay on this PC.\n",
+            );
+        }
+        t
+    }
+
+    /// The log lines that are sent: the game's own `F12: ` lines (the place, the report's
+    /// folder) left out, as the F12 report's note and place are, and every `hitch:` line's place
+    /// `<place>` ([`without_place`]); the local copy keeps them all.
+    pub fn sent_log(&self) -> Vec<String> {
+        self.log
+            .iter()
+            .filter(|l| !l.trim_start().starts_with("F12:"))
+            .filter_map(|l| without_place(l))
+            .collect()
+    }
+
+    /// The body, with the F12 report's part or without it.
+    fn body_with(&self, with_f12: bool) -> String {
         let mut t = String::new();
         let mut line = |s: &str| {
             t.push_str(s);
@@ -705,7 +760,7 @@ The log's last {} lines are in log.txt beside this file.
         } else {
             line("Mods: played without mods");
         }
-        if let Some(f12) = &self.f12 {
+        if let Some(f12) = self.f12.as_ref().filter(|_| with_f12) {
             line("");
             line(&format!(
                 "F12 report made during this run: reports/{}",
@@ -787,20 +842,127 @@ fn tidy(reports: &Path, keep: usize) {
     }
 }
 
-/// After a run: when it ended badly, its report built from this system and kept in nv-rs's own
-/// reports folder. None for a good end; else the report's folder, or why it could not be kept.
-pub fn after_run(run: &Run) -> Option<Result<PathBuf, String>> {
+/// What became of a bad end's report: the folder it was kept in (or why it was not), and what
+/// became of sending it (a line for the player; none when nothing was to be sent).
+pub struct Outcome {
+    pub kept: Result<PathBuf, String>,
+    pub sent: Option<String>,
+}
+
+/// After a run: when it ended badly, its report built from this system, kept in nv-rs's own
+/// reports folder, and sent as the player chose ([`deliver`]). None for a good end.
+pub fn after_run(run: &Run) -> Option<Outcome> {
     let (_, tail) = ends_of(run.log, 1024 * 1024);
     let ending = ending(&tail, run.status, run.shell)?;
     let games: Vec<&Path> = run.games.iter().map(PathBuf::as_path).collect();
     let scrubber = Scrubber::new(&Known::from_system(&games, run.program, run.own));
     let report = build(run, &ending, &system::facts(), &scrubber, SystemTime::now());
     let reports = run.own.join("reports");
-    Some(
-        report
-            .save(&reports)
-            .map_err(|e| format!("{}: {e}", reports.display())),
+    let kept = report
+        .save(&reports)
+        .map_err(|e| format!("{}: {e}", reports.display()));
+    let sent = kept.as_ref().ok().and_then(|folder| {
+        deliver(
+            &report,
+            folder,
+            run.own,
+            run.program,
+            &send::curl(),
+            consent::session(run.own),
+            ask_player,
+        )
+    });
+    Some(Outcome { kept, sent })
+}
+
+/// What happens to a kept report.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Next {
+    Send,
+    Ask,
+    /// Kept on this PC only.
+    Keep,
+}
+
+/// What happens to a report with the player's `answer`, where the package can send
+/// (`can_send`: it has the crash service's file): nothing is sent without one, or without a yes.
+pub fn next_step(answer: consent::Consent, can_send: bool) -> Next {
+    match (can_send, answer) {
+        (true, consent::Consent::Send) => Next::Send,
+        (true, consent::Consent::Ask) => Next::Ask,
+        _ => Next::Keep,
+    }
+}
+
+/// The question after a crash with "Ask me each time": what would go under it (the report
+/// without an F12 report's note and place, and how many of its log's last lines go, without the
+/// game's `F12: ` lines and the places of its `hitch:` lines).
+fn question(report: &Report) -> String {
+    format!(
+        "The game stopped, and nv-rs kept the crash report below. Send it to nv-rs's developers?\n\n{}\nThe log's last {} lines go with it, without where you were in the game.\n",
+        report.sent_body(),
+        report.sent_log().len()
     )
+}
+
+/// The per-crash question's entries: "Don't send" first, so it is the highlighted one, a message
+/// box's default button and the answer without a window; "Send" is the only yes.
+pub const ASK_ENTRIES: [&str; 2] = ["Don't send", "Send"];
+
+/// The player asked through `send` (the launcher's window, [`crate::session::send`]): a yes only
+/// for "Send". Esc and a closed window answer "Don't send"; a reply dropped without an answer and
+/// no window at all are a no.
+fn ask_with(send: impl FnOnce(crate::session::Event) -> bool, text: &str) -> bool {
+    let (reply, answer) = std::sync::mpsc::channel();
+    let asked = send(crate::session::Event::Message {
+        tone: crate::session::Tone::Question,
+        text: text.to_string(),
+        entries: ASK_ENTRIES.iter().map(|e| e.to_string()).collect(),
+        reply,
+    });
+    asked && answer.recv() == Ok(1)
+}
+
+/// [`ask_with`] the launcher's window.
+fn ask_player(text: &str) -> bool {
+    ask_with(crate::session::send, text)
+}
+
+/// What the player sees while curl posts a report (up to 30 seconds).
+pub const SENDING: &str = "Sending the crash report...";
+
+/// `report`, kept in `folder`, sent or not as the player answered (nv-rs's own folder `own`
+/// holds the saved answer, `session` this launcher's own if it gave one, and the stricter of the
+/// two is in force; the launcher's folder `program` holds the crash service's file), by the
+/// program `curl`, `ask` asking first where the answer is "ask each time". The line for the
+/// player, none when nothing was to be sent.
+pub fn deliver(
+    report: &Report,
+    folder: &Path,
+    own: &Path,
+    program: &Path,
+    curl: &Path,
+    session: Option<consent::Consent>,
+    ask: impl FnOnce(&str) -> bool,
+) -> Option<String> {
+    let dsn = send::package_dsn(program);
+    let answer = consent::in_force(consent::read(own), session);
+    match next_step(answer, dsn.is_some()) {
+        Next::Keep => return None,
+        Next::Ask if !ask(&question(report)) => {
+            return Some("The crash report was not sent: it stays on this PC.".into())
+        }
+        Next::Ask | Next::Send => {}
+    }
+    // Seen while it goes, on every system: the waiting screen brings back the window hidden
+    // since the game started (play.sh's lines come back with the next line of output).
+    crate::session::send(crate::session::Event::Status(SENDING.into()));
+    Some(match send::send(report, folder, dsn.as_ref()?, curl) {
+        Ok(_) => "The crash report was sent to nv-rs's developers. Thank you.".into(),
+        Err(why) => {
+            format!("The crash report could not be sent ({why}); it stays on this PC.")
+        }
+    })
 }
 
 /// The example stop line of [`sample`]: said to be an example, with made-up addresses.
@@ -1465,11 +1627,131 @@ mod tests {
             table_card: None,
         };
         assert!(after_run(&run(0)).is_none());
-        let kept = after_run(&run(139)).unwrap().unwrap();
+        let outcome = after_run(&run(139)).unwrap();
+        // No crash service file beside the launcher (a build from source): nothing sent.
+        assert_eq!(outcome.sent, None);
+        let kept = outcome.kept.unwrap();
         assert!(kept.starts_with(root.join("reports")));
         let body = std::fs::read_to_string(kept.join("report.txt")).unwrap();
         assert!(body.contains("signal 11, SIGSEGV"), "{body}");
         assert!(body.contains("built from source"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// After a run, with the crash service's file beside the launcher and "Ask me each time":
+    /// asked in the launcher's window, and with no window (a test has none) nothing is sent.
+    /// (The file names a port on this PC nothing listens on, should anything try.)
+    #[test]
+    fn after_a_run_nothing_goes_without_the_players_yes() {
+        let root =
+            std::env::temp_dir().join(format!("nv-launcher-after-ask-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("logs")).unwrap();
+        let log = root.join("logs").join("game.log");
+        std::fs::write(&log, "a line of the game's\n").unwrap();
+        std::fs::write(
+            root.join(send::DSN_FILE),
+            "http://0123456789abcdef0123456789abcdef@127.0.0.1:9/1\n",
+        )
+        .unwrap();
+        consent::write(&root, consent::Consent::Ask).unwrap();
+        let outcome = after_run(&Run {
+            status: Some(139),
+            shell: Shell::Unix,
+            log: &log,
+            started: SystemTime::now(),
+            mods: false,
+            own: &root,
+            program: &root,
+            games: Vec::new(),
+            table_card: None,
+        })
+        .unwrap();
+        let kept = outcome.kept.unwrap();
+        assert_eq!(
+            outcome.sent.as_deref(),
+            Some("The crash report was not sent: it stays on this PC.")
+        );
+        assert!(!kept.join("envelope.txt").exists());
+        assert!(!kept.join("sent.txt").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// End to end, the launcher's own answer reaches the send: the saved answer is "Send them
+    /// automatically", then the player answers Never where it cannot be kept (the launcher's
+    /// path, `app::keep_consent`), and a crash in this run sends nothing.
+    #[test]
+    fn after_a_run_an_unsaved_never_holds_against_a_saved_send() {
+        let root =
+            std::env::temp_dir().join(format!("nv-launcher-after-never-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("logs")).unwrap();
+        let log = root.join("logs").join("game.log");
+        std::fs::write(&log, "a line of the game's\n").unwrap();
+        std::fs::write(
+            root.join(send::DSN_FILE),
+            "http://0123456789abcdef0123456789abcdef@127.0.0.1:9/1\n",
+        )
+        .unwrap();
+        consent::write(&root, consent::Consent::Send).unwrap();
+        let note = crate::app::keep_consent(&root, true, consent::Consent::Never, true);
+        assert!(note.is_some());
+        assert_eq!(consent::read(&root), consent::Consent::Send);
+        let outcome = after_run(&Run {
+            status: Some(139),
+            shell: Shell::Unix,
+            log: &log,
+            started: SystemTime::now(),
+            mods: false,
+            own: &root,
+            program: &root,
+            games: Vec::new(),
+            table_card: None,
+        })
+        .unwrap();
+        let kept = outcome.kept.unwrap();
+        assert_eq!(outcome.sent, None);
+        assert!(!kept.join("envelope.txt").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Only a hitch line's place goes from what is sent: the cell or worldspace, its form id and
+    /// the grid square, in every form `hitch_log` writes; a hitch line in another form goes
+    /// whole; other lines stay as they are.
+    #[test]
+    fn a_hitch_lines_place_is_left_out_of_what_is_sent() {
+        for (line, sent) in [
+            (
+                "hitch: 64.0 ms big (typical 11.9) frame 15431 at 312.4 s, GoodspringsWorld (0x000da726) grid (-3, 5); stages ms: update 40.1, before draw 0.2; likely cause: freed 22,093 memory blocks",
+                Some("hitch: 64.0 ms big (typical 11.9) frame 15431 at 312.4 s, <place>; stages ms: update 40.1, before draw 0.2; likely cause: freed 22,093 memory blocks"),
+            ),
+            (
+                "hitch: 9.0 ms (typical 3.4) frame 15431 at 312.4 s in a menu, interior Doc Mitchell's House (0x00104c1c); largest read 2.1 MB of <save>.fos",
+                Some("hitch: 9.0 ms (typical 3.4) frame 15431 at 312.4 s in a menu, <place>; largest read 2.1 MB of <save>.fos"),
+            ),
+            (
+                "hitch: 52.3 ms big (typical 8.1) frame 900 at 20.0 s, first frame after a load, WastelandNV (0x000da726) grid (12, -4)",
+                Some("hitch: 52.3 ms big (typical 8.1) frame 900 at 20.0 s, first frame after a load, <place>"),
+            ),
+            (
+                "hitch: 30.0 ms (typical 9.0) frame 7 at 1.5 s in a menu, first frame after a load, no cell; stages ms: update 20.0",
+                Some("hitch: 30.0 ms (typical 9.0) frame 7 at 1.5 s in a menu, first frame after a load, <place>; stages ms: update 20.0"),
+            ),
+            (
+                "hitch: 18.0 ms (typical 6.0) frame 40 at 2.0 s, 0x0000003c grid (0, 0)",
+                Some("hitch: 18.0 ms (typical 6.0) frame 40 at 2.0 s, <place>"),
+            ),
+            ("hitch: a form this does not know, in Goodsprings", None),
+            (
+                "hitch: 5.0 ms (typical 2.0) frame 3 at 0.5 s in Goodsprings",
+                None,
+            ),
+            (
+                "NV_D3D9=wgpu: drawing with Some Card (Vulkan)",
+                Some("NV_D3D9=wgpu: drawing with Some Card (Vulkan)"),
+            ),
+        ] {
+            assert_eq!(without_place(line).as_deref(), sent, "{line}");
+        }
     }
 }

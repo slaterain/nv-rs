@@ -628,6 +628,13 @@ const REFERENCE_PREPARE_56F700: u32 = 0x0056_f700;
 const CELL_LOAD_3D: u32 = 0x0054_5cf0;
 /// Run by `fn_0054bcf0` with the answer of `fn_0054df30`.
 const CELL_AFTER_SCRIPTS: u32 = 0x0055_0c60;
+/// The cell functions `fn_0054bcf0` calls by address: the scripts' run
+/// ([`tes_object_cell_run_scripts`]), [`fn_0054df30`], [`fn_0054bc10`] and
+/// [`tes_object_cell_attach_reference_3d`].
+const CELL_RUN_SCRIPTS: u32 = 0x0054_c740;
+const CELL_REATTACH_CHECK: u32 = 0x0054_df30;
+const CELL_ACCEPTED_PASS: u32 = 0x0054_bc10;
+const CELL_ATTACH_REFERENCE_3D: u32 = 0x0054_8880;
 /// The `TES` method that `fn_0054bcf0` asks about the cell (`(cell)`).
 const TES_CELL_TEST_453490: u32 = 0x0045_3490;
 /// The three-float vector constructor `fn_0054bcf0` uses, and the call that
@@ -3690,7 +3697,9 @@ pub fn fn_0054bc10(e: &mut Engine, this: Ptr<TESObjectCELL>) {
 /// answer to `00550c60`. If the `TES` object accepts the cell (`00453490`)
 /// the 3D is moved to the origin and [`fn_0054bc10`] runs. Otherwise every
 /// reference gets one of two passes over the list, markers (base form
-/// `011ca238` or `011ca230`) in the second and everything else in the first:
+/// `011ca238` or `011ca230`) in the first and everything else in the second
+/// (the list's last reference is judged by the next pass's rule, the pass
+/// being counted when the walk reaches the end):
 /// unless the game loader flag is set it gets its action list set up
 /// (`Script::InitActionList`, `SetActionFlag(0x1000)`); a reference without
 /// form flags `0x800` / `0x20` is un-queued from the process lists (an actor)
@@ -3703,8 +3712,9 @@ pub fn fn_0054bc10(e: &mut Engine, this: Ptr<TESObjectCELL>) {
 /// The compiler's exception frame is not translated.
 pub fn fn_0054bcf0(e: &mut Engine, this: Ptr<TESObjectCELL>, flag: u8) {
     let node_3d = e.call(CELL_LOAD_3D, &args![this]).u32();
-    tes_object_cell_run_scripts(e, this, 0, 0);
-    let scripts = fn_0054df30(e, this);
+    // By address, as the exe calls them (the cell_refs family types this function).
+    e.call(CELL_RUN_SCRIPTS, &args![this, 0u32, 0u32]);
+    let scripts = e.call(CELL_REATTACH_CHECK, &args![this]).u8();
     e.call(CELL_AFTER_SCRIPTS, &args![this, scripts as u32]);
     let tes = e.global::<u32>(TES_POINTER);
     if e.call(TES_CELL_TEST_453490, &args![tes, this]).bool() {
@@ -3714,7 +3724,7 @@ pub fn fn_0054bcf0(e: &mut Engine, this: Ptr<TESObjectCELL>, flag: u8) {
                 e.call(NODE_SET_LOCAL_TRANSLATE, &args![node_3d, vector]);
             });
         }
-        fn_0054bc10(e, this);
+        e.call(CELL_ACCEPTED_PASS, &args![this]);
     } else {
         lock_enter(e, this);
         let tes = e.global::<u32>(TES_POINTER);
@@ -3784,7 +3794,7 @@ pub fn fn_0054bcf0(e: &mut Engine, this: Ptr<TESObjectCELL>, flag: u8) {
                     }
                 }
                 if attach {
-                    tes_object_cell_attach_reference_3d(e, this, item, 0);
+                    e.call(CELL_ATTACH_REFERENCE_3D, &args![this, item, 0u32]);
                 }
             }
         }
