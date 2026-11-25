@@ -1487,7 +1487,11 @@ fn play(
             .ok()
             .and_then(|table| tables::adapter_name(&table)),
     });
-    let kept = match report {
+    let (kept, sent) = match report {
+        Some(outcome) => (Some(outcome.kept), outcome.sent),
+        None => (None, None),
+    };
+    let kept = match kept {
         Some(Ok(folder)) => {
             package.log(&format!("crash report kept in {}", folder.display()));
             Some(folder)
@@ -1498,13 +1502,18 @@ fn play(
         }
         None => None,
     };
+    // Sent, not sent, or why not (the player's answer decides; none: nothing was to be sent).
+    let sent = sent.map_or(String::new(), |line| {
+        package.log(&format!("crash report: {line}"));
+        format!("\n\n{line}")
+    });
     let message = plain_end(&log_tail(&log_path), exit.code(), kept.is_some());
     package.log(&message);
     crate::session::set_stop_code(STOP_GAME_STOPPED);
     match &kept {
         Some(folder) => {
             let text = format!(
-                "{message}\n\nCrash report:\n{}\n\nLog:\n{}",
+                "{message}{sent}\n\nCrash report:\n{}\n\nLog:\n{}",
                 folder.display(),
                 log_path.display()
             );

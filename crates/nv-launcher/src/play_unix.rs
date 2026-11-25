@@ -73,7 +73,7 @@ fn crash_report(
             games.push(PathBuf::from(found));
         }
     }
-    let kept = crate::crash::after_run(&crate::crash::Run {
+    let outcome = crate::crash::after_run(&crate::crash::Run {
         status: Some(code),
         shell: crate::crash::Shell::Unix,
         log,
@@ -84,13 +84,19 @@ fn crash_report(
         games,
         table_card: None,
     })?;
-    Some(match kept {
+    let mut line = match outcome.kept {
         Ok(folder) => format!(
-            "\nnv-rs kept a crash report of this, with your user name and folder names taken out:\n{}\nAttach its two files when you report it.\n",
+            "\nnv-rs kept a crash report of this, with your user name and folder names taken out:\n{}\nAttach its report.txt and log.txt when you report it.\n",
             folder.display()
         ),
         Err(why) => format!("\nnv-rs could not keep a crash report: {why}\n"),
-    })
+    };
+    // Sent, not sent, or why not (the player's answer decides; none: nothing was to be sent).
+    if let Some(sent) = outcome.sent {
+        line.push_str(&sent);
+        line.push('\n');
+    }
+    Some(line)
 }
 
 /// A whole line of play.sh's: the window steps aside when it says the game starts, and the

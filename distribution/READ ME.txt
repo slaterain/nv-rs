@@ -223,8 +223,12 @@ https://github.com/slaterain/nv-rs/issues
 Press F12 in the game when you see something wrong. You hear a beep, and a numbered folder appears
 in userdata\reports with a picture and the log so far. Add your words to its note.txt and attach the
 folder, zipped. If the game stopped, the launcher keeps a crash report in userdata\reports (a
-crash-<date and time> folder, your user name and folder names taken out of it): attach its two
-files, and launcher.log from userdata\logs.
+crash-<date and time> folder, your user name and folder names taken out of it): attach its
+report.txt and log.txt, and launcher.log from userdata\logs. At its first start the launcher asks
+whether crash reports may be sent to nv-rs's developers through Sentry (sentry.io): nothing is
+sent without your yes, and Settings, Crash reports, changes the answer. A report sent is the one
+kept, without an F12 report's note and place and without the game's F12 lines in its log;
+envelope.txt in its folder is what was sent.
 Say what you did just before, and your graphics card, Windows version and game store.
 
 Logs can show your Windows user name in folder paths: look through them first if that matters to you.

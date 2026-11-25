@@ -15,6 +15,10 @@
 //!   `--max-run`, a shared run longer than that fails the check too: the C runtime's own tables are
 //!   in both programs (the longest seen is about 2 KB), game data would be more.
 //!
+//! - With `--crash-reports FILE` (the repository's `distribution/crash-reports.txt`): the package must
+//!   hold `crash-reports.txt` with that text (line ends aside), a DSN with a public key only (the
+//!   crash service the launcher sends a report to when the player agrees).
+//!
 //! Prints what it finds; status 1 when a needle is found or a shared run is over the limit, 2 when
 //! a `--game` file can't be read or the command line is wrong (a `--max-run` that isn't a number
 //! included), and when nothing would be checked: FOLDER missing, not a folder or without files, or
@@ -321,9 +325,12 @@ struct Arguments {
     /// `--notices LIST`: every notice LIST names (`FILE<TAB>NAME` a line, `#` comments) must be
     /// in the package as `licenses/NAME`.
     notices: Option<PathBuf>,
+    /// `--crash-reports FILE`: the package's `crash-reports.txt` must be there and hold FILE's text
+    /// (the repository's `distribution/crash-reports.txt`), a DSN with a public key only.
+    crash_reports: Option<PathBuf>,
 }
 
-const USAGE: &str = "usage: package-check FOLDER [--needle TEXT]... [--program-needle TEXT]... [--program-needle-exact TEXT]... [--game FILE]... [--max-run BYTES] [--notices LIST]";
+const USAGE: &str = "usage: package-check FOLDER [--needle TEXT]... [--program-needle TEXT]... [--program-needle-exact TEXT]... [--game FILE]... [--max-run BYTES] [--notices LIST] [--crash-reports FILE]";
 
 /// The command line after the program's name. A switch without its value, an unknown switch or a
 /// `--max-run` that isn't a number is an error: a limit that was asked for is never dropped.
@@ -347,6 +354,7 @@ fn parse_arguments(args: &[String]) -> Result<Arguments, String> {
             "--program-needle-exact" => out.exact_program_needles.push(value?),
             "--game" => out.games.push(PathBuf::from(value?)),
             "--notices" => out.notices = Some(PathBuf::from(value?)),
+            "--crash-reports" => out.crash_reports = Some(PathBuf::from(value?)),
             "--max-run" => {
                 let n = value?;
                 let limit = n
@@ -371,6 +379,7 @@ fn main() {
         games,
         max_run,
         notices,
+        crash_reports,
     } = match parse_arguments(&args) {
         Ok(arguments) => arguments,
         Err(why) => {
@@ -540,6 +549,20 @@ fn main() {
             }
         }
     }
+    if let Some(file) = &crash_reports {
+        match std::fs::read_to_string(file) {
+            Ok(expected) => {
+                if let Some(why) = crash_reports_problem(&folder, &expected) {
+                    println!("CRASH REPORTS {why}");
+                    bad += 1;
+                }
+            }
+            Err(e) => {
+                eprintln!("--crash-reports {}: {e}", file.display());
+                std::process::exit(2);
+            }
+        }
+    }
     std::process::exit(i32::from(bad != 0));
 }
 
@@ -579,12 +602,65 @@ fn missing_notices(folder: &Path, list: &str) -> Vec<String> {
         .collect()
 }
 
+/// What is wrong with the package's `crash-reports.txt` (the crash service's address the launcher
+/// sends reports to, when the player agrees) against `expected`, the repository's: missing,
+/// different, or not a DSN with a public key only (a secret key must never ship). None: fine.
+fn crash_reports_problem(folder: &Path, expected: &str) -> Option<String> {
+    let Ok(found) = std::fs::read_to_string(folder.join("crash-reports.txt")) else {
+        return Some("crash-reports.txt is missing".into());
+    };
+    let lines = |t: &str| -> Vec<String> { t.lines().map(|l| l.trim_end().to_string()).collect() };
+    if lines(&found) != lines(expected) {
+        return Some("crash-reports.txt differs from distribution/crash-reports.txt".into());
+    }
+    let dsn = expected
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with('#'));
+    let key = dsn
+        .and_then(|l| l.strip_prefix("https://"))
+        .and_then(|rest| rest.split_once('@'))
+        .map(|(key, _)| key);
+    match key {
+        Some(k) if !k.is_empty() && k.bytes().all(|b| b.is_ascii_alphanumeric()) => None,
+        _ => Some("crash-reports.txt holds no https DSN with a public key only".into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The crash service's file must be in the package as the repository has it (line ends
+    /// aside), and hold a DSN with a public key only.
+    #[test]
+    fn the_crash_service_file_must_be_the_repositorys_with_a_public_key() {
+        let dir = std::env::temp_dir().join(format!("package-check-crash-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let good = "# what it is\nhttps://0123abcd@o1.ingest.example.org/42\n";
+        assert_eq!(
+            crash_reports_problem(&dir, good).as_deref(),
+            Some("crash-reports.txt is missing")
+        );
+        std::fs::write(dir.join("crash-reports.txt"), good.replace('\n', "\r\n")).unwrap();
+        assert_eq!(crash_reports_problem(&dir, good), None);
+        std::fs::write(dir.join("crash-reports.txt"), "https://other@x/1\n").unwrap();
+        assert!(crash_reports_problem(&dir, good)
+            .unwrap()
+            .contains("differs"));
+        let secret = "https://key:secret@o1.example.org/42\n";
+        std::fs::write(dir.join("crash-reports.txt"), secret).unwrap();
+        assert!(crash_reports_problem(&dir, secret)
+            .unwrap()
+            .contains("public key only"));
+        let parsed = parse_arguments(&args(&["pkg", "--crash-reports", "c.txt"])).unwrap();
+        assert_eq!(parsed.crash_reports, Some(PathBuf::from("c.txt")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Every notice the list names must be in the package's licenses folder; a line without a

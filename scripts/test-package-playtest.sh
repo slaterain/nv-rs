@@ -88,6 +88,11 @@ package() {
         # And a crates.io crate's licence folder.
         first=$(cd -- "$repo/distribution/licenses" && git ls-files | sed -n 1p)
         check "$label: the archive holds licenses/$first" grep -qxF -e "$name/licenses/$first" "$tmp/entries"
+        # A test build never sends crash reports: no crash service file in it.
+        check "$label: the test build holds no crash-reports.txt" sh -c '! grep -qxF -e "$1" "$2"' x "$name/crash-reports.txt" "$tmp/entries"
+    fi
+    if [ -f "$recorded" ]; then
+        check "$label: package-check was not asked for a crash service file" sh -c '! grep -qxF -e --crash-reports "$1"' x "$recorded"
     fi
     # Every needle of the list after a --needle, byte for byte.
     if [ -f "$recorded" ]; then

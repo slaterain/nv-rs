@@ -196,13 +196,14 @@ pub fn append_output(lines: &mut Vec<String>, text: &str) {
     lines.drain(..extra);
 }
 
-/// Esc's entry: the screen's Back or No, else its last (Exit, OK); none without entries.
+/// Esc's entry: the screen's Back, No or Don't send, else its last (Exit, OK); none without
+/// entries.
 pub fn back_entry(entries: &[String]) -> Option<usize> {
     let last = entries.len().checked_sub(1)?;
     Some(
         entries
             .iter()
-            .position(|x| x == "Back" || x == "No")
+            .position(|x| x == "Back" || x == "No" || x == "Don't send")
             .unwrap_or(last),
     )
 }
@@ -655,15 +656,16 @@ pub fn about_text(in_force: Option<Consent>) -> Vec<String> {
     text
 }
 
-/// The question: where reports go, that only the report goes, that nothing is sent before an
-/// answer, and, where this copy of nv-rs cannot send (`can_send`), that it cannot.
+/// The question: where reports go, that only the report goes (an F12 report's note and place
+/// stay on this PC), that nothing is sent before an answer, and, where this copy of nv-rs cannot
+/// send (`can_send`), that it cannot.
 pub fn question_text(can_send: bool) -> Vec<String> {
     let mut text = vec![
-        "Send crash reports to Sentry (sentry.io), the crash-report service nv-rs's developers use? Only the report goes. Settings can change this.".into(),
+        "Send crash reports to Sentry (sentry.io), the crash-report service nv-rs's developers use? Only the report goes, not an F12 report's note or place. Settings can change this.".into(),
         "Nothing is sent until you choose.".into(),
     ];
     if !can_send {
-        text.push("This copy of nv-rs cannot send yet.".into());
+        text.push("This copy cannot send yet.".into());
     }
     text
 }
@@ -723,6 +725,14 @@ impl ConsentFlow {
     }
 }
 
+/// The launcher's own folder (the package's: `BUILD.txt` and `crash-reports.txt` are beside it).
+fn program_folder() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+        .unwrap_or_default()
+}
+
 /// Whether the crash reports screens open at the start screen: not answered yet, and not asked
 /// already since the launcher started ("Not now" asks again at the next start).
 pub fn asks_consent(answer: Consent, asked: bool) -> bool {
@@ -761,6 +771,22 @@ pub fn row_step_act(testing: bool, index: usize) -> Option<Act> {
 /// intro's note waits); an answer from Settings is written at once, as Settings' other rows are.
 pub fn keeps_at_once(from_settings: bool) -> bool {
     from_settings || cfg!(not(windows))
+}
+
+/// `answer` for crash reports: this launcher's own from now on, so a crash in this run follows
+/// it too (never sending more than the saved answer: [`consent::in_force`]), and kept in nv-rs's
+/// own folder `own` (none where nv-rs may not write there, `refused`): at once (`now`), or, for
+/// the first start's answer on Windows, once Play's first-write checks pass ([`keeps_at_once`];
+/// a first answer never kept so is asked again at the next start). What went wrong, if it could
+/// not be kept.
+pub fn keep_consent(own: &Path, refused: bool, answer: Consent, now: bool) -> Option<String> {
+    consent::set_session(own, answer);
+    if refused {
+        return Some("Not saved: nv-rs may not write in its own folder".into());
+    }
+    consent::keep(own, answer, now).err().map(|e| {
+        format!("Your crash reports answer was not saved ({e}): until nv-rs closes, a report goes only if both it and the saved answer let it.")
+    })
 }
 
 /// The Settings list's entry that opens the Testing list, and the start screen's for Settings.
@@ -1865,8 +1891,8 @@ impl App {
 
     /// The question: where reports go, the three answers, Back.
     fn show_question(&mut self) {
-        // No version of nv-rs sends yet (the sending comes in its own change).
-        let s = question_screen(false);
+        // This copy can send when its package has the crash service's file.
+        let s = question_screen(crate::crash::send::package_dsn(&program_folder()).is_some());
         // Typed in like the first screen: a first press or click only finishes its text, so a
         // double click on Choose never answers.
         self.show(
@@ -1881,13 +1907,9 @@ impl App {
     /// The example report ([`crate::crash::sample`]: made from this PC now, nothing written),
     /// long enough to scroll; Back to the first screen.
     fn show_sample(&mut self) {
-        let program = std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(Path::to_path_buf))
-            .unwrap_or_default();
         let text = crate::crash::sample(
             &self.place.own,
-            &program,
+            &program_folder(),
             self.place.game.as_deref(),
             self.place.mods,
             self.place.adapter_card.clone(),
@@ -1907,18 +1929,10 @@ impl App {
         );
     }
 
-    /// `answer` kept for crash reports in the launcher's own file: at once (`now`), or, for the
-    /// first start's answer on Windows, once Play's first-write checks pass ([`keeps_at_once`];
-    /// a first answer never kept so is asked again at the next start). What went wrong, if it
-    /// could not be kept.
+    /// `answer` kept for crash reports ([`keep_consent`]).
     fn set_consent(&mut self, answer: Consent, now: bool) -> Option<String> {
         self.consent = answer;
-        if self.place.refused.is_some() {
-            return Some("Not saved: nv-rs may not write in its own folder".into());
-        }
-        consent::keep(&self.place.own, answer, now).err().map(|e| {
-            format!("Your crash reports answer was not saved ({e}): it holds until nv-rs closes.")
-        })
+        keep_consent(&self.place.own, self.place.refused.is_some(), answer, now)
     }
 
     /// The question answered: kept, then back to where the screens were opened from.
@@ -3079,6 +3093,8 @@ mod tests {
         assert_eq!(back_entry(&e(&["Play", "Exit"])), Some(1));
         assert_eq!(back_entry(&e(&["OK"])), Some(0));
         assert_eq!(back_entry(&[]), None);
+        // The crash question's: Esc and a closed window never send.
+        assert_eq!(back_entry(&e(&crate::crash::ASK_ENTRIES)), Some(0));
     }
 
     /// Enter sends what is typed (a folder from the start screen or at the folder prompt); Esc
@@ -3585,7 +3601,8 @@ mod tests {
         assert!(keeps_at_once(true));
         assert_eq!(keeps_at_once(false), cfg!(not(windows)));
         // What a report holds (the F12 report's note and place too), where reports go, that only
-        // the report goes, that nothing goes before an answer, and that this version sends none.
+        // the report goes (no F12 note or place), that nothing goes before an answer, and where
+        // this copy cannot send, that it cannot.
         let about = about_text(None).join(" ");
         assert!(about.contains("an F12 report's note and place from that run"));
         assert!(about.contains("no saves or pictures"));
@@ -3596,7 +3613,7 @@ mod tests {
         assert!(!in_settings.contains("Not now"));
         let question = question_text(false).join(" ");
         assert!(question.contains("Sentry (sentry.io)"));
-        assert!(question.contains("Only the report goes"));
+        assert!(question.contains("Only the report goes, not an F12 report's note or place."));
         assert!(question.contains("Nothing is sent until you choose."));
         assert!(question.contains("cannot send yet"));
         assert!(!question_text(true).join(" ").contains("cannot send"));
