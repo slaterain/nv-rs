@@ -640,8 +640,10 @@ fn image_stand_ins(e: &mut Engine) {
 /// The shapes: (width, height, values short by).
 const IMAGE_SHAPES: [(u32, u32, u32); 4] = [(1, 1, 0), (3, 2, 0), (8, 4, 0), (2, 2, 4)];
 
-/// The range and scale arguments the cases try (float bits).
-const RANGES: [u32; 7] = [
+/// The range and scale arguments the cases try (float bits). With a `max`, the typed one-pass
+/// path's floor table is made for finite ends below 2^24 in size up to 4,096 floors apart, and
+/// refused for the others.
+const RANGES: [u32; 10] = [
     0,           // 0.0
     0x437f_0000, // 255.0
     0x3f80_0000, // 1.0
@@ -649,6 +651,9 @@ const RANGES: [u32; 7] = [
     0x7fc0_0000, // a NaN
     0x4f80_0000, // 2^32
     0x8000_0001, // a negative subnormal
+    0x3f00_0000, // 0.5
+    0xbe80_0000, // -0.25
+    0xc7c3_5000, // -100,000.0: more floors to 255.0 than the table holds
 ];
 
 #[test]
@@ -662,7 +667,16 @@ fn facegen_head_get_compressed_image() {
     .inputs(&[
         Input::Of(&[0, 1, 2, 3]),
         Input::Of(&RANGES),
-        Input::Of(&[0x437f_0000, 0x3f80_0000, 0, 0x7fc0_0000, 0x4f80_0000]),
+        // `max`: 255.0, 1.0, 0.0, a NaN, 2^32, 255.5, 100,000.0.
+        Input::Of(&[
+            0x437f_0000,
+            0x3f80_0000,
+            0,
+            0x7fc0_0000,
+            0x4f80_0000,
+            0x437f_8000,
+            0x47c3_5000,
+        ]),
         Input::Of(&[
             0x3f80_0000,
             0x4380_0000,
@@ -713,7 +727,7 @@ fn facegen_head_get_compressed_image() {
         e.mem.set_u32(size + 4, case.word(4));
         vec![image, case.word(1), case.word(2), case.word(3), size]
     })
-    .max_cases(300)
+    .max_cases(400)
     .max_calls(100_000)
     .run()
     .assert_same();
