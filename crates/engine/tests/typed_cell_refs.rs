@@ -4450,6 +4450,22 @@ fn xd_list(e: &mut Engine, seed: u32, kinds: &[u32]) -> u32 {
     list
 }
 
+/// A list copy's source as the copy Diffs make it: [`xd_list`]'s, with a time-left extra data
+/// (type 0x27, JIP's keyed copy) at its head in the seeds with JIP's handler at its sites, so its
+/// copy site is asked from both list copies, with both flags.
+fn xd_copy_source(e: &mut Engine, seed: u32) -> u32 {
+    let list = xd_list(e, seed, XD_SOURCE_KINDS);
+    if seed % 4 == 2 {
+        let mut d = Draw(seed ^ 0x0041_1978);
+        let x = xd_source(e, &mut d, 0x27);
+        e.mem.set_u32(x + 8, e.mem.u32(list + 4));
+        e.mem.set_u32(list + 4, x);
+        let flags = e.mem.u8(list + 8 + 4) | 0x80;
+        e.mem.set_u8(list + 8 + 4, flags);
+    }
+    list
+}
+
 /// Another list to compare the world's with: empty, the same types with the same payloads (each
 /// `Compare`s equal), the same less its last, or one of the copies' types; but for the same list,
 /// an owner (type 0x21) at its head in the seeds [`xd_owner_first`] picks, so the container compare
@@ -5749,7 +5765,7 @@ impl XdCopyLists for Diff {
         };
         self.extra_data_case().inputs(inputs).setup(move |e, case| {
             let w = xd_world(e, case.word(0));
-            let source = xd_list(e, case.word(0), XD_SOURCE_KINDS);
+            let source = xd_copy_source(e, case.word(0));
             let mut words = vec![w.list, source];
             if flags {
                 words.push(case.word(1));
@@ -5885,7 +5901,7 @@ fn the_extra_data_worlds_reach_every_branch() {
             for flag in [0u32, 1] {
                 let mut e = Engine::new_untyped_for_test();
                 let w = xd_world(&mut e, seed);
-                let source = xd_list(&mut e, seed, XD_SOURCE_KINDS);
+                let source = xd_copy_source(&mut e, seed);
                 e.call(function, &args![w.list, source, flag]);
                 for row in xd_site_rows(&e) {
                     reached.insert(match row[0] {
