@@ -646,10 +646,12 @@ pub enum HostMark {
 
 /// How many host marks there are.
 pub const HOST_MARKS: usize = 6;
-/// The host gap's parts: one ending at each mark, then the last to `Main::OnIdle`.
-pub const HOST_PARTS: usize = HOST_MARKS + 1;
+/// The host gap's parts: one ending at each mark, the last mark to `Main::OnIdle`, then the earlier host turns.
+pub const HOST_PARTS: usize = HOST_MARKS + 2;
 
-/// The host gap's parts in words, in [`HostMark`]'s order, then the last mark to `Main::OnIdle`.
+/// The host gap's parts in words, in [`HostMark`]'s order, then the last mark to `Main::OnIdle`, then the time from the
+/// host's first take to its last when main handed back to it more than once before its `OnIdle` (a message box, a
+/// movie: the marks are the last turn's).
 pub const HOST_PART_NAMES: [&str; HOST_PARTS] = [
     "the hitch log's line",
     "the frame log",
@@ -658,6 +660,7 @@ pub const HOST_PART_NAMES: [&str; HOST_PARTS] = [
     "main's thread waking",
     "main taking the platform lock back",
     "the game's window messages and its loop to OnIdle",
+    "earlier host turns and main's own loop between them",
 ];
 
 /// The host's time between two of main's frames, split at its [`HostMark`]s, with the game's window messages main
@@ -701,6 +704,10 @@ static HOST_GAP: Mutex<Option<HostGap>> = Mutex::new(None);
 pub fn host_mark(m: HostMark) {
     if points_on() {
         MARKS.host[m as usize].store(now_ns(), Relaxed);
+        // Main runs again: only the messages of this last turn count, as the last part does.
+        if m == HostMark::MainAwake {
+            *MESSAGES.lock().unwrap_or_else(PoisonError::into_inner) = (0, 0, None);
+        }
     }
 }
 
@@ -760,6 +767,8 @@ pub struct Marks {
     tail: [AtomicU64; TAIL_MARKS],
     /// When each [`HostMark`] was passed since the frame's `OnIdle`, 0 not yet.
     host: [AtomicU64; HOST_MARKS],
+    /// The host's last take of the frame's marks ([`Point::Host`], every one: a frame keeps its first), 0 none.
+    last_take: AtomicU64,
     /// How deep main is in the frame's draw (`008706b0` calls open now).
     depth: AtomicU64,
 }
@@ -776,6 +785,7 @@ impl Marks {
             at: [ZERO; POINTS],
             tail: [ZERO; TAIL_MARKS],
             host: [ZERO; HOST_MARKS],
+            last_take: AtomicU64::new(0),
             depth: AtomicU64::new(0),
         }
     }
@@ -803,17 +813,23 @@ impl Marks {
     }
 
     /// The host's time from its take ([`Point::Host`]) to `now` (the next `OnIdle`), split at the [`HostMark`]s
-    /// passed since the take, in their order (the messages are left empty): `None` without a take this frame.
+    /// passed since its last take, in their order (the messages are left empty), and, when main handed back to the
+    /// host more than once before this `OnIdle`, the time from its first take to its last as the final part: `None`
+    /// without a take this frame.
     pub fn host_gap(&self, now: u64) -> Option<HostGap> {
-        let from = self.at[Point::Host as usize].load(Relaxed);
-        if from == 0 {
+        let first = self.at[Point::Host as usize].load(Relaxed);
+        if first == 0 {
             return None;
         }
+        let from = self.last_take.load(Relaxed).max(first);
         let mut gap = HostGap::default();
+        if from > first {
+            gap.parts[HOST_MARKS + 1] = Some(from - first);
+        }
         let mut last = from;
         for (i, m) in self.host.iter().enumerate() {
             let at = m.load(Relaxed);
-            // A mark of this gap only (passed after the take).
+            // A mark of this gap's last turn only (passed after the last take).
             if at >= last && at != 0 {
                 gap.parts[i] = Some(at - last);
                 last = at;
@@ -835,6 +851,10 @@ impl Marks {
     /// closes nothing and moves nothing; its steps still count, so a step's `_n` above 1 marks such a frame), and a
     /// draw (`008706b0`) nested inside the frame's draw neither starts nor ends it.
     pub fn point(&self, p: Point, now: u64) {
+        // Every take of the host counts as its last (the once-a-frame rule below keeps the first).
+        if p == Point::Host {
+            self.last_take.store(now, Relaxed);
+        }
         // Points are main's only: the depth's read and write need not be one step.
         let depth = self.depth.load(Relaxed);
         match p {
@@ -863,6 +883,7 @@ impl Marks {
             for a in self.at.iter().chain(&self.tail).chain(&self.host) {
                 a.store(0, Relaxed);
             }
+            self.last_take.store(0, Relaxed);
             self.depth.store(0, Relaxed);
         }
         self.at[p as usize].store(now, Relaxed);
@@ -884,6 +905,7 @@ impl Marks {
         for a in self.at.iter().chain(&self.tail).chain(&self.host) {
             a.store(0, Relaxed);
         }
+        self.last_take.store(0, Relaxed);
         self.depth.store(0, Relaxed);
     }
 
@@ -1549,7 +1571,8 @@ mod tests {
                 Some(30),
                 Some(40),
                 Some(5),
-                Some(51_003)
+                Some(51_003),
+                None
             ]
         );
         assert_eq!(
@@ -1570,8 +1593,71 @@ mod tests {
         advance(10);
         point(Point::Idle);
         let g = take_host_gap().expect("a gap");
-        assert_eq!(g.parts, [None, None, None, None, None, None, Some(10)]);
+        assert_eq!(
+            g.parts,
+            [None, None, None, None, None, None, Some(10), None]
+        );
         assert_eq!((g.messages, g.longest_message), (0, None));
+    }
+
+    /// Main handed back to the host twice before its `OnIdle` (a message box, a movie): the parts are measured from
+    /// the host's last take, the time from its first take to its last is the final part (not the hitch log's line),
+    /// and only the last turn's messages count.
+    #[test]
+    fn two_host_turns_before_on_idle_are_split_from_the_last_take() {
+        let _here = on_here();
+        point(Point::Idle);
+        // The first turn: the host's take, its steps, main awake and a message, then main's own loop.
+        point(Point::Host);
+        advance(100);
+        host_mark(HostMark::HitchLog);
+        advance(10);
+        host_mark(HostMark::HandOver);
+        advance(10);
+        host_mark(HostMark::MainAwake);
+        message_out(0x10);
+        advance(5);
+        message_peek();
+        advance(4_000);
+        // The second turn.
+        point(Point::Host);
+        advance(30);
+        host_mark(HostMark::HitchLog);
+        advance(20);
+        host_mark(HostMark::HandOver);
+        advance(40);
+        host_mark(HostMark::MainAwake);
+        advance(6);
+        host_mark(HostMark::MainLocked);
+        message_out(0x200);
+        advance(70);
+        message_peek();
+        advance(9);
+        point(Point::Idle);
+        let g = take_host_gap().expect("a gap");
+        assert_eq!(
+            g.parts,
+            [
+                Some(30),
+                None,
+                None,
+                Some(20),
+                Some(40),
+                Some(6),
+                Some(79),
+                Some(4_125)
+            ]
+        );
+        assert_eq!(
+            (g.messages, g.messages_ns, g.longest_message),
+            (1, 70, Some((0x200, 70)))
+        );
+        assert_eq!(g.longest(), Some((HOST_MARKS + 1, 4_125)));
+        let gap_us = take()[Column::HostGap as usize].0;
+        assert_eq!(
+            gap_us,
+            g.parts.iter().flatten().sum::<u64>() as f64 / 1000.0
+        );
     }
 
     /// Off, the host's marks and the messages read no clock and leave nothing.
