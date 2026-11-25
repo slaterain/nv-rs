@@ -12,7 +12,8 @@
 //! `BSString` and the like. The exe's back-to-back repeated reads of the same word with nothing
 //! between are read once; a word read again after a call is read again. The family's functions
 //! call one another through `typed_call!`, also where the translation went by address; the tile's
-//! integer setter (`00700320`) and `_ftol2` (`00ec62c0`) are the dispatch and C runtime families'.
+//! integer setter and float getter (`00700320`, `00a011b0`) and `_ftol2` (`00ec62c0`) are the
+//! dispatch and C runtime families'.
 
 use crate::{crt, dispatch};
 use engine_core::prelude::*;
@@ -226,7 +227,6 @@ pub mod in_place {
         0x004d_e070, // the renderer flag byte
         0x004d_e0c0, // the renderer width
         0x004d_e0d0, // the renderer height
-        0x0070_9ac0, // the camera scale
         0x00a7_1b70, // NiFrustum's constructor
         0x005b_d5b0, // 007031e0's unused line number: not read at all
         0x005b_d5c0, // (the same)
@@ -252,8 +252,6 @@ const MOVIE_PLAYER_PLAYING: u32 = 0x00ec_17c0;
 /// The movie player pointer.
 const MOVIE_PLAYER: u32 = 0x0126_fac4;
 
-/// Tile trait getter (`00a011b0`, value in ST0): tile, trait id.
-const TILE_GET_VALUE: u32 = 0x00a0_11b0;
 /// `Tile::GetChildByID` (Xbox PDB).
 const TILE_GET_CHILD_BY_ID: u32 = 0x00a0_3eb0;
 /// Trait id whose value (110.0, 111.0 or 112.0) tells the isolate code what
@@ -358,9 +356,13 @@ const INVENTORY_UPDATE_MENU: u32 = 0x0078_2a90;
 const INVENTORY_SAVE_PAGE_STATE: u32 = 0x0077_ffd0;
 const STATS_UPDATE_HEALING_OPTIONS: u32 = 0x007d_f230;
 
-/// A tile's trait value (`00a011b0`, its float widened).
+/// A tile's trait value (`Tile::GetFloat`, `00a011b0`, the dispatch family's), its float widened.
 fn tile_value(e: &mut Engine, tile: u32, id: i32) -> f64 {
-    f64::from(e.call(TILE_GET_VALUE, &args![tile, id]).f32())
+    f64::from(typed_call!(
+        dispatch::FAMILY,
+        0x00a0_11b0,
+        dispatch::tile::get_float(e, Ptr::new(tile), id)
+    ))
 }
 
 /// `Tile::SetInt` (`00700320`, the dispatch family's): the trait set to the integer as a float.
@@ -898,9 +900,9 @@ const DEBUG_TEXT_Y: u32 = 0x011d_ebb0;
 /// `005bd5b0`, `005bd5c0`, `005bd580`, `_ftol2`) that it never uses: reads and
 /// a conversion with no effect, left out here.
 pub fn fn_007031e0(e: &mut Engine, reference: u32) {
-    let Some(manager) = ready_manager(e) else {
+    if ready_manager(e).is_none() {
         return;
-    };
+    }
     e.with_stack(8, |e, text| {
         in_place::empty_string(e, text.addr());
         if reference != 0 {
@@ -917,6 +919,8 @@ pub fn fn_007031e0(e: &mut Engine, reference: u32) {
                 &args![debug_text, characters, x, y as f32, 2u32, -1i32, minus_one, 0u32, 0u32],
             );
         }
+        // The exe asks 004b7210 for the manager again after the four calls.
+        let manager = in_place::manager(e);
         e.mem
             .set_u32(manager.wrapping_add(in_place::PICK_REF), reference);
         e.call(STRING_DTOR, &args![text]);
@@ -1076,7 +1080,8 @@ pub fn interface_show_menus(e: &mut Engine) {
         crt::math::ftol2_sse(e, current)
     )) as i32;
     if menu_id == 0 {
-        e.call(0x0071_7600, &args![manager]);
+        // The exe asks 004b7210 for the manager again after the getter and `_ftol2`.
+        e.call(0x0071_7600, &args![in_place::manager(e)]);
         menu_id = MENU_STATS;
     }
     match menu_id {
@@ -1264,8 +1269,9 @@ pub fn interface_get_control_push_text_for(
     let mut setting = 0u32;
     e.mem.set_u8(buffer, 0);
     let alternate = e.call(0x004b_71d0, &[]).bool();
-    let controls = in_place::controls(e);
     let control_byte = |e: &mut Engine, mode: u32| -> u32 {
+        // The exe asks 00877720 for the controls object before each 00703be0.
+        let controls = in_place::controls(e);
         u32::from(typed_call!(
             super::FAMILY,
             0x0070_3be0,

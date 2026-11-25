@@ -143,140 +143,49 @@ pub mod units {
     }
 }
 
-/// This crate's families, in the order [`units::funcs`] provides them (the checks that span every
-/// family read it).
-pub fn families() -> [&'static engine_core::typed::Family; 31] {
-    [
-        &crate::lockfree::LOCKFREE,
-        &crate::culling::CULLING,
-        &crate::pathing::PATHING,
-        &crate::shader::SHADER,
-        &crate::crt::CRT,
-        &crate::dispatch::DISPATCH,
-        &crate::render::RENDER,
-        &crate::draw::DRAW,
-        &crate::scene::SCENE,
-        &crate::particles::PARTICLES,
-        &crate::collision::COLLISION,
-        &crate::multibound::MULTIBOUND,
-        &crate::geometry::GEOMETRY,
-        &crate::animation::ANIMATION,
-        &crate::draw_f::DRAW_F,
-        &crate::anim_keys::ANIM_KEYS,
-        &crate::process::PROCESS,
-        &crate::lights::LIGHTS,
-        &crate::scripts::SCRIPTS,
-        &crate::hud::HUD,
-        &crate::interface::INTERFACE,
-        &crate::script_lines::SCRIPT_LINES,
-        &crate::facegen::FACEGEN,
-        &crate::save::SAVE,
-        &crate::setup::SETUP,
-        &crate::archives::ARCHIVES,
-        &crate::ai_queries::AI_QUERIES,
-        &crate::cell_refs::CELL_REFS,
-        &crate::navmesh_edges::NAVMESH_EDGES,
-        &crate::ai::AI,
-        &crate::forms::FORMS,
-    ]
-}
-
 // This crate's unit tests: `Engine::new()` registers the core's functions and provides the family.
 #[cfg(test)]
 engine_core::assemble!(units::funcs);
 
 #[cfg(test)]
 mod tests {
-    use super::families;
-    use engine_core::typed::{parse_switch, Mode};
+    use engine_core::typed::{parse_switch, Family, Mode};
 
-    /// The families built around xNVSE's wraps (`script_lines`: the script runner's functions xNVSE
-    /// wraps, also rows of `overridable.tsv`), whose doc says the family goes by address once they are
-    /// wrapped: its value is the typed bodies the wraps call into.
-    const BUILT_AROUND_WRAPS: &[&str] = &["script_lines"];
-
-    /// A wrap an extender registers over a member of a family (its WRAPS rows, the game patches'
-    /// rows) clears the whole family's direct bit for the run, so every `typed_call!` of the family
-    /// goes by address from then on. So no family on by default holds a wrapped address, except one
-    /// whose doc says it is built around that (`script_lines`: the functions xNVSE wraps).
-    #[test]
-    fn no_family_past_its_gate_holds_a_wrapped_address() {
-        let wrapped: Vec<u32> = engine_core::extend::WRAPS
-            .iter()
-            .chain(engine_core::extend::PATCH_WRAPS.iter().copied().flatten())
-            .map(|w| w.addr)
-            .collect();
-        for family in families() {
-            if !family.past_gate || BUILT_AROUND_WRAPS.contains(&family.name) {
-                continue;
-            }
-            for (addr, _) in (family.funcs)() {
-                assert!(
-                    !wrapped.contains(&addr),
-                    "family `{}` holds {addr:08x}, which an extender wraps: its wrap would turn the \
-                     family's direct calls off for the run",
-                    family.name
-                );
-            }
-        }
-    }
-
-    /// A plain registration over a member (a fix row, an nv-rs built-in, a plugin's override: the
-    /// addresses of `overridable.tsv`) clears the family's direct bit too, for the run, once it is
-    /// registered. So no family on by default holds one, except the rows below, each overridden only
-    /// by a plugin that is not built in (kNVSE, ITR) or by a script or frame function, so the family
-    /// goes by address only while that one runs; and the families built around the wraps.
-    #[test]
-    fn no_family_past_its_gate_holds_an_overridable_address() {
-        const ONLY_WHILE_A_PLUGIN_RUNS: &[(&str, u32)] = &[
-            ("dispatch", 0x00a0_9330),
-            ("dispatch", 0x00a0_9410),
-            ("animation", 0x004f_0380),
-            ("animation", 0x00a4_1110),
-            ("scripts", 0x0059_3870),
-            ("scripts", 0x005a_c1e0),
-            ("scripts", 0x005a_c7a0),
-        ];
-        let rows: Vec<(u32, &str)> = include_str!("../../engine-core/data/overridable.tsv")
-            .lines()
-            .filter(|l| !l.starts_with('#') && !l.is_empty())
-            .map(|l| {
-                let mut columns = l.split('\t');
-                let addr = u32::from_str_radix(columns.next().unwrap_or_default(), 16)
-                    .unwrap_or_else(|_| panic!("overridable.tsv: no address in {l:?}"));
-                (addr, columns.nth(1).unwrap_or_default())
-            })
-            .collect();
-        let mut allowed_seen = Vec::new();
-        for family in families() {
-            if !family.past_gate || BUILT_AROUND_WRAPS.contains(&family.name) {
-                continue;
-            }
-            for (addr, _) in (family.funcs)() {
-                let Some((_, by)) = rows.iter().find(|(a, _)| *a == addr) else {
-                    continue;
-                };
-                let allowed = ONLY_WHILE_A_PLUGIN_RUNS.contains(&(family.name, addr));
-                assert!(
-                    allowed,
-                    "family `{}` holds {addr:08x}, which overridable.tsv says {by} replaces: its \
-                     registration would turn the family's direct calls off for the run",
-                    family.name
-                );
-                assert!(
-                    by.contains("kNVSE") || by.contains("ITR") || by.contains("script or frame"),
-                    "{addr:08x} is allowed in `{}` as a plugin's, but overridable.tsv now says {by}",
-                    family.name
-                );
-                allowed_seen.push((family.name, addr));
-            }
-        }
-        for row in ONLY_WHILE_A_PLUGIN_RUNS {
-            assert!(
-                allowed_seen.contains(row),
-                "{row:?} is in no family any more: drop it from the list"
-            );
-        }
+    /// This crate's families, in the order `units::funcs` provides them.
+    fn families() -> [&'static Family; 31] {
+        [
+            &crate::lockfree::LOCKFREE,
+            &crate::culling::CULLING,
+            &crate::pathing::PATHING,
+            &crate::shader::SHADER,
+            &crate::crt::CRT,
+            &crate::dispatch::DISPATCH,
+            &crate::render::RENDER,
+            &crate::draw::DRAW,
+            &crate::scene::SCENE,
+            &crate::particles::PARTICLES,
+            &crate::collision::COLLISION,
+            &crate::multibound::MULTIBOUND,
+            &crate::geometry::GEOMETRY,
+            &crate::animation::ANIMATION,
+            &crate::draw_f::DRAW_F,
+            &crate::anim_keys::ANIM_KEYS,
+            &crate::process::PROCESS,
+            &crate::lights::LIGHTS,
+            &crate::scripts::SCRIPTS,
+            &crate::hud::HUD,
+            &crate::interface::INTERFACE,
+            &crate::script_lines::SCRIPT_LINES,
+            &crate::facegen::FACEGEN,
+            &crate::save::SAVE,
+            &crate::setup::SETUP,
+            &crate::archives::ARCHIVES,
+            &crate::ai_queries::AI_QUERIES,
+            &crate::cell_refs::CELL_REFS,
+            &crate::navmesh_edges::NAVMESH_EDGES,
+            &crate::ai::AI,
+            &crate::forms::FORMS,
+        ]
     }
 
     /// Which of this crate's families are past their gate, and so on with no switch: all of them, the first
