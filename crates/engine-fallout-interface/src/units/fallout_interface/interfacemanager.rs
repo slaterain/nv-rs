@@ -2572,6 +2572,8 @@ fn idle_read_mouse(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut Idle
     e.set(this, InterfaceManager::fMouseWheel, wheel as f32);
 }
 
+/// The mouse part of `idle_read_mouse` (`0x70CDC7`): the left button's pressed, released and held
+/// states (`00a23a50` with 0 and 1, 2, 0), stored, then the held time.
 fn read_mouse_buttons(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut IdleState) {
     let controls = state.controls;
     let query = move |e: &mut Engine, which: u32| {
@@ -2741,6 +2743,7 @@ fn idle_release(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut IdleSta
     }
 }
 
+/// Whether the menu under the pointer (`pOverTileMenu`) is active, at `0x70D44A` and `0x70D58D`.
 fn over_menu_active(e: &mut Engine, _this: Ptr<InterfaceManager>, menu: u32) -> bool {
     menu_is_active(e, menu)
 }
@@ -3219,10 +3222,12 @@ fn idle_dispatch_key(
     }
 }
 
+/// The pause test of the rendered-menu pointer (`004a4040` at `0x70D6DA`: the start menu is up).
 fn paused_or_trading(e: &mut Engine, _this: Ptr<InterfaceManager>) -> bool {
     e.call(MENU_FLAG_QUERY_004A4040, &args![]).bool()
 }
 
+/// The open Pip-Boy's close test reads the pad (`004b71d0` at `0x70E854`).
 fn open_pipboy_reads_the_pad(e: &mut Engine) -> bool {
     e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool()
 }
@@ -4408,6 +4413,7 @@ fn stick_axis(e: &mut Engine, controls: u32, axis: u32) -> i32 {
         .i32()
 }
 
+/// `uGamepadRepeatStartTime` = twice the tick count (`0x710624`, `0x71085F`).
 fn cleared_repeat_time(e: &mut Engine, this: Ptr<InterfaceManager>) {
     let time = e.call(FADE_CLOCK_READ, &args![FADE_CLOCK]).u32() << 1;
     e.set(this, InterfaceManager::uGamepadRepeatStartTime, time);

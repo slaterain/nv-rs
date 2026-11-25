@@ -1106,9 +1106,8 @@ fn condition_value_as_int(e: &mut Engine, item: u32) -> i32 {
 pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr, size: u32) {
     let base = this.addr();
     let buffer = buffer.addr();
-    e.with_stack(0x84 + TWEAKS_TEXT, |e, work| {
+    e.with_stack(0x84 + FRAME_SPARE, |e, work| {
         let work = work.addr();
-        let _tweaks_text = work + 0x84;
         let mut short_heading = false;
         let mut item = e.call(GET_CONDITION_ITEM, &args![base + 0x40, 0u32]).u32();
         let ranks = u32::from(e.mem.u8(base + 0x39));
@@ -1247,7 +1246,9 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
     });
 }
 
-const TWEAKS_TEXT: u32 = 0x60;
+/// Room past the exe's 0x84-byte frame that the port's frame reserved before, kept so the stack below
+/// it stays where it was.
+const FRAME_SPARE: u32 = 0x60;
 
 /// Chunk writers (cdecl): data (`TESForm::__AddChunkData`, `00485990`:
 /// signature, data, size), a word (`00485910`), a byte (`004858f0`, the

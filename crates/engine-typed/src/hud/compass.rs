@@ -491,24 +491,14 @@ pub fn blink_tile(e: &mut Engine, tile: Ptr, period: f32, amplitude: f32) {
     }
 }
 
-/// The compass's top alpha (`0x7792F9`, `FMUL [0x101E568]`): the HUD opacity times 255. With it
-/// the HUD's alpha kept to put back at [`tick_process`] (row on only).
-fn compass_max_alpha(e: &mut Engine, _compass: Ptr, opacity: f32) -> (f32, Option<f32>) {
-    (
-        narrow(f64::from(opacity) * global_f64(e, TWO_FIFTY_FIVE)),
-        None,
-    )
+/// The compass's top alpha (`0x7792F9`, `FMUL [0x101E568]`): the HUD opacity times 255.
+fn compass_max_alpha(e: &mut Engine, opacity: f32) -> f32 {
+    narrow(f64::from(opacity) * global_f64(e, TWO_FIFTY_FIVE))
 }
 
 /// The player's process for the actors' ticks (`0x779F1F`, `008d6f30`).
-fn tick_process(e: &mut Engine, me: u32, kept_opacity: Option<f32>) -> u32 {
-    match kept_opacity {
-        Some(opacity) => {
-            e.mem.set_f32(HUD_ALPHA, opacity);
-            e.mem.u32(me + 0x40)
-        }
-        None => e.call(PROCESS_OF, &args![me]).u32(),
-    }
+fn tick_process(e: &mut Engine, me: u32) -> u32 {
+    e.call(PROCESS_OF, &args![me]).u32()
 }
 
 /// The squared range `setting * setting` as the exe's `IMUL` makes it.
@@ -581,7 +571,7 @@ pub fn update_compass(
     } else {
         1.0
     };
-    let (max_alpha, kept_opacity) = compass_max_alpha(e, compass, opacity);
+    let max_alpha = compass_max_alpha(e, opacity);
     let mut landmark_tiles = typed_call!(
         leaf::FAMILY,
         0x0055_9450,
@@ -845,7 +835,7 @@ pub fn update_compass(
     let me = player(e);
     let mut vats = e.call(VATS_TARGETS, &args![me]).u32();
     let me = player(e);
-    let process = tick_process(e, me, kept_opacity);
+    let process = tick_process(e, me);
     let actor_mode = e.call(ACTOR_MODE, &args![process]).u8() != 0;
     let first = float_setting(e, TICK_RANGE);
     let first_squared = first * first;

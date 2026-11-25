@@ -3101,6 +3101,7 @@ pub fn fn_007d6d70(e: &mut Engine) {
     }
 }
 
+/// `StartMenu::IsInActionMapping` (`007ce8f0`) at `0x7D5365`.
 fn remap_waiting(e: &mut Engine, this: Ptr<StartMenu>) -> bool {
     e.call(WAITING_FOR_REMAP_PRESS, &args![this]).bool()
 }

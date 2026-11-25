@@ -5432,7 +5432,7 @@ pub fn hud_main_menu_update_compass(
     } else {
         1.0
     };
-    let (max_alpha, kept_opacity) = compass_max_alpha(e, compass.addr(), opacity);
+    let max_alpha = compass_max_alpha(e, opacity);
     let landmarks_list = landmarks.addr() + 4;
     let mut landmark_tiles = typed_call!(
         leaf::FAMILY,
@@ -5787,7 +5787,7 @@ pub fn hud_main_menu_update_compass(
     let player = current_player(e);
     let vats = e.call(0x0059_5d10, &args![player]).u32();
     let player = current_player(e);
-    let process = compass_player_cell(e, kept_opacity, player);
+    let process = compass_player_cell(e, player);
     let is_actor_mode = e.call(0x0042_5fd0, &args![process]).bool();
     let first_limit = e.call(0x0040_3e20, &args![0x011c_d7d8_u32]).u32();
     let first_limit = e.mem.f32(first_limit);
@@ -8545,6 +8545,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     ]
 }
 
+/// The low-condition label's alpha step a frame (`0x77268F`, `0x7726AC`): the exe's `alpha / 255 x
+/// 10` (`FMUL [0x1020758]`).
 fn condition_flash_step(e: &Engine, alpha: f32) -> f64 {
     let maximum: f64 = e.global(0x0101_e568);
     {
@@ -8553,22 +8555,14 @@ fn condition_flash_step(e: &Engine, alpha: f32) -> f64 {
     }
 }
 
-/// Answers the alpha and the opacity kept (row on only).
-fn compass_max_alpha(e: &mut Engine, _compass: u32, opacity: f32) -> (f32, Option<f32>) {
-    (
-        (f64::from(opacity) * e.global::<f64>(0x0101_e568)) as f32,
-        None,
-    )
+/// The compass's largest alpha at `0x7792F9`: the exe's `opacity x 255` (`FMUL [0x101E568]`).
+fn compass_max_alpha(e: &mut Engine, opacity: f32) -> f32 {
+    (f64::from(opacity) * e.global::<f64>(0x0101_e568)) as f32
 }
 
-fn compass_player_cell(e: &mut Engine, kept: Option<f32>, player: u32) -> u32 {
-    match kept {
-        Some(opacity) => {
-            e.mem.set_f32(0x011d_979c, opacity);
-            e.mem.u32(player + 0x40)
-        }
-        None => e.call(0x008d_6f30, &args![player]).u32(),
-    }
+/// The player's cell at `0x779F1F`: the exe's `008d6f30`.
+fn compass_player_cell(e: &mut Engine, player: u32) -> u32 {
+    e.call(0x008d_6f30, &args![player]).u32()
 }
 
 /// `HUDMainMenu::SetTargetType`'s settings test from `0x772D36` (with a target and the HUD): the
@@ -8591,18 +8585,25 @@ fn target_blocked_by_settings(e: &mut Engine, enabled: bool) -> bool {
     }
 }
 
+/// The condition arrows (+0x180) on a weapon change (`0x7725D0`): the exe shows them
+/// (`visible` 1).
 fn condition_arrows_on_weapon_change(e: &mut Engine, arrows: u32) {
     hud_trait(e, arrows, 0xfa3, 1);
 }
 
+/// The projectile's weapon at `0x776EE2` (`SetInfoForRef`'s name of a projectile): the exe's
+/// `00476c90` (`sourceWeap`, +0xF8).
 fn crosshair_projectile_weapon(e: &mut Engine, reference: u32) -> u32 {
     e.call(0x0047_6c90, &args![reference]).u32()
 }
 
+/// The dropped projectile's item at `0x777D55`: the exe's `009d9f00` (+0x144).
 fn rock_it_projectile_item(e: &mut Engine, dropped: u32, _display_mask: &mut u32) -> u32 {
     e.call(0x009d_9f00, &args![dropped]).u32()
 }
 
+/// The enemy health bar's test of the action prompt (`0x770E62`..`0x770E78`): the prompt tile's
+/// (+0x9C) visibility is asked; the exe hides the bar while it shows.
 fn prompt_hides_health_bar(e: &mut Engine) -> bool {
     hud_visible(e, 0x9c)
 }

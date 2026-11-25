@@ -13009,12 +13009,6 @@ mod tests {
 
     #[test]
     fn dropping_the_current_ammunition_empties_it_and_places_the_reference() {
-        for on in [false, true] {
-            dropping_the_current_ammunition_empties_it_and_places_the_reference_row(on);
-        }
-    }
-
-    fn dropping_the_current_ammunition_empties_it_and_places_the_reference_row(_on: bool) {
         let mut e = engine();
         list_helpers(&mut e);
         let player = new_player(&mut e);

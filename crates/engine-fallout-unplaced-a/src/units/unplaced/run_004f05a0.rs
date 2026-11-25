@@ -454,12 +454,6 @@ mod tests {
 
     #[test]
     fn node_visit_handles_found_objects_and_recurses_into_children() {
-        for on in [false, true] {
-            node_visit_row(on);
-        }
-    }
-
-    fn node_visit_row(_on: bool) {
         const IS_NODE: u32 = 0x0300_0000;
         let mut e = Engine::new();
         e.map(INVALID_INDEX, 4);
@@ -540,12 +534,6 @@ mod n075_tests {
 
     #[test]
     fn fn_004f06d0_visits_the_object_and_its_children() {
-        for on in [false, true] {
-            fn_004f06d0_visit_row(on);
-        }
-    }
-
-    fn fn_004f06d0_visit_row(_on: bool) {
         let mut e = Engine::new();
         e.map(0x0109_6000, 0x1000);
         e.set_global(INVALID_INDEX, 0xffffu16);

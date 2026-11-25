@@ -290,7 +290,7 @@ More in [FIXES.md, "UI Organizer"](FIXES.md#ui-organizer).
 
 ## lStewieAl's Tweaks
 
-lStewieAl's Tweaks is no longer built in; its fixes are being rebuilt as nv-rs's own.
+⬜ lStewieAl's Tweaks is no longer built in; its fixes are to be rebuilt as nv-rs's own.
 
 ## Mod installers (FOMOD)
 

@@ -16624,12 +16624,6 @@ mod tests {
 
     #[test]
     fn walking_forward_picks_the_walk_group_and_scales_its_speed() {
-        for on in [false, true] {
-            walking_forward_picks_the_walk_group_and_scales_its_speed_row(on);
-        }
-    }
-
-    fn walking_forward_picks_the_walk_group_and_scales_its_speed_row(_on: bool) {
         let mut e = engine();
         let (actor, animation, _) = pick_setup(&mut e);
         stub(&mut e, ACTOR_ANIM_FLAGS, 0x0101);

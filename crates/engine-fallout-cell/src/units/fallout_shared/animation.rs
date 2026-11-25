@@ -13793,12 +13793,6 @@ mod tests {
 
     #[test]
     fn detaching_an_idle_removes_its_add_on_through_the_scene() {
-        for on in [false, true] {
-            detaching_an_idle_removes_its_add_on_through_the_scene_row(on);
-        }
-    }
-
-    fn detaching_an_idle_removes_its_add_on_through_the_scene_row(_on: bool) {
         let (mut e, idle, object, parent) = detach_fixture(true, true);
         let actor = e.get(idle, AnimIdle::pActor).addr();
         let a = idle.addr();

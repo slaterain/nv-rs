@@ -13583,12 +13583,6 @@ mod tests {
 
     #[test]
     fn ammo_is_swapped_through_an_item_change() {
-        for on in [false, true] {
-            ammo_is_swapped_through_an_item_change_row(on);
-        }
-    }
-
-    fn ammo_is_swapped_through_an_item_change_row(_on: bool) {
         let mut e = engine3();
         let (actor, item) = equip_world(&mut e, 0x29);
         let process = with_process(&mut e, actor);

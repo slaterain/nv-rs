@@ -3,16 +3,16 @@
 //! every object of the process array up to the tail of level 3 and every object of the temp list,
 //! and for each actor (and its followers) clears whatever mentions the reference: its followers,
 //! head-track target, package targets and locations, combat, dialogue and furniture targets, flee
-//! target.
+//! target. So a cell unload or a fast travel, which frees hundreds of references, makes these walks
+//! hundreds of times over every actor: in the load window of 2026-11-10 they were 151 and 82 ms of
+//! one cell load (a profiled run).
 //!
-//! Here likewise: an object's extra data list (`005d43c0`: the object plus 0x44) and the word at
-//! +0x70 (`004fd380`) are read in place, the process array's tail and elements and the extra data
+//! Here an object's extra data list (`005d43c0`: the object plus 0x44) and the word at +0x70
+//! (`004fd380`) are read in place, and the process array's tail and elements and the extra data
 //! getters (followers, head-track target, package data, package target, the lookup itself) are the
 //! process and dispatch families' Rust functions. Every other call (the virtual slots of the actors
 //! and their processes, the package and combat functions) is made in the exe's order with the exe's
-//! words. The plugin also skips `Actor::IsSpectator` before the created package's clean-up in
-//! `0096f600` (it jumps into the clean-up whatever the answer); that changes what runs, so it is
-//! not done here.
+//! words.
 //!
 //! Main thread only in the game (the reference's destructor and the cell unload run there or under the
 //! process lock); no float maths.

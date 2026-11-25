@@ -2274,8 +2274,6 @@ pub fn container_menu_do_idle(e: &mut Engine, this: Ptr<ContainerMenu>) {
     {
         return;
     }
-    // With the row on an entry's form is read once more, for this test (`0044ddc0`, a getter; the
-    // type test below reads it again, as the exe does).
     if current_item(e) != 0 && item_type(e, current_item(e)) == 0x28 {
         let first = tile_at(e, me_addr, 0x60);
         let second = tile_at(e, me_addr, 0x64);
@@ -4188,11 +4186,6 @@ mod tests {
 
     #[test]
     fn do_idle_clears_the_subtitle_and_fills_the_card() {
-        ORDINARY_LOG.with(|l| *l.borrow_mut() = None);
-        do_idle_clears_the_subtitle_and_fills_the_card_row(false);
-    }
-
-    fn do_idle_clears_the_subtitle_and_fills_the_card_row(on: bool) {
         let mut e = Engine::new();
         let this = container(&mut e);
         e.set(this, ContainerMenu::m_nTimeToClearSubtitle, 100);
@@ -4207,24 +4200,6 @@ mod tests {
         stub(&mut e, &[SET_STRING_TRAIT, SET_ITEM_CARD]);
         e.call_log = Some(vec![]);
         e.call(0x0075_eac0, &args![this]);
-        // The calls as with the row off; with it on the item's form is read once more, first (the
-        // row's own test, the exe reads it again for the type).
-        let mut log: Vec<(u32, Vec<u32>)> = e.call_log.clone().unwrap_or_default();
-        if on {
-            let at = log
-                .iter()
-                .position(|(a, _)| *a == ITEM_OBJECT)
-                .expect("the row's form read");
-            assert_eq!(log[at].1, vec![0x7000]);
-            log.remove(at);
-        }
-        ORDINARY_LOG.with(|l| {
-            let mut l = l.borrow_mut();
-            match &*l {
-                None => *l = Some(log),
-                Some(off) => assert_eq!(&log, off, "row on: the calls of the row off"),
-            }
-        });
         assert_eq!(e.get(this, ContainerMenu::m_nTimeToClearSubtitle), 0);
         assert_eq!(
             calls_to(&e, SET_STRING_TRAIT),
@@ -4243,12 +4218,6 @@ mod tests {
             calls_to(&e, SET_ITEM_CARD),
             vec![vec![0, tile(0x70), 0, 0x7000, 0]]
         );
-    }
-
-    thread_local! {
-        /// The row-off run's calls of [`do_idle_clears_the_subtitle_and_fills_the_card_row`].
-        static ORDINARY_LOG: std::cell::RefCell<Option<Vec<(u32, Vec<u32>)>>> =
-            const { std::cell::RefCell::new(None) };
     }
 
     /// The item's form getter (`0044ddc0`) for the current item `item` only: the guard has to read the

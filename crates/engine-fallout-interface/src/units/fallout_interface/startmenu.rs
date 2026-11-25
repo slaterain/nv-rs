@@ -5791,12 +5791,6 @@ mod tests {
 
     #[test]
     fn get_at_by_list_index_compares_the_tiles_trait() {
-        for on in [false, true] {
-            get_at_by_list_index_compares_the_tiles_trait_row(on);
-        }
-    }
-
-    fn get_at_by_list_index_compares_the_tiles_trait_row(_on: bool) {
         let mut r = rig();
         let a = r.item(0xc1, 0);
         let b = r.item(0xc2, 0);
