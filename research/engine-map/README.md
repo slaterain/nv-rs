@@ -3,14 +3,15 @@
 The engine map gives every function of `FalloutNV.exe` 1.4.0.525 (unpacked,
 SHA-256 `19406942…739f`) its Xbox 360 prototype name where one can be
 transferred, its source unit (the prototype's `.cpp`) and its subsystem.
-It is Phase 0 of [docs/ENGINE_PORT_PLAN.md](../../docs/ENGINE_PORT_PLAN.md)
-and the input of the function ledger ([scripts/ledger](../../scripts/ledger),
-[docs/LEDGER.md](../../docs/LEDGER.md)).
+It is Phase 0 of the engine port plan and the input of the function ledger
+(`scripts/ledger`). The plan, the ledger and its report (docs/LEDGER.md), and
+the Ghidra and PDB tools named below are no longer in the repository; they
+are in its history.
 
 `engine_map.tsv` here is the committed result, with `frame.tsv` (the
 per-frame call tree, "Frame table" below). They hold only addresses,
 sizes, Xbox PDB names, Xbox addresses, source-unit paths and subsystems
-(ADR-0002). No decompiled code, strings, bytes or databases. Everything
+(Xbox PDB names may be used, marked as such). No decompiled code, strings, bytes or databases. Everything
 below runs on private inputs, and its intermediate files stay in the private
 research tree (`%USERPROFILE%\nv-re\work\phase0` on the maintainer's
 machine).
@@ -75,18 +76,14 @@ Ghidra project (private copy)         Xbox PDB + PowerPC image
    section 2). On 2026-10-09: 17,405 applied, 191 left as conflicts with
    existing Function ID names (not forced), 4 unchanged.
 
-All seven steps run with one command, `.\scripts\engine-map.ps1` (69 s on the
-maintainer's machine; `-FreshProject` copies the source project again and
-redoes step 1, which is needed whenever the matcher's names change, because
-the import does not overwrite names it set before). After Rust changes only
-the ledger needs to run:
-`cargo run --release --manifest-path scripts/ledger/Cargo.toml`.
+The script that ran all seven steps (`scripts/engine-map.ps1`) and the ledger
+are in the repository's history; they are no longer in the repository.
 
 ## Frame table
 
 `frame.tsv` is the call tree of `Main::OnIdle` (Xbox PDB; PC `0086e650`,
 Xbox `8269f3c8`), the function `main` (`0086a850`) calls once per frame
-([docs/FRAME_SKELETON.md](../../docs/FRAME_SKELETON.md)). Depth 0 is
+(docs/FRAME_SKELETON.md, in the repository's history). Depth 0 is
 `Main::OnIdle`, depth 1 its calls, down to depth 3; one row per call site in
 call order, so a function called twice has two rows and two subtrees. Only
 direct calls appear: calls through a vtable or a function pointer (the Havok
@@ -119,7 +116,7 @@ Names the map does not have come from two places:
 
 The ledger does not read a status from this table: it computes one per row
 from the Rust sources and prints the coverage per depth, and the depth-1
-list, in [docs/LEDGER.md](../../docs/LEDGER.md) ("Frame").
+list, in docs/LEDGER.md ("Frame").
 
 On 2026-10-09: 6,692 rows (1 / 143 / 1,575 / 4,973 at depths 0 to 3);
 named 1 / 84 / 461 / 1,449, of which `frame` 1 / 42 / 25 / 20 and

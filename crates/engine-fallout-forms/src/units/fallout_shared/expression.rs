@@ -198,7 +198,6 @@ pub fn expression_to_postfix(
         };
         loop {
             e.mem.set_u32(kind.addr(), OPERAND);
-            // By address: lStewieAl's Tweaks' script inlines replace the tokenizer (overridable.tsv).
             let count = e
                 .call(0x0059_3870, &args![this, cursor, token, kind, 0u32, 0u32])
                 .u32();

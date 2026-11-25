@@ -1,5 +1,5 @@
 This crate translates parts of JIP LN NVSE, the largest plugin of xNVSE (the New Vegas Script
-Extender), into Rust (ADR-0016), with its authors' permission (the maintainer, 2026-11-03),
+Extender), into Rust (ADR-0016),
 JIP's own code and the part that came from the former lutana plugin included. Source: JIP LN
 NVSE 57.30, https://github.com/jazzisparis/JIP-LN-NVSE, commit 5a30ac4. No C++ is included.
 
@@ -12,7 +12,7 @@ same text as this repository's LICENSE), and this translation is distributed und
 
 The co-save's corrected format (`src/cosave.rs`, the fixes row "JIP co-save fixes") translates
 JohnnyGuitar NVSE's corrections of JIP's co-save (`JG/internal/JIP/JIPFixes.cpp`,
-`SerializationFixes`), with its authors' permission (the maintainer, 2026-11-03). Source:
+`SerializationFixes`). Source:
 JohnnyGuitar NVSE, https://github.com/carxt/JohnnyGuitarNVSE, commit c87905e (VNV pins its
 release 5.28). Credits: JohnnyGuitar NVSE is written by carxt and its contributors. It is
 licensed under the GNU Lesser General Public License, version 2.1, whose section 3 lets its code

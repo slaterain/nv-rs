@@ -1,6 +1,5 @@
 This crate translates UI Organizer (UIO), the NVSE plugin that manages the UI and HUD additions of
-other mods, into Rust, with its author's permission (the maintainer, 2026-11-03: every mod author
-gave it). Source: UI Organizer 2.30, https://github.com/jazzisparis/UIO-User-Interface-Organizer,
+other mods, into Rust. Source: UI Organizer 2.30, https://github.com/jazzisparis/UIO-User-Interface-Organizer,
 commit 426d963 (the source of the shipped ui_organizer.dll 2.30). No C++ is included.
 
 Credits: UI Organizer is written by jazzisparis (Jef).
@@ -34,5 +33,4 @@ One file of the UIO 2.30 package is included unchanged: data/supported.txt is th
 Data\uio\supported.txt (UIO's list of the UI mods it knows, 35 entries; 2,433 bytes, SHA-256
 e55238ee7a49c758b961d7a837b087c7e632598ba0d557594bdde1f486cf3809), built into the crate and read
 when the game folder has no Data\uio\supported.txt. That file is not in the source repository the
-MIT License above comes with; it is included with the author's permission (as above) and under
-the same notice.
+MIT License above comes with; it is included under the same notice.

@@ -1511,7 +1511,7 @@ pub(crate) fn pool_give(e: &mut Engine, node: u32) {
     e.set_global(POOL_LOCK_COUNT, count);
     e.set_global(POOL_FREE, node);
     if count == 0 {
-        e.set_global(POOL_LOCK, 0u32);
+        e.mem.set_u32_release(POOL_LOCK, 0);
     }
 }
 
@@ -1521,7 +1521,7 @@ fn pool_unlock(e: &mut Engine) {
     let count = e.global::<u32>(POOL_LOCK_COUNT).wrapping_sub(1);
     e.set_global(POOL_LOCK_COUNT, count);
     if count == 0 {
-        e.set_global(POOL_LOCK, 0u32);
+        e.mem.set_u32_release(POOL_LOCK, 0);
     }
 }
 

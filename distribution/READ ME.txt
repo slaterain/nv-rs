@@ -162,8 +162,8 @@ under Controls in the game's Settings menu; "Vibration" there turns rumble off.
 
 What doesn't yet
 ----------------
-- Script extenders: xNVSE, JIP LN NVSE, MCM's plugin and UI Organizer are built in (JIP, MCM and
-  UIO with the bug fixes on). Other plugins (.dll files, such as JohnnyGuitar NVSE and ShowOff) don't
+- Script extenders: xNVSE, JIP LN NVSE and UI Organizer are built in (JIP and UIO with the bug
+  fixes on). Other plugins (.dll files, such as MCM's plugin, JohnnyGuitar NVSE and ShowOff) don't
   work yet, so mods that also need those still say so.
 - Game pads that are not Xbox-style, not one of those three PlayStation pads and not in SDL's
   controller database don't work yet, unless you add a line for them (above).

@@ -485,7 +485,7 @@ pub fn ni_d3d_shader_program_factory_remove_all_program_directories(e: &mut Engi
                 e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
                 e.mem.set_u32(NODE_POOL_FREE_LIST, found);
                 if count == 0 {
-                    e.mem.set_u32(NODE_POOL_LOCK, 0);
+                    e.mem.set_u32_release(NODE_POOL_LOCK, 0);
                 }
                 let remaining = e.mem.u32(list + 8);
                 e.mem.set_u32(list + 8, remaining.wrapping_sub(1));
@@ -1324,7 +1324,7 @@ pub fn ni_t_pointer_list_base_remove_all(e: &mut Engine, this: Ptr<crate::types:
         e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
         e.mem.set_u32(NODE_POOL_FREE_LIST, node);
         if count == 0 {
-            e.mem.set_u32(NODE_POOL_LOCK, 0);
+            e.mem.set_u32_release(NODE_POOL_LOCK, 0);
         }
     }
     e.set(this, NiTPointerList::m_uiCount, 0);

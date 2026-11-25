@@ -165,11 +165,9 @@ fn visible(e: &mut Engine, offset: u32) -> bool {
 }
 
 /// The enemy health bar's test of the action prompt (`0x770E62`..`0x770E78`): the prompt tile's
-/// (+0x9C) visibility is asked; shown, it hides the bar, unless lStewieAl's Tweaks' S0022.42
-/// (`HUD_HEALTH_BAR_NOT_TIED_TO_PROMPT`, a NOP over the `JNZ`) is on.
+/// (+0x9C) visibility is asked; shown, it hides the bar.
 fn prompt_hides_health_bar(e: &mut Engine) -> bool {
-    let shown = visible(e, 0x9c);
-    shown && !e.stewie(engine_core::extend::stewie::HUD_HEALTH_BAR_NOT_TIED_TO_PROMPT)
+    visible(e, 0x9c)
 }
 
 fn alpha_of(e: &mut Engine, offset: u32) -> f32 {
@@ -467,8 +465,6 @@ fn target(e: &mut Engine, this: u32) {
         let mut show_ref = false;
         if enemy != 0 && e.vcall(enemy, 0x22c, &args![0u32]).u8() == 0 {
             let enemy = e.mem.u32(this + 0x21c);
-            // `0x770E78` (lStewieAl's Tweaks' S0022.42 writes a NOP over the `JNZ`): with the row
-            // on the prompt tile's (+0x9C) visibility is still asked and its answer not used.
             if e.call(IS_DEAD, &args![enemy]).u8() == 0
                 && e.mem.u8(ENEMY_IN_VATS) != 0
                 && !prompt_hides_health_bar(e)

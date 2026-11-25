@@ -126,7 +126,7 @@ pub fn fn_00aa0dc0(e: &mut Engine, this: Ptr<NiBackToFrontAccumulator>) {
             e.mem.set_u32(POOL_LOCK_COUNT, lock_count);
             e.mem.set_u32(POOL_FREE_LIST, node.addr());
             if lock_count == 0 {
-                e.mem.set_u32(POOL_LOCK, 0);
+                e.mem.set_u32_release(POOL_LOCK, 0);
             }
             let count = e.get(list, NiTPointerList::m_uiCount).wrapping_sub(1);
             e.set(list, NiTPointerList::m_uiCount, count);
@@ -437,7 +437,7 @@ pub fn ni_back_to_front_accumulator_finish_accumulating(
         e.mem.set_u32(POOL_LOCK_COUNT, lock_count);
         e.mem.set_u32(POOL_FREE_LIST, node.addr());
         if lock_count == 0 {
-            e.mem.set_u32(POOL_LOCK, 0);
+            e.mem.set_u32_release(POOL_LOCK, 0);
         }
         let count = e.get(list, NiTPointerList::m_uiCount).wrapping_sub(1);
         e.set(list, NiTPointerList::m_uiCount, count);
@@ -471,7 +471,7 @@ pub fn ni_back_to_front_accumulator_register_object_array(e: &mut Engine, this: 
         let lock_count = e.mem.u32(POOL_LOCK_COUNT).wrapping_sub(1);
         e.mem.set_u32(POOL_LOCK_COUNT, lock_count);
         if lock_count == 0 {
-            e.mem.set_u32(POOL_LOCK, 0);
+            e.mem.set_u32_release(POOL_LOCK, 0);
         }
         e.set(node, NiTListItem::m_element, object);
         e.set(node, NiTListItem::m_pkNext, 0);

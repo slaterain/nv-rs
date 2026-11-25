@@ -6,15 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Check the active milestone before proposing work. Keep the proposal focused and state what evidence would establish the result.
-  - type: input
-    id: milestone
-    attributes:
-      label: Milestone
-      description: Name the active milestone or explain why this is a blocker.
-      placeholder: e.g. M1 — Opening and persistent world
-    validations:
-      required: true
+        Keep the proposal focused and state what evidence would establish the result.
   - type: textarea
     id: scope
     attributes:

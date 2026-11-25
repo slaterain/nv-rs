@@ -1,19 +1,15 @@
-//! The menus' tile values and their reaction map (Stewie's Engine Optimizations, item 7: "opening
-//! and closing menus"). A menu that opens reads its file and builds its tiles: every trait a tile
-//! gets or sets goes through `Tile::GetValue` / `GetOrCreateValue` (a binary search of the tile's
-//! sorted trait array with the compare `00a01160`), every `<copy>`-style action records a reaction
-//! (`Tile::AddReaction`, the reaction map `011f3358`), and every name goes through the menu string
-//! map's hash (`00a0d1b0`, one `tolower` call a character). In the translation each of those steps
-//! is a call by address (the search's compares, the hash's characters, the map's slots); here they
-//! are Rust calls, with the same answers, calls into the rest of the game and memory.
+//! The menus' tile values and their reaction map. A menu that opens reads its file and builds its
+//! tiles: every trait a tile gets or sets goes through `Tile::GetValue` / `GetOrCreateValue` (a
+//! binary search of the tile's sorted trait array with the compare `00a01160`), every `<copy>`-style
+//! action records a reaction (`Tile::AddReaction`, the reaction map `011f3358`), and every name goes
+//! through the menu string map's hash (`00a0d1b0`, one `tolower` call a character). In the
+//! translation each of those steps is a call by address (the search's compares, the hash's
+//! characters, the map's slots); here they are Rust calls, with the same answers, calls into the
+//! rest of the game and memory.
 //!
-//! Their self time in a profiled start-up of 2026-11-10 (frames 0 to 122, the main menu's load;
-//! `measure/stewie-eo`, private): the string hash 31.5 ms, `bsearch` 23.5, the map's `SetAt` 23.5,
-//! the sorted find 6.3, `AddReaction` 6.3, the compare 4.8.
-//!
-//! Typed as the exe does it, not as Tweaks does: Tweaks' `AddReaction` skips a reaction already
-//! anywhere in the list (the exe checks only the last node) and its compare is unsigned (the exe's
-//! is signed); both would change what the game does in a case the exe's code allows.
+//! Their self time in a profiled start-up of 2026-11-10 (frames 0 to 122, the main menu's load): the
+//! string hash 31.5 ms, `bsearch` 23.5, the map's `SetAt` 23.5, the sorted find 6.3, `AddReaction`
+//! 6.3, the compare 4.8.
 
 use super::refs;
 use crate::crt;

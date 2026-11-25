@@ -19,7 +19,6 @@
 004a0370	1	NVTF
 004a03c0	1	NVTF
 004ab400	0	JIP
-004b5d10	2	nv-rs thread races
 004bd570	2	ITR
 004bd820	1	JIP
 004bda70	4	JIP
@@ -67,23 +66,14 @@
 00646260	0	JIP
 00646360	0	JIP
 00646d00	0	JIP
-00652140	0	nv-rs thread races
-00652160	0	nv-rs thread races
-00652190	0	nv-rs thread races
-0066e010	0	nv-rs causes keep no witness lists
-0066e440	0	nv-rs causes keep no witness lists
 0068f320	1	ITR
 007052f0	0	xNVSE
-0071d0a0	1	nv-rs thread races
 0077a480	0	JIP
 007838a0	1	nv-rs mod fit worn question
 0078ac60	0	JIP
 007acb60	0	nv-rs facial hair by race folder
 007adce0	0	nv-rs facial hair by race folder
 007b4b50	1	nv-rs facial hair by race folder
-007f3e00	0	nv-rs V.A.T.S. waits only for the camera
-008300c0	0	nv-rs radio song lengths
-00830b30	0	nv-rs radio song lengths
 008492b0	1	nv-rs half-loaded actor's level change
 00866770	0	HeapReplacer
 00866d10	1	HeapReplacer
@@ -121,9 +111,6 @@
 00a09410	0	ITR
 00a0a270	0	ITR
 00a0a300	0	ITR
-00a0df80	0	nv-rs thread races
-00a0e770	1	nv-rs thread races
-00a0f8b0	1	nv-rs thread races
 00a239e0	0	JIP
 00a2e1b0	0	kNVSE
 00a2e280	0	kNVSE
@@ -145,12 +132,11 @@
 00aa14d0	0	ModLimitFix,nv-rs direct file access
 00aa15f0	1	ModLimitFix,nv-rs direct file access
 00aa16d0	1	ModLimitFix,nv-rs direct file access
-00aa3a40	1	nv-rs thread races
 00aa3e40	0	HeapReplacer
 00aa4060	0	HeapReplacer
 00aa4150	0	HeapReplacer
 00aa4200	0	HeapReplacer
-00aa42e0	0	HeapReplacer,nv-rs thread races
+00aa42e0	0	HeapReplacer
 00aa44c0	2	HeapReplacer
 00aa4e40	1	nv-rs high-frame-rate slow motion
 00aa4ee0	1	nv-rs uncap
