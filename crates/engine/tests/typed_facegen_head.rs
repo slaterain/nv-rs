@@ -643,7 +643,8 @@ const IMAGE_SHAPES: [(u32, u32, u32); 4] = [(1, 1, 0), (3, 2, 0), (8, 4, 0), (2,
 /// The range and scale arguments the cases try (float bits). With a `max`, the typed one-pass
 /// path's floor table is made for finite ends below 2^24 in size up to 4,096 floors apart, and
 /// refused for the others.
-const RANGES: [u32; 10] = [
+const RANGES: [u32; 11] = [
+    0xc37f_0000, // -255.0: a face tint's (with 255.0 and a scale of 0.5), the plain case
     0,           // 0.0
     0x437f_0000, // 255.0
     0x3f80_0000, // 1.0
@@ -677,7 +678,9 @@ fn facegen_head_get_compressed_image() {
             0x437f_8000,
             0x47c3_5000,
         ]),
+        // `scale`: a face tint's 0.5 first; 1.0, 256.0, -1.0, infinity, 0.25.
         Input::Of(&[
+            0x3f00_0000,
             0x3f80_0000,
             0x4380_0000,
             0xbf80_0000,
