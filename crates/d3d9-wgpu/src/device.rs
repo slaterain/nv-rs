@@ -459,9 +459,6 @@ struct DrawRecord {
     /// The key; its strides, index size, filtering, occlusion count and sun fields are set at each
     /// draw.
     key: PipeKey,
-    /// The stage groups were set for these samplers and textures ([`Device::stage_group`]) by a
-    /// draw of this record: a later one leaves them as they are.
-    groups: bool,
 }
 
 /// What making pipelines cost since the last report (printed with the present counters every
@@ -1326,7 +1323,11 @@ pub struct Device {
     draw_records: bool,
     state_gen: u64,
     tex_gen: u64,
-    record: Option<DrawRecord>,
+    /// Shared with the draw that uses it: a draw takes one reference, not a copy of every part.
+    record: Option<Arc<DrawRecord>>,
+    /// The stage groups were set for the record's samplers and textures ([`Device::stage_group`])
+    /// by a draw of it: a later one leaves them as they are. False whenever the record is replaced.
+    record_groups: bool,
     /// Each draw's digest of what it gave wgpu ([`Device::record_draw_digests`], tests and the
     /// replay example; none in play).
     draw_digests: Option<Vec<u64>>,
@@ -2176,6 +2177,7 @@ impl Device {
             state_gen: 0,
             tex_gen: 0,
             record: None,
+            record_groups: false,
             draw_digests: None,
             binds: PassBinds::default(),
             made_on_draws: 0,
@@ -3562,6 +3564,7 @@ impl Device {
     pub fn set_draw_records(&mut self, on: bool) {
         self.draw_records = on;
         self.record = None;
+        self.record_groups = false;
     }
 
     /// Turns the registers read from storage on or off (`NV_WGPU_STORAGE_REGS`,
@@ -4732,7 +4735,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// can be filtered or not) in [`Device::sampler_keys`]: the slot's number again while its
     /// states are unchanged, else the key made, numbered when it is new.
     fn sampler_key(&mut self, slot: usize, filterable: bool) -> u32 {
-        let id = self.slot_keys[slot][usize::from(filterable)];
+        let f = usize::from(filterable);
+        let id = self.slot_keys[slot][f];
         if id != NO_KEY {
             return id;
         }
@@ -4742,7 +4746,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             keys.push(sk);
             (keys.len() - 1) as u32
         });
-        self.slot_keys[slot][usize::from(filterable)] = id;
+        self.slot_keys[slot][f] = id;
         id
     }
 
@@ -5640,7 +5644,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// samplers resolved again when only [`Device::tex_gen`] moved), else made from the state as
     /// each draw made it before records. None for a draw that is skipped (no declaration, no
     /// shader the fixed-function stand-ins cover, no target), each said once as before.
-    fn draw_resolved(&mut self) -> Option<DrawRecord> {
+    fn draw_resolved(&mut self) -> Option<Arc<DrawRecord>> {
         if self.draw_records {
             if let Some(r) = self
                 .record
@@ -5648,14 +5652,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 .filter(|r| r.state_gen == self.state_gen)
             {
                 if r.tex_gen == self.tex_gen {
-                    return Some(r.clone());
+                    return Some(Arc::clone(r));
                 }
-                let mut r = r.clone();
+                let mut r = DrawRecord::clone(r);
                 r.samplers = self.sampler_bindings(&r.vs, &r.ps);
                 r.copies = self.samples_a_target(&r.samplers);
                 r.tex_gen = self.tex_gen;
-                r.groups = false;
-                self.record = Some(r.clone());
+                let r = Arc::new(r);
+                self.record = Some(Arc::clone(&r));
+                self.record_groups = false;
                 return Some(r);
             }
         }
@@ -5722,10 +5727,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             samplers,
             depth,
             key,
-            groups: false,
         };
+        let r = Arc::new(r);
         if self.draw_records {
-            self.record = Some(r.clone());
+            self.record = Some(Arc::clone(&r));
+            self.record_groups = false;
         }
         Some(r)
     }
@@ -5765,20 +5771,22 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             self.skipped += 1;
             return;
         };
+        let groups_set = self.record_groups;
+        // The record's parts read in place (one reference to it taken, not each part's).
         let DrawRecord {
-            vs,
-            ps,
+            ref vs,
+            ref ps,
             ffp_vs,
             ffp_ps,
-            decl,
-            link,
-            samplers,
+            ref decl,
+            ref link,
+            ref samplers,
             copies: any_copies,
             depth,
-            mut key,
-            groups: groups_set,
+            key: ref record_key,
             ..
-        } = rec;
+        } = *rec;
+        let mut key = record_key.clone();
         let attributes = &link.attributes;
         let mut strides = [0u32; 8];
         for (k, a) in attributes.iter().enumerate() {
@@ -5985,7 +5993,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // ([`Device::copy_for_sampling`]): what the target held before this draw.
         let mut copies: [Option<Arc<Tex>>; 20] = Default::default();
         // The record's groups are set already (its textures and samplers unchanged since a draw of
-        // it set them, and none of them a target: [`DrawRecord::groups`]): nothing to look up.
+        // it set them, and none of them a target: [`Device::record_groups`]): nothing to look up.
         let groups_kept = self.draw_records
             && groups_set
             && !any_copies
@@ -6017,12 +6025,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             self.stage_group(0, &group_key[vertex..], &samplers[vertex..], &copies);
             self.stage_group(1, &group_key[..vertex], &samplers[..vertex], &copies);
             let (state_gen, tex_gen) = (self.state_gen, self.tex_gen);
-            if let Some(r) = self
+            if self
                 .record
-                .as_mut()
-                .filter(|r| r.state_gen == state_gen && r.tex_gen == tex_gen)
+                .as_ref()
+                .is_some_and(|r| r.state_gen == state_gen && r.tex_gen == tex_gen)
             {
-                r.groups = true;
+                self.record_groups = true;
             }
         }
         // Vertices from DrawPrimitiveUP go into the batch's ring. The register ring's room is made
