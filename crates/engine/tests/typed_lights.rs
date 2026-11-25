@@ -469,6 +469,96 @@ fn lights_parse_radius() {
         .assert_same();
 }
 
+/// The exe's constant bodies the walks answer in place: the object itself (nodes' `IsNode`, the
+/// geometries' `IsTriBasedGeom`), 0, and the point, directional and ambient lights' `GetRTTI`.
+const EXE_BODIES: [u32; 6] = [
+    0x0068_15c0,
+    0x00e6_8810,
+    0x00ac_bb70,
+    0x00a7_d790,
+    0x00a7_5c70,
+    0x00a9_b390,
+];
+
+/// The tree from `object` down with the exe's bodies in its objects' slots where their stand-ins'
+/// answers are what those bodies answer: `IsNode` the object itself (`006815c0`) or 0, and
+/// `IsTriBasedGeom` the object itself (`00e68810`) or 0 (`00acbb70`); any other answer keeps its
+/// stand-in.
+fn exe_bodies(e: &mut Engine, object: u32) {
+    if object == 0 {
+        return;
+    }
+    let vt = e.mem.u32(object);
+    for (slot, k, itself) in [(0xc, 0, 0x0068_15c0), (0x1c, 1, 0x00e6_8810)] {
+        match e.mem.u32(vt + VT_SLOTS + 4 * k) {
+            0 => e.mem.set_u32(vt + slot, 0x00ac_bb70),
+            a if a == object => e.mem.set_u32(vt + slot, itself),
+            _ => {}
+        }
+    }
+    if e.mem.u32(vt + VT_SLOTS) == object {
+        let base = e.mem.u32(object + 0xa0);
+        for i in 0..u32::from(e.mem.u16(object + 0xa6)) {
+            let child = e.mem.u32(base + 4 * i);
+            exe_bodies(e, child);
+        }
+    }
+}
+
+/// The walk world with the exe's bodies in the tree's slots, and the light's `NiLight` answering its
+/// RTTI with the point light's (`k` of 0 or 1), the directional light's (4) or the ambient light's
+/// (5) `GetRTTI`.
+fn exe_body_world(e: &mut Engine, case: &Case) -> Vec<u32> {
+    let w: [u32; 6] = core::array::from_fn(|i| case.word(i));
+    let (l, root) = walk_world(e, case, w, 6);
+    exe_bodies(e, root);
+    let ni = e.mem.u32(l + 0xf8);
+    let rtti = match w[0] {
+        4 => 0x00a7_5c70,
+        5 => 0x00a9_b390,
+        _ => 0x00a7_d790,
+    };
+    let vt = e.mem.u32(ni);
+    e.mem.set_u32(vt + 8, rtti);
+    vec![l, root]
+}
+
+#[test]
+fn lights_add_object_exe_bodies() {
+    Diff::new(entry!(0x00ba_0110, walk::add_object(Ptr<_>, u32)))
+        .common()
+        .ignore_calls(&EXE_BODIES)
+        .inputs(&walk_inputs())
+        .max_cases(256)
+        .setup(exe_body_world)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn lights_parse_frustum_exe_bodies() {
+    Diff::new(entry!(0x00b9_f5b0, walk::parse_frustum(Ptr<_>, u32)))
+        .common()
+        .ignore_calls(&EXE_BODIES)
+        .inputs(&walk_inputs())
+        .max_cases(256)
+        .setup(exe_body_world)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn lights_parse_radius_exe_bodies() {
+    Diff::new(entry!(0x00b9_f6a0, walk::parse_radius(Ptr<_>, u32)))
+        .common()
+        .ignore_calls(&EXE_BODIES)
+        .inputs(&walk_inputs())
+        .max_cases(256)
+        .setup(exe_body_world)
+        .run()
+        .assert_same();
+}
+
 #[test]
 fn lights_bound_rounding() {
     // Fixed inputs where the distances computed at the main thread's precision, each step stored as

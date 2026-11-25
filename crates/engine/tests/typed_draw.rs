@@ -2698,7 +2698,8 @@ fn is_shadow_pass() {
 /// A shader property's slot 0x10c as the light set-ups take it (`setups::property_fade_of`): with the exe's fade
 /// (`00b66b80`) in the slot, the typed fade called directly (the draw family on) answers what the call through the
 /// slot answers with only the translations (the fade's translation), over the property's flags, its distance and
-/// the fade's near and far distances (`011f9454`, `011f9458`); with another function in the slot, both call it.
+/// the fade's near and far distances (`011f9454`, `011f9458`); with another function in the slot (a stand-in
+/// answering three times the distance), both engines answer what that function answers.
 #[test]
 fn property_fade_of_the_slot() {
     const FADE_NEAR: u32 = 0x011f_9454;
@@ -2756,6 +2757,12 @@ fn property_fade_of_the_slot() {
                         assert_eq!(
                             answers[1], answers[0],
                             "flags {flags:x} {flags_24:x}, near {near:x}, far {far:x}, distance {distance:x}"
+                        );
+                        let other = (f64::from(f32::from_bits(distance)) * 3.0) as f32;
+                        assert_eq!(
+                            answers[0][1],
+                            other.to_bits(),
+                            "the other slot's function, distance {distance:x}"
                         );
                         compared += 1;
                     }

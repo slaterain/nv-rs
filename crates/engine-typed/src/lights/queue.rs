@@ -68,7 +68,7 @@ impl Table {
             Some(s) => *s,
             None => {
                 let s = Sphere {
-                    free: e.vcall(ni_light, SLOT_RTTI, &args![]).u32() == RADIUS_FREE_RTTI,
+                    free: walk::slot_word(e, ni_light, SLOT_RTTI) == RADIUS_FREE_RTTI,
                     position: [0u32, 4, 8]
                         .map(|i| e.mem.f32(ni_light.wrapping_add(WORLD_TRANSLATE + i))),
                     radius: e.mem.f32(ni_light.wrapping_add(NI_LIGHT_RADIUS)),
@@ -405,10 +405,10 @@ fn walk_start(e: &mut Engine, object: u32) -> Result<u32, u8> {
     if e.mem.u32(object.wrapping_add(FLAGS)) & 1 != 0 {
         return Err(0);
     }
-    if e.vcall(object, SLOT_IS_NODE, &args![]).u32() == 0 {
+    if walk::slot_word(e, object, SLOT_IS_NODE) == 0 {
         return Err(0);
     }
-    Ok(e.vcall(object, SLOT_IS_NODE, &args![]).u32())
+    Ok(walk::slot_word(e, object, SLOT_IS_NODE))
 }
 
 /// The multibound step: the node cast to the record at `011f5eb4` and its indexed child; `None`
@@ -443,7 +443,7 @@ fn walk_tree(e: &mut Engine, object: u32, leaf: &mut dyn FnMut(&mut Engine, u32)
         let children = e.mem.u32(node.wrapping_add(CHILDREN_BASE));
         let child = e.mem.u32(children.wrapping_add(4 * index));
         if child != 0 {
-            answer &= if e.vcall(child, SLOT_IS_TRI_BASED_GEOM, &args![]).u32() != 0 {
+            answer &= if walk::slot_word(e, child, SLOT_IS_TRI_BASED_GEOM) != 0 {
                 leaf(e, child)
             } else {
                 walk_tree(e, child, leaf)
@@ -497,14 +497,14 @@ pub fn update_start(e: &mut Engine, object: u32, node: u32, skip_culled: u32, co
         others: 0,
     };
     if parent != 0 {
-        if e.vcall(parent, SLOT_RTTI, &args![]).u32() == ROOM_RTTI {
+        if walk::slot_word(e, parent, SLOT_RTTI) == ROOM_RTTI {
             from.rooms = parent;
-        } else if e.vcall(parent, SLOT_RTTI, &args![]).u32() == OTHER_RTTI {
+        } else if walk::slot_word(e, parent, SLOT_RTTI) == OTHER_RTTI {
             from.others = parent;
         }
     }
     if collect & 0xff == 0 {
-        if e.vcall(object, SLOT_IS_TRI_BASED_GEOM, &args![]).u32() != 0 {
+        if walk::slot_word(e, object, SLOT_IS_TRI_BASED_GEOM) != 0 {
             update_geometry(e, object, node, skip_culled, from.rooms, from.others);
         } else {
             update_tree(e, object, node, skip_culled, from.rooms, from.others);
@@ -565,7 +565,7 @@ pub fn update_start(e: &mut Engine, object: u32, node: u32, skip_culled: u32, co
 /// The near flag of an object: `IsNode` answers and 150.0 is above its bound's radius (the null
 /// bound without one; not when unordered).
 fn near_flag(e: &mut Engine, object: u32) -> u32 {
-    if e.vcall(object, SLOT_IS_NODE, &args![]).u32() == 0 {
+    if walk::slot_word(e, object, SLOT_IS_NODE) == 0 {
         return 0;
     }
     let bound = match e.mem.u32(object.wrapping_add(WORLD_BOUND)) {
