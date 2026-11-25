@@ -990,7 +990,8 @@ fn shadow_camera<R: Real>(
 /// slots +0xb4 (its clear colour into a local) and +0xac (set the clear colour); the colour the
 /// local starts as (`011a9bd0`, four words); `BSRenderedTexture::StopOffscreen` (`00b6b260`), the
 /// clear `00b6b8d0` (`cdecl`: 7, the target); the state object (`011f9508`, its view and
-/// projection at +0x980 and +0x9c0); `00b6b790`; the depth pass's locals (`00ba37a0` with the
+/// projection at +0x980 and +0x9c0); the renderer's step after the camera (`00b6b790`: `00b6b6c0`,
+/// then its state +0x200 from 2 back to 0 when its slot +0x180 answers true); the depth pass's locals (`00ba37a0` with the
 /// map, `00ba3a00`; `004eba20`, `004eba90`), the depth value (`010162c0` to `012003c4`), the pass
 /// `00ba3cb0` (`RET 0xc`, on `[[011f91ac] + 8] + 0x44`) and the render `00b97550` (`RET 0x18`, on
 /// `[011f91ac]`); the debug texture's `004bc320` (`RET 4`), `00b55560` (`cdecl`, 9) and
@@ -1003,7 +1004,7 @@ const CLEAR_COLOUR: u32 = 0x011a_9bd0;
 const STOP_OFFSCREEN: u32 = 0x00b6_b260;
 const CLEAR_TARGET: u32 = 0x00b6_b8d0;
 const STATE_OBJECT: u32 = 0x011f_9508;
-const RENDER_STATE_00B6B790: u32 = 0x00b6_b790;
+const RENDERER_STEP: u32 = 0x00b6_b790;
 const PASS_LOCAL: u32 = 0x00ba_37a0;
 const PASS_LOCAL_DESTRUCT: u32 = 0x00ba_3a00;
 const PASS_LIST: u32 = 0x004e_ba20;
@@ -1154,7 +1155,7 @@ fn render_frustum_depth_map_in<R: Real>(
             0x10,
         );
     });
-    e.call(RENDER_STATE_00B6B790, &args![]);
+    e.call(RENDERER_STEP, &args![]);
     if e.global::<u32>(DEPTH_PASS_FLAG) == 0 {
         depth_pass(e, this);
     }
