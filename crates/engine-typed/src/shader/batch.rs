@@ -76,7 +76,7 @@ const NULL_BOUND: u32 = 0x011f_4288;
 /// `BSSkinInstance`'s type (`011f49d8`), what the skin's slot 8 answers for a dismember skin.
 pub(crate) const SKIN_RTTI: u32 = 0x011f_49d8;
 
-/// Callees by address: the map's `GetAt` (`thiscall(map, key, out)`) and `SetAt`, the memory manager and `operator new`, the batch renderer's constructor, the shadow-pass
+/// Callees by address: the map's `GetAt` (`thiscall(map, key, out)`; `add_to_group` calls the dispatch family's lookup directly) and `SetAt`, the memory manager and `operator new`, the batch renderer's constructor, the shadow-pass
 /// test, the shadow light shader's per-geometry set-ups (the draw family's, compared by address), the
 /// renderer's skinned test, the geometry holder's draw, a shader's pass tail of kind 0x11, the node
 /// pool lock. The node pool's allocation is draw_f's (`0043a010`).
@@ -1588,7 +1588,11 @@ pub fn add_to_group(
     // The out slot is the stack word of the `pass_type` argument.
     let (found, value) = e.with_stack(4, |e, slot| {
         e.set_global(slot.addr(), pass_type);
-        let found = e.call(MAP_GET_AT, &args![map, key, slot]).u8() != 0;
+        let found = typed_call!(
+            crate::dispatch::FAMILY,
+            0x0085_3130,
+            crate::dispatch::refs::map_lookup(e, Ptr::new(map), key, Ptr::new(slot.addr()))
+        ) != 0;
         (found, e.global::<u32>(slot.addr()))
     });
     let index = if found {
