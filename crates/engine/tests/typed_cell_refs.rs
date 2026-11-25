@@ -1322,18 +1322,17 @@ fn loader_reference_done() {
     .assert_same();
 }
 
-/// The cell's two counters going down against their translations: from 0 (floored), 1 and 5, the
-/// other counter beside it untouched.
-#[test]
-fn cell_counts_go_down() {
-    for (addr, f) in [
-        entry!(0x0044_0a10, cell_refs::attach::queued_count_down(u32)),
-        entry!(0x0044_0a50, cell_refs::attach::critical_count_down(u32)),
-    ] {
-        Diff::new((addr, f))
-            .family(&CELL_REFS)
+/// The world of the cell's two counters going down: the counter from 0 (floored), 1, 5 or with
+/// its top bit set, the other counter beside it.
+trait CountDownCase {
+    fn count_down_case(self) -> Diff;
+}
+
+impl CountDownCase for Diff {
+    fn count_down_case(self) -> Diff {
+        self.family(&CELL_REFS)
             .goes_by_address(&[0x0040_19a0])
-            .inputs(&[Input::Of(&[0, 1, 5, 0x8000_0000])])
+            .inputs(&[Input::Of(&[0, 1, 5, 0x8000_0000, 0x8000_0001])])
             .setup(|e, case| {
                 queue_stand_ins(e);
                 let cell = e.mem.alloc(0x100);
@@ -1341,7 +1340,29 @@ fn cell_counts_go_down() {
                 e.mem.set_u32(cell + 0xa4, case.word(0) ^ 1);
                 vec![cell]
             })
-            .run()
-            .assert_same();
     }
+}
+
+/// The cell's count of queued references going down against its translation.
+#[test]
+fn cell_queued_count_goes_down() {
+    Diff::new(entry!(
+        0x0044_0a10,
+        cell_refs::attach::queued_count_down(u32)
+    ))
+    .count_down_case()
+    .run()
+    .assert_same();
+}
+
+/// The cell's count of critical queued references going down against its translation.
+#[test]
+fn cell_critical_count_goes_down() {
+    Diff::new(entry!(
+        0x0044_0a50,
+        cell_refs::attach::critical_count_down(u32)
+    ))
+    .count_down_case()
+    .run()
+    .assert_same();
 }
