@@ -4,12 +4,13 @@
 //! `00450edb`). The hitch log's "references" part of a grid load is this function; in a play
 //! session's border hitch it was 3.8 ms of the 4.6 ms load.
 //!
-//! For every reference of the cell, in two passes over the cell's list (markers in the second), the
-//! exe makes about ten calls by address of its own besides the work it hands on (the model loader's
-//! queue, the 3D's attach): the game loader's flag (`0042ce10`), the reference's extra data list
-//! (`005d43c0`, twice), `Script::InitActionList` (`005ac190`), the save object's test (`0047c850`),
-//! the form type (`00401170`) and the base form's flag test (`00452440`), and the virtual calls the
-//! reference's class answers with a constant body (its slots 0x100, 0x224 and the 3D at 0x1d0).
+//! For every reference of the cell, in two passes over the cell's list (the markers in the first),
+//! the exe makes about ten calls by address of its own besides the work it hands on (the model
+//! loader's queue, the 3D's attach): the game loader's flag (`0042ce10`), the reference's extra
+//! data list (`005d43c0`, twice), `Script::InitActionList` (`005ac190`), the save object's test
+//! (`0047c850`), the form type (`00401170`) and the base form's flag test (`00452440`), and the
+//! virtual calls the reference's class answers with a constant body (its slots 0x100, 0x224 and the
+//! 3D at 0x1d0).
 //!
 //! **Native.** The order of work and every call that does work stay the exe's. The field reads are
 //! read in place (the game loader's word at +0x244, the extra list at +0x44, the type byte at +4,
