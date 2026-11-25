@@ -2241,7 +2241,7 @@ mod tests {
             colour_channel(&e, element, channel, &sums, factor);
             for (k, &word) in (0u32..).zip(&before) {
                 let at = element - 8 + 4 * k;
-                let in_colours = k >= 2 && k < 2 + 4 * 37 && (k - 2) % 4 == channel;
+                let in_colours = (2..2 + 4 * 37).contains(&k) && (k - 2) % 4 == channel;
                 let want = if in_colours {
                     let sum = sums[((k - 2) / 4) as usize];
                     x87_store32(x87_mul(f64::from(sum), factor))
