@@ -6,7 +6,9 @@
 //! array from their own constructors, each already holding entries the rebuild has to empty. The
 //! generated meshes are grids of jittered or exact quads (an exact grid puts several vertices at the same
 //! distance from a circumcenter, so ties decide), with holes, with edges to another mesh on one side,
-//! with corners high enough to fail the height test; the opt-in test takes the player's own navmeshes.
+//! with corners high enough to fail the height test, one large enough that the maps' buckets hold several
+//! items; three more are made by hand for what grids never reach (see `special`). The opt-in test
+//! takes the player's own navmeshes.
 //!
 //! What stands in: the heap (`operator new` and `delete`, the bucket tables, the block reallocation)
 //! and the C runtime's square root. The exe's constants and the vtables the code reads are written at
@@ -247,7 +249,7 @@ struct Grid {
     seed: u32,
 }
 
-const GRIDS: [Grid; 7] = [
+const GRIDS: [Grid; 9] = [
     Grid {
         w: 4,
         h: 3,
@@ -310,6 +312,27 @@ const GRIDS: [Grid; 7] = [
         jitter: false,
         tall: 0,
         seed: 7,
+    },
+    // 111 vertices: the pair map's 37 buckets hold several pairs each (portal-corner vertices 36 and
+    // 110 share bucket 36) and the vertex map's buckets several records, so every chain walk runs.
+    Grid {
+        w: 36,
+        h: 2,
+        holes: &[(5, 1), (20, 0)],
+        portals: true,
+        jitter: true,
+        tall: 9,
+        seed: 8,
+    },
+    // Exact again, with portals: ties between pair vertices beyond the 1x1 grid.
+    Grid {
+        w: 3,
+        h: 2,
+        holes: &[],
+        portals: true,
+        jitter: false,
+        tall: 0,
+        seed: 9,
     },
 ];
 
@@ -402,6 +425,132 @@ fn grid(g: Grid) -> (Vec<[f32; 3]>, Vec<([u16; 3], [u16; 3], u32)>) {
     (vertices, triangles)
 }
 
+/// One mesh of the test: vertices and triangles (three vertices, three links, the flags).
+type TestMesh = (Vec<[f32; 3]>, Vec<([u16; 3], [u16; 3], u32)>);
+
+/// An isolated triangle whose edge 0 leads to another mesh (link 0, flag bit 0): its first two
+/// vertices each get one ordinary and one portal edge, so both become pairs whatever their corner.
+fn portal_triangle(m: &mut TestMesh, corners: [[f32; 3]; 3]) {
+    let first = m.0.len() as u16;
+    m.0.extend(corners);
+    m.1.push(([first, first + 1, first + 2], [0, 0xffff, 0xffff], 0x1));
+}
+
+/// An isolated triangle with no portal: a corner becomes a pair only by the corner test.
+fn plain_triangle(m: &mut TestMesh, corners: [[f32; 3]; 3]) {
+    let first = m.0.len() as u16;
+    m.0.extend(corners);
+    m.1.push(([first, first + 1, first + 2], [0xffff; 3], 0));
+}
+
+/// A sharp corner of `angle` radians at `at`, wound as the grids are, so its two edges pass the
+/// corner test when the sine is below 0.1.
+fn sharp_corner(m: &mut TestMesh, at: [f32; 2], angle: f32) {
+    let [x, y] = at;
+    plain_triangle(
+        m,
+        [
+            [x, y, 0.0],
+            [x + 300.0, y, 0.0],
+            [x + 300.0 * angle.cos(), y + 300.0 * angle.sin(), 0.0],
+        ],
+    );
+}
+
+/// The meshes that are not grids, each reaching what the grids don't:
+/// 0. two triangles linked across an edge they both run the same way: their boundary edges at the
+///    shared vertices don't chain, so pass 2 leaves them out;
+/// 1. a right triangle whose circumcenter has exactly 180 between it and a portal vertex placed
+///    under it, a second portal vertex there with a NaN height, a triangle with a NaN corner (a NaN
+///    circumcenter), corners whose sines sit near the corner test's 0.1, a zero-area triangle and
+///    one with two corners at the same point (a zero edge);
+/// 2. a tiny triangle far from every pair, beyond its reach: no preferred vertex.
+fn special(k: u32) -> TestMesh {
+    let mut m: TestMesh = (Vec::new(), Vec::new());
+    match k {
+        0 => {
+            m.0 = vec![
+                [0.0, 0.0, 0.0],
+                [100.0, 0.0, 0.0],
+                [50.0, 80.0, 0.0],
+                [50.0, -80.0, 0.0],
+            ];
+            m.1 = vec![
+                ([0, 1, 2], [1, 0xffff, 0xffff], 0),
+                ([0, 1, 3], [0, 0xffff, 0xffff], 0),
+            ];
+        }
+        1 => {
+            plain_triangle(
+                &mut m,
+                [[0.0, 0.0, 20.0], [100.0, 0.0, 200.0], [0.0, 100.0, 20.0]],
+            );
+            portal_triangle(
+                &mut m,
+                [
+                    [50.0, 50.0, 20.0],
+                    [50.0, 50.0, f32::NAN],
+                    [400.0, 90.0, 20.0],
+                ],
+            );
+            portal_triangle(
+                &mut m,
+                [
+                    [f32::NAN, 600.0, 0.0],
+                    [700.0, 600.0, 0.0],
+                    [650.0, 700.0, 0.0],
+                ],
+            );
+            for (k, sine) in [0.05f32, 0.09, 0.099, 0.101, 0.11].into_iter().enumerate() {
+                sharp_corner(&mut m, [-2000.0 - 400.0 * k as f32, 0.0], sine.asin());
+                // The same sine below the axis, past a right angle: the other branch and limit.
+                sharp_corner(
+                    &mut m,
+                    [-2000.0 - 400.0 * k as f32, 800.0],
+                    sine.asin() - std::f32::consts::PI,
+                );
+            }
+            plain_triangle(
+                &mut m,
+                [[0.0, 3000.0, 0.0], [10.0, 3000.0, 0.0], [20.0, 3000.0, 0.0]],
+            );
+            plain_triangle(
+                &mut m,
+                [
+                    [500.0, 3000.0, 0.0],
+                    [500.0, 3000.0, 0.0],
+                    [600.0, 3100.0, 0.0],
+                ],
+            );
+        }
+        _ => {
+            portal_triangle(
+                &mut m,
+                [[0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [0.0, 100.0, 0.0]],
+            );
+            plain_triangle(
+                &mut m,
+                [
+                    [100_000.0, 0.0, 0.0],
+                    [100_001.0, 0.0, 0.0],
+                    [100_000.5, 0.8, 0.0],
+                ],
+            );
+        }
+    }
+    m
+}
+
+/// The meshes the generated tests run: the grids, then the special ones.
+const MESH_COUNT: u32 = GRIDS.len() as u32 + 3;
+
+fn mesh(k: u32) -> TestMesh {
+    match GRIDS.get(k as usize) {
+        Some(g) => grid(*g),
+        None => special(k - GRIDS.len() as u32),
+    }
+}
+
 /// The comparison's common part: the families play has on, the callees the native code does in its
 /// body, the translation's plain calls the typed helpers make by address, the two locals.
 trait Common {
@@ -441,7 +590,7 @@ impl Common for Diff {
 
 #[test]
 fn rebuild_edge_pairs() {
-    const MESHES: [u32; 7] = [0, 1, 2, 3, 4, 5, 6];
+    const MESHES: [u32; MESH_COUNT as usize] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
     Diff::new(entry!(
         0x0069_9b60,
         navmesh_edges::rebuild_edge_pairs(Ptr<_>)
@@ -450,7 +599,7 @@ fn rebuild_edge_pairs() {
     .inputs(&[Input::Of(&MESHES)])
     .setup(|e, case: &Case| {
         stand_ins(e);
-        let (vertices, triangles) = grid(GRIDS[case.word(0) as usize]);
+        let (vertices, triangles) = mesh(case.word(0));
         vec![build_mesh(e, &vertices, &triangles)]
     })
     .run()
@@ -486,14 +635,16 @@ fn both_ways(
         let mut sides = Vec::new();
         for families in [a, b] {
             let mut e = Engine::new_untyped_for_test();
-            engine_core::x87::set_control_word(word);
             stand_ins(&mut e);
             let mesh = build_mesh(&mut e, vertices, triangles);
             e.with_stack(4, |_, _| ());
             if !families.is_empty() {
                 e.typed_apply_for_test(families, "");
             }
+            // The word for the call alone, as the Diff sets it: the set-up's calls reset it.
+            engine_core::x87::set_control_word(word);
             e.call(0x0069_9b60, &[mesh]);
+            engine_core::x87::set_control_word(engine_core::x87::DEFAULT_CONTROL_WORD);
             sides.push((e, mesh));
         }
         let ((a, mesh), (b, _)) = (&sides[0], &sides[1]);
@@ -516,14 +667,14 @@ fn both_ways(
 /// family on (this one alone differs).
 #[test]
 fn generated_meshes_both_ways() {
-    for (k, g) in GRIDS.into_iter().enumerate() {
-        let (vertices, triangles) = grid(g);
+    for k in 0..MESH_COUNT {
+        let (vertices, triangles) = mesh(k);
         for (a, what) in [
             (&[][..], "translations only"),
             (&CALLEES[..], "the callees typed"),
         ] {
             if let Err(why) = both_ways(&vertices, &triangles, a, &ALL) {
-                panic!("grid {k} against {what}: {why}");
+                panic!("mesh {k} against {what}: {why}");
             }
         }
     }

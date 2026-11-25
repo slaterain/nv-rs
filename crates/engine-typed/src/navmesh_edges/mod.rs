@@ -635,8 +635,9 @@ fn choose_preferred(e: &mut Engine, this: Ptr<NavMesh>, triangles: u32) {
     let mut pairs: Option<Vec<(u16, [f32; 3])>> = None;
     for index in 0..triangles {
         let index = low_16(index);
-        // The exe's frame for one triangle (80 bytes): the planar difference at +24 and the chosen
-        // vertex at +52 are the two locals its calls see.
+        // The translation's 80 bytes of locals for one triangle (the exe keeps them in its one
+        // 0x1d0-byte frame): the planar difference at +24 and the chosen vertex at +52 are the two
+        // locals the calls see, placed as the translation places them.
         e.with_stack(80, |e, scratch| {
             let local_difference = scratch.byte_add(24);
             let local_key = scratch.byte_add(52);
