@@ -2906,7 +2906,7 @@ pub fn fn_008815a0(e: &mut Engine, this: Ptr<Actor>) -> Ptr {
         return Ptr::new(0);
     }
     if e.call(ANIMATION_FLAG_TEST, &args![this]).bool() {
-        let use_actor_slot = actor_is_running_run_once(e, this) == 0
+        let use_actor_slot = e.call(IS_RUNNING_RUN_ONCE, &args![this]).u8() == 0
             || e.call(IS_FLEEING, &args![this, 0u32]).bool();
         if use_actor_slot {
             let value = e.vcall(this.addr(), 0x42c, &args![]).u32();
@@ -2920,6 +2920,9 @@ pub fn fn_008815a0(e: &mut Engine, this: Ptr<Actor>) -> Ptr {
 
 /// `00493bb0(actor)`: a test of the actor (the engine map puts it in `animation.cpp`).
 const ANIMATION_FLAG_TEST: u32 = 0x0049_3bb0;
+/// `Actor::IsRunningRunOnce` (`00881570`), called by address as the exe calls it, so the typed
+/// version registered there is the one that runs.
+const IS_RUNNING_RUN_ONCE: u32 = 0x0088_1570;
 
 // Translated from 00881620 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Actor::SetCurrentTarget` (Xbox PDB): with a process, its virtual `+0x12c`
