@@ -40,7 +40,7 @@ const COLUMNS: u32 = 0x1c;
 const MATRIX_CONSTRUCT: u32 = 0x0065_9000;
 const MATRIX_COPY: u32 = 0x0065_8f30;
 const MATRIX_DESTRUCT: u32 = 0x0044_9680;
-/// `fr2Assert` (cdecl: the file name, the line) with `matrixVT.hpp` and its line 0x113.
+/// `fr2Assert` (cdecl: the file name, the line) with the matrix header's name and its line 0x113.
 const FR2_ASSERT: u32 = 0x00aa_fb90;
 const MATRIX_FILE: u32 = 0x0106_5830;
 /// `_invalid_parameter_noinfo`: a checked getter's call past the end.
