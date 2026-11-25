@@ -7,9 +7,10 @@
 //! machine table names), the played profile's nv-rs settings (no paths), the mods' plugin names,
 //! how the run ended (the stop line with its exe addresses, a panic, a signal or an exit code)
 //! and a fingerprint of it, the log's last lines, and the place and note of an F12 report made
-//! during the run. Never a save, a picture or anything of the game's memory. Everything in it is
-//! scrubbed first ([`scrub`]): the home folder, user and computer names, and every absolute path
-//! but its part below the game's folder or nv-rs's.
+//! during the run. Never a save, a picture or anything of the game's memory. Everything in it but
+//! the system's own lines (its name, processor, memory, card, renderer) is scrubbed first
+//! ([`scrub`]): the home folder, user and computer names, save names, e-mail and network
+//! addresses, and every absolute path but its part below the game's folder or nv-rs's.
 //!
 //! The same on every system: Windows' Play reads the game's exit code, Linux's and macOS's
 //! play.sh passes the program's status on (a signal as 128 + its number, `sh`'s rule).
@@ -92,6 +93,8 @@ pub fn ending(tail: &str, status: Option<i32>, shell: Shell) -> Option<Ending> {
     }
     // A panic only as the run's end (its last lines): one caught and printed earlier (a save
     // copy's, say) is not why a later end happened.
+    // A backtrace after it (RUST_BACKTRACE set) is not counted.
+    let lines: Vec<&str> = lines.into_iter().filter(|l| !is_backtrace(l)).collect();
     let last = lines.len().saturating_sub(PANIC_LINES);
     if let Some(at) = lines[last..]
         .iter()
@@ -110,6 +113,16 @@ pub fn ending(tail: &str, status: Option<i32>, shell: Shell) -> Option<Ending> {
         (_, Some(s)) => Some(Ending::Exit(s)),
         (_, None) => None,
     }
+}
+
+/// Whether `line` is a Rust backtrace's: its heading, a numbered frame, a frame's `at` place, or
+/// the `note:` about backtraces.
+fn is_backtrace(line: &str) -> bool {
+    let t = line.trim_start();
+    let numbered = t
+        .split_once(':')
+        .is_some_and(|(n, _)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    t.starts_with("stack backtrace:") || t.starts_with("at ") || t.starts_with("note: ") || numbered
 }
 
 /// An exit code as people look it up: Windows' crash codes in hex (`0xc0000005`).
@@ -184,6 +197,15 @@ impl Ending {
 /// Whether `word` is an exe address as the stop lines write them: eight hex digits.
 fn is_address(word: &str) -> bool {
     word.len() == 8 && word.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Whether a stop line's last `(in ` opens its call path: an exe address right after it
+/// (`(in 00412345 < 0040cafe)`), not words (`Mods (in progress)`).
+fn has_call_path(line: &str) -> bool {
+    line.rfind("(in ").is_some_and(|at| {
+        let rest = &line[at + 4..];
+        is_address(rest.split([' ', ')']).next().unwrap_or(""))
+    })
 }
 
 /// What makes crashes the same crash, so a crash service puts them in one group: a stop's kind
@@ -549,7 +571,7 @@ fn build(
         let text = std::fs::read(plugins)
             .map(|b| String::from_utf8_lossy(&b).into_owned())
             .unwrap_or_default();
-        plugin_names(&text).iter().map(|m| s.text(m)).collect()
+        plugin_names(&text).iter().map(|m| s.file_name(m)).collect()
     } else {
         Vec::new()
     };
@@ -566,8 +588,19 @@ fn build(
     Report {
         // A panic's place from the line as it was, cut to its crate's part (scrubbing would turn a
         // dependency's folder into `<path>` and group every crate's `mod.rs:12` together).
+        // A stop's kind from the scrubbed line (its paths the same on every machine), its call
+        // path's exe addresses from the line as it was (scrubbing never reaches into them then).
         fingerprint: match raw {
             Ending::Panic(_) => fingerprint(raw).iter().map(|p| s.text(p)).collect(),
+            // Only a call path's addresses, `(in A < B)`: without one (`Mods (in progress)`
+            // is none), the eight-hex words of the text could be a user's number, so those come
+            // from the scrubbed line.
+            Ending::Stop(line) if has_call_path(line) => {
+                let mut f = fingerprint(&ending);
+                f.truncate(2);
+                f.extend(fingerprint(raw).into_iter().skip(2));
+                f
+            }
             _ => fingerprint(&ending),
         },
         ending,
@@ -632,11 +665,12 @@ The log's last {} lines are in log.txt beside this file.
         };
         line("nv-rs crash report");
         line("");
-        line(
-            "nv-rs's launcher made this report when the game stopped. Your user name, home folder",
-        );
-        line("and other folder names are replaced by <user>, <home>, <game>, <nv-rs> and <path>.");
-        line("It holds no saves, no pictures and nothing of the game's memory.");
+        line("nv-rs's launcher made this report when the game stopped. Taken out of it: your user");
+        line("name (<user>), your computer's name (<computer>), your home folder (<home>, and");
+        line("<onedrive>), the game's and nv-rs's folders (<game>, <nv-rs>, <nv-rs-data>), other");
+        line("folders (<path>), save names (<save>), account numbers (<id>), e-mail addresses");
+        line("(<e-mail>) and network addresses (<ip>). An F12 note is kept as you wrote it, with");
+        line("only those taken out. It holds no saves, no pictures and nothing of the game's memory.");
         line("");
         line(&format!(
             "What happened: {}",
@@ -883,7 +917,11 @@ mod tests {
         let home = std::env::var("USERPROFILE")
             .or_else(|_| std::env::var("HOME"))
             .unwrap();
-        std::fs::write(logs.join("game-2.log"), format!("first\nat {home}/x.ini\n")).unwrap();
+        std::fs::write(
+            logs.join("game-2.log"),
+            format!("first\nat {home}/a/x.ini\n"),
+        )
+        .unwrap();
         let plugins = own
             .join("mods")
             .join("AppData")
@@ -899,7 +937,7 @@ mod tests {
             text.contains("a report keeps its last 2 lines; the last 2 of your newest log"),
             "{text}"
         );
-        assert!(text.contains("at <home>/x.ini"), "{text}");
+        assert!(text.contains("at <home>/.../x.ini"), "{text}");
         assert!(!text.contains("an older run's line"));
         assert!(text.contains("  Some Mod.esp"), "{text}");
         assert!(text.contains("Graphics card: Table Card"), "{text}");
@@ -1100,6 +1138,110 @@ mod tests {
         );
     }
 
+    /// A panic followed by its backtrace (RUST_BACKTRACE set) is still the run's end.
+    #[test]
+    fn a_panic_with_its_backtrace_is_the_end() {
+        let mut log = String::from(
+            "x\nthread 'main' panicked at nv-rs/crates/host/src/lib.rs:12:5:\nno table\nstack backtrace:\n",
+        );
+        for n in 0..40 {
+            log.push_str(&format!(
+                "  {n}: std::panicking::frame_{n}\n             at /rustc/abc/library/std/src/panicking.rs:{n}:5\n"
+            ));
+        }
+        log.push_str("note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\n");
+        assert_eq!(
+            ending(&log, Some(101), Shell::Windows),
+            Some(Ending::Panic(
+                "thread 'main' panicked at nv-rs/crates/host/src/lib.rs:12:5: no table".into()
+            ))
+        );
+    }
+
+    /// A stop's exe addresses group the same crash on every machine: a call path's taken from
+    /// the line as it was, even with a user name made of digits or hex letters.
+    #[test]
+    fn a_stops_addresses_are_kept_for_grouping() {
+        let root = std::env::temp_dir().join(format!("nv-launcher-group-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("logs")).unwrap();
+        let log = root.join("logs").join("game-1.log");
+        let line =
+            "Game's main stopped in frame 3: read of 1a2b3c00 not mapped (in 00412345 < 0040cafe)";
+        std::fs::write(&log, format!("{line}\n")).unwrap();
+        let run = Run {
+            status: Some(3),
+            shell: Shell::Windows,
+            log: &log,
+            started: SystemTime::now(),
+            mods: false,
+            own: &root,
+            program: &root,
+            games: Vec::new(),
+            table_card: None,
+        };
+        let s = Scrubber::new(&Known {
+            roots: Vec::new(),
+            words: vec![("12345".into(), "<user>"), ("cafe".into(), "<user>")],
+        });
+        let facts = system::Facts {
+            os: "x".into(),
+            cpu: "x".into(),
+            threads: None,
+            memory: None,
+        };
+        let report = build(
+            &run,
+            &Ending::Stop(line.into()),
+            &facts,
+            &s,
+            SystemTime::now(),
+        );
+        assert_eq!(
+            report.fingerprint,
+            ["stop", "read of # not mapped", "00412345", "0040cafe"]
+        );
+        // Without a call path the text's eight-hex words come from the scrubbed line: one of
+        // them could be the user's number.
+        let num = Scrubber::new(&Known {
+            roots: Vec::new(),
+            words: vec![("20231234".into(), "<user>")],
+        });
+        let bare = "Game's main stopped in frame 3: no save for 20231234 at 00412345";
+        let report = build(
+            &run,
+            &Ending::Stop(bare.into()),
+            &facts,
+            &num,
+            SystemTime::now(),
+        );
+        assert_eq!(
+            report.fingerprint,
+            ["stop", "no save for <user> at #", "00412345"]
+        );
+        // Words in brackets are no call path: `(in progress)`, `(in a script)`.
+        for (line, want) in [
+            (
+                "Game's main stopped in frame 3: could not read G:\\Backups\\20231234\\Mods (in progress)\\x.esp",
+                "could not read <path>\\x.esp",
+            ),
+            (
+                "Game's main stopped in frame 3: could not read G:\\Steam\\userdata\\87654321\\x.vdf (in a script)",
+                "could not read <path>\\x.vdf",
+            ),
+        ] {
+            let report = build(
+                &run,
+                &Ending::Stop(line.into()),
+                &facts,
+                &num,
+                SystemTime::now(),
+            );
+            assert_eq!(report.fingerprint, ["stop", want], "{line}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn the_renderer_is_read_from_the_log_else_the_table() {
         assert_eq!(
@@ -1237,6 +1379,24 @@ mod tests {
             ),
             "{body}"
         );
+        // The header names every placeholder and says how an F12 note is kept.
+        for mark in [
+            "<user>",
+            "<computer>",
+            "<home>",
+            "<onedrive>",
+            "<game>",
+            "<nv-rs>",
+            "<nv-rs-data>",
+            "<path>",
+            "<save>",
+            "<id>",
+            "<e-mail>",
+            "<ip>",
+        ] {
+            assert!(body.contains(mark), "{mark} not in the header");
+        }
+        assert!(body.contains("An F12 note is kept as you wrote it"));
         assert!(body.contains("nv-rs:         nv-rs Windows preview 2026-11-16.1"));
         assert!(body.contains("Commit:        0123456789abcdef"));
         assert!(body.contains("Processor:     Some CPU (8 threads)"));
@@ -1274,7 +1434,7 @@ mod tests {
         assert!(!log_copy.contains(" jt"), "{log_copy}");
         assert!(log_copy.lines().all(|l| l.chars().count() <= LINE_CHARS));
         assert_eq!(log_copy.lines().count(), LOG_LINES);
-        assert!(log_copy.contains("line 399 at <home>\\AppData\\x.tmp by <user> on <computer>"));
+        assert!(log_copy.contains("line 399 at <home>\\...\\x.tmp by <user> on <computer>"));
         // A second report the same second gets its own folder; the oldest go past the limit.
         let second = report.save(&own.join("reports")).unwrap();
         assert_eq!(second.file_name().unwrap(), "crash-1970-01-01_00-00-00-2");

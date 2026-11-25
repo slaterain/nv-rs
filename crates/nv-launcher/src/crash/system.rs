@@ -248,4 +248,19 @@ mod tests {
         assert!(!f.cpu.is_empty());
         assert!(f.threads.is_some());
     }
+
+    /// Windows: the computer's names hold COMPUTERNAME (NetBIOS: capitals, at most 15 characters)
+    /// and the DNS host name, which is the same name without case up to those 15 characters.
+    #[cfg(windows)]
+    #[test]
+    fn windows_gives_both_of_the_computers_names() {
+        let netbios = std::env::var("COMPUTERNAME").unwrap();
+        let dns = crate::play::win::dns_host_name().expect("a DNS host name");
+        assert!(!dns.is_empty() && dns.len() < 256);
+        let names = computer_names();
+        assert!(names.contains(&netbios), "{names:?}");
+        assert!(names.contains(&dns), "{names:?}");
+        let short: String = dns.chars().take(15).collect();
+        assert!(short.eq_ignore_ascii_case(&netbios), "{dns} and {netbios}");
+    }
 }
