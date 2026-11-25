@@ -347,7 +347,7 @@ impl World {
                 e.mem.set_u32(vt + slot, VT_FN + slot);
                 let answers: &[u32] = match slot {
                     0x0 => &[0, 5, 6, 7, 0x80, 0xff, 0x106],
-                    0x8 => &[0, 1, 6, 0xe, 0xff, 0xffff_ffff],
+                    0x8 => &[0, 1, 6, 0xe, 0xffff_ffff],
                     0x15c => &[0, 1, 0x100],
                     0x1e0 => &[0x3f80_0000, 0, 0x8000_0000, 0xbf80_0000, 0x7fc0_0000],
                     0x22c => &[0, FORM_A],
