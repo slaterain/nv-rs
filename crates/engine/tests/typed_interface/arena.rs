@@ -318,7 +318,18 @@ static INDEX: [u32; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
 
 /// The other families' typed functions the family calls through `typed_call!`: by address in these
 /// tests (their stand-ins answer), each family's own tests run them.
-const OTHER_FAMILIES: &[u32] = &[0x0070_0320, 0x00ec_62c0, 0x006b_3eb0, 0x0084_54f0];
+const OTHER_FAMILIES: &[u32] = &[
+    0x0070_0320,
+    0x00ec_62c0,
+    0x006b_3eb0,
+    0x0084_54f0,
+    0x00a0_12d0,
+    0x00a0_1350,
+    0x0040_fbf0,
+    0x0040_fba0,
+    0x0066_29f0,
+    0x0043_b230,
+];
 
 /// The world's settings for a Diff of the family.
 pub trait InArena {
@@ -355,6 +366,7 @@ impl InArena for Diff {
         self.family(&engine_typed::interface::INTERFACE)
             .translation_calls_plainly(plain)
             .ignore_calls(engine_typed::interface::interface_cpp::in_place::ADDRESSES)
+            .ignore_calls(engine_typed::interface::interface_cpp_p2::IN_PLACE)
             .ignore_calls(without)
             .goes_by_address(OTHER_FAMILIES)
             .inputs(&inputs)

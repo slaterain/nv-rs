@@ -226,7 +226,6 @@ pub mod in_place {
         0x004d_e070, // the renderer flag byte
         0x004d_e0c0, // the renderer width
         0x004d_e0d0, // the renderer height
-        0x0070_9ac0, // the camera scale
         0x00a7_1b70, // NiFrustum's constructor
         0x005b_d5b0, // 007031e0's unused line number: not read at all
         0x005b_d5c0, // (the same)
