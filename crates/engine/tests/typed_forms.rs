@@ -2081,8 +2081,6 @@ fn components(e: &mut Engine, mask: u32) {
         };
         set_cast(e, target, part);
     }
-    set_answer(e, 0x0048_0100, 3);
-    set_answer(e, 0x0048_0130, 2);
     e.mem.set_u32(SLOT_ANSWERS + 0x10, 0x1234);
 }
 
@@ -3758,9 +3756,20 @@ fn abd_fatigue() {
 // ---- TESActorBase (`actor_base`) and TESAttributes (`attributes`) ----
 
 /// The one-line bodies the actor base's and the attributes' native code does in place (see their
-/// module comments): left out of the translation's calls, with no double, as [`IN_PLACE`]. Seven
-/// of them are this family's attribute getters and `00480160`, `005f0b50` and `005f2150`, whose
-/// bodies the callers do in place too.
+/// module comments): left out of the translation's calls, with no double, as [`IN_PLACE`].
+/// This family's own bodies the callers do in place: the attribute byte, the attribute getters by actor
+/// value, the creature flag test 0x10 or 1 and the iterator's constructor. Each is left out only in its
+/// callers' tests (in its own, it is the function under test).
+const AB_ATTRIBUTE_BYTE: &[u32] = &[0x0048_0160];
+const AB_ATTRIBUTE_GETTERS: &[u32] = &[
+    0x005f_11f0,
+    0x005f_1210,
+    0x005f_1230,
+    0x005f_1250,
+    0x005f_1270,
+    0x005f_1290,
+    0x005f_12b0,
+];
 const AB_IN_PLACE: &[u32] = &[
     0x0040_1170, // the form type
     0x0046_1580, // the base flags' test
@@ -3777,15 +3786,6 @@ const AB_IN_PLACE: &[u32] = &[
     0x0047_ef30,
     0x0062_f2f0,
     0x0047_ee30,
-    0x0048_0160, // the attribute byte
-    0x005f_11f0, // the attribute getters
-    0x005f_1210,
-    0x005f_1230,
-    0x005f_1250,
-    0x005f_1270,
-    0x005f_1290,
-    0x005f_12b0,
-    0x005f_0b50, // the creature flag test 0x10 or 1
     0x006e_cd40, // the health's setter
     0x0040_8da0, // the full name's text
     0x0041_81e0, // a reference's base object
@@ -3801,7 +3801,6 @@ const AB_IN_PLACE: &[u32] = &[
     0x004f_d3e0, // its current save entry
     0x004f_d3c0, // and load entry
     0x008d_f040, // its version byte
-    0x005f_2150, // the iterator's constructor
     0x005d_8b10, // and its base's
     0x009d_2510, // the attributes' size
     0x0066_ec10, // ToActorValue
@@ -3943,6 +3942,7 @@ fn actor_base_form(
 /// Every actor base and attributes test runs in [`ab_world`].
 fn ab_cases(d: Diff) -> Diff {
     d.forms()
+        .ignore_calls(ABD_IN_PLACE)
         .ignore_calls(AB_IN_PLACE)
         .goes_by_address(&[0x0056_5730])
 }
@@ -4023,11 +4023,14 @@ impl AbCases for Diff {
         ab_flag_cases(self)
     }
     fn ab_attribute_getter(self) -> Diff {
-        self.ab().inputs(&[Input::Of(&[0, 1])]).setup(|e, case| {
-            ab_world(e);
-            let a = actor_base_form(e, 0x2a, 0, 0x0100_0002 + case.word(0), 0, false);
-            vec![a + 0xb8]
-        })
+        self.ab()
+            .ignore_calls(AB_ATTRIBUTE_BYTE)
+            .inputs(&[Input::Of(&[0, 1])])
+            .setup(|e, case| {
+                ab_world(e);
+                let a = actor_base_form(e, 0x2a, 0, 0x0100_0002 + case.word(0), 0, false);
+                vec![a + 0xb8]
+            })
     }
     fn ab_attribute_setter(self) -> Diff {
         self.ab()
@@ -4122,6 +4125,7 @@ fn ab_creature_flag_40_or_1() {
 fn ab_creature_flags_allow() {
     Diff::new(entry!(0x005f_0ba0, actor_base::creature_flags_allow(u32) -> bool))
         .ab_flags()
+        .ignore_calls(&[0x005f_0b50])
         .run()
         .assert_same();
 }
@@ -4363,6 +4367,8 @@ fn ab_remove_change() {
 fn ab_get_actor_value() {
     Diff::new(entry!(0x005f_0fb0, actor_base::get_actor_value(u32, u32) -> u32))
         .ab()
+        .ignore_calls(AB_ATTRIBUTE_GETTERS)
+        .ignore_calls(AB_ATTRIBUTE_BYTE)
         .inputs(&[
             Input::Of(&[
                 0,
@@ -4622,6 +4628,7 @@ fn ab_load_game() {
 fn ab_reset_3d() {
     Diff::new(entry!(0x005f_20a0, actor_base::reset_3d(u32, u8)))
         .ab()
+        .ignore_calls(&[0x005f_2150])
         .inputs(&[Input::Of(&[0, 1, 0x80]), Input::Flag, Input::Flag])
         .setup(|e, case| {
             ab_world(e);
@@ -4731,6 +4738,7 @@ fn attributes_initialize_data_component() {
 fn attributes_copy_component() {
     Diff::new(entry!(0x0048_0000, attributes::copy_component(u32, u32)))
         .ab()
+        .ignore_calls(AB_ATTRIBUTE_BYTE)
         .inputs(&[Input::Flag])
         .setup(|e, case| {
             ab_world(e);
@@ -4748,6 +4756,7 @@ fn attributes_compare_component() {
     // Not an attributes component; the same bytes; one differing byte (the first or the last).
     Diff::new(entry!(0x0048_0070, attributes::compare_component(u32, u32) -> bool))
         .ab()
+        .ignore_calls(AB_ATTRIBUTE_BYTE)
         .inputs(&[Input::Of(&[0, 1, 2, 3])])
         .setup(|e, case| {
             ab_world(e);
