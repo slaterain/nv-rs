@@ -644,32 +644,6 @@ pub fn utc(t: SystemTime) -> (String, String) {
     )
 }
 
-/// A log line as it is sent: a `hitch:` line (the host's `hitch_log`: `hitch: <ms> ms[ big]
-/// (typical <ms>) frame <n> at <s> s[ in a menu][, first frame after a load], <place>[; ...]`)
-/// with its place (`interior <cell> (<form id>)`, `<worldspace> (<form id>) grid (x, y)`, `no
-/// cell`) as `<place>`, the timings and causes after it kept; a `hitch:` line in another form
-/// left out (none: it might hold a place); any other line as it is. Where the player was stays on
-/// this PC until the maintainer says it may go.
-fn without_place(line: &str) -> Option<String> {
-    if !line.trim_start().starts_with("hitch:") {
-        return Some(line.to_string());
-    }
-    let after_frame = line.find(" frame ")?;
-    let at = after_frame + line[after_frame..].find(" at ")?;
-    let mut k = at + line[at..].find(" s")? + 2;
-    for part in [" in a menu", ", first frame after a load"] {
-        if line[k..].starts_with(part) {
-            k += part.len();
-        }
-    }
-    if !line[k..].starts_with(", ") {
-        return None;
-    }
-    k += 2;
-    let end = line[k..].find("; ").map_or(line.len(), |p| k + p);
-    Some(format!("{}<place>{}", &line[..k], &line[end..]))
-}
-
 impl Report {
     /// The report as the player reads it (`report.txt`): [`Report::body`] and where its log is.
     pub fn text(&self) -> String {
@@ -683,36 +657,10 @@ The log's last {} lines are in log.txt beside this file.
         t
     }
 
-    /// Everything the report says but where its log is.
+    /// Everything the report says but where its log is; what is sent ([`send`]) is this and the
+    /// whole log, with where the player was (an F12 report's place, the log's `F12: ` and
+    /// `hitch:` lines) and the F12 report's note.
     pub fn body(&self) -> String {
-        self.body_with(true)
-    }
-
-    /// What of it is sent ([`send`]): the body without an F12 report's note and place, which
-    /// stay on this PC (said when there is one).
-    pub fn sent_body(&self) -> String {
-        let mut t = self.body_with(false);
-        if self.f12.is_some() {
-            t.push_str(
-                "\nThe note and place of the F12 report made during this run stay on this PC.\n",
-            );
-        }
-        t
-    }
-
-    /// The log lines that are sent: the game's own `F12: ` lines (the place, the report's
-    /// folder) left out, as the F12 report's note and place are, and every `hitch:` line's place
-    /// `<place>` ([`without_place`]); the local copy keeps them all.
-    pub fn sent_log(&self) -> Vec<String> {
-        self.log
-            .iter()
-            .filter(|l| !l.trim_start().starts_with("F12:"))
-            .filter_map(|l| without_place(l))
-            .collect()
-    }
-
-    /// The body, with the F12 report's part or without it.
-    fn body_with(&self, with_f12: bool) -> String {
         let mut t = String::new();
         let mut line = |s: &str| {
             t.push_str(s);
@@ -760,7 +708,7 @@ The log's last {} lines are in log.txt beside this file.
         } else {
             line("Mods: played without mods");
         }
-        if let Some(f12) = self.f12.as_ref().filter(|_| with_f12) {
+        if let Some(f12) = &self.f12 {
             line("");
             line(&format!(
                 "F12 report made during this run: reports/{}",
@@ -894,14 +842,13 @@ pub fn next_step(answer: consent::Consent, can_send: bool) -> Next {
     }
 }
 
-/// The question after a crash with "Ask me each time": what would go under it (the report
-/// without an F12 report's note and place, and how many of its log's last lines go, without the
-/// game's `F12: ` lines and the places of its `hitch:` lines).
+/// The question after a crash with "Ask me each time": what would go under it (the report as it
+/// is sent, an F12 report's place and note included, and how many of its log's last lines go).
 fn question(report: &Report) -> String {
     format!(
-        "The game stopped, and nv-rs kept the crash report below. Send it to nv-rs's developers?\n\n{}\nThe log's last {} lines go with it, without where you were in the game.\n",
-        report.sent_body(),
-        report.sent_log().len()
+        "The game stopped, and nv-rs kept the crash report below. Send it to nv-rs's developers?\n\n{}\nThe log's last {} lines go with it.\n",
+        report.body(),
+        report.log.len()
     )
 }
 
@@ -1713,45 +1660,5 @@ mod tests {
         assert_eq!(outcome.sent, None);
         assert!(!kept.join("envelope.txt").exists());
         let _ = std::fs::remove_dir_all(&root);
-    }
-
-    /// Only a hitch line's place goes from what is sent: the cell or worldspace, its form id and
-    /// the grid square, in every form `hitch_log` writes; a hitch line in another form goes
-    /// whole; other lines stay as they are.
-    #[test]
-    fn a_hitch_lines_place_is_left_out_of_what_is_sent() {
-        for (line, sent) in [
-            (
-                "hitch: 64.0 ms big (typical 11.9) frame 15431 at 312.4 s, GoodspringsWorld (0x000da726) grid (-3, 5); stages ms: update 40.1, before draw 0.2; likely cause: freed 22,093 memory blocks",
-                Some("hitch: 64.0 ms big (typical 11.9) frame 15431 at 312.4 s, <place>; stages ms: update 40.1, before draw 0.2; likely cause: freed 22,093 memory blocks"),
-            ),
-            (
-                "hitch: 9.0 ms (typical 3.4) frame 15431 at 312.4 s in a menu, interior Doc Mitchell's House (0x00104c1c); largest read 2.1 MB of <save>.fos",
-                Some("hitch: 9.0 ms (typical 3.4) frame 15431 at 312.4 s in a menu, <place>; largest read 2.1 MB of <save>.fos"),
-            ),
-            (
-                "hitch: 52.3 ms big (typical 8.1) frame 900 at 20.0 s, first frame after a load, WastelandNV (0x000da726) grid (12, -4)",
-                Some("hitch: 52.3 ms big (typical 8.1) frame 900 at 20.0 s, first frame after a load, <place>"),
-            ),
-            (
-                "hitch: 30.0 ms (typical 9.0) frame 7 at 1.5 s in a menu, first frame after a load, no cell; stages ms: update 20.0",
-                Some("hitch: 30.0 ms (typical 9.0) frame 7 at 1.5 s in a menu, first frame after a load, <place>; stages ms: update 20.0"),
-            ),
-            (
-                "hitch: 18.0 ms (typical 6.0) frame 40 at 2.0 s, 0x0000003c grid (0, 0)",
-                Some("hitch: 18.0 ms (typical 6.0) frame 40 at 2.0 s, <place>"),
-            ),
-            ("hitch: a form this does not know, in Goodsprings", None),
-            (
-                "hitch: 5.0 ms (typical 2.0) frame 3 at 0.5 s in Goodsprings",
-                None,
-            ),
-            (
-                "NV_D3D9=wgpu: drawing with Some Card (Vulkan)",
-                Some("NV_D3D9=wgpu: drawing with Some Card (Vulkan)"),
-            ),
-        ] {
-            assert_eq!(without_place(line).as_deref(), sent, "{line}");
-        }
     }
 }

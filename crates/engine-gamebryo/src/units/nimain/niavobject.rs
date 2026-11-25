@@ -97,6 +97,8 @@ const LIST_REMOVE_ALL: u32 = 0x004a_4650;
 /// list's count word as `this`; the engine map's name for the folded body is
 /// another `AddHead`).
 const LIST_NEW_NODE: u32 = 0x0043_a010;
+/// The add at the tail of a list of counted pointers (`00a5a310`), by address as the exe calls it.
+const LIST_ADD_TAIL: u32 = 0x00a5_a310;
 /// `00439fd0`: `NiTPointerListBase<..., NiPointer<NiProperty>>::AddHead`
 /// (engine map), the element passed by address.
 const LIST_ADD_HEAD: u32 = 0x0043_9fd0;
@@ -1092,7 +1094,7 @@ pub fn ni_av_object_link_object(e: &mut Engine, this: Ptr<NiAVObject>, stream: P
                 add_ref(e, object);
             }
             if old_layout {
-                fn_00a5a310(e, property_list(this), pointer);
+                e.call(LIST_ADD_TAIL, &args![property_list(this), pointer]);
             } else {
                 e.call(LIST_ADD_HEAD, &args![property_list(this), pointer]);
             }

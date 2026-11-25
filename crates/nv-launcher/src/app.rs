@@ -656,12 +656,12 @@ pub fn about_text(in_force: Option<Consent>) -> Vec<String> {
     text
 }
 
-/// The question: where reports go, that only the report goes (where the player was in the game
-/// and an F12 report's note stay on this PC), that nothing is sent before an answer, and, where
-/// this copy of nv-rs cannot send (`can_send`), that it cannot.
+/// The question: where reports go, that a report sent includes where the player was in the game
+/// and an F12 report's note, that nothing is sent before an answer, and, where this copy of
+/// nv-rs cannot send (`can_send`), that it cannot.
 pub fn question_text(can_send: bool) -> Vec<String> {
     let mut text = vec![
-        "Send crash reports to Sentry (sentry.io), the crash-report service nv-rs's developers use? Only the report goes, not where you were or an F12 note. Settings can change this.".into(),
+        "Send crash reports to Sentry (sentry.io), the crash-report service nv-rs's developers use? The report includes where you were and your F12 note. Settings can change this.".into(),
         "Nothing is sent until you choose.".into(),
     ];
     if !can_send {
@@ -3600,9 +3600,9 @@ mod tests {
         // Settings' answers are written at once; only the first start's waits on Windows.
         assert!(keeps_at_once(true));
         assert_eq!(keeps_at_once(false), cfg!(not(windows)));
-        // What a report holds (the F12 report's note and place too), where reports go, that only
-        // the report goes (no place in the game, no F12 note), that nothing goes before an
-        // answer, and where this copy cannot send, that it cannot.
+        // What a report holds (the F12 report's note and place too), where reports go, that a
+        // report sent includes where the player was and the F12 note, that nothing goes before
+        // an answer, and where this copy cannot send, that it cannot.
         let about = about_text(None).join(" ");
         assert!(about.contains("an F12 report's note and place from that run"));
         assert!(about.contains("no saves or pictures"));
@@ -3613,7 +3613,8 @@ mod tests {
         assert!(!in_settings.contains("Not now"));
         let question = question_text(false).join(" ");
         assert!(question.contains("Sentry (sentry.io)"));
-        assert!(question.contains("Only the report goes, not where you were or an F12 note."));
+        assert!(question.contains("The report includes where you were and your F12 note."));
+        assert!(!question.contains("not where you were"), "{question}");
         assert!(question.contains("Nothing is sent until you choose."));
         assert!(question.contains("cannot send yet"));
         assert!(!question_text(true).join(" ").contains("cannot send"));

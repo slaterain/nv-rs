@@ -40,11 +40,17 @@
 //! [`scenegraph`] with `NiAVObject::GetProperty` (`00a59d30`), which it asks of each geometry; both
 //! are registered at their addresses, so every caller by address reaches them.
 //!
+//! The shadow scene node's queue of the objects whose lighting is to be redone, which `TES`'s load
+//! fills for every node it puts in the scene (`ShadowSceneNode::AddObject`, `00b5eeb0`, and
+//! `UpdateObjectLighting`, `00b5d9f0`), is typed in [`lighting`] with the add at the tail of a list
+//! of counted pointers (`00a5a310`) it makes; all three are registered at their addresses.
+//!
 //! Stage 1: the objects stay in guest memory where the game made them. The row is
 //! [`Threads::Both`]: the code is integers (the origin's 0.0 for the vector constructor is a constant
 //! word) but for one product in [`scene`], which keeps the x87's exact helpers.
 
 pub mod attach;
+pub mod lighting;
 pub mod queue;
 pub mod scene;
 pub mod scenegraph;
@@ -95,6 +101,9 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x008d_0360, answers_true(u32) -> bool),
         entry!(0x004b_6dc0, scenegraph::set_reference_id_on_scenegraph(u32, u32)),
         entry!(0x00a5_9d30, scenegraph::get_property(u32, i32) -> u32),
+        entry!(0x00b5_eeb0, lighting::add_object(u32, u32)),
+        entry!(0x00b5_d9f0, lighting::update_object_lighting(u32, u32, u8)),
+        entry!(0x00a5_a310, lighting::list_add_tail(u32, u32)),
     ]
 }
 
