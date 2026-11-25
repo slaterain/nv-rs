@@ -13,6 +13,7 @@
 use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Diff, Input};
+use engine_core::typed::MAIN_THREAD;
 use engine_typed::archives::{self, lookup};
 
 /// The archive list's first-node word (its critical section, `011f8170`, is on the same page).
@@ -235,9 +236,41 @@ fn real_archives(data: &std::path::Path) -> Vec<(String, u16, Vec<u32>)> {
     out
 }
 
-/// Opt-in (`NV_DATA`): every BSA's real directory table in one list, name order; for each archive
-/// its first directory's first entry, its middle one's last entry and the end of its last one, and
-/// one entry in no archive, under any type, the meshes bit, the textures bit and 0x10.
+/// [`owner_of_real_archives`]'s world: every archive of `all` in one list, each one's file entries 16
+/// MB apart above the memory the test maps. Answers, for each archive, its first directory's first
+/// entry, its middle one's last entry and the end of its last one, then an entry in no archive.
+fn real_world(e: &mut Engine, all: &[(String, u16, Vec<u32>)]) -> Vec<u32> {
+    stand_ins(e);
+    let mut archives = Vec::new();
+    let mut entries = Vec::new();
+    for (i, (_, types, counts)) in all.iter().enumerate() {
+        let entries_at = 0x4000_0000 + 0x0100_0000 * i as u32;
+        let (a, starts) = archive(e, *types, 1, counts, Some(entries_at));
+        archives.push(a);
+        let mid = counts.len() / 2;
+        entries.push(starts.first().copied().unwrap_or(0));
+        entries.push(
+            starts
+                .get(mid)
+                .map_or(0, |&s| s + 16 * counts[mid].saturating_sub(1)),
+        );
+        entries.push(
+            starts
+                .last()
+                .map_or(0, |&s| s + 16 * counts[counts.len() - 1]),
+        );
+    }
+    entries.push(0x7fff_0000);
+    list(e, &archives);
+    entries
+}
+
+/// Opt-in (`NV_DATA`): every BSA's real directory table in one list, name order. Under any type, for
+/// each archive its first directory's first entry, its middle one's last entry and the end of its
+/// last one (in no archive: the whole list walked); then the entry in no archive under the meshes
+/// bit and 0x10 (both passes walked). One control word: the walk is integers only, and the small
+/// tests run both. The harness hashes all mapped memory at each call, and a whole walk makes one
+/// call a directory, so the cases are few and each group's time is printed.
 #[test]
 #[ignore = "needs a Data folder with BSAs (set NV_DATA)"]
 fn owner_of_real_archives() {
@@ -249,37 +282,33 @@ fn owner_of_real_archives() {
         all.len(),
         all.iter().map(|a| a.2.len()).sum::<usize>()
     );
-    let picks: &'static [u32] = (0..(3 * all.len() as u32 + 1)).collect::<Vec<_>>().leak();
-    Diff::new(entry!(0x00af_6910, lookup::owner_of(Ptr, u32) -> u32))
-        .family(&archives::ARCHIVES)
-        .inputs(&[Input::Of(picks), Input::Of(&[0xffff, 1, 2, 0x10])])
-        .max_cases(4 * picks.len())
-        .setup(move |e, case| {
-            stand_ins(e);
-            let mut archives = Vec::new();
-            let mut entries = Vec::new();
-            for (i, (_, types, counts)) in all.iter().enumerate() {
-                // Each archive's file entries 16 MB apart, above the memory the test maps.
-                let entries_at = 0x4000_0000 + 0x0100_0000 * i as u32;
-                let (a, starts) = archive(e, *types, 1, counts, Some(entries_at));
-                archives.push(a);
-                let mid = counts.len() / 2;
-                entries.push(starts.first().copied().unwrap_or(0));
-                entries.push(
-                    starts
-                        .get(mid)
-                        .map_or(0, |&s| s + 16 * counts[mid].saturating_sub(1)),
-                );
-                entries.push(
-                    starts
-                        .last()
-                        .map_or(0, |&s| s + 16 * counts[counts.len() - 1]),
-                );
-            }
-            entries.push(0x7fff_0000);
-            list(e, &archives);
-            vec![entries[case.word(0) as usize], case.word(1)]
-        })
-        .run()
-        .assert_same();
+    let n = all.len();
+    let none = 3 * n;
+    let groups: [(&str, Vec<(usize, u32)>); 4] = [
+        ("first entries", (0..n).map(|i| (3 * i, 0xffff)).collect()),
+        (
+            "middle entries",
+            (0..n).map(|i| (3 * i + 1, 0xffff)).collect(),
+        ),
+        ("ends", (0..n).map(|i| (3 * i + 2, 0xffff)).collect()),
+        ("in no archive", vec![(none, 1), (none, 0x10)]),
+    ];
+    for (name, picked) in groups {
+        let start = std::time::Instant::now();
+        let picked: &'static [(usize, u32)] = picked.leak();
+        let indices: &'static [u32] = (0..picked.len() as u32).collect::<Vec<_>>().leak();
+        Diff::new(entry!(0x00af_6910, lookup::owner_of(Ptr, u32) -> u32))
+            .family(&archives::ARCHIVES)
+            .control_words(&[MAIN_THREAD])
+            .inputs(&[Input::Of(indices)])
+            .max_cases(indices.len())
+            .setup(move |e, case| {
+                let entries = real_world(e, all);
+                let (which, types) = picked[case.word(0) as usize];
+                vec![entries[which], types]
+            })
+            .run()
+            .assert_same();
+        eprintln!("{name}: {} cases in {:?}", picked.len(), start.elapsed());
+    }
 }
