@@ -361,8 +361,9 @@ mod tests {
     fn destination(e: &Engine, to: u32) -> (Vec<u8>, Vec<u8>) {
         let first = e.mem.u32(to + FIRST);
         let end = e.mem.u32(to + END);
-        let len = u64::from(end.wrapping_sub(first)).min((1u64 << 32) - u64::from(first));
-        (e.mem.bytes(to, 0x20), e.mem.bytes(first, len as u32))
+        // Its storage as far as the top of memory (every destination here has storage).
+        let len = end.wrapping_sub(first).min(first.wrapping_neg());
+        (e.mem.bytes(to, 0x20), e.mem.bytes(first, len))
     }
 
     /// Runs the one pass and answers whether it was taken; a refused one must have written nothing.
