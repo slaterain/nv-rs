@@ -182,6 +182,9 @@ fn read_word_setter(kind: u8) -> Option<u32> {
     }
 }
 
+/// The dispatch family's empty `thiscall(a, b)` body (`RET 8`).
+const NOTHING_2: u32 = 0x0045_34f0;
+
 /// The copies that make a new payload object: (size, constructor, the object's copy from the
 /// source's word), by type.
 fn new_object_copy(kind: u8) -> Option<(u32, u32, u32)> {
@@ -291,7 +294,11 @@ fn add_extra_copy_from(e: &mut Engine, list: u32, extra: u32, caller: u32, calle
     if let Some((size, construct, copy)) = new_object_copy(kind) {
         let word = word_at(e, extra, EXTRA_PAYLOAD);
         let object = new_object(e, size, |e, block| e.call(construct, &args![block]).u32());
-        e.call(copy, &args![object, word]);
+        // The audio buoy marker's copy is the dispatch family's empty body (`004534f0`, `RET 8`),
+        // done in place: nothing.
+        if copy != NOTHING_2 {
+            e.call(copy, &args![object, word]);
+        }
         set_new_object(e, list, kind, object);
         return;
     }
@@ -324,14 +331,15 @@ fn copy_by_arm(e: &mut Engine, list: u32, extra: u32, kind: u8) {
             // the source's words at +0x14 and +0x18 then go into its first two words.
             let word = word_at(e, extra, 0x0c);
             let handle = read_word(e, extra.wrapping_add(0x10));
-            let result = e.mem.alloc(4);
-            e.call(0x0041_c490, &args![list, word, handle, result]);
-            let created = e.mem.u32(result);
-            let second = word_at(e, extra, 0x18);
-            e.mem.set_u32(created.wrapping_add(4), second);
-            let first = word_at(e, extra, 0x14);
-            e.mem.set_u32(created, first);
-            e.mem.free(result);
+            // `result` is a local of the frame, as in the exe.
+            e.with_stack(4, |e, result| {
+                e.call(0x0041_c490, &args![list, word, handle, result]);
+                let created = e.mem.u32(result.addr());
+                let second = word_at(e, extra, 0x18);
+                e.mem.set_u32(created.wrapping_add(4), second);
+                let first = word_at(e, extra, 0x14);
+                e.mem.set_u32(created, first);
+            });
         }
         0x0d => {
             let (first, second) = (word_at(e, extra, 0x0c), word_at(e, extra, 0x10));
@@ -534,12 +542,9 @@ fn copy_by_arm(e: &mut Engine, list: u32, extra: u32, kind: u8) {
             }
         }
         0x78 => {
-            // The exe makes a temporary for a null extra data, which the test at the top rules out;
-            // the word read is the payload's. The translation's block for it is kept, so the heap
-            // ends alike.
-            let temporary = e.mem.alloc(4);
+            // The exe makes a temporary (a local) for a null extra data, which the test at the top
+            // rules out: the word read is the payload.s.
             let word = read_word(e, extra.wrapping_add(0x0c));
-            e.mem.free(temporary);
             e.call(0x0042_0e00, &args![list, word]);
         }
         0x7b => {

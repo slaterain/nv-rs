@@ -1,40 +1,42 @@
-//! The extra data family (`NV_TYPED=extra_data`): what the game asks of and puts into a reference's,
-//! a cell's or an inventory entry's list of extra data (`ExtraDataList`, Xbox PDB), from the exe's
-//! extra data list unit: `AddExtraCopy` and the copies and compares of whole lists ([`copy`]), the
-//! getters and setters of single extra data ([`access`]), and the small records the unit's loader and
-//! save writer build ([`records`]). The list's own operations (its constructors, `AddExtra`,
-//! `RemoveExtra`, the type bitmap, the thread's cache) are the cell references family's
+//! The extra data family (`NV_TYPED=extra_data`): what the game asks of and puts into a
+//! reference's, a cell's or an inventory entry's list of extra data (`ExtraDataList`, Xbox PDB),
+//! from the exe's extra data list unit: `AddExtraCopy` and the copies and compares of whole lists
+//! ([`copy`]), the getters and setters of single extra data ([`access`]), and the small records the
+//! unit's loader and save writer build ([`records`]). The list's own operations (its constructors,
+//! `AddExtra`, `RemoveExtra`, the type bitmap, the thread's cache) are the cell references family's
 //! (`cell_refs::extra_list`), the lookup `GetExtraData` (`00410220`) the dispatch family's. Every
 //! caller reaches these functions by address; the unit's translations that stay (the loader
-//! `004144a0`, the save writer `00412970`, `InitItem` `00416be0`, `GetCanNotWear` `00418b10`) and the
-//! unit's other part files call the native functions by address too.
+//! `004144a0`, the save writer `00412970`, `InitItem` `00416be0`, `GetCanNotWear` `00418b10`) and
+//! the unit's other part files call the native functions by address too.
 //!
-//! **Native.** The exe's order of work. The first_of_kind, the lock (`0040fbf0`, `0040fba0`), `AddExtra`,
-//! both `RemoveExtra`s, `ItemsInList` and the cache's clear are typed calls into their families; a
-//! function of this family calls another as a typed call. The one-instruction leaves the exe calls are
-//! done in place: an extra data's type (`004f1540`) and next (`0044ddc0`, `00403550`), a list node's
-//! item and next (`006815c0`, `00726070`), a handle's word (`00559450`, with JIP LN NVSE's null check
-//! as the leaf has it), a buffer's form (`007af430`), the type bitmap's test (`0040fe80`),
-//! `BSExtraData`'s constructor (`0040ec80`), the sound handle's constructors, compares and empty
-//! destructor, and the small records' constructors. Each type, next or word is read once where the
-//! exe reads it again with nothing in between that could change it. A virtual call (an extra data's
-//! slot 0 delete, its slot 4 `Compare`, the type 0x92 copy's slot 0xc) stays a call through the slot:
-//! each class has its own body. The constructors, destructors and setters of other units, `operator
-//! new` and `operator delete` are called by address.
+//! **Native.** The exe's order of work. The lookup (`00410220`), the lock (`0040fbf0`, `0040fba0`),
+//! `AddExtra`, both `RemoveExtra`s, `ItemsInList` and the cache's clear are typed calls into their
+//! families; a function of this family calls another as a typed call. The one-instruction leaves
+//! the exe calls are done in place: an extra data's type (`004f1540`) and next (`0044ddc0`,
+//! `00403550`), a list node's item and next (`006815c0`, `00726070`), a handle's word (`00559450`,
+//! with JIP LN NVSE's null check as the leaf has it), a buffer's form (`007af430`), the type
+//! bitmap's test (`0040fe80`), `BSExtraData`'s constructor (`0040ec80`), the sound handle's
+//! constructors, compares and empty destructor, the audio buoy marker's empty copy (`004534f0`),
+//! and the small records' constructors. Each type, next or word is read once where the exe reads it
+//! again with nothing in between that could change it. A virtual call (an extra data's slot 0
+//! delete, its slot 4 `Compare`, the type 0x92 copy's slot 0xc) stays a call through the slot: each
+//! class has its own body. The constructors, destructors and setters of other units, `operator new`
+//! and `operator delete` are called by address.
 //!
 //! **Extenders.** JIP LN NVSE has three sites here, each kept where the translation has it:
-//! `AddExtraCopy`'s arm for its keyed data's type 0x27 (`0x411978`, while JIP is installed), the hotkey
-//! copy of `CopyListForReference` (`0x412675`) and the owner test of `CompareListForContainer`
-//! (`0x41271E`), both with its fixes on. JIP wraps `GetCanNotWear` (`00418b10`), so that one stays
-//! translated and out of this family: a wrapped member would send the whole family by address. No
-//! other extender replaces or patches these functions; xNVSE, JIP and JohnnyGuitar call the getters,
-//! the setters and `AddExtraCopy` by address, which reaches them here.
+//! `AddExtraCopy`'s arm for its keyed data's type 0x27 (`0x411978`, while JIP is installed), the
+//! hotkey copy of `CopyListForReference` (`0x412675`) and the owner test of
+//! `CompareListForContainer` (`0x41271E`), both with its fixes on. JIP wraps `GetCanNotWear`
+//! (`00418b10`), so that one stays translated and out of this family: a wrapped member would send
+//! the whole family by address. No other extender replaces or patches these functions; xNVSE, JIP
+//! and JohnnyGuitar call the getters, the setters and `AddExtraCopy` by address, which reaches them
+//! here.
 //!
-//! **Which thread.** Every thread that touches a list (main, the loaders, the AI threads), under the
-//! extra data lock as the exe takes it: [`Threads::Both`]. The floats are moved, not computed (each
-//! through the x87's load and store as the exe does, so a signalling NaN comes out quiet), but for the
-//! rotation matrix's products, worked in `f64` and rounded to `float` where the exe stores, and the
-//! sine and cosine, the x87's `FSINCOS` as `engine_core::x87` has it.
+//! **Which thread.** Every thread that touches a list (main, the loaders, the AI threads), under
+//! the extra data lock as the exe takes it: [`Threads::Both`]. The floats are moved, not computed
+//! (each through the x87's load and store as the exe does, so a signalling NaN comes out quiet),
+//! but for the rotation matrix's products, worked in `f64` and rounded to `float` where the exe
+//! stores, and the sine and cosine, the x87's `FSINCOS` as `engine_core::x87` has it.
 
 pub mod access;
 pub mod copy;
@@ -46,12 +48,12 @@ use engine_core::ptr::Ptr;
 use engine_core::typed::{leaf, Family, FamilyId, Threads};
 use engine_core::{args, entry, typed_call, AbiFn, Engine};
 
-/// This family's bit: what each `typed_call!` of it names. Id 46: the next after the highest in main
-/// (40) and in the open pull requests (44, 45).
+/// This family's bit: what each `typed_call!` of it names. Id 46: the next after the highest in use
+/// when it was made (44 on main, 45 in an open pull request).
 pub const FAMILY: FamilyId = FamilyId::new(46);
 
-/// `NV_TYPED=extra_data`. A native conversion proved by its differential tests: on unless `NV_TYPED`
-/// says otherwise (`NV_TYPED=off` or `extra_data:off`).
+/// `NV_TYPED=extra_data`. A native conversion proved by its differential tests: on unless
+/// `NV_TYPED` says otherwise (`NV_TYPED=off` or `extra_data:off`).
 pub static EXTRA_DATA: Family = Family {
     name: "extra_data",
     id: FAMILY,
@@ -190,7 +192,7 @@ const EXTRA_LOCK: u32 = 0x011c_3920;
 const LIST_HEAD: u32 = 4;
 const LIST_FLAGS: u32 = 8;
 const FLAGS_LEN: u32 = 0x15;
-/// An extra data's type (+4), next (+8) and word_at (+0xc).
+/// An extra data's type (+4), next (+8) and payload (+0xc).
 const EXTRA_TYPE: u32 = 4;
 const EXTRA_NEXT: u32 = 8;
 const EXTRA_PAYLOAD: u32 = 0xc;
@@ -353,8 +355,8 @@ fn zero_bytes(e: &mut Engine, at: u32, n: u32) {
     );
 }
 
-/// `new` and construct: `size` bytes from `operator new`, `build` run on the block; null when
-/// the allocation failed.
+/// `new` and construct: `size` bytes from `operator new`, `build` run on the block; null when the
+/// allocation failed.
 #[inline]
 fn new_object(e: &mut Engine, size: u32, build: impl FnOnce(&mut Engine, u32) -> u32) -> u32 {
     let block = e.call(OPERATOR_NEW, &args![size]).u32();

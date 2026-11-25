@@ -1239,14 +1239,15 @@ pub(crate) fn add_extra_copy_from(
                 0x0055_9450,
                 leaf::word_at_0(e, extra.addr() + 0x10)
             );
-            let result = e.mem.alloc(4);
-            e.call(0x0041_c490, &args![list, word, handle, result]);
-            let created = e.mem.u32(result);
-            let second = payload(e, extra, 0x18);
-            e.mem.set_u32(created + 4, second);
-            let first = payload(e, extra, 0x14);
-            e.mem.set_u32(created, first);
-            e.mem.free(result);
+            // `result` is a local of the frame, as in the exe.
+            e.with_stack(4, |e, result| {
+                e.call(0x0041_c490, &args![list, word, handle, result]);
+                let created = e.mem.u32(result.addr());
+                let second = payload(e, extra, 0x18);
+                e.mem.set_u32(created + 4, second);
+                let first = payload(e, extra, 0x14);
+                e.mem.set_u32(created, first);
+            });
         }
         0x0d => {
             let (first, second) = (payload(e, extra, 0x0c), payload(e, extra, 0x10));
@@ -1449,18 +1450,20 @@ pub(crate) fn add_extra_copy_from(
         }
         0x78 => {
             // The original builds a temporary (0x0045cec0 destroys it) when
-            // `extra` is null, which the check at the top rules out.
-            let temporary = e.mem.alloc(4);
-            let address = if extra.is_null() {
-                e.call(0x0063_3c90, &args![temporary, 0u32]).u32()
-            } else {
-                extra.addr() + 0x0c
-            };
-            let word = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, address));
-            if extra.is_null() {
-                e.call(0x0045_cec0, &args![temporary]);
-            }
-            e.mem.free(temporary);
+            // `extra` is null, which the check at the top rules out; the
+            // temporary is a local of the frame, as in the exe.
+            let word = e.with_stack(4, |e, temporary| {
+                let address = if extra.is_null() {
+                    e.call(0x0063_3c90, &args![temporary, 0u32]).u32()
+                } else {
+                    extra.addr() + 0x0c
+                };
+                let word = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, address));
+                if extra.is_null() {
+                    e.call(0x0045_cec0, &args![temporary]);
+                }
+                word
+            });
             e.call(0x0042_0e00, &args![list, word]);
         }
         0x7b => {

@@ -4008,9 +4008,10 @@ use engine_typed::extra_data::{self, EXTRA_DATA};
 /// What the extra data family does in place where its translation calls: the one-instruction
 /// leaves (an extra data's type and next, the next's store, a node's item and next, a handle's word,
 /// a buffer's form), the type bitmap's test, `BSExtraData`'s constructor, a sound handle's empty
-/// destructor, the navmesh portal record's copy, and the family's own sound handle, mask, flag,
-/// colour and `sincos` bodies.
+/// destructor, the navmesh portal record's copy, the audio buoy marker's empty copy, and the
+/// family's own sound handle, mask, flag, colour and `sincos` bodies.
 const XD_IN_PLACE: &[u32] = &[
+    0x0045_34f0,
     0x004f_1540,
     0x0044_ddc0,
     0x0040_3550,
@@ -4116,9 +4117,8 @@ fn xd_get_or_create(e: &mut Engine, _: &[u32]) -> Ret {
     ret(e.mem.alloc(0x40))
 }
 
-/// What the family calls by address in other units: each a stand-in that counts. The empty body
-/// `004534f0` (`RET 8`, the dispatch family's) and the `memcpy` wrapper (the C runtime's) run as
-/// themselves.
+/// What the family calls by address in other units: each a stand-in that counts. The `memcpy`
+/// wrapper (the C runtime's) runs as itself.
 const XD_NOTED: &[u32] = &[
     0x0040_1080,
     0x0040_7a90,
@@ -4271,11 +4271,58 @@ fn xd_world(e: &mut Engine, seed: u32) -> ExtraWorld {
     );
     xd_stand_ins(e);
     if w.jip >= 2 {
-        for site in [0x0041_1978, 0x0041_2675, 0x0041_271e] {
-            e.on_site(SiteSlot::new(Owner::Jip, site), jip_head);
-        }
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0041_1978), jip_copy_site);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0041_2675), jip_hotkey_site);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0041_271e), jip_owner_site);
     }
     w
+}
+
+/// Where JIP's handlers at the family's three sites note each asking: a count, then rows of the
+/// site and the four words it was handed (zeros past them), so the Diff compares the words JIP's
+/// real handler reads (the copy's list, extra data, caller and the caller's flag).
+const XD_SITE_LOG: u32 = CONTROL + 0x320;
+const XD_SITE_ROWS: u32 = 6;
+
+fn xd_site_note(e: &mut Engine, site: u32, a: &[u32]) {
+    let n = e.mem.u32(XD_SITE_LOG);
+    e.mem.set_u32(XD_SITE_LOG, n.wrapping_add(1));
+    if n < XD_SITE_ROWS {
+        let row = XD_SITE_LOG + 4 + n * 20;
+        e.mem.set_u32(row, site);
+        for i in 0..4u32 {
+            let word = a.get(i as usize).copied().unwrap_or(0);
+            e.mem.set_u32(row + 4 + 4 * i, word);
+        }
+    }
+}
+
+/// The rows [`xd_site_note`] wrote: the site and its four words.
+fn xd_site_rows(e: &Engine) -> Vec<[u32; 5]> {
+    (0..e.mem.u32(XD_SITE_LOG).min(XD_SITE_ROWS))
+        .map(|n| {
+            let row = XD_SITE_LOG + 4 + n * 20;
+            std::array::from_fn(|i| e.mem.u32(row + 4 * i as u32))
+        })
+        .collect()
+}
+
+/// JIP's copy of its keyed data (`0x411978`): noted, done.
+fn jip_copy_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    xd_site_note(e, 0x0041_1978, a);
+    Some(1)
+}
+
+/// JIP's hotkey copy (`0x412675`): noted, done.
+fn jip_hotkey_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    xd_site_note(e, 0x0041_2675, a);
+    Some(1)
+}
+
+/// JIP's owner test (`0x41271E`): noted, an owner is no difference.
+fn jip_owner_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    xd_site_note(e, 0x0041_271e, a);
+    Some(1)
 }
 
 /// Where `place_kind` put the extra data: nowhere, at the head, at the tail, or only its bit set.
@@ -4404,8 +4451,30 @@ fn xd_list(e: &mut Engine, seed: u32, kinds: &[u32]) -> u32 {
 }
 
 /// Another list to compare the world's with: empty, the same types with the same payloads (each
-/// `Compare`s equal), the same less its last, or one of the copies' types.
+/// `Compare`s equal), the same less its last, or one of the copies' types; but for the same list,
+/// an owner (type 0x21) at its head in the seeds [`xd_owner_first`] picks, so the container compare
+/// walks one (and JIP's owner site) under each JIP state.
 fn xd_other(e: &mut Engine, w: &ExtraWorld, seed: u32) -> u32 {
+    let list = xd_other_list(e, w, seed);
+    if xd_owner_first(seed) {
+        let vt = e.mem.u32(XD_VT);
+        let owner = extra_data(e, vt, 0x21, 0x21);
+        e.mem.set_u32(owner + 8, e.mem.u32(list + 4));
+        e.mem.set_u32(list + 4, owner);
+        let flags = e.mem.u8(list + 8 + 4) | 2;
+        e.mem.set_u8(list + 8 + 4, flags);
+    }
+    list
+}
+
+/// Whether [`xd_other`] puts an owner first: half the seeds (each JIP state among them), not with
+/// the same list.
+fn xd_owner_first(seed: u32) -> bool {
+    (seed / 4) % 2 == 0 && Draw(seed ^ 0x0041_27e0).next(4) != 1
+}
+
+/// [`xd_other`]'s list before the owner.
+fn xd_other_list(e: &mut Engine, w: &ExtraWorld, seed: u32) -> u32 {
     let form = Draw(seed ^ 0x0041_27e0).next(4);
     if form == 3 {
         return xd_list(e, seed, XD_SOURCE_KINDS);
@@ -5799,6 +5868,33 @@ fn the_extra_data_worlds_reach_every_branch() {
             .call(0x0041_26c0, &args![w.list, other, 1u32, 0u32])
             .bool();
         reached.insert(format!("container lists differ {differs}"));
+        // Without `allow` the container compare walks the owner first, where there is one, under
+        // each JIP state; with JIP's fixes and its handler its owner site is asked.
+        let head = e.mem.u32(other + 4);
+        if head != 0 && e.mem.u32(head + 4) == 0x21 {
+            e.call(0x0041_26c0, &args![w.list, other, 0u32, 0u32]);
+            let asked = xd_site_rows(&e).iter().any(|r| r[0] == 0x0041_271e);
+            reached.insert(format!(
+                "an owner walked under JIP {}, site asked {asked}",
+                w.jip
+            ));
+        }
+        // The list copies, as their Diffs run them: the words JIP's copy and hotkey sites are
+        // handed.
+        for function in [0x0041_21e0u32, 0x0041_2490] {
+            for flag in [0u32, 1] {
+                let mut e = Engine::new_untyped_for_test();
+                let w = xd_world(&mut e, seed);
+                let source = xd_list(&mut e, seed, XD_SOURCE_KINDS);
+                e.call(function, &args![w.list, source, flag]);
+                for row in xd_site_rows(&e) {
+                    reached.insert(match row[0] {
+                        0x0041_1978 => format!("copy site from {:08x} flag {}", row[3], row[4]),
+                        site => format!("site {site:08x} asked"),
+                    });
+                }
+            }
+        }
         let source = xd_list(&mut e, seed, XD_SOURCE_KINDS);
         let n = e.call(0x0040_fe20, &args![source]).i32();
         reached.insert(format!("a source of {}", n.min(3)));
@@ -5818,6 +5914,18 @@ fn the_extra_data_worlds_reach_every_branch() {
         }
     }
     wanted.extend(["new fails 0", "new fails 1"].map(String::from));
+    for jip in 0..=3 {
+        wanted.push(format!(
+            "an owner walked under JIP {jip}, site asked {}",
+            jip == 2
+        ));
+    }
+    for caller in [0x0041_2250, 0x0041_2523] {
+        for flag in 0..=1 {
+            wanted.push(format!("copy site from {caller:08x} flag {flag}"));
+        }
+    }
+    wanted.push("site 00412675 asked".to_string());
     for name in wanted {
         assert!(
             reached.contains(&name),
