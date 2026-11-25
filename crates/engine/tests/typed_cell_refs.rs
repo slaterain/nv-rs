@@ -34,6 +34,10 @@
 //! `TESObjectREFR::InitScript` (`00565730`), the script of a form (`004826d0`), the reference's
 //! container (`0055d310`) and the actor classes' slot 0x1a4 (`008ae600`) run on a reference, its
 //! forms and its extra data list from a seed, the work `InitScript` hands on standing in.
+//!
+//! The extra data list's functions (`0040ec80` to `00411ea0`) run on a list from a seed: its chain,
+//! its type bitmap, the thread's cache, the extra data lock and JIP's head site, the extra data's
+//! delete and the reference lists' destructors standing in; its constructors run on junk.
 
 use engine as _;
 use engine_core::prelude::*;
@@ -3057,6 +3061,924 @@ fn the_script_seeds_reach_every_branch() {
     for name in SCRIPT_BRANCHES {
         assert!(
             reached.contains_key(name),
+            "no seed reaches {name}: {reached:?}"
+        );
+    }
+}
+
+// ---- The extra data list (`cell_refs::extra_list`) ----------------------------------------------
+//
+// Its world, from a seed: an `ExtraDataList` whose chain holds none to five extra data, each of a
+// type drawn from `EXTRA_KINDS`, all sharing a vtable whose slot 0 (the delete) counts at +0x14;
+// the type bitmap as the chain says, cleared, full, or with one type's bit flipped; the thread's
+// cache holding another list, this list with its types' first extra data, this list from before
+// the dirty count moved, or this list with no entries (a decoy extra data in every other entry);
+// the extra data lock free or held once by this thread; JIP's patches off, on, or on with a
+// handler at its head site (`0040f9d7`) answering "to the head"; and a loose extra data of a drawn
+// type in no chain, its next null or the chain's head. The functions' other arguments are each
+// Diff's inputs.
+
+/// The types the chains are drawn from: those `AddExtra` puts at the head (0xc, 0xd, 0xe, 0x15,
+/// 0x2b), JIP's keyed data (0x27), four `RemoveAllDefault` keeps (0x2e, 0x38, 0x65, 0x84), others
+/// (0x43, 0x4f is kept too), the cache's last entry (0x92), types past its entries (0x93, 0xa0)
+/// and past the bitmap (0xa8, 0xff).
+const EXTRA_KINDS: &[u32] = &[
+    0x0c, 0x0d, 0x0e, 0x15, 0x27, 0x2b, 0x2e, 0x38, 0x43, 0x4f, 0x65, 0x84, 0x92, 0x93, 0xa0, 0xa8,
+    0xff,
+];
+const EXTRA_SEEDS: &[u32] = &[
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26, 27, 28, 29, 30, 31,
+];
+/// Where the extra data's delete (slot 0) is registered; it counts at +0x14 of the extra data.
+const EXTRA_VT_FN: u32 = 0x00ff_c100;
+const EXTRA_DELETES: u32 = 0x14;
+/// The extra data lock (its owner, then its count) and `BaseExtraList::iDirty`.
+const EXTRA_LOCK: u32 = 0x011c_3920;
+const EXTRA_DIRTY: u32 = 0x011c_38e4;
+/// The four reference lists' destructors (standing in: each marks +0x14).
+const REF_LIST_DROPS: [u32; 4] = [0x0043_4560, 0x0043_4af0, 0x0043_4950, 0x0043_4dc0];
+
+struct ExtraWorld {
+    list: u32,
+    chain: Vec<u32>,
+    loose: u32,
+    bitmap: u32,
+    cache_state: u32,
+    lock_held: bool,
+    jip: u32,
+}
+
+impl ExtraWorld {
+    /// An extra data by index: the chain's (past its end the loose one), 6 null, 7 the loose one.
+    fn pick(&self, i: u32) -> u32 {
+        match i {
+            6 => 0,
+            7 => self.loose,
+            _ => self.chain.get(i as usize).copied().unwrap_or(self.loose),
+        }
+    }
+}
+
+/// What the list meets: the lock's imports (as the lighting world has them), the extra data's
+/// delete, `operator delete` and the reference lists' destructors.
+fn extra_stand_ins(e: &mut Engine) {
+    lighting_stand_ins(e);
+    e.register(EXTRA_VT_FN, |e, a| {
+        let n = e.mem.u32(a[0] + EXTRA_DELETES);
+        e.mem.set_u32(a[0] + EXTRA_DELETES, n + 1);
+        Ret::default()
+    });
+    e.register(0x0040_1030, nothing);
+    for addr in REF_LIST_DROPS {
+        e.register(addr, |e, a| {
+            e.mem.set_u32(a[0] + 0x14, 0xd00d);
+            Ret::default()
+        });
+    }
+}
+
+/// An extra data of `kind` with the world's vtable, a null next and a payload word of its own.
+fn extra_data(e: &mut Engine, vt: u32, kind: u32, i: u32) -> u32 {
+    let x = e.mem.alloc(0x18);
+    for (k, w) in [vt, kind, 0, 0x1000 + i, 0, 0].into_iter().enumerate() {
+        e.mem.set_u32(x + 4 * k as u32, w);
+    }
+    x
+}
+
+/// `n` bytes of 0xa5 (what a constructor writes over).
+fn junk(e: &mut Engine, n: u32) -> u32 {
+    let x = e.mem.alloc(n);
+    for i in 0..n {
+        e.mem.set_u8(x + i, 0xa5);
+    }
+    x
+}
+
+/// JIP's handler at its head site: to the head.
+fn jip_head(_: &mut Engine, _: &[u32]) -> Option<u32> {
+    Some(1)
+}
+
+fn extra_world(e: &mut Engine, seed: u32) -> ExtraWorld {
+    use engine_core::extend::{Owner, SiteSlot};
+    e.map(0x011c_3000, 0x1000);
+    e.map(CONTROL, 0x1000);
+    extra_stand_ins(e);
+    let mut d = Draw(seed.wrapping_mul(0x9e37_79b9) ^ 0xf680);
+    let jip = seed % 3;
+    e.set_jip_patches(if jip == 0 { 0 } else { u32::MAX });
+    if jip == 2 {
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0040_f9d7), jip_head);
+    }
+    e.mem.set_u32(EXTRA_DIRTY, 5);
+    let lock_held = d.next(3) == 0;
+    e.mem
+        .set_u32(EXTRA_LOCK, if lock_held { LOCK_THREAD } else { 0 });
+    e.mem.set_u32(EXTRA_LOCK + 4, u32::from(lock_held));
+    let vt = e.mem.alloc(0x10);
+    e.mem.set_u32(vt, EXTRA_VT_FN);
+    let n = [0, 1, 2, 3, 4, 5, 5, 4][d.next(8) as usize];
+    let kinds = EXTRA_KINDS.len() as u32;
+    let chain: Vec<u32> = (0..n)
+        .map(|i| {
+            let kind = EXTRA_KINDS[d.next(kinds) as usize];
+            extra_data(e, vt, kind, i)
+        })
+        .collect();
+    for w in chain.windows(2) {
+        e.mem.set_u32(w[0] + 8, w[1]);
+    }
+    let list = e.mem.alloc(0x20);
+    e.mem.set_u32(list, 0x0101_43e8);
+    e.mem.set_u32(list + 4, chain.first().copied().unwrap_or(0));
+    for &x in &chain {
+        let kind = e.mem.u32(x + 4);
+        if kind >> 3 < 0x15 {
+            let flags = e.mem.u8(list + 8 + (kind >> 3)) | 1 << (kind & 7);
+            e.mem.set_u8(list + 8 + (kind >> 3), flags);
+        }
+    }
+    let bitmap = d.next(6);
+    match bitmap {
+        3 => (0..0x15).for_each(|i| e.mem.set_u8(list + 8 + i, 0)),
+        4 => (0..0x15).for_each(|i| e.mem.set_u8(list + 8 + i, 0xff)),
+        5 => {
+            let kind = EXTRA_KINDS[d.next(12) as usize];
+            let flags = e.mem.u8(list + 8 + (kind >> 3)) ^ 1 << (kind & 7);
+            e.mem.set_u8(list + 8 + (kind >> 3), flags);
+        }
+        _ => {}
+    }
+    let cache = e.tls();
+    let decoy = extra_data(e, vt, 0xee, 0xdec0);
+    for i in 0..0x94 {
+        e.mem.set_u32(cache + 0x10 + 4 * i, decoy);
+    }
+    let cache_state = d.next(4);
+    let (cached, dirty) = match cache_state {
+        0 => (e.mem.alloc(0x20), 5),
+        2 => (list, 4),
+        _ => (list, 5),
+    };
+    e.mem.set_u32(cache + 8, cached);
+    e.mem.set_u32(cache + 0xc, dirty);
+    if cache_state == 1 {
+        for &x in chain.iter().rev() {
+            let kind = e.mem.u32(x + 4);
+            if kind < 0x93 {
+                e.mem.set_u32(cache + 0x10 + 4 * kind, x);
+            }
+        }
+    } else if cache_state == 3 {
+        for i in 0..0x93 {
+            e.mem.set_u32(cache + 0x10 + 4 * i, 0);
+        }
+    }
+    let loose = extra_data(e, vt, EXTRA_KINDS[d.next(kinds) as usize], 9);
+    if d.next(3) == 0 {
+        let head = e.mem.u32(list + 4);
+        e.mem.set_u32(loose + 8, head);
+    }
+    ExtraWorld {
+        list,
+        chain,
+        loose,
+        bitmap,
+        cache_state,
+        lock_held,
+        jip,
+    }
+}
+
+/// The families an extra list function reaches: its own, the dispatch family's lock and type
+/// getter, the leaves' next and the C runtime's `memset`.
+trait ExtraListCase {
+    fn extra_list_case(self) -> Diff;
+}
+
+impl ExtraListCase for Diff {
+    fn extra_list_case(self) -> Diff {
+        self.family(&CELL_REFS)
+            .family(&engine_typed::dispatch::DISPATCH)
+            .family(&leaf::LEAVES)
+            .family(&engine_typed::crt::CRT)
+    }
+}
+
+const FLAGS_WORDS: &[u32] = &[0, 1, 2, 3];
+/// A type argument read as a byte or a word (0x127: high bits).
+const KIND_WORDS: &[u32] = &[0, 0x0c, 0x27, 0x2b, 0x43, 0x92, 0x93, 0xa0, 0xff, 0x127];
+/// A type argument of the cache's `int`: in range, its ends, past them, negative.
+const CACHE_KINDS: &[u32] = &[0, 0x0c, 0x92, 0x93, 0xff, 0xffff_ffff, 0x8000_0000];
+
+#[test]
+fn extra_data_new() {
+    Diff::new(entry!(
+        0x0040_ec80,
+        cell_refs::extra_list::extra_data_new(u32, u8) -> u32
+    ))
+    .family(&CELL_REFS)
+    .inputs(&[Input::Of(&[0, 0x43, 0xff, 0x143])])
+    .setup(|e, case| vec![junk(e, 0x18), case.word(0)])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_data_drop() {
+    Diff::new(entry!(
+        0x0040_ecb0,
+        cell_refs::extra_list::extra_data_drop(u32)
+    ))
+    .family(&CELL_REFS)
+    .setup(|e, _| vec![junk(e, 0x18)])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_data_set_next() {
+    Diff::new(entry!(
+        0x0040_3550,
+        cell_refs::extra_list::set_next(u32, u32)
+    ))
+    .family(&CELL_REFS)
+    .inputs(&[Input::Of(&[0, 0x1234_5678])])
+    .setup(|e, case| vec![junk(e, 0x18), case.word(0)])
+    .run()
+    .assert_same();
+}
+
+/// The constructors of one argument over a block of junk.
+trait ExtraConstructor {
+    fn on_junk(self) -> Diff;
+}
+
+impl ExtraConstructor for Diff {
+    fn on_junk(self) -> Diff {
+        self.family(&CELL_REFS)
+            .family(&engine_typed::crt::CRT)
+            .setup(|e, _| vec![junk(e, 0x20)])
+    }
+}
+
+#[test]
+fn extra_north_rotation_new() {
+    Diff::new(entry!(
+        0x0040_f680,
+        cell_refs::extra_list::north_rotation_new(u32) -> u32
+    ))
+    .on_junk()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_detach_time_new() {
+    Diff::new(entry!(
+        0x0040_f6b0,
+        cell_refs::extra_list::detach_time_new(u32) -> u32
+    ))
+    .on_junk()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_base_list_new() {
+    Diff::new(entry!(
+        0x0040_f740,
+        cell_refs::extra_list::base_list_new(u32) -> u32
+    ))
+    .on_junk()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_data_list_new() {
+    Diff::new(entry!(
+        0x0041_0360,
+        cell_refs::extra_list::data_list_new(u32) -> u32
+    ))
+    .on_junk()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_lock_data_new() {
+    Diff::new(entry!(
+        0x0041_1b00,
+        cell_refs::extra_list::lock_data_new(u32) -> u32
+    ))
+    .on_junk()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_reflected_refs_new() {
+    Diff::new(entry!(
+        0x0041_1b40,
+        cell_refs::extra_list::reflected_refs_new(u32) -> u32
+    ))
+    .on_junk()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_reflector_refs_new() {
+    Diff::new(entry!(
+        0x0041_1be0,
+        cell_refs::extra_list::reflector_refs_new(u32) -> u32
+    ))
+    .on_junk()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_water_light_refs_new() {
+    Diff::new(entry!(
+        0x0041_1c80,
+        cell_refs::extra_list::water_light_refs_new(u32) -> u32
+    ))
+    .on_junk()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_lit_water_refs_new() {
+    Diff::new(entry!(
+        0x0041_1d20,
+        cell_refs::extra_list::lit_water_refs_new(u32) -> u32
+    ))
+    .on_junk()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_four_words_new() {
+    Diff::new(entry!(
+        0x0041_1dc0,
+        cell_refs::extra_list::four_words_new(u32) -> u32
+    ))
+    .on_junk()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_word_16_new() {
+    Diff::new(entry!(
+        0x0041_1e00,
+        cell_refs::extra_list::word_16_new(u32) -> u32
+    ))
+    .on_junk()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_type_92_new() {
+    Diff::new(entry!(
+        0x0041_1e40,
+        cell_refs::extra_list::type_92_new(u32) -> u32
+    ))
+    .on_junk()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_type_92_drop() {
+    Diff::new(entry!(
+        0x0041_1ea0,
+        cell_refs::extra_list::type_92_drop(u32)
+    ))
+    .on_junk()
+    .run()
+    .assert_same();
+}
+
+/// The scalar deleting destructors of an extra data over a block of junk, with the flags 0 to 3.
+trait ExtraDeleter {
+    fn junk_deleted(self) -> Diff;
+}
+
+impl ExtraDeleter for Diff {
+    fn junk_deleted(self) -> Diff {
+        self.family(&CELL_REFS)
+            .inputs(&[Input::Of(FLAGS_WORDS)])
+            .setup(|e, case| {
+                extra_stand_ins(e);
+                vec![junk(e, 0x20), case.word(0)]
+            })
+    }
+}
+
+#[test]
+fn extra_reflected_refs_delete() {
+    Diff::new(entry!(
+        0x0041_1bb0,
+        cell_refs::extra_list::reflected_refs_delete(u32, u32) -> u32
+    ))
+    .junk_deleted()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_reflector_refs_delete() {
+    Diff::new(entry!(
+        0x0041_1c50,
+        cell_refs::extra_list::reflector_refs_delete(u32, u32) -> u32
+    ))
+    .junk_deleted()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_water_light_refs_delete() {
+    Diff::new(entry!(
+        0x0041_1cf0,
+        cell_refs::extra_list::water_light_refs_delete(u32, u32) -> u32
+    ))
+    .junk_deleted()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_lit_water_refs_delete() {
+    Diff::new(entry!(
+        0x0041_1d90,
+        cell_refs::extra_list::lit_water_refs_delete(u32, u32) -> u32
+    ))
+    .junk_deleted()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_type_92_delete() {
+    Diff::new(entry!(
+        0x0041_1e70,
+        cell_refs::extra_list::type_92_delete(u32, u32) -> u32
+    ))
+    .junk_deleted()
+    .run()
+    .assert_same();
+}
+
+/// `ExtraWeaponModFlags`' test: its byte and the mask, each 0, 1, 0x80 or 0xff (the mask's word
+/// also 0x100: its byte alone is read).
+#[test]
+fn extra_weapon_mod_flags_any() {
+    Diff::new(entry!(
+        0x0041_1e20,
+        cell_refs::extra_list::weapon_mod_flags_any(u32, u8) -> bool
+    ))
+    .family(&CELL_REFS)
+    .inputs(&[
+        Input::Of(&[0, 1, 0x80, 0xff]),
+        Input::Of(&[0, 1, 0x80, 0xff, 0x100]),
+    ])
+    .setup(|e, case| {
+        let x = junk(e, 0x18);
+        e.mem.set_u8(x + 0xc, case.word(0) as u8);
+        vec![x, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `BSExtraData::Compare`: the chain's head (or the loose one) against every extra data of the
+/// world and null.
+#[test]
+fn extra_compare() {
+    Diff::new(entry!(
+        0x0040_f700,
+        cell_refs::extra_list::extra_compare(u32, u32) -> bool
+    ))
+    .extra_list_case()
+    .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(&[0, 1, 2, 3, 4, 6, 7])])
+    .setup(|e, case| {
+        let w = extra_world(e, case.word(0));
+        vec![w.pick(0), w.pick(case.word(1))]
+    })
+    .run()
+    .assert_same();
+}
+
+/// A destructor of the world's list with the flags 0 to 3.
+trait ListDeleted {
+    fn list_deleted(self) -> Diff;
+}
+
+impl ListDeleted for Diff {
+    fn list_deleted(self) -> Diff {
+        self.extra_list_case()
+            .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(FLAGS_WORDS)])
+            .setup(|e, case| vec![extra_world(e, case.word(0)).list, case.word(1)])
+    }
+}
+
+#[test]
+fn extra_base_list_delete() {
+    Diff::new(entry!(
+        0x0040_f780,
+        cell_refs::extra_list::base_list_delete(u32, u32) -> u32
+    ))
+    .list_deleted()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_data_list_delete() {
+    Diff::new(entry!(
+        0x0041_0380,
+        cell_refs::extra_list::data_list_delete(u32, u32) -> u32
+    ))
+    .list_deleted()
+    .run()
+    .assert_same();
+}
+
+/// A function of the world's list alone.
+trait OnList {
+    fn on_list(self) -> Diff;
+}
+
+impl OnList for Diff {
+    fn on_list(self) -> Diff {
+        self.extra_list_case()
+            .inputs(&[Input::Of(EXTRA_SEEDS)])
+            .setup(|e, case| vec![extra_world(e, case.word(0)).list])
+    }
+}
+
+#[test]
+fn extra_base_list_drop() {
+    Diff::new(entry!(
+        0x0040_f7b0,
+        cell_refs::extra_list::base_list_drop(u32)
+    ))
+    .on_list()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_data_list_drop() {
+    Diff::new(entry!(
+        0x0041_03b0,
+        cell_refs::extra_list::data_list_drop(u32)
+    ))
+    .on_list()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_clear_last_extra_all() {
+    Diff::new(entry!(
+        0x0040_f860,
+        cell_refs::extra_list::clear_last_extra_all(u32)
+    ))
+    .on_list()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_items_in_list() {
+    Diff::new(entry!(
+        0x0040_fe20,
+        cell_refs::extra_list::items_in_list(u32) -> i32
+    ))
+    .on_list()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_drop_stale_cache() {
+    Diff::new(entry!(
+        0x0040_f900,
+        cell_refs::extra_list::drop_stale_cache()
+    ))
+    .extra_list_case()
+    .inputs(&[Input::Of(EXTRA_SEEDS)])
+    .setup(|e, case| {
+        extra_world(e, case.word(0));
+        Vec::new()
+    })
+    .run()
+    .assert_same();
+}
+
+/// The world's list and a type for the cache's `int` (`CACHE_KINDS`).
+trait ListAndCacheKind {
+    fn list_and_cache_kind(self) -> Diff;
+}
+
+impl ListAndCacheKind for Diff {
+    fn list_and_cache_kind(self) -> Diff {
+        self.extra_list_case()
+            .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(CACHE_KINDS)])
+            .setup(|e, case| vec![extra_world(e, case.word(0)).list, case.word(1)])
+    }
+}
+
+#[test]
+fn extra_clear_last_extra() {
+    Diff::new(entry!(
+        0x0040_f7d0,
+        cell_refs::extra_list::clear_last_extra(u32, i32)
+    ))
+    .list_and_cache_kind()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_cached_extra() {
+    Diff::new(entry!(
+        0x0040_f9e0,
+        cell_refs::extra_list::cached_extra(u32, i32) -> u32
+    ))
+    .list_and_cache_kind()
+    .run()
+    .assert_same();
+}
+
+/// The cache's store: the world's list (or none) and each extra data of the world (or none).
+#[test]
+fn extra_cache_extra() {
+    Diff::new(entry!(
+        0x0040_fa40,
+        cell_refs::extra_list::cache_extra(u32, u32)
+    ))
+    .extra_list_case()
+    .inputs(&[
+        Input::Of(EXTRA_SEEDS),
+        Input::Of(&[0, 1, 2, 6, 7]),
+        Input::Flag,
+    ])
+    .setup(|e, case| {
+        let w = extra_world(e, case.word(0));
+        let list = if case.word(2) == 0 { w.list } else { 0 };
+        vec![list, w.pick(case.word(1))]
+    })
+    .run()
+    .assert_same();
+}
+
+/// Whether a type goes to the head, under JIP's three states, for each type and a word with high
+/// bits.
+#[test]
+fn extra_added_at_head() {
+    Diff::new(entry!(
+        0x0040_f980,
+        cell_refs::extra_list::added_at_head(u32) -> bool
+    ))
+    .extra_list_case()
+    .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5]), Input::Of(KIND_WORDS)])
+    .setup(|e, case| {
+        extra_world(e, case.word(0));
+        vec![case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The world's list with a flag (`destroy`).
+trait ListAndFlag {
+    fn list_and_flag(self) -> Diff;
+}
+
+impl ListAndFlag for Diff {
+    fn list_and_flag(self) -> Diff {
+        self.extra_list_case()
+            .inputs(&[Input::Of(EXTRA_SEEDS), Input::Flag])
+            .setup(|e, case| vec![extra_world(e, case.word(0)).list, case.word(1)])
+    }
+}
+
+#[test]
+fn extra_remove_all() {
+    Diff::new(entry!(
+        0x0040_fae0,
+        cell_refs::extra_list::remove_all(u32, bool)
+    ))
+    .list_and_flag()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_remove_all_default() {
+    Diff::new(entry!(
+        0x0040_fcb0,
+        cell_refs::extra_list::remove_all_default(u32, bool)
+    ))
+    .list_and_flag()
+    .run()
+    .assert_same();
+}
+
+/// The world's list and every type of `EXTRA_KINDS`.
+trait ListAndKind {
+    fn list_and_kind(self) -> Diff;
+}
+
+impl ListAndKind for Diff {
+    fn list_and_kind(self) -> Diff {
+        self.extra_list_case()
+            .max_cases(EXTRA_SEEDS.len() * EXTRA_KINDS.len())
+            .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(EXTRA_KINDS)])
+            .setup(|e, case| vec![extra_world(e, case.word(0)).list, case.word(1)])
+    }
+}
+
+#[test]
+fn extra_has_extra_type() {
+    Diff::new(entry!(
+        0x0040_fe80,
+        cell_refs::extra_list::has_extra_type(u32, u8) -> bool
+    ))
+    .list_and_kind()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_remove_extra_of_type() {
+    Diff::new(entry!(
+        0x0041_0140,
+        cell_refs::extra_list::remove_extra_of_type(u32, u8)
+    ))
+    .list_and_kind()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_get_prev_extra_data() {
+    Diff::new(entry!(
+        0x0041_02d0,
+        cell_refs::extra_list::get_prev_extra_data(u32, u8) -> u32
+    ))
+    .list_and_kind()
+    .run()
+    .assert_same();
+}
+
+/// The bit of a type set or cleared: types in the bitmap, its last byte's (0xa7), past it, and a
+/// word with high bits.
+#[test]
+fn extra_set_extra_flag() {
+    Diff::new(entry!(
+        0x0040_fee0,
+        cell_refs::extra_list::set_extra_flag(u32, u8, bool)
+    ))
+    .extra_list_case()
+    .inputs(&[
+        Input::Of(EXTRA_SEEDS),
+        Input::Of(&[0x0c, 0x27, 0x92, 0xa0, 0xa7, 0xa8, 0xff, 0x127]),
+        Input::Flag,
+    ])
+    .setup(|e, case| {
+        vec![
+            extra_world(e, case.word(0)).list,
+            case.word(1),
+            case.word(2),
+        ]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `AddExtra` of a new extra data of each type into the world's list.
+#[test]
+fn extra_add_extra() {
+    Diff::new(entry!(
+        0x0040_ff60,
+        cell_refs::extra_list::add_extra(u32, u32) -> u32
+    ))
+    .extra_list_case()
+    .max_cases(EXTRA_SEEDS.len() * EXTRA_KINDS.len())
+    .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(EXTRA_KINDS)])
+    .setup(|e, case| {
+        let w = extra_world(e, case.word(0));
+        let vt = e.mem.u32(w.loose);
+        let extra = extra_data(e, vt, case.word(1), 0x20);
+        vec![w.list, extra]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `RemoveExtra` of each extra data of the world (the chain's first five, none, the loose one),
+/// deleted or detached.
+#[test]
+fn extra_remove_extra() {
+    Diff::new(entry!(
+        0x0041_0020,
+        cell_refs::extra_list::remove_extra(u32, u32, bool)
+    ))
+    .extra_list_case()
+    .inputs(&[
+        Input::Of(EXTRA_SEEDS),
+        Input::Of(&[0, 1, 2, 3, 4, 6, 7]),
+        Input::Flag,
+    ])
+    .setup(|e, case| {
+        let w = extra_world(e, case.word(0));
+        vec![w.list, w.pick(case.word(1)), case.word(2)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The list's worlds reach what its functions branch on, checked on the world itself: an empty
+/// chain and one of five, a head type behind another extra data, a type twice in a chain, a kept
+/// type before one `RemoveAllDefault` removes and after one, a type past the bitmap in a chain,
+/// every bitmap and cache state, the lock free and held, JIP's three states, and a loose extra data
+/// whose next is the head.
+#[test]
+fn the_extra_list_seeds_reach_every_branch() {
+    let keeps = |k: u32| {
+        matches!(
+            k,
+            0x2e | 0x38 | 0x4f | 0x52 | 0x54 | 0x58 | 0x65 | 0x7b | 0x84
+        )
+    };
+    let mut reached = std::collections::BTreeSet::<String>::new();
+    for &seed in EXTRA_SEEDS {
+        let mut e = Engine::new_untyped_for_test();
+        let w = extra_world(&mut e, seed);
+        let kinds: Vec<u32> = w.chain.iter().map(|&x| e.mem.u32(x + 4)).collect();
+        reached.insert(format!("a chain of {}", kinds.len()));
+        reached.insert(format!("bitmap {}", w.bitmap.max(2) - 2));
+        reached.insert(format!("cache state {}", w.cache_state));
+        reached.insert(format!("lock held {}", w.lock_held));
+        reached.insert(format!("JIP {}", w.jip));
+        if kinds
+            .iter()
+            .skip(1)
+            .any(|k| matches!(k, 0x0c | 0x0d | 0x0e | 0x15 | 0x2b))
+        {
+            reached.insert("a head type behind another".into());
+        }
+        if kinds
+            .iter()
+            .enumerate()
+            .any(|(i, k)| kinds[..i].contains(k))
+        {
+            reached.insert("a type twice".into());
+        }
+        if kinds.windows(2).any(|p| keeps(p[0]) && !keeps(p[1])) {
+            reached.insert("a removal after a kept one".into());
+        }
+        if kinds.windows(2).any(|p| !keeps(p[0]) && keeps(p[1])) {
+            reached.insert("a kept one after a removal".into());
+        }
+        if kinds.iter().any(|k| k >> 3 >= 0x15) {
+            reached.insert("a type past the bitmap".into());
+        }
+        if !w.chain.is_empty() && e.mem.u32(w.loose + 8) == w.chain[0] {
+            reached.insert("a loose one whose next is the head".into());
+        }
+    }
+    let mut wanted: Vec<String> = (0..=5).map(|n| format!("a chain of {n}")).collect();
+    wanted.extend((0..=3).map(|n| format!("bitmap {n}")));
+    wanted.extend((0..=3).map(|n| format!("cache state {n}")));
+    wanted.extend(["lock held true", "lock held false"].map(String::from));
+    wanted.extend((0..=2).map(|n| format!("JIP {n}")));
+    wanted.extend(
+        [
+            "a head type behind another",
+            "a type twice",
+            "a removal after a kept one",
+            "a kept one after a removal",
+            "a type past the bitmap",
+            "a loose one whose next is the head",
+        ]
+        .map(String::from),
+    );
+    for name in wanted {
+        assert!(
+            reached.contains(&name),
             "no seed reaches {name}: {reached:?}"
         );
     }
