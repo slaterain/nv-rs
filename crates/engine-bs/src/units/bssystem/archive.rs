@@ -207,6 +207,12 @@ const INFLATE_END: u32 = 0x00b4_5db0;
 /// `00afdbc0` (thiscall on a directory entry, one word): whether it holds
 /// the given name hash.
 const DIRECTORY_HAS: u32 = 0x00af_dbc0;
+/// `00afdc00` (thiscall on an archive's `BSArchive` header, one word): whether one of its
+/// directories holds the file entry ([`fn_00afdc00`]; typed in the archives family).
+const ARCHIVE_HOLDS: u32 = 0x00af_dc00;
+/// `00af6910` (cdecl, two words): the listed archive that holds a file entry ([`fn_00af6910`];
+/// typed in the archives family).
+const ENTRY_OWNER: u32 = 0x00af_6910;
 /// `00afcfe0` (thiscall on a hash, no words): a byte of it `00afcf00`
 /// compares.
 const HASH_FLAG: u32 = 0x00af_cfe0;
@@ -2428,7 +2434,11 @@ pub fn fn_00af6910(e: &mut Engine, hash: Ptr, types: u32) -> u32 {
         }
         if archive != 0
             && (type_matches(e, archive, types) || types == ANY_ARCHIVE_TYPE)
-            && fn_00afdc00(e, Ptr::new(archive + Archive::iTag.off), hash.addr())
+            && e.call(
+                ARCHIVE_HOLDS,
+                &args![archive + Archive::iTag.off, hash.addr()],
+            )
+            .bool()
         {
             e.call(LEAVE_CRITICAL_SECTION, &args![ARCHIVE_LIST_LOCK]);
             release(e, archive);
@@ -2450,7 +2460,11 @@ pub fn fn_00af6910(e: &mut Engine, hash: Ptr, types: u32) -> u32 {
         }
         if archive != 0
             && !type_matches(e, archive, types)
-            && fn_00afdc00(e, Ptr::new(archive + Archive::iTag.off), hash.addr())
+            && e.call(
+                ARCHIVE_HOLDS,
+                &args![archive + Archive::iTag.off, hash.addr()],
+            )
+            .bool()
         {
             e.call(LEAVE_CRITICAL_SECTION, &args![ARCHIVE_LIST_LOCK]);
             release(e, archive);
@@ -2476,7 +2490,7 @@ pub fn fn_00af6910(e: &mut Engine, hash: Ptr, types: u32) -> u32 {
 pub fn fn_00af6340(e: &mut Engine, _unused_0: u32, entry: Ptr, passed: u32, path: u32) -> u32 {
     let _unread = e.mem.u32(entry.addr() + 0xc) & 0x8000_0000 != 0;
     let mut made = 0u32;
-    let archive = fn_00af6910(e, entry, ANY_ARCHIVE_TYPE);
+    let archive = e.call(ENTRY_OWNER, &args![entry, ANY_ARCHIVE_TYPE]).u32();
     if archive != 0 {
         add_ref(e, archive);
     }
