@@ -764,6 +764,9 @@ impl Common for Diff {
 /// What [`Common`]'s settings share: the leaves, what runs by address, the limits.
 fn shared(d: Diff) -> Diff {
     d.family(&leaf::LEAVES)
+        // The pass map's lookup, the dispatch family's, which `AddPass` calls: the stand-in here
+        // unless a test names that family (its own tests run it).
+        .goes_by_address(&[0x0085_3130])
         // The plain geometry pass (pass types 0xfc, 0xfd) and the renderer's skinned test are the
         // render family's (their own tests).
         // The draw family's partition draw, skinned packer and strip lists, which the batch renderer's

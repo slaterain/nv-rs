@@ -55,6 +55,20 @@ const FLAG_FIRST_PERSON: u32 = 0x40;
 /// The node pool's lock (`0040fbf0`, `thiscall(lock, 0)`).
 const LOCK_ENTER: u32 = 0x0040_fbf0;
 
+/// The renderer's `AddPass` (slot 0x8c): [`batch::add_to_group`] directly when the slot holds it (the
+/// batch renderer's own), else through the slot.
+fn add_pass(e: &mut Engine, renderer: Ptr<BSBatchRenderer>, pass: Ptr<RenderPass>, pass_type: u32) {
+    if crate::slot_target(e, renderer.addr(), SLOT_ADD_PASS) == 0x00b9_9c90 {
+        typed_call!(
+            FAMILY,
+            0x00b9_9c90,
+            batch::add_to_group(e, renderer, pass, pass_type)
+        );
+    } else {
+        e.vcall(renderer.addr(), SLOT_ADD_PASS, &args![pass, pass_type]);
+    }
+}
+
 /// The thread's batch renderer, by the thread block's index with no modulo.
 #[inline(always)]
 fn thread_renderer(e: &mut Engine, accumulator: Ptr<BSShaderAccumulator>) -> Ptr<BSBatchRenderer> {
@@ -240,7 +254,7 @@ pub fn process_commands(
             Ptr::<RenderPass>::new(e.global::<u32>(base.wrapping_add(index.wrapping_mul(4))));
         if accumulate {
             let renderer = thread_renderer(e, accumulator);
-            e.vcall(renderer.addr(), SLOT_ADD_PASS, &args![pass, 0u32]);
+            add_pass(e, renderer, pass, 0);
         } else {
             let shader = e.call(GET_SHADER, &args![1u32]).u32();
             let pass_enum = u32::from(e.get(pass, RenderPass::usPassEnum));
@@ -312,11 +326,7 @@ fn register_by_kind(
         8 | 9 | 11..=13 => {}
         _ => {
             let renderer = thread_renderer(e, accumulator);
-            e.vcall(
-                renderer.addr(),
-                SLOT_ADD_PASS,
-                &args![pass, u32::from(pass_enum)],
-            );
+            add_pass(e, renderer, pass, u32::from(pass_enum));
         }
     }
 }

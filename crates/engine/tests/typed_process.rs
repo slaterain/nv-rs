@@ -206,6 +206,7 @@ impl Common for Diff {
                 0x0067_f390,
                 0x0093_44a0,
                 0x008a_6650,
+                0x0088_15a0,
             ])
             // The translation's 64-bit multiply and divide of the time budget, which the typed pass
             // computes natively.
@@ -883,6 +884,13 @@ fn forget_world(e: &mut Engine, pattern: u32, answers: u32, which: u32) -> (u32,
         decoy,
         (s_answer, p_answer, pattern % 3, pattern >> 2),
     );
+    // With pattern bit 32 the lead's slot 0x2c8 is the actor classes' own (`008815a0`): the
+    // clean-up's current-target test takes its typed branch (the call itself by address here, to
+    // the translation; its direct run is in `typed_ai_queries`).
+    if pattern & 32 != 0 {
+        let vt = e.mem.u32(lead);
+        e.mem.set_u32(vt + 0x2c8, 0x0088_15a0);
+    }
     // The lead's extra data: followers (a list of the follower and a non-actor), head track, package
     // data (an object whose slots log), package target.
     let non_actor = forget_object(e, 0);
@@ -965,7 +973,7 @@ fn forget_world(e: &mut Engine, pattern: u32, answers: u32, which: u32) -> (u32,
 /// target's slots, so it is never null).
 fn forget_inputs() -> Vec<Input> {
     vec![
-        Input::Of(&[0, 1, 2, 3, 5, 6, 7, 9, 12, 15, 17, 20, 26, 31]),
+        Input::Of(&[0, 1, 2, 3, 5, 6, 7, 9, 12, 15, 17, 20, 26, 31, 33, 46]),
         Input::Of(&[0, 0x5a5a, 0xffff, 0x1234, 0x8001]),
         Input::Of(&[0, 1]),
     ]
@@ -987,7 +995,7 @@ fn process_null_out_target_ref() {
     // The extra data cache's memset wrapper, a C runtime family member: translated on both sides.
     .goes_by_address(&[0x0040_3d30])
     .ignore_calls(FORGET_IN_PLACE)
-    .max_cases(280)
+    .max_cases(320)
     .inputs(&inputs)
     .setup(|e, case| {
         let (lists, target) = forget_world(e, case.word(0), case.word(1), case.word(2));
@@ -1008,7 +1016,7 @@ fn process_reference_destructed() {
     .ignore_calls(FORGET_IN_PLACE)
     // The actors close to the player, which the translation calls as a Rust function.
     .translation_calls_plainly(&[0x0096_e6f0])
-    .max_cases(140)
+    .max_cases(160)
     .inputs(&forget_inputs())
     .setup(|e, case| {
         let (lists, target) = forget_world(e, case.word(0), case.word(1), case.word(2));
