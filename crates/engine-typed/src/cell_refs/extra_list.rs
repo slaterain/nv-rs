@@ -341,7 +341,8 @@ pub fn extra_data_drop(e: &mut Engine, this: u32) {
 }
 
 // Typed from 00403550
-/// An extra data's next (+8) set (`thiscall(this, next)`).
+/// The word at +8 stored (`thiscall(this, next)`): a folded body much code calls (AI packages, the
+/// inventory, Havok among them), which this unit uses for an extra data's next.
 pub fn set_next(e: &mut Engine, this: u32, next: u32) {
     e.mem.set_u32(this.wrapping_add(EXTRA_NEXT), next);
 }
@@ -612,8 +613,9 @@ pub fn remove_extra_of_type(e: &mut Engine, this: u32, kind: u8) {
 
 // Typed from 004102d0
 /// `BaseExtraList::GetPrevExtraData` (Xbox PDB, `thiscall(list, type)`): the extra data right
-/// before the first of the type, under the lock; null when that one is the head, when the bitmap
-/// says there is none, or when the walk runs off the chain.
+/// before the first of the type, under the lock; null when that one is the head or when the bitmap
+/// says there is none. When the bitmap has the bit but the chain holds none of the type, the walk
+/// ends on the chain's last extra data and answers it (null for an empty chain).
 pub fn get_prev_extra_data(e: &mut Engine, this: u32, kind: u8) -> u32 {
     previous_of_kind(e, this, kind)
 }
