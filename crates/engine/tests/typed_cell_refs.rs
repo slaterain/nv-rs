@@ -3,16 +3,16 @@
 //!
 //! The world of `0054bcf0`: a cell whose list of references is built from a seed: none to seven
 //! references (now and then a null item), each with a base form (none, one of the two marker forms,
-//! or an ordinary one of type 0x23, 0x1e or 0x15 with or without its flag `0x40000000`), form flags
-//! `0x800` / `0x20` or none, an extra list whose `ScriptLocals` are absent, fresh or already built, a
-//! 3D or none, and one of two vtables: `TESObjectREFR`'s own slots (the exe functions at 0x100, 0x224
-//! and 0x1d0, so the typed side's direct branches run) or stand-ins that answer words kept in the
-//! reference. The seed also sets the game loader's flag, whether `TES` accepts the cell and whether
-//! the cell has a 3D.
+//! or an ordinary one of type 0x23, 0x2a, 0x1e or 0x15 with or without its flag `0x40000000`), form
+//! flags `0x800` / `0x20` or none, an extra list whose `ScriptLocals` are absent, fresh or already
+//! built, a 3D or none, and one of two vtables: `TESObjectREFR`'s own slots (the exe functions at
+//! 0x100, 0x224 and 0x1d0, so the typed side's direct branches run) or stand-ins that answer words
+//! kept in the reference. The seed also sets the game loader's word (0 to 4, and 6: its bit 1 is
+//! the flag), whether `TES` accepts the cell and whether the cell has a 3D.
 //!
-//! What stands in: the work the pass hands on (`Load3D`, the cell's scripts and the steps after them,
-//! the lock, `TES`'s test and priority, `SetActionFlag`, the cast, the process lists, the model
-//! loader's queue, the attach, the cell's state) and `Script::InitActionList`'s callees.
+//! What stands in: the work the pass hands on (`Load3D`, the cell's scripts and the steps after
+//! them, the lock, `TES`'s test and priority, `SetActionFlag`, the cast, the process lists, the
+//! model loader's queue, the attach, the cell's state) and `Script::InitActionList`'s callees.
 
 use engine as _;
 use engine_core::prelude::*;
@@ -84,9 +84,9 @@ fn answer_of<const AT: u32>(e: &mut Engine, a: &[u32]) -> Ret {
     ret(e.mem.u32(a[0] + AT))
 }
 
-/// The doubles that count their calls: double `K` counts at `COUNTS + 4 * K` and keeps the last word
-/// it was handed (its first past `this` when it has one) at `COUNTS + 0x40 + 4 * K`, so what it was
-/// handed shows in memory as well as in the call log.
+/// The doubles that count their calls: double `K` counts at `COUNTS + 4 * K` and keeps the last
+/// word it was handed (its first past `this` when it has one) at `COUNTS + 0x40 + 4 * K`, so what
+/// it was handed shows in memory as well as in the call log.
 const COUNTS: u32 = CONTROL + 0x100;
 const QUEUED: u32 = 0;
 const ATTACHED: u32 = 1;
@@ -200,7 +200,7 @@ fn reference(e: &mut Engine, d: &mut Draw, vtables: [u32; 2], markers: [u32; 2])
         1 => markers[0],
         2 => markers[1],
         _ => {
-            let kind = [0x23, 0x23, 0x1e, 0x15][d.next(4) as usize];
+            let kind = [0x23, 0x23, 0x2a, 0x1e, 0x15][d.next(5) as usize];
             base_form(e, kind, [0, 0x4000_0000][d.next(2) as usize])
         }
     };
@@ -241,7 +241,7 @@ fn world(e: &mut Engine, seed: u32) -> u32 {
     e.mem.set_u32(PRIORITY, 0x30 + d.next(4));
     let loader = e.mem.alloc(0x250);
     e.mem
-        .set_u32(loader + 0x244, [0, 0, 1, 2, 3][d.next(5) as usize]);
+        .set_u32(loader + 0x244, [0, 0, 1, 2, 3, 4, 6][d.next(7) as usize]);
     e.set_global(GAME_LOADER_POINTER, loader);
     e.set_global(TES_POINTER, 0x7000u32);
     e.set_global(SAVE_GAME_POINTER, 0x7100u32);
@@ -303,14 +303,16 @@ fn references_after_load() {
     .assert_same();
 }
 
-/// The worlds the seeds make reach every branch the pass has, checked on the translation (so a change
-/// to the generator that loses one shows here, not as a weaker comparison): a cell `TES` accepts,
-/// references queued, attached, given their action list and flag, actors' and the other kind's steps,
-/// and a list whose last reference is brought up in both walks.
+/// The worlds the seeds make reach every branch the pass has, checked on the translation (so a
+/// change to the generator that loses one shows here, not as a weaker comparison): a cell `TES`
+/// accepts, references queued, attached, given their action list and flag, actors' and the other
+/// kind's steps, a list whose last reference is brought up in both walks, a queued reference with a
+/// 3D whose base form type is above 0x23 with the flag `0x40000000` (attached: only type 0x23 keeps
+/// it out), and a game loader word of 4 or more with its bit 1 clear (the action lists set up).
 #[test]
 fn the_seeds_reach_every_branch() {
     let mut reached = [0u32; 6];
-    let (mut accepted, mut twice) = (0, 0);
+    let (mut accepted, mut twice, mut above_23, mut high_word) = (0, 0, 0, 0);
     for &seed in SEEDS {
         let mut e = Engine::new_untyped_for_test();
         let cell = world(&mut e, seed);
@@ -334,8 +336,29 @@ fn the_seeds_reach_every_branch() {
             .filter(|i| e.mem.u32(QUEUE_LOG + 4 * i) == last)
             .count();
         twice += u32::from(last != 0 && times == 2);
+        for i in 0..queued {
+            let item = e.mem.u32(QUEUE_LOG + 4 * i);
+            let base = e.mem.u32(item + 0x20);
+            above_23 += u32::from(
+                base != 0
+                    && e.mem.u8(base + 4) > 0x23
+                    && e.mem.u32(base + 0x48) & 0x4000_0000 != 0
+                    && e.mem.u32(item + ANSWER_3D) != 0,
+            );
+        }
+        let word = e.mem.u32(e.global::<u32>(GAME_LOADER_POINTER) + 0x244);
+        high_word +=
+            u32::from(word >= 4 && word & 2 == 0 && e.mem.u32(COUNTS + 4 * ACTION_FLAGS) > 0);
     }
     assert!(accepted > 0, "no seed has TES accept the cell");
+    assert!(
+        above_23 > 0,
+        "no seed queues a type above 0x23 with the flag and a 3D"
+    );
+    assert!(
+        high_word > 0,
+        "no seed has a game loader word of 4 or more with bit 1 clear"
+    );
     assert!(
         twice > 0,
         "no seed ends its list with a reference queued in both walks"
