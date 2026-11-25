@@ -215,8 +215,10 @@ fn stand_ins_all(e: &mut Engine, render: bool, dispatch: bool, draw: bool) {
             ret(0)
         });
     }
-    // The shadow-pass test: odd types.
-    e.register(0x00b6_30f0, |_, a| ret(a[0] & 1));
+    // The shadow-pass test (the draw family's: real where a test names it): odd types.
+    if !draw {
+        e.register(0x00b6_30f0, |_, a| ret(a[0] & 1));
+    }
     if !render {
         e.register(0x00b7_dde0, |_, _| ret(0));
     }
@@ -805,6 +807,9 @@ fn shared(d: Diff) -> Diff {
         .goes_by_address(DRAW_LISTS)
         // draw_f's helpers: off until its gate, so by address, as in play; run in typed_draw.
         .goes_by_address(DRAW_F_HELPERS)
+        // The draw family's shadow-pass test and a lighting property's fade, the dispatch family's node pool
+        // lock and the CRT's `_isnan`: by address (to the stand-ins here) unless a test names their family.
+        .goes_by_address(&[0x00b6_30f0, 0x00b6_6b80, 0x0040_fbf0, 0x00ec_75b1])
         .max_calls(MAX_CALLS)
         .max_cases(160)
 }
@@ -6123,6 +6128,8 @@ fn render_next_alpha() {
         dalpha::render_next_alpha(Ptr<_>, u32, u32, u32, f32)
     ))
     .draw_common_at(0x00b9_af60)
+    // `_isnan` of the current distance (the CRT family's): direct.
+    .family(&crt::CRT)
     .inputs(&[
         Input::Of(TWO_WAYS),
         Input::Of(&[0, 1]),

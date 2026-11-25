@@ -18,10 +18,9 @@ const UP: u32 = 0x0120_0550;
 const LIGHT_DIRECTION: u32 = 0x0120_0510;
 const LIGHT_AMBIENT: u32 = 0x0120_0520;
 const LIGHT_COLOUR: u32 = 0x0120_0570;
-/// What it calls by address: whether a pass is a shadow pass (`00b630f0`, `cdecl(pass)`) and the base
-/// `SetupGeometry` (`00e807d0`). A property's active non-shadow lights (`00b707d0`), the point lights' set-up
-/// (`00baa720`) and the shadow pass's (`00baa850`) are this family's.
-const IS_SHADOW_PASS: u32 = 0x00b6_30f0;
+/// What it calls by address: the base `SetupGeometry` (`00e807d0`). Whether a pass is a shadow pass (`00b630f0`), a
+/// property's active non-shadow lights (`00b707d0`), the point lights' set-up (`00baa720`) and the shadow pass's
+/// (`00baa850`) are this family's.
 const BASE_SETUP_GEOMETRY: u32 = 0x00e8_07d0;
 
 /// The rotation's entries and where the matrix keeps each scaled one (the first entry is stored first,
@@ -141,7 +140,7 @@ pub fn setup_geometry(
             own::set_shader_global(e, LIGHT_DIRECTION + 0xc, ONE);
         }
         let pass = e.global::<u32>(frame + 0x40);
-        if e.call(IS_SHADOW_PASS, &args![pass]).bool() {
+        if super::lists::shadow_pass(e, pass) {
             typed_call!(
                 super::FAMILY,
                 0x00ba_a850,
@@ -222,7 +221,7 @@ pub fn update_point_lights(
         }
         thunks::call_vec3_transform_coord(e, transformed, position, matrix);
         let mut range = f32::from_bits(packet::light_value_word(e, light, 0xe0));
-        if !e.call(IS_SHADOW_PASS, &args![pass]).bool() {
+        if !super::lists::shadow_pass(e, pass) {
             range /= scale;
         }
         // own: the targets are written through set_shader_global
