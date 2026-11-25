@@ -271,6 +271,19 @@ pub fn add(e: &mut Engine, this: Ptr<LockFreeMap>, key: u32, value: u32, replace
     added.to_le_bytes()[0]
 }
 
+// Typed from 009062e0
+/// The map's virtual removal (slot +0x14 of the counted maps; `thiscall(key)`, the removed byte):
+/// under the map's lock, the current thread's interface removes the key (`00528bb0`). The model
+/// loader's word that a reference's task is over (`004409e0`) is this on its map of queued
+/// references.
+pub fn remove(e: &mut Engine, this: Ptr<LockFreeMap>, key: u32) -> u8 {
+    e.call(LOCK_ENTER, &args![lock(this), 0u32]);
+    let face = interface(e, this);
+    let removed = typed_call!(FAMILY, 0x0052_8bb0, iface::remove(e, face, key));
+    e.call(LOCK_LEAVE, &args![lock(this)]);
+    u8::from(removed)
+}
+
 /// The line `0044c480` names in its scope.
 const CLEAR_LINE: u32 = 0x42c;
 

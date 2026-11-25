@@ -217,6 +217,16 @@ const TES_LOAD_REFERENCE: u32 = 0x0045_1ef0;
 /// are called on the parent cell before and after the attach.
 const CELL_ENTER_ATTACH: u32 = 0x0054_1ac0;
 const CELL_LEAVE_ATTACH: u32 = 0x0054_1ae0;
+/// The functions of this unit the exe calls by address at the end of a
+/// reference's task: the loader's word that the reference is done
+/// ([`fn_004409e0`]), the cell's two counters going down ([`fn_00440a10`],
+/// [`fn_00440a50`]) and the attaches the character's and the player's reach
+/// ([`queued_reference_attach`], [`fn_00441800`]).
+const LOADER_REFERENCE_DONE: u32 = 0x0044_09e0;
+const CELL_QUEUED_COUNT_DOWN: u32 = 0x0044_0a10;
+const CELL_CRITICAL_COUNT_DOWN: u32 = 0x0044_0a50;
+const QUEUED_REFERENCE_ATTACH: u32 = 0x0044_0ba0;
+const QUEUED_CHARACTER_ATTACH: u32 = 0x0044_1800;
 /// `TESObjectTREE::BuildDistant3D` (Xbox PDB, `0051cba0`, `__thiscall(0)`).
 const BUILD_DISTANT_3D: u32 = 0x0051_cba0;
 /// `TESModel::GetDistantModelName_ov2` (Xbox PDB, `00489190`),
@@ -1041,14 +1051,14 @@ pub fn queued_reference_cancel(
         e.vcall(reference.addr(), 0x1cc, &args![0u32, 0u32]);
     }
     let loader = e.global::<u32>(MODEL_LOADER);
-    fn_004409e0(e, Ptr::new(loader), reference);
+    e.call(LOADER_REFERENCE_DONE, &args![loader, reference]);
     let cell = e.call(REFERENCE_CELL, &args![reference]).u32();
     if cell != 0 {
         let cell = e.call(REFERENCE_CELL, &args![reference]).u32();
-        fn_00440a10(e, Ptr::new(cell));
+        e.call(CELL_QUEUED_COUNT_DOWN, &args![cell]);
         if e.call(REFERENCE_IS_3D_CRITICAL, &args![reference]).bool() {
             let cell = e.call(REFERENCE_CELL, &args![reference]).u32();
-            fn_00440a50(e, Ptr::new(cell));
+            e.call(CELL_CRITICAL_COUNT_DOWN, &args![cell]);
         }
     }
 }
@@ -1056,8 +1066,9 @@ pub fn queued_reference_cancel(
 // Translated from 004409e0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ModelLoader` method (no name in the engine map) on the loader at `this`:
 /// calls the virtual function `0x14` of the object at `this + 8` with
-/// `reference`. What that slot does is not confirmed; the reference tasks
-/// call it when they are over.
+/// `reference`: the loader's map of queued references, whose vtable
+/// (`0101747c`) holds the map's removal of a key there (`009062e0`). The
+/// reference tasks call it when they are over.
 pub fn fn_004409e0(e: &mut Engine, this: Ptr, reference: Ptr) {
     let object = e.mem.u32(this.addr() + 8);
     e.vcall(object, 0x14, &args![reference]);
@@ -1128,9 +1139,9 @@ pub fn queued_reference_background_clone(e: &mut Engine, this: Ptr<QueuedReferen
 }
 
 // Translated from 00440ba0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `QueuedReference::Attach` (Xbox PDB): nothing happens for a task in state
-/// 6. Otherwise, inside the memory context of the task (source line
-/// `0x804`), a reference with form flag `0x800` or `0x20` ([`fn_00440da0`],
+/// `QueuedReference::Attach` (Xbox PDB): inside the memory context of the
+/// task (source line `0x804`), nothing happens for a task in state 6.
+/// Otherwise a reference with form flag `0x800` or `0x20` ([`fn_00440da0`],
 /// [`fn_00440d80`]) is left alone; any other reference whose parent cell is
 /// loaded (`TES::IsCellLoaded`) gets its addon nodes loaded
 /// (`ModelLoader::LoadAddonNodes` with the model's root node, when the task
@@ -1139,24 +1150,31 @@ pub fn queued_reference_background_clone(e: &mut Engine, this: Ptr<QueuedReferen
 /// reference ([`fn_004409e0`]), and the parent cell's queued-reference count
 /// is lowered (and its critical count, for a reference whose 3D is critical);
 /// `00541ac0` is called on the parent cell at the start and `00541ae0` at the
-/// end.
+/// end. The task's reference is read again for every call that takes it, as
+/// the exe reads it.
 ///
 /// The exception-unwinding frame is not translated.
 pub fn queued_reference_attach(e: &mut Engine, this: Ptr<QueuedReference>) {
     let context = e.get(this, QueuedReference::eContext);
+    let reference = |e: &Engine| e.get(this, QueuedReference::pRef);
     in_context(e, context, ATTACH_SOURCE_LINE, |e| {
         if e.call(TASK_STATE_IS_6, &args![this]).bool() {
             return;
         }
-        let reference = e.get(this, QueuedReference::pRef);
-        let skip = fn_00440da0(e, reference.cast()) || fn_00440d80(e, reference.cast());
-        let cell = e.call(REFERENCE_CELL, &args![reference]).u32();
+        let skip = {
+            let first = reference(e);
+            fn_00440da0(e, first.cast()) || {
+                let second = reference(e);
+                fn_00440d80(e, second.cast())
+            }
+        };
+        let cell = e.call(REFERENCE_CELL, &args![reference(e)]).u32();
         if cell != 0 {
-            let cell = e.call(REFERENCE_CELL, &args![reference]).u32();
+            let cell = e.call(REFERENCE_CELL, &args![reference(e)]).u32();
             e.call(CELL_ENTER_ATTACH, &args![cell]);
         }
         if !skip {
-            let cell = e.call(REFERENCE_CELL, &args![reference]).u32();
+            let cell = e.call(REFERENCE_CELL, &args![reference(e)]).u32();
             let tes = e.global::<u32>(TES_GLOBAL);
             if e.call(TES_IS_CELL_LOADED, &args![tes, cell, 0u32]).bool() {
                 let model_slot = this.byte_add(QueuedReference::spModel.off);
@@ -1166,25 +1184,30 @@ pub fn queued_reference_attach(e: &mut Engine, this: Ptr<QueuedReference>) {
                     let loader = e.global::<u32>(MODEL_LOADER);
                     e.call(
                         MODEL_LOADER_LOAD_ADDON_NODES,
-                        &args![loader, reference, node],
+                        &args![loader, reference(e), node],
                     );
                 }
-                let cell = e.call(REFERENCE_CELL, &args![reference]).u32();
+                let cell = e.call(REFERENCE_CELL, &args![reference(e)]).u32();
                 let tes = e.global::<u32>(TES_GLOBAL);
-                e.call(TES_LOAD_REFERENCE, &args![tes, reference, cell, this, 0u32]);
+                e.call(
+                    TES_LOAD_REFERENCE,
+                    &args![tes, reference(e), cell, this, 0u32],
+                );
             }
         }
         let loader = e.global::<u32>(MODEL_LOADER);
-        fn_004409e0(e, Ptr::new(loader), reference);
-        let cell = e.call(REFERENCE_CELL, &args![reference]).u32();
+        e.call(LOADER_REFERENCE_DONE, &args![loader, reference(e)]);
+        let cell = e.call(REFERENCE_CELL, &args![reference(e)]).u32();
         if cell != 0 {
-            let cell = e.call(REFERENCE_CELL, &args![reference]).u32();
-            fn_00440a10(e, Ptr::new(cell));
-            if e.call(REFERENCE_IS_3D_CRITICAL, &args![reference]).bool() {
-                let cell = e.call(REFERENCE_CELL, &args![reference]).u32();
-                fn_00440a50(e, Ptr::new(cell));
+            let cell = e.call(REFERENCE_CELL, &args![reference(e)]).u32();
+            e.call(CELL_QUEUED_COUNT_DOWN, &args![cell]);
+            if e.call(REFERENCE_IS_3D_CRITICAL, &args![reference(e)])
+                .bool()
+            {
+                let cell = e.call(REFERENCE_CELL, &args![reference(e)]).u32();
+                e.call(CELL_CRITICAL_COUNT_DOWN, &args![cell]);
             }
-            let cell = e.call(REFERENCE_CELL, &args![reference]).u32();
+            let cell = e.call(REFERENCE_CELL, &args![reference(e)]).u32();
             e.call(CELL_LEAVE_ATTACH, &args![cell]);
         }
     });
@@ -1655,7 +1678,7 @@ pub fn fn_004417c0(e: &mut Engine) {
 /// `QueuedCharacter::Attach` (no name in the engine map): the
 /// `QueuedReference::Attach` ([`queued_reference_attach`]).
 pub fn fn_00441800(e: &mut Engine, this: Ptr<QueuedReference>) {
-    queued_reference_attach(e, this);
+    e.call(QUEUED_REFERENCE_ATTACH, &args![this]);
 }
 
 // Translated from 00441820 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1858,7 +1881,7 @@ pub fn queued_player_queue_models(e: &mut Engine, this: Ptr<QueuedCharacter>) {
 // Translated from 00441c30 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `QueuedPlayer::Attach` (no name in the engine map): [`fn_00441800`].
 pub fn fn_00441c30(e: &mut Engine, this: Ptr<QueuedReference>) {
-    fn_00441800(e, this);
+    e.call(QUEUED_CHARACTER_ATTACH, &args![this]);
 }
 
 // Translated from 00441c50 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2606,18 +2629,19 @@ const REFERENCE_ITERATOR_DESTRUCT: u32 = 0x0044_99c0;
 
 /// The reference task constructors `QueueReference` picks from, each
 /// `__thiscall(reference, priority)` (the player's takes the priority only):
-/// `00441b20` (player), `00440e50` (type `0x25`), `00441440` (type `0x2a`),
-/// `00441920` (type `0x2b`) and `0043fd40` (any other).
+/// `00441b20` (player), `00440e50` (type `0x25`, a tree), `00441440` (type `0x2a`, an NPC:
+/// `QueuedCharacter`), `00441920` (type `0x2b`, a creature: `QueuedCreature`) and `0043fd40`
+/// (any other).
 const REFERENCE_TASK_PLAYER: u32 = 0x0044_1b20;
 const REFERENCE_TASK_TREE: u32 = 0x0044_0e50;
-const REFERENCE_TASK_CREATURE: u32 = 0x0044_1440;
-const REFERENCE_TASK_ACTOR: u32 = 0x0044_1920;
+const REFERENCE_TASK_CHARACTER: u32 = 0x0044_1440;
+const REFERENCE_TASK_CREATURE: u32 = 0x0044_1920;
 const REFERENCE_TASK_DEFAULT: u32 = 0x0043_fd40;
 /// Source lines of the memory-context guards of `QueueReference`.
 const QUEUE_REFERENCE_SOURCE_LINE: u32 = 0xc4e;
 const QUEUE_REFERENCE_PLAYER_SOURCE_LINE: u32 = 0xc53;
-const QUEUE_REFERENCE_CREATURE_SOURCE_LINE: u32 = 0xc6b;
-const QUEUE_REFERENCE_ACTOR_SOURCE_LINE: u32 = 0xc72;
+const QUEUE_REFERENCE_NPC_SOURCE_LINE: u32 = 0xc6b;
+const QUEUE_REFERENCE_CREATURE_SOURCE_LINE: u32 = 0xc72;
 /// The cell's two counters `QueueReference` adds to (`00444cc0`, `00444ce0`, `thiscall(cell)`).
 const CELL_COUNT_QUEUED: u32 = 0x0044_4cc0;
 const CELL_COUNT_CRITICAL: u32 = 0x0044_4ce0;
@@ -3572,16 +3596,16 @@ pub fn model_loader_queue_reference(
                         });
                         assign(e, object);
                     }
-                    0x2a => in_context(e, 0x32, QUEUE_REFERENCE_CREATURE_SOURCE_LINE, |e| {
+                    0x2a => in_context(e, 0x32, QUEUE_REFERENCE_NPC_SOURCE_LINE, |e| {
                         let object = construct_object(e, 0x48, |e, block| {
-                            e.call(REFERENCE_TASK_CREATURE, &args![block, reference, priority])
+                            e.call(REFERENCE_TASK_CHARACTER, &args![block, reference, priority])
                                 .u32()
                         });
                         assign(e, object);
                     }),
-                    0x2b => in_context(e, 0x32, QUEUE_REFERENCE_ACTOR_SOURCE_LINE, |e| {
+                    0x2b => in_context(e, 0x32, QUEUE_REFERENCE_CREATURE_SOURCE_LINE, |e| {
                         let object = construct_object(e, 0x40, |e, block| {
-                            e.call(REFERENCE_TASK_ACTOR, &args![block, reference, priority])
+                            e.call(REFERENCE_TASK_CREATURE, &args![block, reference, priority])
                                 .u32()
                         });
                         assign(e, object);
@@ -8558,8 +8582,8 @@ mod tests {
         for constructor in [
             REFERENCE_TASK_PLAYER,
             REFERENCE_TASK_TREE,
+            REFERENCE_TASK_CHARACTER,
             REFERENCE_TASK_CREATURE,
-            REFERENCE_TASK_ACTOR,
             REFERENCE_TASK_DEFAULT,
         ] {
             q_constructor(&mut e, constructor, task);
@@ -8650,8 +8674,8 @@ mod tests {
     fn queue_reference_picks_the_task_by_the_type_of_the_base_form() {
         for (kind, constructor, context) in [
             (0x25u8, REFERENCE_TASK_TREE, None),
-            (0x2a, REFERENCE_TASK_CREATURE, Some((0x32u32, 0xc6bu32))),
-            (0x2b, REFERENCE_TASK_ACTOR, Some((0x32, 0xc72))),
+            (0x2a, REFERENCE_TASK_CHARACTER, Some((0x32u32, 0xc6bu32))),
+            (0x2b, REFERENCE_TASK_CREATURE, Some((0x32, 0xc72))),
             (0x01, REFERENCE_TASK_DEFAULT, None),
         ] {
             let mut q = queue_reference_setup(kind, None, true);

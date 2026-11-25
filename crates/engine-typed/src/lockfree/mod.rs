@@ -129,6 +129,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
             map::find(Ptr<LockFreeMap>, u32, Ptr<Holder>) -> u8
         ),
         entry!(0x0052_8b60, map::add(Ptr<LockFreeMap>, u32, u32, u8) -> u8),
+        entry!(0x0090_62e0, map::remove(Ptr<LockFreeMap>, u32) -> u8),
         entry!(
             0x0044_d070,
             iface::insert_in_bucket(Ptr<MapInterface>, u32, u32, Ptr<Holder>, u8) -> bool

@@ -28,10 +28,16 @@
 //! it by address as the game's other callers do, reaches it through the registration. The small
 //! functions it calls on its task pointer and the cell are typed there too.
 //!
+//! The finish of each task on main, once its files are in (`QueuedReference::PostProcess`,
+//! `0043fdf0`, and the attaches it reaches: `00440ba0`, `00441800`, `00441c30`), is typed in
+//! [`attach`] with `TES::IsCellLoaded`, the loader's word that a reference is done and the cell's
+//! two counters going down.
+//!
 //! Stage 1: the objects stay in guest memory where the game made them. **Integers only** (the one
 //! float, the origin's 0.0 for the vector constructor, is a constant word), so the row is
 //! [`Threads::Both`].
 
+pub mod attach;
 pub mod queue;
 
 use crate::{dispatch, draw, slot_target};
@@ -68,6 +74,14 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0044_4ce0, queue::count_critical(u32)),
         entry!(0x0057_2350, queue::is_3d_critical(u32) -> bool),
         entry!(0x0057_25b0, kind_3d_to_40_or_69(u32) -> bool),
+        entry!(0x0043_fdf0, attach::post_process(u32)),
+        entry!(0x0044_1c30, attach::player_attach(u32)),
+        entry!(0x0044_1800, attach::character_attach(u32)),
+        entry!(0x0044_0ba0, attach::attach(u32)),
+        entry!(0x0045_11e0, attach::is_cell_loaded(u32, u32, u8) -> bool),
+        entry!(0x0044_09e0, attach::reference_done(u32, u32)),
+        entry!(0x0044_0a10, attach::queued_count_down(u32)),
+        entry!(0x0044_0a50, attach::critical_count_down(u32)),
     ]
 }
 
