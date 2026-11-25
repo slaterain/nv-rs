@@ -661,6 +661,7 @@ fn choose_preferred(e: &mut Engine, this: Ptr<NavMesh>, triangles: u32) {
             if pairs.is_none() {
                 pairs = Some(pairs_in_walk_order(e, this));
             }
+            // Read once a triangle: the word holds through the loop (`fabs` restores it).
             let main = float_precision();
             let height_limit = double_global(e, HEIGHT_LIMIT);
             let mut best = NONE;

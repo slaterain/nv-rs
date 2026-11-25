@@ -639,12 +639,21 @@ fn both_ways(
             if !families.is_empty() {
                 e.typed_apply_for_test(families, "");
             }
-            // The word for the call alone, as the Diff sets it: the set-up's calls reset it.
-            engine_core::x87::set_control_word(word);
+            // `FLDCW` as the game does it: the thread's word too, which `fabs` saves and restores
+            // through `_ctrlfp` (with the helpers' word alone it "restores" the default).
+            engine_core::units::crt::set_x87_control_word(&mut e, word);
             e.call(0x0069_9b60, &[mesh]);
             after.push(engine_core::x87::control_word());
-            engine_core::x87::set_control_word(engine_core::x87::DEFAULT_CONTROL_WORD);
+            engine_core::units::crt::set_x87_control_word(
+                &mut e,
+                engine_core::x87::DEFAULT_CONTROL_WORD,
+            );
             sides.push((e, mesh));
+        }
+        if after.iter().any(|&w| w != word) {
+            return Err(format!(
+                "the control word {word:04x} did not hold: {after:04x?}"
+            ));
         }
         let ((a, mesh), (b, _)) = (&sides[0], &sides[1]);
         if (a.mem.heap_top(), a.mem.heap_available()) != (b.mem.heap_top(), b.mem.heap_available())
@@ -662,7 +671,8 @@ fn both_ways(
                 .map(|&k| a.mem.u32(mesh + k))
                 .collect();
             return Err(format!(
-                "memory differs at {differences:08x?} ({words:08x?}; mesh at {mesh:08x}, vertices, triangles, pair buckets, preferred at {blocks:08x?}), control word {word:04x}, after the call {after:04x?}"
+                "memory differs at {differences:08x?} ({words:08x?}; mesh at {mesh:08x}, vertices, \
+                 triangles, pair buckets, preferred at {blocks:08x?}), control word {word:04x}"
             ));
         }
         result = outcome(a, *mesh);
