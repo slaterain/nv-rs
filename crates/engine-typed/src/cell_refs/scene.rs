@@ -27,7 +27,9 @@
 //! translation.
 //!
 //! The reference ID set on the node (`SetReferenceIDOnScenegraph`, `004b6dc0`) is
-//! [`super::scenegraph`]'s typed call.
+//! [`super::scenegraph`]'s typed call; the shadow scene node's add of the node and its lighting
+//! update (`ShadowSceneNode::AddObject`, `00b5eeb0`, and `UpdateObjectLighting`, `00b5d9f0`) are
+//! [`super::lighting`]'s.
 //!
 //! **Floats.** One product, on the path of a type 0x25 base form in a large cell: the radius its
 //! slot 0x1bc answers (stored as a `double`) times the reference's scale, made an integer toward
@@ -83,16 +85,13 @@ const CELL_DISTANT_COUNT: u32 = 0xaa;
 /// The shadow scene nodes (a table of four, `00450b80`; this uses the first).
 const SHADOW_SCENE_NODES: u32 = 0x011f_91c8;
 /// The callees that do the work, by address: the reference's 3D set (`(reference, node)`), its
-/// actor base's `SetStartsDead(0)`, the shadow scene node's add (`(node)`), its actor's add, its
-/// lighting update (`(node, 0)`), the reference's step after the attach, the master particle addon
-/// nodes' removal and addition (`cdecl(node)`), `TESObjectREFR::InitScript`, `00547ad0` (`(cell;
-/// position, count, 1.0)`), `Actor::UpdateAlpha`, the reference's scale, and the ID set on the
-/// scene graph (`cdecl(node, form id)`).
+/// actor base's `SetStartsDead(0)`, the shadow scene node's actor add, the reference's step after
+/// the attach, the master particle addon nodes' removal and addition (`cdecl(node)`),
+/// `TESObjectREFR::InitScript`, `00547ad0` (`(cell; position, count, 1.0)`), `Actor::UpdateAlpha`,
+/// the reference's scale, and the ID set on the scene graph (`cdecl(node, form id)`).
 const REFERENCE_SET_3D: u32 = 0x0057_0f70;
 const SET_STARTS_DEAD: u32 = 0x0056_5210;
-const SHADOW_ADD_OBJECT: u32 = 0x00b5_eeb0;
 const SHADOW_ADD_ACTOR: u32 = 0x00b5_cbd0;
-const SHADOW_UPDATE_LIGHTING: u32 = 0x00b5_d9f0;
 const REFERENCE_AFTER_ATTACH: u32 = 0x0056_f700;
 const REMOVE_PARTICLE_ADDON_NODES: u32 = 0x0057_8170;
 const ADD_PARTICLE_ADDON_NODES: u32 = 0x0057_8060;
@@ -306,7 +305,11 @@ fn give_up_distant_3d(e: &mut Engine, reference: u32) {
 fn into_scene(e: &mut Engine, reference: u32, cell: u32, node: u32, kind: u8) {
     e.call(CELL_LOAD_3D, &args![cell]);
     let shadow = shadow_scene_node(e);
-    e.call(SHADOW_ADD_OBJECT, &args![shadow, node]);
+    typed_call!(
+        FAMILY,
+        0x00b5_eeb0,
+        super::lighting::add_object(e, shadow, node)
+    );
     if is_actor(e, reference) {
         let shadow = shadow_scene_node(e);
         e.call(SHADOW_ADD_ACTOR, &args![shadow, node]);
@@ -348,7 +351,11 @@ fn into_scene(e: &mut Engine, reference: u32, cell: u32, node: u32, kind: u8) {
         base_form(e, reference);
     } else {
         let shadow = shadow_scene_node(e);
-        e.call(SHADOW_UPDATE_LIGHTING, &args![shadow, node, 0u32]);
+        typed_call!(
+            FAMILY,
+            0x00b5_d9f0,
+            super::lighting::update_object_lighting(e, shadow, node, 0)
+        );
     }
 }
 
