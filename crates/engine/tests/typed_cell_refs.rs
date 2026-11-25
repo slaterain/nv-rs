@@ -26,6 +26,10 @@
 //! The reference ID's walk of the scene graph (`004b6dc0`) runs on a tree from a seed (the exe's
 //! node and geometry slots and stand-ins), and `NiAVObject::GetProperty` (`00a59d30`) on a
 //! geometry's list of properties from a seed.
+//!
+//! The shadow scene node's add of an object and its lighting update (`00b5eeb0`, `00b5d9f0`) and
+//! the add at the tail of a list of counted pointers (`00a5a310`) run on a shadow scene node, its
+//! queues, their lock and an object from a seed, the list node pool standing in.
 
 use engine as _;
 use engine_core::prelude::*;
@@ -1414,12 +1418,11 @@ const LARGE_LIMIT: u32 = 0x0101_79e0;
 
 /// The work the load hands on, standing in (the call log holds each call with its words). The
 /// reference ID's walk of the scene graph (`004b6dc0`) is this family's and runs as itself on
-/// [`scene_graph`]'s objects.
-const SCENE_DOUBLES: [u32; 10] = [
+/// [`scene_graph`]'s objects; so do the shadow scene node's add and lighting update (`00b5eeb0`,
+/// `00b5d9f0`) on its queues, their lock and the list node pool of [`lighting_stand_ins`].
+const SCENE_DOUBLES: [u32; 8] = [
     0x0056_5210, // TESActorBase::SetStartsDead
-    0x00b5_eeb0, // ShadowSceneNode::AddObject
-    0x00b5_cbd0, // its actors' add
-    0x00b5_d9f0, // ShadowSceneNode::UpdateObjectLighting
+    0x00b5_cbd0, // the shadow scene node's actors' add
     0x0056_f700, // the step after the attach
     0x0057_8170, // the master particle addon nodes' removal
     0x0057_8060, // and addition
@@ -1494,6 +1497,9 @@ fn scene_stand_ins(e: &mut Engine) {
         e.register(addr, nothing);
     }
     scene_graph(e);
+    // The shadow scene node (its queues empty) and what its queue meets.
+    e.map(0x0333_0000, 0x1000);
+    lighting_stand_ins(e);
     e.register(0x0057_0f70, set_3d);
     e.register(0x0056_7400, |e, a| {
         float_ret(e.mem.u32(a[0] + ANSWER_SCALE))
@@ -1538,11 +1544,13 @@ fn scene_vtable(e: &mut Engine, class: u32) -> u32 {
     vt
 }
 
-/// A node (a geometry of [`scene_graph`]'s), with a parent (whose slot 0xe8 takes it) or none.
-fn scene_node(e: &mut Engine, d: &mut Draw) -> u32 {
+/// A node (a geometry of [`scene_graph`]'s), culled (its flag 1, which `AddObject` leaves out) or
+/// not, with a parent (whose slot 0xe8 takes it) or none.
+fn scene_node(e: &mut Engine, d: &mut Draw, culled: bool) -> u32 {
     let node = e.mem.alloc(0x40);
     e.mem.set_u32(node, GEOMETRY_VTABLE);
     e.mem.set_u32(node + 0x24, PROPERTY_LIST);
+    e.mem.set_u8(node + 0x30, u8::from(culled));
     if d.next(3) != 0 {
         let vt = e.mem.alloc(0x100);
         e.mem.set_u32(vt + 0xe8, VT_FN + 0xe8);
@@ -1558,14 +1566,19 @@ fn scene_world(e: &mut Engine, seed: u32, flag: u32) -> Vec<u32> {
     use engine_core::extend::jip_patches::{NPC_PERKS, NPC_WEAPON_MODS};
     scene_stand_ins(e);
     let mut d = Draw(seed.wrapping_mul(0x9e37_79b9) ^ 0x5ce4);
+    // A quarter of the seeds' nodes culled.
+    let culled = seed % 4 == 3;
     e.set_jip_patches([0, 0, NPC_PERKS, NPC_WEAPON_MODS][d.next(4) as usize]);
     e.mem.set_u8(LARGE_STEP_ON, u8::from(d.next(4) != 0));
     let loader = e.mem.alloc(0x250);
-    // The game loader's word: its flag (bit 1) or not, and a third of the seeds with bit 3 as well
-    // (8 alone, 0xa, 0xe), which the flag's test must not take for its own.
+    // The game loader's word: its flag (bit 1) or not, with bit 0 or bit 2 alone too, and a third
+    // of the seeds with bit 3 as well (8 alone, 9, 0xa, 0xc, 0xe), which the flag's test must not
+    // take for its own.
     let high = if seed % 3 == 1 { 8 } else { 0 };
-    e.mem
-        .set_u32(loader + 0x244, [0, 0, 2, 6][d.next(4) as usize] | high);
+    e.mem.set_u32(
+        loader + 0x244,
+        [0, 0, 1, 2, 4, 6][d.next(6) as usize] | high,
+    );
     e.set_global(GAME_LOADER_POINTER, loader);
     // The reference: its class, type byte, flags, form id and position.
     let class = d.next(4);
@@ -1645,7 +1658,7 @@ fn scene_world(e: &mut Engine, seed: u32, flag: u32) -> Vec<u32> {
     let node = if d.next(4) == 0 {
         0
     } else {
-        scene_node(e, &mut d)
+        scene_node(e, &mut d, culled)
     };
     let data = if d.next(5) == 0 {
         0
@@ -1667,7 +1680,7 @@ fn scene_world(e: &mut Engine, seed: u32, flag: u32) -> Vec<u32> {
     let own_3d = if d.next(4) == 0 {
         0
     } else {
-        scene_node(e, &mut d)
+        scene_node(e, &mut d, culled)
     };
     e.mem.set_u32(r + ANSWER_LOAD_3D, own_3d);
     e.mem
@@ -1690,7 +1703,7 @@ fn scene_world(e: &mut Engine, seed: u32, flag: u32) -> Vec<u32> {
         let model_node = if d.next(3) == 0 {
             0
         } else {
-            scene_node(e, &mut d)
+            scene_node(e, &mut d, culled)
         };
         e.mem.set_u32(task + 0x34, model_node);
         task
@@ -1765,6 +1778,9 @@ fn tes_load_reference() {
     .goes_by_address(&[0x0047_c850, 0x0043_fcd0])
     // The walk's node child count and child (the dispatch family's), on JIP's node.
     .goes_by_address(&[0x0043_b480, 0x0043_b4a0])
+    // The shadow scene node's queue lock (the dispatch family's) and list node pool (the draw F
+    // family's).
+    .goes_by_address(&[0x0040_fbf0, 0x0043_a010])
     .ignore_calls(SCENE_INLINED)
     // What the walk does in place.
     .ignore_calls(WALK_INLINED)
@@ -1803,10 +1819,14 @@ const SCENE_BRANCHES: &[&str] = &[
     "attached",
     "particles removed",
     "particles added",
+    "queued by AddObject",
+    "a culled node left out by AddObject",
     "lighting updated",
     "type 0x1e's step",
     "the action list set up",
     "the action list set up under a word of 8 alone",
+    "the action list set up under bit 0",
+    "the action list set up under bit 2 without bit 1",
     "the game loader's flag",
     "counted as seen from a distance",
     "the distant count wraps",
@@ -1874,7 +1894,6 @@ fn the_scene_seeds_reach_every_branch() {
                 (0x0054_8880, "attached"),
                 (0x0057_8170, "particles removed"),
                 (0x0057_8060, "particles added"),
-                (0x00b5_d9f0, "lighting updated"),
                 (0x0045_34f0, "type 0x1e's step"),
                 (0x005a_c750, "the action list set up"),
                 (0x008c_4640, "an actor's alpha"),
@@ -1886,6 +1905,21 @@ fn the_scene_seeds_reach_every_branch() {
             }
             if words(0x0057_0f70).iter().any(|w| w[1] != 0) {
                 hit("the source's node set as its 3D");
+            }
+            // `AddObject` queues a node that is not culled; the load's own update queues it again.
+            let added = words(0x00b5_eeb0);
+            let queued_by_add = added
+                .iter()
+                .filter(|w| e.mem.u8(w[1] + 0x30) & 1 == 0)
+                .count();
+            if queued_by_add > 0 {
+                hit("queued by AddObject");
+            }
+            if queued_by_add < added.len() {
+                hit("a culled node left out by AddObject");
+            }
+            if words(0x00b5_d9f0).len() > queued_by_add {
+                hit("lighting updated");
             }
             if (kind == 0x2c || kind == 0x2d) && called(VT_FN + 0xe8) {
                 hit("a type 0x2c or 0x2d node to its parent");
@@ -1899,6 +1933,12 @@ fn the_scene_seeds_reach_every_branch() {
             let word = e.mem.u32(e.global::<u32>(GAME_LOADER_POINTER) + 0x244);
             if word == 8 && called(0x005a_c750) {
                 hit("the action list set up under a word of 8 alone");
+            }
+            if word & 3 == 1 && called(0x005a_c750) {
+                hit("the action list set up under bit 0");
+            }
+            if word & 6 == 4 && called(0x005a_c750) {
+                hit("the action list set up under bit 2 without bit 1");
             }
             let distant_after = e.mem.u16(cell + 0xaa);
             if distant_after != distant_before {
@@ -1946,15 +1986,17 @@ fn the_scene_seeds_reach_every_branch() {
 // (`00a59d30`).
 //
 // Their world, from a seed: a tree below a root (now and then none), at most five levels deep, of
-// objects of four sorts: a node of the exe's `NiNode` slots (0xc the object itself, 0x18 none) with
+// objects of five sorts: a node of the exe's `NiNode` slots (0xc the object itself, 0x18 none) with
 // none to four children (a null child now and then); a geometry of the exe's geometry slots (0x18
 // the object itself, 0xc none) with a list of none to four properties (null items too); an object
 // of stand-in slots answering words kept in it (its 0x18 a word that is not the object, or 0 with
-// its 0xc the object itself or 0); and a stand-in node whose slot 0xc answers another node, which
-// holds the children walked, while its own children (never walked) hold a geometry the walk would
-// store in. Each property is of a class whose slot 0x8c holds one of the exe's eleven constant
-// bodies (the shade property's most often) or a stand-in answering a word kept in it (3, 2, 7, -1),
-// with its word at +0x1c from 0, 1, 5, 0xc, 0xd, -1 and 0x8000_0000.
+// its 0xc the object itself or 0); a stand-in node whose slot 0xc answers another node, which holds
+// the children walked, while its own children (never walked) hold a geometry the walk would store
+// in; and a light or a camera (the exe's slots: 0 at both), whose words where a node keeps its
+// children (never walked) hold such a geometry too. Each property is of a class whose slot 0x8c
+// holds one of the exe's eleven constant bodies (the shade property's most often) or a stand-in
+// answering a word kept in it (3, 2, 7, -1), with its word at +0x1c from 0, 1, 5, 0xc, 0xd, -1 and
+// 0x8000_0000.
 
 /// Where the walk's stand-in slots are registered: `WALK_VT_FN + slot`.
 const WALK_VT_FN: u32 = 0x00ff_8000;
@@ -1985,6 +2027,7 @@ const KIND_BODIES: [u32; 13] = [
 struct WalkVtables {
     node: u32,
     geometry: u32,
+    light: u32,
     stand_in: u32,
     properties: Vec<u32>,
 }
@@ -2003,6 +2046,9 @@ fn walk_vtables(e: &mut Engine) -> WalkVtables {
     e.register(WALK_VT_FN + 0x8c, answer_of::<ANSWER_PROPERTY_KIND>);
     let node = walk_vtable(e, &[(0xc, 0x0068_15c0), (0x18, 0x00ac_bb70)]);
     let geometry = walk_vtable(e, &[(0xc, 0x00ac_bb70), (0x18, 0x00e6_8810)]);
+    // The exe's lights and camera (`NiPointLight`, `NiSpotLight`, `NiDirectionalLight`,
+    // `NiCamera`): 0 at both slots.
+    let light = walk_vtable(e, &[(0xc, 0x00ac_bb70), (0x18, 0x00ac_bb70)]);
     let stand_in = walk_vtable(e, &[(0xc, WALK_VT_FN + 0xc), (0x18, WALK_VT_FN + 0x18)]);
     let mut properties: Vec<u32> = KIND_BODIES
         .iter()
@@ -2012,6 +2058,7 @@ fn walk_vtables(e: &mut Engine) -> WalkVtables {
     WalkVtables {
         node,
         geometry,
+        light,
         stand_in,
         properties,
     }
@@ -2061,6 +2108,16 @@ fn walk_properties(e: &mut Engine, d: &mut Draw, vts: &WalkVtables, object: u32)
     }
 }
 
+/// A list holding one shade property the walk accepts (its word at +0x1c 1) for `object`.
+fn shade_list(e: &mut Engine, vts: &WalkVtables, object: u32) {
+    let node = e.mem.alloc(0xc);
+    let p = e.mem.alloc(0x80);
+    e.mem.set_u32(p, vts.properties[3]);
+    e.mem.set_u32(p + 0x1c, 1);
+    e.mem.set_u32(node + 8, p);
+    e.mem.set_u32(object + 0x24, node);
+}
+
 /// None to four children below a node at `depth` (a null one now and then).
 fn walk_children(e: &mut Engine, d: &mut Draw, vts: &WalkVtables, depth: u32) -> Vec<u32> {
     let n = d.next(5);
@@ -2078,7 +2135,7 @@ fn walk_children(e: &mut Engine, d: &mut Draw, vts: &WalkVtables, depth: u32) ->
 
 /// An object at `depth` and what is below it.
 fn walk_tree(e: &mut Engine, d: &mut Draw, vts: &WalkVtables, depth: u32) -> u32 {
-    let sort = if depth >= 4 { d.next(2) } else { d.next(7) };
+    let sort = if depth >= 4 { d.next(2) } else { d.next(8) };
     match sort {
         // A geometry of the exe's slots.
         0 => {
@@ -2109,6 +2166,15 @@ fn walk_tree(e: &mut Engine, d: &mut Draw, vts: &WalkVtables, depth: u32) -> u32
             e.mem.set_u32(o + ANSWER_NODE, other);
             let decoy = walk_object(e, vts.geometry);
             walk_properties(e, d, vts, decoy);
+            set_children(e, o, &[decoy]);
+            o
+        }
+        // A light or a camera (the exe's slots: 0 at both): never walked, though its words at +0xa0
+        // and +0xa6 hold a decoy geometry whose shade property the walk would store in.
+        7 => {
+            let o = walk_object(e, vts.light);
+            let decoy = walk_object(e, vts.geometry);
+            shade_list(e, vts, decoy);
             set_children(e, o, &[decoy]);
             o
         }
@@ -2177,8 +2243,8 @@ const PROPERTY_SEEDS: &[u32] = &[
     26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
 ];
 
-/// `GetProperty` against its translation: a geometry's list from a seed, and kinds below 7, at it,
-/// past it and negative.
+/// `GetProperty` against its translation: a geometry's list from a seed, and every kind below 7
+/// (the exe asks 4 too, in `00b587c0`), at it, past it and negative.
 #[test]
 fn get_property() {
     Diff::new(entry!(
@@ -2189,7 +2255,7 @@ fn get_property() {
     .ignore_calls(WALK_INLINED)
     .inputs(&[
         Input::Of(PROPERTY_SEEDS),
-        Input::Of(&[0, 2, 3, 5, 6, 7, 8, 0xd, 0xffff_ffff, 0x8000_0000]),
+        Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 0xd, 0xffff_ffff, 0x8000_0000]),
     ])
     .setup(|e, case| {
         let vts = walk_vtables(e);
@@ -2206,7 +2272,7 @@ fn get_property() {
 /// shade property's word at +0x1c of 0xc (accepted), 0xd and negative (refused), a geometry with no
 /// shade property, a material property ahead of the shade property, the stand-in slots, a stand-in
 /// node answering another node, a null child and a null property item, three of the exe's property
-/// kinds asked, a tree three levels deep.
+/// kinds asked, a tree three levels deep, a light or camera met under a node.
 #[test]
 fn the_walk_seeds_reach_every_branch() {
     let mut reached = std::collections::BTreeMap::<&str, u32>::new();
@@ -2277,13 +2343,17 @@ fn the_walk_seeds_reach_every_branch() {
                 _ => {}
             }
         }
-        // The tree's shape, through the exe's nodes: a null child and the depth.
+        // The tree's shape, through the exe's nodes: a null child, the depth, a light or a camera.
         let mut stack = vec![(root, 0u32)];
         while let Some((o, depth)) = stack.pop() {
             if depth >= 3 {
                 hit("three levels deep");
             }
-            if e.mem.u32(e.mem.u32(o) + 0xc) != 0x0068_15c0 {
+            let vt = e.mem.u32(o);
+            if e.mem.u32(vt + 0xc) == 0x00ac_bb70 && e.mem.u32(vt + 0x18) == 0x00ac_bb70 {
+                hit("a light or camera (both slots 0)");
+            }
+            if e.mem.u32(vt + 0xc) != 0x0068_15c0 {
                 continue;
             }
             for i in 0..u32::from(e.mem.u16(o + 0xa6)) {
@@ -2314,6 +2384,307 @@ fn the_walk_seeds_reach_every_branch() {
         "a stand-in node answering another node",
         "a null child",
         "three levels deep",
+        "a light or camera (both slots 0)",
+    ] {
+        assert!(
+            reached.contains_key(name),
+            "no seed reaches {name}: {reached:?}"
+        );
+    }
+}
+
+// The shadow scene node's queue of the objects whose lighting is to be redone:
+// `ShadowSceneNode::AddObject` (`00b5eeb0`), `UpdateObjectLighting` (`00b5d9f0`) and the add at the
+// tail of a list of counted pointers (`00a5a310`) that puts an object in it.
+//
+// Their world, from a seed: a shadow scene node whose two queues are each empty or hold one to
+// three items (their count the items', or a word about to wrap); the queues' lock free or already
+// held by this thread (once or twice); an object (now and then none) whose vtable's slot 4 (its
+// delete) marks it, its count at +4 0, 1, 5 or about to wrap (then the temporary's release deletes
+// it), its flags at +0x30 with bit 0 (culled) or not; the list node pool's next node, its links
+// junk or clear and its old element none, the object itself, or another object counted once
+// (deleted when let go) or three times. JIP's patches are all on for half the seeds, off for the
+// others: nothing of JIP's is reached, and the same code runs either way.
+
+/// Where the objects' delete slot is registered, and where it marks an object.
+const LIGHT_VT_FN: u32 = 0x00ff_c000;
+const DELETED: u32 = 0x3c;
+/// The thread the current thread's import answers, and the queues' lock (its owner, then its
+/// count).
+const LOCK_THREAD: u32 = 0x1234;
+const OBJECT_QUEUE_LOCK: u32 = 0x011f_9ec0;
+/// The list node pool's words for its next node: its links and its old element.
+const POOL_LINKS: u32 = CONTROL + 0x800;
+const POOL_ELEMENT: u32 = CONTROL + 0x804;
+
+/// What the queue meets: the interlocked imports and the current thread (plainly), the list node
+/// pool (`0043a010`: a fresh node with the world's words, as a pool node left with words in it
+/// would be) and the objects' delete.
+fn lighting_stand_ins(e: &mut Engine) {
+    e.register(0x00fd_f1c0, |e, a| {
+        let n = e.mem.u32(a[0]).wrapping_add(1);
+        e.mem.set_u32(a[0], n);
+        ret(n)
+    });
+    e.register(0x00fd_f1c4, |e, a| {
+        let n = e.mem.u32(a[0]).wrapping_sub(1);
+        e.mem.set_u32(a[0], n);
+        ret(n)
+    });
+    e.register(0x00fd_f1bc, |e, a| {
+        let old = e.mem.u32(a[0]);
+        if old == a[2] {
+            e.mem.set_u32(a[0], a[1]);
+        }
+        ret(old)
+    });
+    e.register(0x00fd_f1d0, |_, _| ret(LOCK_THREAD));
+    e.register(0x0043_a010, |e, _| {
+        let node = e.mem.alloc(0xc);
+        let links = e.mem.u32(POOL_LINKS);
+        e.mem.set_u32(node, links);
+        e.mem.set_u32(node + 4, links);
+        let element = e.mem.u32(POOL_ELEMENT);
+        e.mem.set_u32(node + 8, element);
+        ret(node)
+    });
+    e.register(LIGHT_VT_FN + 4, |e, a| {
+        let n = e.mem.u32(a[0] + DELETED);
+        e.mem.set_u32(a[0] + DELETED, n + 1);
+        Ret::default()
+    });
+}
+
+/// A counted object of the queue's world: its delete slot, its count and its flags.
+fn lighting_object(e: &mut Engine, count: u32, flags: u8) -> u32 {
+    let vt = e.mem.alloc(0x10);
+    e.mem.set_u32(vt + 4, LIGHT_VT_FN + 4);
+    let o = e.mem.alloc(0x40);
+    e.mem.set_u32(o, vt);
+    e.mem.set_u32(o + 4, count);
+    e.mem.set_u8(o + 0x30, flags);
+    o
+}
+
+/// A queue of none to three items (their elements words never read), its count the items' or a
+/// word about to wrap.
+fn lighting_queue(e: &mut Engine, d: &mut Draw, list: u32) {
+    let n = d.next(4);
+    let (mut head, mut tail) = (0, 0);
+    for i in 0..n {
+        let item = e.mem.alloc(0xc);
+        e.mem.set_u32(item + 4, tail);
+        e.mem.set_u32(item + 8, 0x0600_0000 + i);
+        if tail == 0 {
+            head = item;
+        } else {
+            e.mem.set_u32(tail, item);
+        }
+        tail = item;
+    }
+    e.mem.set_u32(list, head);
+    e.mem.set_u32(list + 4, tail);
+    e.mem
+        .set_u32(list + 8, if d.next(4) == 0 { 0xffff_ffff } else { n });
+}
+
+/// The queue's world of a seed: the shadow scene node, the object (0 now and then) and the pointer
+/// holding it (a word of its own, for the list's add).
+fn lighting_world(e: &mut Engine, seed: u32) -> [u32; 3] {
+    e.map(CONTROL, 0x1000);
+    e.map(0x011f_9000, 0x1000);
+    lighting_stand_ins(e);
+    let mut d = Draw(seed.wrapping_mul(0x9e37_79b9) ^ 0xd9f0);
+    e.set_jip_patches(if seed % 2 == 0 { 0 } else { u32::MAX });
+    let node = e.mem.alloc(0x200);
+    lighting_queue(e, &mut d, node + 0x108);
+    lighting_queue(e, &mut d, node + 0x114);
+    let (owner, count) = [(0, 0), (0, 0), (LOCK_THREAD, 1), (LOCK_THREAD, 2)][d.next(4) as usize];
+    e.mem.set_u32(OBJECT_QUEUE_LOCK, owner);
+    e.mem.set_u32(OBJECT_QUEUE_LOCK + 4, count);
+    let object = if seed % 16 == 5 {
+        0
+    } else {
+        let count = [0, 1, 5, 0xffff_ffff][d.next(4) as usize];
+        let flags = [0, 1, 2, 3, 0xfe, 0xff][d.next(6) as usize];
+        lighting_object(e, count, flags)
+    };
+    let links = [0, 0x5a5a_5a5a][d.next(2) as usize];
+    e.mem.set_u32(POOL_LINKS, links);
+    let element = match d.next(6) {
+        3 => object,
+        4 => lighting_object(e, 1, 0),
+        5 => lighting_object(e, 3, 0),
+        _ => 0,
+    };
+    e.mem.set_u32(POOL_ELEMENT, element);
+    let pointer = e.mem.alloc(4);
+    e.mem.set_u32(pointer, object);
+    [node, object, pointer]
+}
+
+/// `ShadowSceneNode::AddObject` against its translation, over the seeds' worlds.
+#[test]
+fn shadow_scene_add_object() {
+    Diff::new(entry!(
+        0x00b5_eeb0,
+        cell_refs::lighting::add_object(u32, u32)
+    ))
+    .family(&CELL_REFS)
+    .family(&engine_typed::dispatch::DISPATCH)
+    .family(&leaf::LEAVES)
+    // The list node pool (the draw F family's), standing in.
+    .goes_by_address(&[0x0043_a010])
+    .inputs(&[Input::Of(SEEDS)])
+    .setup(|e, case| {
+        let [node, object, _] = lighting_world(e, case.word(0));
+        vec![node, object]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `ShadowSceneNode::UpdateObjectLighting` against its translation, over the seeds' worlds and the
+/// flag 0, 1, 2, 0xff and a word whose low byte is 0.
+#[test]
+fn shadow_scene_update_object_lighting() {
+    Diff::new(entry!(
+        0x00b5_d9f0,
+        cell_refs::lighting::update_object_lighting(u32, u32, u8)
+    ))
+    .family(&CELL_REFS)
+    .family(&engine_typed::dispatch::DISPATCH)
+    .family(&leaf::LEAVES)
+    .goes_by_address(&[0x0043_a010])
+    .inputs(&[Input::Of(SEEDS), Input::Of(&[0, 1, 2, 0xff, 0x100])])
+    .setup(|e, case| {
+        let [node, object, _] = lighting_world(e, case.word(0));
+        vec![node, object, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The add at the tail of a list of counted pointers against its translation: either queue of the
+/// seeds' worlds and the pointer holding the object (or none).
+#[test]
+fn counted_list_add_tail() {
+    Diff::new(entry!(
+        0x00a5_a310,
+        cell_refs::lighting::list_add_tail(u32, u32)
+    ))
+    .family(&CELL_REFS)
+    .goes_by_address(&[0x0043_a010])
+    .inputs(&[Input::Of(SEEDS), Input::Of(&[0x108, 0x114])])
+    .setup(|e, case| {
+        let [node, _, pointer] = lighting_world(e, case.word(0));
+        vec![node + case.word(1), pointer]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The queue's worlds reach what it does, checked on the translation: a null object, a culled one
+/// left out by `AddObject`, each queue, the flag's byte read alone, an empty queue and one with a
+/// tail, a count that wraps, the lock taken anew and taken again by its owner, the node's old
+/// element let go (and deleted), the same element kept, the temporary's release deleting the
+/// object, junk links in the pool's node, JIP's patches on and off.
+#[test]
+fn the_lighting_seeds_reach_every_branch() {
+    let mut reached = std::collections::BTreeMap::<&str, u32>::new();
+    for &seed in SEEDS {
+        for flag in [0u32, 1, 0x100] {
+            let mut e = Engine::new_untyped_for_test();
+            let [node, object, _] = lighting_world(&mut e, seed);
+            let mut hit = |name| *reached.entry(name).or_default() += 1;
+            hit(if e.jip_patches() == 0 {
+                "JIP's patches off"
+            } else {
+                "JIP's patches on"
+            });
+            if object == 0 {
+                hit("a null object");
+                continue;
+            }
+            let culled = e.mem.u8(object + 0x30) & 1 != 0;
+            let queue = if flag & 0xff == 0 { 0x108 } else { 0x114 };
+            let (head, count) = (e.mem.u32(node + queue), e.mem.u32(node + queue + 8));
+            let element = e.mem.u32(POOL_ELEMENT);
+            let element_count = if element == 0 {
+                0
+            } else {
+                e.mem.u32(element + 4)
+            };
+            let owner = e.mem.u32(OBJECT_QUEUE_LOCK);
+            let links = e.mem.u32(POOL_LINKS);
+            e.call_log = Some(Vec::new());
+            if flag == 0 {
+                e.call(0x00b5_eeb0, &args![node, object]);
+            } else {
+                e.call(0x00b5_d9f0, &args![node, object, flag]);
+            }
+            let log = e.call_log.take().unwrap_or_default();
+            if flag == 0 && culled {
+                assert!(!log.iter().any(|(a, _)| *a == 0x00b5_d9f0));
+                hit("a culled object left out by AddObject");
+                continue;
+            }
+            hit(if queue == 0x108 {
+                "queued for an update"
+            } else {
+                "queued for an update of the active lights only"
+            });
+            if flag == 0x100 {
+                hit("the flag's byte read alone");
+            }
+            hit(if head == 0 {
+                "an empty queue's head set"
+            } else {
+                "linked after the tail"
+            });
+            if count == 0xffff_ffff {
+                hit("the queue's count wraps");
+            }
+            hit(if owner == 0 {
+                "the lock taken anew and left"
+            } else {
+                "the lock taken again by its owner"
+            });
+            if links != 0 {
+                hit("junk links in the pool's node");
+            }
+            if element == object {
+                hit("the same element kept");
+            } else if element != 0 {
+                hit(if element_count == 1 {
+                    "the old element let go and deleted"
+                } else {
+                    "the old element let go"
+                });
+            }
+            if e.mem.u32(object + DELETED) != 0 {
+                hit("the temporary's release deletes the object");
+            }
+        }
+    }
+    for name in [
+        "JIP's patches off",
+        "JIP's patches on",
+        "a null object",
+        "a culled object left out by AddObject",
+        "queued for an update",
+        "queued for an update of the active lights only",
+        "the flag's byte read alone",
+        "an empty queue's head set",
+        "linked after the tail",
+        "the queue's count wraps",
+        "the lock taken anew and left",
+        "the lock taken again by its owner",
+        "junk links in the pool's node",
+        "the same element kept",
+        "the old element let go and deleted",
+        "the old element let go",
+        "the temporary's release deletes the object",
     ] {
         assert!(
             reached.contains_key(name),

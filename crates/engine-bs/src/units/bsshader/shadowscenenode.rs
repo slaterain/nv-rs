@@ -1242,10 +1242,10 @@ pub fn fn_00b5ddb0(e: &mut Engine, this: Ptr<ShadowSceneNode>, each: u8, skip: u
 
 // Translated from 00b5eeb0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ShadowSceneNode::AddObject` (Xbox PDB). `thiscall`, `RET 4` (an object): an object without
-/// flag 1 goes to `UpdateObjectLighting` (`00b5d9f0`) with 0.
+/// flag 1 goes to `UpdateObjectLighting` (`00b5d9f0`, by address as the exe calls it) with 0.
 pub fn shadow_scene_node_add_object(e: &mut Engine, this: Ptr<ShadowSceneNode>, object: u32) {
     if object != 0 && e.mem.u32(object.wrapping_add(AV_FLAGS)) & 1 == 0 {
-        shadow_scene_node_update_object_lighting(e, this, object, 0);
+        e.call(UPDATE_OBJECT_LIGHTING, &args![this, object, 0u32]);
     }
 }
 
@@ -1301,6 +1301,8 @@ const LIGHT_RTTI_011F4A28: u32 = 0x011f_4a28;
 const NI_LIGHT_CONSTRUCT_00A7D670: u32 = 0x00a7_d670;
 /// `00439090` (`thiscall` on a point, `RET 4`: another point; `u8` result).
 const POINT_COMPARE_00439090: u32 = 0x0043_9090;
+/// `ShadowSceneNode::UpdateObjectLighting` (`00b5d9f0`), as `AddObject` calls it.
+const UPDATE_OBJECT_LIGHTING: u32 = 0x00b5_d9f0;
 /// The object-queue spin lock (`011f9ec0`: owner, `011f9ec4`: count).
 const OBJECT_QUEUE_LOCK: u32 = 0x011f_9ec0;
 const OBJECT_QUEUE_LOCK_COUNT: u32 = 0x011f_9ec4;
