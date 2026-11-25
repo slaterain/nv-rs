@@ -738,6 +738,12 @@ fn count_invalid(e: &mut Engine) {
 /// the heap's top and free bytes, and every byte of memory beside the stack. Under both control
 /// words.
 fn both_ways(typed: (u32, AbiFn), setup: impl Fn(&mut Engine) -> Vec<u32>) {
+    both_ways_checking(typed, setup, true);
+}
+
+/// [`both_ways`], with `failing` false for a case whose checks all pass (no invalid-parameter
+/// call on either side).
+fn both_ways_checking(typed: (u32, AbiFn), setup: impl Fn(&mut Engine) -> Vec<u32>, failing: bool) {
     for word in [0x027fu16, 0x007f] {
         let mut sides = Vec::new();
         for typed_side in [false, true] {
@@ -759,9 +765,10 @@ fn both_ways(typed: (u32, AbiFn), setup: impl Fn(&mut Engine) -> Vec<u32>) {
             sides[0].1, sides[1].1,
             "the answer, control word {word:04x}"
         );
-        assert!(
+        assert_eq!(
             a.mem.u32(INVALID) > 0,
-            "no check failed: the case tests nothing"
+            failing,
+            "whether a check failed (a failing case that does not tests nothing)"
         );
         assert_eq!(
             a.mem.u32(INVALID),
@@ -838,6 +845,60 @@ fn facegen_head_failing_checks_of_the_morphs() {
     both_ways(typed(), |e| failing_mesh(e, 9, 10, 12, 3));
     // The set 0 coordinates have no coefficient: each morph's row read past the empty vector.
     both_ways(typed(), |e| failing_mesh(e, 6, 9, 0, 0));
+}
+
+/// A head part whose additional vertices lie one point into its own packed vertex array (no
+/// head's data does): each group of the loops reads points an earlier group wrote, so the one-pass
+/// path must step aside for the element loops, which then leave every byte as the translation's.
+/// The checks all pass. With the additional vertices one point past the array's end instead (no
+/// overlap), the one-pass path itself runs against the translation.
+fn shifted_mesh(e: &mut Engine, shift: u32) -> Vec<u32> {
+    constants(e, 1, 256.0, 0x3780_0000);
+    stand_ins(e);
+    mesh_stand_ins(e);
+    let (vertices, stride) = (9u32, 12u32);
+    let total = vertices + 3;
+    let points = vertices + total + 2;
+    let array = e.mem.alloc(stride * points + 16);
+    for v in 0..points {
+        for k in 0..3 {
+            e.mem
+                .set_u32(array + stride * v + 4 * k, value(v, k + 5, 2));
+        }
+    }
+    e.mem.set_u32(ARRAY, array);
+    e.mem.set_u32(STRIDE, stride);
+    e.mem.set_u32(VERTICES, vertices);
+    e.mem.set_u32(HAS_DATA, 3);
+    let data = e.mem.alloc(0x18);
+    e.mem.set_u32(data + 0xc, array + stride * shift);
+    e.mem.set_u32(data + 0x10, total);
+    e.mem.set_u32(EXTRA_DATA, data);
+    let egm_data = egm(e, vertices, [3, 2], 0, 2);
+    let coords = coordinates(e, [3, 2, 0, 0], 2);
+    let mesh = e.mem.alloc(0x24);
+    e.mem.set_u32(mesh + 8, egm_data);
+    e.mem.set_u32(LOADED, 1);
+    let model = e.mem.alloc(0x10);
+    e.mem.set_u32(model + 8, mesh);
+    let geometry = e.mem.alloc(0xc0);
+    let geometry_data = e.mem.alloc(0x40);
+    e.mem.set_u32(geometry + 0xb8, geometry_data);
+    vec![model, coords, geometry, 1]
+}
+
+#[test]
+fn facegen_head_morphs_reading_their_own_writes() {
+    let typed = || {
+        entry!(
+            0x0065_a970,
+            head::apply_coordinates(Ptr<_>, u32, u32, u8) -> bool
+        )
+    };
+    // One point in: the additional vertices overlap the vertex array (the element loops).
+    both_ways_checking(typed(), |e| shifted_mesh(e, 1), false);
+    // Past the array's last vertex: apart (the one-pass path).
+    both_ways_checking(typed(), |e| shifted_mesh(e, 9), false);
 }
 
 /// A face tint for [`facegen_head_failing_checks_of_the_tint`]: 4 by 3 texels, three morphs; the
