@@ -3,12 +3,13 @@
 //! is the square root with the x87 error machinery it ends in: on the main thread, whose control word
 //! has 24-bit precision and the precision exception masked, every `sqrt` reports an inexact result
 //! through `__math_exit`, `__startOneArgErrorHandling`, `__87except` and `__handle_exc`, so a call is
-//! about ten calls deep. Typed, the chain runs as Rust calls.
+//! about ten calls deep. Typed, a root that is a number skips the chain, which changes nothing else
+//! there (`math.rs`); the domain errors and NaNs run it as Rust calls.
 //!
 //! Stage 1: nothing here owns an object; the routines read and write guest memory where their
 //! callers point. Each function stays registered at its exe address; a call by address inside the
-//! family is a `typed_call!`, and every call the exe makes is still made, so the call tree is the
-//! exe's.
+//! family is a `typed_call!`, and every call the exe makes is still made but the square roots' chain
+//! for a number, so the call tree is otherwise the exe's.
 //!
 //! **Floats.** Every thread runs these, so the family's row is [`Threads::Both`]: the x87 code uses
 //! the exact helpers ([`engine_core::x87`]), which round as the running thread's control word says.
