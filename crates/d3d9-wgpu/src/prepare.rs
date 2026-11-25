@@ -159,6 +159,64 @@ impl Entry {
     }
 }
 
+/// Which of a caster's pipelines a [`Caster`] line names: its own (drawn as the game draws it), its
+/// list's (a geometry whose cables are taken out, the rest drawn from a list of the device's own),
+/// its ribbons' coverage pipeline (drawn as the game draws it, or from a list).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum CasterPipe {
+    Main,
+    List,
+    Ribbon,
+    RibbonList,
+}
+
+/// The caster pipes in their number's order (from 0).
+const CASTER_PIPES: [CasterPipe; 4] = [
+    CasterPipe::Main,
+    CasterPipe::List,
+    CasterPipe::Ribbon,
+    CasterPipe::RibbonList,
+];
+
+/// A sun-shadow caster pipeline a run has made ([`crate::sun_shadow::casters_ahead`]): which of
+/// the caster's it is, the pipeline of the still draw it was made for, as the list keeps it (its
+/// shaders, declaration, layout and render states, the cull mode among them), and whether that
+/// draw was alpha-tested (a cut-out casts through its pixel shader). One a line: `c1 WHAT CUTOUT`
+/// (WHAT: [`CasterPipe`] numbered from 0 in its order) and the draw's `p2` line.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct Caster {
+    pub what: CasterPipe,
+    pub cutout: bool,
+    pub draw: Entry,
+}
+
+impl Caster {
+    pub(crate) fn line(&self) -> String {
+        let what = CASTER_PIPES
+            .iter()
+            .position(|&w| w == self.what)
+            .expect("every pipe is numbered");
+        format!("c1 {what} {} {}", u8::from(self.cutout), self.draw.line())
+    }
+
+    /// A caster from a line of the casters' list; None for anything else, which is skipped.
+    pub(crate) fn parse(line: &str) -> Option<Caster> {
+        let (what, rest) = line.strip_prefix("c1 ")?.split_once(' ')?;
+        let what = *CASTER_PIPES.get(what.parse::<usize>().ok()?)?;
+        let (cutout, draw) = rest.split_once(' ')?;
+        let cutout = match cutout {
+            "0" => false,
+            "1" => true,
+            _ => return None,
+        };
+        Some(Caster {
+            what,
+            cutout,
+            draw: Entry::parse(draw)?,
+        })
+    }
+}
+
 /// A fixed-function shader's line (`f1`).
 pub(crate) fn shader_line(tokens: &[u32]) -> String {
     let hex: Vec<String> = tokens.iter().map(|t| format!("{t:x}")).collect();
@@ -299,6 +357,38 @@ mod tests {
         assert_eq!(l.merge(&text), (1, 1));
         assert_eq!(l.entries.len(), 1);
         assert_eq!(l.text(), format!("{line}\n"));
+    }
+
+    /// A caster kind's `c1` line reads back as it was written, cut-out or not; a damaged one, or a
+    /// pipeline line of the other list, is skipped.
+    #[test]
+    fn a_caster_kinds_line_reads_back_as_it_was_written() {
+        for (n, what) in CASTER_PIPES.into_iter().enumerate() {
+            for cutout in [false, true] {
+                let c = Caster {
+                    what,
+                    cutout,
+                    draw: entry(),
+                };
+                let line = c.line();
+                assert!(
+                    line.starts_with(&format!("c1 {n} {} p2 ", u8::from(cutout))),
+                    "{line}"
+                );
+                assert_eq!(Caster::parse(&line), Some(c));
+            }
+        }
+        let line = entry().line();
+        for bad in [
+            line.clone(),
+            format!("c1 0 2 {line}"),
+            format!("c1 4 0 {line}"),
+            format!("c1 0 1 {}", &line[..line.len() - 2]),
+            format!("c2 0 0 {line}"),
+            "c1 0 1".to_string(),
+        ] {
+            assert_eq!(Caster::parse(&bad), None, "{bad}");
+        }
     }
 
     /// A fixed-function shader's `f1` line reads back as its tokens, once; a damaged one (not

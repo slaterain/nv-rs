@@ -2685,6 +2685,53 @@ pub fn get_render_target_data(
     true
 }
 
+/// Port-added (`NV_SAVE_PICTURE_LATER`, `engine_core::save_picture`): [`get_render_target_data`] with
+/// its reply taken later ([`take_rows_later`]), on main's stream after every earlier command; the
+/// destination's memory is not written. False (nothing sent) without real surfaces or on the drawing
+/// side; the caller then reads back at once. A reply asked for later and never taken (a save that
+/// stopped before its end) is let go first.
+pub fn get_render_target_data_later(
+    e: &mut Engine,
+    this: u32,
+    source: u32,
+    destination: u32,
+    pitch: u32,
+) -> bool {
+    if super::d3d9draw::drawing_thread() || stream_of(real(e), this).is_none() {
+        return false;
+    }
+    // As `call`: the drawing side's open slot closed first, so the reply comes after it.
+    if real(e).slot.is_some() {
+        engine_core::real_threads::wait_draw(e);
+        if real(e).slot.is_some() {
+            close(e);
+        }
+    }
+    let Some(stream) = real(e).stream.as_mut() else {
+        return false;
+    };
+    if stream.later_waiting() {
+        drop(stream.take_later());
+    }
+    stream.submit_later(Cmd::GetRenderTargetData {
+        device: this,
+        source,
+        destination,
+        pitch,
+    });
+    true
+}
+
+/// The rows of [`get_render_target_data_later`]'s copy (their length and the rows), once every command
+/// before it is carried out: `None` without one, or when the backend had no surfaces to read.
+pub fn take_rows_later(e: &mut Engine) -> Option<(u32, Vec<u8>)> {
+    let _device = engine_core::real_threads::device_guard(e);
+    match real(e).stream.as_mut()?.take_later()? {
+        Reply::Rows(Some(rows)) => Some((rows.row, rows.bytes)),
+        _ => None,
+    }
+}
+
 /// `SetLOD` on a managed modelled texture: the real texture's `SetLOD` with the same level; a
 /// different previous level than the model's is printed once.
 pub fn texture_set_lod(e: &mut Engine, texture: u32, lod: u32, model: u32) {
