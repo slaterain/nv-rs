@@ -538,9 +538,16 @@ fn facegen_head_apply_coordinate_texturing() {
         Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7]),
         // `_ftol2`'s body: SSE2, the x87 one.
         Input::Of(&[1, 0]),
-        // The coefficient scale (a double) and the colour scale (a float's bits).
+        // The coefficient scale (a double) and the colour scale (a float's bits; one third, whose
+        // products with large sums need rounding, past the powers of two).
         Input::Of(&[0, 1, 2]),
-        Input::Of(&[0x3780_0000, 0x3f80_0000, 0x7fc0_0000, 0x0000_0001]),
+        Input::Of(&[
+            0x3780_0000,
+            0x3f80_0000,
+            0x7fc0_0000,
+            0x0000_0001,
+            0x3eaa_aaab,
+        ]),
     ])
     .setup(|e, case: &Case| {
         let coefficient_scale = match case.word(5) {

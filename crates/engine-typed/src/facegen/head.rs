@@ -2160,10 +2160,15 @@ mod tests {
     /// mode: sums at the `i32` ends, around 2^24 and 2^29 (where the product stops being exact in
     /// a double at 24 bits), zero and a spread; scales named (a face's 2^-16, one, the smallest
     /// subnormal and normal, the largest float, signed zeros, infinities, NaNs) and over every
-    /// exponent.
+    /// exponent. Among them, sums past 2^29 whose product with a scale of 24 bits takes 54: rounded
+    /// to a double first it lands on a float's halfway point (which rounds to even, down here)
+    /// where the x87's one rounding goes up, so a product below 2^31 taken as exact would differ.
     #[test]
     fn the_plain_colour_steps_give_the_helpers_bits() {
         let mut sums: Vec<i32> = vec![0, 1, -1, i32::MAX, i32::MIN, i32::MIN + 1];
+        // With the scales 0x3f800003 and 0x3f800005: products 0x371556a0000001 and 0x2c266820000001
+        // (times 2^-23), the 30 bits below their 24 a half and one more.
+        sums.extend([1_848_289_963, -1_848_289_963, 1_481_428_173]);
         for edge in [1i32 << 24, 1 << 29] {
             for step in -2..=2 {
                 sums.push(edge + step);
@@ -2176,6 +2181,9 @@ mod tests {
         }));
         let named = [
             0x3780_0000,
+            0x3f80_0003,
+            0x3f80_0005,
+            0x3eaa_aaab,
             0x3f80_0000,
             0xbf80_0000,
             0,
