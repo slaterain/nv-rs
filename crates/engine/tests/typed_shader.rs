@@ -4249,6 +4249,9 @@ impl Geometry for Diff {
             ])
             // The first active light's getters (the draw family's, their own tests).
             .goes_by_address(&[0x00b7_0590, 0x00b7_0600])
+            // The draw family's shadow-pass test and a lighting property's fade, the dispatch family's node pool lock and
+            // the CRT's `_isnan`, as in `shared`.
+            .goes_by_address(&[0x00b6_30f0, 0x00b6_6b80, 0x0040_fbf0, 0x00ec_75b1])
             .goes_by_address(DRAW_LISTS)
             .goes_by_address(DRAW_F_HELPERS)
             .max_calls(MAX_CALLS)
