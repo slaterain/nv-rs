@@ -66,6 +66,7 @@ pub static FIXES: &[Fix] = &[
     FACIAL_HAIR_BY_RACE_FOLDER,
     crate::patch_data::STRIP_LOD_WATER,
     crate::direct_files::FIX,
+    crate::crash_fixes::FIX,
     DRAW_THREAD,
     HAVOK_REF_COUNTS,
 ];
@@ -957,6 +958,15 @@ impl Choice {
                 Some(other) => return Err(format!("{}={other}: use 0 or 1", fix.env)),
             }
         }
+        // A part of the crash and leak fixes has a variable of its own, a fix's in all but name.
+        for part in crate::crash_fixes::PARTS {
+            match env(part.env).as_deref().map(str::trim) {
+                None => {}
+                Some("1") => overrides.push((part.env, true)),
+                Some("0") => overrides.push((part.env, false)),
+                Some(other) => return Err(format!("{}={other}: use 0 or 1", part.env)),
+            }
+        }
         // A recording, a scripted run, a measurement or a single fix's switch is a test: with no
         // NV_PRESET of its own it runs on vanilla, so a script that was never told about the preset
         // still measures the original. Only a plain start (or the launcher, whose NV_SAVE_OUT is a
@@ -1135,18 +1145,55 @@ impl Choice {
             )
     }
 
+    /// Whether this part of the crash and leak fixes runs: its own variable if set, else its
+    /// `Fallout.ini` line, else what the family row does ([`Choice::is_on`]).
+    pub fn is_part_on(&self, part: &crate::crash_fixes::Part) -> bool {
+        self.overrides
+            .iter()
+            .find(|(env, _)| *env == part.env)
+            .map_or(self.is_on(&crate::crash_fixes::FIX), |(_, on)| *on)
+    }
+
+    /// The crash and leak fixes in the start-up line: the row with the parts it runs without, or
+    /// the parts on alone with the row off.
+    fn describe_crash_fixes(&self) -> Option<String> {
+        let parts = crate::crash_fixes::PARTS;
+        let row = crate::crash_fixes::FIX.name;
+        if self.is_on(&crate::crash_fixes::FIX) {
+            let without: Vec<&str> = parts
+                .iter()
+                .filter(|p| !self.is_part_on(p))
+                .map(|p| p.name)
+                .collect();
+            Some(if without.is_empty() {
+                row.to_string()
+            } else {
+                format!("{row} (without {})", without.join(", "))
+            })
+        } else {
+            let on: Vec<&str> = parts
+                .iter()
+                .filter(|p| self.is_part_on(p))
+                .map(|p| p.name)
+                .collect();
+            (!on.is_empty()).then(|| format!("{row}: only {}", on.join(", ")))
+        }
+    }
+
     /// The start-up line: what this run is, so a log (and an F12 report) says which game it
     /// measured: the preset, the fixes on, the limits and the threads asked for ([`Choice::threads`];
     /// the host's own `threads:` line says how they ran).
     pub fn describe(&self) -> String {
         let draw_refused = crate::draw_thread::refusal(self)
             .map(|why| format!("{} (refused: {why})", DRAW_THREAD.name));
+        let crash_fixes = self.describe_crash_fixes();
         let on: Vec<&str> = FIXES
             .iter()
-            .filter(|f| self.is_on(f))
-            .map(|f| match (&draw_refused, f.env == DRAW_THREAD.env) {
-                (Some(refused), true) => refused.as_str(),
-                _ => f.name,
+            .filter_map(|f| match (&draw_refused, f.env) {
+                (_, env) if env == crate::crash_fixes::FIX.env => crash_fixes.as_deref(),
+                _ if !self.is_on(f) => None,
+                (Some(refused), env) if env == DRAW_THREAD.env => Some(refused.as_str()),
+                _ => Some(f.name),
             })
             .collect();
         let uncapped = on.contains(&crate::uncap::FIX.name);
@@ -1260,6 +1307,7 @@ pub fn play_run_taken_as_test(
     let fixes: Vec<&str> = FIXES
         .iter()
         .map(|f| f.env)
+        .chain(crate::crash_fixes::PARTS.iter().map(|p| p.env))
         .filter(|name| env(name).is_some())
         .collect();
     if tests.is_empty() && fixes.is_empty() {
@@ -1354,9 +1402,14 @@ fn parse_limit(value: &str, source: &str) -> Result<u32, String> {
 pub fn install(e: &mut Engine, choice: &Choice) {
     crate::uncap::set_frame_limit(choice.frame_limit);
     crate::uncap::set_menu_frame_limit(choice.bound_menu_frame_limit());
-    for fix in FIXES.iter().filter(|f| choice.is_on(f)) {
+    // The crash and leak fixes install part by part, each by its own switch.
+    for fix in FIXES
+        .iter()
+        .filter(|f| choice.is_on(f) && f.env != crate::crash_fixes::FIX.env)
+    {
         (fix.install)(e);
     }
+    crate::crash_fixes::install(e, choice);
     install_loader_walk_limit(e, std::env::var("NV_LOADER_WALK_MS").ok().as_deref());
     if choice.is_on(&DRAW_THREAD) {
         crate::draw_thread::install(e, choice);
