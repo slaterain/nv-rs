@@ -204,8 +204,8 @@ const ARCHIVE_FILE_READ: u32 = 0x00b0_1800;
 const INFLATE_INIT: u32 = 0x00b4_3fe0;
 const INFLATE: u32 = 0x00b4_4000;
 const INFLATE_END: u32 = 0x00b4_5db0;
-/// `00afdbc0` (thiscall on a directory entry, one word): whether it holds
-/// the given name hash.
+/// `00afdbc0` (thiscall on a directory entry, one word): whether an address
+/// lies in the directory's block of 16-byte file entries.
 const DIRECTORY_HAS: u32 = 0x00af_dbc0;
 /// `00afdc00` (thiscall on an archive's `BSArchive` header, one word): whether one of its
 /// directories holds the file entry ([`fn_00afdc00`]; typed in the archives family).
@@ -687,15 +687,16 @@ pub fn fn_00afd8b0(e: &mut Engine, this: Ptr) -> Ptr {
 // Translated from 00afdc00 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (thiscall on a `BSArchive`, one word): whether
 /// any of its `iDirectories` 16-byte directory entries (`pDirectories`,
-/// +0x24) holds `hash` (`00afdbc0` on each, in order).
-pub fn fn_00afdc00(e: &mut Engine, this: Ptr, hash: u32) -> bool {
+/// +0x24) holds the file entry at `address` in its block (`00afdbc0` on
+/// each, in order).
+pub fn fn_00afdc00(e: &mut Engine, this: Ptr, address: u32) -> bool {
     let mut index = 0u32;
     while index < e.mem.u32(this.addr() + 0x10) {
         let entry = e
             .mem
             .u32(this.addr() + 0x24)
             .wrapping_add(index.wrapping_mul(16));
-        if e.call(DIRECTORY_HAS, &args![entry, hash]).bool() {
+        if e.call(DIRECTORY_HAS, &args![entry, address]).bool() {
             return true;
         }
         index += 1;
@@ -2417,14 +2418,15 @@ fn file_by_entry(
 // Translation incomplete: 00af6910 - the FS:[0] exception frame (the unwind state of the NiPointer per archive) is not translated
 /// Unnamed in the engine map (cdecl, two words): under the list's critical
 /// section, the first listed archive whose `BSArchive` part has a
-/// directory with `hash` ([`fn_00afdc00`]) among those whose type bits meet
+/// directory whose block of file entries holds `entry` ([`fn_00afdc00`])
+/// among those whose type bits meet
 /// `types` (or all, for 0xffff); then, unless `types` is 0xffff, among
 /// those whose type bits do not. Each is held by a reference while asked.
 /// Answers the archive or null.
 ///
 /// For `types` 0xffff with no find the exe returns without leaving the
 /// critical section; so does this.
-pub fn fn_00af6910(e: &mut Engine, hash: Ptr, types: u32) -> u32 {
+pub fn fn_00af6910(e: &mut Engine, entry: Ptr, types: u32) -> u32 {
     e.call(ENTER_CRITICAL_SECTION, &args![ARCHIVE_LIST_LOCK]);
     let mut node = e.global::<u32>(ARCHIVE_LIST);
     while node != 0 {
@@ -2436,7 +2438,7 @@ pub fn fn_00af6910(e: &mut Engine, hash: Ptr, types: u32) -> u32 {
             && (type_matches(e, archive, types) || types == ANY_ARCHIVE_TYPE)
             && e.call(
                 ARCHIVE_HOLDS,
-                &args![archive + Archive::iTag.off, hash.addr()],
+                &args![archive + Archive::iTag.off, entry.addr()],
             )
             .bool()
         {
@@ -2462,7 +2464,7 @@ pub fn fn_00af6910(e: &mut Engine, hash: Ptr, types: u32) -> u32 {
             && !type_matches(e, archive, types)
             && e.call(
                 ARCHIVE_HOLDS,
-                &args![archive + Archive::iTag.off, hash.addr()],
+                &args![archive + Archive::iTag.off, entry.addr()],
             )
             .bool()
         {
@@ -2482,8 +2484,8 @@ pub fn fn_00af6910(e: &mut Engine, hash: Ptr, types: u32) -> u32 {
 // Translated from 00af6340 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00af6340 - the FS:[0] exception frame (the unwind state of the NiPointer) is not translated
 /// Unnamed in the engine map (cdecl, four words; the first unused): the
-/// file object for the file `entry` from the archive that has the entry's
-/// directory hash ([`fn_00af6910`] with `entry` as the hash and any type),
+/// file object for the file `entry` from the archive whose directories'
+/// blocks hold the entry ([`fn_00af6910`] with any type),
 /// held by a reference while [`fn_00afa750`] makes it; null without such an
 /// archive. The exe also computes bit 31 of the entry's word at +0xc into
 /// a local it never reads.
