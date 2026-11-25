@@ -1656,12 +1656,7 @@ pub(crate) fn queued_texture_run_in_context(e: &mut Engine, this: Ptr<QueuedText
     if !ni_pointer_get(e, slot).is_null() {
         e.call(QUEUED_TEXTURE_SET_FLAG_1, &args![this, 1u32]);
         let texture = ni_pointer_get(e, slot);
-        // lStewieAl's Tweaks' S0136 (its call at `0x43C20A`): the state read guarded as Tweaks' `__try` does.
-        let state = if e.stewie(engine_core::extend::stewie::QUEUED_TEXTURE_LOAD) {
-            engine_core::extend::stewie::queued_texture_state(e, texture.addr())
-        } else {
-            fn_0043c430(e, texture)
-        };
+        let state = fn_0043c430(e, texture);
         if state == 3 && !fn_0043c3d0(e, this) {
             let texture = ni_pointer_get(e, slot);
             e.vcall(texture.addr(), 0x8c, &args![]);
@@ -4881,60 +4876,15 @@ pub fn queued_helmet_attach(e: &mut Engine, this: Ptr<QueuedHelmet>) {
     fn_0043fb50(e, Ptr::new(loader), reference);
 }
 
-/// `BipedAnim`: the item of slot `index` (`slotData[index].item`, 16-byte entries from +0x2C) and
-/// the character (+0x2B0, the word `AttachHelmet` compares with the player at `004aeb77`).
-const BIPED_SLOT_ITEMS: u32 = 0x2c;
-const BIPED_CHARACTER: u32 = 0x2b0;
-/// The biped slots' names (`char*` each, `01188b98`).
-const BIPED_SLOT_NAMES: u32 = 0x0118_8b98;
-/// `TESObjectREFR::GetTheName` (`0055d520`, `thiscall`) and the form id's offset.
-const REFERENCE_GET_THE_NAME: u32 = 0x0055_d520;
-const FORM_REF_ID: u32 = 0x0c;
-
-/// lStewieAl's Tweaks' row S0186 (`BipedAnimNullItemError::OnQueuedHelmetLoad`, the call at
-/// `0x43FBE4`): with a face model and a cloned node for a slot whose item is gone, the helmet is
-/// not attached (the exe's `AttachHelmet` reads the missing item) and the console says `Failed to
-/// resolve item for body part '<slot>' on actor <name> (<id>)`, or `... on null actor` when
-/// neither the biped's character nor the helmet's reference is set. Tweaks' header has the
-/// character 4 bytes early (+0x2AC); the port reads it where the exe keeps it (+0x2B0).
 fn helmet_slot_has_no_item(
-    e: &mut Engine,
-    this: Ptr<QueuedHelmet>,
-    biped: Ptr,
-    face_model: Ptr,
-    clone: Ptr,
-    index: u32,
+    _e: &mut Engine,
+    _this: Ptr<QueuedHelmet>,
+    _biped: Ptr,
+    _face_model: Ptr,
+    _clone: Ptr,
+    _index: u32,
 ) -> bool {
-    if !e.stewie(engine_core::extend::stewie::BIPED_ANIM_NULL_ITEM)
-        || face_model.is_null()
-        || clone.is_null()
-        || e.mem.u32(biped.addr() + BIPED_SLOT_ITEMS + 0x10 * index) != 0
-    {
-        return false;
-    }
-    let slot = e.mem.u32(BIPED_SLOT_NAMES + 4 * index);
-    let character = e.mem.u32(biped.addr() + BIPED_CHARACTER);
-    let actor = if character != 0 {
-        character
-    } else {
-        e.get(this, QueuedHelmet::pRef).addr()
-    };
-    if actor != 0 {
-        let name = e.call(REFERENCE_GET_THE_NAME, &args![actor]).u32();
-        let id = e.mem.u32(actor + FORM_REF_ID);
-        engine_core::extend::stewie::console_print(
-            e,
-            b"Failed to resolve item for body part '%s' on actor %s (%08X)",
-            &[slot, name, id],
-        );
-    } else {
-        engine_core::extend::stewie::console_print(
-            e,
-            b"Failed to resolve item for body part '%s' on null actor",
-            &[slot],
-        );
-    }
-    true
+    false
 }
 
 // Translated from 0043fc10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -7390,45 +7340,6 @@ mod tests {
         e.mem.set_u8(surface + 0x58 + 3, 4);
         e.call(0x0043_c150, &args![this]);
         assert!(calls_to(&e, TEXTURE_HOOK).is_empty());
-    }
-
-    /// lStewieAl's Tweaks' row S0136 at `0x43C20A`: the palette's texture names surface data that is
-    /// not there (the texture freed under the loader). Row off, the exe's state read faults (here
-    /// on unmapped memory); row on, the state counts 0: no hook call, no fault. With good data the
-    /// row reads its format byte as the exe does (3: the hook is called).
-    #[test]
-    fn s0136_run_with_a_texture_whose_data_is_gone() {
-        for on in [false, true] {
-            let mut e = queue_engine();
-            e.set_stewie(engine_core::extend::stewie::QUEUED_TEXTURE_LOAD, on);
-            e.map(0x011d_8000, 0x1000);
-            let this = run_scene(&mut e);
-            let entry = file_entry(&mut e, 0, 0);
-            e.set(this, QueuedTexture::pFileEntry, entry);
-            let texture = e.mem.alloc(0x40);
-            e.mem.set_u32(texture, TEXTURE_VTABLE);
-            e.mem.set_u32(texture + 0x24, 0x0000_0100);
-            e.register_double(TEXTURE_MAP_FIND, move |e, a| {
-                e.mem.set_u32(a[3], texture);
-                1u32.into_ret()
-            });
-            e.mem.unmap(0, 0x1000);
-            e.call_log = Some(vec![]);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                e.call(0x0043_c150, &args![this]);
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                assert!(calls_to(&e, TEXTURE_HOOK).is_empty());
-                let surface = e.mem.alloc(0x80);
-                e.mem.set_u32(texture + 0x24, surface);
-                e.mem.set_u8(surface + 0x58 + 3, 3);
-                e.call_log = Some(vec![]);
-                e.call(0x0043_c150, &args![this]);
-                assert_eq!(calls_to(&e, TEXTURE_HOOK), vec![vec![texture]]);
-            }
-        }
     }
 
     #[test]
@@ -11725,191 +11636,6 @@ mod tests {
     thread_local! {
         static HELMET_LINES: std::cell::RefCell<Vec<(Vec<u8>, Vec<u8>, Vec<u8>, u32)>> =
             const { std::cell::RefCell::new(Vec::new()) };
-    }
-
-    /// The biped's character in [`helmet_with_slot_item`]: its id (the helmet's reference is
-    /// 0x1234, "Doc Mitchell") and the decoy's at +0x2AC, where Tweaks' header puts the character.
-    const CHARACTER_ID: u32 = 0x5678;
-    const DECOY_ID: u32 = 0x9abc;
-
-    /// A helmet whose slot 2 has a face model and a cloned node, for a biped whose slot 2 holds
-    /// `item` (0: none); `AttachHelmet` does nothing without both, as the exe's does, and otherwise
-    /// reads the slot's item (its form id at +0xC); the console's print keeps (format, slot name,
-    /// actor name, id). The helmet's reference is "Doc Mitchell" (0x1234); the biped's character
-    /// (+0x2B0) is "Sunny Smiles" (0x5678), or 0 without `character`; the word at +0x2AC is a
-    /// decoy, "Trudy" (0x9ABC). `GetTheName` answers each reference's own name.
-    fn helmet_with_slot_item(
-        e: &mut Engine,
-        item: u32,
-        character: bool,
-    ) -> (Ptr<QueuedHelmet>, Ptr) {
-        HELMET_LINES.with(|l| l.borrow_mut().clear());
-        let subject = reference(e);
-        let biped = biped_anim(e, subject, &[]);
-        let sunny = reference(e);
-        e.mem.set_u32(sunny.addr() + 0xc, CHARACTER_ID);
-        let trudy = reference(e);
-        e.mem.set_u32(trudy.addr() + 0xc, DECOY_ID);
-        e.mem.set_u32(
-            biped.addr() + 0x2b0,
-            if character { sunny.addr() } else { 0 },
-        );
-        e.mem.set_u32(biped.addr() + 0x2ac, trudy.addr());
-        e.mem.set_u32(biped.addr() + 0x2c + 0x10 * 2, item);
-        let this = queued_helmet(e, biped, subject, 4, 1);
-        e.mem.set_u32(this.addr() + 0xcc + 8, 0x3c02);
-        e.mem.set_u32(this.addr() + 0x7c + 8, 0x5002);
-        e.register(BIPED_ANIM_ATTACH_HELMET, |e, a| {
-            if a[1] == 0 || a[2] == 0 {
-                return 0u32.into_ret();
-            }
-            let item = e.mem.u32(a[0] + 0x2c + 0x10 * a[3]);
-            e.mem.u32(item + 0xc).into_ret()
-        });
-        e.map(0x0118_8000, 0x1000);
-        let names = e.mem.alloc(0x40);
-        e.mem.set_cstr(names, b"Hat");
-        e.mem.set_u32(0x0118_8b98 + 4 * 2, names);
-        // Each reference keeps its name's address at +0xFC, which `GetTheName` answers.
-        for (who, name) in [
-            (subject, &b"Doc Mitchell"[..]),
-            (sunny, b"Sunny Smiles"),
-            (trudy, b"Trudy"),
-        ] {
-            let text = e.mem.alloc(0x20);
-            e.mem.set_cstr(text, name);
-            e.mem.set_u32(who.addr() + 0xfc, text);
-        }
-        e.register(REFERENCE_GET_THE_NAME, |e, a| {
-            e.mem.u32(a[0] + 0xfc).into_ret()
-        });
-        e.register(0x0071_b160, |_, _| 0x5000u32.into_ret());
-        e.register(0x0071_d0a0, |e, a| {
-            let text = |e: &Engine, at: u32| e.mem.cstr(e.mem.u32(at));
-            let line = (
-                e.mem.cstr(a[1]),
-                text(e, a[2]),
-                if e.mem.cstr(a[1]).ends_with(b"null actor") {
-                    vec![]
-                } else {
-                    text(e, a[2] + 4)
-                },
-                e.mem.u32(a[2] + 8),
-            );
-            HELMET_LINES.with(|l| l.borrow_mut().push(line));
-            Ret::default()
-        });
-        (this, biped)
-    }
-
-    /// The line row S0186 prints for an actor.
-    fn actor_line(name: &[u8], id: u32) -> (Vec<u8>, Vec<u8>, Vec<u8>, u32) {
-        (
-            b"Failed to resolve item for body part '%s' on actor %s (%08X)".to_vec(),
-            b"Hat".to_vec(),
-            name.to_vec(),
-            id,
-        )
-    }
-
-    /// lStewieAl's Tweaks' row S0186: the helmet's model for a slot that holds no item: the exe's
-    /// `AttachHelmet` reads the missing item and stops; with the row on that slot is not attached,
-    /// the console names the slot and the actor (the biped's character at +0x2B0, where the exe
-    /// keeps it, not the word at +0x2AC Tweaks' header names), and the task ends as usual.
-    #[test]
-    fn s0186_a_helmet_for_a_slot_with_no_item() {
-        for on in [false, true] {
-            let mut e = helmet_engine();
-            let (this, _) = helmet_with_slot_item(&mut e, 0, true);
-            e.set_stewie(engine_core::extend::stewie::BIPED_ANIM_NULL_ITEM, on);
-            e.call_log = Some(vec![]);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                e.call(0x0043_fb80, &args![this]);
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                assert!(calls_to(&e, BIPED_ANIM_ATTACH_HELMET).is_empty());
-                assert_eq!(calls_to(&e, HELMET_MAP_SLOT).len(), 1);
-                let lines = HELMET_LINES.with(|l| l.borrow().clone());
-                assert_eq!(lines, [actor_line(b"Sunny Smiles", CHARACTER_ID)]);
-            }
-        }
-    }
-
-    /// Row S0186 with no character on the biped: the helmet's reference is named (the decoy at
-    /// +0x2AC still not); with neither, the line says "null actor".
-    #[test]
-    fn s0186_the_line_names_the_helmets_reference_or_no_actor() {
-        let mut e = helmet_engine();
-        let (this, _) = helmet_with_slot_item(&mut e, 0, false);
-        e.set_stewie(engine_core::extend::stewie::BIPED_ANIM_NULL_ITEM, true);
-        e.call(0x0043_fb80, &args![this]);
-        let lines = HELMET_LINES.with(|l| l.borrow().clone());
-        assert_eq!(lines, [actor_line(b"Doc Mitchell", 0x1234)]);
-        let mut e = helmet_engine();
-        let (this, _) = helmet_with_slot_item(&mut e, 0, false);
-        e.set(this, QueuedHelmet::pRef, Ptr::NULL);
-        e.register(HELMET_MAP_SLOT, |_, _| Ret::default());
-        e.set_stewie(engine_core::extend::stewie::BIPED_ANIM_NULL_ITEM, true);
-        e.call(0x0043_fb80, &args![this]);
-        let lines = HELMET_LINES.with(|l| l.borrow().clone());
-        assert_eq!(
-            lines
-                .iter()
-                .map(|l| (l.0.clone(), l.1.clone()))
-                .collect::<Vec<_>>(),
-            [(
-                b"Failed to resolve item for body part '%s' on null actor".to_vec(),
-                b"Hat".to_vec()
-            )]
-        );
-    }
-
-    /// Row S0186 with no face model for the slot (its cloned node there, no item): Tweaks tests the
-    /// item only with both, so the exe's `AttachHelmet` is asked as with the row off (it does
-    /// nothing without a face model) and nothing is printed.
-    #[test]
-    fn s0186_row_on_without_a_face_model_prints_nothing() {
-        let mut calls = vec![];
-        for on in [false, true] {
-            let mut e = helmet_engine();
-            let (this, biped) = helmet_with_slot_item(&mut e, 0, true);
-            e.mem.set_u32(this.addr() + 0x7c + 8, 0);
-            e.set_stewie(engine_core::extend::stewie::BIPED_ANIM_NULL_ITEM, on);
-            e.call_log = Some(vec![]);
-            e.call(0x0043_fb80, &args![this]);
-            assert_eq!(
-                calls_to(&e, BIPED_ANIM_ATTACH_HELMET),
-                vec![vec![biped.addr(), 0, 0x3c02, 2]]
-            );
-            assert!(HELMET_LINES.with(|l| l.borrow().is_empty()), "row {on}");
-            calls.push(calls_to(&e, HELMET_MAP_SLOT));
-        }
-        assert_eq!(calls[0], calls[1]);
-    }
-
-    /// Row S0186 with the slot's item there (ordinary input): the same attaches with the row off
-    /// and on, and nothing printed.
-    #[test]
-    fn s0186_row_on_with_the_item_changes_nothing() {
-        let mut calls = vec![];
-        for on in [false, true] {
-            let mut e = helmet_engine();
-            let item = e.mem.alloc(0x40);
-            e.mem.set_u32(item + 0xc, 0x0001_5555);
-            let (this, biped) = helmet_with_slot_item(&mut e, item, true);
-            e.set_stewie(engine_core::extend::stewie::BIPED_ANIM_NULL_ITEM, on);
-            e.call_log = Some(vec![]);
-            e.call(0x0043_fb80, &args![this]);
-            assert_eq!(
-                calls_to(&e, BIPED_ANIM_ATTACH_HELMET),
-                vec![vec![biped.addr(), 0x5002, 0x3c02, 2]]
-            );
-            assert!(HELMET_LINES.with(|l| l.borrow().is_empty()));
-            calls.push(calls_to(&e, HELMET_MAP_SLOT));
-        }
-        assert_eq!(calls[0], calls[1]);
     }
 
     #[test]

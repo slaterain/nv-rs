@@ -1,4 +1,0 @@
-target/
-# Recordings are private: results, probe logs and snapshot regions.
-*.jsonl
-*.bin

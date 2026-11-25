@@ -2423,6 +2423,10 @@ pub fn fn_00856ca0(
     }
     e.call(SAVE_NUMERIC_ID_ARRAYS, &args![this, stream]);
     if !game_unavailable(e, this) {
+        // Port-added (`NV_SAVE_PICTURE_LATER`): the picture, read back while the body was written.
+        if let Some(picture) = engine_core::save_picture::take(e) {
+            write_picture_later(e, this, stream, picture);
+        }
         let mode: u32 = e.global(SEEK_MODE);
         e.vcall(stream.addr(), FILE_SEEK, &args![start_position, mode]);
         e.call(
@@ -2832,6 +2836,24 @@ pub fn tes_save_load_game_load_numeric_id(
     }
     fn_00857bd0(e, this, size);
     unresolved
+}
+
+/// Port-added (`NV_SAVE_PICTURE_LATER`, `engine_core::save_picture`): the save picture's bytes written
+/// at their place in the file, where the header wrote the picture's memory, through the file's seek
+/// (absolute, the seek mode the save's own seek back uses) and the save's write (`00857b50`).
+fn write_picture_later(
+    e: &mut Engine,
+    this: Ptr<TESSaveLoadGame>,
+    stream: Ptr,
+    picture: engine_core::save_picture::Picture,
+) {
+    let size = picture.bytes.len() as u32;
+    let block = e.mem.alloc(size.max(1));
+    e.mem.write(block, &picture.bytes);
+    let mode: u32 = e.global(SEEK_MODE);
+    e.vcall(stream.addr(), FILE_SEEK, &args![picture.offset, mode]);
+    e.call(WRITE_BYTES, &args![this, stream, block, size]);
+    e.mem.free(block);
 }
 
 // Translated from 00857b50 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -6454,15 +6476,20 @@ pub fn tes_save_load_game_save_header(
     e.mem.set_u32(frame + HEIGHT, 0x100);
     let mut screenshot = 0u32;
     let mut pixel_bytes = 0u32;
+    // Port-added (`NV_SAVE_PICTURE_LATER`, `engine_core::save_picture`): the picture read back after the
+    // save's body, its bytes written over the ones written here.
+    let mut picture_later = false;
     if !game_unavailable(e, this) {
         let lock: u32 = e.global(SAVE_LOCK);
         e.call(SAVE_LOCK_LEAVE, &args![lock]);
+        engine_core::save_picture::begin();
         screenshot = e
             .call(
                 TAKE_SAVE_SCREENSHOT,
                 &args![frame + WIDTH, frame + HEIGHT, 0u32],
             )
             .u32();
+        picture_later = engine_core::save_picture::end();
         e.call(SAVE_LOCK_ENTER, &args![lock]);
         if screenshot != 0 {
             pixel_bytes = fn_00861610(e, Ptr::new(screenshot), 0, 0);
@@ -6523,6 +6550,10 @@ pub fn tes_save_load_game_save_header(
             write(e, frame + WIDTH, 4);
             write(e, frame + HEIGHT, 4);
             let pixels = e.call(IMAGE_PIXELS, &args![screenshot, 0u32, 0u32]).u32();
+            if picture_later {
+                let offset = e.call(FILE_POSITION, &args![file]).u32();
+                engine_core::save_picture::at(offset, e.mem.bytes(pixels, pixel_bytes));
+            }
             write(e, pixels, pixel_bytes);
             e.vcall(screenshot, SLOT_DESTRUCTOR, &args![1u32]);
         }
@@ -8220,6 +8251,38 @@ mod tests {
         // No forms: the two zero words and the patched end and count.
         let sizes: Vec<usize> = rig.writes.borrow().iter().map(|w| w.1.len()).collect();
         assert_eq!(sizes, vec![4, 4, 4, 4]);
+    }
+
+    /// `NV_SAVE_PICTURE_LATER`: the save writes a picture read back during its body at its place,
+    /// after the numeric id arrays and before its own seek back; without one, as before.
+    #[test]
+    fn save_writes_a_picture_read_back_later_before_its_seek_back() {
+        use engine_core::save_picture as later;
+        later::install(picture_rows);
+        let mut rig = save_rig();
+        let e = &mut rig.e;
+        install_entries(e, &[]);
+        let map: Ptr<ChangesMap> = e.new_object();
+        e.set(rig.game, TESSaveLoadGame::m_pChanges, map);
+        // The header (a stub here) took a 2 by 2 picture read back later, its bytes at file position 77.
+        later::on_for_tests(Some(true));
+        later::begin();
+        later::allow(true);
+        later::deferred(8);
+        later::shot(2, 2);
+        assert!(later::end());
+        later::at(77, vec![0x33; 12]);
+        assert!(fn_00856ca0(e, rig.game, Ptr::NULL, Ptr::NULL, false));
+        later::on_for_tests(None);
+        assert!(later::take(e).is_none(), "taken once");
+        assert_eq!(*rig.seeks.borrow(), vec![(77, 0), (100, 0)]);
+        let sizes: Vec<usize> = rig.writes.borrow().iter().map(|w| w.1.len()).collect();
+        assert_eq!(sizes, vec![4, 4, 12, 4, 4]);
+        assert_eq!(
+            rig.writes.borrow()[2].1,
+            vec![3, 2, 1, 7, 6, 5, 11, 10, 9, 15, 14, 13]
+        );
+        assert_eq!(calls_to(e, SAVE_NUMERIC_ID_ARRAYS).len(), 1);
     }
 
     #[test]
@@ -14007,6 +14070,85 @@ mod tests {
         assert_eq!(text(&rig.e, rig.e.mem.u32(stat + 4)), "Save Game Header");
         // The save number is not counted up when measuring.
         assert_eq!(rig.e.get(rig.game, TESSaveLoadGame::m_iNextSaveNumber), 0);
+    }
+
+    /// `NV_SAVE_PICTURE_LATER`'s copy as the platform answers it: two rows of 8 bytes (two pixels each:
+    /// blue, green, red, alpha), counting from 1.
+    fn picture_rows(_: &mut Engine) -> Option<(u32, Vec<u8>)> {
+        Some((8, (1..=16).collect()))
+    }
+
+    /// `NV_SAVE_PICTURE_LATER`: a header whose picture is read back after the save's body, its bytes
+    /// written over the ones the header wrote at the end of the body, leaves the file's bytes as the
+    /// header with the picture converted at once does.
+    #[test]
+    fn a_save_picture_read_back_later_leaves_the_files_bytes_as_at_once() {
+        use engine_core::save_picture as later;
+        later::install(picture_rows);
+        let file_bytes = |deferred: bool| -> Vec<u8> {
+            let mut rig = header_rig();
+            later::on_for_tests(Some(deferred));
+            // The file: written at its position, which its seek (slot 0x14) sets and 004720a0 reads.
+            let data = Rc::new(RefCell::new((Vec::<u8>::new(), 0usize)));
+            let file = object_with_slots(&mut rig.e, &[(FILE_SEEK, 0x0396_0000)]);
+            let sink = data.clone();
+            rig.e.register_double(FILE_WRITE, move |e, a| {
+                let bytes = e.mem.bytes(a[1], a[2]);
+                let (v, at) = &mut *sink.borrow_mut();
+                if v.len() < *at + bytes.len() {
+                    v.resize(*at + bytes.len(), 0);
+                }
+                v[*at..*at + bytes.len()].copy_from_slice(&bytes);
+                *at += bytes.len();
+                returns(a[2])
+            });
+            let sink = data.clone();
+            rig.e
+                .register_double(FILE_POSITION, move |_, _| returns(sink.borrow().1 as u32));
+            let sink = data.clone();
+            rig.e.register_double(0x0396_0000, move |_, a| {
+                sink.borrow_mut().1 = a[1] as usize;
+                Ret::default()
+            });
+            // The picture (2 by 2, its level 12 bytes), as 00878f60 takes it: its copy read back later
+            // when it may be, else converted into the image at once.
+            let screenshot = rig.screenshot;
+            let pixels = rig.e.call(IMAGE_PIXELS, &[screenshot, 0, 0]).u32();
+            rig.e.register_double(TAKE_SAVE_SCREENSHOT, move |e, _| {
+                later::allow(true);
+                if later::allowed() {
+                    later::deferred(8);
+                }
+                if later::is_deferred() {
+                    later::shot(2, 2);
+                } else {
+                    let (row, rows) = picture_rows(e).unwrap();
+                    let mut rgb = vec![0; 12];
+                    later::convert(&later::placed(&rows, row, 8, 2), 2, 2, &mut rgb);
+                    e.mem.write(pixels, &rgb);
+                }
+                returns(screenshot)
+            });
+            let file = Ptr::new(file);
+            tes_save_load_game_save_header(&mut rig.e, rig.game, file, Ptr::NULL);
+            // The body; then, at the save's end, the picture.
+            let body = rig.e.mem.alloc(4);
+            rig.e.mem.write(body, &[0xB0; 4]);
+            fn_00857b50(&mut rig.e, rig.game, file, Ptr::new(body), 4);
+            if let Some(picture) = later::take(&mut rig.e) {
+                assert!(deferred, "a picture waits only when read back later");
+                write_picture_later(&mut rig.e, rig.game, file, picture);
+            }
+            later::on_for_tests(None);
+            data.take().0
+        };
+        let at_once = file_bytes(false);
+        assert_eq!(file_bytes(true), at_once);
+        // Red, green and blue of each pixel, then the body.
+        let picture = [
+            3, 2, 1, 7, 6, 5, 11, 10, 9, 15, 14, 13, 0xB0, 0xB0, 0xB0, 0xB0,
+        ];
+        assert!(at_once.ends_with(&picture), "{at_once:?}");
     }
 
     #[test]

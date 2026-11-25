@@ -14,7 +14,12 @@
 //! The translations make several calls by address per vertex or texel (the checked iterators'
 //! reads and steps, the strided array's read and write, the coordinates' row, `_ftol2`, the float
 //! floor); here the same reads and writes are plain loads and stores in one loop, and the texel
-//! sums run in host memory, written to the game's buffer once. Every call the translations make
+//! sums run in host memory, written to the game's buffer once. A morph's points go the same way
+//! (`morph_in_host`): its offsets read at once, the points morphed in host memory and written back,
+//! when no check can fail and nothing the morph writes is read again; else point by point as the
+//! exe's loops go (the race menu builds a head two or three times a click, about 13 morph calls
+//! of up to 80 morphs over every vertex; a 2026-11-24 profile of the menu put this function's own
+//! time first under its slider release). Every call the translations make
 //! outside those loops is made, in the same order, with the same words, and every byte they
 //! leave (scratch blocks included) is left the same.
 //!
@@ -420,10 +425,211 @@ fn apply_morph(
     let weight = x87_m32(weight);
     let base = e.mem.u32(iterator);
     let stride = e.mem.u32(iterator.wrapping_add(4));
-    let mut extra = first_extra;
     let offsets_block = e.mem.alloc(8);
     let mut offsets = Offsets::begin(e, morph.wrapping_add(4));
     let points_block = e.mem.alloc(0x40);
+    let layout = MorphLayout {
+        base,
+        stride,
+        first_extra,
+        extra_data,
+        count,
+    };
+    match morph_in_host(e, &offsets, weight, &layout, points_block) {
+        Some(end) => offsets.at = end,
+        None => morph_by_element(e, &mut offsets, weight, &layout, points_block),
+    }
+    e.mem.set_u32(offsets_block, offsets.proxy);
+    e.mem.set_u32(offsets_block.wrapping_add(4), offsets.at);
+    e.mem.free(points_block);
+    e.mem.free(offsets_block);
+}
+
+/// Where one morph of [`apply_coordinates`] reads and writes: the strided vertex array
+/// (`{base, stride}`), the additional vertices' array and its data (0 without), the vertex count.
+struct MorphLayout {
+    base: u32,
+    stride: u32,
+    first_extra: u32,
+    extra_data: u32,
+    count: u32,
+}
+
+/// Whether `[a, a + a_len)` and `[b, b + b_len)` share a byte (64-bit ends: no wrapping).
+fn overlaps(a: u64, a_len: u64, b: u64, b_len: u64) -> bool {
+    a_len != 0 && b_len != 0 && a < b + b_len && b < a + a_len
+}
+
+/// One morph of [`apply_coordinates`] in one pass: the offsets read at once, every point morphed
+/// in host memory and written back, the points block left as [`morph_by_element`] leaves it.
+/// Answers the offsets iterator's end position, or `None` (nothing read or written) when a step
+/// could take a check's failing side (no proxy, a position at or past the proxy's last element)
+/// or when what the loops write could change what they read later (overlapping arrays, a stride
+/// below a point, an address past 4 GB): then the element loops run, as the exe's do.
+fn morph_in_host(
+    e: &mut Engine,
+    offsets: &Offsets,
+    weight: f64,
+    layout: &MorphLayout,
+    points_block: u32,
+) -> Option<u32> {
+    let MorphLayout {
+        base,
+        stride,
+        first_extra,
+        extra_data,
+        count,
+    } = *layout;
+    if offsets.proxy == 0 || stride < 12 {
+        return None;
+    }
+    // The additional vertices past the count: the extra loop's steps (it reads their total after
+    // the vertex loops; nothing they write may change it).
+    let total = if first_extra != 0 {
+        e.mem.u32(extra_data.wrapping_add(0x10))
+    } else {
+        0
+    };
+    let steps = u64::from(count) + u64::from(total.saturating_sub(count));
+    if steps == 0 {
+        // No point and no step: the element loops read nothing either.
+        return None;
+    }
+    let owner = e.mem.u32(offsets.proxy);
+    let end_word = owner.wrapping_add(0x10);
+    let last = e.mem.u32(end_word);
+    let first = u64::from(offsets.at);
+    // Every check is at `first + 6 k` for the steps `k` and passes while it is below `last`.
+    if first + 6 * (steps - 1) >= u64::from(last) {
+        return None;
+    }
+    let extras = u64::from(count.max(total));
+    let vertex_span = if count == 0 {
+        0
+    } else {
+        u64::from(stride) * (u64::from(count) - 1) + 12
+    };
+    let extra_span = if first_extra != 0 { 12 * extras } else { 0 };
+    let limit = 1u64 << 32;
+    if u64::from(base) + vertex_span > limit
+        || u64::from(first_extra) + extra_span > limit
+        || first + 6 * steps > limit
+    {
+        return None;
+    }
+    let (b, x) = (u64::from(base), u64::from(first_extra));
+    let read_only = [
+        (first, 6 * steps),
+        (u64::from(offsets.proxy), 4),
+        (u64::from(end_word), 4),
+        (
+            u64::from(extra_data.wrapping_add(0x10)),
+            if first_extra != 0 { 4 } else { 0 },
+        ),
+    ];
+    if overlaps(b, vertex_span, x, extra_span)
+        || read_only
+            .iter()
+            .any(|&(at, len)| overlaps(b, vertex_span, at, len) || overlaps(x, extra_span, at, len))
+    {
+        return None;
+    }
+    // Both below 4 GB (tested above).
+    let delta_bytes = u32::try_from(6 * steps).ok()?;
+    let extra_bytes = u32::try_from(12 * extras).ok()?;
+    let mut deltas = vec![0u8; delta_bytes as usize];
+    e.mem.read(offsets.at, &mut deltas);
+    let delta = |k: usize| i16::from_le_bytes([deltas[2 * k], deltas[2 * k + 1]]);
+    let n = count as usize;
+    // The points the vertex loops read: the additional vertices' first `count` when there are
+    // any, else the vertex array's.
+    let mut points = vec![0u32; 3 * n];
+    let mut bytes = vec![0u8; 12];
+    if first_extra != 0 {
+        let mut all = vec![0u8; extra_bytes as usize];
+        e.mem.read(first_extra, &mut all);
+        let mut tail: Vec<u32> = all
+            .chunks_exact(4)
+            .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+            .collect();
+        for (k, word) in tail.iter_mut().enumerate() {
+            *word = morphed(delta(k), weight, *word);
+        }
+        points.copy_from_slice(&tail[..3 * n]);
+        let mut out = vec![0u8; tail.len() * 4];
+        for (chunk, word) in out.chunks_exact_mut(4).zip(&tail) {
+            chunk.copy_from_slice(&word.to_le_bytes());
+        }
+        write_points(e, base, stride, &points, &mut bytes);
+        e.mem.write(first_extra, &out);
+    } else {
+        if stride == 12 {
+            let mut all = vec![0u8; 12 * n];
+            e.mem.read(base, &mut all);
+            for (word, w) in points.iter_mut().zip(all.chunks_exact(4)) {
+                *word = u32::from_le_bytes([w[0], w[1], w[2], w[3]]);
+            }
+        } else {
+            for (v, point) in (0u32..).zip(points.chunks_exact_mut(3)) {
+                e.mem.read(vertex_at(base, stride, v), &mut bytes);
+                for (word, w) in point.iter_mut().zip(bytes.chunks_exact(4)) {
+                    *word = u32::from_le_bytes([w[0], w[1], w[2], w[3]]);
+                }
+            }
+        }
+        for (k, word) in points.iter_mut().enumerate() {
+            *word = morphed(delta(k), weight, *word);
+        }
+        write_points(e, base, stride, &points, &mut bytes);
+    }
+    // The points block as the element loops leave it: the last group of four, then the last
+    // single point over its first three words.
+    let groups = n / 4;
+    if groups != 0 {
+        write_words(e, points_block, &points[12 * (groups - 1)..12 * groups]);
+    }
+    if n % 4 != 0 {
+        write_words(e, points_block, &points[3 * (n - 1)..3 * n]);
+    }
+    Some(offsets.at.wrapping_add(delta_bytes))
+}
+
+/// The morphed points written to the strided vertex array: in one write when the points are packed
+/// (a stride of 12), else a point (12 bytes) at a time.
+fn write_points(e: &Engine, base: u32, stride: u32, points: &[u32], bytes: &mut [u8]) {
+    if stride == 12 {
+        let mut all = vec![0u8; 4 * points.len()];
+        for (chunk, word) in all.chunks_exact_mut(4).zip(points) {
+            chunk.copy_from_slice(&word.to_le_bytes());
+        }
+        e.mem.write(base, &all);
+        return;
+    }
+    for (v, point) in (0u32..).zip(points.chunks_exact(3)) {
+        for (chunk, word) in bytes.chunks_exact_mut(4).zip(point) {
+            chunk.copy_from_slice(&word.to_le_bytes());
+        }
+        e.mem.write(vertex_at(base, stride, v), bytes);
+    }
+}
+
+/// One morph of [`apply_coordinates`] as the exe's loops go: four points at a time, then one at a
+/// time, then the additional vertices, every offset read and step through the checked iterator.
+fn morph_by_element(
+    e: &mut Engine,
+    offsets: &mut Offsets,
+    weight: f64,
+    layout: &MorphLayout,
+    points_block: u32,
+) {
+    let MorphLayout {
+        base,
+        stride,
+        first_extra,
+        extra_data,
+        count,
+    } = *layout;
+    let mut extra = first_extra;
     // What the points block holds at the end: the last group of four, then the last single one
     // over its first three words.
     let mut last_four: Option<[u32; 12]> = None;
@@ -509,10 +715,6 @@ fn apply_morph(
     if let Some(point) = last_one {
         write_words(e, points_block, &point);
     }
-    e.mem.set_u32(offsets_block, offsets.proxy);
-    e.mem.set_u32(offsets_block.wrapping_add(4), offsets.at);
-    e.mem.free(points_block);
-    e.mem.free(offsets_block);
 }
 
 // ---------------------------------------------------------------------------------------------

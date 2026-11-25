@@ -385,7 +385,7 @@ pub fn fn_00b63e90(e: &mut Engine, this: Ptr) -> u32 {
             e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
             e.mem.set_u32(NODE_POOL_FREE_LIST, node);
             if count == 0 {
-                e.mem.set_u32(NODE_POOL_LOCK, 0);
+                e.mem.set_u32_release(NODE_POOL_LOCK, 0);
             }
             if next == 0 {
                 break;
@@ -394,7 +394,7 @@ pub fn fn_00b63e90(e: &mut Engine, this: Ptr) -> u32 {
         let count = e.mem.u32(NODE_POOL_LOCK_COUNT).wrapping_sub(1);
         e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
         if count == 0 {
-            e.mem.set_u32(NODE_POOL_LOCK, 0);
+            e.mem.set_u32_release(NODE_POOL_LOCK, 0);
         }
     }
     let tail = e.mem.u32(base + 8);
@@ -1461,7 +1461,7 @@ fn pool_return(e: &mut Engine, node: u32) {
     e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
     e.mem.set_u32(NODE_POOL_FREE_LIST, node);
     if count == 0 {
-        e.mem.set_u32(NODE_POOL_LOCK, 0);
+        e.mem.set_u32_release(NODE_POOL_LOCK, 0);
     }
 }
 
@@ -2337,7 +2337,7 @@ pub fn fn_00b63df0(e: &mut Engine, _this: u32, node: u32) {
     e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
     e.mem.set_u32(NODE_POOL_FREE_LIST, node);
     if count == 0 {
-        e.mem.set_u32(NODE_POOL_LOCK, 0);
+        e.mem.set_u32_release(NODE_POOL_LOCK, 0);
     }
 }
 

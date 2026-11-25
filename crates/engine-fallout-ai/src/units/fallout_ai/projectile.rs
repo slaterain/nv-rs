@@ -1166,18 +1166,9 @@ pub fn projectile_load_game(e: &mut Engine, this: Ptr<Projectile>, buffer: Ptr) 
         }
     }
     if i32::from(e.vcall(buffer.addr(), 0, &args![]).u8()) >= 0x10 {
-        // lStewieAl's Tweaks' row S0180 (`MineDisarmedLightLoadingFix`, the call at `0x9C5723`):
-        // Tweaks' `OnProjectileLoadGame` first runs `009b46c0` on the projectile (its
-        // `##LightOn` block shown again), then the exe's load of the byte.
-        if e.stewie(engine_core::extend::stewie::MINE_DISARMED_LIGHT_LOADING) {
-            e.call(MINE_LIGHT_UPDATE, &args![base]);
-        }
         e.call(LOAD_BYTES, &args![buffer, base + 0x90, 1u32]);
     }
 }
-
-/// `009b46c0` (`thiscall`, the projectile): what row S0180 runs before the impact byte is loaded.
-const MINE_LIGHT_UPDATE: u32 = 0x009b_46c0;
 
 /// The form of a loaded form id word, cast to a reference: `__RTDynamicCast(
 /// 004839c0(form), 0, TESForm, TESObjectREFR, 0)`, or 0 for none.
@@ -1973,25 +1964,6 @@ pub fn projectile_ctor(e: &mut Engine, this: Ptr<Projectile>, _unused_1: u32) ->
     this
 }
 
-// Translation incomplete: 009bbef0 - C++ exception unwinding (FS:[0] frame) is not modelled.
-// Translated from lStewieAl's Tweaks 10.05 (Internal/tweaks_core.cpp): GetWeaponModFlags.
-/// The weapon mod flags of an inventory entry (`ContChangesEntry`): the flags (+0xC) of the
-/// `ExtraWeaponModFlags` (type 0x8D, `BaseExtraList::GetByType` `00410220`) of the first extra
-/// data list in the entry's list (+0); 0 without one.
-fn weapon_mod_flags(e: &mut Engine, item: u32) -> u8 {
-    let lists = e.mem.u32(item);
-    let first = if lists != 0 { e.mem.u32(lists) } else { 0 };
-    if first == 0 {
-        return 0;
-    }
-    let extra = e.call(0x0041_0220, &args![first, 0x8du32]).u32();
-    if extra == 0 {
-        0
-    } else {
-        e.mem.u8(extra + 0xc)
-    }
-}
-
 // Translated from 009bbef0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Projectile constructor from a base object, shooter, weapon, position and
 /// angles (z through `005757d0`, x through `00575770`; y is set to 0).
@@ -2048,12 +2020,6 @@ pub fn fn_009bbef0(
     e.set(this, Projectile::pSecondaryItemChange, 0);
     e.set(this, Projectile::fWeaponCondition, 1.0);
     e.set(this, Projectile::bSoundFired, false);
-    // lStewieAl's Tweaks' row S0192 (`StoreWeaponModFlagsOnProjectiles`, the words written at
-    // `0x9BC0D2` and `0x9BC0DA`): the store is a word, clearing +0x149 to +0x14B with it (Tweaks
-    // keeps the weapon's mod flags at +0x14B).
-    if e.stewie(engine_core::extend::stewie::PROJECTILE_WEAPON_MOD_FLAGS) {
-        e.mem.set_u32(this.addr() + 0x148, 0);
-    }
     let distance = float_global(e, INITIAL_SOUND_DISTANCE);
     e.set(this, Projectile::fSoundDist, distance);
     e.call(0x0057_5690, &args![this, base_object]);
@@ -2077,13 +2043,6 @@ pub fn fn_009bbef0(
                     if item != 0 {
                         let health = e.call(0x004b_cdb0, &args![item, 0u32]).f64();
                         let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, item));
-                        // lStewieAl's Tweaks' row S0192 (its `OnCreateProjectileSetModFlags` called at
-                        // `0x9BC1D2`): the item's mod flags are kept on the projectile.
-                        if e.stewie(engine_core::extend::stewie::PROJECTILE_WEAPON_MOD_FLAGS) {
-                            let flags = weapon_mod_flags(e, item);
-                            let kept = e.mem.u8(this.addr() + 0x14b);
-                            e.mem.set_u8(this.addr() + 0x14b, kept | flags);
-                        }
                         let form_health = e.call(0x0048_73d0, &args![form]).u32();
                         e.set(
                             this,
@@ -2640,79 +2599,8 @@ pub fn fn_009bf370(e: &mut Engine, this: Ptr<Projectile>, delta: f32, x: u32, y:
         copy_point(e, new, position);
         let result = e.call(0x0043_9ef0, &args![new, difference, old]).u32();
         let [dx, dy, dz] = point_words(e, result);
-        // lStewieAl's Tweaks' row S0207 (`NonHitscanProjectileSplashFix`, the call at
-        // `0x9BF461`): Tweaks' `Projectile__SetVector` in place of `009c4e60`.
-        if e.stewie(engine_core::extend::stewie::NON_HITSCAN_PROJECTILE_SPLASH) {
-            projectile_set_vector_with_velocity(e, this.addr(), [dx, dy, dz], true);
-            return;
-        }
         e.call(0x009c_4e60, &args![this, dx, dy, dz, 1u32]);
     });
-}
-
-/// `bhkUtilFunctions::FindCollisionObject` (`00c802d0`, `cdecl`, one word).
-const FIND_COLLISION_OBJECT: u32 = 0x00c8_02d0;
-/// `bhkWorldObject::SetLinearVelocity` (`00561690`, `thiscall`, a `hkVector4*`).
-const SET_LINEAR_VELOCITY: u32 = 0x0056_1690;
-/// The character controller's `OutVelocity` (`hkVector4`, Xbox PDB: `bhkCharacterController`
-/// +0x4F0).
-const CONTROLLER_OUT_VELOCITY: u32 = 0x4f0;
-
-/// Row S0207's routine, Tweaks' `Projectile__SetVector` (`Fixes/NonHitscanProjectileSplashFix.cpp`):
-/// the movement direction (+0x104) set to `vector` and unitized as Tweaks' `NiPoint3::Unitize`
-/// (`float` maths: a length at most 1e-6 gives 0 and a zero vector), its length added to the
-/// distance travelled (+0x110) with `update_distance`; then, when the projectile has a character
-/// controller (its process +0x68, slot +0x28C), a 3D (slot +0x1D0), a collision object on it and
-/// that object's world object (+0x10) with a rigid body (slot +0x40), the world object's linear
-/// velocity is set to the controller's `OutVelocity`. So a projectile that is not hitscan moves its
-/// rigid body too, and water sees it (splashes).
-fn projectile_set_vector_with_velocity(
-    e: &mut Engine,
-    this: u32,
-    vector: [u32; 3],
-    update_distance: bool,
-) {
-    let direction = this + MOVEMENT_DIRECTION;
-    let [x, y, z] = vector.map(f32::from_bits);
-    let length = (x * x + y * y + z * z).sqrt();
-    let (unit, length) = if length > 1e-6 {
-        let recip = 1.0 / length;
-        ([x * recip, y * recip, z * recip], length)
-    } else {
-        ([0.0; 3], 0.0)
-    };
-    for (i, value) in unit.iter().enumerate() {
-        e.mem.set_f32(direction + 4 * i as u32, *value);
-    }
-    if update_distance {
-        let moved = this + 0x110;
-        let total = length + e.mem.f32(moved);
-        e.mem.set_f32(moved, total);
-    }
-    let process = e.mem.u32(this + 0x68);
-    if process == 0 {
-        return;
-    }
-    let controller = e.vcall(process, 0x28c, &args![]).u32();
-    if controller == 0 {
-        return;
-    }
-    let root = e.vcall(this, 0x1d0, &args![]).u32();
-    if root == 0 {
-        return;
-    }
-    let collision = e.call(FIND_COLLISION_OBJECT, &args![root]).u32();
-    if collision == 0 {
-        return;
-    }
-    let world_object = e.mem.u32(collision + 0x10);
-    if world_object == 0 || e.vcall(world_object, 0x40, &args![]).u32() == 0 {
-        return;
-    }
-    e.call(
-        SET_LINEAR_VELOCITY,
-        &args![world_object, controller + CONTROLLER_OUT_VELOCITY],
-    );
 }
 
 /// Sets a debug colour (`NiColorA` constructor `00414430`: r, g, b, a) in a
@@ -3011,27 +2899,15 @@ fn log_vats_hit(e: &mut Engine, this: Ptr<Projectile>, collidee: u32, collidable
 
 fn count_beam_hit(e: &mut Engine, this: Ptr<Projectile>, data: Ptr<ImpactData>) {
     let hits = fn_009c0070(e, this.cast()) as i32;
-    // S0130.06's two hit parts act only with S0130.05 on too (Tweaks installs them together).
-    let impact_row = super::playercharacter::beam_ammo_in_update(e);
-    let limit = if impact_row {
-        beam_age_for_damage(e, this)
-    } else {
-        e.call(0x0088_5bd0, &args![this]).f64()
-    };
+    let limit = e.call(0x0088_5bd0, &args![this]).f64();
     let weapon = e.call(GET_WEAPON, &args![this]).u32();
     let rate = e.call(0x0082_1640, &args![weapon]).f64();
     if hits as f64 / rate < limit {
         let shooter = e.call(GET_SHOOTER, &args![this]).u32();
-        // lStewieAl's Tweaks' row S0130.06 (the bytes written at `0x9BFD0E`): the player's beam
-        // takes no round here and counts no shot (on to `0x9BFD35`); the player's update does both
-        // (S0130.05). Tweaks drops the exe's null test of the shooter; the port keeps it (a guard
-        // against a crash only).
-        if !impact_row || shooter != e.global::<u32>(PLAYER) {
-            if shooter != 0 {
-                e.vcall(shooter, 0x3F0, &args![1u32]);
-            }
-            fn_009c0050(e, this.cast(), hits.wrapping_add(1) as u32);
+        if shooter != 0 {
+            e.vcall(shooter, 0x3F0, &args![1u32]);
         }
+        fn_009c0050(e, this.cast(), hits.wrapping_add(1) as u32);
         let collidee = e.get(data, ImpactData::pCollidee);
         let do_damage = collidee != 0 && is_actor(e, collidee);
         e.set(data, ImpactData::bDoDamage, do_damage);
@@ -3043,37 +2919,8 @@ fn count_beam_hit(e: &mut Engine, this: Ptr<Projectile>, data: Ptr<ImpactData>) 
     }
 }
 
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/ContinuousBeamProjectileCrashFix.cpp):
-// OnGetProjectileAgeForDamage.
-/// lStewieAl's Tweaks' row S0130.06 (the call at `0x9BFCC1`, in place of `00885bd0`, the age
-/// +0xD8): the player's beam (shooter +0xFC the player) after the player's update took a round
-/// (the kept word `BEAM_DECREASED_PLAYER_AMMO`, cleared here) answers `FLT_MAX`, so this impact
-/// counts as a shot and does damage; any other answers its age.
-fn beam_age_for_damage(e: &mut Engine, this: Ptr<Projectile>) -> f64 {
-    let kept = e.stewie_kept(
-        engine_core::extend::stewie::kept::BEAM_DECREASED_PLAYER_AMMO,
-        4,
-    );
-    if e.mem.u32(this.addr() + 0xfc) == e.global::<u32>(PLAYER) && e.mem.u8(kept) != 0 {
-        e.mem.set_u8(kept, 0);
-        return f32::MAX as f64;
-    }
-    e.mem.f32(this.addr() + 0xd8) as f64
-}
-
-// Translated from lStewieAl's Tweaks 10.05 (Fixes/ContinuousBeamProjectileCrashFix.cpp):
-// GetAmmoCount.
 /// The shooter's loaded count after a beam's shot (`0x9BFD6B`, `Actor::GetAmmoCount` `008a88b0`).
-/// lStewieAl's Tweaks' row S0130.04: the player (`011dea3c`) in god mode (`011e07ba`) or demigod
-/// mode (`011e0898`) has 1, so the beam does not stop; any other count as the exe's (its process'
-/// ammunition entry, slot `0x14c`, +4; none: -1).
 fn beam_ammo_count(e: &mut Engine, shooter: u32) -> i32 {
-    if e.stewie(engine_core::extend::stewie::BEAM_GODMODE_FIRING)
-        && shooter == e.global::<u32>(PLAYER)
-        && (e.mem.u8(0x011e_07ba) != 0 || e.mem.u8(0x011e_0898) != 0)
-    {
-        return 1;
-    }
     e.call(0x008a_88b0, &args![shooter]).i32()
 }
 
@@ -3192,15 +3039,9 @@ fn set_speed(e: &mut Engine, projectile: u32, value: f64) {
 
 // Translation incomplete: 009bca60 - C++ exception unwinding (FS:[0] frame) is not modelled.
 /// The player's Strength for a thrown weapon's speed (`009bca60`, `0x9BCEA7`: the actor value owner
-/// +0xA4, slot 8 with 5). lStewieAl's Tweaks' row S0165 (`patchThresholdThrowingVelocityStrength`,
-/// the bytes written there): through `ActorValueOwner::GetClampedActorValue` (`0066ef20`), held
-/// within the actor value's limits.
+/// +0xA4, slot 8 with 5).
 fn thrower_strength(e: &mut Engine, player: u32) -> i32 {
-    if e.stewie(engine_core::extend::stewie::THROW_STRENGTH_CLAMPED) {
-        e.call(0x0066_ef20, &args![player + 0xA4, 5u32]).i32()
-    } else {
-        e.vcall(player + 0xA4, 8, &args![5u32]).i32()
-    }
+    e.vcall(player + 0xA4, 8, &args![5u32]).i32()
 }
 
 // Translated from 009bca60 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -6236,14 +6077,6 @@ fn squared_distance_to(e: &mut Engine, this: Ptr<Projectile>, other: u32) -> f32
     })
 }
 
-/// The console's `ToggleDetection` byte (`011f1221`): 0 while detection is turned off.
-const DETECTION_ON: u32 = 0x011f_1221;
-
-/// lStewieAl's Tweaks' row S0223 (`ToggleDetectCommandAffectsMines`): detection is turned off.
-fn mines_sleep(e: &mut Engine) -> bool {
-    e.stewie(engine_core::extend::stewie::DETECTION_OFF_MINES) && e.mem.u8(DETECTION_ON) == 0
-}
-
 // Translated from 009c39e0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Whether a mine is triggered: an actor of the high process list
 /// (`00717e50`, `005be5c0`, `00968670`) that is alive and active (no
@@ -6260,12 +6093,6 @@ fn mines_sleep(e: &mut Engine) -> bool {
 pub fn fn_009c39e0(e: &mut Engine, this: Ptr<Projectile>) -> bool {
     let base = e.call(GET_BASE_OBJECT, &args![this]).u32();
     let mut radius = e.call(0x0045_cd80, &args![base]).f64() as f32;
-    // lStewieAl's Tweaks' row S0223 (`ToggleDetectCommandAffectsMines`, its
-    // `OnCheckExplosionProximityHook` called at `0x9C39FF`): with detection turned off by the
-    // console (`ToggleDetection`, the byte `011f1221` 0) the function ends here, answering false.
-    if mines_sleep(e) {
-        return false;
-    }
     if e.call(0x008d_6f30, &args![this]).u32() != 0 {
         let cell = e.call(0x008d_6f30, &args![this]).u32();
         if !e.call(0x0042_5fd0, &args![cell]).bool() {
@@ -7444,245 +7271,6 @@ mod tests {
         assert_eq!(calls(&e, 0x009a_52f0).len(), 1);
     }
 
-    /// A continuous beam whose shooter is `shooter` (+0xFC) with `shots` (+0x154), an age of 0.5
-    /// (+0xD8, also `00885bd0`'s answer) and a fire rate of 10 (`00821640`).
-    fn beam_hit_world(
-        e: &mut Engine,
-        shooter: u32,
-        shots: u32,
-    ) -> (Ptr<Projectile>, Ptr<ImpactData>) {
-        let this = projectile(e);
-        e.mem.set_u32(this.addr() + 0xfc, shooter);
-        e.mem.set_u32(this.addr() + 0x154, shots);
-        e.mem.set_f32(this.addr() + 0xd8, 0.5);
-        stub_float(e, 0x0088_5bd0, 0.5);
-        stub_float(e, 0x0082_1640, 10.0);
-        stub(e, 0x008a_88b0, 5);
-        (this, Ptr::new(e.mem.alloc(0x30)))
-    }
-
-    /// Both halves of the beam's ammunition move (S0130.05 and S0130.06) on or off.
-    fn set_beam_ammo_rows(e: &mut Engine, on: bool) {
-        e.set_stewie(engine_core::extend::stewie::BEAM_PLAYER_AMMO_IN_UPDATE, on);
-        e.set_stewie(
-            engine_core::extend::stewie::BEAM_NO_PLAYER_AMMO_IN_IMPACT,
-            on,
-        );
-    }
-
-    /// S0130.06 (the bytes at `0x9BFD0E`): a due hit (1 shot, rate 10, age 0.5) of the player's
-    /// beam takes a round (slot `0x3F0` with 1) and counts a shot off; with the rows it does
-    /// neither for the player's beam and both for an NPC's.
-    #[test]
-    fn s0130_06_the_players_beam_takes_no_round_where_it_hits() {
-        // (rows, the player's beam, the rounds taken, the shots after)
-        for (on, is_player, rounds, shots) in [
-            (false, true, 1usize, 2u32),
-            (true, true, 0, 1),
-            (true, false, 1, 2),
-        ] {
-            let mut e = engine();
-            set_beam_ammo_rows(&mut e, on);
-            let shooter = actor(&mut e);
-            let other = actor(&mut e);
-            e.set_global(PLAYER, if is_player { shooter } else { other });
-            let (this, data) = beam_hit_world(&mut e, shooter, 1);
-            count_beam_hit(&mut e, this, data);
-            assert_eq!(calls(&e, SLOT_BASE + 0x3F0), vec![vec![shooter, 1]; rounds]);
-            assert_eq!(
-                e.mem.u32(this.addr() + 0x154),
-                shots,
-                "on {on} player {is_player}"
-            );
-            assert!(calls(&e, 0x009a_b9a0).is_empty());
-        }
-    }
-
-    /// S0130.06 (`OnGetProjectileAgeForDamage`, `0x9BFCC1`): a hit of the player's beam that is not
-    /// due (1 shot, rate 10, age 0.05: 0.1 is not below 0.05) does no damage; after the player's
-    /// update took a round (the kept word) it is due once: the flag is cleared and the hit counted.
-    #[test]
-    fn s0130_06_a_taken_round_makes_the_next_hit_count() {
-        let mut e = engine();
-        set_beam_ammo_rows(&mut e, true);
-        let player = actor(&mut e);
-        e.set_global(PLAYER, player);
-        let (this, data) = beam_hit_world(&mut e, player, 1);
-        e.mem.set_f32(this.addr() + 0xd8, 0.05);
-        let collidee = actor(&mut e);
-        e.set(data, ImpactData::pCollidee, collidee);
-        e.set(data, ImpactData::bDoDamage, true);
-        count_beam_hit(&mut e, this, data);
-        assert!(!e.get(data, ImpactData::bDoDamage), "not due");
-        let flag = e.stewie_kept(
-            engine_core::extend::stewie::kept::BEAM_DECREASED_PLAYER_AMMO,
-            4,
-        );
-        e.mem.set_u8(flag, 1);
-        count_beam_hit(&mut e, this, data);
-        assert!(e.get(data, ImpactData::bDoDamage), "due after the round");
-        assert_eq!(e.mem.u8(flag), 0);
-        assert_eq!(beam_age_for_damage(&mut e, this), 0.05f32 as f64);
-        e.mem.set_u8(flag, 1);
-        e.mem.set_u32(this.addr() + 0xfc, collidee);
-        assert_eq!(
-            beam_age_for_damage(&mut e, this),
-            0.05f32 as f64,
-            "an NPC's beam"
-        );
-        assert_eq!(e.mem.u8(flag), 1);
-    }
-
-    /// S0165 (`patchThresholdThrowingVelocityStrength`, `0x9BCEA7`): the thrower's Strength is the
-    /// actor value owner's (+0xA4) slot 8 with 5 (12 here, past the limit); with the row it is
-    /// `GetClampedActorValue` (`0066ef20`, answering 10).
-    #[test]
-    fn s0165_a_throw_uses_the_clamped_strength() {
-        for (on, strength) in [(false, 12), (true, 10)] {
-            let mut e = engine();
-            e.set_stewie(engine_core::extend::stewie::THROW_STRENGTH_CLAMPED, on);
-            let player = e.mem.alloc(0x200);
-            let table = vtable(&mut e);
-            e.mem.set_u32(player + 0xA4, table);
-            stub(&mut e, SLOT_BASE + 8, 12);
-            stub(&mut e, 0x0066_ef20, 10);
-            assert_eq!(thrower_strength(&mut e, player), strength, "on {on}");
-            let asked = calls(&e, 0x0066_ef20);
-            let expected = if on {
-                vec![vec![player + 0xA4, 5]]
-            } else {
-                vec![]
-            };
-            assert_eq!(asked, expected, "on {on}");
-        }
-    }
-
-    /// S0192 (`GetWeaponModFlags`): the flags (+0xC) of the `ExtraWeaponModFlags` (0x8D,
-    /// `00410220`) of the item's first extra data list; 0 without a list or a first list.
-    #[test]
-    fn s0192_an_items_weapon_mod_flags() {
-        let mut e = engine();
-        let extra = e.mem.alloc(0x10);
-        e.mem.set_u8(extra + 0xc, 0x5);
-        let first = e.mem.alloc(0x20);
-        let lists = e.mem.alloc(8);
-        e.mem.set_u32(lists, first);
-        let item = e.mem.alloc(0xc);
-        e.register_double(0x0041_0220, move |_, a| {
-            if a[0] == first && a[1] == 0x8d {
-                extra
-            } else {
-                0
-            }
-            .into_ret()
-        });
-        assert_eq!(weapon_mod_flags(&mut e, item), 0, "no list");
-        e.mem.set_u32(item, lists);
-        assert_eq!(weapon_mod_flags(&mut e, item), 5);
-        e.mem.set_u32(lists, 0);
-        assert_eq!(weapon_mod_flags(&mut e, item), 0, "no first list");
-    }
-
-    /// S0192 (`0x9BC0D2`): a new projectile clears +0x148 as a byte; with the row the whole word
-    /// +0x148 to +0x14B (the mod flags at +0x14B among them).
-    #[test]
-    fn s0192_a_new_projectile_clears_the_mod_flags_word() {
-        for on in [false, true] {
-            let mut e = engine();
-            e.set_stewie(engine_core::extend::stewie::PROJECTILE_WEAPON_MOD_FLAGS, on);
-            let this = projectile(&mut e);
-            e.mem.set_u32(this.addr() + 0x148, 0xffff_ffff);
-            fn_009bbef0(&mut e, this, Ptr::NULL, 0, 0, 0, 0, 0, 0.0, 0.0);
-            let expected = if on { 0 } else { 0xffff_ff00 };
-            assert_eq!(e.mem.u32(this.addr() + 0x148), expected, "on {on}");
-        }
-    }
-
-    /// S0223 (`ToggleDetectCommandAffectsMines`): mines sleep with the row while the console's
-    /// detection byte (`011f1221`) is 0.
-    #[test]
-    fn s0223_mines_sleep_while_detection_is_off() {
-        for (on, detection, sleeps) in [(true, 0u8, true), (true, 1, false), (false, 0, false)] {
-            let mut e = engine();
-            e.set_stewie(engine_core::extend::stewie::DETECTION_OFF_MINES, on);
-            e.mem.set_u8(DETECTION_ON, detection);
-            assert_eq!(mines_sleep(&mut e), sleeps, "on {on} detection {detection}");
-        }
-    }
-
-    /// S0130.05 with S0130.06 in all four on/off combinations: a due beam of the player (1 shot,
-    /// rate 10, age 0.5) goes through the player's update's ammunition part and then hits an
-    /// actor. One round is taken (slot `0x3F0` with 1: in the update with both rows on, at the
-    /// hit otherwise), two shots are counted, the hit does damage and the beam does not fade.
-    /// With the halves on separate switches one alone took no round at all (S0130.06: unlimited
-    /// ammunition) or two (S0130.05).
-    #[test]
-    fn s0130_05_and_06_take_one_round_and_do_damage_in_every_combination() {
-        const TAKE: u32 = 0x7D00_03F0;
-        for (on05, on06) in [(false, false), (true, false), (false, true), (true, true)] {
-            let mut e = engine();
-            e.set_stewie(
-                engine_core::extend::stewie::BEAM_PLAYER_AMMO_IN_UPDATE,
-                on05,
-            );
-            e.set_stewie(
-                engine_core::extend::stewie::BEAM_NO_PLAYER_AMMO_IN_IMPACT,
-                on06,
-            );
-            e.register(TAKE, |_, _| 1u32.into_ret());
-            let player = actor(&mut e);
-            set_slot(&mut e, player, 0x3F0, TAKE);
-            e.set_global(PLAYER, player);
-            let (this, data) = beam_hit_world(&mut e, player, 1);
-            let weapon = e.mem.alloc(0x140);
-            e.mem.set_f32(weapon + 0x134, 10.0);
-            e.mem.set_u32(this.addr() + 0xf8, weapon);
-            e.mem.set_u32(player + 0x1a0, this.addr());
-            let collidee = actor(&mut e);
-            e.set(data, ImpactData::pCollidee, collidee);
-            super::super::playercharacter::player_beam_update_ammo(&mut e);
-            count_beam_hit(&mut e, this, data);
-            let label = format!("05 {on05} 06 {on06}");
-            assert_eq!(calls(&e, TAKE), vec![vec![player, 1]], "{label}");
-            assert_eq!(e.mem.u32(this.addr() + 0x154), 2, "{label}");
-            assert!(e.get(data, ImpactData::bDoDamage), "{label}");
-            assert_eq!(e.mem.u32(this.addr() + 0xc8) & 0x20, 0, "{label}");
-            assert!(calls(&e, 0x009a_b9a0).is_empty(), "{label}");
-        }
-    }
-
-    /// S0130.04 (`GetAmmoCount`, `0x9BFD6B`): after a beam's hit the player in god mode
-    /// (`011e07ba`) or demigod mode (`011e0898`) counts one round, so the beam does not stop
-    /// (`009ab9a0`); off, or another shooter, the count is `008a88b0`'s (-1 here: it stops).
-    #[test]
-    fn s0130_04_the_player_in_god_mode_keeps_the_beam_going() {
-        // (row, god, demigod, the player's beam, the count)
-        for (on, god, demigod, is_player, count) in [
-            (false, 1u8, 0u8, true, -1i32),
-            (true, 1, 0, true, 1),
-            (true, 0, 1, true, 1),
-            (true, 0, 0, true, -1),
-            (true, 1, 0, false, -1),
-        ] {
-            let mut e = engine();
-            e.set_stewie(engine_core::extend::stewie::BEAM_GODMODE_FIRING, on);
-            let shooter = actor(&mut e);
-            let other = actor(&mut e);
-            e.set_global(PLAYER, if is_player { shooter } else { other });
-            e.mem.set_u8(0x011e_07ba, god);
-            e.mem.set_u8(0x011e_0898, demigod);
-            let (this, data) = beam_hit_world(&mut e, shooter, 1);
-            stub(&mut e, 0x008a_88b0, u32::MAX);
-            assert_eq!(
-                beam_ammo_count(&mut e, shooter),
-                count,
-                "on {on} {god} {demigod}"
-            );
-            count_beam_hit(&mut e, this, data);
-            assert_eq!(calls(&e, 0x009a_b9a0).len(), usize::from(count < 1));
-        }
-    }
-
     #[test]
     fn moves_and_reports_the_step() {
         let mut e = engine();
@@ -7708,91 +7296,6 @@ mod tests {
                 1
             ]]
         );
-    }
-
-    /// The step of `moves_and_reports_the_step` (a difference of (1, 2, 3)) with row S0207 `on`;
-    /// the projectile has a process with a character controller, a 3D, a collision object and a
-    /// world object with a rigid body when `physics`. Answers the projectile, the controller and
-    /// the world object.
-    fn step_with_row(e: &mut Engine, on: bool, physics: bool) -> (Ptr<Projectile>, u32, u32) {
-        point_subtract(e);
-        let this = projectile(e);
-        let before = e.mem.alloc(0xC);
-        let after = e.mem.alloc(0xC);
-        set_point(e, before, [1.0, 1.0, 1.0]);
-        set_point(e, after, [2.0, 3.0, 4.0]);
-        sequence(e, 0x7E00_0050, vec![before, after]);
-        set_slot(e, this.addr(), 0x1F4, 0x7E00_0050);
-        e.mem.set_f32(this.addr() + 0x110, 10.0);
-        let controller = e.mem.alloc(0x600);
-        let world = object(e, 0x20);
-        if physics {
-            let process = object(e, 0x40);
-            stub(e, 0x7E00_0060, controller);
-            set_slot(e, process, 0x28c, 0x7E00_0060);
-            e.mem.set_u32(this.addr() + 0x68, process);
-            stub(e, 0x7E00_0070, 0x5000);
-            set_slot(e, this.addr(), 0x1d0, 0x7E00_0070);
-            let collision = e.mem.alloc(0x20);
-            e.mem.set_u32(collision + 0x10, world);
-            stub(e, FIND_COLLISION_OBJECT, collision);
-            stub(e, 0x7E00_0080, 0x6000);
-            set_slot(e, world, 0x40, 0x7E00_0080);
-        }
-        stub(e, SET_LINEAR_VELOCITY, 0);
-        e.set_stewie(
-            engine_core::extend::stewie::NON_HITSCAN_PROJECTILE_SPLASH,
-            on,
-        );
-        fn_009bf370(e, this, 0.5, 7, 8, 9);
-        (this, controller, world)
-    }
-
-    /// lStewieAl's Tweaks' row S0207 (`0x9BF461`): on, Tweaks' `Projectile__SetVector` in place of
-    /// `009c4e60`: the direction is (1, 2, 3) unitized, its length (sqrt 14) added to the distance
-    /// travelled (10), and the world object's linear velocity set to the controller's
-    /// `OutVelocity` (+0x4F0). Off, the exe's call (as `moves_and_reports_the_step`) and no
-    /// velocity.
-    #[test]
-    fn s0207_a_projectile_moves_its_rigid_body() {
-        let mut e = engine();
-        let (this, controller, world) = step_with_row(&mut e, true, true);
-        assert!(calls(&e, 0x009c_4e60).is_empty());
-        let length = 14.0f32.sqrt();
-        let direction: Vec<f32> = (0..3)
-            .map(|i| e.mem.f32(this.addr() + MOVEMENT_DIRECTION + 4 * i))
-            .collect();
-        // Tweaks multiplies by the reciprocal.
-        let recip = 1.0 / length;
-        assert_eq!(direction, [recip, 2.0 * recip, 3.0 * recip]);
-        assert_eq!(e.mem.f32(this.addr() + 0x110), length + 10.0);
-        assert_eq!(
-            calls(&e, SET_LINEAR_VELOCITY),
-            [vec![world, controller + CONTROLLER_OUT_VELOCITY]]
-        );
-        assert_eq!(calls(&e, FIND_COLLISION_OBJECT), [vec![0x5000]]);
-        let mut e = engine();
-        let (this, _, _) = step_with_row(&mut e, false, true);
-        assert_eq!(calls(&e, 0x009c_4e60)[0][0], this.addr());
-        assert!(calls(&e, SET_LINEAR_VELOCITY).is_empty());
-    }
-
-    /// Row S0207 with no process (no character controller): the direction and the distance only;
-    /// a zero step gives a zero direction and adds nothing.
-    #[test]
-    fn s0207_without_a_controller_only_the_direction() {
-        let mut e = engine();
-        let (this, _, _) = step_with_row(&mut e, true, false);
-        assert!(e.mem.f32(this.addr() + MOVEMENT_DIRECTION) > 0.0);
-        assert!(calls(&e, SET_LINEAR_VELOCITY).is_empty());
-        assert!(calls(&e, FIND_COLLISION_OBJECT).is_empty());
-        let mut e = engine();
-        let this = projectile(&mut e);
-        e.mem.set_f32(this.addr() + 0x110, 10.0);
-        e.mem.set_f32(this.addr() + MOVEMENT_DIRECTION, 5.0);
-        projectile_set_vector_with_velocity(&mut e, this.addr(), [0; 3], true);
-        assert_eq!(e.mem.f32(this.addr() + MOVEMENT_DIRECTION), 0.0);
-        assert_eq!(e.mem.f32(this.addr() + 0x110), 10.0);
     }
 
     #[test]
@@ -8582,20 +8085,6 @@ mod tests {
         stub_float(&mut e, 0x004a_7290, 200.0);
         e.set(this, Projectile::iFlags, 0x4000);
         assert!(!fn_009c39e0(&mut e, this));
-
-        // S0223 (`OnCheckExplosionProximityHook`, `0x9C39FF`): with the row and detection turned
-        // off (the byte `011f1221` 0) the same mine answers false before its cell is asked
-        // (`008d6f30`); with detection on it still triggers.
-        stub_float(&mut e, 0x004a_7290, 25.0);
-        e.set(this, Projectile::iFlags, 0);
-        e.set_stewie(engine_core::extend::stewie::DETECTION_OFF_MINES, true);
-        e.mem.set_u8(DETECTION_ON, 0);
-        e.call_log = Some(vec![]);
-        assert!(!fn_009c39e0(&mut e, this));
-        assert!(calls(&e, 0x008d_6f30).is_empty());
-        e.mem.set_u8(DETECTION_ON, 1);
-        assert!(fn_009c39e0(&mut e, this));
-        assert!(!calls(&e, 0x008d_6f30).is_empty());
     }
 
     thread_local! {
@@ -9734,58 +9223,6 @@ mod n026_tests {
                 calls(&log, ASSIGN_ACTOR_CAUSE),
                 vec![vec![this.addr() + ACTOR_CAUSE, u32::MAX ^ 0x1000]]
             );
-        }
-    }
-
-    /// lStewieAl's Tweaks' row S0180 (`0x9C5723`): a version 0x10 save: on, `009b46c0` runs on the
-    /// projectile just before the impact byte (+0x90) is loaded, so a mine's light is set again;
-    /// off, it is not called. A save older than 0x10 reaches neither, with the row on.
-    #[test]
-    fn s0180_a_loaded_mine_sets_its_light_first() {
-        for (version, on, lit) in [
-            (0x10u32, false, false),
-            (0x10, true, true),
-            (0xd, true, false),
-        ] {
-            let mut e = Engine::new();
-            lists(&mut e);
-            let this = projectile(&mut e, &[(0x1d0, word(0))]);
-            let buffer = buffer(&mut e, version);
-            quiet(
-                &mut e,
-                &[
-                    0x0093_2a00,
-                    LOAD_BYTES,
-                    0x0086_48e0,
-                    0x0086_4a20,
-                    ASSIGN_ACTOR_CAUSE,
-                    MINE_LIGHT_UPDATE,
-                ],
-            );
-            e.register(0x0086_48a0, |_, _| word(0));
-            e.register(CAST_SOURCE_004839C0, |_, _| word(0));
-            e.register(RT_DYNAMIC_CAST, |_, _| word(0));
-            e.register(0x0066_e330, |_, _| word(0));
-            e.register(0x0086_4a60, |_, _| word(0));
-            e.set_stewie(engine_core::extend::stewie::MINE_DISARMED_LIGHT_LOADING, on);
-            e.call_log = Some(vec![]);
-            e.call(0x009c_52f0, &args![this, buffer]);
-            let log = e.call_log.take().unwrap();
-            let lights = calls(&log, MINE_LIGHT_UPDATE);
-            if lit {
-                assert_eq!(lights, [vec![this.addr()]]);
-                // Just before the impact byte's load, the last call.
-                let tail: Vec<_> = log
-                    .iter()
-                    .rev()
-                    .take(2)
-                    .map(|(a, w)| (*a, w.get(1).copied()))
-                    .collect();
-                assert_eq!(tail[0], (LOAD_BYTES, Some(this.addr() + 0x90)));
-                assert_eq!(tail[1].0, MINE_LIGHT_UPDATE);
-            } else {
-                assert!(lights.is_empty(), "version {version:x}, on {on}");
-            }
         }
     }
 

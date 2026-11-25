@@ -3894,15 +3894,8 @@ pub fn fn_00a34f20(
     true
 }
 
-/// The activation's two adds to the owner's active set (`0xA34FCB`, `0xA35003`). lStewieAl's Tweaks' row
-/// S0108 (`patchFixNullNifOwnerCrash`, its `SequenceActivateNullCheck`): a sequence with no owner (the
-/// set's address then 0x44) is not added; the exe adds it to a set at 0x44.
+/// The activation's two adds to the owner's active set (`0xA34FCB`, `0xA35003`).
 fn activation_add_to_active_set(e: &mut Engine, this: Ptr<NiControllerSequence>) {
-    if e.get(this, NiControllerSequence::m_pkOwner).addr() == 0
-        && e.stewie(engine_core::extend::stewie::SEQUENCE_NULL_OWNER)
-    {
-        return;
-    }
     add_to_active_set(e, this);
 }
 
@@ -8441,37 +8434,6 @@ NiAlphaProperty",
         assert!(activate(&mut e, this, Ptr::NULL, f32::NAN, true, false));
         assert_eq!(e.get(this, NiControllerSequence::m_eState), 1);
         assert_eq!(float_at(&e, this.addr() + 0x4c), 0.0);
-    }
-
-    /// lStewieAl's Tweaks' row S0108: a sequence with no owner, activated with an ease-in and without.
-    /// Row off: the exe adds it to the set at 0x44 (the owner's +0x44 of no owner), which faults here;
-    /// row on: it is not added and the state is set, the answer true. With an owner, the same set
-    /// row off and on.
-    #[test]
-    fn s0108_a_sequence_with_no_owner() {
-        for on in [false, true] {
-            for ease_in in [2.0f32, 0.0] {
-                let mut e = setup();
-                let (this, _) = update_sequence(&mut e, 0);
-                set_items(&mut e, this, 0);
-                active_set(&mut e, this);
-                e.set_stewie(engine_core::extend::stewie::SEQUENCE_NULL_OWNER, on);
-                assert!(activate(&mut e, this, Ptr::NULL, ease_in, false, false));
-                assert_eq!(active_elements(&e, this), vec![this.addr()]);
-                e.set(this, NiControllerSequence::m_eState, 0);
-                e.mem.set_u32(this.addr() + 0x40, 0);
-                e.mem.unmap(0, 0x1000);
-                let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    activate(&mut e, this, Ptr::NULL, ease_in, false, false)
-                }));
-                e.call_stack.clear();
-                assert_eq!(run.ok(), on.then_some(true), "row {on}, ease-in {ease_in}");
-                if on {
-                    let state = if ease_in > 0.0 { 2 } else { 1 };
-                    assert_eq!(e.get(this, NiControllerSequence::m_eState), state);
-                }
-            }
-        }
     }
 
     #[test]

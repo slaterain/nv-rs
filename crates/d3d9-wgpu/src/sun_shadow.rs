@@ -1543,6 +1543,10 @@ pub fn still_good(drawn: Option<&Cascade>, now: &Cascade, sun_changed: bool) -> 
     }
 }
 
+/// A caster's draw without its pipeline ([`GeoKey::drawn`]): its buffers and offsets, its index buffer,
+/// its range and base vertex.
+pub(crate) type Drawn = ([(u64, u64); 8], u64, u32, u32, i32);
+
 /// What a caster draws: its pipeline, buffers (by their own numbers, [`crate::device::Buf::id`],
 /// offset and upload count) and range. One geometry can stand in several places ([`Cache`]).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1565,6 +1569,18 @@ impl GeoKey {
             index: (self.index.0, 0),
             ..self.clone()
         }
+    }
+
+    /// The draw whatever its pipeline and whatever has been written into its buffers since: what a
+    /// caster whose kind changes keeps while its new pipeline is on its way.
+    pub fn drawn(&self) -> Drawn {
+        (
+            self.streams.map(|(b, o, _)| (b, o)),
+            self.index.0,
+            self.start,
+            self.count,
+            self.base_vertex,
+        )
     }
 
     /// Its buffers alone (their own numbers, without offsets' upload counts, ranges or pipeline):
@@ -3091,7 +3107,8 @@ impl Gpu {
     /// draw's own: a two-sided material none), in `layout`; with the pixel module `cutout` (an
     /// alpha-tested caster's own, which discards what its alpha test would) or none. With `coverage`
     /// (a ribbon cable's, its pixel module in `cutout`): no depth, its pixel shader's alpha added
-    /// into the coverage maps' alpha ([`THIN_FORMAT`]).
+    /// into the coverage maps' alpha ([`THIN_FORMAT`]). `ahead`: made on a thread of its own while play goes on (the hitch
+    /// log counts it apart: no wait of the render thread's).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn make_pipeline(
         device: &wgpu::Device,
@@ -3104,6 +3121,7 @@ impl Gpu {
         index32: bool,
         cull: Option<wgpu::Face>,
         coverage: bool,
+        ahead: bool,
     ) -> Result<wgpu::RenderPipeline, String> {
         let add = wgpu::BlendComponent {
             src_factor: wgpu::BlendFactor::One,
@@ -3194,9 +3212,16 @@ impl Gpu {
             Some(e) => Err(e.to_string()),
         };
         let took = started.elapsed();
-        d3d9_stream::hitch::add(d3d9_stream::hitch::Count::ShadowPipelines, 1);
-        d3d9_stream::hitch::add_time(d3d9_stream::hitch::Count::ShadowPipelineNs, took);
-        d3d9_stream::hitch::note(d3d9_stream::hitch::Call::ShadowPipeline, took);
+        // Made on a thread of its own while play goes on (`ahead`), or where the render thread waits for it.
+        use d3d9_stream::hitch::{self, Count};
+        let (n, ns) = if ahead {
+            (Count::ShadowPipelinesAhead, Count::ShadowPipelineAheadNs)
+        } else {
+            (Count::ShadowPipelines, Count::ShadowPipelineNs)
+        };
+        hitch::add(n, 1);
+        hitch::add_time(ns, took);
+        hitch::note(hitch::Call::ShadowPipeline, took);
         made
     }
 
@@ -3958,6 +3983,43 @@ pub fn enable_characters(on: bool) {
 /// Whether devices made now cast characters ([`enable_characters`]).
 pub fn characters() -> bool {
     CHARACTERS.load(Ordering::Relaxed) != 0
+}
+
+/// A test's choice of [`casters_ahead`] (0: none, the run's; 1 off; 2 on).
+static AHEAD_FOR_TESTS: AtomicU8 = AtomicU8::new(0);
+
+static CASTER_DELAY_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Tests: each caster pipeline made on a thread of its own from now on waits `ms` on its thread
+/// first, as a slow compile would (0: none).
+#[doc(hidden)]
+pub fn caster_delay_for_tests(ms: u64) {
+    CASTER_DELAY_MS.store(ms, Ordering::Relaxed);
+}
+
+/// [`caster_delay_for_tests`]'s wait, if any.
+pub(crate) fn caster_delay() -> Option<std::time::Duration> {
+    let ms = CASTER_DELAY_MS.load(Ordering::Relaxed);
+    (ms != 0).then(|| std::time::Duration::from_millis(ms))
+}
+
+/// Tests: still casters' pipelines made ahead or not for devices made from now on, whatever the run says (`None`:
+/// the run's choice again).
+#[doc(hidden)]
+pub fn casters_ahead_for_tests(on: Option<bool>) {
+    AHEAD_FOR_TESTS.store(on.map_or(0, |on| 1 + u8::from(on)), Ordering::Relaxed);
+}
+
+/// Whether devices made now make a still caster's depth-only pipeline on a thread of its own the first time its
+/// shader, declaration and layout are seen, as a character's already is (`NV_SUN_CASTERS_AHEAD=1`): the render thread
+/// does not stop for the driver's compile (several ms each when the driver has not made it before; a turn into a new
+/// area brings many at once), and the caster casts from the frame its pipeline is there (its maps are drawn again
+/// then, as for any caster that comes). Off: made on the render thread when first seen, casting in that frame.
+pub fn casters_ahead() -> bool {
+    match AHEAD_FOR_TESTS.load(Ordering::Relaxed) {
+        0 => std::env::var("NV_SUN_CASTERS_AHEAD").is_ok_and(|v| v.trim() == "1"),
+        n => n == 2,
+    }
 }
 
 /// A skinned caster this small in a map (radius in texels) is left out of it: its shadow is a

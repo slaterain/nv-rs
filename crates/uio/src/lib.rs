@@ -1,6 +1,6 @@
 //! UI Organizer (UIO), the NVSE plugin that puts UI mods' additions into the game's menus, built
 //! in. Translated from UIO 2.30 (`jazzisparis/UIO-User-Interface-Organizer`, commit `426d963`,
-//! the source of the shipped 2.30 DLL), MIT licence, with its author's permission; credits and the
+//! the source of the shipped 2.30 DLL), MIT licence; credits and the
 //! licence in `NOTICE`. UIO patches the old 32-bit program, so its DLL cannot load into nv-rs: it
 //! is rebuilt here, part by part (docs/FIXES.md, "UI Organizer").
 //!
@@ -113,7 +113,7 @@ pub fn set_on(e: &mut Engine, on: bool) {
     e.ext::<Uio>().on = on;
 }
 
-/// Whether UIO is built in and on: what other built-ins ask in place of JIP's and Stewie's
+/// Whether UIO is built in and on: what other built-ins ask in place of JIP's
 /// `GetModuleHandle("ui_organizer")`.
 pub fn on(e: &Engine) -> bool {
     e.uio()

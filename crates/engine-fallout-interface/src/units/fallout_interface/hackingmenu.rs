@@ -2704,12 +2704,9 @@ fn place_words(e: &mut Engine, this: Ptr<HackingMenu>, buffer: u32, garbage_coun
     }
 }
 
-/// Whether the file's first character becomes the selection: a gamepad in use (`004b71d0`), or
-/// always with lStewieAl's Tweaks' S0025 (`patchFixCrashWhenControllerReconnectsInHackingMenu`: the
-/// jump at `0x7693F5` taken out, the test still made).
+/// Whether the file's first character becomes the selection: a gamepad in use (`004b71d0`).
 fn selection_follows_the_gamepad(e: &mut Engine) -> bool {
-    let gamepad = e.call(GAMEPAD_IN_USE, &args![]).bool();
-    gamepad || e.stewie(engine_core::extend::stewie::HACKING_SELECTION_TILE)
+    e.call(GAMEPAD_IN_USE, &args![]).bool()
 }
 
 /// Makes the file's terminal lines from the buffer (the tail of
@@ -5217,85 +5214,6 @@ mod n054_menu_tests {
         assert_eq!(sets.len(), 14);
         assert_eq!(sets[0], vec![0x600, 0xfa3, 1]);
         assert_eq!(calls_to(&e, GAME_TIME).len(), 15);
-    }
-
-    /// lStewieAl's Tweaks' row S0025: the file's first character is the selection with a gamepad
-    /// either way; without one only with the row; the gamepad test is made each time.
-    #[test]
-    fn s0025_the_first_character_is_the_selection_without_a_gamepad() {
-        for (on, pad, wanted) in [
-            (false, 1, true),
-            (false, 0, false),
-            (true, 0, true),
-            (true, 1, true),
-        ] {
-            let mut e = Engine::new();
-            e.set_stewie(engine_core::extend::stewie::HACKING_SELECTION_TILE, on);
-            answer(&mut e, GAMEPAD_IN_USE, pad);
-            e.call_log = Some(vec![]);
-            assert_eq!(
-                selection_follows_the_gamepad(&mut e),
-                wanted,
-                "row {on}, pad {pad}"
-            );
-            assert_eq!(calls_to(&e, GAMEPAD_IN_USE).len(), 1, "the test still made");
-        }
-    }
-
-    /// Review of #842: the file-line loop (`write_file_lines`, the tail of `00768aa0`) uses S0025's
-    /// test. Without a gamepad, row on: the first file line's tile (`+0x2c`) is `pOverTile` and the
-    /// cursor x its screen x plus the second column's offset; row off (the exe): neither is set.
-    #[test]
-    fn s0025_the_file_lines_set_the_selection_without_a_gamepad() {
-        for on in [false, true] {
-            let mut e = Engine::new();
-            let this = menu(&mut e);
-            e.set_stewie(engine_core::extend::stewie::HACKING_SELECTION_TILE, on);
-            pages(
-                &mut e,
-                &[INTERVAL_SCALE, DEFAULT_INTERVAL, SECOND_COLUMN_OFFSET],
-            );
-            e.mem.set_f32(DEFAULT_INTERVAL, 100.0);
-            e.mem.set_f64(SECOND_COLUMN_OFFSET, 119.0);
-            e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
-            let zero = e.mem.alloc(4);
-            answer(&mut e, SETTING_VALUE, zero);
-            answer(&mut e, GAMEPAD_IN_USE, 0);
-            e.register(MENU_RENDER_TEMPLATE, |e, _| e.mem.alloc(0x10).into_ret());
-            e.register(MAX_OF_TWO, |_, a| a[0].max(a[1]).into_ret());
-            answer_st0(&mut e, TILE_SCREEN_X, 100.0);
-            real_ftol(&mut e);
-            stub(
-                &mut e,
-                &[
-                    TILE_GET_VALUE_Q,
-                    TILE_GET_VALUE,
-                    ANIMATING_TEXT_CONNECT,
-                    MEMCPY,
-                    STRING_SPRINTF,
-                    WORD_AT_ZERO,
-                    ANIMATING_TEXT_CONSTRUCTOR_WITH_ARGUMENT,
-                    TILE_SET_INT_FROM_VALUE,
-                    INTERFACE_SINGLETON,
-                ],
-            );
-            e.set(this, HackingMenu::pOverTile, 0);
-            e.set(this, HackingMenu::iCursorX, -5);
-            let text = e.mem.alloc(8);
-            let buffer = e.mem.alloc(FILE_CHARACTERS + 0x10);
-            let mut line_index = 0;
-            write_file_lines(&mut e, this, Ptr::new(text), buffer, &mut line_index);
-            let first = e.mem.u32(this.addr() + IO_LINES);
-            let tile = e.mem.u32(first + 0x2c);
-            assert_ne!(tile, 0);
-            if on {
-                assert_eq!(e.get(this, HackingMenu::pOverTile), tile);
-                assert_eq!(e.get(this, HackingMenu::iCursorX), 219);
-            } else {
-                assert_eq!(e.get(this, HackingMenu::pOverTile), 0, "row off");
-                assert_eq!(e.get(this, HackingMenu::iCursorX), -5, "row off");
-            }
-        }
     }
 
     #[test]

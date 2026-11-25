@@ -3598,7 +3598,7 @@ fn unlock_items(e: &mut Engine) {
     let count = e.global::<u32>(ITEM_LOCK_COUNT).wrapping_sub(1);
     e.set_global(ITEM_LOCK_COUNT, count);
     if count == 0 {
-        e.set_global(ITEM_LOCK, 0u32);
+        e.mem.set_u32_release(ITEM_LOCK, 0);
     }
 }
 

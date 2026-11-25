@@ -2622,6 +2622,22 @@ impl Mem {
     pub fn set_u32(&self, a: u32, v: u32) {
         self.store(a, v.to_le_bytes());
     }
+    /// Publishes earlier guest writes before storing this word (an inlined x86 lock release).
+    /// Shared, aligned mapped words use a release atomic store; [`atomic_u32`] preserves the
+    /// write track's atomic mark. Unaligned or unmapped shared words retain the ordinary store's
+    /// diagnostics and fault behavior after a release fence. Without shared memory the normal
+    /// store is used, including write watches and every other store diagnostic.
+    #[inline]
+    pub fn set_u32_release(&self, a: u32, v: u32) {
+        if self.is_shared() {
+            if let Some(word) = self.atomic_u32(a) {
+                word.store(v, std::sync::atomic::Ordering::Release);
+                return;
+            }
+            std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
+        }
+        self.set_u32(a, v);
+    }
     #[inline]
     pub fn set_u64(&self, a: u32, v: u64) {
         self.store(a, v.to_le_bytes());
@@ -3104,6 +3120,62 @@ mod tests {
         m.set_u32(0x0010_0000, 5);
         assert_eq!(dirty(&t), vec![0x0010_0000]);
         assert_eq!(m.take_watch_hits().len(), 1, "the watch saw it");
+    }
+
+    #[test]
+    fn release_store_preserves_nonshared_track_and_watch() {
+        let mut m = Mem::new();
+        m.map(0x0010_0000, 0x1000);
+        let t = m.enable_track().unwrap();
+        t.set_tracked(0x0010_0000, 0x1000, true);
+        let _ = dirty(&t);
+        m.watch(0x0010_0000, 8, false);
+        m.set_u32_release(0x0010_0004, 0x1234_5678);
+        assert_eq!(m.u32(0x0010_0004), 0x1234_5678);
+        assert_eq!(dirty(&t), vec![0x0010_0000]);
+        let hits = m.take_watch_hits();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            (hits[0].addr, hits[0].old, hits[0].new, hits[0].kind),
+            (0x0010_0004, 0, 0x1234_5678, WatchKind::Write)
+        );
+    }
+
+    #[test]
+    fn release_store_is_shared_and_keeps_the_track_atomic_mark() {
+        let mut m = Mem::new();
+        m.map(0x0010_0000, 0x2000);
+        let t = m.enable_track().unwrap();
+        t.set_tracked(0x0010_0000, 0x1000, true);
+        m.start_sharing();
+        let _ = dirty(&t);
+        m.set_u32_release(0x0010_0004, 0x8765_4321);
+        assert_eq!(dirty(&t), vec![0x0010_0000]);
+        let other = m.view();
+        assert_eq!(
+            other
+                .atomic_u32(0x0010_0004)
+                .unwrap()
+                .load(std::sync::atomic::Ordering::Acquire),
+            0x8765_4321
+        );
+    }
+
+    #[test]
+    fn release_store_shared_fallback_retains_unaligned_and_fault_behavior() {
+        let mut m = Mem::new();
+        m.map(0x0010_0000, 0x2000);
+        m.start_sharing();
+        assert!(m.atomic_u32(0x0010_0ffe).is_none());
+        m.set_u32_release(0x0010_0ffe, 0x1122_3344);
+        assert_eq!(m.view().u32(0x0010_0ffe), 0x1122_3344);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            m.set_u32_release(0x0020_0000, 0);
+        }));
+        assert!(
+            stopped.is_err(),
+            "an unmapped release store must still fault"
+        );
     }
 
     /// A span reads what `Mem::u32` reads, only where its page and the next are plainly mapped.

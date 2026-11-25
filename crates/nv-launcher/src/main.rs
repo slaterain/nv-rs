@@ -18,6 +18,7 @@
 
 mod app;
 mod canvas;
+mod crash;
 mod font;
 mod game;
 mod gpu;

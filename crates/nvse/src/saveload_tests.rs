@@ -649,11 +649,11 @@ fn other_plugins_sections_go_back_with_the_row() {
     }
 }
 
-/// A built-in that reads no section of its own yet (lStewieAl's Tweaks: listed, its records not
+/// A built-in that reads no section of its own yet (listed, its records not
 /// built) leaves its section to the keep row: kept and written back, as a plugin not built in.
 #[test]
 fn a_built_in_without_a_reader_keeps_its_section_with_the_row() {
-    let tweaks = cosave::Kept {
+    let unread = cosave::Kept {
         opcode_base: 0x2132,
         chunks: 1,
         data: [
@@ -671,8 +671,8 @@ fn a_built_in_without_a_reader_keeps_its_section_with_the_row() {
         plugins::register(
             &mut e,
             plugins::BuiltIn {
-                file: "nvse_stewie_tweaks.dll",
-                name: "lStewieAl's Tweaks",
+                file: "example_plugin.dll",
+                name: "Example plugin",
                 version: 1005,
                 opcode_base: 0x2132,
                 listed: true,
@@ -683,7 +683,7 @@ fn a_built_in_without_a_reader_keeps_its_section_with_the_row() {
                 new_game: None,
             },
         );
-        put_arrays(Vec::new(), std::slice::from_ref(&tweaks));
+        put_arrays(Vec::new(), std::slice::from_ref(&unread));
         pre_load(&mut e, NAME);
         save_game(&mut e, NAME);
         let bytes = file(CO_SAVE).unwrap();
@@ -693,7 +693,7 @@ fn a_built_in_without_a_reader_keeps_its_section_with_the_row() {
             bases.push(p.opcode_base);
             let section = r.take_plugin(p.length).unwrap();
             if p.opcode_base == 0x2132 {
-                assert_eq!(section, tweaks.data);
+                assert_eq!(section, unread.data);
             }
             r.end_plugin();
         }

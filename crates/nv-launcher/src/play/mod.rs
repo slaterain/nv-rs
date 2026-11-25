@@ -24,7 +24,7 @@ use game_profile::settings;
 mod tables;
 mod ui;
 pub use ui::{answer_in_boxes, desktop_size};
-mod win;
+pub(crate) mod win;
 
 use settings::{migrated_name, Settings};
 use std::cell::{Cell, RefCell};
@@ -923,8 +923,9 @@ fn tidy_logs(logs: &Path) {
     }
 }
 
-/// What the player reads when the game's run ended badly, from the log's end.
-fn plain_end(tail: &str, status: Option<i32>) -> String {
+/// What the player reads when the game's run ended badly, from the log's end; `report`: a crash
+/// report was kept (`crate::crash`), which the player attaches instead of the log.
+fn plain_end(tail: &str, status: Option<i32>, report: bool) -> String {
     let lines: Vec<&str> = tail.lines().filter(|l| !l.trim().is_empty()).collect();
     let last = lines
         .iter()
@@ -958,9 +959,14 @@ fn plain_end(tail: &str, status: Option<i32>) -> String {
     } else {
         ""
     };
+    let attach = if report {
+        "attach the crash report named below: your user name and folder names are taken out of it."
+    } else {
+        "attach the log named below. It may show your Windows user name in folder paths."
+    };
     format!(
-        "The game stopped (status {}).\n\n{what}{renderer}\n\nPlease report it at {ISSUES} and attach the log named below. It may show your Windows user name in folder paths.\n\nLast line of the log:\n{last}",
-        status.map_or("unknown".to_string(), |s| s.to_string())
+        "The game stopped (status {}).\n\n{what}{renderer}\n\nPlease report it at {ISSUES} and {attach}\n\nLast line of the log:\n{last}",
+        status.map_or("unknown".to_string(), crate::crash::code_text)
     )
 }
 
@@ -1159,6 +1165,9 @@ fn play(
     status: &ui::Status,
 ) -> Result<i32, Stop> {
     let (mut game, check_lines) = find_game(package, options.game.as_deref())?;
+    // The game's folder as found (mods put an install of it in the package), for a crash report
+    // to leave out.
+    let found_game = game.folder.clone();
     first_write(package, &game.folder)?;
     for line in &check_lines {
         package.log(line);
@@ -1426,6 +1435,7 @@ fn play(
         key("nv-rs Display", "iMenuFrameLimit"),
         log_path.display()
     ));
+    let started = std::time::SystemTime::now();
     let mut child = command.spawn().map_err(|e| Stop {
         code: STOP_BLOCKED,
         message: format!(
@@ -1459,14 +1469,60 @@ fn play(
     if exit.success() {
         return Ok(0);
     }
-    let message = plain_end(&log_tail(&log_path), exit.code());
+    // The crash report (a stop, a crash or another bad end), scrubbed, in the reports folder.
+    let report = crate::crash::after_run(&crate::crash::Run {
+        status: exit.code(),
+        shell: crate::crash::Shell::Windows,
+        log: &log_path,
+        started,
+        mods: options.mods,
+        own: &package.userdata,
+        program: &package.root,
+        games: vec![found_game, game.folder.clone()],
+        table_card: std::fs::read(&profile.table)
+            .ok()
+            .and_then(|table| tables::adapter_name(&table)),
+    });
+    let kept = match report {
+        Some(Ok(folder)) => {
+            package.log(&format!("crash report kept in {}", folder.display()));
+            Some(folder)
+        }
+        Some(Err(why)) => {
+            package.log(&format!("the crash report could not be kept: {why}"));
+            None
+        }
+        None => None,
+    };
+    let message = plain_end(&log_tail(&log_path), exit.code(), kept.is_some());
     package.log(&message);
-    let text = format!("{message}\n\nLog:\n{}", log_path.display());
     crate::session::set_stop_code(STOP_GAME_STOPPED);
-    if ui::windows_allowed()
-        && crate::session::message(&text, &["Open the logs folder", "Back"]) == 0
-    {
-        ui::open_folder(&package.logs);
+    match &kept {
+        Some(folder) => {
+            let text = format!(
+                "{message}\n\nCrash report:\n{}\n\nLog:\n{}",
+                folder.display(),
+                log_path.display()
+            );
+            if ui::windows_allowed() {
+                match crate::session::message(
+                    &text,
+                    &["Open the crash report", "Open the logs folder", "Back"],
+                ) {
+                    0 => ui::open_folder(folder),
+                    1 => ui::open_folder(&package.logs),
+                    _ => {}
+                }
+            }
+        }
+        None => {
+            let text = format!("{message}\n\nLog:\n{}", log_path.display());
+            if ui::windows_allowed()
+                && crate::session::message(&text, &["Open the logs folder", "Back"]) == 0
+            {
+                ui::open_folder(&package.logs);
+            }
+        }
     }
     Ok(STOP_GAME_STOPPED)
 }
@@ -1656,27 +1712,36 @@ mod tests {
     #[test]
     fn the_players_message_names_what_happened() {
         let tail = "Game code: ok\nsomething\nGame's main stopped in frame 12: open function 00123456\nmore\n";
-        let text = plain_end(tail, Some(3));
+        let text = plain_end(tail, Some(3), false);
         assert!(text.contains("status 3"));
         assert!(text.contains("Game's main stopped in frame 12"));
         assert!(plain_end(
             "panicked: the sound table has a line this layer does not know: DsNew",
-            Some(3)
+            Some(3),
+            false
         )
         .contains("Sound on this PC"));
-        assert!(plain_end("IDirect3D9::CheckDeviceFormat(0 1) was not captured in the adapter table: not provided", Some(3))
+        assert!(plain_end("IDirect3D9::CheckDeviceFormat(0 1) was not captured in the adapter table: not provided", Some(3), false)
             .contains("graphics card"));
         assert!(plain_end(
             "NV_D3D9=real: CreateDevice answered 0x8876086a: nothing is forwarded",
-            None
+            None,
+            false
         )
         .contains("Settings on Play.exe's start screen: Display mode Window"));
-        assert!(plain_end("", None).contains("the log is empty"));
+        assert!(plain_end("", None, false).contains("the log is empty"));
         // Drawn on Vulkan: the fallback renderer is named; on the real Direct3D 9 it is not.
         let vulkan =
             "NV_D3D9=wgpu: drawing with a card (Vulkan)\nGame's main stopped in frame 9: x\n";
-        assert!(plain_end(vulkan, Some(3)).contains("Renderer \"Direct3D 9\""));
-        assert!(!plain_end(tail, Some(3)).contains("Renderer"));
+        assert!(plain_end(vulkan, Some(3), false).contains("Renderer \"Direct3D 9\""));
+        assert!(!plain_end(tail, Some(3), false).contains("Renderer"));
+        // With a crash report kept, the player attaches it (scrubbed), not the log.
+        let with_report = plain_end(tail, Some(3), true);
+        assert!(with_report.contains("attach the crash report named below"));
+        assert!(!with_report.contains("user name in folder paths"));
+        assert!(text.contains("attach the log named below"));
+        // A Windows crash code is written as people look it up.
+        assert!(plain_end("", Some(0xc000_0005_u32 as i32), false).contains("status 0xc0000005"));
     }
 
     #[test]

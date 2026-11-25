@@ -62,8 +62,38 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-#[path = "../../../scripts/ledger/src/typed_marker.rs"]
-mod typed_marker;
+/// What a typed marker is: the comment line above a typed function that names the address it was
+/// typed from. A line that talks about a typed marker but is not a well-formed one is a finding in
+/// engine code.
+mod typed_marker {
+    /// How a marker starts, once its indentation is off. Then come its address, as eight hex
+    /// digits, and nothing or `, read against fnv_decomp`.
+    pub const PREFIX: &str = "// Typed from ";
+
+    /// Whether a line talks about a typed marker.
+    pub fn mentioned(line: &str) -> bool {
+        line.contains("Typed from")
+    }
+
+    /// The address of a well-formed marker line; `None` for any other line.
+    pub fn address(line: &str) -> Option<u32> {
+        let rest = line.trim_start().strip_prefix(PREFIX)?;
+        if !rest.is_char_boundary(rest.len().min(8)) {
+            return None;
+        }
+        let (address, tail) = rest.split_at(rest.len().min(8));
+        if address.len() != 8 || !address.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        let tail_ok = matches!(
+            tail.trim_end(),
+            "" | "." | ", read against fnv_decomp" | ", read against fnv_decomp."
+        );
+        tail_ok
+            .then(|| u32::from_str_radix(address, 16).ok())
+            .flatten()
+    }
+}
 
 /// Directories the fallback walk never enters, wherever they are.
 const SKIP_DIRS: &[&str] = &["target", ".git", "node_modules", ".build", ".claude"];
@@ -1838,8 +1868,7 @@ fn typed_findings(rel: &str, text: &str) -> Vec<(usize, String)> {
         {
             found.push((
                 i + 1,
-                "an x86 assumption in typed code (it stays portable, docs/ENGINE_CRATE.md)"
-                    .to_string(),
+                "an x86 assumption in typed code (it stays portable)".to_string(),
             ));
         }
         if !tests[i] {
