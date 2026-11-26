@@ -7,23 +7,30 @@
 //! love tester and quantity menus).
 //!
 //! **Native.** The exe's order of work: its calls by address of functions no family types (the
-//! `Menu` base, the list boxes and simple arrays of the unit's second half, the lists, the smart
-//! pointer assignment, the timers, the other menus' creators), its virtual calls (a menu's deleting
-//! destructor and class, whatever menu it is). What it calls that is plain stores or reads is done
-//! here with no call ([`IN_PLACE`] and the interface unit's [`in_place::ADDRESSES`]): `memset` of
-//! a menu's tile pointers, the sound handle's and a null smart pointer's constructors (and the
-//! array constructor over null smart pointers or over the healing options), the empty constructors
-//! (`006815c0`, which answers its argument), the menus by class, the manager and its menus root, a
-//! list node's item and next, a menu's tile and state, the state stored (`007037c0`), the start
-//! menu's class (`0070ede0`, 0x3f5) and the map menu's (`00720df0`, 0x3ff). The family's functions
-//! call one another through `typed_call!`, as do the interface unit's menu creators; the tile's
-//! float getter and test (`00a011b0`, `00a01230`) and the smart pointer destructor (`0045cec0`) are
-//! the dispatch family's.
+//! `Menu` base's destructor, the lists' destructors and clears, the smart pointer assignment, the
+//! timers, the other menus' creators), its virtual calls (a menu's deleting destructor and class,
+//! whatever menu it is). What it calls that is plain stores or reads is done here with no call
+//! ([`IN_PLACE`] and the interface unit's [`in_place::ADDRESSES`]): the `Menu` base's and the
+//! 8-byte list's constructors, `memset` of a menu's tile pointers, the sound handle's and a null
+//! smart pointer's constructors (and the array constructor over null smart pointers or over the
+//! healing options), the empty constructors (`006815c0`, which answers its argument), the menus
+//! by class, the manager and its menus root, a list node's item and next, a menu's tile and
+//! state, the state stored (`007037c0`), the start menu's class (`0070ede0`, 0x3f5) and the map
+//! menu's (`00720df0`, 0x3ff). The family's functions call one another through `typed_call!`
+//! (the stats and VATS menus' list boxes and the pages' simple arrays are
+//! [`super::menu_manager_p2`]'s), as do the interface unit's menu creators; the tile's float
+//! getter and test (`00a011b0`, `00a01230`) and the smart pointer destructor (`0045cec0`) are the
+//! dispatch family's.
 
 use super::interface_cpp::in_place::{self, manager, menu_by_class, menus_root};
 use super::interface_cpp::{
     fn_00704140, fn_007048c0, fn_00704be0, interface_create_item_mod_menu,
     interface_create_repair_menu,
+};
+use super::menu_manager_p2::{
+    fn_00721060, fn_00721150, fn_00721850, fn_00721920, fn_00722000, fn_007220d0, fn_007227b0,
+    fn_00722880, fn_00722f60, fn_00723070, fn_00723750, fn_00723f00, fn_00723f30, fn_00723f50,
+    fn_00723f80, fn_00723fa0, fn_00723fd0, fn_00723ff0, fn_00724020, fn_00724040, fn_00724070,
 };
 use crate::dispatch;
 use engine_core::prelude::*;
@@ -38,6 +45,8 @@ pub const IN_PLACE: &[u32] = &[
     0x0066_94e0, // the default one (null), the array constructor's element
     0x0063_17a0, // a list node's item: the node's +8
     0x007b_52d0, // a list node's next: its first word
+    0x00a1_c4a0, // the `Menu` base's constructor: plain stores
+    0x0096_a2d0, // the 8-byte list's constructor: two zero words
     0x0070_ede0, // the start menu's class, 0x3f5
     0x004f_d3a0, // the word at +0x74 (the container menu's)
     0x0067_1d10, // the word at +0x30 (the book menu's reference)
@@ -56,8 +65,9 @@ const VECTOR_DESTRUCT: u32 = 0x00ec_5fce;
 /// The debug message print (an `overridable.tsv` row) and the unknown class's text.
 const DEBUG_MESSAGE: u32 = 0x005b_5e40;
 const UNKNOWN_MENU_CLASS_TEXT: u32 = 0x0106_ff64;
-/// The `Menu` base's constructor and destructor (thiscall).
-const MENU_CONSTRUCT: u32 = 0x00a1_c4a0;
+/// The `Menu` base's vtable (its constructor `00a1c4a0` stores it, [`menu_base`]) and its destructor
+/// (thiscall; JIP LN's menu state site is in it, so it stays a call).
+const MENU_VTABLE: u32 = 0x0109_5484;
 const MENU_DESTRUCT: u32 = 0x00a1_c520;
 
 /// `MenuManager`'s single instance, and the table its constructor body grows to `0x54` entries
@@ -91,8 +101,7 @@ const SURGERY_STATIC_POINTERS: [u32; 3] = [0x011d_adb4, 0x011d_ade8, 0x011d_ae5c
 
 /// A healing option's inventory item delete (`004459e0`, thiscall with a flag).
 const ITEM_DELETE: u32 = 0x0044_59e0;
-/// The 8-byte list's constructor, destructor and clear (thiscall).
-const LIST_CONSTRUCT: u32 = 0x0096_a2d0;
+/// The 8-byte list's destructor and clear (thiscall; its constructor is [`empty_list`]).
 const LIST_DESTRUCT: u32 = 0x0046_ffb0;
 const LIST_CLEAR: u32 = 0x0047_0470;
 /// The named and status effect lists' empties, and a status effect's data flush.
@@ -109,39 +118,9 @@ const STRING_SET: u32 = 0x0040_37f0;
 const POINTER_ASSIGN: u32 = 0x0066_b0d0;
 const POINTER_DESTRUCT: u32 = 0x0045_cec0;
 const POINTER_CONSTRUCT_DEFAULT: u32 = 0x0066_94e0;
-/// The VATS menu's members and destructor.
-const VATS_ACTION_LIST_CONSTRUCT: u32 = 0x0072_3750;
+/// The VATS menu's command and destructor.
 const VATS_COMMAND_CONSTRUCT: u32 = 0x009c_a4a0;
 const VATS_MENU_DESTRUCT: u32 = 0x007e_9130;
-/// The stats menu's six list boxes: their constructors and destructors (the unit's second half) by
-/// offset, in the exe's order.
-const STATS_LIST_BOX_CONSTRUCTORS: [(u32, u32); 6] = [
-    (0x180, 0x0072_1060),
-    (0x1b0, 0x0072_1060),
-    (0x1e0, 0x0072_1850),
-    (0x210, 0x0072_2000),
-    (0x240, 0x0072_27b0),
-    (0x270, 0x0072_2f60),
-];
-const STATS_LIST_BOX_DESTRUCTORS: [(u32, u32); 6] = [
-    (0x270, 0x0072_3070),
-    (0x240, 0x0072_2880),
-    (0x210, 0x0072_20d0),
-    (0x1e0, 0x0072_1920),
-    (0x1b0, 0x0072_1150),
-    (0x180, 0x0072_1150),
-];
-/// The pages' simple arrays (the unit's second half), thiscall.
-const BOOK_BUTTONS_CONSTRUCT: u32 = 0x0072_3f50;
-const BOOK_TEXT_ITEMS_CONSTRUCT: u32 = 0x0072_3f00;
-const BOOK_TEXT_ITEMS_DESTRUCT: u32 = 0x0072_3f30;
-const BOOK_BUTTONS_DESTRUCT: u32 = 0x0072_3f80;
-const LOVE_TESTER_BUTTONS_CONSTRUCT: u32 = 0x0072_4040;
-const LOVE_TESTER_TEXT_ITEMS_CONSTRUCT: u32 = 0x0072_3fa0;
-const LOVE_TESTER_TEXT_ITEMS_DESTRUCT: u32 = 0x0072_3fd0;
-const LOVE_TESTER_BUTTONS_DESTRUCT: u32 = 0x0072_4070;
-const LOVE_TESTER_GLOWS_CONSTRUCT: u32 = 0x0072_3ff0;
-const LOVE_TESTER_GLOWS_DESTRUCT: u32 = 0x0072_4020;
 
 /// `Tile::GetMenu` (Xbox PDB).
 const TILE_GET_MENU: u32 = 0x00a0_3c90;
@@ -187,6 +166,27 @@ fn free_if_flagged(e: &mut Engine, this: Ptr, flags: u32) {
     if flags & 1 != 0 {
         e.call(FREE, &args![this]);
     }
+}
+
+/// The `Menu` base constructor (`00a1c4a0`, plain stores): its vtable, the words at +4, +8, +0xc,
+/// +0x10, +0x14 and +0x18 null, the state (+0x24) 4, the byte at +0x1d 1 and the one at +0x1c 0.
+#[inline]
+fn menu_base(e: &mut Engine, at: u32) {
+    e.mem.set_u32(at, MENU_VTABLE);
+    for offset in [8u32, 0xc, 4, 0x10, 0x14] {
+        e.mem.set_u32(at.wrapping_add(offset), 0);
+    }
+    e.mem.set_u32(at.wrapping_add(MENU_STATE), 4);
+    e.mem.set_u8(at.wrapping_add(0x1d), 1);
+    e.mem.set_u32(at.wrapping_add(0x18), 0);
+    e.mem.set_u8(at.wrapping_add(0x1c), 0);
+}
+
+/// The 8-byte list's constructor (`0096a2d0`, plain stores): its two words zero.
+#[inline]
+pub(super) fn empty_list(e: &mut Engine, at: u32) {
+    e.mem.set_u32(at, 0);
+    e.mem.set_u32(at.wrapping_add(4), 0);
 }
 
 /// `memset(at, 0, size)` (`00403d30`) of a menu's tile pointers: `size` is a whole number of words.
@@ -396,7 +396,7 @@ pub fn menu_manager_create_menu_by_class(e: &mut Engine, _this: Ptr, class: u32)
 /// zeroed, the current page, the page count and the help manual cleared. `this`.
 pub fn fn_0071f240(e: &mut Engine, this: Ptr) -> Ptr {
     let base = this.addr();
-    e.call(MENU_CONSTRUCT, &args![this]);
+    menu_base(e, this.addr());
     e.mem.set_u32(base, TUTORIAL_MENU_VTABLE);
     zero_words(e, base.wrapping_add(0x28), 0x20);
     for offset in [0x48u32, 0x4c, 0x50] {
@@ -434,7 +434,7 @@ pub fn fn_0071f310(e: &mut Engine, this: Ptr) {
 /// and the two flags cleared. `this`.
 pub fn fn_0071f340(e: &mut Engine, this: Ptr) -> Ptr {
     let base = this.addr();
-    e.call(MENU_CONSTRUCT, &args![this]);
+    menu_base(e, this.addr());
     e.mem.set_u32(base, STATS_MENU_VTABLE);
     for option in 0..4u32 {
         healing_option(e, base.wrapping_add(0x28 + 0x10 * option));
@@ -449,9 +449,15 @@ pub fn fn_0071f340(e: &mut Engine, this: Ptr) -> Ptr {
         0x0071_f5d0,
         fn_0071f5d0(e, Ptr::new(base.wrapping_add(0x84)))
     );
-    for (offset, constructor) in STATS_LIST_BOX_CONSTRUCTORS {
-        e.call(constructor, &args![base.wrapping_add(offset)]);
-    }
+    // The six list boxes, in the exe's order: two of `ActorValue::Index`, then `PerkRankData *`,
+    // `MiscStatID`, `StatusEffect *` and `TESReputation *`.
+    let list_box = |offset: u32| Ptr::new(base.wrapping_add(offset));
+    typed_call!(super::FAMILY, 0x0072_1060, fn_00721060(e, list_box(0x180)));
+    typed_call!(super::FAMILY, 0x0072_1060, fn_00721060(e, list_box(0x1b0)));
+    typed_call!(super::FAMILY, 0x0072_1850, fn_00721850(e, list_box(0x1e0)));
+    typed_call!(super::FAMILY, 0x0072_2000, fn_00722000(e, list_box(0x210)));
+    typed_call!(super::FAMILY, 0x0072_27b0, fn_007227b0(e, list_box(0x240)));
+    typed_call!(super::FAMILY, 0x0072_2f60, fn_00722f60(e, list_box(0x270)));
     zero_words(e, base.wrapping_add(0x90), 0xf0);
     // The four status effects, then `bActiveEffectsUpdatedThisFrame` and `bLimbMode` (Xbox PDB).
     for offset in [0x74u32, 0x78, 0x80, 0x7c] {
@@ -499,7 +505,7 @@ pub fn fn_0071f520(e: &mut Engine, option: Ptr) -> bool {
 // Typed from 0071f540
 /// The `StatsMenu::NamedEffectsList` constructor: the list at +4, then the vtable. `this`.
 pub fn fn_0071f540(e: &mut Engine, this: Ptr) -> Ptr {
-    e.call(LIST_CONSTRUCT, &args![this.addr().wrapping_add(4)]);
+    empty_list(e, this.addr().wrapping_add(4));
     e.mem.set_u32(this.addr(), NAMED_EFFECTS_LIST_VTABLE);
     this
 }
@@ -516,7 +522,7 @@ pub fn fn_0071f570(e: &mut Engine, this: Ptr) {
 // Typed from 0071f5d0
 /// The `StatsMenu::StatusEffectList` constructor: the list at +4, then the vtable. `this`.
 pub fn fn_0071f5d0(e: &mut Engine, this: Ptr) -> Ptr {
-    e.call(LIST_CONSTRUCT, &args![this.addr().wrapping_add(4)]);
+    empty_list(e, this.addr().wrapping_add(4));
     e.mem.set_u32(this.addr(), STATUS_EFFECT_LIST_VTABLE);
     this
 }
@@ -588,9 +594,14 @@ pub fn fn_0071f700(e: &mut Engine, this: Ptr) {
         }
     }
     typed_call!(super::FAMILY, 0x0071_f8c0, fn_0071f8c0(e));
-    for (offset, destructor) in STATS_LIST_BOX_DESTRUCTORS {
-        e.call(destructor, &args![base.wrapping_add(offset)]);
-    }
+    // The six list boxes in reverse.
+    let list_box = |offset: u32| Ptr::new(base.wrapping_add(offset));
+    typed_call!(super::FAMILY, 0x0072_3070, fn_00723070(e, list_box(0x270)));
+    typed_call!(super::FAMILY, 0x0072_2880, fn_00722880(e, list_box(0x240)));
+    typed_call!(super::FAMILY, 0x0072_20d0, fn_007220d0(e, list_box(0x210)));
+    typed_call!(super::FAMILY, 0x0072_1920, fn_00721920(e, list_box(0x1e0)));
+    typed_call!(super::FAMILY, 0x0072_1150, fn_00721150(e, list_box(0x1b0)));
+    typed_call!(super::FAMILY, 0x0072_1150, fn_00721150(e, list_box(0x180)));
     typed_call!(
         super::FAMILY,
         0x0071_f600,
@@ -683,7 +694,7 @@ pub fn stats_menu_attach_tile_by_id(e: &mut Engine, this: Ptr, id: i32, tile: u3
 /// check (+0x58) cleared. `this`.
 pub fn fn_0071fa80(e: &mut Engine, this: Ptr) -> Ptr {
     let base = this.addr();
-    e.call(MENU_CONSTRUCT, &args![this]);
+    menu_base(e, this.addr());
     e.mem.set_u32(base, TEXT_EDIT_MENU_VTABLE);
     e.call(TEXT_EDITOR_CONSTRUCT, &args![base.wrapping_add(0x34)]);
     zero_words(e, base.wrapping_add(0x28), 0xc);
@@ -730,7 +741,7 @@ pub fn fn_0071fbc0(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
 /// releases what a static held), then the scalar fields. `this`.
 pub fn fn_0071fbf0(e: &mut Engine, this: Ptr) -> Ptr {
     let base = this.addr();
-    e.call(MENU_CONSTRUCT, &args![this]);
+    menu_base(e, this.addr());
     e.mem.set_u32(base, SURGERY_MENU_VTABLE);
     sound_handle(e, base.wrapping_add(0x94));
     sound_handle(e, base.wrapping_add(0xa0));
@@ -830,9 +841,13 @@ pub fn fn_00720010(_e: &mut Engine, _this: Ptr, id: i32) -> i32 {
 /// `bConcentratedFirePerk` (+0x104) cleared and `pLastLimb` (+0x108) null (Xbox PDB names). `this`.
 pub fn fn_00720040(e: &mut Engine, this: Ptr) -> Ptr {
     let base = this.addr();
-    e.call(MENU_CONSTRUCT, &args![this]);
+    menu_base(e, this.addr());
     e.mem.set_u32(base, VATS_MENU_VTABLE);
-    e.call(VATS_ACTION_LIST_CONSTRUCT, &args![base.wrapping_add(0xb0)]);
+    typed_call!(
+        super::FAMILY,
+        0x0072_3750,
+        fn_00723750(e, Ptr::new(base.wrapping_add(0xb0)))
+    );
     e.call(VATS_COMMAND_CONSTRUCT, &args![base.wrapping_add(0x11c)]);
     zero_words(e, base.wrapping_add(0x28), 0x80);
     e.mem.set_u8(base.wrapping_add(0xf8), 0);
@@ -881,7 +896,7 @@ fn book_state(e: &mut Engine, base: u32) {
 /// (+0x28) zeroed, `pBookGeometry` null and the state fields set (Xbox PDB names). `this`.
 pub fn fn_00720170(e: &mut Engine, this: Ptr) -> Ptr {
     let base = this.addr();
-    e.call(MENU_CONSTRUCT, &args![this]);
+    menu_base(e, this.addr());
     e.mem.set_u32(base, SPECIAL_BOOK_MENU_VTABLE);
     e.call(
         VECTOR_CONSTRUCT,
@@ -922,22 +937,18 @@ pub fn special_book_menu_scalar_deleting_destructor(e: &mut Engine, this: Ptr, f
 /// A `SPECIALBookMenu` page's constructor: `Buttons` (+0) and `TextItems` (+0x10) (Xbox PDB).
 /// `this`.
 pub fn fn_00720360(e: &mut Engine, this: Ptr) -> Ptr {
-    e.call(BOOK_BUTTONS_CONSTRUCT, &args![this]);
-    e.call(
-        BOOK_TEXT_ITEMS_CONSTRUCT,
-        &args![this.addr().wrapping_add(0x10)],
-    );
+    typed_call!(super::FAMILY, 0x0072_3f50, fn_00723f50(e, this));
+    let text_items = Ptr::new(this.addr().wrapping_add(0x10));
+    typed_call!(super::FAMILY, 0x0072_3f00, fn_00723f00(e, text_items));
     this
 }
 
 // Typed from 007203c0
 /// A `SPECIALBookMenu` page's destructor: `TextItems` (+0x10), then `Buttons` (+0).
 pub fn fn_007203c0(e: &mut Engine, this: Ptr) {
-    e.call(
-        BOOK_TEXT_ITEMS_DESTRUCT,
-        &args![this.addr().wrapping_add(0x10)],
-    );
-    e.call(BOOK_BUTTONS_DESTRUCT, &args![this]);
+    let text_items = Ptr::new(this.addr().wrapping_add(0x10));
+    typed_call!(super::FAMILY, 0x0072_3f30, fn_00723f30(e, text_items));
+    typed_call!(super::FAMILY, 0x0072_3f80, fn_00723f80(e, this));
 }
 
 // Typed from 00720420
@@ -966,13 +977,12 @@ pub fn fn_00720420(e: &mut Engine, this: Ptr) {
 /// state fields set (Xbox PDB names). `this`.
 pub fn fn_00720550(e: &mut Engine, this: Ptr) -> Ptr {
     let base = this.addr();
-    e.call(MENU_CONSTRUCT, &args![this]);
+    menu_base(e, this.addr());
     e.mem.set_u32(base, LOVE_TESTER_MENU_VTABLE);
-    e.call(
-        LOVE_TESTER_TEXT_ITEMS_CONSTRUCT,
-        &args![base.wrapping_add(0x64)],
-    );
-    e.call(LOVE_TESTER_GLOWS_CONSTRUCT, &args![base.wrapping_add(0x74)]);
+    let light_bulbs = Ptr::new(base.wrapping_add(0x64));
+    typed_call!(super::FAMILY, 0x0072_3fa0, fn_00723fa0(e, light_bulbs));
+    let glows = Ptr::new(base.wrapping_add(0x74));
+    typed_call!(super::FAMILY, 0x0072_3ff0, fn_00723ff0(e, glows));
     e.call(
         VECTOR_CONSTRUCT,
         &args![
@@ -1018,22 +1028,18 @@ pub fn love_tester_menu_scalar_deleting_destructor(e: &mut Engine, this: Ptr, fl
 /// A `LoveTesterMenu` page's constructor: `Buttons` (+0) and `TextItems` (+0x10) (Xbox PDB).
 /// `this`.
 pub fn fn_007207a0(e: &mut Engine, this: Ptr) -> Ptr {
-    e.call(LOVE_TESTER_BUTTONS_CONSTRUCT, &args![this]);
-    e.call(
-        LOVE_TESTER_TEXT_ITEMS_CONSTRUCT,
-        &args![this.addr().wrapping_add(0x10)],
-    );
+    typed_call!(super::FAMILY, 0x0072_4040, fn_00724040(e, this));
+    let text_items = Ptr::new(this.addr().wrapping_add(0x10));
+    typed_call!(super::FAMILY, 0x0072_3fa0, fn_00723fa0(e, text_items));
     this
 }
 
 // Typed from 00720800
 /// A `LoveTesterMenu` page's destructor: `TextItems` (+0x10), then `Buttons` (+0).
 pub fn fn_00720800(e: &mut Engine, this: Ptr) {
-    e.call(
-        LOVE_TESTER_TEXT_ITEMS_DESTRUCT,
-        &args![this.addr().wrapping_add(0x10)],
-    );
-    e.call(LOVE_TESTER_BUTTONS_DESTRUCT, &args![this]);
+    let text_items = Ptr::new(this.addr().wrapping_add(0x10));
+    typed_call!(super::FAMILY, 0x0072_3fd0, fn_00723fd0(e, text_items));
+    typed_call!(super::FAMILY, 0x0072_4070, fn_00724070(e, this));
 }
 
 // Typed from 00720860
@@ -1056,11 +1062,10 @@ pub fn fn_00720860(e: &mut Engine, this: Ptr) {
         VECTOR_DESTRUCT,
         &args![base.wrapping_add(0x84), 0x20u32, 9u32, 0x0072_0800u32],
     );
-    e.call(LOVE_TESTER_GLOWS_DESTRUCT, &args![base.wrapping_add(0x74)]);
-    e.call(
-        LOVE_TESTER_TEXT_ITEMS_DESTRUCT,
-        &args![base.wrapping_add(0x64)],
-    );
+    let glows = Ptr::new(base.wrapping_add(0x74));
+    typed_call!(super::FAMILY, 0x0072_4020, fn_00724020(e, glows));
+    let light_bulbs = Ptr::new(base.wrapping_add(0x64));
+    typed_call!(super::FAMILY, 0x0072_3fd0, fn_00723fd0(e, light_bulbs));
     e.call(MENU_DESTRUCT, &args![this]);
 }
 
@@ -1076,7 +1081,7 @@ pub fn tutorial_menu_attach_tile_by_id(e: &mut Engine, this: Ptr, id: i32, tile:
 // Typed from 00720a10
 /// The `QuantityMenu` constructor: the `Menu` base and the vtable. `this`.
 pub fn fn_00720a10(e: &mut Engine, this: Ptr) -> Ptr {
-    e.call(MENU_CONSTRUCT, &args![this]);
+    menu_base(e, this.addr());
     e.mem.set_u32(this.addr(), QUANTITY_MENU_VTABLE);
     this
 }
