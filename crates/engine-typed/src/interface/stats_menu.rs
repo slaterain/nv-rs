@@ -1601,7 +1601,6 @@ pub fn list_box_misc_stat_id_add_item(
 const GET_SOUND_HANDLE_BY_NAME: u32 = 0x00ad_7550;
 const SOUND_HANDLE_PLAY: u32 = 0x00ad_8830;
 const AUDIO: u32 = 0x011f_6d98;
-const ENTER_SOUND: u32 = 0x0107_4f40;
 const BUTTON_SOUND: u32 = 0x0106_f380;
 const TEXT_TO_TRAIT: u32 = 0x00a0_1860;
 const UPDATE_TILE: u32 = 0x00a0_4640;
