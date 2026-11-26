@@ -165,7 +165,7 @@ The translation runs every function of the game through `engine-core`'s model of
 program: its memory, its calls by address, its x87 floating point. That is exact but slow. A
 native rewrite is plain Rust registered at the function's address, so every caller that calls that
 address gets it, and it is checked against the translation before it is turned on. The goal is the
-whole game native. About 48,000 functions are translated, and about 1,100 of them have a native
+whole game native. About 48,000 functions are translated, and about 2,100 of them have a native
 rewrite so far (the translation stays, as the reference the native code is tested against).
 
 ### Where to help

@@ -35,7 +35,7 @@ Builds from source (not yet the preview) also recognize one GOG build: the en-US
 2. Double-click `Play.exe`. The launcher opens, in the look of the game's terminals; `> Play` finds
    your game and starts it.
 3. `Import my saves.cmd` brings your saves over (in builds from source and the next preview, the
-   launcher's `> Import saves` entry does it instead). The launcher's `> Settings` has the display options and the game fixes.
+   launcher's `> Import saves` entry does it instead). The launcher's `> Settings` has the display options, each game fix on its own, and the new lighting (ambient occlusion and sun shadows, off by default; Shift+F11 switches it while playing).
 
 It never changes your game, your saves or your settings: everything it writes stays in its own
 folder. Windows may warn because the program isn't signed. It has only been run on one PC so far:
@@ -66,14 +66,14 @@ shows what's left.
 | ✅ | **The whole game** | Combat, AI, quests, dialogue, menus, saves, the open world and the DLCs, checked against the original and playable. |
 | ✅ | **Fixes** | Bug fixes on by default, each with its own setting; the original's behaviour is one setting away. |
 | ✅ | **Windows preview** | [Released](https://github.com/slaterain/nv-rs/releases); run on one PC so far. |
-| 🔨 | **Native 64-bit code** | Started: threads on their own cores, textures and sounds kept outside the 32-bit memory, and the first hot paths as native code (the script evaluator, the world draw's device calls, the actors' per-frame loops). |
+| 🔨 | **Native 64-bit code** | Under way: threads on their own cores, textures and sounds kept outside the 32-bit memory, and about 2,100 of the game's functions rewritten as native code so far (the script evaluator, the world draw, the actors' AI, forms, menus, cells and their extra data, the scene's lights), each checked against the translation. |
 | 🔨 | **Built-in script extender: xNVSE** | All 654 of its script commands and both its script languages, with nothing to install. |
 | 🔨 | **Built-in script extender: JIP LN:** | All its script commands (JIP LN: 1,116 and its two version commands) and all of its game patches that do something on this port (174 of 183; three more are folded into others, six do nothing here); on in the default fixes preset, off in vanilla (`bJIPInstalled=0` turns it off). |
 | 🔨 | **UI Organizer (UIO)** | UI mods' HUD and menu additions; on in the default fixes preset (`bUIO=0` turns it off). |
 | ⬜ | **lStewieAl's Tweaks** | No longer built in. Mods that expect it are to be supported from their own files (CONTRIBUTING.md, "What can and can't be accepted"). |
 | 🔨 | **Mod installers (FOMOD)** | Mods with an installer, from .zip or .7z, installed into nv-rs's own folder, never the game's. |
-| 🔨 | **One launcher** | `Play.exe` opens a window like the game's terminals to play, install mods, import saves and change settings. |
-| 🔨 | **Modern graphics (wgpu)** | The default renderer, on Vulkan; in the places compared, on one NVIDIA card, its pictures nearly match Direct3D 9's, and at 8x antialiasing it is about 8% slower. |
+| 🔨 | **One launcher** | `Play.exe` opens a window like the game's terminals to play, install mods, import saves and change settings; its Settings has the port's own switches, the fixes one by one and the new lighting. |
+| 🔨 | **Modern graphics (wgpu)** | The default renderer, on Vulkan; in the places compared, on one NVIDIA card, its pictures nearly match Direct3D 9's, and at 8x antialiasing it is about 8% slower. New lighting (ambient occlusion and sun shadows) is being tried, off by default. |
 | 🔨 | **Game pads** | Xbox-style pads on Windows as in the original; other pads, and Linux, not yet tried with a real pad. |
 | ⬜ | **More platforms, co-op, VR** | Planned; co-op has no design yet. |
 
