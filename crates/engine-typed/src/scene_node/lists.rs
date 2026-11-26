@@ -11,15 +11,22 @@
 //! import calls), the light queues' lock given back (the dispatch family's `0040fba0` body, as the
 //! exe inlines it), the objects' `IsNode` and `IsTriBasedGeom` slots and the lights' RTTI slot when
 //! they hold the exe's constant bodies ([`slot_word`]), and the point comparison of a moved light
-//! (`NiPoint3::operator!=` `00439090` and its `operator==` `004390c0`: three float compares).
+//! (`NiPoint3::operator!=` `00439090` and its `operator==` `004390c0`: three float compares), and
+//! the arrays' element moves (`00cb9930`: a 4-byte `memmove` per element).
 //! Typed calls: the queues' lock (`0040fbf0`, the dispatch family's), the counted list's add at the
 //! tail (`00a5a310`, the cell references family's), the object update (`00a59c60`, the scene
 //! family's), the cast (`00653290`, the dispatch family's), the shadow drop of the set-up family
 //! (`00b5c3c0`), the light's constructor, `SetLight`, shadow flag and geometry removal (the lights
 //! family's), and these functions' calls of each other. What stays by address: the allocation, the
 //! `NiLight` constructor, the light update (`00b5d300`) and its cull (`00b9ef30`), the renderer's
-//! shadow map release and end, the property's light walk, the list's `RemoveAll`, the arrays'
-//! reallocation and moves and their allocator slots, and an array search's compare function.
+//! shadow map release and end, the property's light walk, the arrays' allocator slots, and an array
+//! search's compare function.
+//!
+//! Also here: the counted list's `RemoveAll` (`00e74d40`), which the node's lists, the particle
+//! systems' modifier lists and every other `NiPointer` list of the exe share: each item's pointer
+//! let go and the item handed back to the item pool under the pool's lock (the dispatch family's
+//! `0040fbf0`, given back in place); and the arrays' growth (`00cb9ce0`), which the physics code's
+//! `BSSimpleArray`s share too.
 //!
 //! **JIP LN NVSE.** Its H03 patch writes the size of the `NiLight` a light made dynamic gets
 //! (`00b5cd00`'s push at `00b5cd29`): the seam `00b5cd2a` is asked here as in the translation,
@@ -46,27 +53,27 @@ use engine_core::{args, typed_call, Engine};
 /// `lLightQueueUpdate` (+0xfc) (Xbox PDB names); `kShadowLightActiveFence` and
 /// `kShadowLightFadingInFence` (+0xd0, +0xd4), `pBSPortalGraph` (+0x1e0) and
 /// `bAllowLightRemoveQueues` (+0x1fc).
-const LIGHT_LIST: u32 = 0xb4;
-const SHADOW_LIGHT_LIST: u32 = 0xc0;
-const LIGHT_QUEUE_ADD: u32 = 0xe4;
-const LIGHT_QUEUE_REMOVE: u32 = 0xf0;
-const LIGHT_QUEUE_UPDATE: u32 = 0xfc;
-const ACTIVE_FENCE: u32 = 0xd0;
-const FADING_FENCE: u32 = 0xd4;
-const PORTAL_GRAPH: u32 = 0x1e0;
+pub(super) const LIGHT_LIST: u32 = 0xb4;
+pub(super) const SHADOW_LIGHT_LIST: u32 = 0xc0;
+pub(super) const LIGHT_QUEUE_ADD: u32 = 0xe4;
+pub(super) const LIGHT_QUEUE_REMOVE: u32 = 0xf0;
+pub(super) const LIGHT_QUEUE_UPDATE: u32 = 0xfc;
+pub(super) const ACTIVE_FENCE: u32 = 0xd0;
+pub(super) const FADING_FENCE: u32 = 0xd4;
+pub(super) const PORTAL_GRAPH: u32 = 0x1e0;
 const ALLOW_REMOVE_QUEUES: u32 = 0x1fc;
 /// A list item: the next item (+0), the previous (+4), the element (+8).
-const ITEM_NEXT: u32 = 0;
-const ITEM_PREVIOUS: u32 = 4;
-const ITEM_ELEMENT: u32 = 8;
+pub(super) const ITEM_NEXT: u32 = 0;
+pub(super) const ITEM_PREVIOUS: u32 = 4;
+pub(super) const ITEM_ELEMENT: u32 = 8;
 /// The light queues' lock (its owner word; its count at `011f9ea4`).
 const QUEUE_LOCK: u32 = 0x011f_9ea0;
 /// A shadow scene light's portal graph (+0x240, the first word of the image's last four).
-const LIGHT_PORTAL_GRAPH: u32 = 0x240;
+pub(super) const LIGHT_PORTAL_GRAPH: u32 = 0x240;
 /// `NiAVObject` members (PC): `m_uFlags` (+0x30, bit 0 culled), the world translation (+0x8c);
 /// `NiNode`'s children (+0xa0, their used size +0xa6) and the node's child index word (+0xb0).
-const AV_FLAGS: u32 = 0x30;
-const WORLD_TRANSLATE: u32 = 0x8c;
+pub(super) const AV_FLAGS: u32 = 0x30;
+pub(super) const WORLD_TRANSLATE: u32 = 0x8c;
 const CHILDREN_BASE: u32 = 0xa0;
 const CHILDREN_SIZE: u32 = 0xa6;
 const CHILD_INDEX: u32 = 0xb0;
@@ -78,12 +85,13 @@ const PROPERTY_TYPE: u32 = 0x1c;
 /// The slots: the deleting destructor of a counted object (+4, no stack words) and of the sun light
 /// (+0, a flag), the RTTI (+8), `IsNode` (+0xc), `IsTriBasedGeom` (+0x1c); an array's allocate
 /// (+4, an element count) and free (+8, the buffer).
-const SLOT_DELETE: u32 = 4;
+pub(super) const SLOT_DELETE: u32 = 4;
 const SLOT_RTTI: u32 = 8;
 const SLOT_IS_NODE: u32 = 0xc;
 const SLOT_IS_TRI_BASED_GEOM: u32 = 0x1c;
 const SLOT_ARRAY_ALLOCATE: u32 = 4;
 const SLOT_ARRAY_FREE: u32 = 8;
+const SLOT_ARRAY_REALLOCATE: u32 = 0xc;
 /// An array (`BSSimpleArray`-shaped): vtable, buffer (+4), count (+8), capacity (+0xc).
 const ARRAY_BUFFER: u32 = 4;
 const ARRAY_COUNT: u32 = 8;
@@ -96,60 +104,56 @@ const LIGHT_RTTI: u32 = 0x011f_4a28;
 const SHADOW_SCENE_NODE_RTTI: u32 = 0x011f_9e80;
 /// The renderer object (`011f91a8`), its shadow map release (`00b6d4c0`) and its end of the maps'
 /// drop (`00b6d130`).
-const RENDERER: u32 = 0x011f_91a8;
+pub(super) const RENDERER: u32 = 0x011f_91a8;
 const RENDERER_RELEASE_MAP: u32 = 0x00b6_d4c0;
 const RENDERER_MAPS_DROPPED: u32 = 0x00b6_d130;
 /// By address: the allocation (`cdecl`, a size), `NiLight`'s constructor (`00a7d670`), the light
 /// update (`00b5d300`) and cull (`00b9ef30`), the lighting property's light walk (`00b70490`, its
-/// iterator a word the caller holds), the list's `RemoveAll` (`00e74d40`), and the arrays'
-/// reallocation (`00cb9ce0`: new capacity, count) and moves (`00cb9930`: to, from, count).
-const NEW_OBJECT: u32 = 0x00aa_13e0;
+/// iterator a word the caller holds).
+pub(super) const NEW_OBJECT: u32 = 0x00aa_13e0;
 const NI_LIGHT_CONSTRUCT: u32 = 0x00a7_d670;
-const LIGHT_UPDATE: u32 = 0x00b5_d300;
-const LIGHT_CULL: u32 = 0x00b9_ef30;
+pub(super) const LIGHT_UPDATE: u32 = 0x00b5_d300;
+pub(super) const LIGHT_CULL: u32 = 0x00b9_ef30;
 const PROPERTY_NEXT_LIGHT: u32 = 0x00b7_0490;
-const LIST_REMOVE_ALL: u32 = 0x00e7_4d40;
-const ARRAY_REALLOCATE: u32 = 0x00cb_9ce0;
-const ARRAY_MOVE: u32 = 0x00cb_9930;
 /// The size of the `NiLight` `00b5cd00` makes (its `PUSH 0xFC`; JIP's H03 answers its own size at
 /// the seam `00b5cd2a` inside that push).
 const NI_LIGHT_SIZE: u32 = 0xfc;
 /// `0x250` bytes: a `ShadowSceneLight`.
-const SHADOW_SCENE_LIGHT_SIZE: u32 = 0x250;
+pub(super) const SHADOW_SCENE_LIGHT_SIZE: u32 = 0x250;
 
 /// An item's next item.
 #[inline]
-fn next_of(e: &Engine, item: u32) -> u32 {
+pub(super) fn next_of(e: &Engine, item: u32) -> u32 {
     e.mem.u32(item.wrapping_add(ITEM_NEXT))
 }
 
 /// An item's element.
 #[inline]
-fn element_of(e: &Engine, item: u32) -> u32 {
+pub(super) fn element_of(e: &Engine, item: u32) -> u32 {
     e.mem.u32(item.wrapping_add(ITEM_ELEMENT))
 }
 
 /// The head item of the node's list at `list`.
 #[inline]
-fn head_of(e: &Engine, this: u32, list: u32) -> u32 {
+pub(super) fn head_of(e: &Engine, this: u32, list: u32) -> u32 {
     e.mem.u32(this.wrapping_add(list))
 }
 
 /// A light's `NiLight` (`spLight`).
 #[inline]
-fn ni_light_of(e: &Engine, light: u32) -> u32 {
+pub(super) fn ni_light_of(e: &Engine, light: u32) -> u32 {
     e.mem.u32(light.wrapping_add(ShadowSceneLight::spLight.off))
 }
 
 /// The object's count up (an `NiPointer` taking it).
 #[inline]
-fn hold(e: &mut Engine, object: u32) {
+pub(super) fn hold(e: &mut Engine, object: u32) {
     interlocked_increment(e, object.wrapping_add(4));
 }
 
 /// The object's count down (an `NiPointer` letting it go), the object deleted (slot 4) at zero.
 #[inline]
-fn release(e: &mut Engine, object: u32) {
+pub(super) fn release(e: &mut Engine, object: u32) {
     if interlocked_decrement(e, object.wrapping_add(4)) == 0 {
         e.vcall(object, SLOT_DELETE, &args![]);
     }
@@ -173,7 +177,7 @@ fn unlock_queues(e: &mut Engine) {
 
 /// The inlined `AddTail(NiPointer(object))` of the list at `list`: the object in a stack word,
 /// held (unless `checked` and null) while the list's add takes a count of its own, then let go.
-fn add_tail_held(e: &mut Engine, list: u32, object: u32, checked: bool) {
+pub(super) fn add_tail_held(e: &mut Engine, list: u32, object: u32, checked: bool) {
     e.with_stack(4, |e, slot| {
         e.mem.set_u32(slot.addr(), object);
         let held = !checked || object != 0;
@@ -193,7 +197,7 @@ fn add_tail_held(e: &mut Engine, list: u32, object: u32, checked: bool) {
 
 /// The inlined `NiPointer` assignment of `object` to the word at `slot`: nothing for the same
 /// object; the old one let go, the new one stored and held.
-fn assign(e: &mut Engine, slot: u32, object: u32) {
+pub(super) fn assign(e: &mut Engine, slot: u32, object: u32) {
     let old = e.mem.u32(slot);
     if old == object {
         return;
@@ -234,11 +238,65 @@ fn light_of(e: &Engine, this: u32, ni_light: u32) -> u32 {
     0
 }
 
+/// The arrays' element move (`00cb9930`, `thiscall(array, to, from, count)`, `ret 0xc`, the array
+/// unread) in place: `count` words from `from` to `to`, each a 4-byte `memmove` in the exe, upwards
+/// when `to` is below `from`, downwards from the last when above (no move when the count less one
+/// is negative as a signed word), none when they are the same or the count is 0.
+fn move_words(e: &mut Engine, to: u32, from: u32, count: u32) {
+    if count == 0 || to == from {
+        return;
+    }
+    let copy = |e: &mut Engine, i: u32| {
+        let word = e.mem.u32(from.wrapping_add(i.wrapping_mul(4)));
+        e.mem.set_u32(to.wrapping_add(i.wrapping_mul(4)), word);
+    };
+    if to < from {
+        for i in 0..count {
+            copy(e, i);
+        }
+    } else if (count.wrapping_sub(1) as i32) >= 0 {
+        for i in (0..count).rev() {
+            copy(e, i);
+        }
+    }
+}
+
+// Typed from 00cb9ce0
+/// The arrays' growth (`thiscall(array, capacity, count)`, `ret 8`; `BSSimpleArray`-shaped, its
+/// allocator slots asked): without a buffer, one from the allocate slot (+4) and the capacity set;
+/// for a count equal to the capacity, the reallocate slot (+0xc: the buffer, the capacity) answers
+/// the buffer; otherwise a new buffer from the allocate slot takes the `count` elements (the move
+/// `00cb9930` in place, [`move_words`]) and the old one goes to the free slot (+8). The capacity is
+/// the caller's to set in the last two.
+pub fn grow(e: &mut Engine, this: Ptr, capacity: u32, count: u32) {
+    let array = this.addr();
+    let buffer = e.mem.u32(array.wrapping_add(ARRAY_BUFFER));
+    if buffer == 0 {
+        let fresh = e.vcall(array, SLOT_ARRAY_ALLOCATE, &args![capacity]).u32();
+        e.mem.set_u32(array.wrapping_add(ARRAY_CAPACITY), capacity);
+        e.mem.set_u32(array.wrapping_add(ARRAY_BUFFER), fresh);
+        return;
+    }
+    if count == e.mem.u32(array.wrapping_add(ARRAY_CAPACITY)) {
+        let kept = e
+            .vcall(array, SLOT_ARRAY_REALLOCATE, &args![buffer, capacity])
+            .u32();
+        e.mem.set_u32(array.wrapping_add(ARRAY_BUFFER), kept);
+        return;
+    }
+    let fresh = e.vcall(array, SLOT_ARRAY_ALLOCATE, &args![capacity]).u32();
+    // The buffer after the allocate slot; the move is in place, so the free slot gets it too.
+    let buffer = e.mem.u32(array.wrapping_add(ARRAY_BUFFER));
+    move_words(e, fresh, buffer, count);
+    e.vcall(array, SLOT_ARRAY_FREE, &args![buffer]);
+    e.mem.set_u32(array.wrapping_add(ARRAY_BUFFER), fresh);
+}
+
 // Typed from 00b5c360
 /// The next slot of an array reserved (`fastcall(array)`), its index answered. A full array grows
 /// first: with no capacity, a four-element buffer from the allocate slot (+4) and the count,
 /// buffer and capacity 4 set; otherwise the capacity doubles (0x400 more once above 0x400) through
-/// the reallocation `00cb9ce0` (new capacity, count).
+/// the growth `00cb9ce0` (new capacity, count; [`grow`]).
 pub fn reserve_slot(e: &mut Engine, this: Ptr) -> u32 {
     let array = this.addr();
     let count = e.mem.u32(array.wrapping_add(ARRAY_COUNT));
@@ -258,7 +316,7 @@ pub fn reserve_slot(e: &mut Engine, this: Ptr) -> u32 {
         } else {
             capacity.wrapping_mul(2)
         };
-        e.call(ARRAY_REALLOCATE, &args![array, grown, count]);
+        typed_call!(FAMILY, 0x00cb_9ce0, grow(e, this, grown, count));
         e.mem.set_u32(array.wrapping_add(ARRAY_CAPACITY), grown);
     }
     let index = e.mem.u32(array.wrapping_add(ARRAY_COUNT));
@@ -291,10 +349,11 @@ pub fn find(e: &mut Engine, this: Ptr, value: u32, start: u32, compare: u32) -> 
 // Typed from 00b5ade0
 /// An array's element `index` removed (`thiscall(array, index, shrink)`, `ret 8`). Without the
 /// shrink byte, or while the count is above a quarter of the capacity (capacity up to 0x400) or
-/// above the capacity less 0x800 (larger), the later elements move down one (`00cb9930`) and the
-/// count drops. Otherwise a smaller buffer (half the capacity, or 0x400 less above 0x800) comes
-/// from the allocate slot, the elements before the index and then `count - 1` from after it move
-/// into it, the old buffer goes to the free slot, and the count, buffer and capacity are set.
+/// above the capacity less 0x800 (larger; wrapping, so a capacity of 0x401 to 0x7ff shrinks),
+/// the later elements move down one ([`move_words`]) and the count drops. Otherwise a smaller
+/// buffer (half the capacity, or 0x400 less above 0x800) comes from the allocate slot, the
+/// elements before the index and then `count - 1` from after it move into it, the old buffer goes
+/// to the free slot, and the count, buffer and capacity are set.
 pub fn remove_at(e: &mut Engine, this: Ptr, index: u32, shrink: u8) {
     let array = this.addr();
     let capacity = e.mem.u32(array.wrapping_add(ARRAY_CAPACITY));
@@ -311,9 +370,10 @@ pub fn remove_at(e: &mut Engine, this: Ptr, index: u32, shrink: u8) {
             .u32(array.wrapping_add(ARRAY_BUFFER))
             .wrapping_add(index.wrapping_mul(4));
         let after = count.wrapping_sub(index).wrapping_sub(1);
-        e.call(ARRAY_MOVE, &args![array, at, at.wrapping_add(4), after]);
-        let left = e.mem.u32(array.wrapping_add(ARRAY_COUNT)).wrapping_sub(1);
-        e.mem.set_u32(array.wrapping_add(ARRAY_COUNT), left);
+        move_words(e, at, at.wrapping_add(4), after);
+        // The move is done in place: the count read above is the one the exe decrements.
+        e.mem
+            .set_u32(array.wrapping_add(ARRAY_COUNT), count.wrapping_sub(1));
         return;
     }
     let smaller = if capacity > 0x800 {
@@ -322,21 +382,18 @@ pub fn remove_at(e: &mut Engine, this: Ptr, index: u32, shrink: u8) {
         capacity >> 1
     };
     let fresh = e.vcall(array, SLOT_ARRAY_ALLOCATE, &args![smaller]).u32();
+    // The buffer and the count as the exe reads them after the allocate slot; the moves are done
+    // in place, so nothing changes them until the free slot.
     let buffer = e.mem.u32(array.wrapping_add(ARRAY_BUFFER));
-    e.call(ARRAY_MOVE, &args![array, fresh, buffer, index]);
-    let moved = e.mem.u32(array.wrapping_add(ARRAY_COUNT)).wrapping_sub(1);
+    let count = e.mem.u32(array.wrapping_add(ARRAY_COUNT));
+    move_words(e, fresh, buffer, index);
     let gap = index.wrapping_mul(4);
-    let buffer = e.mem.u32(array.wrapping_add(ARRAY_BUFFER));
-    e.call(
-        ARRAY_MOVE,
-        &args![
-            array,
-            fresh.wrapping_add(gap),
-            buffer.wrapping_add(gap).wrapping_add(4),
-            moved
-        ],
+    move_words(
+        e,
+        fresh.wrapping_add(gap),
+        buffer.wrapping_add(gap).wrapping_add(4),
+        count.wrapping_sub(1),
     );
-    let buffer = e.mem.u32(array.wrapping_add(ARRAY_BUFFER));
     e.vcall(array, SLOT_ARRAY_FREE, &args![buffer]);
     let left = e.mem.u32(array.wrapping_add(ARRAY_COUNT)).wrapping_sub(1);
     e.mem.set_u32(array.wrapping_add(ARRAY_COUNT), left);
@@ -346,21 +403,18 @@ pub fn remove_at(e: &mut Engine, this: Ptr, index: u32, shrink: u8) {
 
 // Typed from 00b5aea0
 /// `count` elements at `index` removed from an array (`thiscall(array, index, count)`, `ret 8`):
-/// the last `min(count, elements after them)` (unsigned) move into the gap (`00cb9930`), then the
+/// the last `min(count, elements after them)` (unsigned) move into the gap ([`move_words`]), then the
 /// count drops by `count`.
 pub fn remove_run(e: &mut Engine, this: Ptr, index: u32, count: u32) {
     let array = this.addr();
     let size = e.mem.u32(array.wrapping_add(ARRAY_COUNT));
     let moved = size.wrapping_sub(index).wrapping_sub(count).min(count);
     let buffer = e.mem.u32(array.wrapping_add(ARRAY_BUFFER));
-    e.call(
-        ARRAY_MOVE,
-        &args![
-            array,
-            buffer.wrapping_add(index.wrapping_mul(4)),
-            buffer.wrapping_add(size.wrapping_sub(moved).wrapping_mul(4)),
-            moved
-        ],
+    move_words(
+        e,
+        buffer.wrapping_add(index.wrapping_mul(4)),
+        buffer.wrapping_add(size.wrapping_sub(moved).wrapping_mul(4)),
+        moved,
     );
     let left = e
         .mem
@@ -661,9 +715,10 @@ pub fn queue_all_removals(e: &mut Engine, this: Ptr) {
         0x00b5_c3c0,
         setup::lists::drop_shadow_maps(e, this)
     );
-    e.call(
-        LIST_REMOVE_ALL,
-        &args![node.wrapping_add(SHADOW_LIGHT_LIST)],
+    typed_call!(
+        FAMILY,
+        0x00e7_4d40,
+        remove_all(e, Ptr::new(node.wrapping_add(SHADOW_LIGHT_LIST)))
     );
     e.mem.set_u32(node.wrapping_add(ACTIVE_FENCE), 0);
     e.mem.set_u32(node.wrapping_add(FADING_FENCE), 0);
@@ -1066,4 +1121,50 @@ pub fn add_unique(e: &mut Engine, this: Ptr, object: u32) {
     if missing {
         add_tail_held(e, list, object, true);
     }
+}
+
+/// The pool the list items go back to (`NiTPointerAllocator`'s): its lock (owner `011c5f80`,
+/// count `011c5f84`) and its free item head (`011c5f58`).
+const ITEM_POOL_LOCK: u32 = 0x011c_5f80;
+const ITEM_POOL_COUNT: u32 = 0x011c_5f84;
+const ITEM_POOL_FREE: u32 = 0x011c_5f58;
+
+// Typed from 00e74d40
+/// `NiTPointerListBase<NiTPointerAllocator<unsigned int>, NiPointer<..>>::RemoveAll` (engine map,
+/// `thiscall(list)`): for each item from the head (its next read first): its `NiPointer` let go
+/// and cleared when set; under the item pool's lock (`0040fbf0` with 0) the item's previous word
+/// cleared and the item pushed on the pool's free list, the lock given back as the exe inlines it
+/// (the count down, the free head stored, at zero no owner). Then the count, head and tail
+/// cleared.
+pub fn remove_all(e: &mut Engine, this: Ptr<NiTPointerList>) {
+    let list = this.addr();
+    let mut item = e.mem.u32(list);
+    while item != 0 {
+        let element = element_of(e, item);
+        let next = next_of(e, item);
+        if element != 0 {
+            release(e, element);
+            e.mem.set_u32(item.wrapping_add(ITEM_ELEMENT), 0);
+        }
+        typed_call!(
+            dispatch::FAMILY,
+            0x0040_fbf0,
+            dispatch::refs::lock(e, Ptr::<LightLock>::new(ITEM_POOL_LOCK), 0u32)
+        );
+        e.mem.set_u32(item.wrapping_add(ITEM_PREVIOUS), 0);
+        let free = e.mem.u32(ITEM_POOL_FREE);
+        e.mem.set_u32(item.wrapping_add(ITEM_NEXT), free);
+        let count = e.mem.u32(ITEM_POOL_COUNT).wrapping_sub(1);
+        e.mem.set_u32(ITEM_POOL_COUNT, count);
+        e.mem.set_u32(ITEM_POOL_FREE, item);
+        if count == 0 {
+            // The exe's plain store of the owner gives the lock back: a release store, so the
+            // free list's words are seen before the lock is free.
+            e.mem.set_u32_release(ITEM_POOL_LOCK, 0);
+        }
+        item = next;
+    }
+    e.mem.set_u32(list.wrapping_add(8), 0);
+    e.mem.set_u32(list, 0);
+    e.mem.set_u32(list.wrapping_add(4), 0);
 }
