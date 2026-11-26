@@ -22,8 +22,8 @@ use engine_core::prelude::*;
 use engine_core::typed::diff::{Diff, Input};
 use engine_typed::crt::CRT;
 use engine_typed::forms::{
-    actor_base, actor_base_data, ai_form, animation, attributes, debug_string, object, tesform,
-    FORMS,
+    actor_base, actor_base_data, ai_form, animation, attributes, conditions, debug_string, object,
+    package_data, package_list, schedule, tesform, FORMS,
 };
 use engine_typed::pathing::PATHING;
 
@@ -4943,17 +4943,10 @@ fn attributes_destruct_biped_model_form() {
 // ---- TESAIForm (`ai_form`) and TESAnimation (`animation`) ----
 
 /// The words the AI form's and the animation's callees by address answer, one each from
-/// [`AI_ANSWERS`]: the package list's operations, the equip type and a file's chunk type.
+/// [`AI_ANSWERS`]: the equip type and a file's chunk type. (The package list's operations are
+/// this family's: their own code runs, over the package world.)
 const AI_ANSWERS: u32 = 0x0300_7000;
-const AI_ANSWERED: [u32; 10] = [
-    0x0067_e400, // the package list's clear
-    0x0067_e3a0, // its destructor
-    0x0067_e440, // its copy
-    0x0067_e420, // its append
-    0x0067_e560, // its InitItem
-    0x0067_e780, // its current package
-    0x0067_ec40, // its missed packages
-    0x0067_e4a0, // whether two lists differ
+const AI_ANSWERED: [u32; 2] = [
     0x0047_9430, // the equip type
     0x0047_26b0, // a file's chunk type
 ];
@@ -5030,23 +5023,11 @@ macro_rules! ai_answered {
     };
 }
 
-/// The world plus what the AI form and the animation reach: their callees' answers, the slot
-/// stand-in, a chunk read of the case's bytes and the save/load game.
+/// The package world plus what the AI form and the animation reach: their callees' answers, the
+/// slot stand-in, a chunk read of the case's bytes and the save/load game.
 fn ai_world(e: &mut Engine) {
-    world(e);
-    ai_answered!(
-        e,
-        0x0067_e400,
-        0x0067_e3a0,
-        0x0067_e440,
-        0x0067_e420,
-        0x0067_e560,
-        0x0067_e780,
-        0x0067_ec40,
-        0x0067_e4a0,
-        0x0047_9430,
-        0x0047_26b0,
-    );
+    package_world(e);
+    ai_answered!(e, 0x0047_9430, 0x0047_26b0);
     e.register(VT_FN + 4, slot_answer::<4>);
     e.register(0x0047_2890, |e, a| {
         let size = e.mem.u32(AI_CHUNK_SIZE);
@@ -5058,7 +5039,7 @@ fn ai_world(e: &mut Engine) {
 }
 
 /// An actor base form (the test vtable) and its `TESAIForm` at +0x90, returned: the class's vtable,
-/// then the AI data's bytes made from `seed`, the package list's head two words of its own.
+/// then the AI data's bytes made from `seed`, and a package list of none, one or two packages.
 fn ai_form(e: &mut Engine, seed: u32) -> u32 {
     let owner = e.mem.alloc(0xc0);
     e.mem.set_u32(owner, VTABLE);
@@ -5068,6 +5049,8 @@ fn ai_form(e: &mut Engine, seed: u32) -> u32 {
         e.mem
             .set_u8(ai + i, seed.wrapping_mul(0x3b).wrapping_add(i * 0x11) as u8);
     }
+    let items = packages(e, seed, seed % 3, false);
+    set_list(e, ai + 0x18, &items);
     ai
 }
 
@@ -5118,7 +5101,13 @@ const NAME_LISTS: [&[Option<&str>]; 5] = [
 
 /// The AI form's and the animation's cases: the forms family's, with their own in-place bodies.
 fn ai_cases(d: Diff) -> Diff {
-    d.forms().ignore_calls(AI_IN_PLACE)
+    pk_locals(
+        d.forms()
+            .ignore_calls(AI_IN_PLACE)
+            .ignore_calls(PK_IN_PLACE)
+            .ignore_calls(PK_OWN_IN_PLACE)
+            .goes_by_address(PK_BY_ADDRESS),
+    )
 }
 
 /// The AI form's and the animation's shared cases, as steps of the `Diff` chain.
@@ -5239,7 +5228,9 @@ fn ai_reference(e: &mut Engine, pick: u32) -> u32 {
     if pick == 0 {
         return 0;
     }
-    let reference = e.mem.alloc(0x40);
+    let reference = e.mem.alloc(0x80);
+    let process = process(e, 0, 0, reference);
+    e.mem.set_u32(reference + REF_PROCESS, process);
     if pick == 2 {
         let base = ai_form(e, 7) - 0x90;
         e.mem.set_u32(reference + 0x20, base);
@@ -5612,7 +5603,12 @@ fn ai_init_item() {
         .setup(|e, case| {
             ai_world(e);
             e.mem.set_u8(AI_INIT_ITEM_SETTING + 4, case.word(0) as u8);
-            vec![ai_form(e, 3), case.word(1)]
+            let owner = if case.word(1) != 0 {
+                form(e, 0x2a, 0, 0x0100_0abc)
+            } else {
+                0
+            };
+            vec![ai_form(e, 4), owner]
         })
         .run()
         .assert_same();
@@ -5624,7 +5620,7 @@ fn ai_current_package() {
         .ai_reference()
         .setup(|e, case| {
             ai_world(e);
-            set_ai_answer(e, 0x0067_e780, case.word(1));
+            set_calendar(e, case.word(1));
             vec![ai_reference(e, case.word(0))]
         })
         .run()
@@ -5648,7 +5644,11 @@ fn ai_missed_packages() {
         ai_world(e);
         vec![
             ai_reference(e, case.word(0)),
-            case.word(1),
+            if case.word(1) != 0 {
+                new_list(e, &[])
+            } else {
+                0
+            },
             case.word(2),
             case.word(3),
         ]
@@ -5704,6 +5704,13 @@ fn ai_compare_component() {
             ai_world(e);
             let this = ai_form(e, 0x31);
             let other = ai_form(e, 0x31);
+            // The package lists: the same nodes, or each its own.
+            if case.word(1) == 0 {
+                for at in [0x18, 0x1c] {
+                    let word = e.mem.u32(this + at);
+                    e.mem.set_u32(other + at, word);
+                }
+            }
             // 0: not a TESAIForm; 1: the same data; then one byte of the data different.
             if let Some(offset) = case.word(0).checked_sub(2) {
                 let at = other + AI_COMPARED[offset as usize];
@@ -5715,7 +5722,6 @@ fn ai_compare_component() {
                 TYPE_TES_AI_FORM,
                 if case.word(0) == 0 { 0 } else { other },
             );
-            set_ai_answer(e, 0x0067_e4a0, case.word(1));
             vec![this, other]
         })
         .run()
@@ -7695,4 +7701,1290 @@ fn ob_scaled_model_file_name() {
     })
     .run()
     .assert_same();
+}
+
+// ---- The package list (`package_list`), the schedule (`schedule`), the package data
+// (`package_data`) and the condition lists (`conditions`) ----
+
+/// The package world's calendar and answers: the calendar's month, day, day of the week and hour
+/// (`f32` bits), the days in a month, the interface's target and a package target's reference.
+const PK_STATE: u32 = 0x0300_7300;
+const PK_MONTH: u32 = PK_STATE;
+const PK_DAY: u32 = PK_STATE + 4;
+const PK_DAY_OF_WEEK: u32 = PK_STATE + 8;
+const PK_HOUR: u32 = PK_STATE + 0xc;
+const PK_DAYS: u32 = PK_STATE + 0x10;
+const PK_TARGET: u32 = PK_STATE + 0x14;
+const PK_TARGET_REFERENCE: u32 = PK_STATE + 0x18;
+/// The forms the form map's lookup finds, by an id's low three bits (0: none found).
+const PK_FORMS: u32 = PK_STATE + 0x40;
+/// The packages' and the processes' vtables; each slot's stand-in sits at `PK_FN + slot`.
+const PK_VTABLE: u32 = 0x0300_7400;
+const PROCESS_VTABLE: u32 = 0x0300_7a00;
+const PK_FN: u32 = 0x00ff_8000;
+const TYPE_TES_PACKAGE: u32 = 0x0118_46a0;
+const TYPE_ACTOR: u32 = 0x0118_46d4;
+const PACKAGE_FORM_TYPE: u8 = 0x49;
+/// A package's fields (the exe's), then the answers the test keeps in it: whether it may run for a
+/// reference (its slot 0x138), its conditions' answer, the per-actor test's, the flag test's bits
+/// (bit n answering the test with n), its type and the run-once-a-day list's answer.
+const PK_PROCEDURE: u32 = 0x18;
+const PK_FLAGS: u32 = 0x1c;
+const PK_TARGET_AT: u32 = 0x30;
+const PK_SCHEDULE: u32 = 0x38;
+const PK_MAY_RUN: u32 = 0x60;
+const PK_HOLDS: u32 = 0x61;
+const PK_ACTOR_TEST: u32 = 0x62;
+const PK_FLAG_TESTS: u32 = 0x63;
+const PK_TYPE: u32 = 0x64;
+const PK_RUN_ONCE: u32 = 0x68;
+/// A reference's process (the exe's), then the test's current package and procedure value.
+const REF_PROCESS: u32 = 0x68;
+const REF_CURRENT: u32 = 0x70;
+const REF_VALUE: u32 = 0x74;
+
+/// The one-line bodies of other classes the package functions do in place (see their module
+/// comments): left out of the translations' calls, with no double, as [`IN_PLACE`] (which has the
+/// big-endian byte, the word and half swaps, the empty list's constructor and the word store at +4).
+const PK_IN_PLACE: &[u32] = &[
+    0x0068_15c0, // a node's item slot
+    0x0072_6070, // its next node
+    0x0082_56d0, // a list's empty test
+    0x0072_6c60, // a node's item store
+    0x005a_e380, // a list's item count
+    0x0041_d8a0, // a package's schedule
+    0x0087_eaa0, // its conditions
+    0x0067_1d10, // its target
+    0x0096_11e0, // its procedure type
+    0x0067_4e40, // its never-to-run flag
+    0x0067_0f90, // its once-a-day flag
+    0x0067_8ca0, // a schedule's month
+    0x0086_a460, // and hour
+    0x0054_07b0, // the month's setter
+    0x005d_43c0, // a reference's extra data
+    0x008d_8520, // its process
+    0x0060_ce80, // the duration's swap
+    0x0067_f030, // the loaded object's constructor
+    0x0055_9450, // an event action's idle
+    0x0053_7e90, // its setter
+    0x0044_ddc0, // its topic
+    0x0040_3550, // its setter
+    0x0084_e3a0, // its word at +0xc
+    0x0041_fd00, // its setter
+];
+/// The family's own one-line bodies its callers do in place: listed only in the callers' tests.
+const PK_OWN_IN_PLACE: &[u32] = &[
+    0x0067_8cc0, // the schedule's day of the week
+    0x0067_8ce0, // its date
+    0x0067_fdb0, // the day of the week's setter
+    0x0067_fdd0, // the date's
+    0x0067_fdf0, // the hour's
+    0x0067_ad20, // TESPackageData's constructor
+    0x0067_ad70, // its destructor
+    0x0067_c490, // the patrol data's destructor
+];
+/// The typed calls into families these tests don't name, doubles on both sides: a reference's
+/// current package and a package's type (`ai_queries`), the run-once-a-day test (`extra_data`), the
+/// calendar's day (`ai`) and the interface's target (`interface`).
+const PK_BY_ADDRESS: &[u32] = &[
+    0x0093_44a0,
+    0x0041_ca90,
+    0x0041_d8c0,
+    0x0086_7d60,
+    0x0070_3180,
+];
+
+/// The world plus what the package functions reach: the form map, the packages' and processes'
+/// slots, an owner's name slot, and the doubles of their callees by address.
+fn package_world(e: &mut Engine) {
+    world(e);
+    // The pages of the exe's constants the package functions read: the hour step (1.0), the last
+    // hour (23.0), the dialogue data's distance (100.0) and the package types' names.
+    for page in [0x0101_2000, 0x0101_6000, 0x0103_5000, 0x0119_b000] {
+        e.map(page, 0x1000);
+    }
+    e.mem.set_f64(0x0101_2070, 1.0);
+    e.mem.set_f64(0x0103_5838, 23.0);
+    e.mem.set_u32(0x0101_6410, 0x42c8_0000);
+    for kind in 0..3 {
+        e.mem.set_u32(0x0119_bcb0 + 4 * kind, 0x0101_0b00 + kind);
+    }
+    let map = form(e, 0x7f, 0, 0);
+    e.mem.set_u32(FORM_MAP, map);
+    for slot in [0x10, 0x130, 0x138] {
+        e.mem.set_u32(PK_VTABLE + slot, PK_FN + slot);
+    }
+    for slot in [0x30, 0x34, 0x38, 0x128, 0x59c, 0x5a8] {
+        e.mem.set_u32(PROCESS_VTABLE + slot, PK_FN + slot);
+    }
+    e.register(PK_FN + 0x10, |_, _| ret(0));
+    e.register(PK_FN + 0x130, |_, a| ret(a[0] + 0x50));
+    e.register(PK_FN + 0x138, |e, a| {
+        ret(u32::from(e.mem.u8(a[0] + PK_MAY_RUN)))
+    });
+    e.register(PK_FN + 0x30, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+    e.register(PK_FN + 0x34, |e, a| ret(e.mem.u32(a[0] + 0x14)));
+    e.register(PK_FN + 0x38, |e, a| ret(e.mem.u32(a[0] + 0x18)));
+    e.register(PK_FN + 0x128, |e, a| ret(e.mem.u32(a[0] + 0x1c)));
+    e.register(PK_FN + 0x59c, |_, _| ret(0));
+    e.register(PK_FN + 0x5a8, |_, _| ret(0));
+    // The owner's name: a text of its own into the string handed.
+    e.mem.set_u32(VTABLE + 0x90, VT_FN + 0x90);
+    e.register(VT_FN + 0x90, |e, a| {
+        e.mem.set_u32(a[1], 0x0101_0090);
+        ret(0)
+    });
+    e.register(0x0067_8d40, |e, a| {
+        ret(u32::from(e.mem.u8(a[0] + PK_FLAG_TESTS) >> (a[1] & 7) & 1))
+    });
+    e.register(0x0086_7d20, |e, _| ret(e.mem.u32(PK_MONTH)));
+    e.register(0x0086_7d60, |e, _| ret(e.mem.u32(PK_DAY)));
+    e.register(0x0086_7ef0, |e, _| ret(e.mem.u32(PK_DAY_OF_WEEK)));
+    e.register(0x0086_7da0, |e, _| {
+        let bits = e.mem.u32(PK_HOUR);
+        Ret {
+            eax: bits,
+            edx: 0,
+            st0: f64::from(f32::from_bits(bits)),
+        }
+    });
+    e.register(0x0093_44a0, |e, a| ret(e.mem.u32(a[0] + REF_CURRENT)));
+    e.register(0x0041_ca90, |e, a| ret(e.mem.u32(a[0] + PK_TYPE)));
+    e.register(0x0041_d8c0, |e, a| {
+        ret(u32::from(e.mem.u8(a[1] + PK_RUN_ONCE)))
+    });
+    e.register(0x0068_0020, |e, _| ret(e.mem.u32(PK_TARGET_REFERENCE)));
+    e.register(0x0068_0c30, |e, a| {
+        ret(u32::from(e.mem.u8(a[0] - 0x40 + PK_HOLDS)))
+    });
+    e.register(0x0070_3180, |e, _| ret(e.mem.u32(PK_TARGET)));
+    e.register(0x0046_4f30, |_, a| ret(a[0]));
+    e.register(0x0055_d520, |_, a| ret(a[0].wrapping_add(0x78)));
+    e.register(0x0056_9b80, |e, a| {
+        ret(if a[0] == 0 {
+            0
+        } else {
+            e.mem.u32(a[0] + REF_VALUE)
+        })
+    });
+    e.register(0x0067_7760, |e, a| {
+        ret(u32::from(e.mem.u8(a[0] + PK_ACTOR_TEST)))
+    });
+    // The output list's test: whether a node holds the package the word points at.
+    e.register(0x005f_65d0, |e, a| {
+        let item = e.mem.u32(a[1]);
+        let mut node = a[0];
+        while node != 0 {
+            if e.mem.u32(node) == item {
+                return ret(1);
+            }
+            node = e.mem.u32(node + 4);
+        }
+        ret(0)
+    });
+    e.register(0x004b_10d0, |e, _| ret(e.mem.u32(PK_DAYS)));
+    // The procedure type's calculation stores the value it is given.
+    e.register(0x0067_77b0, |e, a| {
+        e.mem.set_u32(a[0] + PK_PROCEDURE, a[1]);
+        ret(0)
+    });
+    for addr in [
+        0x005a_c750,
+        0x0042_2690,
+        0x00ec_623a,
+        0x0070_3c00,
+        0x0067_fbe0,
+        0x005a_a420,
+        0x007b_3fa0,
+    ] {
+        e.register(addr, |_, _| ret(0));
+    }
+    e.register(0x0040_37b0, |e, a| {
+        e.mem.set_u32(a[0], 0);
+        e.mem.set_u32(a[0] + 4, 0);
+        ret(a[0])
+    });
+    e.register(0x0040_37f0, |e, a| {
+        e.mem.set_u32(a[0], a[1]);
+        ret(0)
+    });
+    e.register(0x005a_a0f0, |_, a| ret(a[0]));
+    e.register(MAP_LOOKUP, |e, a| {
+        let form = e.mem.u32(PK_FORMS + 4 * (a[1] & 7));
+        if form != 0 {
+            e.mem.set_u32(a[2], form);
+        }
+        ret(u32::from(form != 0))
+    });
+    // The cast to `TESPackage` finds a form of the package type; the others answer as `CASTS` says.
+    e.register(RT_DYNAMIC_CAST, |e, a| {
+        if a[3] == TYPE_TES_PACKAGE {
+            ret(if a[0] != 0 && e.mem.u8(a[0] + 4) == PACKAGE_FORM_TYPE {
+                a[0]
+            } else {
+                0
+            })
+        } else {
+            ret(e.mem.u32(CASTS + (a[3] & 0xfff)))
+        }
+    });
+}
+
+/// A list whose head is at `head` holding `items`, a node each (none: both words zero).
+fn set_list(e: &mut Engine, head: u32, items: &[u32]) {
+    e.mem.set_u32(head, 0);
+    e.mem.set_u32(head + 4, 0);
+    let mut node = head;
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+            let next = e.mem.alloc(8);
+            e.mem.set_u32(node + 4, next);
+            node = next;
+        }
+        e.mem.set_u32(node, *item);
+    }
+}
+
+fn new_list(e: &mut Engine, items: &[u32]) -> u32 {
+    let head = e.mem.alloc(8);
+    set_list(e, head, items);
+    head
+}
+
+/// A word mixed from `seed` and `k`: the builders' picks.
+fn mix(seed: u32, k: u32) -> u32 {
+    let x = seed.wrapping_mul(0x9e37_79b9) ^ k.wrapping_mul(0x85eb_ca6b);
+    (x ^ (x >> 15)).wrapping_mul(0x2c1b_3c6d) >> 7
+}
+
+fn pick<T: Copy>(seed: u32, k: u32, from: &[T]) -> T {
+    from[(mix(seed, k) % from.len() as u32) as usize]
+}
+
+/// A schedule's eight bytes from `seed`: the month, the day of the week, the date and the hour, each
+/// "any" or a value, and a duration.
+fn set_schedule(e: &mut Engine, schedule: u32, seed: u32) {
+    e.mem.set_u8(schedule, pick(seed, 1, &[0xff, 0, 4, 11]));
+    e.mem.set_u8(schedule + 1, pick(seed, 2, &[0xff, 0, 3, 6]));
+    e.mem
+        .set_u8(schedule + 2, pick(seed, 3, &[0, 1, 14, 15, 30, 0xff]));
+    e.mem.set_u8(schedule + 3, pick(seed, 4, &[0xff, 0, 7, 22]));
+    e.mem.set_u32(schedule + 4, pick(seed, 5, &[0, 2, 6, 30]));
+}
+
+fn new_schedule(e: &mut Engine, seed: u32) -> u32 {
+    let s = e.mem.alloc(8);
+    set_schedule(e, s, seed);
+    s
+}
+
+/// A package from `seed`: the test's vtable and the package form type, its procedure type (unset
+/// or set), flags, schedule and target, and the answers its callees give.
+fn package(e: &mut Engine, seed: u32) -> u32 {
+    let p = e.mem.alloc(0x80);
+    e.mem.set_u32(p, PK_VTABLE);
+    e.mem.set_u8(p + 4, PACKAGE_FORM_TYPE);
+    e.mem
+        .set_u32(p + PK_PROCEDURE, pick(seed, 6, &[0xffff_ffff, 3]));
+    let flags = pick(seed, 7, &[0, 4, 0x400, 0x8000, 0x404, 0x8004, 0xffff_ffff]);
+    e.mem.set_u32(p + PK_FLAGS, flags);
+    set_schedule(e, p + PK_SCHEDULE, seed);
+    e.mem
+        .set_u32(p + PK_TARGET_AT, pick(seed, 8, &[0, 0x0101_0300]));
+    for (k, at) in [
+        (9, PK_MAY_RUN),
+        (10, PK_HOLDS),
+        (11, PK_ACTOR_TEST),
+        (12, PK_RUN_ONCE),
+    ] {
+        e.mem.set_u8(p + at, pick(seed, k, &[0u8, 1, 1]));
+    }
+    e.mem
+        .set_u8(p + PK_FLAG_TESTS, pick(seed, 13, &[0u8, 1, 2, 3]));
+    e.mem.set_u32(p + PK_TYPE, pick(seed, 14, &[0u32, 1, 2]));
+    p
+}
+
+/// A package that may run at any time: any month, day and hour, its conditions holding.
+fn package_any_time(e: &mut Engine, seed: u32) -> u32 {
+    let p = package(e, seed);
+    e.mem.set_u32(p + PK_FLAGS, 4);
+    for (at, byte) in [(0, 0xff), (1, 0xff), (2, 0), (3, 0xff)] {
+        e.mem.set_u8(p + PK_SCHEDULE + at, byte);
+    }
+    e.mem.set_u8(p + PK_MAY_RUN, 1);
+    e.mem.set_u8(p + PK_HOLDS, 1);
+    e.mem.set_u8(p + PK_ACTOR_TEST, 1);
+    p
+}
+
+/// `count` packages from `seed` (every third one may run at any time), a null item in the middle
+/// when `null` is set.
+fn packages(e: &mut Engine, seed: u32, count: u32, null: bool) -> Vec<u32> {
+    let mut items: Vec<u32> = (0..count)
+        .map(|i| {
+            let s = seed.wrapping_mul(7).wrapping_add(i);
+            if s % 3 == 2 {
+                package_any_time(e, s)
+            } else {
+                package(e, s)
+            }
+        })
+        .collect();
+    if null && count > 1 {
+        items.insert(1, 0);
+    }
+    items
+}
+
+/// A process answering `day`, `month` and a year, acting on `object`.
+fn process(e: &mut Engine, day: u32, month: u32, object: u32) -> u32 {
+    let p = e.mem.alloc(0x40);
+    e.mem.set_u32(p, PROCESS_VTABLE);
+    e.mem.set_u32(p + 0x10, day);
+    e.mem.set_u32(p + 0x14, month);
+    e.mem.set_u32(p + 0x18, 2281);
+    e.mem.set_u32(p + 0x1c, object);
+    p
+}
+
+/// A reference for the package queries: its process (acting on the reference itself), its current
+/// package and the value its procedure type takes.
+fn pk_reference(e: &mut Engine, current: u32, day: u32, month: u32) -> u32 {
+    let r = e.mem.alloc(0x80);
+    let process = process(e, day, month, r);
+    e.mem.set_u32(r + REF_PROCESS, process);
+    e.mem.set_u32(r + REF_CURRENT, current);
+    e.mem.set_u32(r + REF_VALUE, 0x55);
+    r
+}
+
+/// The calendars a case picks: the month, day, day of the week and hour (`f32` bits).
+const PK_CALENDARS: [(u32, u32, u32, u32); 4] = [
+    (4, 15, 3, 0x4100_0000),
+    (0, 1, 0, 0x41b8_0000),
+    (11, 30, 6, 0),
+    (4, 14, 2, 0x40e0_0000),
+];
+
+fn set_calendar(e: &mut Engine, pick: u32) {
+    let (month, day, day_of_week, hour) = PK_CALENDARS[pick as usize % PK_CALENDARS.len()];
+    e.mem.set_u32(PK_MONTH, month);
+    e.mem.set_u32(PK_DAY, day);
+    e.mem.set_u32(PK_DAY_OF_WEEK, day_of_week);
+    e.mem.set_u32(PK_HOUR, hour);
+    e.mem.set_u32(PK_DAYS, 30);
+}
+
+/// A block of `size` bytes of its own (each byte from `seed`).
+fn pk_block(e: &mut Engine, size: u32, seed: u32) -> u32 {
+    let b = e.mem.alloc(size);
+    for i in 0..size {
+        e.mem.set_u8(b + i, (mix(seed, i) & 0xff) as u8);
+    }
+    b
+}
+
+/// The stack words the package functions hand their callees: the list's append and removal, the
+/// compile index, the string, the owner's name slot, the output list's test, the line and its print,
+/// and the load buffer's read.
+fn pk_locals(d: Diff) -> Diff {
+    d.local_at(0x0090_5820, 1, 4)
+        .local_at(0x0090_5330, 1, 4)
+        .local_at(0x0048_5d50, 0, 4)
+        .local_at(0x0040_37b0, 0, 8)
+        .local_at(0x0040_37f0, 0, 8)
+        .local_at(0x0040_37d0, 0, 8)
+        .local_at(VT_FN + 0x90, 1, 8)
+        .local_at(0x005f_65d0, 1, 4)
+        .local_at(0x00ec_623a, 0, 0x134)
+        .local_at(0x0070_3c00, 0, 0x134)
+        .local_at(0x0086_4980, 1, 4)
+}
+
+/// The package functions' cases: the forms family's, with their own in-place bodies, the typed
+/// calls that go by address and the stack words they hand on.
+fn pk_cases(d: Diff) -> Diff {
+    pk_locals(
+        d.forms()
+            .ignore_calls(PK_IN_PLACE)
+            .goes_by_address(PK_BY_ADDRESS),
+    )
+}
+
+/// The package functions' shared cases, as steps of the `Diff` chain.
+trait PkCases {
+    fn pk(self) -> Diff;
+    fn pk_caller(self) -> Diff;
+    fn pk_list(self) -> Diff;
+    fn pk_object(self, size: u32) -> Diff;
+    fn pk_deleting(self) -> Diff;
+    fn pk_load(self) -> Diff;
+    fn pk_schedule(self) -> Diff;
+    fn pk_schedule_pair(self) -> Diff;
+    fn pk_schedule_setter(self) -> Diff;
+    fn pk_conditions(self) -> Diff;
+}
+
+impl PkCases for Diff {
+    fn pk(self) -> Diff {
+        pk_cases(self)
+    }
+    fn pk_caller(self) -> Diff {
+        pk_cases(self).ignore_calls(PK_OWN_IN_PLACE)
+    }
+    fn pk_list(self) -> Diff {
+        pk_list_cases(self)
+    }
+    fn pk_object(self, size: u32) -> Diff {
+        pk_object_cases(self, size)
+    }
+    fn pk_deleting(self) -> Diff {
+        pk_deleting_cases(self)
+    }
+    fn pk_load(self) -> Diff {
+        pk_load_cases(self)
+    }
+    fn pk_schedule(self) -> Diff {
+        pk_schedule_cases(self)
+    }
+    fn pk_schedule_pair(self) -> Diff {
+        pk_schedule_pair_cases(self)
+    }
+    fn pk_schedule_setter(self) -> Diff {
+        pk_schedule_setter_cases(self)
+    }
+    fn pk_conditions(self) -> Diff {
+        pk_conditions_cases(self)
+    }
+}
+
+/// The item lists the list tests pick from (words standing for packages, 0 a null item).
+const PK_LISTS: [&[u32]; 6] = [
+    &[],
+    &[0x0101_0a01],
+    &[0x0101_0a01, 0x0101_0a02],
+    &[0x0101_0a01, 0x0101_0a03, 0x0101_0a02],
+    &[0x0101_0a01, 0, 0x0101_0a02],
+    &[0, 0x0101_0a02],
+];
+
+/// A list from [`PK_LISTS`].
+fn pk_list_cases(d: Diff) -> Diff {
+    d.pk()
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5])])
+        .setup(|e, case| {
+            package_world(e);
+            vec![new_list(e, PK_LISTS[case.word(0) as usize])]
+        })
+}
+
+#[test]
+fn pk_list_destruct() {
+    Diff::new(entry!(0x0067_e3a0, package_list::destruct(u32)))
+        .pk_list()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_list_free() {
+    Diff::new(entry!(0x0067_e400, package_list::free(u32)))
+        .pk_list()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_list_add_tail() {
+    Diff::new(entry!(0x0067_e420, package_list::add_tail(u32, u32)))
+        .pk()
+        .inputs(&[Input::Of(&[0, 1, 2, 4]), Input::Of(WORDS)])
+        .setup(|e, case| {
+            package_world(e);
+            vec![new_list(e, PK_LISTS[case.word(0) as usize]), case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_list_copy() {
+    Diff::new(entry!(0x0067_e440, package_list::copy(u32, u32)))
+        .pk()
+        .inputs(&[Input::Of(&[0, 1, 3]), Input::Of(&[0, 1, 2, 3, 4, 5])])
+        .setup(|e, case| {
+            package_world(e);
+            let this = new_list(e, PK_LISTS[case.word(0) as usize]);
+            let other = new_list(e, PK_LISTS[case.word(1) as usize]);
+            vec![this, other]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_lists_differ() {
+    Diff::new(entry!(0x0067_e4a0, package_list::lists_differ(u32, u32) -> bool))
+        .pk()
+        .inputs(&[
+            Input::Of(&[0, 1, 2, 3, 4, 5]),
+            Input::Of(&[0, 1, 2, 3, 4, 5]),
+        ])
+        .setup(|e, case| {
+            package_world(e);
+            let this = new_list(e, PK_LISTS[case.word(0) as usize]);
+            let other = new_list(e, PK_LISTS[case.word(1) as usize]);
+            vec![this, other]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The form ids `InitItem`'s cases pick from: the lookup finds a package for low bits 1, another
+/// form for 2 and nothing for 3.
+const PK_IDS: [&[u32]; 6] = [
+    &[],
+    &[0x0100_0001],
+    &[0x0100_0002],
+    &[0x0100_0001, 0x0100_0003, 0x0100_0009],
+    &[0x0100_0003, 0x0100_0001],
+    &[0x0100_0002, 0x0100_0003, 0x0100_000a],
+];
+
+#[test]
+fn pk_list_init_item() {
+    Diff::new(entry!(0x0067_e560, package_list::init_item(u32, u32)))
+        // Not `.pk()`: its stack words compare by their place in frames shaped alike (the id's, the
+        // name's and the removal's), since the typed loop makes no call between one node's name and
+        // the next node's id that would tell a new local at the same address from the old one.
+        .forms()
+        .ignore_calls(PK_IN_PLACE)
+        .goes_by_address(PK_BY_ADDRESS)
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5]), Input::Of(&[0, 1, 2])])
+        .setup(|e, case| {
+            package_world(e);
+            let p = package(e, 1);
+            e.mem.set_u32(PK_FORMS + 4, p);
+            let other = form(e, 0x2a, 0, 0x0100_0002);
+            e.mem.set_u32(PK_FORMS + 8, other);
+            // The owner: none, a form without a file, a form from a file.
+            let owner = match case.word(1) {
+                0 => 0,
+                n => {
+                    let f = form(e, 0x2a, 0, 0x0100_0abc);
+                    if n == 2 {
+                        let source = file(e, true);
+                        // Index 5, but 1 for the list whose missing package has a node before
+                        // it: the removal looks for the id with the index, which the node
+                        // doesn't hold, so the exe would walk that node for ever.
+                        let index = if case.word(0) == 3 { 1 } else { 5 };
+                        e.mem.set_u8(source + FILE_COMPILE_INDEX_AT, index);
+                        set_files(e, f, &[source]);
+                    }
+                    f
+                }
+            };
+            vec![new_list(e, PK_IDS[case.word(0) as usize]), owner]
+        })
+        .run()
+        .assert_same();
+}
+
+/// Hours as `f32` bits: 0.0, 2.0, 5.0, 5.9, 21.5, 23.5, -1.0, a quiet NaN.
+const PK_HOURS: &[u32] = &[
+    0,
+    0x4000_0000,
+    0x40a0_0000,
+    0x40bc_cccd,
+    0x41ac_0000,
+    0x41bc_0000,
+    0xbf80_0000,
+    0x7fc0_0000,
+];
+
+#[test]
+fn pk_in_schedule_window() {
+    Diff::new(entry!(
+        0x0067_e700,
+        package_list::in_schedule_window(i32, i32, f32) -> bool
+    ))
+    .pk()
+    .inputs(&[
+        Input::Of(&[0, 5, 20, 23, 0xffff_ffff]),
+        Input::Of(&[0, 1, 3, 8, 30]),
+        Input::Of(PK_HOURS),
+    ])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_find_current_package() {
+    Diff::new(entry!(
+        0x0067_e780,
+        package_list::find_current_package(u32, u32) -> u32
+    ))
+    .pk_caller()
+    .inputs(&[
+        // The list: its seed and size (0: empty), a null item in it.
+        Input::Of(&[1, 2, 3, 4, 5, 6, 7, 8]),
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Flag,
+        // The reference: none; its current package none, the list's first, another of type 1.
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&[0, 1, 2, 3]),
+        // The interface's target is the reference; the process's object is an actor.
+        Input::Flag,
+        Input::Flag,
+    ])
+    .max_cases(1024)
+    .setup(|e, case| {
+        package_world(e);
+        let items = packages(e, case.word(0), case.word(1), case.word(2) != 0);
+        // List 8's first package: a window past midnight (22:00 for 6 hours) on the 30th, which the
+        // calendar's 1st does not take as the day before (its day before is day 0).
+        if case.word(0) == 8 {
+            if let Some(&first) = items.first() {
+                for (at, byte) in [(0, 0xff), (1, 0xff), (2, 30), (3, 22)] {
+                    e.mem.set_u8(first + PK_SCHEDULE + at, byte);
+                }
+                e.mem.set_u32(first + PK_SCHEDULE + 4, 6);
+                e.mem.set_u32(first + PK_FLAGS, 0);
+                e.mem.set_u8(first + PK_MAY_RUN, 1);
+                e.mem.set_u8(first + PK_HOLDS, 1);
+            }
+        }
+        let list = new_list(e, &items);
+        set_calendar(e, case.word(4));
+        let reference = match case.word(3) {
+            0 => 0,
+            1 => pk_reference(e, 0, 3, 4),
+            2 => pk_reference(e, items.first().copied().unwrap_or(0), 3, 4),
+            _ => {
+                let other = package(e, 99);
+                e.mem.set_u32(other + PK_TYPE, 1);
+                pk_reference(e, other, 3, 4)
+            }
+        };
+        e.mem.set_u32(
+            PK_TARGET,
+            if case.word(5) != 0 {
+                reference
+            } else {
+                0x0101_0bad
+            },
+        );
+        set_cast(e, TYPE_ACTOR, if case.word(6) != 0 { reference } else { 0 });
+        e.mem.set_u32(PK_TARGET_REFERENCE, 0x0101_0c00);
+        vec![list, reference]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The missed packages' walks: the actor's process's day and month, and the calendar's month, day
+/// and hour: no day; today, ending at 8:00; from the day before; across the year's end to 2:00.
+const PK_WALKS: [(u32, u32, u32, u32, u32); 4] = [
+    (0, 4, 4, 15, 0x4100_0000),
+    (15, 4, 4, 15, 0x4100_0000),
+    (14, 4, 4, 15, 0x4100_0000),
+    (30, 11, 0, 1, 0x4000_0000),
+];
+
+#[test]
+fn pk_missed_packages() {
+    Diff::new(entry!(
+        0x0067_ec40,
+        package_list::missed_packages(u32, u32, u32, u32, f32)
+    ))
+    .pk_caller()
+    .inputs(&[
+        // The list's seed and size (0: empty).
+        Input::Of(&[1, 2, 3, 4, 5]),
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&[0, 1, 2, 3]),
+        // The output list: empty, or holding the list's first package.
+        Input::Flag,
+        // The actor's current package: none or the list's second.
+        Input::Flag,
+        // The hour: 5.0, 22.0, 7.5, 0.0 (a start past 23:00 today would walk a whole year).
+        Input::Of(&[0x40a0_0000, 0x41b0_0000, 0x40f0_0000, 0]),
+    ])
+    .max_cases(768)
+    .setup(|e, case| {
+        package_world(e);
+        let items = packages(e, case.word(0), case.word(1), false);
+        // List 5's first package: missable at 7:00 on any day, so the walks from 5:00 and 0:00 reach
+        // its hour exactly (an equal hour has not passed it yet).
+        if case.word(0) == 5 {
+            if let Some(&first) = items.first() {
+                for (at, byte) in [(0, 0xff), (1, 0xff), (2, 0), (3, 7)] {
+                    e.mem.set_u8(first + PK_SCHEDULE + at, byte);
+                }
+                e.mem.set_u32(first + PK_FLAGS, 4);
+                e.mem.set_u8(first + PK_ACTOR_TEST, 1);
+            }
+        }
+        let list = new_list(e, &items);
+        let (day, month, calendar_month, calendar_day, hour) = PK_WALKS[case.word(2) as usize];
+        e.mem.set_u32(PK_MONTH, calendar_month);
+        e.mem.set_u32(PK_DAY, calendar_day);
+        e.mem.set_u32(PK_DAY_OF_WEEK, 4);
+        e.mem.set_u32(PK_HOUR, hour);
+        e.mem.set_u32(PK_DAYS, 30);
+        let current = if case.word(4) != 0 {
+            items.get(1).copied().unwrap_or(0)
+        } else {
+            0
+        };
+        let actor = pk_reference(e, current, day, month);
+        let first = items.first().copied().unwrap_or(0);
+        let seeded = [first];
+        let out = new_list(e, if case.word(3) != 0 { &seeded[..] } else { &[] });
+        vec![list, actor, out, 0x3f80_0000, case.word(5)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_is_missable() {
+    Diff::new(entry!(0x0067_efd0, package_list::is_missable(u32) -> bool))
+        .pk()
+        .inputs(&[Input::Of(&[0, 4, 0xffff_fffb, 0xffff_ffff])])
+        .setup(|e, case| {
+            package_world(e);
+            let p = package(e, 3);
+            e.mem.set_u32(p + PK_FLAGS, case.word(0));
+            vec![p]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The schedule seeds the schedule tests pick from.
+const PK_SEEDS: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
+#[test]
+fn pk_schedule_compare() {
+    Diff::new(entry!(0x0067_8a80, schedule::compare(u32, u32) -> i32))
+        .pk_caller()
+        .inputs(&[Input::Of(PK_SEEDS), Input::Of(PK_SEEDS)])
+        .setup(|e, case| {
+            package_world(e);
+            let p = package(e, case.word(0));
+            vec![p, new_schedule(e, case.word(1))]
+        })
+        .run()
+        .assert_same();
+}
+
+/// A schedule's getter: schedules from the seeds.
+fn pk_schedule_cases(d: Diff) -> Diff {
+    d.pk().inputs(&[Input::Of(PK_SEEDS)]).setup(|e, case| {
+        package_world(e);
+        vec![new_schedule(e, case.word(0))]
+    })
+}
+
+#[test]
+fn pk_schedule_day_of_week() {
+    Diff::new(entry!(
+        0x0067_8cc0,
+        schedule::day_of_week(u32) -> i8
+    ))
+    .pk_schedule()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_schedule_date() {
+    Diff::new(entry!(0x0067_8ce0, schedule::date(u32) -> u8))
+        .pk_schedule()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_schedule_construct() {
+    Diff::new(entry!(0x0067_fcb0, schedule::construct(u32) -> u32))
+        .pk()
+        .inputs(&[Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            package_world(e);
+            vec![pk_block(e, 0xc, case.word(0))]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_schedule_swap_three_words() {
+    Diff::new(entry!(0x0067_ff10, schedule::swap_three_words(u32)))
+        .pk()
+        .inputs(&[Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            package_world(e);
+            vec![pk_block(e, 0x14, case.word(0))]
+        })
+        .run()
+        .assert_same();
+}
+
+/// Two schedules (the second none for the last seed), from the seeds.
+fn pk_schedule_pair_cases(d: Diff) -> Diff {
+    d.pk_caller()
+        .inputs(&[Input::Of(PK_SEEDS), Input::Of(&[0, 1, 5, 6, 0xff])])
+        .setup(|e, case| {
+            package_world(e);
+            let this = new_schedule(e, case.word(0));
+            let other = if case.word(1) == 0xff {
+                0
+            } else {
+                new_schedule(e, case.word(1))
+            };
+            vec![this, other]
+        })
+}
+
+#[test]
+fn pk_schedule_assign() {
+    Diff::new(entry!(0x0067_fcf0, schedule::assign(u32, u32) -> u32))
+        .pk()
+        .inputs(&[Input::Of(&[0, 1, 5]), Input::Of(&[2, 6])])
+        .setup(|e, case| {
+            package_world(e);
+            vec![new_schedule(e, case.word(0)), new_schedule(e, case.word(1))]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_schedule_set_from() {
+    Diff::new(entry!(0x0067_fd40, schedule::set_from(u32, u32)))
+        .pk_schedule_pair()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_schedule_differs() {
+    Diff::new(entry!(
+        0x0067_fe10,
+        schedule::differs(u32, u32) -> bool
+    ))
+    .pk_schedule_pair()
+    .run()
+    .assert_same();
+}
+
+/// A schedule's byte setter: a schedule and a word whose low byte it stores.
+fn pk_schedule_setter_cases(d: Diff) -> Diff {
+    d.pk()
+        .inputs(&[
+            Input::Of(&[0, 3]),
+            Input::Of(&[0, 0x7f, 0x80, 0xff, 0x1_23]),
+        ])
+        .setup(|e, case| {
+            package_world(e);
+            vec![new_schedule(e, case.word(0)), case.word(1)]
+        })
+}
+
+#[test]
+fn pk_schedule_set_day_of_week() {
+    Diff::new(entry!(0x0067_fdb0, schedule::set_day_of_week(u32, u8)))
+        .pk_schedule_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_schedule_set_date() {
+    Diff::new(entry!(0x0067_fdd0, schedule::set_date(u32, u8)))
+        .pk_schedule_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_schedule_set_hour() {
+    Diff::new(entry!(0x0067_fdf0, schedule::set_hour(u32, u8)))
+        .pk_schedule_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_schedule_save() {
+    Diff::new(entry!(0x0067_fec0, schedule::save(u32)))
+        .pk()
+        .inputs(&[Input::Flag, Input::Of(&[0, 3, 7])])
+        .setup(|e, case| {
+            package_world(e);
+            record_buffer(e);
+            e.mem.set_u8(BIG_ENDIAN, case.word(0) as u8);
+            vec![new_schedule(e, case.word(1))]
+        })
+        .run()
+        .assert_same();
+}
+
+/// A package data object of `size` bytes of its own: its constructor's or destructor's cases.
+fn pk_object_cases(d: Diff, size: u32) -> Diff {
+    d.pk().inputs(&[Input::Of(&[0, 1])]).setup(move |e, case| {
+        package_world(e);
+        vec![pk_block(e, size, case.word(0))]
+    })
+}
+
+/// A deleting destructor's cases: an object and its flags.
+fn pk_deleting_cases(d: Diff) -> Diff {
+    d.pk_caller()
+        .inputs(&[Input::Of(&[0, 1, 2, 3])])
+        .setup(|e, case| {
+            package_world(e);
+            vec![pk_block(e, 0x10, 5), case.word(0)]
+        })
+}
+
+#[test]
+fn pk_data_construct() {
+    Diff::new(entry!(0x0067_ad20, package_data::construct(u32) -> u32))
+        .pk_object(8)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_data_scalar_deleting_destructor() {
+    Diff::new(entry!(
+        0x0067_ad40,
+        package_data::scalar_deleting_destructor(u32, u32) -> u32
+    ))
+    .pk_deleting()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_data_destruct() {
+    Diff::new(entry!(0x0067_ad70, package_data::destruct(u32)))
+        .pk_object(8)
+        .run()
+        .assert_same();
+}
+
+/// A save game load's cases: the byte read (0: no object; 1 and 0x101: one; 0x100: none, its low
+/// byte clear) and whether the allocation fails.
+fn pk_load_cases(d: Diff) -> Diff {
+    d.pk()
+        .inputs(&[Input::Of(&[0, 1, 0x100, 0x101]), Input::Flag])
+        .setup(|e, case| {
+            package_world(e);
+            e.mem.set_u32(READ_WORD, case.word(0));
+            e.mem.set_u32(NEW_FAILS, case.word(1));
+            vec![pk_block(e, 0x10, 2), 0x0101_0e00]
+        })
+}
+
+#[test]
+fn pk_dialogue_load_game() {
+    Diff::new(entry!(
+        0x0067_b050,
+        package_data::dialogue_load_game(u32, u32)
+    ))
+    .pk_load()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_dialogue_swap_endian() {
+    Diff::new(entry!(0x0067_b100, package_data::dialogue_swap_endian(u32)))
+        .pk_object(0x20)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_dialogue_construct() {
+    Diff::new(entry!(0x0067_b170, package_data::dialogue_construct(u32) -> u32))
+        .pk_object(0x24)
+        .ignore_calls(&[0x0067_ad20])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_eat_construct() {
+    Diff::new(entry!(0x0067_b950, package_data::eat_construct(u32) -> u32))
+        .pk_object(0xc)
+        .ignore_calls(&[0x0067_ad20])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_escort_construct() {
+    Diff::new(entry!(0x0067_bbf0, package_data::escort_construct(u32) -> u32))
+        .pk_object(0x10)
+        .ignore_calls(&[0x0067_ad20])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_follow_construct() {
+    Diff::new(entry!(0x0067_bfd0, package_data::follow_construct(u32) -> u32))
+        .pk_object(0x10)
+        .ignore_calls(&[0x0067_ad20])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_patrol_load_game() {
+    Diff::new(entry!(
+        0x0067_c330,
+        package_data::patrol_load_game(u32, u32)
+    ))
+    .pk_load()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_patrol_construct() {
+    Diff::new(entry!(0x0067_c3f0, package_data::patrol_construct(u32) -> u32))
+        .pk_object(0xc)
+        .ignore_calls(&[0x0067_ad20])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_patrol_scalar_deleting_destructor() {
+    Diff::new(entry!(
+        0x0067_c420,
+        package_data::patrol_scalar_deleting_destructor(u32, u32) -> u32
+    ))
+    .pk_deleting()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_patrol_construct_from() {
+    Diff::new(entry!(
+        0x0067_c450,
+        package_data::patrol_construct_from(u32, u32) -> u32
+    ))
+    .pk_caller()
+    .inputs(&[Input::Of(&[0, 1, 0x0201, 0x7766_0201, 0xffff_ffff])])
+    .setup(|e, case| {
+        package_world(e);
+        vec![pk_block(e, 0xc, 4), case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_patrol_destruct() {
+    Diff::new(entry!(0x0067_c490, package_data::patrol_destruct(u32)))
+        .pk()
+        .ignore_calls(&[0x0067_ad70])
+        .inputs(&[Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            package_world(e);
+            vec![pk_block(e, 0xc, case.word(0))]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_use_item_construct() {
+    Diff::new(entry!(0x0067_c770, package_data::use_item_construct(u32) -> u32))
+        .pk_object(0xc)
+        .ignore_calls(&[0x0067_ad20])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_use_weapon_swap_endian() {
+    Diff::new(entry!(
+        0x0067_ca10,
+        package_data::use_weapon_swap_endian(u32)
+    ))
+    .pk_object(0x18)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_clear_word_4() {
+    Diff::new(entry!(0x0067_da20, package_data::clear_word_4(u32, u32)))
+        .pk()
+        .inputs(&[Input::Of(&[0, 1]), Input::Of(&[0, 0x1234])])
+        .setup(|e, case| {
+            package_world(e);
+            vec![pk_block(e, 0x10, case.word(0)), case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_event_action_construct() {
+    Diff::new(entry!(
+        0x0067_da40,
+        package_data::event_action_construct(u32) -> u32
+    ))
+    .pk_object(0x10)
+    .run()
+    .assert_same();
+}
+
+/// An event action: an idle, a script of the test's (or none), a topic and a word.
+fn event_action(e: &mut Engine, seed: u32, script: bool) -> u32 {
+    let a = pk_block(e, 0x10, seed);
+    let s = if script {
+        let s = e.mem.alloc(0x54);
+        e.mem.set_u32(s, PK_VTABLE);
+        s
+    } else {
+        0
+    };
+    e.mem.set_u32(a + 4, s);
+    a
+}
+
+#[test]
+fn pk_event_action_clear() {
+    Diff::new(entry!(0x0067_da80, package_data::event_action_clear(u32)))
+        .pk()
+        .inputs(&[Input::Flag])
+        .setup(|e, case| {
+            package_world(e);
+            vec![event_action(e, 1, case.word(0) != 0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_event_action_copy() {
+    Diff::new(entry!(
+        0x0067_dad0,
+        package_data::event_action_copy(u32, u32)
+    ))
+    .pk()
+    .inputs(&[Input::Flag, Input::Flag, Input::Flag])
+    .setup(|e, case| {
+        package_world(e);
+        registries(e, true, 0, true, true, 0);
+        e.mem.set_u32(NEW_FAILS, case.word(2));
+        let this = event_action(e, 1, case.word(0) != 0);
+        let other = event_action(e, 2, case.word(1) != 0);
+        vec![this, other]
+    })
+    // A script to copy into an action without one, when the allocation fails: the exe marks the
+    // null script temporary (a read of its flags at 8) and stops there.
+    .expect_stops(|case| case.word(0) == 0 && case.word(1) != 0 && case.word(2) != 0)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_location_swap_endian() {
+    Diff::new(entry!(0x0067_eff0, package_data::location_swap_endian(u32)))
+        .pk_object(0xc)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_conditions_construct() {
+    Diff::new(entry!(0x0068_0890, conditions::construct(u32) -> u32))
+        .pk_object(8)
+        .run()
+        .assert_same();
+}
+
+/// A condition list from [`PK_LISTS`] (the items standing for condition items), or none (6).
+fn pk_conditions_cases(d: Diff) -> Diff {
+    d.pk()
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5, 6])])
+        .setup(|e, case| {
+            package_world(e);
+            let pick = case.word(0) as usize;
+            vec![if pick == 6 {
+                0
+            } else {
+                new_list(e, PK_LISTS[pick])
+            }]
+        })
+}
+
+#[test]
+fn pk_conditions_destruct() {
+    Diff::new(entry!(0x0068_08b0, conditions::destruct(u32)))
+        .pk()
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5])])
+        .setup(|e, case| {
+            package_world(e);
+            vec![new_list(e, PK_LISTS[case.word(0) as usize])]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_conditions_clear() {
+    Diff::new(entry!(0x0068_0fe0, conditions::clear(u32)))
+        .pk_conditions()
+        .run()
+        .assert_same();
+}
+
+/// Values as `f32` bits: 0.0, -0.0, 1.0, -1.0, 2.5, infinity, a quiet NaN, a signalling one.
+const PK_VALUES: &[u32] = &[
+    0,
+    0x8000_0000,
+    0x3f80_0000,
+    0xbf80_0000,
+    0x4020_0000,
+    0x7f80_0000,
+    0x7fc0_0000,
+    0x7f80_0001,
+];
+
+#[test]
+fn pk_conditions_compare_values() {
+    Diff::new(entry!(
+        0x0068_1050,
+        conditions::compare_values(u32, f32, f32) -> bool
+    ))
+    .pk()
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3, 4, 5, 6, 0xffff_ffff]),
+        Input::Of(PK_VALUES),
+        Input::Of(PK_VALUES),
+    ])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_conditions_swap_function_data() {
+    Diff::new(entry!(0x0068_1110, conditions::swap_function_data(u32)))
+        .pk_object(0xc)
+        .run()
+        .assert_same();
 }

@@ -213,7 +213,7 @@ fn schedule_allows(e: &mut Engine, package: u32, schedule: u32) -> bool {
         let hour = f32::from_bits(x87_store32(hour));
         let duration = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, schedule)) as i32;
         let start = e.call(0x0086_a460, &args![schedule]).u8() as i8 as i32;
-        if !fn_0067e700(e, start, duration, hour) {
+        if !e.call(0x0067_e700, &args![start, duration, hour]).bool() {
             return false;
         }
     }

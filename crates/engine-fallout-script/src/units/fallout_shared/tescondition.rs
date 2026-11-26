@@ -252,7 +252,7 @@ pub fn tes_condition_load(e: &mut Engine, this: Ptr, file: Ptr) {
         0
     };
     e.call(ITEM_LOAD, &args![item, file]);
-    bs_simple_list_tes_condition_item_add_tail(e, this, item);
+    e.call(0x0067_e420, &args![this, item]);
 }
 
 // Translated from 00680a20 (decompiled, FalloutNV.exe 1.4.0.525)
