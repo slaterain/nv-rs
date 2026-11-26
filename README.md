@@ -73,7 +73,7 @@ shows what's left.
 | ⬜ | **lStewieAl's Tweaks** | No longer built in. Mods that expect it are to be supported from their own files (CONTRIBUTING.md, "What can and can't be accepted"). |
 | 🔨 | **Mod installers (FOMOD)** | Mods with an installer, from .zip or .7z, installed into nv-rs's own folder, never the game's. |
 | 🔨 | **One launcher** | `Play.exe` opens a window like the game's terminals to play, install mods, import saves and change settings; its Settings has the display options, each fix on its own and the new lighting. |
-| 🔨 | **Modern graphics (wgpu)** | The default renderer, on Vulkan; in the places compared, on one NVIDIA card, its pictures nearly match Direct3D 9's, and at 8x antialiasing it is about 8% slower. New lighting (ambient occlusion and sun shadows) is being tried, off by default. |
+| 🔨 | **Modern graphics (wgpu)** | The default renderer, on Vulkan; in the places compared, on one NVIDIA card, its pictures nearly match Direct3D 9's, and at 8x antialiasing it is about 8% slower. New lighting (ambient occlusion and sun shadows) is being tried, off by default, and so is a new way of drawing: the still world drawn again from what the renderer keeps instead of being set up from scratch every frame. |
 | 🔨 | **Game pads** | Xbox-style pads on Windows as in the original; other pads, and Linux, not yet tried with a real pad. |
 | ⬜ | **More platforms, co-op, VR** | Planned; co-op has no design yet. |
 

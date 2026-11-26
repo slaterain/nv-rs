@@ -107,10 +107,12 @@ pub enum List {
 /// `backend_of`, and it is a Windows API).
 const WINDOWS_ONLY: [&str; 2] = ["bNotBackground", "bShaderWarm"];
 
-/// Keys whose rows are not shown: they do nothing in a play run. The world drawn on a second
-/// thread: the host refuses it in every play run (`host::draw_thread::refusal` lets it in only with
-/// its own check variable, which a play run never has).
-const HIDDEN: [&str; 1] = ["bWorldDrawThread"];
+/// Keys whose rows are not shown: they do nothing in a play run, or are the engineers' until their
+/// checks pass. The world drawn on a second thread: the host refuses it in every play run
+/// (`host::draw_thread::refusal` lets it in only with its own check variable, which a play run never
+/// has). The world's still lit objects drawn from kept records (`sDrawItems`): off until its picture
+/// proof and speed check pass.
+const HIDDEN: [&str; 2] = ["bWorldDrawThread", "sDrawItems"];
 
 impl List {
     /// Its rows on this system.

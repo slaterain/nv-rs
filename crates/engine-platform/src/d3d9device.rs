@@ -1094,6 +1094,7 @@ static WRITER: engine_core::real_threads::DeviceWriter = {
 
 fn register_code(e: &mut Engine) {
     engine_core::real_threads::install_device_writer(&WRITER);
+    engine_core::draw_items::install(&super::d3d9items::HOOKS);
     let device: [(u32, crate::AbiFn); 48] = [
         (16, crate::entry!(0, reset(Ptr, Ptr) -> u32).1),
         (

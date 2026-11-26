@@ -6351,7 +6351,7 @@ fn direct_hold(e: &Engine, world: &'static World) {
 /// threads, the switch off).
 #[inline]
 pub fn device_vcall(e: &mut Engine, this: u32, slot: u32, args: &[u32]) -> Ret {
-    let _call = InCall::enter(note_device_call(e, this, slot, args));
+    let _call = NotedCall::enter(note_device_call(e, this, slot, args));
     if DIRECT.with(Cell::get) == 0 || e.diagnosing_direct() {
         return e.vcall(this, slot, args);
     }
@@ -6459,7 +6459,7 @@ fn device_typed(
     pick: fn(&'static DeviceWriter) -> AbiFn,
     typed: impl FnOnce(&mut Engine, &'static DeviceWriter) -> u32,
 ) -> Ret {
-    let _call = InCall::enter(note_device_call(e, this, slot, args));
+    let _call = NotedCall::enter(note_device_call(e, this, slot, args));
     if DIRECT.with(Cell::get) == 0 || e.diagnosing_direct() {
         return e.vcall(this, slot, args);
     }
@@ -6792,25 +6792,40 @@ fn note_device_call(e: &Engine, this: u32, slot: u32, args: &[u32]) -> bool {
 }
 
 /// A noted device call running ([`IN_CALL`] one deeper while it does).
-struct InCall(bool);
+struct NotedCall(bool);
 
-impl InCall {
+impl NotedCall {
     #[inline(always)]
-    fn enter(noted: bool) -> InCall {
+    fn enter(noted: bool) -> NotedCall {
         if noted {
             IN_CALL.with(|c| c.set(c.get() + 1));
         }
-        InCall(noted)
+        NotedCall(noted)
     }
 }
 
-impl Drop for InCall {
+impl Drop for NotedCall {
     #[inline(always)]
     fn drop(&mut self) {
         if self.0 {
             IN_CALL.with(|c| c.set(c.get().saturating_sub(1)));
         }
     }
+}
+
+/// Whether this thread is inside a device call the recorder noted ([`device_record_begin`]) or a
+/// record's replay makes again ([`device_replay`]): the draw's own calls, whose commands
+/// [`crate::draw_items`] may hold. One thread-local read.
+#[inline(always)]
+pub fn in_noted_call() -> bool {
+    IN_CALL.with(Cell::get) != 0
+}
+
+/// Tests: `f` as inside a noted device call ([`in_noted_call`]).
+#[doc(hidden)]
+pub fn as_noted_call_for_tests<R>(f: impl FnOnce() -> R) -> R {
+    let _call = NotedCall::enter(true);
+    f()
 }
 
 /// The platform layer reached the device's state (every device function and the resources' do): with the recorder
@@ -6870,6 +6885,8 @@ pub const DEVICE_CALL_MARK: u32 = 0;
 /// local copy of its bytes; through the writer's function for the slots it has, else
 /// [`device_vcall`]. Its answer.
 pub fn device_replay(e: &mut Engine, call: &DeviceCall) -> Ret {
+    // The draw's own call again: its commands are the draw's, as at the build ([`in_noted_call`]).
+    let _call = NotedCall::enter(true);
     match call.data_arg {
         Some(i) if !call.data.is_empty() => e.with_stack(call.data.len() as u32, |e, local| {
             e.mem.write(local.addr(), &call.data);

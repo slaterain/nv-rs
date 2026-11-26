@@ -1,5 +1,5 @@
-//! Kept draw records (`NV_DRAW_KEEP`, off by default; `1` on, `check` on with every reuse checked): the world
-//! draw's plain geometries (the batch renderer's `render_standard`, `00b98e80`) built once and kept. The first time a
+//! Kept draw records drawn as items (`NV_DRAW_ITEMS`, off by default; `1` on, `check` both forms; the renderer
+//! design's stage 1, `engine_core::draw_items`): the world draw's plain geometries (the batch renderer's `render_standard`, `00b98e80`) built once and kept. The first time a
 //! geometry is drawn in a pass, its set-up and draw run as always while three logs note what they do: the state
 //! cache's setters it calls (`super::super::shader::state`'s leaf setters, kept as calls: the cache decides again
 //! what the device gets), the device calls it makes outside them (`engine_core::real_threads`' recorder, with the
@@ -13,53 +13,72 @@
 //! run again on every replay with the frame's camera, sun, lights and time; what they read is not an input.
 //! So a kept draw breaks only when the geometry's own inputs change, not when the camera moves.
 //!
+//! The draw's own device calls (stream sources, indices, constant uploads, the draw: what the recorder notes) go to
+//! the backend once, as a record it keeps (`RecordNext`, `d3d9_stream::Kept`); a replay then sends one `DrawItem`
+//! of that record with the replay's registers in their place, when its own calls came together up to the draw and
+//! are the record's again (the platform layer holds them: `engine_platform`'s `d3d9items`; anything else goes out
+//! as it came). The setter calls stay calls, so the state cache and the device keep agreeing, and the device's state
+//! after an item is the one after the draw.
+//!
 //! What a player sees is the same: a record is used only when every input it read is the same, and it does what the
-//! set-up did. With `check`, every replay is also checked: the set-up runs as always and what it did is compared
-//! with the record (the counters name the first difference); the set-up's own result is what the frame gets.
+//! set-up did. With `check`, every draw that could have been replayed is drawn as always and checked: first the item
+//! it would have been is made from the record's replay (`DrawItem` with `check` 1), then the set-up runs as always
+//! (its own commands, the old form, after a `RecordNext` with `check` 1), and what the set-up did is compared with
+//! the record (the counters name the first difference). The backend draws the old form; one recording of the run
+//! replayed as its items instead (`d3d9_stream::kept::Form`) gives the pictures and per-draw digests to compare.
 //!
 //! Not kept: pass types with their own set-ups (0xfc, 0xfd, 0x102, 0xca, 0xd1) and 4, 5, 0x250, 0x251, a shader
 //! other than the shadow light shader's set-ups, a skinned geometry, and everything while the drawing thread's
 //! packet is open (stage 1 of the records).
 
 use super::capture;
+use engine_core::draw_items::{self, Ask, Done};
 use engine_core::mem::{STORE_LOG_MARK, STORE_LOG_QUIET};
 use engine_core::real_threads::{self as rt, DeviceCall};
 use engine_core::Engine;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
-/// `NV_DRAW_KEEP`.
+/// `NV_DRAW_ITEMS` ([`engine_core::draw_items::Mode`]), with the engineers' audit.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
     Off,
     On,
     Check,
-    /// As [`Mode::Check`], and every 64th build also notes every guest read the set-up makes ([`engine_core::Mem`]'s
-    /// read audit; stepped threads only, slow): reads that are none of the record's inputs, its own writes, its
-    /// device calls' structures, its own bytes or its locals are counted by address (the counters' `uncovered`).
+    /// As [`Mode::Check`] (`NV_DRAW_ITEMS=check` with `NV_DRAW_ITEMS_AUDIT=1`), and every 64th build also notes every
+    /// guest read the set-up makes ([`engine_core::Mem`]'s read audit; stepped threads only, slow): reads that are none
+    /// of the record's inputs, its own writes, its device calls' structures, its own bytes or its locals are counted by
+    /// address (the counters' `uncovered`).
     Audit,
 }
 
-/// The process's mode: `NV_DRAW_KEEP` (`1` or `on`, `check`; anything else off), read once; tests set it
-/// ([`set_mode_for_tests`]).
+/// The run's mode: [`engine_core::draw_items::mode`] (`NV_DRAW_ITEMS`, or the host's choice from `sDrawItems`);
+/// tests set their own ([`set_mode_for_tests`]).
+#[inline]
 pub fn mode() -> Mode {
-    static MODE: std::sync::OnceLock<Mode> = std::sync::OnceLock::new();
+    use engine_core::draw_items::Mode as Run;
     if let Some(m) = TEST_MODE.with(Cell::get) {
         return m;
     }
-    *MODE.get_or_init(|| match std::env::var("NV_DRAW_KEEP").as_deref() {
-        Ok("1" | "on") => Mode::On,
-        Ok("check") => Mode::Check,
-        Ok("audit") => Mode::Audit,
-        _ => Mode::Off,
-    })
+    match engine_core::draw_items::mode() {
+        Run::Off => Mode::Off,
+        Run::On => Mode::On,
+        Run::Check => {
+            static AUDIT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            if *AUDIT.get_or_init(|| std::env::var("NV_DRAW_ITEMS_AUDIT").is_ok_and(|v| v == "1")) {
+                Mode::Audit
+            } else {
+                Mode::Check
+            }
+        }
+    }
 }
 
 thread_local! {
     static TEST_MODE: Cell<Option<Mode>> = const { Cell::new(None) };
 }
 
-/// Tests: this thread's mode, in place of `NV_DRAW_KEEP`.
+/// Tests: this thread's mode, in place of `NV_DRAW_ITEMS`.
 #[doc(hidden)]
 pub fn set_mode_for_tests(mode: Option<Mode>) {
     TEST_MODE.with(|m| m.set(mode));
@@ -200,9 +219,12 @@ struct Record {
     replayable: bool,
     /// The draw count ([`Stats::seen`]) when it was last built or replayed: records unused for long are dropped.
     last_used: u64,
+    /// The backend's record of its draw's own commands (`engine_core::draw_items`): its number and their shape's
+    /// hash; none when they could not be sent as a record (a setter's send between them, or no draw).
+    item: Option<(u32, u64)>,
 }
 
-/// The counters (`NV_DRAW_KEEP` reports them every [`REPORT_EVERY`] draws it saw).
+/// The counters (`NV_DRAW_ITEMS` reports them every [`REPORT_EVERY`] draws it saw).
 #[derive(Default)]
 struct Stats {
     seen: u64,
@@ -224,6 +246,18 @@ struct Stats {
     uncovered: HashMap<u32, u64>,
     /// Check mode: the differing ops by kind and destination.
     differed_at: HashMap<String, u64>,
+    /// Items (`engine_core::draw_items`): sent in place of a replay's own commands; replays whose commands went out
+    /// as they came (a setter's send between them) or were not the record's (another shape); records sent with a
+    /// build, and builds whose commands could not be one; check items made beside their old form, and those dropped.
+    items: u64,
+    items_plain: u64,
+    items_other: u64,
+    records_sent: u64,
+    records_plain: u64,
+    check_items: u64,
+    check_items_dropped: u64,
+    /// Every record dropped because the backend's were gone (a device made or reset).
+    epochs: u64,
 }
 
 const REPORT_EVERY: u64 = 1_000_000;
@@ -235,6 +269,11 @@ struct Keep {
     /// The setter calls of the record being built, and how deep in setters it is.
     leaves: Option<Vec<Leaf>>,
     leaf_depth: u32,
+    /// The next backend record's number (never 0), the backend's epoch the records are of, and the numbers of
+    /// backend records no record of this side holds any more, not yet sent to be dropped.
+    next_id: u32,
+    epoch: u64,
+    forgotten: Vec<u32>,
 }
 
 thread_local! {
@@ -269,6 +308,8 @@ pub fn leaf(e: &mut Engine, leaf: Leaf, body: impl FnOnce(&mut Engine)) {
         }
     });
     if outer {
+        // The run of the draw's own commands held so far ends here (`engine_core::draw_items`), as at the replay.
+        draw_items::interrupt(e);
         pause(e, true);
     }
     body(e);
@@ -341,6 +382,7 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
         body(e);
         return;
     }
+    follow_epoch();
     let snapshot = statics(e, key);
     // What breaks a kept record, if anything: None reuses it.
     let verdict = KEEP.with(|k| {
@@ -364,9 +406,26 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
                 }),
         }
     });
+    let item = KEEP.with(|k| k.borrow().records.get(&key).and_then(|r| r.item));
     match verdict {
         None if mode == Mode::On => {
-            replay(e, key);
+            // The record's replay; its own commands one item when the backend has them.
+            match item {
+                Some((id, hash)) => {
+                    let ask = Ask::Item {
+                        id,
+                        hash,
+                        check: false,
+                    };
+                    let done = with_held(e, ask, |e| replay(e, key));
+                    count(|s| match done {
+                        Done::Drawn => s.items += 1,
+                        Done::Other => s.items_other += 1,
+                        _ => s.items_plain += 1,
+                    });
+                }
+                None => replay(e, key),
+            }
             KEEP.with(|k| {
                 let mut k = k.borrow_mut();
                 let seen = k.stats.seen;
@@ -377,8 +436,23 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
             count(|s| s.replayed += 1);
         }
         None => {
-            // Check: the set-up runs as always; what it did against the record.
-            let built = build(e, key, &mut body);
+            // Check: the item this draw would have been, made from the record's replay as `On` makes it; then the
+            // set-up runs as always (its commands the old form beside the item) and what it did is compared with
+            // the record.
+            let beside = item.is_some_and(|(id, hash)| {
+                let ask = Ask::Item {
+                    id,
+                    hash,
+                    check: true,
+                };
+                let done = with_held(e, ask, |e| replay(e, key));
+                count(|s| match done {
+                    Done::Drawn => s.check_items += 1,
+                    _ => s.check_items_dropped += 1,
+                });
+                done == Done::Drawn
+            });
+            let (built, sent) = build_sent(e, key, &mut body, item, beside);
             KEEP.with(|k| {
                 let mut k = k.borrow_mut();
                 let k = &mut *k;
@@ -400,13 +474,14 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
                     Record {
                         statics: snapshot,
                         last_used: k.stats.seen,
+                        item: sent,
                         ..built
                     },
                 );
             });
         }
         Some(why) => {
-            let built = build(e, key, &mut body);
+            let (built, sent) = build_sent(e, key, &mut body, item, false);
             KEEP.with(|k| {
                 let mut k = k.borrow_mut();
                 let k = &mut *k;
@@ -426,6 +501,7 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
                     Record {
                         statics: snapshot,
                         last_used: k.stats.seen,
+                        item: sent,
                         ..built
                     },
                 );
@@ -433,18 +509,109 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
         }
     }
     evict();
+    send_forgotten(e);
     report();
 }
 
+/// `body` with the draw's own commands held for `ask` (`engine_core::draw_items`): what came of it.
+fn with_held(e: &mut Engine, ask: Ask, body: impl FnOnce(&mut Engine)) -> Done {
+    draw_items::begin(e, ask);
+    body(e);
+    draw_items::end(e)
+}
+
+/// [`build`] with its draw's own commands sent as a backend record (a new number; the record's `old` one dropped
+/// with it): the record, and its backend record when its commands could be sent as one. `beside`: a check run's
+/// item of the old record was sent just before, so these are its old form. An old backend record not dropped with
+/// the new one's sending is dropped later ([`send_forgotten`]).
+fn build_sent(
+    e: &mut Engine,
+    key: Key,
+    body: &mut impl FnMut(&mut Engine),
+    old: Option<(u32, u64)>,
+    beside: bool,
+) -> (Record, Option<(u32, u64)>) {
+    let id = KEEP.with(|k| {
+        let mut k = k.borrow_mut();
+        let id = k.next_id.max(1);
+        k.next_id = id.wrapping_add(1);
+        id
+    });
+    let forget = old.map_or(0, |(old, _)| old);
+    let ask = Ask::Record {
+        id,
+        forget,
+        check: beside,
+    };
+    let mut built = None;
+    let done = with_held(e, ask, |e| built = Some(build(e, key, body)));
+    let built = built.expect("the build ran");
+    let sent = match done {
+        Done::Recorded(hash) => Some((id, hash)),
+        _ => None,
+    };
+    KEEP.with(|k| {
+        let mut k = k.borrow_mut();
+        if sent.is_some() {
+            k.stats.records_sent += 1;
+        } else {
+            k.stats.records_plain += 1;
+            if forget != 0 {
+                k.forgotten.push(forget);
+            }
+        }
+    });
+    (built, sent)
+}
+
+/// The backend's records are gone (a device made or reset: `engine_core::draw_items::epoch`): every record goes, so
+/// each is built again and sent anew.
+fn follow_epoch() {
+    let now = draw_items::epoch();
+    KEEP.with(|k| {
+        let mut k = k.borrow_mut();
+        if k.epoch != now {
+            k.epoch = now;
+            if !k.records.is_empty() {
+                k.stats.epochs += 1;
+            }
+            k.records.clear();
+            k.forgotten.clear();
+        }
+    });
+}
+
+/// The backend records no record holds any more, sent to be dropped (in batches of [`FORGET_BATCH`]).
+fn send_forgotten(e: &mut Engine) {
+    let ids = KEEP.with(|k| {
+        let mut k = k.borrow_mut();
+        (k.forgotten.len() >= FORGET_BATCH).then(|| std::mem::take(&mut k.forgotten))
+    });
+    if let Some(ids) = ids {
+        draw_items::forget(e, &ids);
+    }
+}
+
+const FORGET_BATCH: usize = 256;
+
 /// Above [`MAX_RECORDS`] records, the ones not used in the last [`STALE_AFTER`] draws are dropped (geometry freed, a cell
-/// unloaded, a game loaded: their keys are dead or about to be reused).
+/// unloaded, a game loaded: their keys are dead or about to be reused), their backend records with them.
 fn evict() {
     KEEP.with(|k| {
         let mut k = k.borrow_mut();
+        let k = &mut *k;
         if k.records.len() > MAX_RECORDS {
             let cutoff = k.stats.seen.saturating_sub(STALE_AFTER);
-            k.records.retain(|_, r| r.last_used >= cutoff);
+            let forgotten = &mut k.forgotten;
+            k.records.retain(|_, r| {
+                let keep = r.last_used >= cutoff;
+                if !keep {
+                    forgotten.extend(r.item.map(|(id, _)| id));
+                }
+                keep
+            });
             if k.records.len() > MAX_RECORDS {
+                forgotten.extend(k.records.values().filter_map(|r| r.item.map(|(id, _)| id)));
                 k.records.clear();
             }
         }
@@ -624,6 +791,7 @@ fn assemble(
             ops,
             replayable: true,
             last_used: 0,
+            item: None,
         },
         written,
     )
@@ -657,6 +825,8 @@ fn replay(e: &mut Engine, key: Key) {
 }
 
 fn replay_leaf(e: &mut Engine, leaf: Leaf) {
+    // As at the build ([`leaf`]): the run of the draw's own commands held so far ends here.
+    draw_items::interrupt(e);
     use crate::shader::{state, FAMILY as SHADER};
     use engine_core::ptr::Ptr;
     use engine_core::typed_call;
@@ -925,7 +1095,7 @@ fn summary(s: &Stats, records: usize) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "NV_DRAW_KEEP: {} draws: {} replayed, {} built (new {}, own bytes changed {}, inputs changed {}, device reached outside the record {}); {} checked, {} differed{}; {records} records; inputs that broke records most: [{top}]; differed first at: [{differed}]{audit}",
+        "NV_DRAW_ITEMS: {} draws: {} replayed, {} built (new {}, own bytes changed {}, inputs changed {}, device reached outside the record {}); {} checked, {} differed{}; {records} records; inputs that broke records most: [{top}]; differed first at: [{differed}]{audit}; items: {} drawn, {} plain, {} not the record's; backend records: {} sent, {} plain; check items: {} beside their old form, {} dropped; records dropped for a new device: {}",
         s.seen,
         s.replayed,
         s.built_new + s.built_statics + s.built_inputs + s.built_unkeepable,
@@ -936,6 +1106,14 @@ fn summary(s: &Stats, records: usize) -> String {
         s.checked,
         s.mismatched,
         s.first_mismatch.as_deref().map_or_else(String::new, |m| format!(" (first: {m})")),
+        s.items,
+        s.items_plain,
+        s.items_other,
+        s.records_sent,
+        s.records_plain,
+        s.check_items,
+        s.check_items_dropped,
+        s.epochs,
     )
 }
 
@@ -1061,6 +1239,101 @@ mod tests {
         assert!(s.contains("1 replayed"), "{s}");
         assert!(s.contains("1 checked, 1 differed"), "{s}");
         assert!(s.contains("inputs changed 1"), "{s}");
+        set_mode_for_tests(None);
+        reset_for_tests();
+    }
+
+    thread_local! {
+        /// The test hooks' log of what was asked, their answer to a record (`None`: plain), what they were told to
+        /// drop, and their epoch.
+        static ASKS: RefCell<Vec<Ask>> = const { RefCell::new(Vec::new()) };
+        static RECORDED: Cell<Option<u64>> = const { Cell::new(Some(77)) };
+        static DROPPED: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+        static EPOCH: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// TEST DATA: the platform layer's side as a log (a record answered `RECORDED`, an item drawn); other threads'
+    /// tests see their own empty log and plain answers, as without hooks.
+    static TEST_HOOKS: draw_items::Hooks = draw_items::Hooks {
+        begin: |_, ask| ASKS.with(|a| a.borrow_mut().push(ask)),
+        end: |_| match ASKS.with(|a| a.borrow().last().copied()) {
+            Some(Ask::Record { .. }) => {
+                RECORDED.with(Cell::get).map_or(Done::Plain, Done::Recorded)
+            }
+            Some(Ask::Item { .. }) => Done::Drawn,
+            None => Done::Plain,
+        },
+        interrupt: |_| (),
+        forget: |_, ids| DROPPED.with(|d| d.borrow_mut().extend_from_slice(ids)),
+        epoch: || EPOCH.with(Cell::get),
+    };
+
+    fn asks() -> Vec<Ask> {
+        ASKS.with(|a| std::mem::take(&mut *a.borrow_mut()))
+    }
+
+    /// With items: a build's own commands go to the backend as a record of a new number (the old one dropped with
+    /// it), a replay's as one item of it; a check run makes the item from the replay and then its old form beside
+    /// it; a build whose commands could not be a record leaves its replays plain and its old number to be dropped;
+    /// the backend's records gone (a new device) drop every record.
+    #[test]
+    fn a_replay_is_one_item_while_the_backend_keeps_its_record() {
+        draw_items::install(&TEST_HOOKS);
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x100);
+        let (input, out) = (block, block + 0x10);
+        e.mem.set_u32(input, 5);
+        reset_for_tests();
+        let _ = asks();
+        set_mode_for_tests(Some(Mode::On));
+        let runs = Cell::new(0u32);
+        let body = |e: &mut Engine| {
+            runs.set(runs.get() + 1);
+            let value = capture::word(e, input, 0);
+            e.mem.set_u32(out, value + 1);
+        };
+        let key = (0x10, 1, 0x20, 0x30, 0);
+        let record = |id, forget, check| Ask::Record { id, forget, check };
+        let item = |id, check| Ask::Item {
+            id,
+            hash: 77,
+            check,
+        };
+        draw(&mut e, key, body);
+        assert_eq!(asks(), [record(1, 0, false)]);
+        draw(&mut e, key, body);
+        assert_eq!((asks(), runs.get()), (vec![item(1, false)], 1));
+        e.mem.set_u32(input, 6);
+        draw(&mut e, key, body);
+        assert_eq!((asks(), runs.get()), (vec![record(2, 1, false)], 2));
+        set_mode_for_tests(Some(Mode::Check));
+        draw(&mut e, key, body);
+        assert_eq!(asks(), [item(2, true), record(3, 2, true)]);
+        assert_eq!((runs.get(), e.mem.u32(out)), (3, 7), "the old form drew");
+        // A record that could not be sent: its replays plain, its number dropped later.
+        set_mode_for_tests(Some(Mode::On));
+        RECORDED.with(|r| r.set(None));
+        e.mem.set_u32(input, 8);
+        draw(&mut e, key, body);
+        assert_eq!(asks(), [record(4, 3, false)]);
+        draw(&mut e, key, body);
+        assert_eq!(asks(), [], "replayed with its own commands");
+        assert_eq!(runs.get(), 4);
+        assert_eq!(KEEP.with(|k| k.borrow().forgotten.clone()), [3]);
+        // A new device: every record built again.
+        RECORDED.with(|r| r.set(Some(77)));
+        EPOCH.with(|n| n.set(1));
+        draw(&mut e, key, body);
+        assert_eq!((asks(), runs.get()), (vec![record(5, 0, false)], 5));
+        let s = summary_now();
+        assert!(s.contains("items: 1 drawn, 0 plain"), "{s}");
+        assert!(s.contains("backend records: 4 sent, 1 plain"), "{s}");
+        assert!(
+            s.contains("check items: 1 beside their old form, 0 dropped"),
+            "{s}"
+        );
+        assert!(s.contains("records dropped for a new device: 1"), "{s}");
+        EPOCH.with(|n| n.set(0));
         set_mode_for_tests(None);
         reset_for_tests();
     }

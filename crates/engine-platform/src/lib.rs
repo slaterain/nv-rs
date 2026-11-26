@@ -90,6 +90,7 @@ pub mod d3d9;
 pub mod d3d9backend;
 pub mod d3d9device;
 pub mod d3d9draw;
+mod d3d9items;
 pub mod d3d9query;
 pub mod d3d9real;
 pub mod d3d9resource;

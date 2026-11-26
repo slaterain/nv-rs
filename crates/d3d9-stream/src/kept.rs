@@ -47,17 +47,32 @@ pub struct Counts {
     pub cut: u64,
 }
 
-/// A record: its commands, each payload a range of `bytes`.
-#[derive(Default)]
-struct Record {
+/// Commands kept as they came (a record, or the platform's held draw commands), each payload a
+/// range of `bytes`, with the hash of their shape: every command whole but each `SetConstants`'
+/// registers (an item brings those).
+pub struct Commands {
     cmds: Vec<Cmd<(u32, u32)>>,
     bytes: Vec<u8>,
-    /// The bytes its `SetConstants` take, together: what an item brings.
+    /// The bytes their `SetConstants` take, together: what an item brings.
     constants: u64,
+    shape: u64,
+    scratch: Vec<u8>,
 }
 
-impl Record {
-    fn keep(&mut self, cmd: Cmd<Data<'_>>) {
+impl Default for Commands {
+    fn default() -> Commands {
+        Commands {
+            cmds: Vec::new(),
+            bytes: Vec::new(),
+            constants: 0,
+            shape: crate::wire::HASH_START,
+            scratch: Vec::new(),
+        }
+    }
+}
+
+impl Commands {
+    pub fn keep(&mut self, cmd: Cmd<Data<'_>>) {
         let bytes = &mut self.bytes;
         let kept = cmd.map(|d| {
             // 4-aligned, as the stream keeps words.
@@ -67,12 +82,83 @@ impl Record {
             bytes.extend_from_slice(&b);
             (at, b.len() as u32)
         });
+        self.scratch.clear();
         if let Cmd::SetConstants { data: (_, len), .. } = kept {
             self.constants += u64::from(len);
+            crate::wire::encode(&cmd.map(|_| Data::Bytes(&[])), &mut self.scratch);
+        } else {
+            crate::wire::encode(&cmd, &mut self.scratch);
         }
+        self.shape = crate::wire::hash(self.shape, &self.scratch);
         self.cmds.push(kept);
     }
+
+    pub fn len(&self) -> usize {
+        self.cmds.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cmds.is_empty()
+    }
+
+    /// The hash of the commands but their registers: two lists of the same shape differ at most
+    /// in their registers.
+    pub fn shape(&self) -> u64 {
+        self.shape
+    }
+
+    /// The bytes of their registers, together.
+    pub fn constant_bytes(&self) -> u64 {
+        self.constants
+    }
+
+    pub fn clear(&mut self) {
+        *self = Commands {
+            scratch: std::mem::take(&mut self.scratch),
+            ..Commands::default()
+        };
+    }
+
+    /// The commands as they came.
+    pub fn iter(&self) -> impl Iterator<Item = Cmd<Data<'_>>> {
+        self.cmds.iter().map(|c| {
+            c.map(|(from, len)| {
+                Data::Bytes(&self.bytes[from as usize..from as usize + len as usize])
+            })
+        })
+    }
+
+    /// The commands with each `SetConstants`' registers taken in turn from `given` (as long as
+    /// [`Commands::constant_bytes`]).
+    pub fn with_registers<'a>(&'a self, given: &'a [u8]) -> impl Iterator<Item = Cmd<Data<'a>>> {
+        let mut at = 0usize;
+        self.cmds.iter().map(move |c| match *c {
+            Cmd::SetConstants {
+                device,
+                kind,
+                start,
+                count,
+                data: (_, len),
+            } => {
+                let len = len as usize;
+                let data = Data::Bytes(&given[at..at + len]);
+                at += len;
+                Cmd::SetConstants {
+                    device,
+                    kind,
+                    start,
+                    count,
+                    data,
+                }
+            }
+            other => other.map(|(from, len)| {
+                Data::Bytes(&self.bytes[from as usize..from as usize + len as usize])
+            }),
+        })
+    }
 }
+
+type Record = Commands;
 
 /// A record being made: its number, its form, its commands so far.
 struct Pending {
@@ -165,33 +251,8 @@ impl<B: Backend> Kept<B> {
             return;
         }
         let given = constants.bytes();
-        let mut at = 0usize;
         let Kept { inner, records, .. } = self;
-        let r = &records[&id];
-        for c in &r.cmds {
-            let cmd = match *c {
-                Cmd::SetConstants {
-                    device,
-                    kind,
-                    start,
-                    count,
-                    data: (_, len),
-                } => {
-                    let len = len as usize;
-                    let data = Data::Bytes(&given[at..at + len]);
-                    at += len;
-                    Cmd::SetConstants {
-                        device,
-                        kind,
-                        start,
-                        count,
-                        data,
-                    }
-                }
-                other => other.map(|(from, len)| {
-                    Data::Bytes(&r.bytes[from as usize..from as usize + len as usize])
-                }),
-            };
+        for cmd in records[&id].with_registers(&given) {
             inner.execute(cmd);
         }
         self.counts.items += 1;
@@ -254,7 +315,7 @@ impl<B: Backend> Backend for Kept<B> {
                 let Some(p) = self.pending.as_mut() else {
                     return self.inner.execute(cmd);
                 };
-                if matches!(cmd, Cmd::Present { .. }) || p.record.cmds.len() >= MOST_COMMANDS {
+                if matches!(cmd, Cmd::Present { .. }) || p.record.len() >= MOST_COMMANDS {
                     self.cut();
                     return self.inner.execute(cmd);
                 }
