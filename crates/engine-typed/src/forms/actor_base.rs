@@ -20,13 +20,13 @@
 //! (`00825c00`), current save and load entries (`004fd3e0`, `004fd3c0`) and version byte
 //! (`008df040`), a save buffer's change flags (`00428110`, `004280f0`), a setting's value
 //! (`00408d60`), the change flags' word (`008c71b0`) and the iterator's base constructor
-//! (`005d8b10`). `TESForm`'s, `TESActorBaseData`'s and `TESAttributes`' functions are this
-//! family's typed calls, `memset` and `_ftol2` the C runtime family's; a word the exe reads again
-//! with nothing between that could change it is read once, and so is the save/load game
-//! (`011de45c`), which the exe reads again after calls by address but which is set once at start-up
-//! and stays the same through a save or a load. Every virtual call goes through its
-//! slot, and the rest (the RTTI casts, the AI form's and spell list's functions, the save/load
-//! game's change tests, the combat formulas, the logger) are calls by address.
+//! (`005d8b10`). `TESForm`'s, `TESActorBaseData`'s, `TESAttributes`' and `TESAIForm`'s functions
+//! are this family's typed calls, `memset` and `_ftol2` the C runtime family's; a word the exe
+//! reads again with nothing between that could change it is read once, and so is the save/load
+//! game (`011de45c`), which the exe reads again after calls by address but which is set once at
+//! start-up and stays the same through a save or a load. Every virtual call goes through its slot,
+//! and the rest (the RTTI casts, the spell list's functions, the save/load game's change tests,
+//! the combat formulas, the logger) are calls by address.
 //!
 //! Floats: the AI and the loading threads ask the desirability too, so it is the exe's x87
 //! arithmetic as the translation does it (`x87_add` under the running thread's control word, each
@@ -34,7 +34,7 @@
 //! loaded exactly and stored as an `f32`; the karma read as an actor value is made an integer by
 //! `_ftol2`, the C runtime family's.
 
-use super::{actor_base_data, attributes, tesform, FAMILY};
+use super::{actor_base_data, ai_form, attributes, tesform, FAMILY};
 use crate::crt;
 use engine_core::typed::leaf;
 use engine_core::x87::{fistp_chop, x87_add, x87_quiet, x87_store32};
@@ -77,11 +77,6 @@ const REFERENCE_PROCESS: u32 = 0x68;
 /// The AI form's statistics bytes: actor value codes 0 to 4 at +4 to +8, and code 0x39's.
 const AI_FORM_BYTES: u32 = 4;
 const AI_FORM_BYTE_39: u32 = 0x12;
-const AI_FORM_SET_0: u32 = 0x0047_ee00;
-const AI_FORM_SET_1: u32 = 0x0047_eed0;
-const AI_FORM_SET_2: u32 = 0x0047_ef00;
-const AI_FORM_SET_3: u32 = 0x0047_ef50;
-const AI_FORM_SET_4: u32 = 0x0047_ef80;
 const PLAYER: u32 = 0x011d_ea3c;
 const BGS_SAVE_LOAD_GAME: u32 = 0x011d_df38;
 const SAVE_LOAD_GAME: u32 = 0x011d_e45c;
@@ -131,14 +126,9 @@ const DATA_SAVE_TO_BUFFER: u32 = 0x0047_ea30;
 const DATA_LOAD_FROM_BUFFER: u32 = 0x0047_ea70;
 const SPELLS_SAVE_TO_BUFFER: u32 = 0x0048_e040;
 const SPELLS_LOAD_FROM_BUFFER: u32 = 0x0048_e140;
-const AI_SAVE_TO_BUFFER: u32 = 0x0047_f940;
-const AI_LOAD_FROM_BUFFER: u32 = 0x0047_f980;
 const SPELLS_SAVE_SIZE: u32 = 0x0048_d8f0;
-const AI_SAVE_SIZE: u32 = 0x0047_f7e0;
 const SPELLS_SAVE_GAME: u32 = 0x0048_da20;
-const AI_SAVE_GAME: u32 = 0x0047_f840;
 const SPELLS_LOAD_GAME: u32 = 0x0048_dca0;
-const AI_LOAD_GAME: u32 = 0x0047_f8c0;
 /// `GetDesirability`'s casts and callees.
 const DYNAMIC_CAST: u32 = 0x00ec_43fb;
 const TYPE_TES_FORM: u32 = 0x0118_3028;
@@ -510,23 +500,34 @@ pub fn get_actor_value(e: &mut Engine, this: u32, code: u32) -> u32 {
 pub fn set_actor_value(e: &mut Engine, this: u32, code: u32, value: u32) {
     let ai = at(this, AI_FORM);
     let attributes = at(this, ATTRIBUTES);
-    let byte = value & 0xff;
     let low = low_byte(value);
     match code {
         0 => {
-            e.call(AI_FORM_SET_0, &args![ai, byte, 1u32]);
+            typed_call!(
+                FAMILY,
+                0x0047_ee00,
+                ai_form::set_aggression(e, ai, low, 1u8)
+            );
         }
         1 => {
-            e.call(AI_FORM_SET_1, &args![ai, byte, 1u32]);
+            typed_call!(
+                FAMILY,
+                0x0047_eed0,
+                ai_form::set_confidence(e, ai, low, 1u8)
+            );
         }
         2 => {
-            e.call(AI_FORM_SET_2, &args![ai, byte, 1u32]);
+            typed_call!(FAMILY, 0x0047_ef00, ai_form::set_energy(e, ai, low, 1u8));
         }
         3 => {
-            e.call(AI_FORM_SET_3, &args![ai, byte, 1u32]);
+            typed_call!(
+                FAMILY,
+                0x0047_ef50,
+                ai_form::set_responsibility(e, ai, low, 1u8)
+            );
         }
         4 => {
-            e.call(AI_FORM_SET_4, &args![ai, byte]);
+            typed_call!(FAMILY, 0x0047_ef80, ai_form::set_mood(e, ai, low));
         }
         5 => typed_call!(FAMILY, 0x005f_14b0, set_attribute_5(e, attributes, low)),
         6 => typed_call!(FAMILY, 0x005f_14d0, set_attribute_6(e, attributes, low)),
@@ -675,7 +676,11 @@ pub fn save_to_buffer(e: &mut Engine, this: u32, buffer: u32) {
         0x0048_0270,
         attributes::save_to_buffer(e, at(this, ATTRIBUTES), buffer)
     );
-    e.call(AI_SAVE_TO_BUFFER, &args![at(this, AI_FORM), buffer]);
+    typed_call!(
+        FAMILY,
+        0x0047_f940,
+        ai_form::save_to_buffer(e, at(this, AI_FORM), buffer)
+    );
     if buffer_has_name(e, buffer) {
         let text = name_text(e, this);
         e.call(SAVE_STRING, &args![buffer, text, 0u32]);
@@ -737,7 +742,11 @@ pub fn save_size(e: &mut Engine, this: u32, flags: u32) -> u16 {
         e.call(SPELLS_SAVE_SIZE, &args![at(this, SPELL_LIST), flags])
             .u16(),
     );
-    size = size.wrapping_add(e.call(AI_SAVE_SIZE, &args![at(this, AI_FORM), flags]).u16());
+    size = size.wrapping_add(typed_call!(
+        FAMILY,
+        0x0047_f7e0,
+        ai_form::save_size(e, at(this, AI_FORM), flags)
+    ));
     if flags & CHANGE_NAME != 0 {
         let text = name_text(e, this);
         let length = e.call(STRING_LENGTH, &args![text]).u16();
@@ -794,7 +803,11 @@ pub fn save_game(e: &mut Engine, this: u32, flags: u32) {
             actor_base_data::save_game(e, at(this, ACTOR_BASE_DATA), flags)
         );
         e.call(SPELLS_SAVE_GAME, &args![at(this, SPELL_LIST), flags]);
-        e.call(AI_SAVE_GAME, &args![at(this, AI_FORM), flags]);
+        typed_call!(
+            FAMILY,
+            0x0047_f840,
+            ai_form::save_game(e, at(this, AI_FORM), flags)
+        );
         if flags & CHANGE_NAME != 0 {
             let text = name_text(e, this);
             let length = e.call(STRING_LENGTH, &args![text]).u8();
@@ -925,7 +938,11 @@ pub fn load_game(e: &mut Engine, this: u32, flags: u32, second: u32) {
             SPELLS_LOAD_GAME,
             &args![at(this, SPELL_LIST), flags, second],
         );
-        e.call(AI_LOAD_GAME, &args![at(this, AI_FORM), flags, second]);
+        typed_call!(
+            FAMILY,
+            0x0047_f8c0,
+            ai_form::load_game(e, at(this, AI_FORM), flags, second)
+        );
         if flags & CHANGE_NAME != 0 {
             typed_call!(
                 crt::FAMILY,
@@ -1003,7 +1020,11 @@ pub fn load_from_buffer(e: &mut Engine, this: u32, buffer: u32) {
         0x0048_02b0,
         attributes::load_from_buffer(e, at(this, ATTRIBUTES), buffer)
     );
-    e.call(AI_LOAD_FROM_BUFFER, &args![at(this, AI_FORM), buffer]);
+    typed_call!(
+        FAMILY,
+        0x0047_f980,
+        ai_form::load_from_buffer(e, at(this, AI_FORM), buffer)
+    );
     // The exe's frame: the name buffer at its offset from `EBP`.
     e.with_stack(0x118, |e, frame| {
         if buffer_has_name(e, buffer) {

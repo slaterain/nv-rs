@@ -27,8 +27,8 @@ pub fn fn_0071b040(e: &mut Engine, this: Ptr) {
     if object != 0 {
         e.call(DELETE_007B3FA0, &args![object, 1u32]);
     }
-    fn_0071b020(e, this.byte_add(0x10));
-    fn_0071b020(e, this.byte_add(4));
+    e.call(0x0071_b020, &args![this.byte_add(0x10)]);
+    e.call(0x0071_b020, &args![this.byte_add(4)]);
 }
 
 /// This unit's translated functions, by exe address.
@@ -82,8 +82,11 @@ mod destructor_tests {
             if deletes {
                 expected.push((DELETE_007B3FA0, vec![object, 1]));
             }
-            expected.push((0x0071_dec0, vec![this + 0x10]));
-            expected.push((0x0071_dec0, vec![this + 4]));
+            // Each list through the forwarder, by address.
+            for list in [this + 0x10, this + 4] {
+                expected.push((0x0071_b020, vec![list]));
+                expected.push((0x0071_dec0, vec![list]));
+            }
             assert_eq!(log[1..].to_vec(), expected);
         }
     }

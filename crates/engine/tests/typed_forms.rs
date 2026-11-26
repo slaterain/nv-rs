@@ -1,6 +1,9 @@
 //! The differential test of every typed function of the forms family (`engine_typed::forms`)
 //! against its translation: `TESForm`'s own functions (`tesform`) and `TESActorBaseData`'s
-//! (`actor_base_data`, whose world adds the settings, the save/load game and the template walk).
+//! (`actor_base_data`, whose world adds the settings, the save/load game and the template walk),
+//! `TESActorBase`'s and `TESAttributes`' (`actor_base`, `attributes`, whose world adds actor bases
+//! with their components), and `TESAIForm`'s and `TESAnimation`'s (`ai_form`, `animation`, whose
+//! world adds the package list's answers, the copied settings and a chunk of KF file names).
 //!
 //! One world serves the whole unit: the unit's globals (the registries, the record writer's buffer,
 //! the save games, the data handler, the form-type table and the group tag, the big-endian byte);
@@ -16,7 +19,9 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Diff, Input};
 use engine_typed::crt::CRT;
-use engine_typed::forms::{actor_base, actor_base_data, attributes, tesform, FORMS};
+use engine_typed::forms::{
+    actor_base, actor_base_data, ai_form, animation, attributes, tesform, FORMS,
+};
 
 /// The stand-in slots: `VT_FN + slot`, each answering the word at `SLOT_ANSWERS + slot`.
 const VT_FN: u32 = 0x00ff_4000;
@@ -150,7 +155,7 @@ const SAVE_KIND_AT: u32 = 0x17;
 const HANDLER_NO_IDS: u32 = 0x620;
 
 /// Every callee answered by a word of its own.
-const ANSWERED: [u32; 98] = [
+const ANSWERED: [u32; 88] = [
     0x0047_0470, // the source file list's destructor
     0x0046_ffb0, // and its wrapper
     0x0048_6b80, // the form array's remove
@@ -222,24 +227,14 @@ const ANSWERED: [u32; 98] = [
     0x0084_a6d0, // the actor base data's callee
     0x0084_a620, // the save/load game's change test
     0x0084_a740, // and its form-changed test
-    0x0047_ee00, // the AI form's setters
-    0x0047_eed0,
-    0x0047_ef00,
-    0x0047_ef50,
-    0x0047_ef80,
     0x0048_73d0, // GetFormHealth
     0x0047_ea30, // the actor base data's buffer save
     0x0047_ea70, // and load
     0x0048_e040, // the spell list's buffer save
     0x0048_e140, // and load
-    0x0047_f940, // the AI form's buffer save
-    0x0047_f980, // and load
     0x0048_d8f0, // the spell list's save size
-    0x0047_f7e0, // the AI form's
     0x0048_da20, // the spell list's save
-    0x0047_f840, // the AI form's
     0x0048_dca0, // the spell list's load
-    0x0047_f8c0, // the AI form's
     0x0086_5e70, // SaveString
     0x0048_9100, // the full name's setter
     0x0096_bbc0, // the iterator's walk
@@ -2583,11 +2578,12 @@ fn karma_settings(e: &mut Engine, consistent: bool) {
 
 /// Every actor base data test runs in [`actor_world`] with the karma settings.
 fn actor_cases(d: Diff) -> Diff {
-    // The script's set-up (`00565730`, the cell references family's) is a double here, so its
-    // typed call goes by address.
+    // The script's set-up (`00565730`, the cell references family's) and the template walk's extra
+    // data getters (`00418520`, `004121b0`, the extra data family's) are doubles here, so their
+    // typed calls go by address.
     d.forms()
         .ignore_calls(ABD_IN_PLACE)
-        .goes_by_address(&[0x0056_5730])
+        .goes_by_address(&[0x0056_5730, 0x0041_8520, 0x0041_21b0])
 }
 
 /// The actor base data tests' shared cases, as steps of the `Diff` chain.
@@ -3841,24 +3837,14 @@ fn ab_world(e: &mut Engine) {
         e,
         0x0084_a620,
         0x0084_a740,
-        0x0047_ee00,
-        0x0047_eed0,
-        0x0047_ef00,
-        0x0047_ef50,
-        0x0047_ef80,
         0x0048_73d0,
         0x0047_ea30,
         0x0047_ea70,
         0x0048_e040,
         0x0048_e140,
-        0x0047_f940,
-        0x0047_f980,
         0x0048_d8f0,
-        0x0047_f7e0,
         0x0048_da20,
-        0x0047_f840,
         0x0048_dca0,
-        0x0047_f8c0,
         0x0086_5e70,
         0x0048_9100,
         0x0096_bbc0,
@@ -3952,7 +3938,7 @@ fn ab_cases(d: Diff) -> Diff {
     d.forms()
         .ignore_calls(ABD_IN_PLACE)
         .ignore_calls(AB_IN_PLACE)
-        .goes_by_address(&[0x0056_5730])
+        .goes_by_address(&[0x0056_5730, 0x0041_8520, 0x0041_21b0])
 }
 
 const AB_TYPES: &[u32] = &[0x2a, 0x2b, 0x18];
@@ -4011,7 +3997,6 @@ fn ab_save_setup(e: &mut Engine, case: &engine_core::typed::diff::Case, named: b
     e.mem.set_u8(save_load + SL_VERSION, version);
     e.mem.set_u32(save_load + SL_POSITION, STREAM);
     set_answer(e, 0x0048_d8f0, 0x0011);
-    set_answer(e, 0x0047_f7e0, 0x0103);
     a
 }
 
@@ -4949,4 +4934,1012 @@ fn attributes_destruct_biped_model_form() {
     })
     .run()
     .assert_same();
+}
+
+// ---- TESAIForm (`ai_form`) and TESAnimation (`animation`) ----
+
+/// The words the AI form's and the animation's callees by address answer, one each from
+/// [`AI_ANSWERS`]: the package list's operations, the equip type and a file's chunk type.
+const AI_ANSWERS: u32 = 0x0300_7000;
+const AI_ANSWERED: [u32; 10] = [
+    0x0067_e400, // the package list's clear
+    0x0067_e3a0, // its destructor
+    0x0067_e440, // its copy
+    0x0067_e420, // its append
+    0x0067_e560, // its InitItem
+    0x0067_e780, // its current package
+    0x0067_ec40, // its missed packages
+    0x0067_e4a0, // whether two lists differ
+    0x0047_9430, // the equip type
+    0x0047_26b0, // a file's chunk type
+];
+/// The animation's vtable: slot 4 (`ClearDataComponent`) holds the class's own function or a
+/// stand-in that answers a word.
+const ANIM_VTABLE: u32 = 0x0300_7100;
+/// The bytes the file's chunk read gives, as many as [`AI_CHUNK_SIZE`] says.
+const AI_CHUNK: u32 = 0x0300_7200;
+const AI_CHUNK_SIZE: u32 = 0x0300_72f0;
+const TYPE_TES_AI_FORM: u32 = 0x0118_6cd4;
+const TYPE_TES_ANIMATION: u32 = 0x0118_584c;
+const AI_FORM_VTABLE: u32 = 0x0101_be98;
+const KFFZ: u32 = 0x5a46_464b;
+/// The five copied settings (setting, copy), their guard byte, the byte setting `InitItem` reads.
+const AI_SETTINGS: [(u32, u32); 5] = [
+    (0x011c_533c, 0x011c_52a8),
+    (0x011c_5320, 0x011c_52ac),
+    (0x011c_52fc, 0x011c_52b0),
+    (0x011c_530c, 0x011c_52b4),
+    (0x011c_52e4, 0x011c_52b8),
+];
+const AI_SETTINGS_COPIED: u32 = 0x011c_52c0;
+const AI_INIT_ITEM_SETTING: u32 = 0x011c_5348;
+
+/// The one-line bodies of other classes the AI form's and the animation's native code does in
+/// place (see their module comments): left out of the translations' calls, with no double, as
+/// [`IN_PLACE`] (which has the form type, the base component's and the empty list's constructors,
+/// the aggression getter, a file's chunk size and a save buffer's change flags).
+const AI_IN_PLACE: &[u32] = &[
+    0x004f_6de0, // the confidence
+    0x005b_b4d0, // the energy
+    0x0062_f2f0, // the mood
+    0x0070_5cf0, // the aggro radius flag
+    0x0082_5c00, // the aggro radius
+    0x0084_e3a0, // the service flags
+    0x0082_4060, // the training level
+    0x0050_0940, // the package list's address
+    0x0068_0890, // its constructor
+    0x0040_3e20, // a float setting's value pointer
+    0x0040_8d60, // a byte setting's
+    0x0041_81e0, // a reference's base form
+    0x0082_56d0, // a list's empty test
+    0x0068_15c0, // a node's item slot
+    0x0072_6070, // its next node
+];
+/// The family's own getters its callers do in place: listed only in their callers' tests.
+const AI_OWN_IN_PLACE: &[u32] = &[
+    0x0047_ee30, // the assistance
+    0x0047_ef30, // the responsibility
+    0x0047_f000, // the training skill
+    0x0047_efe0, // the service flags' test
+    0x0047_f060, // the training skill's range
+];
+
+fn ai_answer_at(addr: u32) -> u32 {
+    let index = AI_ANSWERED
+        .iter()
+        .position(|a| *a == addr)
+        .expect("an answered callee");
+    AI_ANSWERS + 4 * index as u32
+}
+
+fn ai_answer<const A: u32>(e: &mut Engine, _: &[u32]) -> Ret {
+    ret(e.mem.u32(ai_answer_at(A)))
+}
+
+fn set_ai_answer(e: &mut Engine, addr: u32, value: u32) {
+    e.mem.set_u32(ai_answer_at(addr), value);
+}
+
+macro_rules! ai_answered {
+    ($e:expr, $($addr:expr),* $(,)?) => {
+        $( $e.register($addr, ai_answer::<{ $addr }>); )*
+    };
+}
+
+/// The world plus what the AI form and the animation reach: their callees' answers, the slot
+/// stand-in, a chunk read of the case's bytes and the save/load game.
+fn ai_world(e: &mut Engine) {
+    world(e);
+    ai_answered!(
+        e,
+        0x0067_e400,
+        0x0067_e3a0,
+        0x0067_e440,
+        0x0067_e420,
+        0x0067_e560,
+        0x0067_e780,
+        0x0067_ec40,
+        0x0067_e4a0,
+        0x0047_9430,
+        0x0047_26b0,
+    );
+    e.register(VT_FN + 4, slot_answer::<4>);
+    e.register(0x0047_2890, |e, a| {
+        let size = e.mem.u32(AI_CHUNK_SIZE);
+        copy_bytes(e, a[1], AI_CHUNK, size);
+        ret(1)
+    });
+    let save_load = e.mem.alloc(0x20);
+    e.mem.set_u32(SAVE_LOAD_GAME, save_load);
+}
+
+/// An actor base form (the test vtable) and its `TESAIForm` at +0x90, returned: the class's vtable,
+/// then the AI data's bytes made from `seed`, the package list's head two words of its own.
+fn ai_form(e: &mut Engine, seed: u32) -> u32 {
+    let owner = e.mem.alloc(0xc0);
+    e.mem.set_u32(owner, VTABLE);
+    let ai = owner + 0x90;
+    e.mem.set_u32(ai, AI_FORM_VTABLE);
+    for i in 4..0x20 {
+        e.mem
+            .set_u8(ai + i, seed.wrapping_mul(0x3b).wrapping_add(i * 0x11) as u8);
+    }
+    ai
+}
+
+/// The ranged fields a case picks: the mood and confidence below their counts and a training skill
+/// that is a skill (`low`), or each past it.
+fn set_ai_ranges(e: &mut Engine, ai: u32, low: bool) {
+    let (mood, confidence, skill) = if low { (3, 2, 5) } else { (9, 6, 0x30) };
+    e.mem.set_u8(ai + 8, mood);
+    e.mem.set_u8(ai + 5, confidence);
+    e.mem.set_u8(ai + 0x10, skill);
+}
+
+/// A C string of the test's own.
+fn c_string(e: &mut Engine, text: &[u8]) -> u32 {
+    let s = e.mem.alloc(text.len() as u32 + 1);
+    for (i, b) in text.iter().enumerate() {
+        e.mem.set_u8(s + i as u32, *b);
+    }
+    s
+}
+
+/// An animation component on [`ANIM_VTABLE`], its name list holding `names` (a `None` is a node
+/// with no name; further nodes are blocks of their own).
+fn animation(e: &mut Engine, names: &[Option<&str>]) -> u32 {
+    let a = e.mem.alloc(0xc);
+    e.mem.set_u32(a, ANIM_VTABLE);
+    let mut node = a + 4;
+    for (i, name) in names.iter().enumerate() {
+        if i > 0 {
+            let next = e.mem.alloc(8);
+            e.mem.set_u32(node + 4, next);
+            node = next;
+        }
+        let text = name.map_or(0, |n| c_string(e, n.as_bytes()));
+        e.mem.set_u32(node, text);
+    }
+    a
+}
+
+/// The name lists the animation's cases pick from.
+const NAME_LISTS: [&[Option<&str>]; 5] = [
+    &[],
+    &[Some("walk.kf")],
+    &[Some("walk.kf"), Some("Run.KF"), Some("idle.kf")],
+    &[Some("walk.kf"), None, Some("idle.kf")],
+    &[None, Some("jump.kf")],
+];
+
+/// The AI form's and the animation's cases: the forms family's, with their own in-place bodies.
+fn ai_cases(d: Diff) -> Diff {
+    d.forms().ignore_calls(AI_IN_PLACE)
+}
+
+/// The AI form's and the animation's shared cases, as steps of the `Diff` chain.
+trait AiCases {
+    fn ai(self) -> Diff;
+    fn ai_caller(self) -> Diff;
+    fn ai_byte_setter(self) -> Diff;
+    fn ai_setter(self, values: &'static [u32]) -> Diff;
+    fn ai_getter(self) -> Diff;
+    fn ai_saves(self, words: usize) -> Diff;
+    fn ai_buffer(self) -> Diff;
+    fn ai_reference(self) -> Diff;
+    fn names(self) -> Diff;
+}
+
+impl AiCases for Diff {
+    fn ai(self) -> Diff {
+        ai_cases(self)
+    }
+    fn ai_caller(self) -> Diff {
+        ai_cases(self).ignore_calls(AI_OWN_IN_PLACE)
+    }
+    fn ai_byte_setter(self) -> Diff {
+        ai_byte_setter_cases(self)
+    }
+    fn ai_setter(self, values: &'static [u32]) -> Diff {
+        ai_setter_cases(self, values)
+    }
+    fn ai_getter(self) -> Diff {
+        ai_getter_cases(self)
+    }
+    fn ai_saves(self, words: usize) -> Diff {
+        ai_saves_cases(self, words)
+    }
+    fn ai_buffer(self) -> Diff {
+        ai_buffer_cases(self)
+    }
+    fn ai_reference(self) -> Diff {
+        ai_reference_cases(self)
+    }
+    fn names(self) -> Diff {
+        names_cases(self)
+    }
+}
+
+/// A byte setter with a notify flag: a value (its low byte stored) and the flag (its low byte
+/// tested), on components from two seeds.
+fn ai_byte_setter_cases(d: Diff) -> Diff {
+    d.ai()
+        .inputs(&[
+            Input::Of(&[0, 1]),
+            Input::Of(&[0, 0x7f, 0xff, 0x1_23]),
+            Input::Of(&[0, 1, 0x100, 0xffff_ffff]),
+        ])
+        .setup(|e, case| {
+            ai_world(e);
+            vec![ai_form(e, case.word(0)), case.word(1), case.word(2)]
+        })
+}
+
+/// A setter of one value, on components from two seeds.
+fn ai_setter_cases(d: Diff, values: &'static [u32]) -> Diff {
+    d.ai()
+        .inputs(&[Input::Of(&[0, 1]), Input::Of(values)])
+        .setup(|e, case| {
+            ai_world(e);
+            vec![ai_form(e, case.word(0)), case.word(1)]
+        })
+}
+
+/// A getter: components from a few seeds.
+fn ai_getter_cases(d: Diff) -> Diff {
+    d.ai()
+        .inputs(&[Input::Of(&[0, 1, 0x7f, 0xff])])
+        .setup(|e, case| {
+            ai_world(e);
+            vec![ai_form(e, case.word(0))]
+        })
+}
+
+/// The save game functions: the change flags (with flag 8 or not) and, for the load (`words` 3),
+/// the word it does not read.
+fn ai_saves_cases(d: Diff, words: usize) -> Diff {
+    d.ai()
+        .inputs(&[Input::Of(&[0, 8, 7, 0xffff_ffff]), Input::Of(&[0, 0x55])])
+        .setup(move |e, case| {
+            ai_world(e);
+            e.mem.set_u32(READ_WORD, 0x1234_5678);
+            let mut call = vec![ai_form(e, 3), case.word(0), case.word(1)];
+            call.truncate(words);
+            call
+        })
+}
+
+/// The save buffer functions: the buffer's change flags (its word at +0x17).
+fn ai_buffer_cases(d: Diff) -> Diff {
+    d.ai()
+        .inputs(&[Input::Of(&[0, 8, 7, 0xffff_ffff])])
+        .setup(|e, case| {
+            ai_world(e);
+            e.mem.set_u32(READ_WORD, 0x1234_5678);
+            let buffer = e.mem.alloc(0x20);
+            e.mem.set_u32(buffer + 0x17, case.word(0));
+            vec![ai_form(e, 5), buffer]
+        })
+}
+
+/// The package queries' references: none, one whose base form is none, one with a base form; the
+/// list's answer.
+fn ai_reference_cases(d: Diff) -> Diff {
+    d.ai()
+        .inputs(&[Input::Of(&[0, 1, 2]), Input::Of(&[0, 0x77])])
+}
+
+/// The reference a package query's case picks (0, a reference with no base form, or one with an
+/// actor base form at +0x20).
+fn ai_reference(e: &mut Engine, pick: u32) -> u32 {
+    if pick == 0 {
+        return 0;
+    }
+    let reference = e.mem.alloc(0x40);
+    if pick == 2 {
+        let base = ai_form(e, 7) - 0x90;
+        e.mem.set_u32(reference + 0x20, base);
+    }
+    reference
+}
+
+/// The animation's name cases: one of [`NAME_LISTS`] and the case-blind compare's answer (0: the
+/// same name). The list's append is handed a local's address, which the typed side may place
+/// elsewhere.
+fn names_cases(d: Diff) -> Diff {
+    d.ai()
+        .local_at(0x0090_5820, 1, 4)
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4]), Input::Of(&[0, 1, 0xffff_ffff])])
+}
+
+#[test]
+fn ai_clear_data_component() {
+    Diff::new(entry!(0x0047_ede0, ai_form::clear_data_component(u32)))
+        .ai_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_set_aggression() {
+    Diff::new(entry!(0x0047_ee00, ai_form::set_aggression(u32, u8, u8)))
+        .ai_byte_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_set_confidence() {
+    Diff::new(entry!(0x0047_eed0, ai_form::set_confidence(u32, u8, u8)))
+        .ai_byte_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_set_energy() {
+    Diff::new(entry!(0x0047_ef00, ai_form::set_energy(u32, u8, u8)))
+        .ai_byte_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_set_responsibility() {
+    Diff::new(entry!(
+        0x0047_ef50,
+        ai_form::set_responsibility(u32, u8, u8)
+    ))
+    .ai_byte_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ai_is_skill() {
+    Diff::new(entry!(0x0047_f060, ai_form::is_skill(i32) -> bool))
+        .ai()
+        .inputs(&[Input::Of(&[
+            0,
+            0x1f,
+            0x20,
+            0x27,
+            0x2d,
+            0x2e,
+            0x7fff_ffff,
+            0x8000_0000,
+            0x8000_0020,
+            0xffff_ffff,
+        ])])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_assistance() {
+    Diff::new(entry!(0x0047_ee30, ai_form::assistance(u32) -> u8))
+        .ai_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_responsibility() {
+    Diff::new(entry!(0x0047_ef30, ai_form::responsibility(u32) -> u8))
+        .ai_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_mark_changed() {
+    Diff::new(entry!(0x0047_f790, ai_form::mark_changed(u32, u32)))
+        .ai()
+        // `TESActorBase::AddChange` and `TESForm::AddChange` run in some cases: their in-place bodies.
+        .ignore_calls(AB_IN_PLACE)
+        .ignore_calls(ABD_IN_PLACE)
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5]), Input::Of(&[8, 0xffff_ffff])])
+        .setup(|e, case| {
+            ai_world(e);
+            answered!(e, 0x0084_a620);
+            set_answer(e, 0x0084_a620, 1);
+            let bgs = e.mem.alloc(0x40);
+            e.mem.set_u32(BGS_SAVE_LOAD_GAME, bgs);
+            let this = match case.word(0) {
+                0 => 0,
+                // The component's own address with its form at 0: no form to mark.
+                1 => 0x90,
+                // A form whose slot 0x48 is a stand-in.
+                2 => ai_form(e, 1),
+                // `TESActorBase::AddChange` in the slot, for a loaded and a created form, and
+                // `TESForm::AddChange`.
+                pick => {
+                    let ai = ai_form(e, 1);
+                    let owner = ai - 0x90;
+                    let vtable = e.mem.alloc(0x50);
+                    let (body, id) = match pick {
+                        3 => (0x005f_1630, 0x0100_0042),
+                        4 => (0x005f_1630, 0xff00_0042),
+                        _ => (0x0048_4b60, 0x0100_0042),
+                    };
+                    e.mem.set_u32(vtable + 0x48, body);
+                    e.mem.set_u32(owner, vtable);
+                    e.mem.set_u32(owner + 0xc, id);
+                    ai
+                }
+            };
+            vec![this, case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_set_assistance() {
+    Diff::new(entry!(0x0047_ee50, ai_form::set_assistance(u32, u8)))
+        .ai_setter(&[0, 0x7f, 0xff, 0x1_23])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_set_aggro_radius_flag() {
+    Diff::new(entry!(0x0047_ee70, ai_form::set_aggro_radius_flag(u32, u8)))
+        .ai_setter(&[0, 1, 0xff, 0x1_00])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_set_aggro_radius() {
+    Diff::new(entry!(0x0047_ee90, ai_form::set_aggro_radius(u32, u32)))
+        .ai_setter(WORDS)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_set_mood() {
+    Diff::new(entry!(0x0047_ef80, ai_form::set_mood(u32, u8)))
+        .ai_setter(&[0, 3, 7, 8, 9, 0xff, 0x1_07, 0x1_08])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_set_service_flags() {
+    Diff::new(entry!(
+        0x0047_efb0,
+        ai_form::set_service_flags(u32, u32, u8)
+    ))
+    .ai()
+    .inputs(&[Input::Of(FLAGS), Input::Of(&[0, 1, 0x100])])
+    .setup(|e, case| {
+        ai_world(e);
+        vec![ai_form(e, 2), case.word(0), case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ai_training_skill() {
+    Diff::new(entry!(0x0047_f000, ai_form::training_skill(u32) -> u32))
+        .ai_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_set_training_skill() {
+    Diff::new(entry!(0x0047_f020, ai_form::set_training_skill(u32, u32)))
+        .ai_caller()
+        .inputs(&[
+            Input::Of(&[0, 1]),
+            Input::Of(&[0, 0x1f, 0x20, 0x2a, 0x2d, 0x2e, 0x8000_0020, 0xffff_ffff]),
+        ])
+        .setup(|e, case| {
+            ai_world(e);
+            vec![ai_form(e, case.word(0)), case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_set_training_level() {
+    Diff::new(entry!(0x0047_f090, ai_form::set_training_level(u32, u8)))
+        .ai_setter(&[0, 0x64, 0xff, 0x1_01])
+        .run()
+        .assert_same();
+}
+
+/// The copied settings' cases: copied before or not, and their floats (one set with a signalling
+/// NaN, an infinity and a negative zero).
+fn set_ai_settings(e: &mut Engine, copied: u32, odd: u32) {
+    e.mem.set_u8(AI_SETTINGS_COPIED, copied as u8);
+    let floats: [u32; 5] = if odd == 0 {
+        [0x3fc0_0000, 0xc000_0000, 0x42c8_0000, 0x3e80_0000, 0]
+    } else {
+        [
+            0x7f80_0001,
+            0xff80_0000,
+            0x8000_0000,
+            0x7fc0_0002,
+            0x0000_0001,
+        ]
+    };
+    for ((setting, copy), bits) in AI_SETTINGS.into_iter().zip(floats) {
+        e.mem.set_u32(setting + 4, bits);
+        e.mem.set_u32(copy, 0x1111_1111);
+    }
+}
+
+#[test]
+fn ai_initialize_data_component() {
+    Diff::new(entry!(0x0047_ed10, ai_form::initialize_data_component(u32)))
+        .ai()
+        .inputs(&[Input::Of(&[0, 1, 0x100]), Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            ai_world(e);
+            set_ai_settings(e, case.word(0), case.word(1));
+            vec![ai_form(e, 4)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_construct() {
+    Diff::new(entry!(0x0047_ec40, ai_form::construct(u32) -> u32))
+        .ai()
+        .inputs(&[Input::Of(&[0, 1]), Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            ai_world(e);
+            set_ai_settings(e, case.word(0), case.word(1));
+            vec![ai_form(e, 6)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_destruct() {
+    Diff::new(entry!(0x0047_ecb0, ai_form::destruct(u32)))
+        .ai_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_load_data() {
+    Diff::new(entry!(0x0047_f0b0, ai_form::load_data(u32, u32)))
+        .ai()
+        .inputs(&[Input::Of(&[0, 1, 2]), Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            ai_world(e);
+            let this = ai_form(e, case.word(1));
+            let record = if case.word(0) == 0 {
+                0
+            } else {
+                // A record: its bytes made up, the confidence and mood in range or not.
+                let record = data(e, 0x14);
+                let low = case.word(0) == 1;
+                e.mem.set_u8(record + 1, if low { 4 } else { 5 });
+                e.mem.set_u8(record + 4, if low { 7 } else { 8 });
+                record
+            };
+            vec![this, record]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_copy_ai_data() {
+    Diff::new(entry!(0x0047_f1e0, ai_form::copy_ai_data(u32, u32)))
+        .ai_caller()
+        .inputs(&[Input::Of(&[0, 1, 2])])
+        .setup(|e, case| {
+            ai_world(e);
+            let this = ai_form(e, 1);
+            // Another component with its ranged fields in range or not, or this one itself.
+            let other = match case.word(0) {
+                2 => this,
+                pick => {
+                    let other = ai_form(e, 9);
+                    set_ai_ranges(e, other, pick == 0);
+                    other
+                }
+            };
+            vec![this, other]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_copy_packages() {
+    Diff::new(entry!(0x0047_f2d0, ai_form::copy_packages(u32, u32)))
+        .ai()
+        .inputs(&[Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            ai_world(e);
+            vec![ai_form(e, case.word(0)), ai_form(e, 8)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_copy_component() {
+    Diff::new(entry!(0x0047_f190, ai_form::copy_component(u32, u32)))
+        .ai_caller()
+        .inputs(&[Input::Of(&[0, 1, 2])])
+        .setup(|e, case| {
+            ai_world(e);
+            let this = ai_form(e, 1);
+            let other = ai_form(e, 0x22);
+            set_ai_ranges(e, other, case.word(0) == 1);
+            set_cast(
+                e,
+                TYPE_TES_AI_FORM,
+                if case.word(0) == 0 { 0 } else { other },
+            );
+            vec![this, other]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_add_package() {
+    Diff::new(entry!(0x0047_f500, ai_form::add_package(u32, u32)))
+        .ai_setter(WORDS)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_init_item() {
+    Diff::new(entry!(0x0047_f4c0, ai_form::init_item(u32, u32)))
+        .ai()
+        .inputs(&[Input::Of(&[0, 1, 0x80]), Input::Of(&[0, 0x1234])])
+        .setup(|e, case| {
+            ai_world(e);
+            e.mem.set_u8(AI_INIT_ITEM_SETTING + 4, case.word(0) as u8);
+            vec![ai_form(e, 3), case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_current_package() {
+    Diff::new(entry!(0x0047_f520, ai_form::current_package(u32) -> u32))
+        .ai_reference()
+        .setup(|e, case| {
+            ai_world(e);
+            set_ai_answer(e, 0x0067_e780, case.word(1));
+            vec![ai_reference(e, case.word(0))]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_missed_packages() {
+    Diff::new(entry!(
+        0x0047_f590,
+        ai_form::missed_packages(u32, u32, f32, f32)
+    ))
+    .ai_reference()
+    .inputs(&[
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 0x77]),
+        Input::Of(&[0x3fc0_0000, 0x7f80_0001, 0x8000_0000]),
+        Input::Of(&[0xc2c8_0000, 0xff80_0001, 0x7f80_0000]),
+    ])
+    .setup(|e, case| {
+        ai_world(e);
+        vec![
+            ai_reference(e, case.word(0)),
+            case.word(1),
+            case.word(2),
+            case.word(3),
+        ]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ai_copied_setting() {
+    Diff::new(entry!(0x0047_eeb0, ai_form::copied_setting(u8) -> f32))
+        .ai()
+        .inputs(&[Input::Of(&[0, 1, 2, 4, 5, 0xff, 0x102])])
+        .setup(|e, case| {
+            ai_world(e);
+            for (i, bits) in [0x3fc0_0000u32, 0xc120_0000, 0x7f80_0001, 0, 0x8000_0000]
+                .into_iter()
+                .enumerate()
+            {
+                e.mem.set_u32(0x011c_52a8 + 4 * i as u32, bits);
+            }
+            vec![case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_has_service() {
+    Diff::new(entry!(0x0047_efe0, ai_form::has_service(u32, u32) -> bool))
+        .ai_setter(&[0, 1, 0x400, 0x8000_0000, 0xffff_ffff])
+        .run()
+        .assert_same();
+}
+
+/// The fields of the AI data the compare reads, by offset, and padding bytes it does not.
+const AI_COMPARED: [u32; 21] = [
+    4, 5, 6, 7, 8, 0xc, 0xd, 0xe, 0xf, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 9, 0xa, 0xb,
+    0x18,
+];
+
+#[test]
+fn ai_compare_component() {
+    Diff::new(entry!(0x0047_f300, ai_form::compare_component(u32, u32) -> bool))
+        .ai_caller()
+        .inputs(&[
+            Input::Of(&[
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+            ]),
+            Input::Of(&[0, 1, 0x100]),
+        ])
+        .setup(|e, case| {
+            ai_world(e);
+            let this = ai_form(e, 0x31);
+            let other = ai_form(e, 0x31);
+            // 0: not a TESAIForm; 1: the same data; then one byte of the data different.
+            if let Some(offset) = case.word(0).checked_sub(2) {
+                let at = other + AI_COMPARED[offset as usize];
+                let byte = e.mem.u8(at);
+                e.mem.set_u8(at, byte ^ 0x40);
+            }
+            set_cast(
+                e,
+                TYPE_TES_AI_FORM,
+                if case.word(0) == 0 { 0 } else { other },
+            );
+            set_ai_answer(e, 0x0067_e4a0, case.word(1));
+            vec![this, other]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_sells_buys_item() {
+    Diff::new(entry!(0x0047_f600, ai_form::sells_buys_item(u32, u32) -> bool))
+        .ai_caller()
+        .inputs(&[
+            Input::Of(&[
+                0, 0x17, 0x18, 0x19, 0x1a, 0x1f, 0x28, 0x29, 0x2a, 0x2f, 0x32, 0x67, 0x68, 0xff,
+            ]),
+            Input::Of(&[9, 0xa, 0xb, 0xc, 0xd, 0xe]),
+            Input::Of(&[0, 0xffff_ffff, 0x0000_0555, 0x0000_00aa]),
+        ])
+        .max_cases(400)
+        .setup(|e, case| {
+            ai_world(e);
+            let this = ai_form(e, 2);
+            e.mem.set_u32(this + 0xc, case.word(2));
+            let item = form(e, case.word(0), 0, 0x55);
+            set_ai_answer(e, 0x0047_9430, case.word(1));
+            vec![this, item]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_save_size() {
+    Diff::new(entry!(0x0047_f7e0, ai_form::save_size(u32, u32) -> u16))
+        .ai_setter(&[0, 8, 7, 0xffff_ffff, 0x8000_0008])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_save_game() {
+    Diff::new(entry!(0x0047_f840, ai_form::save_game(u32, u32)))
+        .ai_saves(2)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_load_game() {
+    Diff::new(entry!(0x0047_f8c0, ai_form::load_game(u32, u32, u32)))
+        .ai_saves(3)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_save_to_buffer() {
+    Diff::new(entry!(0x0047_f940, ai_form::save_to_buffer(u32, u32)))
+        .ai_buffer()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ai_load_from_buffer() {
+    Diff::new(entry!(0x0047_f980, ai_form::load_from_buffer(u32, u32)))
+        .ai_buffer()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn animation_construct() {
+    Diff::new(entry!(0x0047_f9c0, animation::construct(u32) -> u32))
+        .ai()
+        .inputs(&[Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            ai_world(e);
+            vec![data(e, 0xc + case.word(0))]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn animation_destruct() {
+    Diff::new(entry!(0x0047_f9f0, animation::destruct(u32)))
+        .names()
+        .setup(|e, case| {
+            ai_world(e);
+            vec![animation(e, NAME_LISTS[case.word(0) as usize])]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn animation_clear_data_component() {
+    Diff::new(entry!(0x0047_fa50, animation::clear_data_component(u32)))
+        .names()
+        .setup(|e, case| {
+            ai_world(e);
+            vec![animation(e, NAME_LISTS[case.word(0) as usize])]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn animation_load_names() {
+    Diff::new(entry!(0x0047_faa0, animation::load_names(u32, u32, u32)))
+        .names()
+        .inputs(&[
+            Input::Of(&[0, 1, 2, 3, 4, 5]),
+            Input::Of(&[0, 1, 0xffff_ffff]),
+        ])
+        .setup(|e, case| {
+            ai_world(e);
+            set_answer(e, STRING_COMPARE, case.word(1));
+            let this = animation(e, NAME_LISTS[1]);
+            // 0: no file; 1: no component; 2: another chunk; then a chunk of names, one with an
+            // empty first name, one whose names repeat.
+            let chunk: &[u8] = match case.word(0) {
+                4 => b"\0walk.kf\0",
+                5 => b"a.kf\0A.KF\0b.kf\0\0",
+                _ => b"walk.kf\0Run.kf\0idle.kf\0\0",
+            };
+            for (i, b) in chunk.iter().enumerate() {
+                e.mem.set_u8(AI_CHUNK + i as u32, *b);
+            }
+            e.mem.set_u32(AI_CHUNK_SIZE, chunk.len() as u32);
+            let file = file(e, false);
+            e.mem.set_u32(file + FILE_CHUNK_SIZE_AT, chunk.len() as u32);
+            set_ai_answer(
+                e,
+                0x0047_26b0,
+                if case.word(0) == 2 { 0x4d52_4f46 } else { KFFZ },
+            );
+            let component = if case.word(0) == 1 { 0 } else { this };
+            let file = if case.word(0) == 0 { 0 } else { file };
+            vec![this, component, file]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn animation_copy_component() {
+    Diff::new(entry!(0x0047_fb50, animation::copy_component(u32, u32)))
+        .names()
+        .inputs(&[
+            Input::Of(&[0, 1, 2, 3, 4]),
+            Input::Of(&[0, 1, 0xffff_ffff]),
+            Input::Of(&[0, 1, 2]),
+        ])
+        .setup(|e, case| {
+            ai_world(e);
+            set_answer(e, STRING_COMPARE, case.word(1));
+            let this = animation(e, NAME_LISTS[2]);
+            let other = animation(e, NAME_LISTS[case.word(0) as usize]);
+            // 0: not a TESAnimation; 1: slot 4 holds `ClearDataComponent`; 2: a stand-in.
+            let slot = if case.word(2) == 1 {
+                0x0047_fa50
+            } else {
+                VT_FN + 4
+            };
+            e.mem.set_u32(ANIM_VTABLE + 4, slot);
+            set_cast(
+                e,
+                TYPE_TES_ANIMATION,
+                if case.word(2) == 0 { 0 } else { other },
+            );
+            vec![this, other]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn animation_compare_component() {
+    Diff::new(entry!(0x0047_fbd0, animation::compare_component(u32, u32) -> bool))
+        .names()
+        .inputs(&[
+            Input::Of(&[0, 1, 2, 3, 4]),
+            Input::Of(&[0, 1, 0xffff_ffff]),
+            Input::Of(&[0, 1, 2, 3, 4, 5]),
+        ])
+        .setup(|e, case| {
+            ai_world(e);
+            set_answer(e, STRING_COMPARE, case.word(1));
+            let this = animation(e, NAME_LISTS[case.word(0) as usize]);
+            // 5: not a TESAnimation; else another list.
+            let pick = case.word(2).min(4);
+            let other = animation(e, NAME_LISTS[pick as usize]);
+            set_cast(
+                e,
+                TYPE_TES_ANIMATION,
+                if case.word(2) == 5 { 0 } else { other },
+            );
+            vec![this, other]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn animation_has_name() {
+    Diff::new(entry!(0x0047_fcb0, animation::has_name(u32, u32) -> bool))
+        .names()
+        .setup(|e, case| {
+            ai_world(e);
+            set_answer(e, STRING_COMPARE, case.word(1));
+            let this = animation(e, NAME_LISTS[case.word(0) as usize]);
+            vec![this, c_string(e, b"WALK.kf")]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn animation_add_name() {
+    Diff::new(entry!(0x0047_fd20, animation::add_name(u32, u32)))
+        .names()
+        .setup(|e, case| {
+            ai_world(e);
+            set_answer(e, STRING_COMPARE, case.word(1));
+            let this = animation(e, NAME_LISTS[case.word(0) as usize]);
+            vec![this, c_string(e, b"jump.kf")]
+        })
+        .run()
+        .assert_same();
 }
