@@ -183,6 +183,7 @@ pub fn world(e: &mut Engine, seed: u32, callees: &[u32], without: &[u32]) {
         }
         match at {
             CONTROLS_POLL => controls_poll(e),
+            LIST_REMOVE_FIRST => list_remove_first(e),
             _ => stand_in(e, at),
         }
     }
@@ -203,6 +204,28 @@ fn controls_poll(e: &mut Engine) {
         e.mem.set_u32(POLLS, polls);
         if polls >= 3 {
             e.mem.set_u8(MESSAGE_RESULT, 1);
+        }
+        Ret::default()
+    });
+}
+
+/// `0063f7b0` (thiscall on an embedded list: its first node removed), the call each round of the
+/// stats menu's list clean-ups (`007e07f0`, `007e0850`) makes until the list is empty: logged as a
+/// stand-in's, then the second node's item and next move into the list's own node, or with no second
+/// node the item is cleared, so the loop ends.
+const LIST_REMOVE_FIRST: u32 = 0x0063_f7b0;
+
+fn list_remove_first(e: &mut Engine) {
+    e.register_double(LIST_REMOVE_FIRST, |e, words| {
+        log(e, LIST_REMOVE_FIRST, words);
+        let list = words[0];
+        let next = e.mem.u32(list.wrapping_add(4));
+        if next == 0 {
+            e.mem.set_u32(list, 0);
+        } else {
+            let (item, after) = (e.mem.u32(next), e.mem.u32(next.wrapping_add(4)));
+            e.mem.set_u32(list, item);
+            e.mem.set_u32(list.wrapping_add(4), after);
         }
         Ret::default()
     });

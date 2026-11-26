@@ -6105,9 +6105,7 @@ const STATS_VARIANTS: [u32; 4] = [0, 3, 1, 2];
 /// The menu: limb mode in the variant 0, the effects already updated this frame in the variant 3,
 /// the 60 tiles all set but in the variant 2, the perk tile set; the healing options' callbacks
 /// stand-ins, in the variant 3 the first's and the fourth's the exe's own (`007e05f0`,
-/// `007e07a0`). The Pip-Boy (the manager's `+0x174`, object 108) up but in the variant 1. A
-/// list's first node's removal (`0063f7b0`) does its work: the next node's words move up, or the
-/// item is cleared.
+/// `007e07a0`). The Pip-Boy (the manager's `+0x174`, object 108) up but in the variant 1.
 fn put_stats_menu(e: &mut Engine, variant: u32) {
     use arena::{object, CODE, VTABLES};
     let live = variant != 2;
@@ -6166,18 +6164,6 @@ fn put_stats_menu(e: &mut Engine, variant: u32) {
         e.mem.set_u32(manager + 0x174, object(108));
         e.mem.set_u8(object(108) + 0x28, u8::from(variant != 1));
     }
-    e.register_double(0x0063_f7b0, |e, words| {
-        let list = words[0];
-        let next = e.mem.u32(list + 4);
-        if next == 0 {
-            e.mem.set_u32(list, 0);
-        } else {
-            let (item, after) = (e.mem.u32(next), e.mem.u32(next + 4));
-            e.mem.set_u32(list, item);
-            e.mem.set_u32(list + 4, after);
-        }
-        Ret::default()
-    });
 }
 
 /// The variants of [`put_status_data`]'s world.
@@ -6215,7 +6201,8 @@ fn put_status_data(e: &mut Engine, variant: u32) {
 
 /// The stats menu's worlds, as settings of a Diff.
 trait StatsWorlds {
-    /// In [`put_stats_menu`]'s world.
+    /// In [`put_stats_menu`]'s world, the vector constructor (`00ec782f`) no stand-in: the fade
+    /// object's, which the native code does in place, runs for real on the translation's side.
     fn in_stats(self, args: &'static [Arg]) -> Diff;
     /// In [`put_status_data`]'s world.
     fn in_status_data(self, args: &'static [Arg]) -> Diff;
@@ -6223,7 +6210,14 @@ trait StatsWorlds {
 
 impl StatsWorlds for Diff {
     fn in_stats(self, args: &'static [Arg]) -> Diff {
-        self.in_arena_and(args, CALLEES, &[], &STATS_VARIANTS, put_stats_menu)
+        self.in_arena_without_and(
+            args,
+            CALLEES,
+            &[],
+            &[0x00ec_782f],
+            &STATS_VARIANTS,
+            put_stats_menu,
+        )
     }
 
     fn in_status_data(self, args: &'static [Arg]) -> Diff {
@@ -6248,7 +6242,7 @@ fn stats_menu_fn_007db1c0_diff() {
         0x007d_b1c0,
         interface::stats_menu::fn_007db1c0() -> u32
     ))
-    .in_arena(&[], CALLEES, &[])
+    .in_arena_without(&[], CALLEES, &[], &[0x00ec_782f])
     .run()
     .assert_same();
 }
