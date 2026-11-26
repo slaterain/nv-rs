@@ -11,11 +11,12 @@
 //! ([`rooms`]). The list's own operations (its constructors, `AddExtra`, `RemoveExtra`, the type
 //! bitmap, the thread's cache) are the cell references family's (`cell_refs::extra_list`), the
 //! lookup `GetExtraData` (`00410220`) the dispatch family's. Every caller reaches these functions
-//! by address; the unit's translations that stay (`GetCanNotWear` `00418b10`, `ScriptLocals`'
-//! scalar deleting destructor `0041af70`) and the unit's other part files call the native functions
-//! by address too. Three functions of the part 2 and 3 ranges are other families': a package's
-//! type `0041ca90` (the AI queries', read in place here), `GetPackageExtraTarget` `0041cb70` and
-//! `GetActorPackageData` `004212b0` (the dispatch family's).
+//! by address; the unit's translation that stays (`GetCanNotWear` `00418b10`) and the unit's other
+//! part files call the native functions by address too. Four functions of the part 2 and 3 ranges
+//! are other families': `ScriptLocals`' scalar deleting destructor `0041af70` (native in the script
+//! lines family, the one that holds xNVSE's wraps), a package's type `0041ca90` (the AI queries',
+//! read in place here), `GetPackageExtraTarget` `0041cb70` and `GetActorPackageData` `004212b0`
+//! (the dispatch family's).
 //!
 //! **Native.** The exe's order of work. The lookup (`00410220`), the lock (`0040fbf0`, `0040fba0`),
 //! `AddExtra`, both `RemoveExtra`s, `ItemsInList` and the cache's clear are typed calls into their
@@ -32,9 +33,9 @@
 //! list's test for an item (`005f65d0`) and for emptiness (`008256d0`), a form's type
 //! (`00401170`), a reference's extra list (`005d43c0`), the store of a payload word (`0041fd00`), a
 //! portal's two rooms (`009707f0`, `00420ba0`), the enable state parent's flag leaves and the
-//! constructors of the file's own classes. Each type, next or word is
-//! read once where the exe reads it again with nothing in between that could change it. A virtual
-//! call (an extra data's slot 0 delete, its slot 4 `Compare`, the type 0x92 copy's slot 0xc) stays
+//! constructors of the file's own classes. Each type, next or word is read once where the exe
+//! reads it again with nothing in between that could change it. A virtual call (an extra data's
+//! slot 0 delete, its slot 4 `Compare`, the type 0x92 copy's slot 0xc, a primitive's slot 0) stays
 //! a call through the slot: each class has its own body. The constructors, destructors and setters
 //! of other units, `operator new` and `operator delete` are called by address.
 //!
@@ -43,10 +44,11 @@
 //! two default scans' tables (`0x41D0F6`, `0x41D212`, `0x41D25A`), while JIP is installed; the
 //! hotkey copy of `CopyListForReference` (`0x412675`), the owner test of `CompareListForContainer`
 //! (`0x41271E`) and the reference pointer setter's persistence test (`0x41C833`), with its fixes
-//! on. JIP wraps `GetCanNotWear` (`00418b10`) and xNVSE `0041af70`, so those stay translated and
-//! out of this family: a wrapped member would send the whole family by address. No other extender
-//! replaces or patches these functions; xNVSE, JIP and JohnnyGuitar call the getters, the setters
-//! and `AddExtraCopy` by address, which reaches them here.
+//! on. JIP wraps `GetCanNotWear` (`00418b10`), which stays translated, and xNVSE `0041af70` (the
+//! script lines family's): both stay out of this family and are called by address, as a wrapped
+//! member would send the whole family by address. No other extender replaces or patches these
+//! functions; xNVSE, JIP and JohnnyGuitar call the getters, the setters and `AddExtraCopy` by
+//! address, which reaches them here.
 //!
 //! **Which thread.** Every thread that touches a list (main, the loaders, the AI threads), under
 //! the extra data lock as the exe takes it: [`Threads::Both`]. The floats are moved, not computed

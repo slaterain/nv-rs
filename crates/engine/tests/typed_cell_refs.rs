@@ -4244,11 +4244,17 @@ fn xd_stand_ins(e: &mut Engine) {
 /// The extra list's world (`extra_world`) for the family: page 0 mapped (a failed allocation's
 /// null extra data is read and added as the exe does), the read-only floats the getters and the
 /// scale setter read, the world vtable's `Compare` and slot 3, the type 0x92 copy's slot 3,
-/// `operator new` failing for some seeds, the thread's word at +0x294 in four forms, and JIP's
-/// three sites of the family with its head site.
+/// `operator new` failing for some seeds, the thread's word at +0x294 in four forms, JIP's patch
+/// word in three forms where it is on, and JIP's sites of the family with its head site.
 fn xd_world(e: &mut Engine, seed: u32) -> ExtraWorld {
+    use engine_core::extend::jip_patches::{FIXES, INSTALLED};
     use engine_core::extend::{Owner, SiteSlot};
     let w = extra_world(e, seed);
+    // JIP on: installed with its fixes, installed alone, or its fixes alone, so a seam gated by
+    // the other bit shows.
+    if w.jip % 3 != 0 {
+        e.set_jip_patches([u32::MAX, INSTALLED, FIXES][(seed / 4 % 3) as usize]);
+    }
     e.map(0, 0x1000);
     e.map(0x0101_2000, 0x3000);
     e.mem.set_u32(0x0101_2054, (-1.0f32).to_bits());
@@ -5966,6 +5972,65 @@ fn the_extra_data_worlds_reach_every_branch() {
     }
 }
 
+/// The part 2 range's setups reach their thin branches (run as the translations, every miss listed
+/// at once): the terminal state's delete on 0 and the action's delete on 1 as `xd_setter` builds
+/// their worlds, and a run-once search whose answer the stop at an empty item decides, as
+/// `xe_run_once` builds it.
+#[test]
+fn the_part_2_worlds_reach_every_branch() {
+    let mut reached = std::collections::BTreeSet::<String>::new();
+    for &seed in EXTRA_SEEDS {
+        for (setter, kind, value) in [(0x0041_be10u32, 0x50u32, 0u32), (0x0041_b3d0, 0x0e, 1)] {
+            let mut e = Engine::new_untyped_for_test();
+            let w = xd_world(&mut e, seed);
+            place_kind(&mut e, &w, seed, kind);
+            let extra = e.call(0x0041_0220, &args![w.list, kind]).u32();
+            if extra == 0 {
+                continue;
+            }
+            let deletes = e.mem.u32(extra + EXTRA_DELETES);
+            e.call(setter, &args![w.list, value]);
+            let deleted = e.mem.u32(extra + EXTRA_DELETES) != deletes;
+            reached.insert(format!("type {kind:#x} deleted {deleted}"));
+        }
+        for second in 0..5 {
+            let mut e = Engine::new_untyped_for_test();
+            let words = xe_run_once_world(&mut e, seed, second, false);
+            let found = e.call(0x0041_d8c0, &args![words[0], words[1]]).bool();
+            // The answer of a walk that passes over empty items.
+            let extra = e.call(0x0041_0220, &args![words[0], 0x1bu32]).u32();
+            let mut node = if extra == 0 {
+                0
+            } else {
+                e.mem.u32(extra + 0xc)
+            };
+            let mut anywhere = false;
+            while node != 0 {
+                let entry = e.mem.u32(node);
+                anywhere |= entry != 0 && e.mem.u32(entry) == words[1];
+                node = e.mem.u32(node + 4);
+            }
+            reached.insert(format!(
+                "run-once found {found}, past an empty item {anywhere}"
+            ));
+        }
+    }
+    let wanted = [
+        "type 0x50 deleted true",
+        "type 0x50 deleted false",
+        "type 0xe deleted true",
+        "type 0xe deleted false",
+        "run-once found true, past an empty item true",
+        "run-once found false, past an empty item false",
+        "run-once found false, past an empty item true",
+    ];
+    let missed: Vec<&str> = wanted
+        .into_iter()
+        .filter(|name| !reached.contains(*name))
+        .collect();
+    assert!(missed.is_empty(), "no seed reaches {missed:?}: {reached:?}");
+}
+
 // ---- The extra data family's loader, InitItem and save writer ----------------------------------
 
 /// What the loader, `InitItem` and the save writer do in place beside the family's own: the file's
@@ -6801,6 +6866,59 @@ const XE_MASKS: &[u32] = &[0, 1, 0xfe, 0x100];
 /// An action's flags: 1 (the default), 0, others, a word whose low byte is 1.
 const XE_ACTIONS: &[u32] = &[1, 0, 2, 0xff, 0x101];
 
+/// [`XeShapes::xe_run_once`]'s world: the run-once packages (type 0x1b) of up to five entries,
+/// the third empty in some seeds (five with the third empty in a third of them); the second word a
+/// flag, or the `second`th package of the list (the first one none of it, the fourth and fifth past
+/// the empty item when there is one).
+fn xe_run_once_world(e: &mut Engine, seed: u32, second: u32, flags: bool) -> Vec<u32> {
+    let w = xd_world(e, seed);
+    let x = place_kind(e, &w, seed, 0x1b);
+    let mut d = Draw(seed.wrapping_mul(0x0041_d7b0) ^ 0x7e57);
+    let mut packages = vec![0x4321];
+    {
+        let head = e.mem.alloc(8);
+        let mut node = head;
+        // A third of the seeds hold five entries, the third empty, so a search for a later package
+        // meets the stop.
+        let full = seed % 3 == 2;
+        let n = d.next(5);
+        for i in 0..if full { 5 } else { n } {
+            let entry = if i == 2 && (full || d.next(3) == 0) {
+                0
+            } else {
+                let entry = e.mem.alloc(8);
+                let package = if d.next(4) == 0 {
+                    0
+                } else {
+                    let package = xd_block(e, 0x40, i);
+                    let day = [0u8, 0x10, 0x14, 0x15, 0xf0][d.next(5) as usize];
+                    e.mem.set_u8(package + 0x38 + 3, day);
+                    e.mem
+                        .set_u32(package + 0x38 + 4, [0, 1, 5, u32::MAX][d.next(4) as usize]);
+                    packages.push(package);
+                    package
+                };
+                e.mem.set_u32(entry, package);
+                e.mem.set_u8(entry + 4, [0u8, 1, 0xff][d.next(3) as usize]);
+                entry
+            };
+            if i > 0 {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+            e.mem.set_u32(node, entry);
+        }
+        xe_hold(e, x, 0x1b, head);
+    }
+    let second = if flags {
+        [0, 1, 0xff][second as usize % 3]
+    } else {
+        packages[second as usize % packages.len()]
+    };
+    vec![w.list, second]
+}
+
 /// The part 2 range's test shapes.
 trait XeShapes {
     fn xe_pair(self, kinds: &'static [u32], first: &'static [u32], second: &'static [u32]) -> Diff;
@@ -7040,55 +7158,9 @@ impl XeShapes for Diff {
     /// another.
     fn xe_run_once(self, flags: bool) -> Diff {
         self.extra_data_case()
-            .max_cases(EXTRA_SEEDS.len() * 3)
-            .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(&[0, 1, 2])])
-            .setup(move |e, case| {
-                let seed = case.word(0);
-                let w = xd_world(e, seed);
-                let x = place_kind(e, &w, seed, 0x1b);
-                let mut d = Draw(seed.wrapping_mul(0x0041_d7b0) ^ 0x7e57);
-                let mut packages = vec![0x4321];
-                {
-                    let head = e.mem.alloc(8);
-                    let mut node = head;
-                    for i in 0..d.next(5) {
-                        let entry = if i == 2 && d.next(3) == 0 {
-                            0
-                        } else {
-                            let entry = e.mem.alloc(8);
-                            let package = if d.next(4) == 0 {
-                                0
-                            } else {
-                                let package = xd_block(e, 0x40, i);
-                                let day = [0u8, 0x10, 0x14, 0x15, 0xf0][d.next(5) as usize];
-                                e.mem.set_u8(package + 0x38 + 3, day);
-                                e.mem.set_u32(
-                                    package + 0x38 + 4,
-                                    [0, 1, 5, u32::MAX][d.next(4) as usize],
-                                );
-                                packages.push(package);
-                                package
-                            };
-                            e.mem.set_u32(entry, package);
-                            e.mem.set_u8(entry + 4, [0u8, 1, 0xff][d.next(3) as usize]);
-                            entry
-                        };
-                        if i > 0 {
-                            let next = e.mem.alloc(8);
-                            e.mem.set_u32(node + 4, next);
-                            node = next;
-                        }
-                        e.mem.set_u32(node, entry);
-                    }
-                    xe_hold(e, x, 0x1b, head);
-                }
-                let second = if flags {
-                    [0, 1, 0xff][case.word(1) as usize]
-                } else {
-                    packages[case.word(1) as usize % packages.len()]
-                };
-                vec![w.list, second]
-            })
+            .max_cases(EXTRA_SEEDS.len() * 5)
+            .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(&[0, 1, 2, 3, 4])])
+            .setup(move |e, case| xe_run_once_world(e, case.word(0), case.word(1), flags))
     }
 
     /// (list, the address of three words) with an extra data of `kind` placed or not.
@@ -8114,7 +8186,7 @@ fn xe_only_owner_defaults() {
 #[test]
 fn xe_is_default_for_container() {
     Diff::new(entry!(0x0041_d120, extra_data::packages::is_default_for_container(u32, u8) -> bool))
-        .xe_scan(&[0, 1])
+        .xe_scan(&[0, 1, 2])
         .run()
         .assert_same();
 }
