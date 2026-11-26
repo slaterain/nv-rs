@@ -220,7 +220,8 @@ fn list_remove_first(e: &mut Engine) {
         log(e, LIST_REMOVE_FIRST, words);
         let list = words[0];
         let next = e.mem.u32(list.wrapping_add(4));
-        if next == 0 {
+        // A word that is no mapped node (a list built from the arena's words) ends the list.
+        if next == 0 || !e.mem.is_mapped(next) || !e.mem.is_mapped(next.wrapping_add(4)) {
             e.mem.set_u32(list, 0);
         } else {
             let (item, after) = (e.mem.u32(next), e.mem.u32(next.wrapping_add(4)));

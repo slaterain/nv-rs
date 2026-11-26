@@ -27,6 +27,7 @@ const CALLEES: &[u32] = &[
     0x0040_1030,
     0x0040_37d0,
     0x0040_37f0,
+    0x0040_4010,
     0x0040_4390,
     0x0040_44d0,
     0x0040_46f0,
@@ -67,6 +68,8 @@ const CALLEES: &[u32] = &[
     0x0047_02f0,
     0x0047_0470,
     0x0047_6b20,
+    0x0047_e040,
+    0x0047_e0e0,
     0x0048_3a00,
     0x0048_73d0,
     0x0048_ebc0,
@@ -331,6 +334,7 @@ const CALLEES: &[u32] = &[
     0x00a0_0e90,
     0x00a0_0f30,
     0x00a0_11b0,
+    0x00a0_11f0,
     0x00a0_1230,
     0x00a0_12d0,
     0x00a0_1350,
@@ -3246,7 +3250,7 @@ fn fn_0071f600_diff() {
         0x0071_f600,
         interface::menu_manager::fn_0071f600(Ptr)
     ))
-    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .in_status_effects(&[Arg::Ptr], &[0x0071_f9f0, 0x0071_f570])
     .run()
     .assert_same();
 }
@@ -3272,7 +3276,7 @@ fn stats_menu_named_effects_list_scalar_deleting_destructor_diff() {
 #[test]
 fn stats_menu_status_effect_list_scalar_deleting_destructor_diff() {
     Diff::new(engine_core::entry!(0x0071_f6a0, interface::menu_manager::stats_menu_status_effect_list_scalar_deleting_destructor(Ptr, u32) -> Ptr))
-    .in_arena(&[Arg::Ptr, Arg::Word], CALLEES, &[0x0071_f600])
+    .in_status_effects(&[Arg::Ptr, Arg::Word], &[0x0071_f600, 0x0071_f9f0, 0x0071_f570])
     .run()
     .assert_same();
 }
@@ -3280,7 +3284,7 @@ fn stats_menu_status_effect_list_scalar_deleting_destructor_diff() {
 #[test]
 fn stats_menu_scalar_deleting_destructor_diff() {
     Diff::new(engine_core::entry!(0x0071_f6d0, interface::menu_manager::stats_menu_scalar_deleting_destructor(Ptr, u32) -> Ptr))
-    .in_arena(&[Arg::Ptr, Arg::Word], CALLEES, &[0x0071_f700, 0x0071_f9c0, 0x0071_f9f0, 0x0071_f570, 0x0071_f8c0, 0x0071_f900, 0x0071_f930, 0x0071_f600, 0x0072_11e0, 0x0072_1990, 0x0072_2140, 0x0072_28f0, 0x0072_30e0])
+    .in_status_effects(&[Arg::Ptr, Arg::Word], &[0x0071_f700, 0x0071_f9f0, 0x0071_f570, 0x0071_f8c0, 0x0071_f900, 0x0071_f930, 0x0071_f600, 0x0072_11e0, 0x0072_1990, 0x0072_2140, 0x0072_28f0, 0x0072_30e0])
     .run()
     .assert_same();
 }
@@ -3291,11 +3295,9 @@ fn fn_0071f700_diff() {
         0x0071_f700,
         interface::menu_manager::fn_0071f700(Ptr)
     ))
-    .in_arena(
+    .in_status_effects(
         &[Arg::Ptr],
-        CALLEES,
         &[
-            0x0071_f9c0,
             0x0071_f9f0,
             0x0071_f570,
             0x0071_f8c0,
@@ -6105,7 +6107,8 @@ const STATS_VARIANTS: [u32; 4] = [0, 3, 1, 2];
 /// The menu: limb mode in the variant 0, the effects already updated this frame in the variant 3,
 /// the 60 tiles all set but in the variant 2, the perk tile set; the healing options' callbacks
 /// stand-ins, in the variant 3 the first's and the fourth's the exe's own (`007e05f0`,
-/// `007e07a0`). The Pip-Boy (the manager's `+0x174`, object 108) up but in the variant 1.
+/// `007e07a0`). The Pip-Boy (the manager's `+0x174`, object 108) up but in the variant 1. The fade
+/// object's current group (`011dace4`'s first word) a group number.
 fn put_stats_menu(e: &mut Engine, variant: u32) {
     use arena::{object, CODE, VTABLES};
     let live = variant != 2;
@@ -6164,6 +6167,11 @@ fn put_stats_menu(e: &mut Engine, variant: u32) {
         e.mem.set_u32(manager + 0x174, object(108));
         e.mem.set_u8(object(108) + 0x28, u8::from(variant != 1));
     }
+    // The fade object's current group (its first word), when there is one.
+    let fade = e.mem.u32(0x011d_ace4);
+    if fade != 0 {
+        e.mem.set_u32(fade, [1u32, 5, 0, 3][variant as usize]);
+    }
 }
 
 /// The variants of [`put_status_data`]'s world.
@@ -6199,21 +6207,110 @@ fn put_status_data(e: &mut Engine, variant: u32) {
     }
 }
 
+/// The variants of [`put_status_effects`]'s world.
+const STATUS_EFFECT_VARIANTS: [u32; 2] = [0, 1];
+
+/// A world for the status effect lists: object 3's lists at `+4` (a `StatusEffectList`'s own) and
+/// at `+0x88` (the stats menu's list at its `+0x84`) hold two status effects (objects 240 and 242,
+/// the second's node object 241) in the variant 0 and none in the variant 1, and its four status
+/// effect words (`+0x74` to `+0x80`) one (object 244) or none; object 40's are all empty. (The
+/// arena's own words there would make status effects of small numbers and floats, whose clean-up
+/// writes over the zero page.)
+fn put_status_effects(e: &mut Engine, variant: u32) {
+    use arena::object;
+    let full = variant == 0;
+    for (k, list) in [(3u32, 4u32), (3, 0x88), (40, 4), (40, 0x88)] {
+        let at = object(k) + list;
+        let filled = full && k == 3;
+        e.mem.set_u32(at, if filled { object(240) } else { 0 });
+        e.mem.set_u32(at + 4, if filled { object(241) } else { 0 });
+    }
+    e.mem.set_u32(object(241), object(242));
+    e.mem.set_u32(object(241) + 4, 0);
+    for k in [3u32, 40] {
+        for slot in [0x74u32, 0x78, 0x7c, 0x80] {
+            let one = full && k == 3 && slot == 0x74;
+            e.mem
+                .set_u32(object(k) + slot, if one { object(244) } else { 0 });
+        }
+    }
+}
+
+/// The variants of [`put_fade_groups`]'s and [`put_archetypes`]'s worlds.
+const SMALL_WORLD_VARIANTS: [u32; 3] = [0, 1, 2];
+
+/// The fade object's current group (its first word) on both pointer values (objects 3 and 40): 0
+/// and 1, 2 and 3, or 5 and 4 (the arena's word there is a vtable).
+fn put_fade_groups(e: &mut Engine, variant: u32) {
+    use arena::object;
+    let groups = [[0u32, 1], [2, 3], [5, 4]][variant as usize];
+    for (k, group) in [3u32, 40].into_iter().zip(groups) {
+        e.mem.set_u32(object(k), group);
+    }
+}
+
+/// An effect setting's archetype (`+0x98`) on both pointer values (objects 3 and 40): 0 and 1, 2
+/// and 3, or 0x2b and 0x2c; the archetype flag table's first 0x30 entries with the flag 0x40, the
+/// flag 2 or both in turn (the arena's words there are pointers and floats).
+fn put_archetypes(e: &mut Engine, variant: u32) {
+    use arena::object;
+    let first = [0u32, 2, 0x2b][variant as usize];
+    for (k, archetype) in [3u32, 40].into_iter().zip([first, first + 1]) {
+        e.mem.set_u32(object(k) + 0x98, archetype);
+    }
+    for archetype in 0..0x30u32 {
+        let flags = [0x40u32, 2, 0x42][(archetype % 3) as usize];
+        e.mem.set_u32(0x0118_3328 + 16 * archetype, flags);
+    }
+}
+
 /// The stats menu's worlds, as settings of a Diff.
 trait StatsWorlds {
     /// In [`put_stats_menu`]'s world, the vector constructor (`00ec782f`) no stand-in: the fade
     /// object's, which the native code does in place, runs for real on the translation's side.
     fn in_stats(self, args: &'static [Arg]) -> Diff;
+    /// [`StatsWorlds::in_stats`] with the translation's plain calls `plain`.
+    fn in_stats_with(self, args: &'static [Arg], plain: &[u32]) -> Diff;
+    /// In [`put_fade_groups`]'s world: a pointer and a byte.
+    fn in_fade_groups(self) -> Diff;
+    /// In [`put_archetypes`]'s world: a pointer.
+    fn in_archetypes(self) -> Diff;
     /// In [`put_status_data`]'s world.
     fn in_status_data(self, args: &'static [Arg]) -> Diff;
+    /// In [`put_status_effects`]'s world, with the translation's plain calls `plain`.
+    fn in_status_effects(self, args: &'static [Arg], plain: &[u32]) -> Diff;
 }
 
 impl StatsWorlds for Diff {
     fn in_stats(self, args: &'static [Arg]) -> Diff {
+        self.in_stats_with(args, &[])
+    }
+
+    fn in_fade_groups(self) -> Diff {
+        self.in_arena_and(
+            &[Arg::Ptr, Arg::Byte],
+            CALLEES,
+            &[],
+            &SMALL_WORLD_VARIANTS,
+            put_fade_groups,
+        )
+    }
+
+    fn in_archetypes(self) -> Diff {
+        self.in_arena_and(
+            &[Arg::Ptr],
+            CALLEES,
+            &[],
+            &SMALL_WORLD_VARIANTS,
+            put_archetypes,
+        )
+    }
+
+    fn in_stats_with(self, args: &'static [Arg], plain: &[u32]) -> Diff {
         self.in_arena_without_and(
             args,
             CALLEES,
-            &[],
+            plain,
             &[0x00ec_782f],
             &STATS_VARIANTS,
             put_stats_menu,
@@ -6222,6 +6319,16 @@ impl StatsWorlds for Diff {
 
     fn in_status_data(self, args: &'static [Arg]) -> Diff {
         self.in_arena_and(args, CALLEES, &[], &STATUS_DATA_VARIANTS, put_status_data)
+    }
+
+    fn in_status_effects(self, args: &'static [Arg], plain: &[u32]) -> Diff {
+        self.in_arena_and(
+            args,
+            CALLEES,
+            plain,
+            &STATUS_EFFECT_VARIANTS,
+            put_status_effects,
+        )
     }
 }
 
@@ -6297,7 +6404,7 @@ fn stats_menu_fn_007dbfe0_diff() {
         0x007d_bfe0,
         interface::stats_menu::fn_007dbfe0(Ptr, u32)
     ))
-    .in_arena(&[Arg::Ptr, Arg::Byte], CALLEES, &[])
+    .in_fade_groups()
     .run()
     .assert_same();
 }
@@ -6330,7 +6437,7 @@ fn stats_menu_do_idle_diff() {
         0x007d_c4f0,
         interface::stats_menu::stats_menu_do_idle(Ptr)
     ))
-    .in_stats(&[Arg::Object])
+    .in_stats_with(&[Arg::Object], &[0x0070_27b0, 0x0070_2680])
     .run()
     .assert_same();
 }
@@ -6440,7 +6547,7 @@ fn stats_menu_fn_007df1b0_diff() {
         0x007d_f1b0,
         interface::stats_menu::fn_007df1b0(Ptr) -> bool
     ))
-    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .in_archetypes()
     .run()
     .assert_same();
 }
@@ -6627,7 +6734,7 @@ fn stats_menu_fn_007e07f0_diff() {
         0x007e_07f0,
         interface::stats_menu::fn_007e07f0(Ptr)
     ))
-    .in_stats(&[Arg::Ptr])
+    .in_status_effects(&[Arg::Ptr], &[0x0071_f9f0, 0x0071_f570])
     .run()
     .assert_same();
 }
