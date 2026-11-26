@@ -457,6 +457,23 @@ commands! {
     /// (sync) `IDirect3DQuery9::GetData(flags)` after the game's `D3DISSUE_END`. Replies
     /// [`Reply::Query`].
     QueryGetData { query: Handle, flags: u32 },
+
+    // Kept draw records ([`crate::Kept`], the renderer's items): a draw's own commands kept by the
+    // backend and carried out again by number. Added after every other command, so a file written
+    // before them still reads ([`crate::wire::OLDER_LIST_HASH`]).
+
+    /// The commands that follow, up to and including the next draw (`DrawPrimitive`,
+    /// `DrawIndexedPrimitive`), are record `id`'s: carried out as they come and kept; record
+    /// `forget` (0: none) is dropped. `check` 1: they are the old form of a check run's item (the
+    /// `DrawItem` with `check` 1 just before them): a replay of the items keeps them without
+    /// carrying them out.
+    RecordNext { device: Handle, id: u32, forget: u32, check: u32 },
+    /// Record `id`'s commands carried out again, in order, each `SetConstants` with its registers
+    /// taken in turn from `constants`. `check` 1: a check run's item beside its old form, carried
+    /// out only by a replay of the items.
+    DrawItem { device: Handle, id: u32, check: u32, constants: payload },
+    /// The records `ids` (words) dropped.
+    ForgetRecords { device: Handle, ids: payload },
 }
 
 impl Cmd<Data<'_>> {
@@ -552,6 +569,8 @@ impl Cmd<Data<'_>> {
             Cmd::UploadSurface {
                 row, rows, data, ..
             } => exact("data", data, u64::from(*row) * u64::from(*rows)),
+            Cmd::DrawItem { constants, .. } => whole("constants", constants, 4),
+            Cmd::ForgetRecords { ids, .. } => whole("ids", ids, 4),
             _ => Ok(()),
         }
     }

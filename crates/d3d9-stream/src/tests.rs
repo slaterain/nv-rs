@@ -876,6 +876,22 @@ fn every_command<'a>(p: &'a Payloads, big: Data<'a>) -> Vec<Cmd<Data<'a>>> {
             query: 0x4800,
             flags: 0,
         },
+        Cmd::RecordNext {
+            device: d,
+            id: 5,
+            forget: 4,
+            check: 1,
+        },
+        Cmd::DrawItem {
+            device: d,
+            id: 5,
+            check: 0,
+            constants: w(&p.registers),
+        },
+        Cmd::ForgetRecords {
+            device: d,
+            ids: w(&p.handles),
+        },
     ]
 }
 
@@ -3114,4 +3130,265 @@ fn the_render_threads_idle_calls_stay_out_of_its_commands_parts() {
     let (call, ns) = render.expect("the render thread's longest call");
     assert_eq!(call, hitch::Call::Poll);
     assert!(ns >= 30_000_000, "{ns}");
+}
+
+/// A file written before the kept draw records' commands were added reads as ever: its list's hash
+/// ([`wire::OLDER_LIST_HASH`], a recording's header of 2026-11-20) is the hash of today's list up to
+/// them, and both hashes are read.
+#[test]
+fn files_written_before_the_kept_records_commands_still_read() {
+    let list = crate::cmd::LIST;
+    let at = list
+        .find("RecordNext")
+        .expect("the kept records' first command");
+    let older = list[..at].trim_end_matches([',', ' ']);
+    assert!(older.ends_with("QueryGetData { query : Handle, flags : u32 }"));
+    assert_eq!(
+        wire::hash(wire::HASH_START, older.as_bytes()),
+        wire::OLDER_LIST_HASH
+    );
+    let mut file = wire::header().to_vec();
+    file[8..].copy_from_slice(&wire::OLDER_LIST_HASH.to_le_bytes());
+    wire::encode(
+        &Cmd::SetRenderState {
+            device: 1,
+            state: 7,
+            value: 1,
+        },
+        &mut file,
+    );
+    let read: Vec<_> = wire::commands(&file)
+        .expect("the older list is read")
+        .collect::<Result<_, _>>()
+        .expect("its command");
+    assert_eq!(read.len(), 1);
+    file[8] ^= 1;
+    assert!(wire::commands(&file).is_err(), "another list is refused");
+}
+
+/// TEST DATA: a draw's own commands (a stream source, indices, two constant sets, the draw), its
+/// registers `regs` (two vertex registers, then one pixel register).
+fn kept_draw(regs: &[u32; 12]) -> Vec<(Cmd<()>, Vec<u8>)> {
+    let bytes = |w: &[u32]| w.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>();
+    vec![
+        (
+            Cmd::SetStreamSource {
+                device: 1,
+                stream: 0,
+                buffer: 0x50,
+                offset: 16,
+                stride: 32,
+            },
+            Vec::new(),
+        ),
+        (
+            Cmd::SetIndices {
+                device: 1,
+                buffer: 0x60,
+            },
+            Vec::new(),
+        ),
+        (
+            Cmd::SetConstants {
+                device: 1,
+                kind: 0,
+                start: 4,
+                count: 2,
+                data: (),
+            },
+            bytes(&regs[..8]),
+        ),
+        (
+            Cmd::SetConstants {
+                device: 1,
+                kind: 3,
+                start: 1,
+                count: 1,
+                data: (),
+            },
+            bytes(&regs[8..]),
+        ),
+        (
+            Cmd::DrawIndexedPrimitive {
+                device: 1,
+                kind: 4,
+                base_vertex: 0,
+                min_index: 0,
+                vertices: 30,
+                start_index: 6,
+                count: 10,
+            },
+            Vec::new(),
+        ),
+    ]
+}
+
+/// Runs `cmds` (each with its payload, when it has one) into `b`.
+fn run_kept(b: &mut (impl Backend + ?Sized), cmds: &[(Cmd<()>, Vec<u8>)]) {
+    for (c, data) in cmds {
+        b.execute(c.map(|()| Data::Bytes(data)));
+    }
+}
+
+/// The registers of [`kept_draw`] as one item's payload.
+fn item_registers(regs: &[u32; 12]) -> Vec<u8> {
+    regs.iter().flat_map(|w| w.to_le_bytes()).collect()
+}
+
+/// A record's commands are carried out as they come and kept; an item carries them out again with
+/// its own registers: the backend gets exactly what the draw sent with those registers, and nothing
+/// for an item whose registers are not the record's size or whose record was dropped.
+#[test]
+fn an_item_carries_out_its_records_commands_with_its_own_registers() {
+    let first: [u32; 12] = std::array::from_fn(|i| i as u32);
+    let second: [u32; 12] = std::array::from_fn(|i| 100 + i as u32);
+    let mut plain = Log::default();
+    let plain_lines = plain.lines();
+    run_kept(&mut plain, &kept_draw(&first));
+    run_kept(&mut plain, &kept_draw(&second));
+
+    let log = Log::default();
+    let lines = log.lines();
+    let mut kept = Kept::new(log);
+    kept.execute(Cmd::RecordNext {
+        device: 1,
+        id: 7,
+        forget: 0,
+        check: 0,
+    });
+    run_kept(&mut kept, &kept_draw(&first));
+    let regs = item_registers(&second);
+    kept.execute(Cmd::DrawItem {
+        device: 1,
+        id: 7,
+        check: 0,
+        constants: Data::Bytes(&regs),
+    });
+    assert_eq!(*lines.lock().unwrap(), *plain_lines.lock().unwrap());
+    assert_eq!(kept.counts().records, 1);
+    assert_eq!(kept.counts().items, 1);
+
+    let before = lines.lock().unwrap().len();
+    kept.execute(Cmd::DrawItem {
+        device: 1,
+        id: 7,
+        check: 0,
+        constants: Data::Bytes(&regs[..16]),
+    });
+    let ids = 7u32.to_le_bytes();
+    kept.execute(Cmd::ForgetRecords {
+        device: 1,
+        ids: Data::Bytes(&ids),
+    });
+    kept.execute(Cmd::DrawItem {
+        device: 1,
+        id: 7,
+        check: 0,
+        constants: Data::Bytes(&regs),
+    });
+    assert_eq!(lines.lock().unwrap().len(), before, "nothing carried out");
+    assert_eq!(kept.counts().mismatched, 1);
+    assert_eq!(kept.counts().missing, 1);
+}
+
+/// A check run's two forms of one draw: the old form (`Form::Old`) carries out the draw's own
+/// commands and leaves the item; the items (`Form::Items`) draw the item from the record kept
+/// before and only keep the old form (as the game side renews its record); both give the digests a
+/// run without items gives, here where the item and the old form agree.
+#[test]
+fn a_check_run_replays_as_its_old_form_or_as_its_items() {
+    let first: [u32; 12] = std::array::from_fn(|i| i as u32);
+    let second: [u32; 12] = std::array::from_fn(|i| 100 + i as u32);
+    let regs = item_registers(&second);
+    let run = |b: &mut dyn Backend| {
+        b.execute(Cmd::RecordNext {
+            device: 1,
+            id: 1,
+            forget: 0,
+            check: 0,
+        });
+        run_kept(b, &kept_draw(&first));
+        b.execute(Cmd::DrawItem {
+            device: 1,
+            id: 1,
+            check: 1,
+            constants: Data::Bytes(&regs),
+        });
+        b.execute(Cmd::RecordNext {
+            device: 1,
+            id: 2,
+            forget: 1,
+            check: 1,
+        });
+        run_kept(b, &kept_draw(&second));
+    };
+    let (mut plain, plain_digests) = StateDigest::new();
+    run_kept(&mut plain, &kept_draw(&first));
+    run_kept(&mut plain, &kept_draw(&second));
+    for form in [kept::Form::Old, kept::Form::Items] {
+        let (digest, digests) = StateDigest::new();
+        let mut b = Kept::with_form(digest, form);
+        run(&mut b);
+        assert_eq!(b.counts().items, u64::from(form == kept::Form::Items));
+        assert_eq!(b.counts().other_form, 1, "{form:?}");
+        assert_eq!(b.records(), 1, "the old form renewed the record ({form:?})");
+        assert_eq!(
+            *digests.lock().unwrap(),
+            *plain_digests.lock().unwrap(),
+            "{form:?}"
+        );
+    }
+    // An item that differs from its old form gives another digest in the items' replay only.
+    let (digest, digests) = StateDigest::new();
+    let mut b = Kept::with_form(digest, kept::Form::Items);
+    b.execute(Cmd::RecordNext {
+        device: 1,
+        id: 1,
+        forget: 0,
+        check: 0,
+    });
+    run_kept(&mut b, &kept_draw(&first));
+    let wrong = item_registers(&first);
+    b.execute(Cmd::DrawItem {
+        device: 1,
+        id: 1,
+        check: 1,
+        constants: Data::Bytes(&wrong),
+    });
+    let d = digests.lock().unwrap();
+    let p = plain_digests.lock().unwrap();
+    assert_eq!(d[0], p[0]);
+    assert_ne!(d[1], p[1], "the item's registers are the first draw's");
+}
+
+/// A record is given up at a `Present` before its draw: an item of it draws nothing.
+#[test]
+fn a_record_without_its_draw_is_given_up() {
+    let mut kept = Kept::new(Log::default());
+    kept.execute(Cmd::RecordNext {
+        device: 1,
+        id: 3,
+        forget: 0,
+        check: 0,
+    });
+    let cmds = kept_draw(&[0; 12]);
+    run_kept(&mut kept, &cmds[..2]);
+    kept.execute(Cmd::Present {
+        device: 1,
+        source: None,
+        dest: None,
+        window: 0,
+        dirty: false,
+        model: 0,
+        frame: 1,
+    });
+    kept.execute(Cmd::DrawItem {
+        device: 1,
+        id: 3,
+        check: 0,
+        constants: Data::Bytes(&[0; 48]),
+    });
+    assert_eq!(kept.counts().cut, 1);
+    assert_eq!(kept.counts().missing, 1);
+    assert_eq!(kept.records(), 0);
 }
