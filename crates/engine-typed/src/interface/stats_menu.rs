@@ -1,4 +1,4 @@
-//! The stats menu's unit (`fallout/interface/menus/statsmenu.cpp`, Xbox PDB), its first part: the
+//! The stats menu's unit (`fallout/interface/menus/statsmenu`, Xbox PDB), its first part: the
 //! status data list's destructor and clean-ups, the fade object (made on first use, its groups,
 //! their tiles and fade bytes, the fade callback), the idle, the pages, the actor values, perks,
 //! healing options and mode, the SPECIAL and skill rows, the face image and the radiation meter, the
@@ -168,7 +168,7 @@ const HUNDRED: u32 = 0x0101_7a40;
 const FADE_TARGET: u32 = 0x0102_3cd8;
 const KNOB_RATE: u32 = 0x0107_80a4;
 const BURST_SCALE: u32 = 0x0101_6248;
-const CONSTANT_007DDEF0: u32 = 0x0101_3974;
+const RETURNED_FLOAT: u32 = 0x0101_3974;
 
 /// The allocator (cdecl: size).
 const ALLOCATE: u32 = 0x0040_1000;
@@ -213,12 +213,13 @@ const REQUIRED_EXPERIENCE: u32 = 0x0064_8b50;
 /// The inventory: `GetInventoryItem` (`RET 8`), `GetItemCountinContainer` (`RET 4`).
 const GET_INVENTORY_ITEM: u32 = 0x0057_6260;
 const GET_ITEM_COUNT: u32 = 0x0057_5610;
-/// `004b71d0` (no arguments, `AL`).
-const FLAG_004B71D0: u32 = 0x004b_71d0;
-/// The radiation meter's callees: `005c5420` (`ST0`), `004bd510` (cdecl, two floats, `ST0`), the
-/// Pip-Boy's knob (`007f86f0`, `RET 0xc`).
-const VALUE_005C5420: u32 = 0x005c_5420;
-const FLOAT_PAIR_004BD510: u32 = 0x004b_d510;
+/// `004b71d0` (no arguments, `AL`: a byte of the manager's at `011d8a84` and a test of its
+/// object at `011d8c4c`).
+const MANAGER_STATE_TEST: u32 = 0x004b_71d0;
+/// The radiation meter's callees: `005c5420` (`ST0`), `004bd510` (cdecl, two floats, `ST0`: the
+/// first rounded up to a whole multiple of the second), the Pip-Boy's knob (`007f86f0`, `RET 0xc`).
+const METER_SCALE: u32 = 0x005c_5420;
+const ROUND_UP_TO_MULTIPLE: u32 = 0x004b_d510;
 const PIPBOY_KNOB: u32 = 0x007f_86f0;
 /// The page's callees: `FORenderedMenu::TriggerBurst` (`RET 0xc`), `SetKnobPosition` (cdecl),
 /// `SetIconAndDescription` (`RET 4`), the list's data (`007d86c0`, `RET 8`), `007dc9b0` (`RET 4`).
@@ -864,7 +865,7 @@ pub fn fn_007ddb00(e: &mut Engine, this: Ptr) {
     let a = super::narrow(f64::from(value) * constant(e, THOUSAND));
     // `FLD a; FCHS; FDIV 2.0`, kept as a double.
     let b = f64::from(super::narrow(-f64::from(a) / constant(e, TWO)));
-    let scale = e.call(VALUE_005C5420, &args![]).f64();
+    let scale = e.call(METER_SCALE, &args![]).f64();
     let c = super::narrow(f64::from(super::narrow(scale * f64::from(a))) + b);
     let rads = super::narrow(
         e.vcall(actor_values(player(e)), AV_FLOAT, &args![0x36u32])
@@ -884,7 +885,7 @@ pub fn fn_007ddb00(e: &mut Engine, this: Ptr) {
         1.0
     } else {
         super::narrow(
-            e.call(FLOAT_PAIR_004BD510, &args![x87_quiet(d), 1.0f32])
+            e.call(ROUND_UP_TO_MULTIPLE, &args![x87_quiet(d), 1.0f32])
                 .f64(),
         )
     };
@@ -897,7 +898,7 @@ pub fn fn_007ddb00(e: &mut Engine, this: Ptr) {
 // Typed from 007ddef0
 /// The float at `01013974` (`FLD`, a signalling NaN quieted).
 pub fn fn_007ddef0(e: &mut Engine) -> f32 {
-    load_float(e, CONSTANT_007DDEF0)
+    load_float(e, RETURNED_FLOAT)
 }
 
 // Typed from 007df1b0
@@ -1044,7 +1045,7 @@ pub fn stats_menu_update_healing_mode(e: &mut Engine, this: Ptr) {
     let enabled = static_trait(e, HEALING_GUARD, 2, ENABLED_TRAIT, ENABLED_TEXT);
     let limb = limb_mode(e, at) != 0;
     let healing = field(e, at, HEALING_TILE);
-    if healing != 0 && e.call(FLAG_004B71D0, &args![]).bool() {
+    if healing != 0 && e.call(MANAGER_STATE_TEST, &args![]).bool() {
         tile_set_int(e, healing, button, if limb { 0xa } else { 0xb });
         let setting = if limb {
             LIMB_MODE_SETTING
@@ -1251,7 +1252,7 @@ pub fn fn_007e05f0(e: &mut Engine, record: Ptr) -> bool {
     if hardcore && value != u32::MAX {
         return false;
     }
-    if hardcore || !e.call(FLAG_004B71D0, &args![]).bool() || value == u32::MAX {
+    if hardcore || !e.call(MANAGER_STATE_TEST, &args![]).bool() || value == u32::MAX {
         value = 0x10;
     }
     let values = actor_values(player);
@@ -1408,7 +1409,7 @@ pub fn fn_007e0e30(e: &mut Engine, this: Ptr, callback: u32, value: u32) {
 }
 
 /// `ListBox<T>::AddItem` of the perk rank and misc stat instances (the template's body, as
-/// `levelupmenu.cpp`'s `ListBox<BGSPerk_P>` has it): with a container and a template (`template`,
+/// the level-up menu's `ListBox<BGSPerk_P>` has it): with a container and a template (`template`,
 /// else the list's), the template rendered into the container; the new tile's id -1 when it has
 /// none and its string `text` when given; a new `ListBoxItem` of the tile and `data` (`007a62e0`,
 /// in place) inserted by `compare` (then `Synchronize` with flag 0) or appended (then, with flag 0,
