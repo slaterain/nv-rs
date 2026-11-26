@@ -13,6 +13,7 @@ extern "system" {
     fn CreateMutexW(security: *const c_void, owner: i32, name: *const u16) -> *mut c_void;
     fn GetLastError() -> u32;
     fn CloseHandle(handle: *mut c_void) -> i32;
+    fn GetModuleHandleW(name: *const u16) -> *mut c_void;
 }
 #[link(name = "advapi32")]
 extern "system" {
@@ -170,6 +171,13 @@ pub fn known_folder(csidl: i32) -> Option<PathBuf> {
         )
     };
     (hr == 0).then(|| PathBuf::from(from_wide(&buffer)))
+}
+
+/// Whether the DLL `name` is loaded in this process (`GetModuleHandleW`, which loads nothing).
+pub fn module_loaded(name: &str) -> bool {
+    let name = wide_str(name);
+    // SAFETY: a zero-ended wide string; the handle answered is not kept (no reference is taken).
+    !unsafe { GetModuleHandleW(name.as_ptr()) }.is_null()
 }
 
 pub const HKLM: isize = 0x8000_0002u32 as i32 as isize;

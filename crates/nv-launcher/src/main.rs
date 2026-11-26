@@ -4,7 +4,8 @@
 //! Linux and macOS it is `nv-rs` and runs the package's play.sh in its terminal (crate::play_unix).
 //!
 //!   nv-rs                       the start screen (the game's intro before it, the first time)
-//!   nv-rs --mods | --import-saves | --install-mods | --check | --game FOLDER | --from FOLDER
+//!   nv-rs --mods | --mod-manager | --import-saves | --install-mods | --check | --game FOLDER
+//!         | --from FOLDER
 //!                               Play.exe's actions (Windows) and play.sh's (Linux, macOS), at once
 //!
 //! For pictures and tests (nothing is written but the capture, no sound):

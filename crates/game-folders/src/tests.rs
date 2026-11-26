@@ -1026,3 +1026,101 @@ fn a_manifests_installdir_cannot_lead_out_of_steamapps_common() {
     );
     assert!(common.is_dir() && library.is_dir());
 }
+
+/// A mod manager's plugin list (Amethyst deploys it into the game's Proton prefix, at
+/// `drive_c/users/steamuser/AppData/Local/FalloutNV/plugins.txt`): the game's own prefix's local
+/// AppData first, another Proton prefix's after it, `Public` and a prefix without the list left
+/// out; the report names them, and nothing is written.
+#[test]
+fn a_mod_managers_plugin_list_is_found_in_the_games_proton_prefix_first() {
+    let s = Scratch::new("manager");
+    let home = s.home(System::Linux);
+    s.dir("home/.local/share/Steam/steamapps");
+    let compat = "home/.local/share/Steam/steamapps/compatdata";
+    // A non-Steam shortcut's prefix sorts before the game's ids by name: still after them.
+    s.file(
+        &format!("{compat}/1000/pfx/drive_c/users/steamuser/AppData/Local/FalloutNV/plugins.txt"),
+        "Other.esp\n",
+    );
+    let game = s.file(
+        &format!("{compat}/22380/pfx/drive_c/users/steamuser/AppData/Local/FalloutNV/plugins.txt"),
+        "FalloutNV.esm\nDeadMoney.esm\nMod One.esp\n",
+    );
+    s.file(
+        &format!("{compat}/22380/pfx/drive_c/users/Public/AppData/Local/FalloutNV/plugins.txt"),
+        "x\n",
+    );
+    s.dir(&format!(
+        "{compat}/22490/pfx/drive_c/users/steamuser/AppData/Local/FalloutNV"
+    ));
+    let before = tree(&s.0);
+    let local = game.parent().unwrap().parent().unwrap().to_path_buf();
+    let other = s.0.join(format!(
+        "{compat}/1000/pfx/drive_c/users/steamuser/AppData/Local"
+    ));
+    let found = scan(&home).appdata;
+    assert_eq!(found, [local.clone(), other]);
+    let report = report(&home);
+    let appdata: Vec<&str> = report
+        .lines()
+        .filter(|l| l.starts_with("appdata\t"))
+        .collect();
+    // (The folders as found: on Windows, where these tests also run, their text mixes `/` and `\`.)
+    let expected: Vec<String> = found
+        .iter()
+        .map(|p| format!("appdata\t{}", escape(&path_bytes(p))))
+        .collect();
+    assert_eq!(appdata, expected);
+    // The game reads `<local AppData>/FalloutNV/plugins.txt`: Amethyst's list, as it wrote it.
+    assert_eq!(
+        std::fs::read(local.join("FalloutNV").join("plugins.txt")).unwrap(),
+        b"FalloutNV.esm\nDeadMoney.esm\nMod One.esp\n"
+    );
+    assert_eq!(tree(&s.0), before, "the scan wrote nothing");
+}
+
+/// Every file and folder under `dir`, sorted, with each file's bytes.
+fn tree(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut at = vec![dir.to_path_buf()];
+    while let Some(d) = at.pop() {
+        for entry in std::fs::read_dir(&d).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                at.push(path.clone());
+                out.push((path, Vec::new()));
+            } else {
+                let bytes = std::fs::read(&path).unwrap();
+                out.push((path, bytes));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The script extender plugins in Data/NVSE/Plugins that nv-rs has not built in, named once each
+/// (any case of the folders and names); the four built in, other files and other folders are not.
+#[test]
+fn nvse_plugins_that_are_not_built_in_are_named() {
+    let s = Scratch::new("nvse");
+    let data = s.dir("game/Data");
+    assert!(nvse_plugins_not_built_in(&data).is_empty());
+    for name in [
+        "nvse/plugins/JIP_NVSE.dll",
+        "nvse/plugins/johnnyguitarnvse.dll",
+        "nvse/plugins/ui_organizer.dll",
+        "nvse/plugins/jip_nvse.ini",
+        "nvse/plugins/kNVSE.dll",
+        "nvse/plugins/ShowOff/ShowOff.dll",
+        "NVSE/Plugins/nvse_stewie_tweaks.DLL",
+        "Textures/x.dll",
+    ] {
+        s.file(&format!("game/Data/{name}"), "not a real plugin");
+    }
+    // (Two folders off Windows, one on Windows, whose names have no case.)
+    assert_eq!(
+        nvse_plugins_not_built_in(&data),
+        ["kNVSE.dll", "nvse_stewie_tweaks.DLL"]
+    );
+}
