@@ -1,6 +1,7 @@
 //! The launcher's drawing: the terminal's picture ([`crate::canvas::Canvas`]) as one texture,
-//! scaled to the window (or to a capture) with its 4:3 shape kept and black around it; a whole
-//! multiple of its size is scaled by repeating pixels, any other size smoothly.
+//! scaled to the window (or to a capture): the 4:3 screen with its shape kept and black around it
+//! on a picture of the window's own shape ([`framing`]); a whole multiple of its size is scaled by
+//! repeating pixels, any other size smoothly.
 //!
 //! The launcher has to start where the game's own renderer does not: it is where the player
 //! changes the renderer. So it asks for the plainest device there is (no features, the lowest
@@ -41,6 +42,10 @@ pub struct Gpu {
     layout: wgpu::BindGroupLayout,
     module: wgpu::ShaderModule,
     pipeline: Option<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
+    /// The two samplers: by repeating pixels, and smoothly.
+    samplers: [wgpu::Sampler; 2],
+    /// The picture's texture (made again when the picture's size changes: [`Gpu::upload`]) and
+    /// its two bind groups, by repeating pixels and smoothly.
     picture: wgpu::Texture,
     nearest: wgpu::BindGroup,
     smooth: wgpu::BindGroup,
@@ -309,45 +314,19 @@ impl Gpu {
             label: Some("terminal"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
         });
-        let picture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("terminal picture"),
-            size: wgpu::Extent3d {
-                width: size.0,
-                height: size.1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let view = picture.create_view(&Default::default());
-        let group = |filter: wgpu::FilterMode| {
-            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        let sampler = |filter: wgpu::FilterMode| {
+            device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("terminal"),
                 mag_filter: filter,
                 min_filter: filter,
                 ..Default::default()
-            });
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("terminal"),
-                layout: &layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
-                    },
-                ],
             })
         };
-        let nearest = group(wgpu::FilterMode::Nearest);
-        let smooth = group(wgpu::FilterMode::Linear);
+        let samplers = [
+            sampler(wgpu::FilterMode::Nearest),
+            sampler(wgpu::FilterMode::Linear),
+        ];
+        let (picture, [nearest, smooth]) = picture_texture(&device, &layout, &samplers, size);
         Ok(Gpu {
             adapter,
             device,
@@ -355,11 +334,17 @@ impl Gpu {
             layout,
             module,
             pipeline: None,
+            samplers,
             picture,
             nearest,
             smooth,
             lost,
         })
+    }
+
+    /// The largest picture the device takes, on either side.
+    pub fn most_side(&self) -> u32 {
+        self.device.limits().max_texture_dimension_2d
     }
 
     /// Whether the driver has lost the device ([`counts_as_lost`]).
@@ -373,8 +358,14 @@ impl Gpu {
         format!("{} ({:?})", info.name, info.backend)
     }
 
-    /// The picture's pixels (RGBA rows, the texture's size).
-    pub fn upload(&self, rgba: &[u8], size: (u32, u32)) {
+    /// The picture's pixels (RGBA rows, `size` the picture's): its texture made again first when
+    /// the size is not the last one's (the window's shape changed).
+    pub fn upload(&mut self, rgba: &[u8], size: (u32, u32)) {
+        if (self.picture.width(), self.picture.height()) != size {
+            let (picture, [nearest, smooth]) =
+                picture_texture(&self.device, &self.layout, &self.samplers, size);
+            (self.picture, self.nearest, self.smooth) = (picture, nearest, smooth);
+        }
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.picture,
@@ -437,17 +428,17 @@ impl Gpu {
         &self.pipeline.as_ref().expect("just made").1
     }
 
-    /// The picture (`picture` its size) drawn into `target` (`target_size`, `format`): black
-    /// around it, its shape kept.
+    /// The picture (the last one uploaded, of `framing`'s size) drawn into `target` (`format`)
+    /// where `framing` puts it: black around it, its shape kept.
     pub fn draw(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         format: wgpu::TextureFormat,
-        target_size: (u32, u32),
-        picture: (u32, u32),
+        framing: &Framing,
     ) {
-        let (x, y, w, h) = fit(picture, target_size);
+        let (x, y, w, h) = framing.rect;
+        let picture = framing.picture;
         let whole = w % picture.0 == 0 && h % picture.1 == 0;
         let group = if whole {
             self.nearest.clone()
@@ -480,8 +471,9 @@ impl Gpu {
         pass.draw(0..3, 0..1);
     }
 
-    /// The picture drawn at `size` off screen and read back: RGBA rows.
-    pub fn capture(&mut self, picture: (u32, u32), size: (u32, u32)) -> Result<Vec<u8>, String> {
+    /// The picture drawn off screen at `size` where `framing` (made for that size) puts it, and
+    /// read back: RGBA rows.
+    pub fn capture(&mut self, framing: &Framing, size: (u32, u32)) -> Result<Vec<u8>, String> {
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let target = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("capture"),
@@ -506,7 +498,7 @@ impl Gpu {
             mapped_at_creation: false,
         });
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        self.draw(&mut encoder, &view, format, size, picture);
+        self.draw(&mut encoder, &view, format, framing);
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: &target,
@@ -587,22 +579,153 @@ pub fn game_card() -> Option<(String, wgpu::Backend)> {
     })
 }
 
-/// Where a picture of `picture`'s size goes in `target`, centred: the largest size of its shape
-/// that fits, or the largest whole multiple of it when that is at least nine tenths as large (its
-/// pixels stay sharp).
-pub fn fit(picture: (u32, u32), target: (u32, u32)) -> (u32, u32, u32, u32) {
+/// The picture's texture at `size` and its bind groups with each of `samplers`.
+fn picture_texture(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    samplers: &[wgpu::Sampler; 2],
+    size: (u32, u32),
+) -> (wgpu::Texture, [wgpu::BindGroup; 2]) {
+    let picture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("terminal picture"),
+        size: wgpu::Extent3d {
+            width: size.0.max(1),
+            height: size.1.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let view = picture.create_view(&Default::default());
+    let groups = samplers.each_ref().map(|sampler| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("terminal"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        })
+    });
+    (picture, groups)
+}
+
+/// The scale a picture of `picture`'s size is drawn at in `target`: the largest that fits, or
+/// the largest whole one when that is at least nine tenths as large (its pixels stay sharp).
+fn scale(picture: (u32, u32), target: (u32, u32)) -> f32 {
     let s = (target.0 as f32 / picture.0 as f32).min(target.1 as f32 / picture.1 as f32);
     let whole = s.floor();
-    let s = if whole >= 1.0 && whole >= s * 0.9 {
+    if whole >= 1.0 && whole >= s * 0.9 {
         whole
     } else {
         s
-    };
+    }
+}
+
+/// Where a picture of `picture`'s size goes in `target`, centred, at [`scale`]'s size.
+#[cfg(test)]
+pub fn fit(picture: (u32, u32), target: (u32, u32)) -> (u32, u32, u32, u32) {
+    let s = scale(picture, target);
     let (w, h) = (
         ((picture.0 as f32 * s) as u32).min(target.0),
         ((picture.1 as f32 * s) as u32).min(target.1),
     );
     ((target.0 - w) / 2, (target.1 - h) / 2, w, h)
+}
+
+/// How the terminal's 4:3 screen (`screen`, its size in its own units) stands in a window of
+/// `window` pixels: at the scale `fit` gives it, centred, with black bars beside it (a wide
+/// window) or above and below it (a tall one). The picture drawn is the window's own shape at
+/// that scale, the screen in its middle, so what belongs to the window (its buttons) goes in the
+/// window's corner; on neither side larger than `most` (the device's largest texture).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Framing {
+    /// The picture's size, in the screen's units: the screen's own at the least.
+    pub picture: (u32, u32),
+    /// Where the screen's top-left corner is on the picture.
+    pub screen_at: (i32, i32),
+    /// Where the picture goes in the window: x, y, width and height, in pixels.
+    pub rect: (u32, u32, u32, u32),
+}
+
+/// [`Framing`] for `screen` in `window`, the picture at most `most` on a side.
+pub fn framing(screen: (u32, u32), window: (u32, u32), most: u32) -> Framing {
+    let s = scale(screen, window);
+    let side = |window: u32, own: u32| {
+        if s > 0.0 {
+            ((window as f32 / s) as u32).clamp(own, most.max(own))
+        } else {
+            own
+        }
+    };
+    let picture = (side(window.0, screen.0), side(window.1, screen.1));
+    let (w, h) = (
+        ((picture.0 as f32 * s) as u32).min(window.0),
+        ((picture.1 as f32 * s) as u32).min(window.1),
+    );
+    Framing {
+        picture,
+        screen_at: (
+            ((picture.0 - screen.0) / 2) as i32,
+            ((picture.1 - screen.1) / 2) as i32,
+        ),
+        rect: ((window.0 - w) / 2, (window.1 - h) / 2, w, h),
+    }
+}
+
+impl Framing {
+    /// The window position `pos` (pixels) in the picture's units; None in a window too small to
+    /// show it.
+    pub fn in_picture(&self, pos: (f64, f64)) -> Option<(f64, f64)> {
+        let (x, y, w, h) = self.rect;
+        if w == 0 || h == 0 {
+            return None;
+        }
+        Some((
+            (pos.0 - x as f64) * self.picture.0 as f64 / w as f64,
+            (pos.1 - y as f64) * self.picture.1 as f64 / h as f64,
+        ))
+    }
+
+    /// The window position `pos` in the screen's own units ([`Framing::in_picture`], less where
+    /// the screen stands on the picture).
+    pub fn in_screen(&self, pos: (f64, f64)) -> Option<(f64, f64)> {
+        let (px, py) = self.in_picture(pos)?;
+        Some((px - self.screen_at.0 as f64, py - self.screen_at.1 as f64))
+    }
+
+    /// The window rectangle (x, y, width, height, in pixels) of the picture's area `a` (in its
+    /// units: the window's buttons).
+    #[cfg(test)]
+    pub fn area_in_window(&self, a: (i32, i32, u32, u32)) -> (f64, f64, f64, f64) {
+        let (x, y, w, h) = self.rect;
+        let (sx, sy) = (
+            w as f64 / self.picture.0 as f64,
+            h as f64 / self.picture.1 as f64,
+        );
+        (
+            x as f64 + a.0 as f64 * sx,
+            y as f64 + a.1 as f64 * sy,
+            a.2 as f64 * sx,
+            a.3 as f64 * sy,
+        )
+    }
+
+    /// The window rectangle of the screen's own area `a` (in its units: its rows).
+    #[cfg(test)]
+    pub fn screen_area_in_window(&self, a: (i32, i32, u32, u32)) -> (f64, f64, f64, f64) {
+        self.area_in_window((a.0 + self.screen_at.0, a.1 + self.screen_at.1, a.2, a.3))
+    }
 }
 
 /// The API's name as the start screen says it.
@@ -770,5 +893,49 @@ mod tests {
             "{w}x{h}"
         );
         assert!((100..=101).contains(&y));
+    }
+
+    /// In a 4:3 window the picture is the screen itself, as before; in a wider or taller one it
+    /// is the window's shape, the screen whole in its middle at the same scale as `fit`'s, so
+    /// the picture fills the window (to a pixel) and the screen goes where `fit` puts it. The
+    /// device's largest texture caps the picture, centred then.
+    #[test]
+    fn the_picture_takes_the_windows_shape_around_the_screen() {
+        let screen = (960, 720);
+        let f = framing(screen, (960, 720), 8192);
+        assert_eq!(f.picture, screen);
+        assert_eq!((f.screen_at, f.rect), ((0, 0), (0, 0, 960, 720)));
+        assert_eq!(framing(screen, (1920, 1440), 8192).picture, screen);
+        for (window, picture, at) in [
+            ((3440, 1440), (1720, 720), (380, 0)),
+            ((5120, 1440), (2560, 720), (800, 0)),
+            ((2560, 1080), (1706, 720), (373, 0)),
+            ((1280, 720), (1280, 720), (160, 0)),
+            ((1080, 1920), (960, 1706), (0, 493)),
+            ((2000, 1440), (1000, 720), (20, 0)),
+        ] {
+            let f = framing(screen, window, 8192);
+            assert_eq!((f.picture, f.screen_at), (picture, at), "{window:?}");
+            let (x, y, w, h) = f.rect;
+            assert!(x <= 1 && y <= 1, "{window:?} {:?}", f.rect);
+            assert!(
+                window.0 - w <= 2 && window.1 - h <= 2,
+                "{window:?} {:?}",
+                f.rect
+            );
+            // The screen where `fit` puts it, to a pixel.
+            let (fx, fy, fw, fh) = fit(screen, window);
+            let (sx, sy, sw, sh) = f.screen_area_in_window((0, 0, screen.0, screen.1));
+            assert!((sx - fx as f64).abs() <= 1.0 && (sy - fy as f64).abs() <= 1.0);
+            assert!((sw - fw as f64).abs() <= 1.0 && (sh - fh as f64).abs() <= 1.0);
+            // Window positions come back to the screen's units.
+            let (px, py) = f.in_screen((sx + sw / 2.0, sy + sh / 2.0)).unwrap();
+            assert!((px - 480.0).abs() < 1.0 && (py - 360.0).abs() < 1.0);
+        }
+        let capped = framing(screen, (5120, 1440), 2048);
+        assert_eq!((capped.picture, capped.screen_at), ((2048, 720), (544, 0)));
+        assert_eq!(capped.rect, (512, 0, 4096, 1440));
+        assert_eq!(framing(screen, (0, 0), 8192).rect, (0, 0, 0, 0));
+        assert_eq!(framing(screen, (0, 0), 8192).in_picture((1.0, 1.0)), None);
     }
 }

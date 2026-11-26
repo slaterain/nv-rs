@@ -196,6 +196,25 @@ pub fn append_output(lines: &mut Vec<String>, text: &str) {
     lines.drain(..extra);
 }
 
+/// The screen of a program's `output` (the mod installer's, play.sh's): its lines as the welcome
+/// text, which shows its end (new output brings it back there; Page Up and the wheel show the
+/// earlier lines, the installer's list above its question), what the player has `typed` at the
+/// prompt, and once the program has `ended` Back and Exit.
+pub fn output_screen(output: &[String], ended: bool, typed: String) -> Screen {
+    Screen {
+        title: "-nv-rs-".into(),
+        welcome: output.to_vec(),
+        follow_end: true,
+        typed,
+        entries: if ended {
+            vec!["Back".into(), EXIT.into()]
+        } else {
+            Vec::new()
+        },
+        ..Default::default()
+    }
+}
+
 /// Esc's entry: the screen's Back, No or Don't send, else its last (Exit, OK); none without
 /// entries.
 pub fn back_entry(entries: &[String]) -> Option<usize> {
@@ -222,6 +241,18 @@ pub fn first_size(monitor: Option<(f64, f64)>) -> (f64, f64) {
     };
     let height = h.min(mh * HEIGHT_SHARE).min(mw * 0.9 * 3.0 / 4.0);
     ((height * 4.0 / 3.0).floor(), height.floor())
+}
+
+/// The smallest the window may be made, in the monitor's logical units: half the terminal's
+/// size, but never more than the first size (`first`, [`first_size`]), so a monitor that says it
+/// is very small in logical units (a scale factor larger than its height allows, as a monitor
+/// reporting a wrong size in millimetres can give on X11) never gets a window taller or wider
+/// than itself, its bottom rows off the screen.
+pub fn least_size(first: (f64, f64)) -> (f64, f64) {
+    (
+        (f64::from(screen::WIDTH) / 2.0).min(first.0),
+        (f64::from(screen::HEIGHT) / 2.0).min(first.1),
+    )
 }
 
 /// Where a window of `size` stands centred on a monitor at `origin` of `monitor`'s size (all in
@@ -487,33 +518,31 @@ pub fn frameless(a: winit::window::WindowAttributes) -> winit::window::WindowAtt
     a.with_title("nv-rs").with_decorations(false)
 }
 
-/// The entry under the window position `pos` (pixels) in a window of `window` pixels, the
-/// terminal's picture fitted into it ([`gpu::fit`]) and its rows laid out as `rows`: the index of
-/// a shown entry, none above, below, left or right of them.
-pub fn row_hit(window: (u32, u32), rows: &screen::Rows, pos: (f64, f64)) -> Option<usize> {
-    let (x, y, w, h) = gpu::fit((screen::WIDTH, screen::HEIGHT), window);
-    if w == 0 || h == 0 || rows.row == 0 {
-        return None;
-    }
-    let px = (pos.0 - x as f64) * screen::WIDTH as f64 / w as f64;
-    let py = (pos.1 - y as f64) * screen::HEIGHT as f64 / h as f64;
-    if px < rows.x as f64 || px > (rows.x + rows.width as i32) as f64 || py < rows.top as f64 {
+/// The terminal's screen's own size, in its units.
+pub const SCREEN: (u32, u32) = (screen::WIDTH, screen::HEIGHT);
+
+/// The entry under the window position `pos` (pixels), the screen standing in the window as
+/// `framing` puts it ([`gpu::framing`]) and its rows laid out as `rows`: the index of a shown
+/// entry, none above, below, left or right of them.
+pub fn row_hit(framing: &gpu::Framing, rows: &screen::Rows, pos: (f64, f64)) -> Option<usize> {
+    let (px, py) = framing.in_screen(pos)?;
+    if rows.row == 0
+        || px < rows.x as f64
+        || px > (rows.x + rows.width as i32) as f64
+        || py < rows.top as f64
+    {
         return None;
     }
     let k = ((py - rows.top as f64) / rows.row as f64) as usize;
     (k < rows.shown).then_some(rows.first + k)
 }
 
-/// The window's own button ([`screen::buttons`]) under the window position `pos` (pixels) in a
-/// window of `window` pixels, the terminal's picture fitted into it as for [`row_hit`].
-pub fn button_hit(window: (u32, u32), look: &Look, pos: (f64, f64)) -> Option<screen::Button> {
-    let (x, y, w, h) = gpu::fit((screen::WIDTH, screen::HEIGHT), window);
-    if w == 0 || h == 0 {
-        return None;
-    }
-    let px = (pos.0 - x as f64) * screen::WIDTH as f64 / w as f64;
-    let py = (pos.1 - y as f64) * screen::HEIGHT as f64 / h as f64;
-    screen::button_at(look, (px, py))
+/// The window's own button ([`screen::buttons`], in the picture's top-right corner, so the
+/// window's) under the window position `pos` (pixels), the picture standing in the window as
+/// `framing` puts it, as for [`row_hit`].
+pub fn button_hit(framing: &gpu::Framing, look: &Look, pos: (f64, f64)) -> Option<screen::Button> {
+    let p = framing.in_picture(pos)?;
+    screen::button_at(look, framing.picture.0, p)
 }
 
 /// A window the minimise button minimises: winit's (on every system), or a test's own.
@@ -1749,7 +1778,7 @@ impl App {
         else {
             return;
         };
-        let mut canvas = if let Mode::Intro(intro) = &self.mode {
+        let canvas = if let Mode::Intro(intro) = &self.mode {
             let lines = intro.typed(self.started.elapsed().as_millis() as u64);
             self.rows = None;
             screen::draw_intro(&self.look, &lines)
@@ -1758,9 +1787,11 @@ impl App {
             self.rows = Some(rows);
             canvas
         };
+        // The 4:3 screen in the window's shape, the buttons in the window's corner.
+        let framing = gpu::framing(SCREEN, (config.width, config.height), gpu.most_side());
+        let mut canvas = canvas.placed(framing.picture, framing.screen_at);
         screen::draw_buttons(&mut canvas, &self.look, self.hover);
-        let picture = (screen::WIDTH, screen::HEIGHT);
-        gpu.upload(&canvas.pixels, picture);
+        gpu.upload(&canvas.pixels, framing.picture);
         use wgpu::CurrentSurfaceTexture as T;
         let (got, frame) = match surface.get_current_texture() {
             T::Success(f) | T::Suboptimal(f) => (Got::Texture, Some(f)),
@@ -1788,13 +1819,7 @@ impl App {
         };
         let view = frame.texture.create_view(&Default::default());
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
-        gpu.draw(
-            &mut encoder,
-            &view,
-            config.format,
-            (config.width, config.height),
-            picture,
-        );
+        gpu.draw(&mut encoder, &view, config.format, &framing);
         gpu.queue.submit([encoder.finish()]);
         gpu.queue.present(frame);
         self.frame.on_frame(FrameStep::Draw, key, Instant::now());
@@ -1905,16 +1930,24 @@ impl App {
         self.show_start();
     }
 
+    /// How the screen stands in the window now, as [`App::redraw`] draws it.
+    fn framing(&self) -> Option<gpu::Framing> {
+        let (config, gpu) = (self.config.as_ref()?, self.gpu.as_ref()?);
+        Some(gpu::framing(
+            SCREEN,
+            (config.width, config.height),
+            gpu.most_side(),
+        ))
+    }
+
     /// The row under the window position, if any.
     fn row_at(&self, pos: (f64, f64)) -> Option<usize> {
-        let (config, rows) = (self.config.as_ref()?, self.rows.as_ref()?);
-        row_hit((config.width, config.height), rows, pos)
+        row_hit(&self.framing()?, self.rows.as_ref()?, pos)
     }
 
     /// The window's button under the window position, if any.
     fn button_at(&self, pos: (f64, f64)) -> Option<screen::Button> {
-        let config = self.config.as_ref()?;
-        button_hit((config.width, config.height), &self.look, pos)
+        button_hit(&self.framing()?, &self.look, pos)
     }
 
     /// The button under the mouse is `over` now: drawn again when that changes.
@@ -2302,16 +2335,7 @@ impl App {
             _ => None,
         };
         let typed = std::mem::take(&mut self.screen.typed);
-        let mut s = Screen {
-            title: "-nv-rs-".into(),
-            welcome: self.output.clone(),
-            follow_end: true,
-            typed,
-            ..Default::default()
-        };
-        if ended.is_some() {
-            s.entries = vec!["Back".into(), EXIT.into()];
-        }
+        let s = output_screen(&self.output, ended.is_some(), typed);
         if self.hidden && ended.is_some() {
             self.show(Mode::Output(ended), s, false);
         } else {
@@ -2382,13 +2406,11 @@ impl winit::application::ApplicationHandler<Event> for App {
         // No title bar or border, as a terminal's screen (the maintainer's wish): the window is
         // moved by dragging its background ([`press_drags`]) and closed by Exit, Esc's way back
         // to it, or the system's own close keys. The title still names it in the task bar.
+        let least = least_size((w, h));
         let mut attributes = frameless(winit::window::Window::default_attributes())
             .with_visible(false)
             .with_inner_size(winit::dpi::LogicalSize::new(w, h))
-            .with_min_inner_size(winit::dpi::LogicalSize::new(
-                screen::WIDTH / 2,
-                screen::HEIGHT / 2,
-            ));
+            .with_min_inner_size(winit::dpi::LogicalSize::new(least.0, least.1));
         // Centred on its monitor (Windows would place it at its own default spot).
         if let Some(m) = &monitor {
             let scale = m.scale_factor();
@@ -2676,8 +2698,12 @@ impl winit::application::ApplicationHandler<Event> for App {
                 match press {
                     Press::Up => self.focus(step_focus(self.screen.highlighted, count, true)),
                     Press::Down => self.focus(step_focus(self.screen.highlighted, count, false)),
-                    Press::PageUp => self.screen.scroll = self.screen.scroll.saturating_sub(5),
-                    Press::PageDown => self.screen.scroll += 5,
+                    Press::PageUp => {
+                        self.screen.scroll = screen::scrolled(&self.look, &self.screen, true, 5)
+                    }
+                    Press::PageDown => {
+                        self.screen.scroll = screen::scrolled(&self.look, &self.screen, false, 5)
+                    }
                     Press::Right => self.step_row(true),
                     Press::Left => self.step_row(false),
                     Press::Enter => self.choose(event_loop),
@@ -2738,10 +2764,11 @@ impl winit::application::ApplicationHandler<Event> for App {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => (p.y / 30.0) as f32,
                 };
-                if lines > 0.0 {
-                    self.screen.scroll = self.screen.scroll.saturating_sub(lines.ceil() as usize);
-                } else if lines < 0.0 {
-                    self.screen.scroll += (-lines).ceil() as usize;
+                // The wheel up shows what is above (a program's output's earlier lines too).
+                if lines != 0.0 {
+                    let by = lines.abs().ceil() as usize;
+                    self.screen.scroll =
+                        screen::scrolled(&self.look, &self.screen, lines > 0.0, by);
                 }
                 self.request_redraw();
             }
@@ -3007,24 +3034,36 @@ pub fn capture(c: &crate::Capture) -> Result<(), String> {
     };
     let look = look_of(place.game.as_deref(), &fallout_ini, c.plain);
     let mut drawing = gpu::choose(None, (0, 0))?;
-    let picture = (screen::WIDTH, screen::HEIGHT);
-    let mut canvas = match (c.intro_at, &look.intro) {
-        (Some(ms), Some([welcome, logon, header])) => {
+    let canvas = match (c.intro_at, &look.intro, &c.output) {
+        (_, _, Some(file)) => {
+            // A program's output as the terminal shows it while the program runs (the mod
+            // installer's lines), scrolled up `scroll` lines from its end.
+            let text =
+                std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
+            let mut lines = Vec::new();
+            append_output(&mut lines, &text);
+            let mut s = output_screen(&lines, false, String::new());
+            s.scroll = c.scroll;
+            screen::draw(&look, &s, None, true).0
+        }
+        (Some(ms), Some([welcome, logon, header]), None) => {
             let intro = Intro::new(welcome, logon, header, false, pacing::frame_ms(0));
             screen::draw_intro(&look, &intro.typed(ms))
         }
-        (Some(_), None) => return Err("the intro needs the game's look".into()),
-        (None, _) => {
+        (Some(_), None, None) => return Err("the intro needs the game's look".into()),
+        (None, _, None) => {
             let card =
                 Card::Known(gpu::game_card().map(|(n, a)| (n, gpu::api_name(a).to_string())));
             let s = start_screen(&place, &card);
             screen::draw(&look, &s, None, true).0
         }
     };
-    screen::draw_buttons(&mut canvas, &look, None);
     let g = &mut drawing.gpu;
-    g.upload(&canvas.pixels, picture);
-    let rgba = g.capture(picture, c.size)?;
+    let framing = gpu::framing(SCREEN, c.size, g.most_side());
+    let mut canvas = canvas.placed(framing.picture, framing.screen_at);
+    screen::draw_buttons(&mut canvas, &look, None);
+    g.upload(&canvas.pixels, framing.picture);
+    let rgba = g.capture(&framing, c.size)?;
     std::fs::write(&c.file, crate::png::encode(c.size.0, c.size.1, &rgba))
         .map_err(|e| format!("{}: {e}", c.file.display()))?;
     println!(
@@ -3097,23 +3136,33 @@ mod tests {
         }
     }
 
-    /// The window's two buttons are hit inside their boxes, in the picture's top-right corner
-    /// wherever the window puts the picture (scaled, or with bars beside it), and nowhere else:
-    /// not between them, beyond them, on the header or on an entry; no entry is hit on them.
+    /// The window's two buttons are hit inside their boxes, in the window's top-right corner
+    /// whatever its shape (scaled, or with bars beside the screen: the buttons are on the bar
+    /// then), and nowhere else: not between them, beyond them, on the header or on an entry; no
+    /// entry is hit on them.
     #[test]
     fn the_window_buttons_are_hit_in_their_boxes() {
         use screen::Button;
         let look = Look::plain();
-        let boxes = screen::buttons(&look);
-        assert_eq!(boxes.map(|(b, _)| b), [Button::Minimise, Button::Exit]);
         let s = start_screen(&place(Some("/g/x"), false), &Card::Asking);
         let rows = screen::rows_of(&look, &s);
-        for (window, scale, left) in [
-            ((960, 720), 1.0, 0.0),
-            ((1920, 1440), 2.0, 0.0),
-            ((1600, 720), 1.0, 320.0),
+        for (window, scale, left, picture_width) in [
+            ((960, 720), 1.0, 0.0, 960),
+            ((1920, 1440), 2.0, 0.0, 960),
+            ((1600, 720), 1.0, 320.0, 1600),
         ] {
-            let at = |x: f64, y: f64| (left + x * scale, y * scale);
+            let framing = gpu::framing(SCREEN, window, 8192);
+            assert_eq!(framing.picture.0, picture_width);
+            let boxes = screen::buttons(&look, picture_width);
+            assert_eq!(boxes.map(|(b, _)| b), [Button::Minimise, Button::Exit]);
+            // A point of the picture (the buttons'), and one of the screen (the rest).
+            let at = |x: f64, y: f64| (x * scale, y * scale);
+            let on_screen = |x: f64, y: f64| (left + x * scale, y * scale);
+            let window_right = window.0 as f64 - 10.0 * scale;
+            assert_eq!(
+                at((boxes[1].1 .0 + boxes[1].1 .2 as i32) as f64, 0.0).0,
+                window_right
+            );
             for (b, (x, y, w, h)) in boxes {
                 let (x, y, w, h) = (x as f64, y as f64, w as f64, h as f64);
                 for (px, py) in [
@@ -3122,8 +3171,8 @@ mod tests {
                     (x + w - 0.5, y + h - 0.5),
                 ] {
                     let p = at(px, py);
-                    assert_eq!(button_hit(window, &look, p), Some(b), "{window:?} {p:?}");
-                    assert_eq!(row_hit(window, &rows, p), None, "{window:?} {p:?}");
+                    assert_eq!(button_hit(&framing, &look, p), Some(b), "{window:?} {p:?}");
+                    assert_eq!(row_hit(&framing, &rows, p), None, "{window:?} {p:?}");
                 }
                 for (px, py) in [
                     (x - 1.0, y + h / 2.0),
@@ -3132,20 +3181,23 @@ mod tests {
                     (x + w / 2.0, y + h + 1.0),
                 ] {
                     let p = at(px, py);
-                    assert_ne!(button_hit(window, &look, p), Some(b), "{window:?} {p:?}");
+                    assert_ne!(button_hit(&framing, &look, p), Some(b), "{window:?} {p:?}");
                 }
             }
             let (_, (mx, my, mw, mh)) = boxes[0];
             let mid = (my + mh as i32 / 2) as f64;
             let gap = (mx + mw as i32) as f64 + 2.5;
-            assert_eq!(button_hit(window, &look, at(gap, mid)), None);
-            assert_eq!(button_hit(window, &look, at(955.0, mid)), None);
-            assert_eq!(button_hit(window, &look, at(480.0, 70.0)), None);
-            let entry = at(rows.x as f64 + 10.0, rows.top as f64 + 10.0);
-            assert_eq!(button_hit(window, &look, entry), None);
-            assert_eq!(row_hit(window, &rows, entry), Some(0));
+            assert_eq!(button_hit(&framing, &look, at(gap, mid)), None);
+            let right = picture_width as f64 - 5.0;
+            assert_eq!(button_hit(&framing, &look, at(right, mid)), None);
+            assert_eq!(button_hit(&framing, &look, on_screen(480.0, 70.0)), None);
+            let entry = on_screen(rows.x as f64 + 10.0, rows.top as f64 + 10.0);
+            assert_eq!(button_hit(&framing, &look, entry), None);
+            assert_eq!(row_hit(&framing, &rows, entry), Some(0));
         }
-        assert_eq!(button_hit((0, 0), &look, (0.0, 0.0)), None);
+        let none = gpu::framing(SCREEN, (0, 0), 8192);
+        assert_eq!(button_hit(&none, &look, (0.0, 0.0)), None);
+        assert_eq!(row_hit(&none, &rows, (0.0, 0.0)), None);
     }
 
     /// The exit button does what the menu's Exit does (the same act, so the same way out of the
@@ -3394,6 +3446,20 @@ mod tests {
             w <= 800.0 * 0.9 && (w / h - 4.0 / 3.0).abs() < 0.01,
             "{w}x{h}"
         );
+        // Ultrawide screens (21:9, 32:9): the height decides, never the width; the window is
+        // the terminal's 4:3, never the monitor's shape.
+        for monitor in [(3440.0, 1440.0), (5120.0, 1440.0), (2560.0, 1080.0)] {
+            assert_eq!(first_size(Some(monitor)), (960.0, 720.0), "{monitor:?}");
+        }
+        // The smallest window: half the terminal, never more than the first window, even on a
+        // monitor whose logical size is far too small (a wrong scale factor).
+        assert_eq!(least_size((960.0, 720.0)), (480.0, 360.0));
+        for monitor in [(242.0, 101.0), (640.0, 360.0), (1280.0, 720.0)] {
+            let first = first_size(Some(monitor));
+            let least = least_size(first);
+            assert!(least.0 <= first.0 && least.1 <= first.1, "{monitor:?}");
+            assert!(first.1 <= monitor.1 && first.0 <= monitor.0, "{monitor:?}");
+        }
         // Centred on its monitor, a second monitor's origin included; never left of it.
         assert_eq!(centred((0, 0), (1920, 1080), (960, 720)), (480, 180));
         assert_eq!(centred((1920, -200), (1280, 1024), (960, 720)), (2080, -48));
@@ -3645,6 +3711,8 @@ mod tests {
                 let rows = screen::rows_of(&look, &s);
                 assert!(rows.shown > 0);
                 for window in [(960, 720), (640, 480), (1280, 700)] {
+                    // The screen where `fit` puts it, to check the framing's mapping against.
+                    let framing = gpu::framing(SCREEN, window, 8192);
                     let (x, y, w, h) = gpu::fit((screen::WIDTH, screen::HEIGHT), window);
                     let at = |px: f64, py: f64| {
                         (
@@ -3655,7 +3723,7 @@ mod tests {
                     let mid = rows.x as f64 + rows.width as f64 / 2.0;
                     let row_y = |k: f64| rows.top as f64 + (k + 0.5) * rows.row as f64;
                     for k in 0..rows.shown {
-                        let hit = row_hit(window, &rows, at(mid, row_y(k as f64)));
+                        let hit = row_hit(&framing, &rows, at(mid, row_y(k as f64)));
                         assert_eq!(hit, Some(rows.first + k), "{window:?} row {k}");
                         assert!(!press_drags(hit.is_some(), false));
                     }
@@ -3665,7 +3733,7 @@ mod tests {
                         (rows.x as f64 + rows.width as f64 + 5.0, row_y(0.0)),
                         (mid, row_y(rows.shown as f64)),
                     ] {
-                        let hit = row_hit(window, &rows, at(px, py));
+                        let hit = row_hit(&framing, &rows, at(px, py));
                         assert_eq!(hit, None, "{window:?} at {px},{py}");
                         assert!(press_drags(hit.is_some(), false));
                     }
@@ -3913,7 +3981,7 @@ mod tests {
                 || b.1 + b.3 as i32 <= a.1
         };
         let look = Look::plain();
-        let boxes = screen::buttons(&look).map(|(_, b)| b);
+        let boxes = screen::buttons(&look, screen::WIDTH).map(|(_, b)| b);
         assert!(apart(boxes[0], boxes[1]));
         for b in boxes {
             assert!(b.0 >= 0 && b.1 >= 0, "{b:?}");
@@ -3950,6 +4018,253 @@ mod tests {
                     assert!(apart(b, h), "{}: {b:?} {h:?}", s.title);
                 }
             }
+        }
+    }
+
+    /// What the mod installer (`crates/mod-chooser`) writes for its list, as it wraps it:
+    /// `installed` mods installed with nv-rs and `waiting` archives, its question, its prompt.
+    fn installer_list(installed: usize, waiting: usize) -> String {
+        let mut out = String::from("nv-rs mods\n==========\n\n");
+        if installed > 0 {
+            out.push_str("Installed with nv-rs:\n");
+            for i in 1..=installed {
+                out.push_str(&format!("  {i}) Installed mod number {i}\n"));
+            }
+        }
+        if waiting > 0 {
+            out.push_str("Waiting in the mods folder, not installed yet:\n");
+            for i in 1..=waiting {
+                out.push_str(&format!("  {}) Waiting archive {i}.7z\n", installed + i));
+            }
+        }
+        out.push_str(
+            "\nType a number and press Enter. A waiting archive's number installs it; an\n    \
+             installed mod's number shows what it installed.\nTo remove an installed mod, type \
+             remove and its number (like remove 1).\nJust press Enter to finish.\n> ",
+        );
+        out
+    }
+
+    /// Every screen in every window shape players have (21:9 and 32:9 ultrawides, a wide and
+    /// short 16:9, a tall portrait screen, the first window's 4:3): the screen whole inside the
+    /// window, its 4:3 shape kept and as large as fits, black beside it; every entry that shows
+    /// inside the window and hit where it is drawn, the highlighted one among them wherever it is
+    /// in a long list; the window's buttons in the window's top-right corner, drawn there. The
+    /// Mods screen with more mods than it holds (the mod installer's list, wrapped to the
+    /// screen's text width) shows its question at its end, and Page Up reaches every line of it.
+    #[test]
+    fn every_screen_shows_its_options_in_every_window_shape() {
+        use crate::canvas::Canvas;
+        const WINDOWS: [(u32, u32); 6] = [
+            (3440, 1440),
+            (2560, 1080),
+            (5120, 1440),
+            (1280, 720),
+            (1080, 1920),
+            (960, 720),
+        ];
+        let look = Look::plain();
+        let fixes = generated("fixes");
+        let mut installer = Vec::new();
+        append_output(&mut installer, &installer_list(25, 15));
+        let mods_asking = output_screen(&installer, false, String::new());
+        let mods_ended = output_screen(&installer, true, String::new());
+        let mut screens = vec![
+            start_screen(&place(Some("/g/x"), true), &Card::Asking),
+            start_screen(&place(None, false), &Card::Asking),
+            mods_asking.clone(),
+            mods_ended.clone(),
+            message_screen("A question?", &["Yes".into(), "No".into()]),
+            question_screen(false),
+            question_screen(true),
+        ];
+        for consent in [None, Some(Consent::Ask)] {
+            screens.push(Screen {
+                title: format!("-{CRASH_ROW}-"),
+                welcome: about_text(consent),
+                entries: about_entries(consent.is_some()),
+                ..Default::default()
+            });
+        }
+        let note = Some("The choice could not be saved: the file is read-only.".to_string());
+        for list in [settings::List::Main].into_iter().chain(SUBLISTS) {
+            screens.push(list_screen(list, &fixes, true, None, true, Consent::Ask));
+            screens.push(list_screen(
+                list,
+                &fixes,
+                false,
+                note.clone(),
+                true,
+                Consent::Ask,
+            ));
+            for &row in list.rows() {
+                screens.push(choices_screen(row, &fixes, (5120, 1440)));
+            }
+        }
+        // Each screen with each of its entries highlighted, laid out once (the layout is the
+        // screen's own, the same in every window).
+        let mut laid = Vec::new();
+        for s in &screens {
+            for highlighted in 0..s.entries.len().max(1) {
+                let s = Screen {
+                    highlighted,
+                    ..s.clone()
+                };
+                let rows = screen::rows_of(&look, &s);
+                if !s.entries.is_empty() {
+                    assert!(rows.shown > 0, "{}", s.title);
+                    assert!(
+                        (rows.first..rows.first + rows.shown).contains(&highlighted),
+                        "{}: entry {highlighted} of {} not shown ({rows:?})",
+                        s.title,
+                        s.entries.len()
+                    );
+                }
+                let bottom = rows.top + (rows.row * rows.shown as u32) as i32;
+                assert!(bottom <= screen::HEIGHT as i32, "{}: {rows:?}", s.title);
+                laid.push((s, rows));
+            }
+        }
+        let inside = |window: (u32, u32), (x, y, w, h): (f64, f64, f64, f64)| {
+            x >= -0.01
+                && y >= -0.01
+                && x + w <= window.0 as f64 + 0.01
+                && y + h <= window.1 as f64 + 0.01
+        };
+        for window in WINDOWS {
+            let f = gpu::framing(SCREEN, window, 8192);
+            let whole = f.screen_area_in_window((0, 0, screen::WIDTH, screen::HEIGHT));
+            assert!(inside(window, whole), "{window:?}: {whole:?}");
+            assert!(
+                (whole.2 / whole.3 - 4.0 / 3.0).abs() < 0.01,
+                "{window:?}: {whole:?}"
+            );
+            assert!(
+                whole.2 >= window.0 as f64 - 2.0 || whole.3 >= window.1 as f64 - 2.0,
+                "{window:?}: as large as fits, {whole:?}"
+            );
+            // The buttons: in the window's top-right corner, hit there.
+            let scale = f.rect.2 as f64 / f.picture.0 as f64;
+            for (b, area) in screen::buttons(&look, f.picture.0) {
+                let (x, y, w, h) = f.area_in_window(area);
+                assert!(inside(window, (x, y, w, h)), "{window:?} {b:?}");
+                assert!(y <= 10.0 * scale + 1.0, "{window:?} {b:?} at {y}");
+                assert!(
+                    x >= window.0 as f64 - 120.0 * scale,
+                    "{window:?} {b:?} at {x}"
+                );
+                let centre = (x + w / 2.0, y + h / 2.0);
+                assert_eq!(button_hit(&f, &look, centre), Some(b), "{window:?}");
+            }
+            let exit = f.area_in_window(screen::buttons(&look, f.picture.0)[1].1);
+            let right = window.0 as f64 - (exit.0 + exit.2);
+            assert!(
+                right <= 10.0 * scale + 2.0,
+                "{window:?}: {right} from the right"
+            );
+            // Every entry that shows: inside the window, hit at its centre.
+            for (s, rows) in &laid {
+                for k in 0..rows.shown {
+                    let area = (
+                        rows.x,
+                        rows.top + (rows.row * k as u32) as i32,
+                        rows.width,
+                        rows.row,
+                    );
+                    let (x, y, w, h) = f.screen_area_in_window(area);
+                    assert!(
+                        inside(window, (x, y, w, h)),
+                        "{window:?} {}: row {k}",
+                        s.title
+                    );
+                    let hit = row_hit(&f, rows, (x + w / 2.0, y + h / 2.0));
+                    assert_eq!(hit, Some(rows.first + k), "{window:?} {}: row {k}", s.title);
+                    assert_eq!(button_hit(&f, &look, (x + w / 2.0, y + h / 2.0)), None);
+                }
+            }
+            // Drawn: the screen whole in its place on the window's picture, black around it but
+            // for the buttons, which are drawn in the corner.
+            for s in [&screens[0], &mods_asking, &laid.last().unwrap().0] {
+                let (drawn, _) = screen::draw(&look, s, None, true);
+                let mut c = Canvas {
+                    width: drawn.width,
+                    height: drawn.height,
+                    pixels: drawn.pixels.clone(),
+                }
+                .placed(f.picture, f.screen_at);
+                screen::draw_buttons(&mut c, &look, None);
+                let px = |c: &Canvas, x: u32, y: u32| {
+                    let i = ((y * c.width + x) * 4) as usize;
+                    [c.pixels[i], c.pixels[i + 1], c.pixels[i + 2]]
+                };
+                let boxes = screen::buttons(&look, f.picture.0).map(|(_, b)| b);
+                let in_box = |x: u32, y: u32| {
+                    boxes.iter().any(|&(bx, by, bw, bh)| {
+                        (bx..bx + bw as i32).contains(&(x as i32))
+                            && (by..by + bh as i32).contains(&(y as i32))
+                    })
+                };
+                let (ax, ay) = (f.screen_at.0 as u32, f.screen_at.1 as u32);
+                for y in (0..c.height).step_by(3) {
+                    for x in (0..c.width).step_by(3) {
+                        let on_screen = (ax..ax + screen::WIDTH).contains(&x)
+                            && (ay..ay + screen::HEIGHT).contains(&y);
+                        if on_screen && !in_box(x, y) {
+                            assert_eq!(px(&c, x, y), px(&drawn, x - ax, y - ay), "{window:?}");
+                        } else if !on_screen && !in_box(x, y) {
+                            assert_eq!(px(&c, x, y), [0, 0, 0], "{window:?} at {x},{y}");
+                        }
+                    }
+                }
+                for (bx, by, bw, bh) in boxes {
+                    let lit = (by..by + bh as i32)
+                        .flat_map(|y| (bx..bx + bw as i32).map(move |x| (x, y)))
+                        .filter(|&(x, y)| px(&c, x as u32, y as u32) != [0, 0, 0])
+                        .count();
+                    assert!(lit > 20, "{window:?}: a button drawn in the corner");
+                }
+            }
+        }
+        // The Mods screen: more lines than it holds, its end (the question and the installer's
+        // prompt) at rest with the line saying more is above; Page Up shows every line.
+        let wrapped = screen::welcome_lines(&look, &mods_asking);
+        assert!(
+            screen::most_scroll(&look, &mods_asking) > 20,
+            "the list is long"
+        );
+        let rest = screen::line_texts(&look, &mods_asking);
+        assert_eq!(rest[3], screen::MORE_ABOVE);
+        assert!(rest.iter().any(|l| l == "Just press Enter to finish."));
+        assert_eq!(
+            rest[rest.len() - 2],
+            "> ",
+            "the installer's own prompt last"
+        );
+        for s in [mods_asking, mods_ended] {
+            let mut s = s;
+            let mut seen = std::collections::HashSet::new();
+            loop {
+                seen.extend(screen::line_texts(&look, &s));
+                let next = screen::scrolled(&look, &s, true, 5);
+                if next == s.scroll {
+                    break;
+                }
+                s.scroll = next;
+            }
+            for line in &wrapped {
+                assert!(seen.contains(line), "never shown: {line:?}");
+            }
+            for first_and_last in ["Installed mod number 1", "Waiting archive 15.7z"] {
+                assert!(seen.iter().any(|l| l.ends_with(first_and_last)));
+            }
+            if !s.entries.is_empty() {
+                assert_eq!(screen::rows_of(&look, &s).shown, 2, "Back and Exit show");
+            }
+            // Page Down brings it back to its end.
+            while s.scroll > 0 {
+                s.scroll = screen::scrolled(&look, &s, false, 5);
+            }
+            assert_eq!(screen::line_texts(&look, &s)[3], screen::MORE_ABOVE);
         }
     }
 
