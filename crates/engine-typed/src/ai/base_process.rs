@@ -15,7 +15,7 @@
 //! name) is [`empty_name`] on the classes that keep the default.
 
 use super::FAMILY;
-use super::{actor_package, middle_low_process};
+use super::{actor_package, low_process, middle_low_process};
 use crate::{ai_queries, dispatch, multibound, slot_target};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
@@ -645,6 +645,12 @@ pub fn copy(e: &mut Engine, this: Ptr, other: Ptr) {
                     FAMILY,
                     0x0092_ca70,
                     middle_low_process::copy(e, Ptr::new(target), Ptr::new(source))
+                );
+            } else if level_copy == 0x0090_7510 {
+                typed_call!(
+                    FAMILY,
+                    0x0090_7510,
+                    low_process::copy_level(e, Ptr::new(target), Ptr::new(source))
                 );
             } else {
                 e.call(level_copy, &args![target, source]);

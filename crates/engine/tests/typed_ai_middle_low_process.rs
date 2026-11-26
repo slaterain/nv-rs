@@ -58,6 +58,9 @@ const SLOTS: &[u32] = &[
     0x434, 0x438, 0x514, 0x524, 0x5a0, 0x5a4, 0x5a8, 0x7b4, 0x7c4, 0x7c8, 0x7cc, 0x7d0, 0x7d4,
     0x7d8, 0x7dc, 0x7e0, 0x7e4, 0x7e8, 0x7ec, 0x7f0, 0x7f4, 0x7fc, 0x800, 0x808,
 ];
+/// Slots `LowProcess`'s typed functions call (`ResetTarget`'s 0x12c, `Update_ov2`'s 0x14 and the
+/// actor's 0x25c): stand-ins that count and answer 0, drawing nothing from the seed.
+const QUIET_SLOTS: &[u32] = &[0x14, 0x12c, 0x25c];
 /// The exe's bodies a slot may hold instead.
 const REAL_SLOTS: &[(u32, u32)] = &[
     (0x24, 0x0092_cfd0),
@@ -143,6 +146,9 @@ const ACTION_WORDS: &[u32] = &[
 enum Kind {
     /// Answers only.
     Plain,
+    /// A function the family types now: its answers are still drawn (so the rest of the world stays
+    /// as it was), but it runs as itself.
+    Typed,
     /// `thiscall(save_load, address, size)`: moves the position (+0x14) on by the size.
     Write,
     /// `thiscall(object, address, size)`: writes its answer into the bytes (up to 4) and, on the
@@ -168,7 +174,7 @@ const DOUBLES: &[(u32, &[u32], Kind)] = &[
     (0x0086_5e50, UNREAD, Kind::Plain), // the save buffer's writer
     (0x0090_6fe0, UNREAD, Kind::Plain), // LowProcess's destructor
     (0x0090_a1a0, BOOLS, Kind::Plain),  // LowProcess::CheckforNewPackage
-    (0x0090_c360, UNREAD, Kind::Plain), // LowProcess::Update_ov2
+    (0x0090_c360, UNREAD, Kind::Typed), // LowProcess::Update_ov2
     (0x0040_1030, UNREAD, Kind::Plain), // the free
     (0x0066_eea0, FLOATS, Kind::Plain), // ActorValue::CheckClampDamageModifier
     (0x00ec_43fb, &[0, TARGET, ACTOR, TARGET], Kind::Plain), // __RTDynamicCast
@@ -195,7 +201,7 @@ const DOUBLES: &[(u32, &[u32], Kind)] = &[
     (0x0048_39c0, &[FORM, PACKAGE], Kind::Plain), // the form for an id
     (0x005b_5e40, UNREAD, Kind::Plain), // the SAVELOAD warnings
     (0x008a_8f60, UNREAD, Kind::Plain), // the actor's package re-evaluation
-    (0x0090_a070, UNREAD, Kind::Plain), // LowProcess::ResetTarget
+    (0x0090_a070, UNREAD, Kind::Typed), // LowProcess::ResetTarget
     (0x008b_3bb0, DONE, Kind::Plain),   // Actor::IsPathingComplete
     (0x008b_3bf0, BOOLS, Kind::Plain),  // Actor::IsWaitingOnPath
     (0x0067_8670, FLOATS, Kind::Plain), // TESPackage::GetPackageRadiusActorToLocation
@@ -221,6 +227,8 @@ const DOUBLES: &[(u32, &[u32], Kind)] = &[
 /// The callees the translations call and the typed code does in place (one load, store or test
 /// each), or leaves out (a pure call whose answer the exe never reads).
 const IN_PLACE: &[u32] = &[
+    0x0068_0020, // the package target's reference and its kind (ResetTarget)
+    0x0051_9b00,
     0x0040_6d70, // the actor value's flag
     0x0042_8110, // the buffer's change flags
     0x0042_80f0, // their test
@@ -355,6 +363,11 @@ impl World {
             rng: (u64::from(seed) ^ 0x9e37_79b9_7f4a_7c15).wrapping_mul(0xbf58_476d_1ce4_e5b9) | 1,
         };
         e.map(0, 0x1000);
+        // A package target's reference that is a float word or 0xffff (`ResetTarget` reads its flags):
+        // zeros.
+        e.map(0x3f80_0000, 0x1000);
+        e.map(0x0001_0000, 0x1000);
+        e.map(0x7f80_0000, 0x1000);
         e.map(CONTROL, 0x4000);
         e.map(BUFFER, 0x2_0000);
         // With the temporary modifiers: a middle-low block of exactly 0xffff bytes (6 more), one past.
@@ -368,6 +381,13 @@ impl World {
                 ret(e.mem.u32(vt + ANSWERS + slot))
             });
         }
+        for &slot in QUIET_SLOTS {
+            e.register_double(VT_FN + slot, move |e, _| {
+                let n = e.mem.u32(SLOT_COUNTS + slot);
+                e.mem.set_u32(SLOT_COUNTS + slot, n + 1);
+                ret(0)
+            });
+        }
         for (k, (addr, answers, kind)) in DOUBLES.iter().enumerate() {
             let block = block(k);
             for i in 0..8 {
@@ -375,6 +395,9 @@ impl World {
                 e.mem.set_u32(block + 4 + 4 * i, answer);
             }
             let kind = *kind;
+            if matches!(kind, Kind::Typed) {
+                continue;
+            }
             e.register_double(*addr, move |e, a| {
                 let n = e.mem.u32(block);
                 e.mem.set_u32(block, n + 1);
@@ -383,7 +406,7 @@ impl World {
                 let answer = e.mem.u32(block + 4 + 4 * (n % 8));
                 let next = e.mem.u32(block + 4 + 4 * ((n + 1) % 8));
                 let (bytes, moves) = match kind {
-                    Kind::Plain | Kind::Remove | Kind::Moves => (0, 0),
+                    Kind::Plain | Kind::Typed | Kind::Remove | Kind::Moves => (0, 0),
                     Kind::Write => (0, a[2]),
                     Kind::Read => (a[2].min(4), 0),
                     Kind::ReadMoves => (a[2].min(4), a[2]),
@@ -437,6 +460,9 @@ impl World {
             }
             let vt = e.mem.alloc(2 * ANSWERS);
             e.mem.set_u32(o, vt);
+            for &slot in QUIET_SLOTS {
+                e.mem.set_u32(vt + slot, VT_FN + slot);
+            }
             for &slot in SLOTS {
                 e.mem.set_u32(vt + slot, VT_FN + slot);
                 let answers: &[u32] = match slot {
@@ -1127,7 +1153,7 @@ fn the_seeds_reach_every_branch() {
         &[
             "not an actor",
             "new package",
-            "reset",
+            "reset (an action after it)",
             "travel: path goal",
             "travel: look around",
             "travel: facing",
@@ -1149,10 +1175,10 @@ fn the_seeds_reach_every_branch() {
             let actor = args[1];
             // The actor's slot 0x100 (never the exe's body here) says whether it is one.
             let is_actor = actor != 0 && e.mem.u8(e.mem.u32(actor) + ANSWERS + 0x100) != 0;
-            vec![
+            let mut taken = vec![
                 actor != 0 && !is_actor,
                 slot_calls(e, 0x524) > 0,
-                calls(e, 0x0090_a070) > 0,
+                false,
                 calls(e, 0x008b_3690) > 0,
                 calls(e, 0x0046_f280) > 0,
                 slot_calls(e, 0x2c4) > 0,
@@ -1171,7 +1197,10 @@ fn the_seeds_reach_every_branch() {
                 is_actor && calls(e, 0x008b_3bf0) == 0,
                 calls(e, 0x00ec_623a) > 0,
                 calls(e, 0x008b_3bf0) > 0 && slot_calls(e, 0x28) == 0,
-            ]
+            ];
+            // ResetTarget ran when an action after it did.
+            taken[2] = taken[3..=10].iter().any(|t| *t);
+            taken
         },
     );
 }

@@ -150,7 +150,7 @@ fn is_created_id(id: u32) -> bool {
 
 /// `Procedure::GetProcedureCount` (`0096a820`) of a package's procedure (`009611e0`): the signed
 /// byte of the table for 0 to 0x30, -1 otherwise.
-fn procedure_count(e: &Engine, package: u32) -> i32 {
+pub(super) fn procedure_count(e: &Engine, package: u32) -> i32 {
     let procedure = e.mem.u32(package.wrapping_add(PACKAGE_PROCEDURE));
     if procedure < 0x31 {
         i32::from(e.mem.i8(PROCEDURE_COUNTS + procedure))

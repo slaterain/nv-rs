@@ -27,9 +27,11 @@ const CALLEES: &[u32] = &[
     0x0040_1030,
     0x0040_37d0,
     0x0040_37f0,
+    0x0040_4010,
+    0x0040_4390,
+    0x0040_44d0,
     0x0040_46f0,
     0x0040_48e0,
-    0x0040_4920,
     0x0040_4a70,
     0x0040_4dc0,
     0x0040_4eb0,
@@ -38,7 +40,7 @@ const CALLEES: &[u32] = &[
     0x0040_6d00,
     0x0040_6d30,
     0x0040_6d50,
-    0x0040_6de0,
+    0x0040_6d90,
     0x0040_6f60,
     0x0040_8b20,
     0x0040_9480,
@@ -58,6 +60,7 @@ const CALLEES: &[u32] = &[
     0x0045_0f90,
     0x0045_6a20,
     0x0045_7ba0,
+    0x0045_7fe0,
     0x0045_a5e0,
     0x0045_cec0,
     0x0046_9880,
@@ -65,6 +68,8 @@ const CALLEES: &[u32] = &[
     0x0047_02f0,
     0x0047_0470,
     0x0047_6b20,
+    0x0047_e040,
+    0x0047_e0e0,
     0x0048_3a00,
     0x0048_73d0,
     0x0048_ebc0,
@@ -102,18 +107,26 @@ const CALLEES: &[u32] = &[
     0x0055_d520,
     0x0056_7790,
     0x0057_5510,
+    0x0057_5610,
+    0x0057_6260,
     0x0057_85e0,
     0x0057_c730,
     0x0057_dd70,
+    0x005a_3370,
     0x005a_e3d0,
     0x005b_5e40,
+    0x005c_5420,
     0x005e_02b0,
     0x005e_58f0,
+    0x0063_f7b0,
+    0x0064_3c90,
     0x0064_50f0,
     0x0064_5380,
     0x0064_6360,
+    0x0064_8b50,
     0x0066_29f0,
     0x0066_b0d0,
+    0x0066_ef20,
     0x006b_3eb0,
     0x006f_fe10,
     0x0070_0320,
@@ -171,6 +184,7 @@ const CALLEES: &[u32] = &[
     0x0072_ceb0,
     0x0072_d250,
     0x0073_0690,
+    0x0073_14c0,
     0x0073_15e0,
     0x0073_3500,
     0x0073_acb0,
@@ -240,6 +254,7 @@ const CALLEES: &[u32] = &[
     0x007a_1820,
     0x007a_1850,
     0x007a_1880,
+    0x007a_22d0,
     0x007a_7eb0,
     0x007a_8a10,
     0x007a_8ba0,
@@ -269,20 +284,21 @@ const CALLEES: &[u32] = &[
     0x007c_b330,
     0x007c_b7d0,
     0x007c_e7a0,
+    0x007d_86c0,
     0x007d_a2c0,
+    0x007d_c7e0,
+    0x007d_c9b0,
     0x007d_cc80,
-    0x007d_cfc0,
-    0x007d_d090,
-    0x007d_d710,
     0x007d_da60,
-    0x007d_f230,
-    0x007d_f4e0,
-    0x007d_f5d0,
+    0x007d_dc20,
+    0x007d_dd10,
+    0x007d_de00,
+    0x007d_df00,
     0x007d_fc90,
-    0x007d_fcd0,
     0x007d_fd00,
-    0x007e_07f0,
-    0x007e_09b0,
+    0x007e_0060,
+    0x007e_0230,
+    0x007e_06b0,
     0x007e_41f0,
     0x007e_47a0,
     0x007e_5890,
@@ -292,8 +308,10 @@ const CALLEES: &[u32] = &[
     0x007e_9200,
     0x007e_bd50,
     0x007f_6920,
+    0x007f_86f0,
     0x007f_8a80,
     0x007f_a010,
+    0x007f_b150,
     0x0083_e510,
     0x0083_fd60,
     0x0084_54f0,
@@ -303,6 +321,7 @@ const CALLEES: &[u32] = &[
     0x0086_5e50,
     0x0087_f4c0,
     0x0087_f6c0,
+    0x0087_f9f0,
     0x008c_7aa0,
     0x0090_5330,
     0x0090_5820,
@@ -315,6 +334,7 @@ const CALLEES: &[u32] = &[
     0x00a0_0e90,
     0x00a0_0f30,
     0x00a0_11b0,
+    0x00a0_11f0,
     0x00a0_1230,
     0x00a0_12d0,
     0x00a0_1350,
@@ -324,6 +344,8 @@ const CALLEES: &[u32] = &[
     0x00a0_3eb0,
     0x00a0_4200,
     0x00a0_7530,
+    0x00a0_7c60,
+    0x00a0_7dc0,
     0x00a0_87d0,
     0x00a0_8b20,
     0x00a0_9080,
@@ -3228,7 +3250,7 @@ fn fn_0071f600_diff() {
         0x0071_f600,
         interface::menu_manager::fn_0071f600(Ptr)
     ))
-    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .in_status_effects(&[Arg::Ptr], &[0x0071_f9f0, 0x0071_f570])
     .run()
     .assert_same();
 }
@@ -3254,7 +3276,7 @@ fn stats_menu_named_effects_list_scalar_deleting_destructor_diff() {
 #[test]
 fn stats_menu_status_effect_list_scalar_deleting_destructor_diff() {
     Diff::new(engine_core::entry!(0x0071_f6a0, interface::menu_manager::stats_menu_status_effect_list_scalar_deleting_destructor(Ptr, u32) -> Ptr))
-    .in_arena(&[Arg::Ptr, Arg::Word], CALLEES, &[0x0071_f600])
+    .in_status_effects(&[Arg::Ptr, Arg::Word], &[0x0071_f600, 0x0071_f9f0, 0x0071_f570])
     .run()
     .assert_same();
 }
@@ -3262,7 +3284,7 @@ fn stats_menu_status_effect_list_scalar_deleting_destructor_diff() {
 #[test]
 fn stats_menu_scalar_deleting_destructor_diff() {
     Diff::new(engine_core::entry!(0x0071_f6d0, interface::menu_manager::stats_menu_scalar_deleting_destructor(Ptr, u32) -> Ptr))
-    .in_arena(&[Arg::Ptr, Arg::Word], CALLEES, &[0x0071_f700, 0x0071_f9c0, 0x0071_f9f0, 0x0071_f570, 0x0071_f8c0, 0x0071_f900, 0x0071_f930, 0x0071_f600, 0x0072_11e0, 0x0072_1990, 0x0072_2140, 0x0072_28f0, 0x0072_30e0])
+    .in_status_effects(&[Arg::Ptr, Arg::Word], &[0x0071_f700, 0x0071_f9f0, 0x0071_f570, 0x0071_f8c0, 0x0071_f900, 0x0071_f930, 0x0071_f600, 0x0072_11e0, 0x0072_1990, 0x0072_2140, 0x0072_28f0, 0x0072_30e0])
     .run()
     .assert_same();
 }
@@ -3273,11 +3295,9 @@ fn fn_0071f700_diff() {
         0x0071_f700,
         interface::menu_manager::fn_0071f700(Ptr)
     ))
-    .in_arena(
+    .in_status_effects(
         &[Arg::Ptr],
-        CALLEES,
         &[
-            0x0071_f9c0,
             0x0071_f9f0,
             0x0071_f570,
             0x0071_f8c0,
@@ -5095,6 +5115,77 @@ fn every_family_holds_each_crates_families() {
     assert_eq!(all.len(), listed.len(), "a family provided twice");
 }
 
+/// A family module left out of its crate's list is neither provided nor listed, so the test above
+/// can't see it: every family the families' sources declare (a `pub static NAME: Family = Family {`
+/// at the start of a line, under `engine-typed`, `engine-core`'s `typed` and `engine-fallout-forms`)
+/// is listed, by its name.
+#[test]
+fn every_declared_family_is_listed() {
+    fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for path in entries.flatten().map(|entry| entry.path()) {
+            if path.is_dir() {
+                rust_files(&path, out);
+            } else if path.extension().is_some_and(|x| x == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    let listed: Vec<&str> = engine_core::typed::FAMILIES
+        .iter()
+        .chain(engine_typed::FAMILIES.iter())
+        .map(|f| f.name)
+        .chain([
+            engine_fallout_forms::topic_search::TOPIC_SEARCH.name,
+            engine_fallout_forms::topic_order::TOPIC_ORDER.name,
+        ])
+        .collect();
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut files = Vec::new();
+    for root in [
+        "engine-typed/src",
+        "engine-core/src/typed",
+        "engine-fallout-forms/src",
+    ] {
+        rust_files(&crates.join(root), &mut files);
+    }
+    let mut declared = Vec::new();
+    for file in &files {
+        let text = std::fs::read_to_string(file).unwrap_or_default();
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if !(line.starts_with("pub static ") && line.ends_with(": Family = Family {")) {
+                continue;
+            }
+            let name = lines[i + 1..]
+                .iter()
+                .take_while(|l| !l.starts_with('}'))
+                .find_map(|l| l.trim().strip_prefix("name: \""))
+                .and_then(|rest| rest.split('"').next());
+            let Some(name) = name else {
+                panic!("{}: a family with no name line: {line}", file.display());
+            };
+            declared.push((name.to_string(), file.display().to_string()));
+        }
+    }
+    assert!(
+        declared.len() >= listed.len(),
+        "only {} families declared in the sources, {} listed",
+        declared.len(),
+        listed.len()
+    );
+    let unlisted: Vec<_> = declared
+        .iter()
+        .filter(|(name, _)| !listed.contains(&name.as_str()))
+        .collect();
+    assert!(
+        unlisted.is_empty(),
+        "families declared but in no crate's list (add each to its crate's FAMILIES): {unlisted:?}"
+    );
+}
+
 /// An address is in one family at most, whichever families are on by default: `NV_TYPED` can turn
 /// any on, and two families holding one address stop `Engine::new` once both are (on 2026-11-25
 /// `00717e50` was in `ai` and in `topic_search`). This names both families.
@@ -5386,6 +5477,7 @@ fn no_member_of_a_family_on_by_default_holds_a_seam() {
         (0x0077_14da, "hud"),
         (0x0077_951e, "hud"),
         (0x0077_955d, "hud"),
+        (0x007e_0c1f, "interface"),
         (0x00b5_cd2a, "scene_node"),
         (0x0059_3fbc, "scripts"),
         (0x0059_49d4, "scripts"),
@@ -5460,6 +5552,11 @@ const ITEM_LIST_VARIANTS: [u32; 8] = [6, 7, 5, 3, 2, 1, 4, 0];
 fn put_item_list_box(e: &mut Engine, variant: u32) {
     use arena::object;
     put_list_box(e, variant);
+    // The richest variant's second item filtered as well (its node is object 161), so the node
+    // removal's filtered branch (`_num_filtered` less 1.0) runs.
+    if variant == 6 {
+        e.mem.set_u8(object(171) + 8, 1);
+    }
     for (k, group) in [(0u32, 0u32), (2, 1), (4, 0)] {
         e.mem.set_u32(object(190 + k) + 8, group);
     }
@@ -5527,18 +5624,66 @@ fn put_inventory(e: &mut Engine, variant: u32) {
 }
 
 /// The variants of [`put_form_type`]'s world.
-const FORM_TYPE_VARIANTS: [u32; 5] = [0, 1, 2, 3, 4];
+const FORM_TYPE_VARIANTS: [u32; 11] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
 /// A world for the filters by form type: both pointer arguments' items (objects 3 and 40) with a
-/// form (object 201) whose type byte is, by variant, 0x28, 0x18, 0x73, 0x1a or 0 (each filter's
-/// match, a later match, and none).
+/// form (object 201) whose type byte is, by variant, 0x28, 0x18, 0x73, 0x1a, 0 (each filter's
+/// match, a later match, and none) or one of the last filter's other types (0x1f, 0x29, 0x67, 0x32,
+/// 0x6c, 0x74).
 fn put_form_type(e: &mut Engine, variant: u32) {
     use arena::object;
-    let kind = [0x28u8, 0x18, 0x73, 0x1a, 0][variant as usize];
+    let kind = [
+        0x28u8, 0x18, 0x73, 0x1a, 0, 0x1f, 0x29, 0x67, 0x32, 0x6c, 0x74,
+    ][variant as usize];
     for item in [object(3), object(40)] {
         e.mem.set_u32(item + 8, object(201));
     }
     e.mem.set_u8(object(201) + 4, kind);
+}
+
+/// The variants of [`put_sort_words`]'s world.
+const SORT_VARIANTS: [u32; 4] = [0, 1, 2, 3];
+
+/// A world for the sorts' comparisons: both pointer arguments' items (objects 3 and 40) with counts
+/// (`+4`) and healths that tell a signed compare from an unsigned one (a high bit on either side,
+/// equal words, two high-bit words). Each item's form (`+8`, objects 222 and 223) has its own vtable
+/// (objects 224 and 225) whose health slot (`+0x10`) answers the variant's health; `__RTDynamicCast`
+/// answers the form it is given.
+fn put_sort_words(e: &mut Engine, variant: u32) {
+    use arena::{object, CODE};
+    const WORDS: [(u32, u32); 4] = [
+        (0xbf80_0000, 3),
+        (3, 0x8000_0000),
+        (5, 5),
+        (0xffff_fff0, 0xffff_ffff),
+    ];
+    let (a, b) = WORDS[variant as usize];
+    for (k, (item, word)) in (0u32..).zip([(object(3), a), (object(40), b)]) {
+        e.mem.set_u32(item + 4, word);
+        e.mem.set_u32(item + 8, object(222 + k));
+        e.mem.set_u32(object(222 + k), object(224 + k));
+        e.mem.set_u32(object(224 + k) + 0x10, CODE + 0x200 + 4 * k);
+        e.register_double(CODE + 0x200 + 4 * k, move |_, _| Ret {
+            eax: word,
+            ..Ret::default()
+        });
+    }
+    e.register_double(0x00ec_43fb, |_, words| Ret {
+        eax: words[0],
+        ..Ret::default()
+    });
+}
+
+/// [`put_item_list_box`]'s world with `Tile::GetFloat` answering a `_num_filtered` with a fraction
+/// for most variants (1.5, 2.75, -0.5, ...), so a truncation tells from a rounding.
+fn put_fractional_filtered(e: &mut Engine, variant: u32) {
+    const FILTERED: [f32; 8] = [1.5, 2.75, -0.5, 0.75, 1.0, 3.5, 0.25, -2.5];
+    put_item_list_box(e, variant);
+    let filtered = f64::from(FILTERED[variant as usize]);
+    e.register_double(0x00a0_11b0, move |_, _| Ret {
+        st0: filtered,
+        ..Ret::default()
+    });
 }
 
 /// The item list box's and the filters' worlds, as settings of a Diff.
@@ -5547,12 +5692,37 @@ trait ItemWorlds {
     fn in_item_list(self, args: &'static [Arg], max: usize) -> Diff;
     /// In [`put_form_type`]'s world, one pointer argument.
     fn in_form_types(self) -> Diff;
+    /// In [`put_sort_words`]'s world, two pointer arguments.
+    fn in_sort_words(self) -> Diff;
+    /// In [`put_fractional_filtered`]'s world, one pointer argument.
+    fn in_fractional_filtered(self) -> Diff;
 }
 
 impl ItemWorlds for Diff {
     fn in_item_list(self, args: &'static [Arg], max: usize) -> Diff {
         self.in_arena_and(args, CALLEES, &[], &ITEM_LIST_VARIANTS, put_item_list_box)
             .max_cases(max)
+    }
+
+    fn in_sort_words(self) -> Diff {
+        self.in_arena_and(
+            &[Arg::Ptr, Arg::Ptr],
+            CALLEES,
+            &[],
+            &SORT_VARIANTS,
+            put_sort_words,
+        )
+    }
+
+    fn in_fractional_filtered(self) -> Diff {
+        self.in_arena_and(
+            &[Arg::Ptr],
+            CALLEES,
+            &[],
+            &ITEM_LIST_VARIANTS,
+            put_fractional_filtered,
+        )
+        .max_cases(32)
     }
 
     fn in_form_types(self) -> Diff {
@@ -5674,7 +5844,7 @@ fn item_list_box_num_unfiltered_diff() {
         0x0071_ae60,
         interface::item_list_box::list_box_num_unfiltered(Ptr) -> i32
     ))
-    .in_item_list(&[Arg::Ptr], 32)
+    .in_fractional_filtered()
     .run()
     .assert_same();
 }
@@ -5745,7 +5915,7 @@ fn item_list_box_fn_00719ca0_diff() {
         0x0071_9ca0,
         interface::item_list_box::fn_00719ca0(u32, u32) -> i32
     ))
-    .in_arena(&[Arg::Ptr, Arg::Ptr], CALLEES, &[])
+    .in_sort_words()
     .run()
     .assert_same();
 }
@@ -5756,7 +5926,7 @@ fn item_list_box_fn_00719cf0_diff() {
         0x0071_9cf0,
         interface::item_list_box::fn_00719cf0(u32, u32) -> i32
     ))
-    .in_arena(&[Arg::Ptr, Arg::Ptr], CALLEES, &[])
+    .in_sort_words()
     .run()
     .assert_same();
 }
@@ -5922,6 +6092,741 @@ fn list_box_get_highlight_target_every_move_diff() {
         put_list_box,
     )
     .max_cases(168)
+    .run()
+    .assert_same();
+}
+
+// ---- The stats menu (`statsmenu.cpp`), its first part -------------------------------------------
+
+/// The variants of [`put_stats_menu`]'s world, the richest first.
+const STATS_VARIANTS: [u32; 4] = [0, 3, 1, 2];
+
+/// The stats menu's world. The open menu (`011dace0`) is object 3, the player (`011dea3c`) object
+/// 100, both absent in the variant 2. The exe's doubles the menu computes with (1000.0, 2.0, pi,
+/// pi / 2, 5.0, 100.0) hold their values. The player: hardcore (`+0x7bc` 1) in the variants 1 and 3;
+/// its actor values (`+0xa4`) on a vtable of stand-ins; its active effects (`+0x94`) on their own
+/// vtable (object 101) whose list slot answers one node (object 105) with one effect (object 106) of
+/// kind 0xa (variants 0 and 3; else 3), active in the variant 0. The hardcore state shown
+/// (`011a0ae1`) set in the variants 0 and 3, the next update (`011dad74`) never in the variant 1.
+/// The menu: limb mode in the variant 0, the effects already updated this frame in the variant 3,
+/// the 60 tiles all set but in the variant 2, the perk tile set; the healing options' callbacks
+/// stand-ins, in the variant 3 the first's and the fourth's the exe's own (`007e05f0`,
+/// `007e07a0`). The Pip-Boy (the manager's `+0x174`, object 108) up but in the variant 1. The fade
+/// object's current group (`011dace4`'s first word) a group number.
+fn put_stats_menu(e: &mut Engine, variant: u32) {
+    use arena::{object, CODE, VTABLES};
+    let live = variant != 2;
+    let menu = object(3);
+    let player = object(100);
+    e.mem.set_u32(0x011d_ace0, if live { menu } else { 0 });
+    e.mem.set_u32(0x011d_ea3c, if live { player } else { 0 });
+    for (at, value) in [
+        (0x0101_7b70u32, 1000.0f64),
+        (0x0101_1590, 2.0),
+        (0x0101_ff40, std::f64::consts::PI),
+        (0x0106_4f50, std::f64::consts::FRAC_PI_2),
+        (0x0102_0998, 5.0),
+        (0x0101_7a40, 100.0),
+    ] {
+        e.mem.set_u64(at, value.to_bits());
+    }
+    e.mem
+        .set_u32(player + 0x7bc, u32::from(variant == 1 || variant == 3));
+    e.mem.set_u32(player + 0xa4, VTABLES + 0x400);
+    e.mem.set_u32(player + 0x94, object(101));
+    e.mem.set_u32(object(101) + 8, CODE + 0x208);
+    e.register_double(CODE + 0x208, |_, _| Ret {
+        eax: arena::object(105),
+        ..Ret::default()
+    });
+    e.mem.set_u32(object(105), object(106));
+    e.mem.set_u32(object(105) + 4, 0);
+    e.mem.set_u32(
+        object(106) + 0x2c,
+        if variant == 0 || variant == 3 { 0xa } else { 3 },
+    );
+    e.mem.set_u8(object(106) + 0x10, u8::from(variant == 0));
+    e.mem
+        .set_u8(0x011a_0ae1, u8::from(variant == 0 || variant == 3));
+    e.mem
+        .set_u32(0x011d_ad74, if variant == 1 { u32::MAX } else { 0 });
+    if variant != 2 {
+        for i in 0..60 {
+            e.mem.set_u32(menu + 0x90 + 4 * i, object(110 + i % 40));
+        }
+    }
+    e.mem.set_u8(menu + 0x2a0, u8::from(variant == 0));
+    e.mem.set_u8(menu + 0x2a1, u8::from(variant == 3));
+    e.mem.set_u32(menu + 0x118, object(107));
+    for k in 0..4u32 {
+        let callback = match (variant, k) {
+            (3, 0) => 0x007e_05f0,
+            (3, 3) => 0x007e_07a0,
+            _ => CODE + 0x40 + 4 * k,
+        };
+        e.mem.set_u32(menu + 0x28 + 0x10 * k + 0xc, callback);
+    }
+    let manager = e.mem.u32(0x011d_8a80);
+    if manager != 0 {
+        e.mem.set_u32(manager + 0x174, object(108));
+        e.mem.set_u8(object(108) + 0x28, u8::from(variant != 1));
+    }
+    // The fade object's current group (its first word), when there is one.
+    let fade = e.mem.u32(0x011d_ace4);
+    if fade != 0 {
+        e.mem.set_u32(fade, [1u32, 5, 0, 3][variant as usize]);
+    }
+}
+
+/// The variants of [`put_status_data`]'s world.
+const STATUS_DATA_VARIANTS: [u32; 4] = [0, 1, 2, 3];
+
+/// A world for the status data list (object 3, its embedded list at `+4`: an entry of key 2, then a
+/// node, object 231, with an entry of key 0x36) and an effect item's words on both pointer values
+/// (objects 40 and 3: its actor value `+0x10`, its setting `+0x14` object 233 of archetype 0, so the
+/// plain case, object 3 twice, runs every variant). The archetype table's entry 0 has bit 2 but in
+/// the variant 2 (the key is then -1). By variant: the effect's key 0x36 (found), 0x37 with the
+/// setting's flag 4 (negated, with a duration), 0x37 with flag 2 (no duration), 0x37 with neither
+/// and JIP LN's fixes on (the G107 seam asked, none answering).
+fn put_status_data(e: &mut Engine, variant: u32) {
+    use arena::object;
+    let list = object(3);
+    e.mem.set_u32(list + 4, object(230));
+    e.mem.set_u32(list + 8, object(231));
+    e.mem.set_u32(object(230) + 0x10, 2);
+    e.mem.set_u32(object(231), object(232));
+    e.mem.set_u32(object(231) + 4, 0);
+    e.mem.set_u32(object(232) + 0x10, 0x36);
+    for effect in [object(40), list] {
+        e.mem
+            .set_u32(effect + 0x10, if variant == 0 { 0x36 } else { 0x37 });
+        e.mem.set_u32(effect + 0x14, object(233));
+    }
+    e.mem.set_u32(object(233) + 0x98, 0);
+    e.mem
+        .set_u32(object(233) + 0x58, [0, 4, 2, 0][variant as usize]);
+    e.mem.set_u32(0x0118_3328, if variant == 2 { 0 } else { 2 });
+    if variant == 3 {
+        e.set_jip_patches(engine_core::extend::jip_patches::FIXES);
+    }
+}
+
+/// The variants of [`put_status_effects`]'s world.
+const STATUS_EFFECT_VARIANTS: [u32; 2] = [0, 1];
+
+/// A world for the status effect lists: object 3's lists at `+4` (a `StatusEffectList`'s own) and
+/// at `+0x88` (the stats menu's list at its `+0x84`) hold two status effects (objects 240 and 242,
+/// the second's node object 241) in the variant 0 and none in the variant 1, and its four status
+/// effect words (`+0x74` to `+0x80`) one (object 244) or none; object 40's are all empty. (The
+/// arena's own words there would make status effects of small numbers and floats, whose clean-up
+/// writes over the zero page.)
+fn put_status_effects(e: &mut Engine, variant: u32) {
+    use arena::object;
+    let full = variant == 0;
+    for (k, list) in [(3u32, 4u32), (3, 0x88), (40, 4), (40, 0x88)] {
+        let at = object(k) + list;
+        let filled = full && k == 3;
+        e.mem.set_u32(at, if filled { object(240) } else { 0 });
+        e.mem.set_u32(at + 4, if filled { object(241) } else { 0 });
+    }
+    e.mem.set_u32(object(241), object(242));
+    e.mem.set_u32(object(241) + 4, 0);
+    for k in [3u32, 40] {
+        for slot in [0x74u32, 0x78, 0x7c, 0x80] {
+            let one = full && k == 3 && slot == 0x74;
+            e.mem
+                .set_u32(object(k) + slot, if one { object(244) } else { 0 });
+        }
+    }
+}
+
+/// The variants of [`put_fade_groups`]'s and [`put_archetypes`]'s worlds.
+const SMALL_WORLD_VARIANTS: [u32; 3] = [0, 1, 2];
+
+/// The fade object's current group (its first word) on both pointer values (objects 3 and 40): 0
+/// and 1, 2 and 3, or 5 and 4 (the arena's word there is a vtable).
+fn put_fade_groups(e: &mut Engine, variant: u32) {
+    use arena::object;
+    let groups = [[0u32, 1], [2, 3], [5, 4]][variant as usize];
+    for (k, group) in [3u32, 40].into_iter().zip(groups) {
+        e.mem.set_u32(object(k), group);
+    }
+}
+
+/// An effect setting's archetype (`+0x98`) on both pointer values (objects 3 and 40): 0 and 1, 2
+/// and 3, or 0x2b and 0x2c; the archetype flag table's first 0x30 entries with the flag 0x40, the
+/// flag 2 or both in turn (the arena's words there are pointers and floats).
+fn put_archetypes(e: &mut Engine, variant: u32) {
+    use arena::object;
+    let first = [0u32, 2, 0x2b][variant as usize];
+    for (k, archetype) in [3u32, 40].into_iter().zip([first, first + 1]) {
+        e.mem.set_u32(object(k) + 0x98, archetype);
+    }
+    for archetype in 0..0x30u32 {
+        let flags = [0x40u32, 2, 0x42][(archetype % 3) as usize];
+        e.mem.set_u32(0x0118_3328 + 16 * archetype, flags);
+    }
+}
+
+/// The stats menu's worlds, as settings of a Diff.
+trait StatsWorlds {
+    /// In [`put_stats_menu`]'s world, the vector constructor (`00ec782f`) no stand-in: the fade
+    /// object's, which the native code does in place, runs for real on the translation's side.
+    fn in_stats(self, args: &'static [Arg]) -> Diff;
+    /// [`StatsWorlds::in_stats`] with the translation's plain calls `plain`.
+    fn in_stats_with(self, args: &'static [Arg], plain: &[u32]) -> Diff;
+    /// In [`put_fade_groups`]'s world: a pointer and a byte.
+    fn in_fade_groups(self) -> Diff;
+    /// In [`put_archetypes`]'s world: a pointer.
+    fn in_archetypes(self) -> Diff;
+    /// In [`put_status_data`]'s world.
+    fn in_status_data(self, args: &'static [Arg]) -> Diff;
+    /// In [`put_status_effects`]'s world, with the translation's plain calls `plain`.
+    fn in_status_effects(self, args: &'static [Arg], plain: &[u32]) -> Diff;
+}
+
+impl StatsWorlds for Diff {
+    fn in_stats(self, args: &'static [Arg]) -> Diff {
+        self.in_stats_with(args, &[])
+    }
+
+    fn in_fade_groups(self) -> Diff {
+        self.in_arena_and(
+            &[Arg::Ptr, Arg::Byte],
+            CALLEES,
+            &[],
+            &SMALL_WORLD_VARIANTS,
+            put_fade_groups,
+        )
+    }
+
+    fn in_archetypes(self) -> Diff {
+        self.in_arena_and(
+            &[Arg::Ptr],
+            CALLEES,
+            &[],
+            &SMALL_WORLD_VARIANTS,
+            put_archetypes,
+        )
+    }
+
+    fn in_stats_with(self, args: &'static [Arg], plain: &[u32]) -> Diff {
+        self.in_arena_without_and(
+            args,
+            CALLEES,
+            plain,
+            &[0x00ec_782f],
+            &STATS_VARIANTS,
+            put_stats_menu,
+        )
+    }
+
+    fn in_status_data(self, args: &'static [Arg]) -> Diff {
+        self.in_arena_and(args, CALLEES, &[], &STATUS_DATA_VARIANTS, put_status_data)
+    }
+
+    fn in_status_effects(self, args: &'static [Arg], plain: &[u32]) -> Diff {
+        self.in_arena_and(
+            args,
+            CALLEES,
+            plain,
+            &STATUS_EFFECT_VARIANTS,
+            put_status_effects,
+        )
+    }
+}
+
+#[test]
+fn stats_menu_fn_00406de0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0040_6de0,
+        interface::stats_menu::fn_00406de0(Ptr)
+    ))
+    .in_stats(&[Arg::Ptr])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007db1c0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_b1c0,
+        interface::stats_menu::fn_007db1c0() -> u32
+    ))
+    .in_arena_without(&[], CALLEES, &[], &[0x00ec_782f])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007db250_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_b250,
+        interface::stats_menu::fn_007db250(Ptr, u32, u32)
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Small, Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007db270_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_b270,
+        interface::stats_menu::fn_007db270(Ptr, u32, u32, u32)
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Small, Arg::Small, Arg::Word], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007db2c0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_b2c0,
+        interface::stats_menu::fn_007db2c0(Ptr) -> Ptr
+    ))
+    .in_arena_without(&[Arg::Object], CALLEES, &[], &[0x00ec_782f])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007db340_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_b340,
+        interface::stats_menu::fn_007db340(Ptr) -> bool
+    ))
+    .in_stats(&[Arg::Ptr])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007dbfe0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_bfe0,
+        interface::stats_menu::fn_007dbfe0(Ptr, u32)
+    ))
+    .in_fade_groups()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fade_control_callback_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_c040,
+        interface::stats_menu::stats_menu_fade_control_callback(u32, u32) -> bool
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Byte], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007dc0a0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_c0a0,
+        interface::stats_menu::fn_007dc0a0(Ptr) -> Ptr
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_do_idle_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_c4f0,
+        interface::stats_menu::stats_menu_do_idle(Ptr)
+    ))
+    .in_stats_with(&[Arg::Object], &[0x0070_27b0, 0x0070_2680])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007dcc00_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_cc00,
+        interface::stats_menu::fn_007dcc00(Ptr) -> i32
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007dcc40_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_cc40,
+        interface::stats_menu::fn_007dcc40(Ptr) -> i32
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_update_all_actor_values_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_cfc0,
+        interface::stats_menu::stats_menu_update_all_actor_values(Ptr)
+    ))
+    .in_stats(&[Arg::Object])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_update_actor_value_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_d090,
+        interface::stats_menu::stats_menu_update_actor_value(Ptr, u32)
+    ))
+    .in_stats(&[Arg::Object, Arg::ActorValue])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_update_perks_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_d710,
+        interface::stats_menu::stats_menu_update_perks()
+    ))
+    .in_stats(&[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007dd8a0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_d8a0,
+        interface::stats_menu::fn_007dd8a0(Ptr) -> u8
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007ddad0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_dad0,
+        interface::stats_menu::fn_007ddad0(Ptr, u32)
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Small], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007ddb00_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_db00,
+        interface::stats_menu::fn_007ddb00(Ptr)
+    ))
+    .in_stats(&[Arg::Ptr])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007ddef0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_def0,
+        interface::stats_menu::fn_007ddef0() -> f32
+    ))
+    .in_arena(&[], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007df1b0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_f1b0,
+        interface::stats_menu::fn_007df1b0(Ptr) -> bool
+    ))
+    .in_archetypes()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007df1d0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_f1d0,
+        interface::stats_menu::fn_007df1d0(Ptr) -> u32
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007df210_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_f210,
+        interface::stats_menu::fn_007df210(Ptr) -> u32
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_update_healing_options_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_f230,
+        interface::stats_menu::stats_menu_update_healing_options(Ptr, u32)
+    ))
+    .in_stats(&[Arg::Object, Arg::Small])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_update_player_name_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_f4e0,
+        interface::stats_menu::stats_menu_update_player_name()
+    ))
+    .in_stats(&[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_update_player_title_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_f5d0,
+        interface::stats_menu::stats_menu_update_player_title()
+    ))
+    .in_stats(&[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_update_healing_mode_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_f620,
+        interface::stats_menu::stats_menu_update_healing_mode(Ptr)
+    ))
+    .in_stats(&[Arg::Ptr])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_special_update_fn_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_fa30,
+        interface::stats_menu::stats_menu_special_update_fn(u32, u32)
+    ))
+    .in_stats(&[Arg::Ptr, Arg::ActorValue])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_skills_update_fn_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_fb00,
+        interface::stats_menu::stats_menu_skills_update_fn(u32, u32)
+    ))
+    .in_stats(&[Arg::Ptr, Arg::ActorValue])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007dfc60_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_fc60,
+        interface::stats_menu::fn_007dfc60(u32, u32)
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Small], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007dfcd0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_fcd0,
+        interface::stats_menu::fn_007dfcd0() -> u8
+    ))
+    .in_stats(&[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007dfdf0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_fdf0,
+        interface::stats_menu::fn_007dfdf0(Ptr, u32) -> u32
+    ))
+    .in_arena(&[Arg::Ptr, Arg::ActorValue], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007dfe40_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_fe40,
+        interface::stats_menu::fn_007dfe40(Ptr) -> i32
+    ))
+    .in_stats(&[Arg::Ptr])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_set_current_page_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_ff40,
+        interface::stats_menu::stats_menu_set_current_page(Ptr, i32)
+    ))
+    .in_stats(&[Arg::Object, Arg::Small])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e04e0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_04e0,
+        interface::stats_menu::fn_007e04e0(u32, u32) -> i32
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e05f0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_05f0,
+        interface::stats_menu::fn_007e05f0(Ptr) -> bool
+    ))
+    .in_stats(&[Arg::Ptr])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e07a0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_07a0,
+        interface::stats_menu::fn_007e07a0(Ptr) -> bool
+    ))
+    .in_stats(&[Arg::Ptr])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e07f0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_07f0,
+        interface::stats_menu::fn_007e07f0(Ptr)
+    ))
+    .in_status_effects(&[Arg::Ptr], &[0x0071_f9f0, 0x0071_f570])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e0850_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_0850,
+        interface::stats_menu::fn_007e0850(Ptr)
+    ))
+    .in_stats(&[Arg::Ptr])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e09b0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_09b0,
+        interface::stats_menu::fn_007e09b0(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_status_data_list_register_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_0b20,
+        interface::stats_menu::stats_menu_status_data_list_register(Ptr, u32)
+    ))
+    .in_status_data(&[Arg::Ptr, Arg::Ptr])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e0ce0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_0ce0,
+        interface::stats_menu::fn_007e0ce0(Ptr, u32) -> u32
+    ))
+    .in_status_data(&[Arg::Ptr, Arg::Small])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e0e30_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_0e30,
+        interface::stats_menu::fn_007e0e30(Ptr, u32, u32)
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Code, Arg::Word], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e0e70_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_0e70,
+        interface::stats_menu::fn_007e0e70(Ptr, u32, u32, u32, u32) -> u32
+    ))
+    .in_item_list(&[Arg::Ptr, Arg::Word, Arg::Ptr, Arg::Code, Arg::Ptr], 48)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e1110_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_1110,
+        interface::stats_menu::fn_007e1110(Ptr, u32) -> u32
+    ))
+    .in_item_list(&[Arg::Ptr, Arg::ListTile], 40)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_list_box_misc_stat_id_add_item_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_1190,
+        interface::stats_menu::list_box_misc_stat_id_add_item(Ptr, u32, u32, u32, u32) -> u32
+    ))
+    .in_item_list(&[Arg::Ptr, Arg::Word, Arg::Ptr, Arg::Code, Arg::Ptr], 48)
     .run()
     .assert_same();
 }

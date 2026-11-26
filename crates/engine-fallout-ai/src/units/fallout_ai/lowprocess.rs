@@ -1530,7 +1530,7 @@ pub fn low_process_process_patrol(e: &mut Engine, this: Ptr<LowProcess>, actor: 
         e.vcall(actor.addr(), ACTOR_SLOT_418, &args![]);
         return;
     }
-    let mut time = low_process_get_time_delta(e, this, actor.addr()).to_bits();
+    let mut time = x87_store32(e.call(0x0090_7260, &args![this, actor]).f64());
     let zero: f64 = e.global(ZERO);
     while x87_load32(time) > zero {
         time = match e.mem.u32(data.wrapping_add(4)) {
@@ -1542,24 +1542,16 @@ pub fn low_process_process_patrol(e: &mut Engine, this: Ptr<LowProcess>, actor: 
                 }
             }
             1 => {
-                let left = fn_009125b0(
-                    e,
-                    this,
-                    actor,
-                    Ptr::new(data),
-                    f32::from_bits(x87_quiet_bits(time)),
-                );
-                x87_store32(f64::from(left))
+                let left = e
+                    .call(0x0091_25b0, &args![this, actor, data, x87_quiet_bits(time)])
+                    .f64();
+                x87_store32(left)
             }
             2 => {
-                let left = low_process_process_patrol_at_ref(
-                    e,
-                    this,
-                    actor,
-                    Ptr::new(data),
-                    f32::from_bits(x87_quiet_bits(time)),
-                );
-                x87_store32(f64::from(left))
+                let left = e
+                    .call(0x0091_2990, &args![this, actor, data, x87_quiet_bits(time)])
+                    .f64();
+                x87_store32(left)
             }
             _ => 0,
         };
@@ -1639,7 +1631,7 @@ pub fn low_process_process_patrol_at_ref(
                 left = 0;
             }
         }
-        low_process_process_patrol_start_travel_to_next_ref(e, this, actor, data);
+        e.call(0x0091_2340, &args![this, actor, data]);
     } else {
         let waited = x87_store32(x87_add(
             x87_load32(e.mem.u32(waited_at)),
@@ -2059,7 +2051,7 @@ pub fn fn_009125b0(e: &mut Engine, this: Ptr<LowProcess>, actor: Ptr, data: Ptr,
         cells_unloaded(e, actor_cell, reference_cell)
     };
     if !fast && e.call(ACTOR_TEST_008B3B90, &args![actor]).bool() {
-        low_process_process_patrol_start_travel_to_next_ref(e, this, actor, data);
+        e.call(0x0091_2340, &args![this, actor, data]);
         return f32::from_bits(left);
     }
     let mut mode = 0x101u32;
@@ -4578,7 +4570,7 @@ pub fn low_process_check_for_new_package(
     let mut replace = false;
     if package == 0 {
         changed = true;
-        low_process_set_current_package_from_schedule(e, this, actor);
+        e.call(0x0090_7700, &args![this, actor]);
         if current(e) == 0 {
             changed = false;
         }
@@ -4708,7 +4700,7 @@ pub fn low_process_check_for_new_package(
             }
             package = 0;
         }
-        if !low_process_set_current_package_from_schedule(e, this, actor) {
+        if !e.call(0x0090_7700, &args![this, actor]).bool() {
             return false;
         }
         let new_package = current(e);
@@ -5150,7 +5142,7 @@ pub fn low_process_update(e: &mut Engine, this: Ptr<LowProcess>, mobile: Ptr) {
         runs = !e.call(PACKAGE_TEST_008A6290, &args![p]).bool();
     }
     if runs {
-        low_process_reset_target(e, this);
+        e.call(0x0090_a070, &args![this]);
         let p = current(e);
         let procedure = running_procedure(e, base, p);
         let process_slot = |e: &mut Engine, slot: u32| {
@@ -5370,7 +5362,7 @@ pub fn low_process_update(e: &mut Engine, this: Ptr<LowProcess>, mobile: Ptr) {
                 typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, schedule)) == 0
             } {
                 let old = current(e);
-                low_process_set_current_package_from_schedule(e, this, Ptr::new(actor));
+                e.call(0x0090_7700, &args![this, actor]);
                 package = current(e);
                 if old != current(e) {
                     e.vcall(base, SET_PROCEDURE_INDEX_RUNNING_SLOT, &args![0u32]);
@@ -8667,7 +8659,7 @@ fn acquire_settings_match(e: &mut Engine, process: u32, form: u32) -> bool {
 fn new_acquire_entry(e: &mut Engine) -> u32 {
     let block = e.call(ALLOCATE, &args![0x1cu32]).u32();
     if block != 0 {
-        fn_0090e600(e, Ptr::new(block)).addr()
+        e.call(0x0090_e600, &args![block]).u32()
     } else {
         0
     }
