@@ -155,15 +155,15 @@ fi
 # The refusals: a release package without the game and without --game-check-later, a package of
 # both kinds, and --game-check-later with a game.
 refused() { # NAME, TEXT the refusal must hold, then package-playtest.sh's arguments
-    what=$1
-    want=$2
+    rwhat=$1
+    rwant=$2
     shift 2
     status=0
     sh "$here/scripts/package-playtest.sh" --source "$tmp/rel" --version selftest --system "$system" --use-built \
         --target "$tmp/target" --out "$tmp/out-refused" "$@" >"$tmp/log" 2>&1 || status=$?
-    check "refused: $what (status $status)" [ "$status" != 0 ]
-    check "refused: $what says why" grep -qF -e "$want" "$tmp/log"
-    check "refused: $what made no archive" sh -c '! ls "$1"/*.tar.gz >/dev/null 2>&1' x "$tmp/out-refused"
+    check "refused: $rwhat (status $status)" [ "$status" != 0 ]
+    check "refused: $rwhat says why" grep -qF -e "$rwant" "$tmp/log"
+    check "refused: $rwhat made no archive" sh -c '! ls "$1"/*.tar.gz >/dev/null 2>&1' x "$tmp/out-refused"
 }
 refused "a release package without the game" "needs --game"
 refused "a package of both kinds" "give one of them" --game-check-later --test-build
