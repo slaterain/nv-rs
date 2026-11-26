@@ -4009,9 +4009,12 @@ use engine_typed::extra_data::{self, EXTRA_DATA};
 /// leaves (an extra data's type and next, the next's store, a node's item and next, a handle's word,
 /// a buffer's form), the type bitmap's test, `BSExtraData`'s constructor, a sound handle's empty
 /// destructor, the navmesh portal record's copy, the audio buoy marker's empty copy, the
-/// family's own sound handle, mask, flag, colour and `sincos` bodies, and the part 2 range's: a
+/// family's own sound handle, mask, flag, colour and `sincos` bodies, the part 2 range's: a
 /// form's id, a package's type and time stamp, a stamp's byte, the save/load singleton's test, an
-/// `NiPointer`'s compare and a temporary one made from null with its release.
+/// `NiPointer`'s compare and a temporary one made from null with its release; and the part 3
+/// range's: a simple list's emptiness and its test for an item, a form's type, a reference's extra
+/// list, the store of a payload word, a portal's two rooms, the enable state parent's flag leaves
+/// and the constructors of the range's own classes.
 const XD_IN_PLACE: &[u32] = &[
     0x0045_34f0,
     0x004f_1540,
@@ -4043,6 +4046,25 @@ const XD_IN_PLACE: &[u32] = &[
     0x0063_3c90,
     0x0045_cec0,
     0x0041_d8a0,
+    0x0082_56d0,
+    0x005f_65d0,
+    0x0040_1170,
+    0x005d_43c0,
+    0x0041_fd00,
+    0x0097_07f0,
+    0x0041_db30,
+    0x0041_db80,
+    0x0041_dc00,
+    0x0041_dc50,
+    0x0041_e750,
+    0x0041_faf0,
+    0x0041_fcd0,
+    0x0041_ff80,
+    0x0042_02d0,
+    0x0042_0500,
+    0x0042_1090,
+    0x0042_1280,
+    0x0042_0ba0,
 ];
 
 /// The families an extra data function reaches (the extra list's with its lock, type getter,
@@ -4135,12 +4157,9 @@ const XD_NOTED: &[u32] = &[
     0x005a_bf60,
     0x005b_5e40,
     0x00ec_43fb,
-    0x0041_e160,
     0x0042_1540,
-    0x0041_e250,
     0x0042_1430,
     0x0042_1b70,
-    0x0041_e440,
     0x0042_1e40,
     0x0042_1d50,
     0x0042_1c60,
@@ -4149,21 +4168,18 @@ const XD_NOTED: &[u32] = &[
     0x0042_dde0,
     0x0042_2050,
     0x0042_2150,
-    0x0042_0f00,
     0x0043_a160,
     0x0043_a810,
     0x0043_8bb0,
     0x0043_8df0,
     0x0067_c650,
     0x0067_c6f0,
-    0x0041_fc10,
     0x0058_efd0,
     0x0058_f4c0,
     0x0058_9450,
     0x0058_9770,
     0x0068_0890,
     0x0042_2480,
-    0x0041_dc70,
     0x0042_2750,
     0x0043_3b70,
     0x0043_42b0,
@@ -4177,16 +4193,9 @@ const XD_NOTED: &[u32] = &[
     0x0043_46f0,
     0x0043_4c80,
     0x004a_4d40,
-    0x0041_fa60,
     0x0042_eb60,
     0x0053_7e90,
-    0x0042_0fd0,
     0x0042_ef20,
-    0x0041_fec0,
-    0x0042_0a60,
-    0x0042_0e00,
-    0x0042_0c10,
-    0x0042_0870,
     0x0042_f200,
     0x0043_4a70,
     0x0043_4ee0,
@@ -4225,8 +4234,11 @@ fn xd_stand_ins(e: &mut Engine) {
         0x0040_f1b0 => 0x8c, 0x0040_f440 => 0x0a, 0x0043_27e0 => 0x1c, 0x0043_2870 => 0x19,
         0x0043_28d0 => 0x1a, 0x0043_2aa0 => 0x35, 0x0043_2be0 => 0x2f, 0x0043_2c20 => 0x0c,
         0x0043_2cb0 => 0x14, 0x0043_3010 => 0x1b, 0x0043_3260 => 0x13, 0x0043_3300 => 0x37,
+        0x0043_5920 => 0x39, 0x0040_f370 => 0x03, 0x0043_34b0 => 0x3b, 0x0043_36c0 => 0x89,
+        0x0043_3640 => 0x51,
     }
     xe_stand_ins(e);
+    xp_stand_ins(e);
 }
 
 /// The extra list's world (`extra_world`) for the family: page 0 mapped (a failed allocation's
@@ -4249,6 +4261,11 @@ fn xd_world(e: &mut Engine, seed: u32) -> ExtraWorld {
     // A null extra data (a failed allocation's, which the exe adds and calls through as it is)
     // reads the world's vtable from page 0, so its calls reach the stand-ins on both sides.
     e.mem.set_u32(0, vt);
+    // The pages the world's own payload words (0x1000 and up) and the cache's decoy's (0xeec0) point
+    // into: zeros, so the part 3 functions that follow a payload (a room's data, a portal's words)
+    // read and write there as the exe would.
+    e.map(0x1000, 0x1000);
+    e.map(0xe000, 0x1000);
     // The game loader's global `RemoveNonPersistentCellData` reads (its flag test ignores it).
     e.map(0x011d_d000, 0x1000);
     // The save/load singleton's global, which the reference pointer setter's translation reads.
@@ -6164,9 +6181,6 @@ const XF_NOTED: &[u32] = &[
     0x0067_dd20,
     0x0043_0a90,
     0x004a_4e90,
-    0x0041_e160,
-    0x0041_e250,
-    0x0041_e440,
     0x0042_1430,
     0x0042_1b70,
     0x0042_1c60,
@@ -6176,36 +6190,18 @@ const XF_NOTED: &[u32] = &[
     0x0042_2220,
     0x0042_2350,
     0x0042_eb60,
-    0x0041_dc70,
-    0x0041_ece0,
-    0x0041_f080,
     0x0042_1f30,
     0x0042_e2c0,
-    0x0041_f1a0,
-    0x0041_f330,
-    0x0041_f940,
-    0x0041_fa60,
     0x0042_2150,
-    0x0041_fc10,
-    0x0041_fe90,
-    0x0041_fec0,
-    0x0042_0210,
-    0x0042_0440,
-    0x0042_0fd0,
     0x0042_f200,
-    0x0041_fd00,
     0x0048_4e60,
     0x0046_1630,
     0x0043_7730,
-    0x0041_dcd0,
-    0x0041_e530,
     0x0043_3db0,
     0x0043_3ed0,
     0x0043_4050,
     0x0067_c6c0,
-    0x0042_0ce0,
     0x0058_f210,
-    0x0041_edd0,
     0x0090_5330,
     0x0063_f7b0,
     0x004d_93c0,
@@ -6216,7 +6212,6 @@ const XF_NOTED: &[u32] = &[
     0x0067_dc80,
     0x007d_6bb0,
     0x00a5_8550,
-    0x0041_ec80,
     0x0040_37d0,
 ];
 
