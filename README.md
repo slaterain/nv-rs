@@ -4,10 +4,10 @@
 
 <h1 align="center">nv-rs</h1>
 
-[![Download](https://img.shields.io/badge/Download-preview_2026--11--26.1-brightgreen.svg)](https://github.com/slaterain/nv-rs/releases/tag/preview-2026-11-26.1)
+[![Download](https://img.shields.io/badge/Download-nv--rs_1.0-brightgreen.svg)](https://github.com/slaterain/nv-rs/releases/tag/v1.0)
 [![Rust](https://img.shields.io/badge/Rust-2021_edition-orange.svg)](https://www.rust-lang.org/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Windows_|_Linux_|_macOS-purple.svg)](#play-the-preview)
+[![Platform](https://img.shields.io/badge/Platform-Windows_|_Linux_|_macOS-purple.svg)](#play-it)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2.svg?logo=discord&logoColor=white)](https://discord.gg/pn5kjZJJxx)
 
 **Fallout: New Vegas, rebuilt in Rust, aiming to play exactly like the original.**
@@ -23,9 +23,9 @@ a modern 64-bit engine: high frame rates, fewer crashes, built-in modding and mo
 
 ---
 
-## Play the preview
+## Play it
 
-**[Download the preview](https://github.com/slaterain/nv-rs/releases/tag/preview-2026-11-26.1)**
+**[Download nv-rs 1.0](https://github.com/slaterain/nv-rs/releases/tag/v1.0)**
 for Windows, Linux or macOS (Apple silicon). You need Fallout: New Vegas, version 1.4.0.525.
 
 - **Windows:** extract the ZIP to a folder of its own (not Documents, Program Files or the game's
@@ -57,7 +57,7 @@ the 4 GB memory limit. After that: co-op and VR.
 | ✅ | **The whole game** | Playable from start to finish, DLCs included. |
 | ✅ | **Fixes** | Bug fixes on by default, each with its own setting. |
 | ✅ | **Launcher** | Play, mods, saves, settings and crash reports in one window. |
-| ✅ | **Windows, Linux, macOS** | A preview for each; tested by the team on Windows. |
+| ✅ | **Windows, Linux, macOS** | Released for all three; tested by the team on Windows. |
 | 🔨 | **Mods** | `.esp`/`.esm` mods and mod installers work; xNVSE, JIP LN NVSE and UI Organizer are built in. Players report Tale of Two Wastelands working. Other `.dll` plugins don't load yet. |
 | 🔨 | **Native code** | About 2,550 of the game's functions rewritten in native Rust so far. |
 | 🔨 | **Graphics** | Vulkan by default. Optional new lighting: ambient occlusion and sun shadows (Shift+F11 in the game). |
@@ -86,7 +86,7 @@ the original's own code and recordings of the original game. Judge it by how it 
 
 ## Get involved
 
-- **Play and report:** try the preview and [open an issue](https://github.com/slaterain/nv-rs/issues)
+- **Play and report:** try it and [open an issue](https://github.com/slaterain/nv-rs/issues)
   for anything that differs from the original.
 - **Contribute:** read [CONTRIBUTING.md](CONTRIBUTING.md) (and point your agent at it), say
   in an issue what you'd like to work on, then open a small pull request.
