@@ -109,7 +109,20 @@ const ANGLE: u32 = 0x011f_d868;
 /// with an integer at +0xe4. With vertex entry 15 enabled: `011fd868` = game time (`011f940c`)
 /// / 3600.0 * 6.28318 * the integer (in the exe's order, each step rounded to a float).
 /// `this` (`ECX`) is not read, but `SetupGeometryConstants` (`00b7dab0`) calls it with `ECX` set.
-pub fn vertex_entry_15(e: &mut Engine, _this: Ptr, object: Ptr) {
+pub fn vertex_entry_15(e: &mut Engine, this: Ptr, object: Ptr) {
+    if crate::draw::keep::building() {
+        let call = crate::draw::keep::Leaf::Entry15 {
+            this: this.addr(),
+            object: object.addr(),
+        };
+        return crate::draw::keep::leaf(e, call, |e| entry_15_now(e, object));
+    }
+    entry_15_now(e, object);
+}
+
+/// [`vertex_entry_15`]'s work (a kept draw record makes the call again with the frame's time).
+#[inline(always)]
+fn entry_15_now(e: &mut Engine, object: Ptr) {
     if !entry_enabled(e, VERTEX_ENTRIES + 4 * 15) {
         return;
     }
@@ -133,7 +146,20 @@ const TARGET: u32 = 0x011f_a2e0;
 /// read. With vertex entry 16 enabled: the four floats at `011fa2e0` become those at
 /// `011f95f4` less the camera's x and y (`011f474c`) and less 15.0 twice (the last as `FSUBR`).
 /// `this` (`ECX`) is not read, but `SetupGeometryConstants` (`00b7dab0`) calls it with `ECX` set.
-pub fn vertex_entry_16(e: &mut Engine, _this: Ptr, _unused_0: u32) {
+pub fn vertex_entry_16(e: &mut Engine, this: Ptr, unused: u32) {
+    if crate::draw::keep::building() {
+        let call = crate::draw::keep::Leaf::Entry16 {
+            this: this.addr(),
+            unused,
+        };
+        return crate::draw::keep::leaf(e, call, entry_16_now);
+    }
+    entry_16_now(e);
+}
+
+/// [`vertex_entry_16`]'s work (a kept draw record makes the call again with the frame's camera).
+#[inline(always)]
+fn entry_16_now(e: &mut Engine) {
     if !entry_enabled(e, VERTEX_ENTRIES + 4 * 16) {
         return;
     }
@@ -202,7 +228,22 @@ const RUNNING: u32 = 0x011f_94aa;
 /// `011f94ac`) / (`011ad838` * 5))) less the second object's +0x8c and +0x90 (the factor 1.0
 /// clears `011f94aa`). Every step and copy is in the exe's order.
 /// `this` (`ECX`) is not read, but `SetupGeometryConstants` (`00b7dab0`) calls it with `ECX` set.
-pub fn vertex_entry_21(e: &mut Engine, _this: Ptr, pass_type: u32, first: Ptr, second: Ptr) {
+pub fn vertex_entry_21(e: &mut Engine, this: Ptr, pass_type: u32, first: Ptr, second: Ptr) {
+    if crate::draw::keep::building() {
+        let call = crate::draw::keep::Leaf::Entry21 {
+            this: this.addr(),
+            pass_type,
+            first: first.addr(),
+            second: second.addr(),
+        };
+        return crate::draw::keep::leaf(e, call, |e| entry_21_now(e, pass_type, first, second));
+    }
+    entry_21_now(e, pass_type, first, second);
+}
+
+/// [`vertex_entry_21`]'s work (a kept draw record makes the call again with the frame's time).
+#[inline(always)]
+fn entry_21_now(e: &mut Engine, pass_type: u32, first: Ptr, second: Ptr) {
     if !entry_enabled(e, VERTEX_ENTRIES + 4 * 21) {
         return;
     }
@@ -542,6 +583,20 @@ pub fn eye_pos_words(e: &mut Engine, words: &[u32]) -> Ret {
 /// transformed by the matrix (`D3DXVec3TransformCoord`) goes to `011fd894` with the object's
 /// +0x30.
 pub fn eye_pos(e: &mut Engine, pass_type: u32, object: Ptr, matrix: [u32; 16]) {
+    if crate::draw::keep::building() {
+        let call = crate::draw::keep::Leaf::EyePos {
+            pass_type,
+            object: object.addr(),
+            matrix,
+        };
+        return crate::draw::keep::leaf(e, call, |e| eye_pos_now(e, pass_type, object, matrix));
+    }
+    eye_pos_now(e, pass_type, object, matrix);
+}
+
+/// [`eye_pos`]'s work (a kept draw record makes the call again with the frame's eye).
+#[inline(always)]
+fn eye_pos_now(e: &mut Engine, pass_type: u32, object: Ptr, matrix: [u32; 16]) {
     if !entry_enabled(e, VERTEX_ENTRIES + 4 * 9) && !entry_enabled(e, PIXEL_ENTRIES + 4 * 5) {
         return;
     }
@@ -897,6 +952,49 @@ pub fn lights(
     pass_type: u32,
     flag: u32,
 ) {
+    if crate::draw::keep::building() {
+        let call = crate::draw::keep::Leaf::Lights {
+            property: property.addr(),
+            rendering: rendering.addr(),
+            matrix,
+            scale_object: scale_object.addr(),
+            pass_type,
+            flag,
+        };
+        return crate::draw::keep::leaf(e, call, |e| {
+            lights_now(
+                e,
+                property,
+                rendering,
+                matrix,
+                scale_object,
+                pass_type,
+                flag,
+            );
+        });
+    }
+    lights_now(
+        e,
+        property,
+        rendering,
+        matrix,
+        scale_object,
+        pass_type,
+        flag,
+    );
+}
+
+/// [`lights`]'s work (a kept draw record makes the call again with the frame's camera and lights).
+#[inline(always)]
+fn lights_now(
+    e: &mut Engine,
+    property: Ptr,
+    rendering: Ptr,
+    matrix: [u32; 16],
+    scale_object: Ptr,
+    pass_type: u32,
+    flag: u32,
+) {
     let property = property.addr();
     let rendering = rendering.addr();
     let light_float = e.global::<u32>(property + 0x6c); // own: main's object read in place (value packet B, piece 4)
@@ -1109,12 +1207,30 @@ const COLOUR_LUMINANCE: u32 = 0x00b7_19e0;
 /// `this` (`ECX`) is not read, but `SetupGeometryConstants` (`00b7dab0`) calls it with `ECX` set.
 pub fn ambient_emittance(
     e: &mut Engine,
-    _this: Ptr,
+    this: Ptr,
     property: Ptr,
     rendering: Ptr,
     block: Ptr,
     word: u32,
 ) {
+    if crate::draw::keep::building() {
+        let call = crate::draw::keep::Leaf::Ambient {
+            this: this.addr(),
+            property: property.addr(),
+            rendering: rendering.addr(),
+            block: block.addr(),
+            word,
+        };
+        return crate::draw::keep::leaf(e, call, |e| {
+            ambient_emittance_now(e, property, rendering, block, word);
+        });
+    }
+    ambient_emittance_now(e, property, rendering, block, word);
+}
+
+/// [`ambient_emittance`]'s work (a kept draw record makes the call again with the frame's lights and HDR scale).
+#[inline(always)]
+fn ambient_emittance_now(e: &mut Engine, property: Ptr, rendering: Ptr, block: Ptr, word: u32) {
     let property = property.addr();
     let rendering = rendering.addr();
     let current = capture::own_at::<u32>(e, RENDERING_PASS);

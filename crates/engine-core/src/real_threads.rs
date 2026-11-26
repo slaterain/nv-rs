@@ -6351,6 +6351,7 @@ fn direct_hold(e: &Engine, world: &'static World) {
 /// threads, the switch off).
 #[inline]
 pub fn device_vcall(e: &mut Engine, this: u32, slot: u32, args: &[u32]) -> Ret {
+    let _call = InCall::enter(note_device_call(e, this, slot, args));
     if DIRECT.with(Cell::get) == 0 || e.diagnosing_direct() {
         return e.vcall(this, slot, args);
     }
@@ -6458,6 +6459,7 @@ fn device_typed(
     pick: fn(&'static DeviceWriter) -> AbiFn,
     typed: impl FnOnce(&mut Engine, &'static DeviceWriter) -> u32,
 ) -> Ret {
+    let _call = InCall::enter(note_device_call(e, this, slot, args));
     if DIRECT.with(Cell::get) == 0 || e.diagnosing_direct() {
         return e.vcall(this, slot, args);
     }
@@ -6696,6 +6698,203 @@ pub fn device_set_pixel_constants(
         |w| w.pixel_constants.0,
         |e, w| (w.pixel_constants.1)(e, device, start, data, count),
     )
+}
+
+/// A device call the typed draw code made while this thread's recorder was on
+/// ([`device_record_begin`]): the device, the slot (byte offset), the words, and for a call that
+/// passes a structure by address (constants, a matrix, a plane, a viewport) from the caller's stack
+/// for locals the bytes there as they were at the call and which word held the address (one
+/// elsewhere is read again at replay). [`device_replay`] makes it again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceCall {
+    pub this: u32,
+    pub slot: u32,
+    pub args: Vec<u32>,
+    pub data: Vec<u8>,
+    pub data_arg: Option<usize>,
+}
+
+thread_local! {
+    /// The calls recorded on this thread while its recorder is on.
+    static RECORDED: std::cell::RefCell<Option<Vec<DeviceCall>>> =
+        const { std::cell::RefCell::new(None) };
+    /// 1 while the recorder is on and not paused (the one test a device call makes), else 0.
+    static RECORDING: Cell<u32> = const { Cell::new(0) };
+    /// Pauses in force while the recorder is on.
+    static RECORD_PAUSES: Cell<u32> = const { Cell::new(0) };
+    /// How deep this thread is in device calls the recorder noted.
+    static IN_CALL: Cell<u32> = const { Cell::new(0) };
+    /// Whether the device's state was reached outside a noted call while the recorder was on (a call it cannot
+    /// make again: [`note_device_state`]).
+    static UNSEEN: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Starts this thread's device call recorder (the kept draw records' build, the typed draw code):
+/// every call through [`device_vcall`] and the writer's functions is noted until
+/// [`device_record_end`]. Starting it again drops what it held.
+pub fn device_record_begin() {
+    IN_CALL.with(|c| c.set(0));
+    UNSEEN.with(|u| u.set(false));
+    RECORDED.with(|r| *r.borrow_mut() = Some(Vec::new()));
+    RECORD_PAUSES.with(|p| p.set(0));
+    RECORDING.with(|r| r.set(1));
+}
+
+/// Ends this thread's recorder: the calls noted, in order.
+pub fn device_record_end() -> Vec<DeviceCall> {
+    RECORDING.with(|r| r.set(0));
+    RECORD_PAUSES.with(|p| p.set(0));
+    RECORDED.with(|r| r.borrow_mut().take()).unwrap_or_default()
+}
+
+/// Pauses (`true`) or resumes (`false`) this thread's recorder; pauses nest. Nothing without it.
+pub fn device_record_pause(pause: bool) {
+    if RECORDED.with(|r| r.borrow().is_none()) {
+        return;
+    }
+    let n = RECORD_PAUSES.with(|p| {
+        let n = if pause {
+            p.get() + 1
+        } else {
+            p.get().saturating_sub(1)
+        };
+        p.set(n);
+        n
+    });
+    RECORDING.with(|r| r.set(u32::from(n == 0)));
+}
+
+/// The word of a device call that is the address of a structure, and the structure's bytes:
+/// `Set{Vertex,Pixel}ShaderConstant{F,I,B}` (16, 16 and 4 bytes a register), `SetTransform` (a
+/// matrix), `SetClipPlane` (a plane), `SetViewport`, `SetMaterial`, `SetLight`.
+pub fn device_structure(slot: u32, args: &[u32]) -> Option<(usize, u32)> {
+    let count = |i: usize| args.get(i).copied().unwrap_or(0);
+    match slot {
+        0x178 | 0x180 | 0x1b4 | 0x1bc => Some((1, count(2).saturating_mul(16))),
+        0x188 | 0x1c4 => Some((1, count(2).saturating_mul(4))),
+        0xb0 => Some((1, 64)),
+        0xdc => Some((1, 16)),
+        0xbc => Some((0, 24)),
+        0xc4 => Some((0, 68)),
+        0xcc => Some((1, 104)),
+        _ => None,
+    }
+}
+
+/// Notes a device call when this thread's recorder is on (one thread-local test otherwise); answers whether it did.
+#[inline(always)]
+fn note_device_call(e: &Engine, this: u32, slot: u32, args: &[u32]) -> bool {
+    if RECORDING.with(Cell::get) != 0 {
+        note_device_call_slow(e, this, slot, args);
+        return true;
+    }
+    false
+}
+
+/// A noted device call running ([`IN_CALL`] one deeper while it does).
+struct InCall(bool);
+
+impl InCall {
+    #[inline(always)]
+    fn enter(noted: bool) -> InCall {
+        if noted {
+            IN_CALL.with(|c| c.set(c.get() + 1));
+        }
+        InCall(noted)
+    }
+}
+
+impl Drop for InCall {
+    #[inline(always)]
+    fn drop(&mut self) {
+        if self.0 {
+            IN_CALL.with(|c| c.set(c.get().saturating_sub(1)));
+        }
+    }
+}
+
+/// The platform layer reached the device's state (every device function and the resources' do): with the recorder
+/// on and outside a call it noted, that is a call it could not make again (a device call by the vtable from
+/// translated code, a buffer's `Lock`), noted for [`device_record_unseen`]. One thread-local test otherwise.
+#[inline(always)]
+pub fn note_device_state() {
+    if RECORDING.with(Cell::get) != 0 && IN_CALL.with(Cell::get) == 0 {
+        UNSEEN.with(|u| u.set(true));
+    }
+}
+
+/// Whether, since [`device_record_begin`], the device's state was reached outside the calls the recorder noted
+/// ([`note_device_state`]): what it recorded is then not all the device got.
+pub fn device_record_unseen() -> bool {
+    UNSEEN.with(Cell::get)
+}
+
+#[cold]
+#[inline(never)]
+fn note_device_call_slow(e: &Engine, this: u32, slot: u32, args: &[u32]) {
+    // A structure on the caller's stack for locals is gone by replay time: its bytes are kept. One elsewhere (the
+    // shader statics, an object) is read again where it is at replay, as the call would read it then.
+    let (data_arg, data) = match device_structure(slot, args) {
+        Some((i, len))
+            if args.get(i).is_some_and(|&p| p != 0 && e.in_locals(p)) && len <= 0x4000 =>
+        {
+            let mut bytes = vec![0u8; len as usize];
+            if e.mem.try_read(args[i], &mut bytes).is_err() {
+                bytes.clear();
+            }
+            (Some(i), bytes)
+        }
+        _ => (None, Vec::new()),
+    };
+    let call = DeviceCall {
+        this,
+        slot,
+        args: args.to_vec(),
+        data,
+        data_arg,
+    };
+    RECORDED.with(|r| {
+        if let Some(v) = r.borrow_mut().as_mut() {
+            // Its place among the writes the store log notes meanwhile, when one is on.
+            e.mem.store_log_mark(DEVICE_CALL_MARK, v.len() as u32);
+            v.push(call);
+        }
+    });
+}
+
+/// The store log mark ([`crate::mem::Mem::store_log_mark`]) a recorded device call leaves, its index in
+/// the recorder's list as the mark's bytes.
+pub const DEVICE_CALL_MARK: u32 = 0;
+
+/// Makes a recorded device call again ([`DeviceCall`]): a structure it passed by address from a
+/// local copy of its bytes; through the writer's function for the slots it has, else
+/// [`device_vcall`]. Its answer.
+pub fn device_replay(e: &mut Engine, call: &DeviceCall) -> Ret {
+    match call.data_arg {
+        Some(i) if !call.data.is_empty() => e.with_stack(call.data.len() as u32, |e, local| {
+            e.mem.write(local.addr(), &call.data);
+            let mut args = call.args.clone();
+            args[i] = local.addr();
+            device_call_by_slot(e, call.this, call.slot, &args)
+        }),
+        _ => device_call_by_slot(e, call.this, call.slot, &call.args),
+    }
+}
+
+/// A device call by its slot: the writer's function where it has one, else [`device_vcall`].
+fn device_call_by_slot(e: &mut Engine, this: u32, slot: u32, a: &[u32]) -> Ret {
+    let w = |i: usize| a.get(i).copied().unwrap_or(0);
+    match (slot, a.len()) {
+        (0xe4, 2) => device_set_render_state(e, this, w(0), w(1)),
+        (0x10c, 3) => device_set_stage_state(e, this, w(0), w(1), w(2)),
+        (0x114, 3) => device_set_sampler_state(e, this, w(0), w(1), w(2)),
+        (0x104, 2) => device_set_texture(e, this, w(0), w(1)),
+        (0x190, 4) => device_set_stream_source(e, this, w(0), w(1), w(2), w(3)),
+        (0x144, 3) => device_draw_primitive(e, this, w(0), w(1), w(2)),
+        (0x148, 6) => device_draw_indexed_primitive(e, this, w(0), w(1), w(2), w(3), w(4), w(5)),
+        (0x178 | 0x1b4, 3) => device_set_constants(e, this, slot, w(0), w(1), w(2)),
+        _ => device_vcall(e, this, slot, a),
+    }
 }
 
 /// The world draw's hold of the device lock with real threads (`NV_DRAW_DIRECT`): what a wait, a

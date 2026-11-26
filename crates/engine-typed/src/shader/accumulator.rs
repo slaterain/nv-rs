@@ -650,6 +650,16 @@ fn set_vertex_constants(e: &mut Engine, register: u32, data: u32, count: u32) {
 /// ([`set_world_transform`], not sent); its world times view, transposed, goes to vertex constants 0
 /// to 3.
 pub fn set_world_view_constants(e: &mut Engine, this: u32, _unused: u32, transform: u32) {
+    if crate::draw::keep::building() {
+        let call = crate::draw::keep::Leaf::WorldView { this, transform };
+        return crate::draw::keep::leaf(e, call, |e| world_view_constants_now(e, this, transform));
+    }
+    world_view_constants_now(e, this, transform);
+}
+
+/// [`set_world_view_constants`]'s work (a kept draw record makes the call again with the frame's camera).
+#[inline(always)]
+fn world_view_constants_now(e: &mut Engine, this: u32, transform: u32) {
     let renderer = Ptr::<NiDX9Renderer>::new(e.global::<u32>(this.wrapping_add(0x18)));
     typed_call!(
         FAMILY,
@@ -794,7 +804,22 @@ const COLOR: u32 = 0x011f_a2d0;
 /// `thiscall(shader, geometry, green, source)`: the colour constant: red 1.0 when the geometry's
 /// property has bit 5 of its second flags, green 1.0 when asked (else the default's), blue the source's
 /// float +0x38 (or the default blue), alpha the default's.
-pub fn set_tint(e: &mut Engine, _this: u32, owner: Ptr<NiGeometry>, green: u32, source: u32) {
+pub fn set_tint(e: &mut Engine, this: u32, owner: Ptr<NiGeometry>, green: u32, source: u32) {
+    if crate::draw::keep::building() {
+        let call = crate::draw::keep::Leaf::Tint {
+            this,
+            owner: owner.addr(),
+            green,
+            source,
+        };
+        return crate::draw::keep::leaf(e, call, |e| tint_now(e, owner, green, source));
+    }
+    tint_now(e, owner, green, source);
+}
+
+/// [`set_tint`]'s work (a kept draw record makes the call again: it reads the fog property of the frame).
+#[inline(always)]
+fn tint_now(e: &mut Engine, owner: Ptr<NiGeometry>, green: u32, source: u32) {
     let default_green = e.global::<u32>(DEFAULT_COLOR + 4);
     let alpha = e.global::<u32>(DEFAULT_COLOR + 0xc);
     let property = e.get(owner, NiGeometry::pShaderProperty);
