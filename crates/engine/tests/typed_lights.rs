@@ -12,6 +12,9 @@ use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_typed::lights::{self, walk};
 
+#[path = "typed_lights/scene_node.rs"]
+mod scene_node;
+
 const VT_FN: u32 = 0x00ff_2000;
 const VT_SLOTS: u32 = 0x200;
 const LOG: u32 = 0x0300_0000;
@@ -3145,7 +3148,7 @@ mod scene_light {
             // kept); the cull word; the shadow dimmer (above, just above, just below 0.05, NaN);
             // the accumulator (kept, none); the renderer's free map (one, none); the scene's bound;
             // the extents' extra data; the shadow camera (a new one, kept); the script test; the
-            // depth pass and the scene's scale; the unit cross small first; floats.
+            // scene's scale; the unit cross small first; the depth pass; floats.
             Diff::new(entry!(
                 0x00b9_dfc0,
                 scene_frustum::setup_frustum_depth_map(Ptr<_>, u32, u32)
@@ -3159,6 +3162,8 @@ mod scene_light {
                 0x0045_7990,
                 0x0063_c8a0,
                 0x00a7_4e10,
+                // The map setter (the scene node family's): its stand-in stores the map.
+                0x00b5_aee0,
             ])
             .inputs(&[
                 Input::Flag,
@@ -3176,6 +3181,7 @@ mod scene_light {
                 Input::Of(&[1, 0]),
                 Input::Of(&[0, 1]),
                 Input::Of(&[0, 1]),
+                Input::Of(&[0, 1]),
                 Input::F32Swept(HALF),
                 Input::F32Swept(MINUS_ONE),
                 Input::F32Swept(TWO),
@@ -3188,8 +3194,8 @@ mod scene_light {
             .float_sweep(200)
             .setup(|e, case| {
                 fworld(e);
-                let f = |i: usize| bits(case, 15 + i);
-                let ni = ni_light_of(e, case, 6, 15, f(3));
+                let f = |i: usize| bits(case, 16 + i);
+                let ni = ni_light_of(e, case, 6, 16, f(3));
                 e.mem.set_u32(ni + 0x30, 0x10);
                 words(e, ni + 0x68, &[ONE, 0, 0, 0, ONE, 0, 0, 0, ONE]);
                 let l = plain_light(e, ni, case.word(0) as u8);
@@ -3259,7 +3265,7 @@ mod scene_light {
                 words(e, CROSSES, &small);
                 words(e, CROSSES + 0xc, &[0, ONE, 0, HALF, 0, ONE]);
                 words(e, 0x011a_9484, &[f(6), f(1), MINUS_ONE]);
-                e.mem.set_u32(0x011f_91b0, case.word(13));
+                e.mem.set_u32(0x011f_91b0, case.word(15));
                 vec![l, 0x7777, case.word(13) + 2]
             })
             .run()

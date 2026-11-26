@@ -168,6 +168,9 @@ struct Layout {
     welcome_y: i32,
     /// The welcome text's lines that show (a long text shows a part of itself).
     text: std::ops::Range<usize>,
+    /// Whether [`MORE_BELOW`] shows under them, in the place of the text's last line: the text
+    /// goes on below (read with Page Down or the wheel).
+    more: bool,
     line_y: i32,
     rows: Rows,
     prompt_y: i32,
@@ -241,6 +244,9 @@ fn layout(look: &Look, screen: &Screen) -> Layout {
     } else {
         screen.scroll.min(lines - visible)
     };
+    // A text cut before its end (not a program's output, which shows its end) says so in its
+    // last line's place.
+    let more = !screen.follow_end && start + visible < lines;
     let line_y = welcome_y + lh * visible as i32 + 10;
     let top = line_y + 2 + 10;
     // As many rows as fit above the prompt, at most the game's 12; scrolled so the highlighted
@@ -251,7 +257,8 @@ fn layout(look: &Look, screen: &Screen) -> Layout {
     Layout {
         line_height: lh,
         welcome_y,
-        text: start..start + visible,
+        text: start..start + visible - usize::from(more),
+        more,
         line_y,
         rows: Rows {
             top,
@@ -279,6 +286,9 @@ pub fn line_texts(look: &Look, screen: &Screen) -> Vec<String> {
         screen.title.clone(),
     ];
     out.extend(welcome_lines(look, screen)[l.text].iter().cloned());
+    if l.more {
+        out.push(MORE_BELOW.to_string());
+    }
     out.extend(
         screen.entries[rows.first..rows.first + rows.shown]
             .iter()
@@ -291,9 +301,13 @@ pub fn line_texts(look: &Look, screen: &Screen) -> Vec<String> {
 /// The prompt at the bottom, before what is typed there.
 pub const PROMPT: &str = "> ";
 
+/// The line under a text that goes on below what shows.
+pub const MORE_BELOW: &str = "(more below: Page Down)";
+
 /// Where the first entry's line is in [`line_texts`].
 pub fn first_entry_line(look: &Look, screen: &Screen) -> usize {
-    3 + layout(look, screen).text.len()
+    let l = layout(look, screen);
+    3 + l.text.len() + usize::from(l.more)
 }
 
 /// How many characters the screen types before it is whole.
@@ -360,13 +374,19 @@ pub fn draw(look: &Look, screen: &Screen, shown: Option<&[usize]>, cursor: bool)
     // The welcome text (the part that shows), then the line under it, as wide as the text.
     let mut widest = 0;
     let welcome = welcome_lines(look, screen);
-    for (i, line) in welcome[l.text.clone()].iter().enumerate() {
+    let more = l.more.then_some(MORE_BELOW);
+    for (i, line) in welcome[l.text.clone()]
+        .iter()
+        .map(String::as_str)
+        .chain(more)
+        .enumerate()
+    {
         let part = typed(line);
         look.font
             .draw(&mut c, 100, l.welcome_y + lh * i as i32, &part, text);
         widest = widest.max(look.font.width(line));
     }
-    if !l.text.is_empty() {
+    if !l.text.is_empty() || l.more {
         c.fill(100, l.line_y, widest, 2, look.at(200.0, 255.0));
     }
     // The list.
@@ -447,8 +467,9 @@ mod tests {
         assert_eq!(lines.concat().replace(' ', ""), path.replace(' ', ""));
     }
 
-    /// A text longer than its room shows its start (moved by the scroll) or, following a
-    /// program's output, its end; the entries keep their rows below it.
+    /// A text longer than its room shows its start (moved by the scroll), with a line saying more
+    /// is below in its last line's place, or, scrolled to its end or following a program's
+    /// output, its end with no such line; the entries keep their rows below it.
     #[test]
     fn a_long_text_shows_a_part_and_keeps_the_entries() {
         let look = Look::plain();
@@ -459,15 +480,32 @@ mod tests {
         let l = layout(&look, &s);
         assert_eq!(l.text.start, 0);
         assert!(l.text.len() > 5 && l.text.len() < 60, "{:?}", l.text);
+        assert!(l.more);
+        let lines = line_texts(&look, &s);
+        assert_eq!(lines[3 + l.text.len()], MORE_BELOW);
+        assert_eq!(first_entry_line(&look, &s), 4 + l.text.len());
+        assert_eq!(lines[first_entry_line(&look, &s)], "> Back");
         assert_eq!(l.rows.shown, 2);
         let prompt = HEIGHT as i32 - look.font.line_height() as i32 - 30;
         assert!(l.rows.top + (l.rows.row * 2) as i32 <= prompt - 10);
         s.scroll = 1000;
-        assert_eq!(layout(&look, &s).text.end, 60);
+        let end = layout(&look, &s);
+        assert_eq!((end.text.end, end.more), (60, false));
+        assert_eq!(
+            end.text.len(),
+            l.text.len() + 1,
+            "the hint's line is the text's again"
+        );
         s.scroll = 3;
         assert_eq!(layout(&look, &s).text.start, 3);
         s.follow_end = true;
-        assert_eq!(layout(&look, &s).text.end, 60);
+        let follow = layout(&look, &s);
+        assert_eq!((follow.text.end, follow.more), (60, false));
+        // A text that fits says nothing more.
+        let short = screen(&["Game: x"]);
+        assert!(!layout(&look, &short).more);
+        assert!(!line_texts(&look, &short).iter().any(|l| l == MORE_BELOW));
+        assert!(look.font.width(MORE_BELOW) <= WRAP);
     }
 
     /// The welcome text wraps at 600 at spaces and keeps every word; the list starts below it.

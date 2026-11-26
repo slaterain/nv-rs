@@ -19,14 +19,18 @@
 //! - [`menu_manager`]: the menu manager unit up to `00721060`: `MenuManager` (its instance, the menu
 //!   factory, reloading, deleting, the frontmost menu, whether a menu is open) and the constructors,
 //!   destructors, classes and tile attaching of the menus the factory makes that were emitted there.
+//! - [`menu_manager_p2`]: the same unit from `00721060` to its end: the six `ListBox<T>` instances
+//!   (construction, emptying, sorting, highlighting and its moves, the indices, the highlight box,
+//!   the scroll steps, the unfiltered count) and the pages' `BSSimpleArray`s.
 //!
 //! **Floats.** The menus run on the main thread ([`Threads::Main`]), at the float precision the
 //! exe's main thread computes in once Direct3D set it: plain `f32` (the camera frustum's products;
 //! a product by one of the exe's double factors is exact in an `f64` and rounded once to the float).
 //! The item card's ratios, the screen ratio and the tab line's share take a double operand of the
 //! exe's (a constant, an integer loaded whole): each such step is the `f64` result rounded once to the
-//! float, the 24-bit step. The rest are stores of integers as floats, and the menu manager's
-//! compares of tile traits (a float against a float or a double, exact either way).
+//! float, the 24-bit step; so do the list boxes' scroll steps (a whole count times a float, a float
+//! over the whole number of steps). The rest are stores of integers as floats, and the menu
+//! manager's compares of tile traits (a float against a float or a double, exact either way).
 
 use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::AbiFn;
@@ -35,6 +39,7 @@ pub mod interface_cpp;
 pub mod interface_cpp_p2;
 pub mod interface_cpp_p3;
 pub mod menu_manager;
+pub mod menu_manager_p2;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(44);
@@ -56,6 +61,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
     all.extend(interface_cpp_p2::funcs());
     all.extend(interface_cpp_p3::funcs());
     all.extend(menu_manager::funcs());
+    all.extend(menu_manager_p2::funcs());
     all
 }
 

@@ -13,11 +13,20 @@
 //!   `TESNPC` and `TESCreature`) but the save/load stub `0047c850` (the draw family's): its
 //!   constructor and destructor, the flag getters and setters, the statistics' getters and
 //!   setters, the faction list, the template forms, the record and save game chunks, the karma.
+//! - [`actor_base`]: every function of `TESActorBase`'s unit (the base of `TESNPC` and
+//!   `TESCreature`): the form-type flag tests, the actor value getter and setter, the attributes'
+//!   getters and setters, the health, the change routing for created forms, an item's
+//!   desirability, the worn items' check, the actor base's save and load, `Reset3DMobIterator`.
+//! - [`attributes`]: every function of `TESAttributes`' unit and of the unit after it: the seven
+//!   attribute bytes' record data, initialisation, copy, compare, getter and setter, their save
+//!   game functions, and `TESBipedModelForm`'s constructor and destructor with `TESModelRDT`'s
+//!   constructor.
 //!
 //! Reached: each function stays registered at its exe address, so the translations' calls by
 //! address and the vtable slots that hold them (`TESForm`'s vtable `0101c794` and the form classes
 //! that keep its slots) reach the typed functions; between them the calls are typed calls. The
-//! translations that called one of them as a plain Rust function (all in `tesform.rs` itself)
+//! translations that called one of them as a plain Rust function (in `tesform.rs`,
+//! `tesactorbasedata.rs`, `tesactorbase.rs`, `tesattributes.rs` and `run_004801e0.rs` themselves)
 //! call it by address now, so the game reaches the typed function from there too.
 //!
 //! Native: the one-line bodies the exe calls (the form type, its flag tests, the byte swaps, the
@@ -41,15 +50,22 @@
 //! the compile index are computed exactly as the translation computes them.
 //!
 //! Stage 1: the objects stay in guest memory where the game made them. The loading threads read and
-//! write forms too, so the row is [`Threads::Both`]. No float maths: the components' weight and
+//! write forms too, so the row is [`Threads::Both`], and the float maths is the exe's x87 maths under
+//! the running thread's control word, as the translation does it: the calculated level's
+//! multiply and divide and an item's desirability's add (`x87_mul`, `x87_div`, `x87_add`), each
+//! result stored as the `f32` the exe stores; the karma loaded from an integer exactly and read
+//! back through the C runtime's typed `_ftol2`. A float becomes an integer through
+//! `x87::fistp_chop` where the exe's `FISTP` runs under the truncating control word it sets (the
+//! loaded quality, the armour's base rating, the statistics' fields). The components' weight and
 //! quality are only moved (a getter's `ST0` stored as the `f32` the exe stores, a quality byte
-//! widened exactly), and the loaded quality becomes its byte through `x87::fistp_chop`, as the
-//! exe's `FISTP` does under the truncating control word it sets there.
+//! widened exactly); each module comment says how its own floats are done.
 
 use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 
+pub mod actor_base;
 pub mod actor_base_data;
+pub mod attributes;
 pub mod tesform;
 
 /// This family's bit: what each `typed_call!` of it names. Id 45: past the families in main
@@ -230,6 +246,62 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0047_e4a0, actor_base_data::save_game(u32, u32)),
         entry!(0x0047_e6f0, actor_base_data::load_game(u32, u32, u32)),
         entry!(0x004a_8ae0, actor_base_data::fatigue(u32) -> u16),
+        entry!(0x0047_ffc0, attributes::initialize_data_component(u32)),
+        entry!(0x0048_0000, attributes::copy_component(u32, u32)),
+        entry!(0x0048_0070, attributes::compare_component(u32, u32) -> bool),
+        entry!(0x0048_0100, attributes::save_data(u32, u32) -> u32),
+        entry!(0x0048_0130, attributes::load_data(u32, u32) -> u32),
+        entry!(0x0048_0160, attributes::attribute(u32, u32) -> u32),
+        entry!(0x0048_0180, attributes::set_attribute_value(u32, u32, u8, u8)),
+        entry!(0x0048_01e0, attributes::save_size(u32, u32) -> u16),
+        entry!(0x0048_0210, attributes::save_game(u32, u32)),
+        entry!(0x0048_0240, attributes::load_game(u32, u32, u32)),
+        entry!(0x0048_0270, attributes::save_to_buffer(u32, u32)),
+        entry!(0x0048_02b0, attributes::load_from_buffer(u32, u32)),
+        entry!(0x0048_02f0, attributes::construct_biped_model_form(u32) -> u32),
+        entry!(0x0048_03e0, attributes::construct_model_rdt_at(u32) -> u32),
+        entry!(0x0048_0400, attributes::destruct_biped_model_form(u32)),
+        entry!(0x0056_5210, actor_base::set_starts_dead(u32, u8)),
+        entry!(0x005f_0b00, actor_base::get_health(u32) -> u32),
+        entry!(0x005f_0b30, actor_base::set_health(u32, u32)),
+        entry!(0x005f_0b50, actor_base::creature_flag_10_or_1(u32) -> bool),
+        entry!(0x005f_0ba0, actor_base::creature_flags_allow(u32) -> bool),
+        entry!(0x005f_0bf0, actor_base::creature_flag_40_or_1(u32) -> bool),
+        entry!(0x005f_0c40, actor_base::creature_flag_20(u32) -> bool),
+        entry!(0x005f_0c80, actor_base::is_immobile(u32) -> bool),
+        entry!(0x005f_0cc0, actor_base::get_sex(u32) -> i32),
+        entry!(0x005f_0d00, actor_base::npc_flag_10(u32) -> bool),
+        entry!(0x005f_0d30, actor_base::set_npc_flag_10(u32, u8)),
+        entry!(0x005f_0d60, actor_base::get_desirability(u32, u32) -> f32),
+        entry!(0x005f_0f50, actor_base::starts_dead(u32) -> bool),
+        entry!(0x005f_0f80, actor_base::player_or_default_value(u32) -> u32),
+        entry!(0x005f_0fb0, actor_base::get_actor_value(u32, u32) -> u32),
+        entry!(0x005f_11f0, actor_base::attribute_5(u32) -> u32),
+        entry!(0x005f_1210, actor_base::attribute_6(u32) -> u32),
+        entry!(0x005f_1230, actor_base::attribute_7(u32) -> u32),
+        entry!(0x005f_1250, actor_base::attribute_8(u32) -> u32),
+        entry!(0x005f_1270, actor_base::attribute_9(u32) -> u32),
+        entry!(0x005f_1290, actor_base::attribute_a(u32) -> u32),
+        entry!(0x005f_12b0, actor_base::attribute_b(u32) -> u32),
+        entry!(0x005f_12d0, actor_base::set_actor_value(u32, u32, u32)),
+        entry!(0x005f_14b0, actor_base::set_attribute_5(u32, u8)),
+        entry!(0x005f_14d0, actor_base::set_attribute_6(u32, u8)),
+        entry!(0x005f_14f0, actor_base::set_attribute_7(u32, u8)),
+        entry!(0x005f_1510, actor_base::set_attribute_8(u32, u8)),
+        entry!(0x005f_1530, actor_base::set_attribute_9(u32, u8)),
+        entry!(0x005f_1550, actor_base::set_attribute_a(u32, u8)),
+        entry!(0x005f_1570, actor_base::set_attribute_b(u32, u8)),
+        entry!(0x005f_1590, actor_base::should_run_init_default_worn(u32, u32) -> bool),
+        entry!(0x005f_1630, actor_base::add_change(u32, u32)),
+        entry!(0x005f_1690, actor_base::remove_change(u32, u32)),
+        entry!(0x005f_16f0, actor_base::save_size(u32, u32) -> u16),
+        entry!(0x005f_18c0, actor_base::save_game(u32, u32)),
+        entry!(0x005f_1b30, actor_base::load_game(u32, u32, u32)),
+        entry!(0x005f_1f30, actor_base::save_to_buffer(u32, u32)),
+        entry!(0x005f_1fd0, actor_base::load_from_buffer(u32, u32)),
+        entry!(0x005f_20a0, actor_base::reset_3d(u32, u8)),
+        entry!(0x005f_2150, actor_base::construct_reset_3d_iterator(u32) -> u32),
+        entry!(0x005f_2170, actor_base::reset_3d_operate(u32, u32)),
 
     ]
 }
