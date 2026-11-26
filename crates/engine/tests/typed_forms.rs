@@ -5335,6 +5335,9 @@ fn ai_responsibility() {
 fn ai_mark_changed() {
     Diff::new(entry!(0x0047_f790, ai_form::mark_changed(u32, u32)))
         .ai()
+        // `TESActorBase::AddChange` and `TESForm::AddChange` run in some cases: their in-place bodies.
+        .ignore_calls(AB_IN_PLACE)
+        .ignore_calls(ABD_IN_PLACE)
         .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5]), Input::Of(&[8, 0xffff_ffff])])
         .setup(|e, case| {
             ai_world(e);
