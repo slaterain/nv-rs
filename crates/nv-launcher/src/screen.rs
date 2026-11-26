@@ -17,7 +17,9 @@
 //!   400 ms (`_blink_interval`).
 //!
 //! The launcher's own addition, as the window has no title bar: minimise and exit buttons in the
-//! top-right corner above the header ([`buttons`]), in the text's colour and the list's highlight.
+//! window's top-right corner above the header ([`buttons`]), in the text's colour and the list's
+//! highlight. In a window of another shape the screen keeps its 4:3 shape in the middle, black
+//! beside or above and below it (`crate::gpu::Framing`), and the buttons stay in the corner.
 //!
 //! Every colour is the terminal colour (`[Interface] iSystemColorTerminal*`) times the tile's
 //! brightness over 255 (`Tile::UpdateTile`'s colour step), text at 255 on an HD screen.
@@ -171,9 +173,12 @@ struct Layout {
     welcome_y: i32,
     /// The welcome text's lines that show (a long text shows a part of itself).
     text: std::ops::Range<usize>,
-    /// Whether [`MORE_BELOW`] shows under them, in the place of the text's last line: the text
-    /// goes on below (read with Page Down or the wheel).
-    more: bool,
+    /// Whether [`MORE_ABOVE`] shows over them, in the place of the first line that would show:
+    /// the text starts above (read with Page Up or the wheel).
+    above: bool,
+    /// Whether [`MORE_BELOW`] shows under them, in the place of the last line that would show:
+    /// the text goes on below (read with Page Down or the wheel).
+    below: bool,
     line_y: i32,
     rows: Rows,
     prompt_y: i32,
@@ -231,25 +236,58 @@ pub fn shows_whole(look: &Look, screen: &Screen) -> bool {
         && l.rows.shown == screen.entries.len()
 }
 
+/// The welcome text's lines, and how many of them show at once: the text keeps room below it for
+/// the entries (three rows at least, or as many as there are), the line and the gaps; a longer
+/// text shows the part that fits.
+fn text_room(look: &Look, screen: &Screen) -> (usize, usize) {
+    let lh = look.font.line_height() as i32;
+    let welcome_y = 60 + lh * 3 + 20;
+    let row = lh + 20;
+    let prompt_y = HEIGHT as i32 - lh - 30;
+    let lines = welcome_lines(look, screen).len();
+    let keep = screen.entries.len().min(3) as i32 * row + 2 + 20 + 10;
+    let room = ((prompt_y - keep - welcome_y).max(lh) / lh) as usize;
+    (lines, lines.min(room))
+}
+
+/// The most `screen`'s text moves ([`Screen::scroll`]): the lines that do not show at once.
+pub fn most_scroll(look: &Look, screen: &Screen) -> usize {
+    let (lines, visible) = text_room(look, screen);
+    lines - visible
+}
+
+/// `screen`'s scroll after its text is moved `by` lines toward its start (`back`: Page Up, the
+/// wheel up) or toward its end, never past either, so the way back is as long as the way there. A
+/// screen that follows its end (a program's output) counts its scroll up from the end.
+pub fn scrolled(look: &Look, screen: &Screen, back: bool, by: usize) -> usize {
+    let most = most_scroll(look, screen);
+    let now = screen.scroll.min(most);
+    if back == screen.follow_end {
+        (now + by).min(most)
+    } else {
+        now.saturating_sub(by)
+    }
+}
+
 fn layout(look: &Look, screen: &Screen) -> Layout {
     let lh = look.font.line_height() as i32;
     let welcome_y = 60 + lh * 3 + 20;
     let row = (lh + 20) as u32;
     let prompt_y = HEIGHT as i32 - lh - 30;
-    // The text keeps room below it for the entries (three rows at least, or as many as there
-    // are), the line and the gaps; a longer text shows the part that fits.
-    let lines = welcome_lines(look, screen).len();
-    let keep = screen.entries.len().min(3) as i32 * row as i32 + 2 + 20 + 10;
-    let room = ((prompt_y - keep - welcome_y).max(lh) / lh) as usize;
-    let visible = lines.min(room);
+    let (lines, visible) = text_room(look, screen);
+    // A program's output shows its end, moved up by the scroll (its earlier lines, the mod
+    // installer's list above its question); any other text its start, moved down by it.
+    let most = lines - visible;
+    let moved = screen.scroll.min(most);
     let start = if screen.follow_end {
-        lines - visible
+        most - moved
     } else {
-        screen.scroll.min(lines - visible)
+        moved
     };
-    // A text cut before its end (not a program's output, which shows its end) says so in its
-    // last line's place.
-    let more = !screen.follow_end && start + visible < lines;
+    // A text cut before its end says so in its last line's place, one cut after its start in
+    // its first line's (when a line of the text still shows between them).
+    let below = start + visible < lines;
+    let above = start > 0 && visible > 1 + usize::from(below);
     let line_y = welcome_y + lh * visible as i32 + 10;
     let top = line_y + 2 + 10;
     // As many rows as fit above the prompt, at most the game's 12; scrolled so the highlighted
@@ -260,8 +298,9 @@ fn layout(look: &Look, screen: &Screen) -> Layout {
     Layout {
         line_height: lh,
         welcome_y,
-        text: start..start + visible - usize::from(more),
-        more,
+        text: start + usize::from(above)..start + visible - usize::from(below),
+        above,
+        below,
         line_y,
         rows: Rows {
             top,
@@ -322,20 +361,23 @@ impl Button {
     }
 }
 
-/// The buttons' boxes (x, y, width, height): squares a line high plus 10 (at most 45), 5 apart,
-/// 10 from the screen's top and right edges, so above the header (its first line starts at 60).
-pub fn buttons(look: &Look) -> [(Button, Area); 2] {
+/// The buttons' boxes (x, y, width, height) on a picture `width` wide (the screen's own
+/// [`WIDTH`] in a 4:3 window; a wider window's picture is wider, `crate::gpu::Framing`): squares
+/// a line high plus 10 (at most 45), 5 apart, 10 from the picture's top and right edges, so in
+/// the window's corner, above the header (its first line starts at 60).
+pub fn buttons(look: &Look, width: u32) -> [(Button, Area); 2] {
     let side = (look.font.line_height() + 10).min(45);
-    let exit = WIDTH as i32 - 10 - side as i32;
+    let exit = width as i32 - 10 - side as i32;
     [
         (Button::Minimise, (exit - 5 - side as i32, 10, side, side)),
         (Button::Exit, (exit, 10, side, side)),
     ]
 }
 
-/// The button whose box holds the point `p` of the screen (in its own units), if any.
-pub fn button_at(look: &Look, p: (f64, f64)) -> Option<Button> {
-    buttons(look)
+/// The button whose box holds the point `p` of a picture `width` wide (in the screen's units),
+/// if any.
+pub fn button_at(look: &Look, width: u32, p: (f64, f64)) -> Option<Button> {
+    buttons(look, width)
         .into_iter()
         .find(|&(_, (x, y, w, h))| {
             p.0 >= x as f64
@@ -346,12 +388,13 @@ pub fn button_at(look: &Look, p: (f64, f64)) -> Option<Button> {
         .map(|(b, _)| b)
 }
 
-/// The buttons drawn over a screen: each sign in the text's colour, the ink of "X" centred in its
-/// box (so "_" sits low, as a minimise sign does); the one under the mouse (`hover`) as the list's
-/// highlighted row is, its box filled at brightness 128 and alpha 224, its sign in (0, 5, 0).
+/// The buttons drawn over the picture (its top-right corner): each sign in the text's colour, the
+/// ink of "X" centred in its box (so "_" sits low, as a minimise sign does); the one under the
+/// mouse (`hover`) as the list's highlighted row is, its box filled at brightness 128 and alpha
+/// 224, its sign in (0, 5, 0).
 pub fn draw_buttons(c: &mut Canvas, look: &Look, hover: Option<Button>) {
     let (dx, dy) = sign_offset(look);
-    for (b, (x, y, w, h)) in buttons(look) {
+    for (b, (x, y, w, h)) in buttons(look, c.width) {
         let colour = if hover == Some(b) {
             c.fill(x, y, w, h, look.at(128.0, 224.0));
             [0.0, 5.0 / 255.0, 0.0, 1.0]
@@ -364,7 +407,7 @@ pub fn draw_buttons(c: &mut Canvas, look: &Look, hover: Option<Button>) {
 
 /// Where a sign's pen goes in its box: the ink of "X" (drawn once on its own) centred in it.
 fn sign_offset(look: &Look) -> (i32, i32) {
-    let side = buttons(look)[0].1 .2 as i32;
+    let side = buttons(look, WIDTH)[0].1 .2 as i32;
     let (w, h) = (look.font.width("X").max(1), look.font.line_height().max(1));
     let mut c = Canvas::new(w, h);
     look.font.draw(&mut c, 0, 0, "X", [1.0; 4]);
@@ -396,8 +439,11 @@ pub fn line_texts(look: &Look, screen: &Screen) -> Vec<String> {
         look.header[1].clone(),
         screen.title.clone(),
     ];
+    if l.above {
+        out.push(MORE_ABOVE.to_string());
+    }
     out.extend(welcome_lines(look, screen)[l.text].iter().cloned());
-    if l.more {
+    if l.below {
         out.push(MORE_BELOW.to_string());
     }
     out.extend(
@@ -415,10 +461,14 @@ pub const PROMPT: &str = "> ";
 /// The line under a text that goes on below what shows.
 pub const MORE_BELOW: &str = "(more below: Page Down)";
 
+/// The line over a text that starts above what shows (a program's output shows its end: the mod
+/// installer's list above its question).
+pub const MORE_ABOVE: &str = "(more above: Page Up)";
+
 /// Where the first entry's line is in [`line_texts`].
 pub fn first_entry_line(look: &Look, screen: &Screen) -> usize {
     let l = layout(look, screen);
-    3 + l.text.len() + usize::from(l.more)
+    3 + usize::from(l.above) + l.text.len() + usize::from(l.below)
 }
 
 /// How many characters the screen types before it is whole.
@@ -477,11 +527,12 @@ pub fn draw(look: &Look, screen: &Screen, shown: Option<&[usize]>, cursor: bool)
     // The welcome text (the part that shows), then the line under it, as wide as the text.
     let mut widest = 0;
     let welcome = welcome_lines(look, screen);
-    let more = l.more.then_some(MORE_BELOW);
-    for (i, line) in welcome[l.text.clone()]
-        .iter()
-        .map(String::as_str)
-        .chain(more)
+    let above = l.above.then_some(MORE_ABOVE);
+    let below = l.below.then_some(MORE_BELOW);
+    for (i, line) in above
+        .into_iter()
+        .chain(welcome[l.text.clone()].iter().map(String::as_str))
+        .chain(below)
         .enumerate()
     {
         let part = typed(line);
@@ -489,7 +540,7 @@ pub fn draw(look: &Look, screen: &Screen, shown: Option<&[usize]>, cursor: bool)
             .draw(&mut c, 100, l.welcome_y + lh * i as i32, &part, text);
         widest = widest.max(look.font.width(line));
     }
-    if !l.text.is_empty() || l.more {
+    if !l.text.is_empty() || l.above || l.below {
         c.fill(100, l.line_y, widest, 2, look.at(200.0, 255.0));
     }
     // The list.
@@ -583,7 +634,7 @@ mod tests {
         let l = layout(&look, &s);
         assert_eq!(l.text.start, 0);
         assert!(l.text.len() > 5 && l.text.len() < 60, "{:?}", l.text);
-        assert!(l.more);
+        assert!(l.below && !l.above);
         let lines = line_texts(&look, &s);
         assert_eq!(lines[3 + l.text.len()], MORE_BELOW);
         assert_eq!(first_entry_line(&look, &s), 4 + l.text.len());
@@ -593,22 +644,84 @@ mod tests {
         assert!(l.rows.top + (l.rows.row * 2) as i32 <= prompt - 10);
         s.scroll = 1000;
         let end = layout(&look, &s);
-        assert_eq!((end.text.end, end.more), (60, false));
+        assert_eq!((end.text.end, end.below, end.above), (60, false, true));
         assert_eq!(
             end.text.len(),
-            l.text.len() + 1,
-            "the hint's line is the text's again"
+            l.text.len(),
+            "the hint above takes the first line's place"
+        );
+        assert_eq!(line_texts(&look, &s)[3], MORE_ABOVE);
+        s.scroll = 3;
+        let middle = layout(&look, &s);
+        assert_eq!(
+            (middle.text.start, middle.above, middle.below),
+            (4, true, true)
+        );
+        assert_eq!(first_entry_line(&look, &s), 5 + middle.text.len());
+        // A program's output shows its end, the hint above it; its scroll counts up from the end.
+        s.follow_end = true;
+        s.scroll = 0;
+        let follow = layout(&look, &s);
+        assert_eq!(
+            (follow.text.end, follow.below, follow.above),
+            (60, false, true)
         );
         s.scroll = 3;
-        assert_eq!(layout(&look, &s).text.start, 3);
-        s.follow_end = true;
-        let follow = layout(&look, &s);
-        assert_eq!((follow.text.end, follow.more), (60, false));
+        let back = layout(&look, &s);
+        assert_eq!((back.text.end, back.below), (60 - 3 - 1, true));
+        s.scroll = 1000;
+        let top = layout(&look, &s);
+        assert_eq!((top.text.start, top.above, top.below), (0, false, true));
         // A text that fits says nothing more.
         let short = screen(&["Game: x"]);
-        assert!(!layout(&look, &short).more);
-        assert!(!line_texts(&look, &short).iter().any(|l| l == MORE_BELOW));
-        assert!(look.font.width(MORE_BELOW) <= WRAP);
+        let l = layout(&look, &short);
+        assert!(!l.below && !l.above);
+        assert!(!line_texts(&look, &short)
+            .iter()
+            .any(|l| l == MORE_BELOW || l == MORE_ABOVE));
+        assert!(look.font.width(MORE_BELOW) <= WRAP && look.font.width(MORE_ABOVE) <= WRAP);
+    }
+
+    /// Page Up and Page Down (and the wheel) move a long text by lines, never past its start or
+    /// its end, so the way back is as long as the way there; a program's output, which shows its
+    /// end, moves up from the end. Every line of the text shows at one scroll or another.
+    #[test]
+    fn a_long_text_scrolls_both_ways_and_every_line_shows() {
+        let look = Look::plain();
+        let many: Vec<String> = (0..60).map(|i| format!("line {i}")).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        for follow_end in [false, true] {
+            let mut s = screen(&many);
+            s.entries = vec!["Back".into()];
+            s.follow_end = follow_end;
+            let most = most_scroll(&look, &s);
+            assert!(most > 10, "{most}");
+            let mut seen = vec![false; 60];
+            let mut steps = 0;
+            loop {
+                let l = layout(&look, &s);
+                for i in l.text.clone() {
+                    seen[i] = true;
+                }
+                // Away from where it rests: down a text, up a program's output.
+                let next = scrolled(&look, &s, follow_end, 5);
+                assert!(next <= most);
+                if next == s.scroll {
+                    break;
+                }
+                s.scroll = next;
+                steps += 1;
+            }
+            assert!(seen.iter().all(|&x| x), "{follow_end}: {seen:?}");
+            assert_eq!(s.scroll, most);
+            // Past the far end it stays there; back the same number of steps to where it began.
+            assert_eq!(scrolled(&look, &s, follow_end, 5), most);
+            for _ in 0..steps {
+                s.scroll = scrolled(&look, &s, !follow_end, 5);
+            }
+            assert_eq!(s.scroll, 0);
+            assert_eq!(scrolled(&look, &s, !follow_end, 5), 0);
+        }
     }
 
     /// The welcome text wraps at 600 at spaces and keeps every word; the list starts below it.
@@ -662,7 +775,7 @@ mod tests {
         };
         let mut plain = Canvas::new(WIDTH, HEIGHT);
         draw_buttons(&mut plain, &look, None);
-        let boxes = buttons(&look);
+        let boxes = buttons(&look, WIDTH);
         let inside: usize = boxes.iter().map(|&(_, b)| lit(&plain, b)).sum();
         assert!(
             boxes.iter().all(|&(_, b)| lit(&plain, b) > 20),

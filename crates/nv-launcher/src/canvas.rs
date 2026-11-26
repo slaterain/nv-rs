@@ -21,6 +21,32 @@ impl Canvas {
         }
     }
 
+    /// This picture on a black one of `size` with its top-left corner at `at` (the terminal's
+    /// 4:3 screen in a window of another shape: `crate::gpu::Framing`), the part outside cut off;
+    /// itself when it is that size already.
+    pub fn placed(self, size: (u32, u32), at: (i32, i32)) -> Canvas {
+        if (self.width, self.height) == size && at == (0, 0) {
+            return self;
+        }
+        let mut out = Canvas::new(size.0, size.1);
+        let x0 = at.0.max(0);
+        let x1 = (at.0 + self.width as i32).min(size.0 as i32);
+        if x1 <= x0 {
+            return out;
+        }
+        for y in 0..self.height as i32 {
+            let ty = y + at.1;
+            if ty < 0 || ty >= size.1 as i32 {
+                continue;
+            }
+            let from = ((y as u32 * self.width + (x0 - at.0) as u32) * 4) as usize;
+            let to = ((ty as u32 * size.0 + x0 as u32) * 4) as usize;
+            let n = ((x1 - x0) * 4) as usize;
+            out.pixels[to..to + n].copy_from_slice(&self.pixels[from..from + n]);
+        }
+        out
+    }
+
     /// `colour` over the pixel at (`x`, `y`) with `coverage` (0 to 1) times its alpha.
     pub fn blend(&mut self, x: i32, y: i32, colour: [f32; 4], coverage: f32) {
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
@@ -152,4 +178,42 @@ pub fn dds_rgba(dds: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
         return None;
     }
     Some((w, h, decode_dxt1(dds.get(128..)?, w, h)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A picture placed on a larger one keeps every pixel, moved by `at`, with black (opaque)
+    /// around it; one placed on its own size is itself.
+    #[test]
+    fn a_picture_is_placed_whole_with_black_around_it() {
+        let mut small = Canvas::new(3, 2);
+        for (i, p) in small.pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            *p = [i as u8 + 1, 7, 9, 255];
+        }
+        let big = Canvas {
+            width: 3,
+            height: 2,
+            pixels: small.pixels.clone(),
+        }
+        .placed((6, 4), (2, 1));
+        let at = |x: u32, y: u32| &big.pixels[((y * 6 + x) * 4) as usize..][..4];
+        for y in 0..4 {
+            for x in 0..6 {
+                if (2..5).contains(&x) && (1..3).contains(&y) {
+                    let i = ((y - 1) * 3 + (x - 2)) as u8;
+                    assert_eq!(at(x, y), [i + 1, 7, 9, 255], "{x},{y}");
+                } else {
+                    assert_eq!(at(x, y), [0, 0, 0, 255], "{x},{y}");
+                }
+            }
+        }
+        let same = small.placed((3, 2), (0, 0));
+        assert_eq!(same.pixels[0], 1);
+        assert_eq!(
+            Canvas::new(2, 2).placed((1, 1), (5, 5)).pixels,
+            [0, 0, 0, 255]
+        );
+    }
 }
