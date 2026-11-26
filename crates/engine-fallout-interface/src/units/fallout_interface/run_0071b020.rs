@@ -82,8 +82,11 @@ mod destructor_tests {
             if deletes {
                 expected.push((DELETE_007B3FA0, vec![object, 1]));
             }
-            expected.push((0x0071_dec0, vec![this + 0x10]));
-            expected.push((0x0071_dec0, vec![this + 4]));
+            // Each list through the forwarder, by address.
+            for list in [this + 0x10, this + 4] {
+                expected.push((0x0071_b020, vec![list]));
+                expected.push((0x0071_dec0, vec![list]));
+            }
             assert_eq!(log[1..].to_vec(), expected);
         }
     }
