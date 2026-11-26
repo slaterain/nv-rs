@@ -25,11 +25,13 @@ use arena::{Arg, InArena};
 const CALLEES: &[u32] = &[
     0x0040_1000,
     0x0040_1030,
+    0x0040_1460,
     0x0040_37d0,
     0x0040_37f0,
     0x0040_4010,
     0x0040_4390,
     0x0040_44d0,
+    0x0040_46b0,
     0x0040_46f0,
     0x0040_48e0,
     0x0040_4a70,
@@ -47,6 +49,7 @@ const CALLEES: &[u32] = &[
     0x0040_fba0,
     0x0040_fbf0,
     0x0043_8390,
+    0x0043_8470,
     0x0043_9410,
     0x0043_aaf0,
     0x0043_b230,
@@ -74,6 +77,7 @@ const CALLEES: &[u32] = &[
     0x0048_73d0,
     0x0048_ebc0,
     0x0048_f200,
+    0x0049_5460,
     0x004a_4040,
     0x004a_d050,
     0x004a_d270,
@@ -99,8 +103,10 @@ const CALLEES: &[u32] = &[
     0x004d_e490,
     0x004e_4430,
     0x004e_ef00,
+    0x004f_4280,
     0x004f_8a30,
     0x004f_e160,
+    0x0050_1c10,
     0x0050_3a70,
     0x0052_5980,
     0x0052_5b20,
@@ -118,6 +124,8 @@ const CALLEES: &[u32] = &[
     0x005c_5420,
     0x005e_02b0,
     0x005e_58f0,
+    0x0061_66e0,
+    0x0061_6710,
     0x0063_f7b0,
     0x0064_3c90,
     0x0064_50f0,
@@ -126,12 +134,14 @@ const CALLEES: &[u32] = &[
     0x0064_8b50,
     0x0066_29f0,
     0x0066_b0d0,
+    0x0066_e9b0,
+    0x0066_e9f0,
+    0x0066_ea20,
     0x0066_ef20,
     0x006b_3eb0,
     0x006f_fe10,
     0x0070_0320,
     0x0070_10e0,
-    0x0070_4390,
     0x0070_5fc0,
     0x0070_5fe0,
     0x0070_9430,
@@ -286,19 +296,8 @@ const CALLEES: &[u32] = &[
     0x007c_e7a0,
     0x007d_86c0,
     0x007d_a2c0,
-    0x007d_c7e0,
-    0x007d_c9b0,
     0x007d_cc80,
-    0x007d_da60,
-    0x007d_dc20,
-    0x007d_dd10,
-    0x007d_de00,
     0x007d_df00,
-    0x007d_fc90,
-    0x007d_fd00,
-    0x007e_0060,
-    0x007e_0230,
-    0x007e_06b0,
     0x007e_41f0,
     0x007e_47a0,
     0x007e_5890,
@@ -308,9 +307,11 @@ const CALLEES: &[u32] = &[
     0x007e_9200,
     0x007e_bd50,
     0x007f_6920,
+    0x007f_8610,
     0x007f_86f0,
     0x007f_8a80,
     0x007f_a010,
+    0x007f_a0f0,
     0x007f_b150,
     0x0083_e510,
     0x0083_fd60,
@@ -336,6 +337,7 @@ const CALLEES: &[u32] = &[
     0x00a0_11b0,
     0x00a0_11f0,
     0x00a0_1230,
+    0x00a0_1290,
     0x00a0_12d0,
     0x00a0_1350,
     0x00a0_1860,
@@ -343,6 +345,7 @@ const CALLEES: &[u32] = &[
     0x00a0_3da0,
     0x00a0_3eb0,
     0x00a0_4200,
+    0x00a0_4640,
     0x00a0_7530,
     0x00a0_7c60,
     0x00a0_7dc0,
@@ -366,6 +369,8 @@ const CALLEES: &[u32] = &[
     0x00a6_faf0,
     0x00a6_fb90,
     0x00aa_4db0,
+    0x00ad_7550,
+    0x00ad_8830,
     0x00ba_30f0,
     0x00ba_3130,
     0x00c3_a8a0,
@@ -6201,7 +6206,12 @@ fn put_status_data(e: &mut Engine, variant: u32) {
         e.mem
             .set_u32(effect + 0x10, if variant == 0 { 0x36 } else { 0x37 });
         e.mem.set_u32(effect + 0x14, object(233));
+        // As an active effect: its effect item (`+0xc`, object 234) with the same key and setting.
+        e.mem.set_u32(effect + 0xc, object(234));
     }
+    e.mem
+        .set_u32(object(234) + 0x10, if variant == 0 { 0x36 } else { 0x37 });
+    e.mem.set_u32(object(234) + 0x14, object(233));
     e.mem.set_u32(object(233) + 0x98, 0);
     e.mem
         .set_u32(object(233) + 0x58, [0, 4, 2, 0][variant as usize]);
@@ -6251,6 +6261,10 @@ fn put_fade_groups(e: &mut Engine, variant: u32) {
     for (k, group) in [3u32, 40].into_iter().zip(groups) {
         e.mem.set_u32(object(k), group);
     }
+    // Object 3's group 2 holds object 5 (the first word argument) and object 40's group 0 object 3.
+    e.mem.set_u32(object(3) + 0x14, object(5));
+    e.mem.set_u32(object(3) + 0x18, 0);
+    e.mem.set_u32(object(40) + 4, object(3));
 }
 
 /// An effect setting's archetype (`+0x98`) on both pointer values (objects 3 and 40): 0 and 1, 2
@@ -6277,6 +6291,8 @@ trait StatsWorlds {
     fn in_stats_with(self, args: &'static [Arg], plain: &[u32]) -> Diff;
     /// In [`put_fade_groups`]'s world: a pointer and a byte.
     fn in_fade_groups(self) -> Diff;
+    /// In [`put_fade_groups`]'s world with `args`.
+    fn in_fade_groups_with(self, args: &'static [Arg]) -> Diff;
     /// In [`put_archetypes`]'s world: a pointer.
     fn in_archetypes(self) -> Diff;
     /// In [`put_status_data`]'s world.
@@ -6291,13 +6307,11 @@ impl StatsWorlds for Diff {
     }
 
     fn in_fade_groups(self) -> Diff {
-        self.in_arena_and(
-            &[Arg::Ptr, Arg::Byte],
-            CALLEES,
-            &[],
-            &SMALL_WORLD_VARIANTS,
-            put_fade_groups,
-        )
+        self.in_fade_groups_with(&[Arg::Ptr, Arg::Byte])
+    }
+
+    fn in_fade_groups_with(self, args: &'static [Arg]) -> Diff {
+        self.in_arena_and(args, CALLEES, &[], &SMALL_WORLD_VARIANTS, put_fade_groups)
     }
 
     fn in_archetypes(self) -> Diff {
@@ -6825,6 +6839,446 @@ fn stats_menu_list_box_misc_stat_id_add_item_diff() {
     Diff::new(engine_core::entry!(
         0x007e_1190,
         interface::stats_menu::list_box_misc_stat_id_add_item(Ptr, u32, u32, u32, u32) -> u32
+    ))
+    .in_item_list(&[Arg::Ptr, Arg::Word, Arg::Ptr, Arg::Code, Arg::Ptr], 48)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_toggle_healing_mode_diff() {
+    Diff::new(engine_core::entry!(
+        0x0070_4390,
+        interface::stats_menu::stats_menu_toggle_healing_mode()
+    ))
+    .in_stats(&[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007db630_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_b630,
+        interface::stats_menu::fn_007db630(Ptr, u32) -> u32
+    ))
+    .in_fade_groups_with(&[Arg::Ptr, Arg::Word])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007dbfa0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_bfa0,
+        interface::stats_menu::fn_007dbfa0(Ptr, u32, u8)
+    ))
+    .in_fade_groups_with(&[Arg::Ptr, Arg::Small, Arg::Byte])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007dc010_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_c010,
+        interface::stats_menu::fn_007dc010(Ptr, u32, u32) -> u32
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Small, Arg::Small], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007dc0c0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_c0c0,
+        interface::stats_menu::fn_007dc0c0(Ptr) -> Ptr
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_do_gamepad_up_event_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_c0e0,
+        interface::stats_menu::stats_menu_do_gamepad_up_event(Ptr, u32, u32) -> bool
+    ))
+    .in_stats(&[Arg::Object, Arg::Small, Arg::Word])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_do_leave_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_c490,
+        interface::stats_menu::stats_menu_do_leave(Ptr, u32, u32)
+    ))
+    .in_stats(&[Arg::Object, Arg::Word, Arg::Ptr])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007dc7e0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_c7e0,
+        interface::stats_menu::fn_007dc7e0(Ptr, u32)
+    ))
+    .in_stats(&[Arg::Object, Arg::ActorValue])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007dc9b0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_c9b0,
+        interface::stats_menu::fn_007dc9b0(Ptr, Ptr)
+    ))
+    .in_stats(&[Arg::Object, Arg::Ptr])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007dcb40_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_cb40,
+        interface::stats_menu::fn_007dcb40(Ptr, u32)
+    ))
+    .in_stats(&[Arg::Object, Arg::Ptr])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007dda60_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_da60,
+        interface::stats_menu::fn_007dda60()
+    ))
+    .in_stats(&[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007ddaa0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_daa0,
+        interface::stats_menu::fn_007ddaa0(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007ddc20_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_dc20,
+        interface::stats_menu::fn_007ddc20(Ptr)
+    ))
+    .in_stats(&[Arg::Object])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007ddd10_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_dd10,
+        interface::stats_menu::fn_007ddd10(Ptr)
+    ))
+    .in_stats(&[Arg::Object])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007dde00_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_de00,
+        interface::stats_menu::fn_007dde00(Ptr)
+    ))
+    .in_stats(&[Arg::Object])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007df120_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_f120,
+        interface::stats_menu::fn_007df120(Ptr, u32)
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Word], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007df140_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_f140,
+        interface::stats_menu::fn_007df140(Ptr, u32) -> Ptr
+    ))
+    .in_arena(&[Arg::Object, Arg::Word], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007df920_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_f920,
+        interface::stats_menu::fn_007df920(Ptr)
+    ))
+    .in_stats(&[Arg::Object])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007df9c0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_f9c0,
+        interface::stats_menu::fn_007df9c0(u32) -> u32
+    ))
+    .in_arena(&[Arg::Small], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_set_knob_position_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_fc90,
+        interface::stats_menu::stats_menu_set_knob_position(u8)
+    ))
+    .in_stats(&[Arg::Byte])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_set_current_stats_page_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_fd00,
+        interface::stats_menu::stats_menu_set_current_stats_page(u8)
+    ))
+    .in_stats(&[Arg::Small])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_move_knob_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_fd20,
+        interface::stats_menu::stats_menu_move_knob(Ptr, u32, Ptr)
+    ))
+    .in_stats(&[Arg::Object, Arg::Ptr, Arg::Ptr])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e0060_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_0060,
+        interface::stats_menu::fn_007e0060(Ptr, i32) -> bool
+    ))
+    .in_stats(&[Arg::Object, Arg::Small])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_get_page_for_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_00e0,
+        interface::stats_menu::stats_menu_get_page_for(Ptr, u32, Ptr) -> bool
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Small, Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e0160_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_0160,
+        interface::stats_menu::fn_007e0160(Ptr, u32, Ptr) -> bool
+    ))
+    .in_arena(&[Arg::Ptr, Arg::StatsId, Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e0230_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_0230,
+        interface::stats_menu::fn_007e0230(Ptr)
+    ))
+    .in_stats(&[Arg::Object])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_toggle_gen_rep_mode_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_02b0,
+        interface::stats_menu::stats_menu_toggle_gen_rep_mode(Ptr)
+    ))
+    .in_stats(&[Arg::Ptr])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e0480_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_0480,
+        interface::stats_menu::fn_007e0480(u32, u32) -> i32
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e0510_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_0510,
+        interface::stats_menu::fn_007e0510(u32, u32) -> i32
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e0540_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_0540,
+        interface::stats_menu::fn_007e0540(u32, u32) -> i32
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e06b0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_06b0,
+        interface::stats_menu::fn_007e06b0() -> u32
+    ))
+    .in_stats(&[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e06f0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_06f0,
+        interface::stats_menu::fn_007e06f0(Ptr) -> bool
+    ))
+    .in_stats(&[Arg::Ptr])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_status_effect_list_register_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_08a0,
+        interface::stats_menu::stats_menu_status_effect_list_register(Ptr, u32)
+    ))
+    .in_status_effects(&[Arg::Ptr, Arg::Ptr], &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e09d0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_09d0,
+        interface::stats_menu::fn_007e09d0(Ptr, u32)
+    ))
+    .in_status_data(&[Arg::Ptr, Arg::Ptr])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e0a20_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_0a20,
+        interface::stats_menu::fn_007e0a20(Ptr, u32)
+    ))
+    .in_status_data(&[Arg::Ptr, Arg::Ptr])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e0c50_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_0c50,
+        interface::stats_menu::fn_007e0c50(Ptr, u32) -> u32
+    ))
+    .in_status_effects(&[Arg::Ptr, Arg::Small], &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_do_controller_switch_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_0d60,
+        interface::stats_menu::stats_menu_do_controller_switch(Ptr, u32)
+    ))
+    .in_stats(&[Arg::Object, Arg::Word])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_bs_string_operator_add_assign_ov2_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_0d80,
+        interface::stats_menu::bs_string_operator_add_assign_ov2(Ptr, u32) -> Ptr
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_list_box_status_effect_add_item_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_1430,
+        interface::stats_menu::list_box_status_effect_add_item(Ptr, u32, u32, u32, u32) -> u32
+    ))
+    .in_item_list(&[Arg::Ptr, Arg::Word, Arg::Ptr, Arg::Code, Arg::Ptr], 48)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007e16d0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007e_16d0,
+        interface::stats_menu::fn_007e16d0(Ptr, u32, u32, u32, u32) -> u32
     ))
     .in_item_list(&[Arg::Ptr, Arg::Word, Arg::Ptr, Arg::Code, Arg::Ptr], 48)
     .run()
