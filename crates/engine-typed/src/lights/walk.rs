@@ -63,7 +63,7 @@ const RTTI_BODIES: [(u32, u32); 3] = [
 /// The word the object's `slot` answers (no stack words): one of the exe's constant bodies above
 /// answered in place, any other target through the vtable.
 #[inline]
-pub(super) fn slot_word(e: &mut Engine, object: u32, slot: u32) -> u32 {
+pub(crate) fn slot_word(e: &mut Engine, object: u32, slot: u32) -> u32 {
     match slot_target(e, object, slot) {
         ANSWERS_ITSELF | GEOMETRY_ANSWERS_ITSELF => object,
         ANSWERS_ZERO => 0,

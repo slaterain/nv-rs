@@ -64,7 +64,7 @@ pub fn tes_attributes_copy_component(e: &mut Engine, this: Ptr, source: Ptr) {
     }
     for index in 0..7u32 {
         let code = e.call(TO_ACTOR_VALUE, &args![0u32, index & 0xff]).u32();
-        let value = fn_00480160(e, Ptr::new(attributes), code) as u8;
+        let value = e.call(0x0048_0160, &args![attributes, code]).u8();
         e.mem.set_u8(this.addr() + index + 4, value);
     }
 }
@@ -133,7 +133,7 @@ pub fn tes_attributes_compare_component(e: &mut Engine, this: Ptr, other: Ptr) -
     for index in 0..7u32 {
         let mine = e.mem.u8(this.addr() + index + 4);
         let code = e.call(TO_ACTOR_VALUE, &args![0u32, index & 0xff]).u32();
-        let theirs = fn_00480160(e, Ptr::new(attributes), code) as u8;
+        let theirs = e.call(0x0048_0160, &args![attributes, code]).u8();
         if mine != theirs {
             return true;
         }

@@ -20,15 +20,17 @@
 //! buffer's change flags (`00428110`, the word at +0x17, and `004280f0`, its bits) and a
 //! reference's base form (`004181e0`, the word at +0x20). The compare reads the compared fields
 //! once each, as words where the exe compares every byte of them. This unit's functions call each
-//! other as typed calls. What stays a call by address: the RTTI cast, the vtable slot
-//! that marks a form changed (the actor base classes override it), the package list's operations,
-//! the equip type, the save/load game's and the save buffers' reads and writes.
+//! other as typed calls. The vtable slot that marks the form changed is this family's typed call
+//! when it holds `TESActorBase::AddChange` (`005f1630`) or `TESForm::AddChange` (`00484b60`), and a
+//! call through the slot otherwise. What stays a call by address: the RTTI cast, the package
+//! list's operations, the equip type, the save/load game's and the save buffers' reads and writes.
 //!
 //! Floats are only moved: the five copied settings and the two package query floats pass through
 //! `FLD`/`FSTP` in the exe, which quiets a signalling NaN, and the copied setting a getter answers
 //! is loaded the same way ([`x87_quiet_bits`]).
 
-use super::FAMILY;
+use super::{actor_base, tesform, FAMILY};
+use crate::slot_target;
 use engine_core::x87::x87_quiet_bits;
 use engine_core::{args, typed_call, Engine};
 
@@ -186,15 +188,23 @@ pub fn responsibility(e: &mut Engine, this: u32) -> u8 {
 
 // Typed from 0047f790
 /// The form that holds this component (`this - 0x90`; none for a null `this`) marked changed
-/// with `flags` (its vtable slot 0x48).
+/// with `flags` (its vtable slot 0x48: this family's `TESActorBase::AddChange`, which NPCs and
+/// creatures keep, or `TESForm::AddChange` as typed calls when the slot holds one of them).
 pub fn mark_changed(e: &mut Engine, this: u32, flags: u32) {
     let owner = if this == 0 {
         0
     } else {
         this.wrapping_sub(IN_ACTOR_BASE)
     };
-    if owner != 0 {
-        e.vcall(owner, SLOT_ADD_CHANGE, &args![flags]);
+    if owner == 0 {
+        return;
+    }
+    match slot_target(e, owner, SLOT_ADD_CHANGE) {
+        0x005f_1630 => typed_call!(FAMILY, 0x005f_1630, actor_base::add_change(e, owner, flags)),
+        0x0048_4b60 => typed_call!(FAMILY, 0x0048_4b60, tesform::add_change(e, owner, flags)),
+        _ => {
+            e.vcall(owner, SLOT_ADD_CHANGE, &args![flags]);
+        }
     }
 }
 
