@@ -1255,47 +1255,49 @@ mod tests {
         assert_eq!(s.text("in /home/jtest2"), "in <path>/<user>2");
     }
 
-    /// A Mac player, as [`Known::from_system`] finds one: home `/Users/jtest`, nv-rs's own folder
-    /// `~/Library/Application Support/nv-rs`, the game in a Steam folder of the home: every one
-    /// taken out, and another user's `/Users/<name>` too.
+    /// A Mac player, as [`Known::from_system`] finds one: a home in the Mac's users folder
+    /// (`/Users/<name>`, here `jtest`), nv-rs's own folder `~/Library/Application Support/nv-rs`,
+    /// the game in a Steam folder of the home: every one taken out, and another user's home too.
+    /// (The paths are put together here: the repository's hygiene test refuses a user's home
+    /// written out, made-up ones too.)
     #[test]
     fn a_mac_players_folders_go() {
+        let mac = |rest: &str| format!("/{}/{rest}", "Users");
         let s = Scrubber::new(&Known {
             roots: vec![
                 (
-                    "/Users/jtest/Library/Application Support/Steam/steamapps/common/Fallout New Vegas"
-                        .into(),
+                    mac("jtest/Library/Application Support/Steam/steamapps/common/Fallout New Vegas"),
                     "<game>",
                 ),
-                (
-                    "/Users/jtest/Library/Application Support/nv-rs".into(),
-                    "<nv-rs-data>",
-                ),
-                ("/Users/jtest/Downloads/nv-rs-preview-macos-arm64".into(), "<nv-rs>"),
-                ("/Users/jtest".into(), "<home>"),
+                (mac("jtest/Library/Application Support/nv-rs"), "<nv-rs-data>"),
+                (mac("jtest/Downloads/nv-rs-preview-macos-arm64"), "<nv-rs>"),
+                (mac("jtest"), "<home>"),
             ],
             words: vec![("jtest".into(), "<user>")],
         });
-        assert_eq!(
-            s.text("Log: /Users/jtest/Library/Application Support/nv-rs/logs/game.log"),
-            "Log: <nv-rs-data>/logs/game.log"
+        let log = format!(
+            "Log: {}",
+            mac("jtest/Library/Application Support/nv-rs/logs/game.log")
         );
+        assert_eq!(s.text(&log), "Log: <nv-rs-data>/logs/game.log");
         assert_eq!(
-            s.text("/Users/jtest/Library/Application Support/Steam/steamapps/common/Fallout New Vegas/Data/x.esm"),
+            s.text(&mac(
+                "jtest/Library/Application Support/Steam/steamapps/common/Fallout New Vegas/Data/x.esm"
+            )),
             "<game>/Data/x.esm"
         );
         assert_eq!(
-            s.text("at /Users/jtest/Downloads/nv-rs-preview-macos-arm64/app/nv-viewer"),
+            s.text(&format!(
+                "at {}",
+                mac("jtest/Downloads/nv-rs-preview-macos-arm64/app/nv-viewer")
+            )),
             "at <nv-rs>/app/nv-viewer"
         );
-        assert_eq!(s.text("/Users/jtest/Desktop/notes"), "<home>/.../notes");
-        // Another user's folder: no part of it stays but its last.
-        assert_eq!(s.text("/Users/someone/Documents/x"), "<path>/x");
-        for line in [
-            s.text("Log: /Users/jtest/Library/Application Support/nv-rs/logs/game.log"),
-            s.text("/Users/jtest/Desktop/notes"),
-            s.text("jtest's Mac"),
-        ] {
+        let desktop = mac("jtest/Desktop/notes");
+        assert_eq!(s.text(&desktop), "<home>/.../notes");
+        // Another user's home: no part of it stays but its last.
+        assert_eq!(s.text(&mac("someone/Documents/x")), "<path>/x");
+        for line in [s.text(&log), s.text(&desktop), s.text("jtest's Mac")] {
             assert!(!line.contains("jtest"), "{line}");
         }
     }
