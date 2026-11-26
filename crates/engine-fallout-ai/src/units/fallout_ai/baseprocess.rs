@@ -1695,7 +1695,8 @@ mod tests {
             assert_eq!(calls_to(&e, 0x008c_5ec0), [vec![0x2004, 0x7777]]);
             assert_eq!(calls_to(&e, 0x0072_6070), [vec![0x2004]]);
             if running == 0 {
-                assert_eq!(targets(&e), [0x008c_5ec0, 0x0072_6070]);
+                // The running package word is asked by address (`008d0430`), then its leaf.
+                assert_eq!(targets(&e), [0x008c_5ec0, 0x008d_0430, 0x0072_6070]);
             } else {
                 assert_eq!(calls_to(&e, 0x0070_0004), [vec![instance, 0x7777]]);
             }
