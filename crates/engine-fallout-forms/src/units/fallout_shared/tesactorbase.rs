@@ -286,7 +286,7 @@ pub fn fn_005f1690(e: &mut Engine, this: Ptr, value: u32) {
 pub fn fn_005f0fb0(e: &mut Engine, this: Ptr, index: u32) -> u32 {
     let base = this.addr();
     let ai = base.wrapping_sub(0x70);
-    let attributes = Ptr::new(base.wrapping_sub(0x48));
+    let attributes = base.wrapping_sub(0x48);
     let data = base.wrapping_sub(0xd0);
     match index {
         0 => u32::from(e.call(0x004f_1540, &args![ai]).u8()),
@@ -294,14 +294,14 @@ pub fn fn_005f0fb0(e: &mut Engine, this: Ptr, index: u32) -> u32 {
         2 => u32::from(e.call(0x005b_b4d0, &args![ai]).u8()),
         3 => u32::from(e.call(0x0047_ef30, &args![ai]).u8()),
         4 => u32::from(e.call(0x0062_f2f0, &args![ai]).u8()),
-        5 => fn_005f11f0(e, attributes) & 0xff,
-        6 => fn_005f1210(e, attributes) & 0xff,
-        7 => fn_005f1230(e, attributes) & 0xff,
-        8 => fn_005f1250(e, attributes) & 0xff,
-        9 => fn_005f1270(e, attributes) & 0xff,
-        0xa => fn_005f1290(e, attributes) & 0xff,
-        0xb => fn_005f12b0(e, attributes) & 0xff,
-        0x10 => tes_actor_base_get_health(e, Ptr::new(base.wrapping_sub(0x100))),
+        5 => e.call(0x005f_11f0, &args![attributes]).u32() & 0xff,
+        6 => e.call(0x005f_1210, &args![attributes]).u32() & 0xff,
+        7 => e.call(0x005f_1230, &args![attributes]).u32() & 0xff,
+        8 => e.call(0x005f_1250, &args![attributes]).u32() & 0xff,
+        9 => e.call(0x005f_1270, &args![attributes]).u32() & 0xff,
+        0xa => e.call(0x005f_1290, &args![attributes]).u32() & 0xff,
+        0xb => e.call(0x005f_12b0, &args![attributes]).u32() & 0xff,
+        0x10 => e.call(0x005f_0b00, &args![base.wrapping_sub(0x100)]).u32(),
         0x15 => u32::from(e.call(0x008f_21d0, &args![data]).u16()),
         0x16 => u32::from(e.vcall(data, 0x60, &[]).u16()),
         0x17 => {
@@ -361,7 +361,9 @@ pub fn fn_005f12d0(e: &mut Engine, this: Ptr, index: u32, value: u32) {
         0xa => {
             e.call(0x005f_1550, &args![attributes, byte]);
         }
-        0xb => fn_005f1570(e, Ptr::new(attributes), value as u8),
+        0xb => {
+            e.call(0x005f_1570, &args![attributes, byte]);
+        }
         0x10 => {
             e.call(0x005f_0b30, &args![this, value]);
         }
@@ -618,7 +620,7 @@ pub fn fn_005f0b30(e: &mut Engine, this: Ptr, health: u32) {
 /// False when `005f0b50` is false; otherwise true unless the form type is
 /// 0x2B and flag 0x40000 of the actor base data (+0x30, `00461580`) is set.
 pub fn fn_005f0ba0(e: &mut Engine, this: Ptr) -> bool {
-    if !fn_005f0b50(e, this) {
+    if !e.call(0x005f_0b50, &args![this]).bool() {
         return false;
     }
     if e.call(GET_TYPE_BYTE, &args![this]).u32() == ACCEPTED_TYPE
@@ -1035,7 +1037,7 @@ pub fn fn_005f20a0(e: &mut Engine, this: Ptr, value: u8) {
         return;
     }
     e.with_stack(0x10, |e, iterator| {
-        fn_005f2150(e, iterator);
+        e.call(0x005f_2150, &args![iterator]);
         e.mem.set_u32(iterator.addr() + 8, this.addr());
         e.mem.set_u8(iterator.addr() + 0xc, value);
         e.call(SET_WORD_4, &args![iterator, 0u32]);
@@ -1517,6 +1519,7 @@ mod b024_tests {
             0x005f_1510,
             0x005f_1530,
             0x005f_1550,
+            0x005f_1570,
             0x0048_0180,
             0x005f_0b30,
             0x0047_e270,
@@ -1557,7 +1560,7 @@ mod b024_tests {
         );
         assert_eq!(
             set(&mut e, 0xb, 0x1234),
-            vec![(0x0048_0180, vec![this + 0xb8, 0xb, 0x34, 1])]
+            vec![(0x005f_1570, vec![this + 0xb8, 0x34])]
         );
         assert_eq!(
             set(&mut e, 0x10, 0x1234),
