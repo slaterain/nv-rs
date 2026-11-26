@@ -504,6 +504,45 @@ pub fn row_hit(window: (u32, u32), rows: &screen::Rows, pos: (f64, f64)) -> Opti
     (k < rows.shown).then_some(rows.first + k)
 }
 
+/// The window's own button ([`screen::buttons`]) under the window position `pos` (pixels) in a
+/// window of `window` pixels, the terminal's picture fitted into it as for [`row_hit`].
+pub fn button_hit(window: (u32, u32), look: &Look, pos: (f64, f64)) -> Option<screen::Button> {
+    let (x, y, w, h) = gpu::fit((screen::WIDTH, screen::HEIGHT), window);
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let px = (pos.0 - x as f64) * screen::WIDTH as f64 / w as f64;
+    let py = (pos.1 - y as f64) * screen::HEIGHT as f64 / h as f64;
+    screen::button_at(look, (px, py))
+}
+
+/// A window the minimise button minimises: winit's (on every system), or a test's own.
+pub trait Minimise {
+    fn minimise(&self);
+}
+
+impl Minimise for winit::window::Window {
+    fn minimise(&self) {
+        self.set_minimized(true);
+    }
+}
+
+/// A press of the window's `button`: Minimise minimises `window` and does nothing more; Exit
+/// does what the menu's Exit does ([`on_enter`]'s), or while Play's work runs (`working`: no
+/// screen offers Exit then) what closing the window does then ([`Act::Close`]).
+pub fn press_button(button: screen::Button, working: bool, window: Option<&impl Minimise>) -> Act {
+    match button {
+        screen::Button::Minimise => {
+            if let Some(w) = window {
+                w.minimise();
+            }
+            Act::Nothing
+        }
+        screen::Button::Exit if working => Act::Close,
+        screen::Button::Exit => Act::Exit,
+    }
+}
+
 /// Whether a left press moves the window (it has no title bar): anywhere but on an entry
 /// (which the press chooses), and not while the window has stepped aside for the game.
 pub fn press_drags(on_entry: bool, hidden: bool) -> bool {
@@ -585,6 +624,9 @@ pub enum Act {
     OpenConsentFromSettings,
     /// The crash reports screens left unanswered: to where they were opened from.
     CloseConsent,
+    /// The exit button while Play's work runs: only the window goes, as when it is closed then
+    /// ([`App::close_while_working`]).
+    Close,
     Nothing,
 }
 
@@ -1364,6 +1406,8 @@ struct App {
     frame_ms: f64,
     rows: Option<screen::Rows>,
     mouse: (f64, f64),
+    /// The window's button under the mouse (drawn highlighted).
+    hover: Option<screen::Button>,
     card: Card,
     /// The action named on the command line, started as soon as the window is there.
     action: Option<Vec<OsString>>,
@@ -1705,7 +1749,7 @@ impl App {
         else {
             return;
         };
-        let canvas = if let Mode::Intro(intro) = &self.mode {
+        let mut canvas = if let Mode::Intro(intro) = &self.mode {
             let lines = intro.typed(self.started.elapsed().as_millis() as u64);
             self.rows = None;
             screen::draw_intro(&self.look, &lines)
@@ -1714,6 +1758,7 @@ impl App {
             self.rows = Some(rows);
             canvas
         };
+        screen::draw_buttons(&mut canvas, &self.look, self.hover);
         let picture = (screen::WIDTH, screen::HEIGHT);
         gpu.upload(&canvas.pixels, picture);
         use wgpu::CurrentSurfaceTexture as T;
@@ -1866,6 +1911,21 @@ impl App {
         row_hit((config.width, config.height), rows, pos)
     }
 
+    /// The window's button under the window position, if any.
+    fn button_at(&self, pos: (f64, f64)) -> Option<screen::Button> {
+        let config = self.config.as_ref()?;
+        button_hit((config.width, config.height), &self.look, pos)
+    }
+
+    /// The button under the mouse is `over` now: drawn again when that changes.
+    fn set_hover(&mut self, over: Option<screen::Button>) {
+        if self.hover != over {
+            self.hover = over;
+            self.frame.changed();
+            self.request_redraw();
+        }
+    }
+
     /// Whether what is typed goes to the prompt on this screen.
     /// Does what a choice does.
     fn act(&mut self, act: Act, event_loop: &ActiveEventLoop) {
@@ -1926,6 +1986,7 @@ impl App {
             Act::OpenQuestion => self.show_question(),
             Act::OpenConsentFromSettings => self.open_consent_from_settings(),
             Act::CloseConsent => self.close_consent(None),
+            Act::Close => self.close_while_working(event_loop),
             Act::Nothing => {}
         }
     }
@@ -2661,6 +2722,7 @@ impl winit::application::ApplicationHandler<Event> for App {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse = (position.x, position.y);
+                self.set_hover(self.button_at(self.mouse));
                 if let Some(i) = self.row_at(self.mouse) {
                     // The focus moves only onto live entries (the game's are disabled while
                     // it types).
@@ -2670,6 +2732,7 @@ impl winit::application::ApplicationHandler<Event> for App {
                     }
                 }
             }
+            WindowEvent::CursorLeft { .. } => self.set_hover(None),
             WindowEvent::MouseWheel { delta, .. } => {
                 let lines = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
@@ -2687,6 +2750,15 @@ impl winit::application::ApplicationHandler<Event> for App {
                 button: MouseButton::Left,
                 ..
             } => {
+                // The window's own buttons first, on every screen, typing or not; a press on
+                // one never moves the window.
+                if let Some(b) = self.button_at(self.mouse) {
+                    if b == screen::Button::Minimise {
+                        self.set_hover(None);
+                    }
+                    let act = press_button(b, self.working, self.window.as_deref());
+                    return self.act(act, event_loop);
+                }
                 // Off the entries the press also moves the window (it has no title bar); the
                 // intro's own click (which ends it) moves it the same way.
                 let intro = matches!(self.mode, Mode::Intro(_));
@@ -2883,6 +2955,7 @@ pub fn run(raw: Vec<String>) -> i32 {
         frame_ms: pacing::frame_ms(0),
         rows: None,
         mouse: (0.0, 0.0),
+        hover: None,
         card: Card::Asking,
         action: (!raw.is_empty()).then(|| raw.iter().map(OsString::from).collect()),
         output: Vec::new(),
@@ -2935,7 +3008,7 @@ pub fn capture(c: &crate::Capture) -> Result<(), String> {
     let look = look_of(place.game.as_deref(), &fallout_ini, c.plain);
     let mut drawing = gpu::choose(None, (0, 0))?;
     let picture = (screen::WIDTH, screen::HEIGHT);
-    let canvas = match (c.intro_at, &look.intro) {
+    let mut canvas = match (c.intro_at, &look.intro) {
         (Some(ms), Some([welcome, logon, header])) => {
             let intro = Intro::new(welcome, logon, header, false, pacing::frame_ms(0));
             screen::draw_intro(&look, &intro.typed(ms))
@@ -2948,6 +3021,7 @@ pub fn capture(c: &crate::Capture) -> Result<(), String> {
             screen::draw(&look, &s, None, true).0
         }
     };
+    screen::draw_buttons(&mut canvas, &look, None);
     let g = &mut drawing.gpu;
     g.upload(&canvas.pixels, picture);
     let rgba = g.capture(picture, c.size)?;
@@ -3011,6 +3085,109 @@ mod tests {
         assert!(press_drags(false, false));
         assert!(!press_drags(true, false));
         assert!(!press_drags(false, true));
+    }
+
+    /// A window that counts its minimises.
+    #[derive(Default)]
+    struct Counted(std::cell::Cell<u32>);
+
+    impl Minimise for Counted {
+        fn minimise(&self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    /// The window's two buttons are hit inside their boxes, in the picture's top-right corner
+    /// wherever the window puts the picture (scaled, or with bars beside it), and nowhere else:
+    /// not between them, beyond them, on the header or on an entry; no entry is hit on them.
+    #[test]
+    fn the_window_buttons_are_hit_in_their_boxes() {
+        use screen::Button;
+        let look = Look::plain();
+        let boxes = screen::buttons(&look);
+        assert_eq!(boxes.map(|(b, _)| b), [Button::Minimise, Button::Exit]);
+        let s = start_screen(&place(Some("/g/x"), false), &Card::Asking);
+        let rows = screen::rows_of(&look, &s);
+        for (window, scale, left) in [
+            ((960, 720), 1.0, 0.0),
+            ((1920, 1440), 2.0, 0.0),
+            ((1600, 720), 1.0, 320.0),
+        ] {
+            let at = |x: f64, y: f64| (left + x * scale, y * scale);
+            for (b, (x, y, w, h)) in boxes {
+                let (x, y, w, h) = (x as f64, y as f64, w as f64, h as f64);
+                for (px, py) in [
+                    (x + 0.5, y + 0.5),
+                    (x + w / 2.0, y + h / 2.0),
+                    (x + w - 0.5, y + h - 0.5),
+                ] {
+                    let p = at(px, py);
+                    assert_eq!(button_hit(window, &look, p), Some(b), "{window:?} {p:?}");
+                    assert_eq!(row_hit(window, &rows, p), None, "{window:?} {p:?}");
+                }
+                for (px, py) in [
+                    (x - 1.0, y + h / 2.0),
+                    (x + w + 1.0, y + h / 2.0),
+                    (x + w / 2.0, y - 1.0),
+                    (x + w / 2.0, y + h + 1.0),
+                ] {
+                    let p = at(px, py);
+                    assert_ne!(button_hit(window, &look, p), Some(b), "{window:?} {p:?}");
+                }
+            }
+            let (_, (mx, my, mw, mh)) = boxes[0];
+            let mid = (my + mh as i32 / 2) as f64;
+            let gap = (mx + mw as i32) as f64 + 2.5;
+            assert_eq!(button_hit(window, &look, at(gap, mid)), None);
+            assert_eq!(button_hit(window, &look, at(955.0, mid)), None);
+            assert_eq!(button_hit(window, &look, at(480.0, 70.0)), None);
+            let entry = at(rows.x as f64 + 10.0, rows.top as f64 + 10.0);
+            assert_eq!(button_hit(window, &look, entry), None);
+            assert_eq!(row_hit(window, &rows, entry), Some(0));
+        }
+        assert_eq!(button_hit((0, 0), &look, (0.0, 0.0)), None);
+    }
+
+    /// The exit button does what the menu's Exit does (the same act, so the same way out of the
+    /// event loop and the same end) on every screen that has Exit, and on the others while
+    /// nothing runs; while Play's work runs (no screen offers Exit then) it closes the window as
+    /// the window's own close does then. It never minimises.
+    #[test]
+    fn the_exit_button_goes_the_way_of_the_menus_exit() {
+        let w = Counted::default();
+        let s = start_screen(&place(Some("/g/x"), false), &Card::Asking);
+        let i = s.entries.iter().position(|e| e == EXIT).unwrap();
+        let menu = on_enter(Kind::Start, "", i, &s.entries[i]);
+        assert_eq!(menu, Act::Exit);
+        assert_eq!(press_button(screen::Button::Exit, false, Some(&w)), menu);
+        for kind in [Kind::Refused, Kind::Ended] {
+            assert_eq!(
+                press_button(screen::Button::Exit, false, Some(&w)),
+                on_enter(kind, "", 0, EXIT)
+            );
+        }
+        assert_eq!(
+            press_button(screen::Button::Exit, true, Some(&w)),
+            Act::Close
+        );
+        assert_eq!(w.0.get(), 0);
+    }
+
+    /// The minimise button minimises the window (winit's, on every system) and does nothing
+    /// else, Play's work running or not; before there is a window it does nothing.
+    #[test]
+    fn the_minimise_button_minimises_the_window() {
+        for working in [false, true] {
+            let w = Counted::default();
+            let act = press_button(screen::Button::Minimise, working, Some(&w));
+            assert_eq!(act, Act::Nothing);
+            assert_eq!(w.0.get(), 1);
+        }
+        let none: Option<&Counted> = None;
+        assert_eq!(
+            press_button(screen::Button::Minimise, false, none),
+            Act::Nothing
+        );
     }
 
     /// The start screen offers what works today: Play, Play with mods only when there are mods,
@@ -3722,6 +3899,58 @@ mod tests {
         let mut fresh = ConsentFlow::default();
         assert_eq!(fresh.at_start(false, Consent::Never), Kind::Start);
         assert_eq!(fresh.at_start(false, Consent::Unanswered), Kind::Consent);
+    }
+
+    /// In the launcher's own plain look the window's two buttons fit every screen: inside the
+    /// picture, apart, and above the header's lines (the longest titles' too), so above all a
+    /// screen shows below them: its text, its list and its prompt.
+    #[test]
+    fn the_window_buttons_fit_every_screen_of_the_plain_look() {
+        let apart = |a: screen::Area, b: screen::Area| {
+            a.0 + a.2 as i32 <= b.0
+                || b.0 + b.2 as i32 <= a.0
+                || a.1 + a.3 as i32 <= b.1
+                || b.1 + b.3 as i32 <= a.1
+        };
+        let look = Look::plain();
+        let boxes = screen::buttons(&look).map(|(_, b)| b);
+        assert!(apart(boxes[0], boxes[1]));
+        for b in boxes {
+            assert!(b.0 >= 0 && b.1 >= 0, "{b:?}");
+            assert!(b.0 + b.2 as i32 <= screen::WIDTH as i32, "{b:?}");
+            assert!(b.2 >= 30 && b.3 >= 30, "big enough to hit: {b:?}");
+        }
+        let fixes = generated("fixes");
+        let mut screens = vec![
+            start_screen(&place(Some("/g/x"), true), &Card::Asking),
+            start_screen(&place(None, false), &Card::Asking),
+            message_screen("A question?", &["Yes".into(), "No".into()]),
+            question_screen(false),
+            question_screen(true),
+        ];
+        for consent in [None, Some(Consent::Ask)] {
+            screens.push(Screen {
+                title: format!("-{CRASH_ROW}-"),
+                welcome: about_text(consent),
+                entries: about_entries(consent.is_some()),
+                ..Default::default()
+            });
+        }
+        for list in [settings::List::Main].into_iter().chain(SUBLISTS) {
+            screens.push(list_screen(list, &fixes, true, None, true, Consent::Ask));
+            for &row in list.rows() {
+                screens.push(choices_screen(row, &fixes, (3840, 2160)));
+            }
+        }
+        for s in &screens {
+            let header = screen::header_boxes(&look, s);
+            for b in boxes {
+                assert!(b.1 + b.3 as i32 <= header[0].1, "{}: {b:?}", s.title);
+                for h in header {
+                    assert!(apart(b, h), "{}: {b:?} {h:?}", s.title);
+                }
+            }
+        }
     }
 
     /// In the launcher's own plain look (the game not found yet), every line and every choice of

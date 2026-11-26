@@ -16,6 +16,9 @@
 //! - the prompt `"> "` 30 above the bottom with the 17 by 17 cursor after it, blinking every
 //!   400 ms (`_blink_interval`).
 //!
+//! The launcher's own addition, as the window has no title bar: minimise and exit buttons in the
+//! top-right corner above the header ([`buttons`]), in the text's colour and the list's highlight.
+//!
 //! Every colour is the terminal colour (`[Interface] iSystemColorTerminal*`) times the tile's
 //! brightness over 255 (`Tile::UpdateTile`'s colour step), text at 255 on an HD screen.
 //! Text appears a character at a time at `iComputersDisplayRateMenus` (150 a second), the lines
@@ -272,6 +275,114 @@ fn layout(look: &Look, screen: &Screen) -> Layout {
     }
 }
 
+/// A box on the screen: x, y, width, height.
+pub type Area = (i32, i32, u32, u32);
+
+/// The header's three lines and where each goes (x, y, width, height): centred from y 60, a line
+/// apart. `FinishIntro` measures 17 a character, the game font's advance (the font's own width
+/// gives the same); the plain font's by its own cell.
+fn header_lines<'a>(look: &'a Look, screen: &'a Screen) -> [(&'a str, Area); 3] {
+    let lh = look.font.line_height();
+    let line = |i: i32, s: &'a str| {
+        let w = look.font.width(s);
+        (
+            s,
+            ((WIDTH as i32 - w as i32) / 2, 60 + lh as i32 * i, w, lh),
+        )
+    };
+    [
+        line(0, &look.header[0]),
+        line(1, &look.header[1]),
+        line(2, &screen.title),
+    ]
+}
+
+/// The header's lines' boxes (x, y, width, height) as [`draw`] puts them (the tests' fit of the
+/// window's buttons).
+#[cfg(test)]
+pub fn header_boxes(look: &Look, screen: &Screen) -> [Area; 3] {
+    header_lines(look, screen).map(|(_, b)| b)
+}
+
+/// The window's own buttons (it has no title bar), in the screen's top-right corner on every
+/// screen, the intro's too: minimise, then exit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Button {
+    Minimise,
+    Exit,
+}
+
+impl Button {
+    /// The sign it shows in the terminal's font: the usual ones.
+    pub fn sign(self) -> &'static str {
+        match self {
+            Button::Minimise => "_",
+            Button::Exit => "X",
+        }
+    }
+}
+
+/// The buttons' boxes (x, y, width, height): squares a line high plus 10 (at most 45), 5 apart,
+/// 10 from the screen's top and right edges, so above the header (its first line starts at 60).
+pub fn buttons(look: &Look) -> [(Button, Area); 2] {
+    let side = (look.font.line_height() + 10).min(45);
+    let exit = WIDTH as i32 - 10 - side as i32;
+    [
+        (Button::Minimise, (exit - 5 - side as i32, 10, side, side)),
+        (Button::Exit, (exit, 10, side, side)),
+    ]
+}
+
+/// The button whose box holds the point `p` of the screen (in its own units), if any.
+pub fn button_at(look: &Look, p: (f64, f64)) -> Option<Button> {
+    buttons(look)
+        .into_iter()
+        .find(|&(_, (x, y, w, h))| {
+            p.0 >= x as f64
+                && p.0 < (x + w as i32) as f64
+                && p.1 >= y as f64
+                && p.1 < (y + h as i32) as f64
+        })
+        .map(|(b, _)| b)
+}
+
+/// The buttons drawn over a screen: each sign in the text's colour, the ink of "X" centred in its
+/// box (so "_" sits low, as a minimise sign does); the one under the mouse (`hover`) as the list's
+/// highlighted row is, its box filled at brightness 128 and alpha 224, its sign in (0, 5, 0).
+pub fn draw_buttons(c: &mut Canvas, look: &Look, hover: Option<Button>) {
+    let (dx, dy) = sign_offset(look);
+    for (b, (x, y, w, h)) in buttons(look) {
+        let colour = if hover == Some(b) {
+            c.fill(x, y, w, h, look.at(128.0, 224.0));
+            [0.0, 5.0 / 255.0, 0.0, 1.0]
+        } else {
+            look.at(255.0, 255.0)
+        };
+        look.font.draw(c, x + dx, y + dy, b.sign(), colour);
+    }
+}
+
+/// Where a sign's pen goes in its box: the ink of "X" (drawn once on its own) centred in it.
+fn sign_offset(look: &Look) -> (i32, i32) {
+    let side = buttons(look)[0].1 .2 as i32;
+    let (w, h) = (look.font.width("X").max(1), look.font.line_height().max(1));
+    let mut c = Canvas::new(w, h);
+    look.font.draw(&mut c, 0, 0, "X", [1.0; 4]);
+    let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
+    for y in 0..h {
+        for x in 0..w {
+            if c.pixels[((y * w + x) * 4) as usize] > 0 {
+                (x0, y0) = (x0.min(x), y0.min(y));
+                (x1, y1) = (x1.max(x + 1), y1.max(y + 1));
+            }
+        }
+    }
+    if x0 >= x1 {
+        return ((side - w as i32) / 2, (side - h as i32) / 2);
+    }
+    ((side - (x0 + x1) as i32) / 2, (side - (y0 + y1) as i32) / 2)
+}
+
 /// The lines the screen types, in the order the game's text manager types them: the two header
 /// lines, the title (the header's third line), the welcome text's lines that show, each entry
 /// that shows as `"> "` and its text, and last the prompt `"> "` (`FinishIntro` 00758d30 puts the
@@ -358,18 +469,10 @@ pub fn draw(look: &Look, screen: &Screen, shown: Option<&[usize]>, cursor: bool)
         index += 1;
         s.chars().take(n).collect()
     };
-    // The header, centred: `FinishIntro` measures 17 a character, the game font's advance (the
-    // font's own width gives the same); the plain font's by its own cell.
-    let centred = |s: &str| (WIDTH as i32 - look.font.width(s) as i32) / 2;
-    let lines = [
-        look.header[0].as_str(),
-        look.header[1].as_str(),
-        screen.title.as_str(),
-    ];
-    for (i, line) in lines.iter().enumerate() {
+    // The header, centred ([`header_lines`]).
+    for (line, (x, y, _, _)) in header_lines(look, screen) {
         let part = typed(line);
-        look.font
-            .draw(&mut c, centred(line), 60 + lh * i as i32, &part, text);
+        look.font.draw(&mut c, x, y, &part, text);
     }
     // The welcome text (the part that shows), then the line under it, as wide as the text.
     let mut widest = 0;
@@ -540,5 +643,67 @@ mod tests {
         s.highlighted = 15;
         let r = layout(&look, &s).rows;
         assert_eq!(r.first + r.shown - 1, 15);
+    }
+
+    /// The window's buttons draw their signs inside their boxes in the text's colour, and only
+    /// the one under the mouse gets the list's highlight box (its sign then dark).
+    #[test]
+    fn the_buttons_show_the_highlight_under_the_mouse() {
+        let look = Look::plain();
+        let at = |c: &Canvas, x: i32, y: i32| {
+            let i = ((y as u32 * c.width + x as u32) * 4) as usize;
+            [c.pixels[i], c.pixels[i + 1], c.pixels[i + 2]]
+        };
+        let lit = |c: &Canvas, (x, y, w, h): Area| {
+            (y..y + h as i32)
+                .flat_map(|yy| (x..x + w as i32).map(move |xx| (xx, yy)))
+                .filter(|&(xx, yy)| at(c, xx, yy) != [0, 0, 0])
+                .count()
+        };
+        let mut plain = Canvas::new(WIDTH, HEIGHT);
+        draw_buttons(&mut plain, &look, None);
+        let boxes = buttons(&look);
+        let inside: usize = boxes.iter().map(|&(_, b)| lit(&plain, b)).sum();
+        assert!(
+            boxes.iter().all(|&(_, b)| lit(&plain, b) > 20),
+            "each sign drawn"
+        );
+        assert_eq!(
+            lit(&plain, (0, 0, WIDTH, HEIGHT)),
+            inside,
+            "nothing outside the boxes"
+        );
+        let text = look.at(255.0, 255.0).map(|v| (v * 255.0).round() as u8);
+        for (_, (x, y, w, h)) in boxes {
+            let sign: Vec<_> = (y..y + h as i32)
+                .flat_map(|yy| (x..x + w as i32).map(move |xx| (xx, yy)))
+                .map(|(xx, yy)| at(&plain, xx, yy))
+                .filter(|p| *p != [0, 0, 0])
+                .collect();
+            assert!(sign.contains(&[text[0], text[1], text[2]]), "{sign:?}");
+        }
+        let mut hovered = Canvas::new(WIDTH, HEIGHT);
+        draw_buttons(&mut hovered, &look, Some(Button::Exit));
+        let fill = {
+            let mut c = Canvas::new(1, 1);
+            c.fill(0, 0, 1, 1, look.at(128.0, 224.0));
+            at(&c, 0, 0)
+        };
+        let (_, (ex, ey, ew, eh)) = boxes[1];
+        let (_, (mx, my, _, _)) = boxes[0];
+        assert_eq!(boxes[1].0, Button::Exit);
+        assert_eq!(at(&hovered, ex + 1, ey + 1), fill);
+        assert_eq!(at(&hovered, ex + ew as i32 - 2, ey + eh as i32 - 2), fill);
+        assert_eq!(at(&hovered, mx + 1, my + 1), [0, 0, 0]);
+        // The highlighted sign is dark on the box: no text-coloured pixel left in it.
+        let exit_pixels: Vec<_> = (ey..ey + eh as i32)
+            .flat_map(|yy| (ex..ex + ew as i32).map(move |xx| (xx, yy)))
+            .map(|(xx, yy)| at(&hovered, xx, yy))
+            .collect();
+        assert!(!exit_pixels.contains(&[text[0], text[1], text[2]]));
+        assert!(
+            exit_pixels.iter().any(|p| *p != fill),
+            "the sign shows on the box"
+        );
     }
 }
