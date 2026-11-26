@@ -2259,7 +2259,7 @@ pub fn fn_00420950(e: &mut Engine, this: Ptr<ExtraDataList>, visited: Ptr) -> u3
         }
         let slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
         let room = e.mem.u32(slot);
-        let room_list = e.call(REFERENCE_EXTRA_LIST, &args![room]).ptr();
+        let room_list: Ptr<ExtraDataList> = e.call(REFERENCE_EXTRA_LIST, &args![room]).ptr();
         if e.call(0x0042_0810, &args![room_list]).bool() {
             return room;
         }
@@ -2277,7 +2277,8 @@ pub fn fn_00420950(e: &mut Engine, this: Ptr<ExtraDataList>, visited: Ptr) -> u3
             if !e.call(VISITED_SET_FIND, &args![visited, room, seen]).bool() {
                 let seen_value = e.mem.u8(seen.addr()) as u32;
                 e.call(VISITED_SET_INSERT, &args![visited, room, seen_value]);
-                let room_list = e.call(REFERENCE_EXTRA_LIST, &args![room]).ptr();
+                let room_list: Ptr<ExtraDataList> =
+                    e.call(REFERENCE_EXTRA_LIST, &args![room]).ptr();
                 let found = e.call(0x0042_0950, &args![room_list, visited]).u32();
                 if found != 0 {
                     return found;
@@ -2315,14 +2316,14 @@ pub fn fn_00420a60(e: &mut Engine, this: Ptr<ExtraDataList>, index: i32, referen
     let master = if reference == 0 {
         0
     } else {
-        let list = e.call(REFERENCE_EXTRA_LIST, &args![reference]).ptr();
+        let list: Ptr<ExtraDataList> = e.call(REFERENCE_EXTRA_LIST, &args![reference]).ptr();
         e.call(0x0042_08b0, &args![list]).u32()
     };
     let room_reference = if master == 0 { reference } else { master };
     let room = if room_reference == 0 {
         0
     } else {
-        let list = e.call(REFERENCE_EXTRA_LIST, &args![room_reference]).ptr();
+        let list: Ptr<ExtraDataList> = e.call(REFERENCE_EXTRA_LIST, &args![room_reference]).ptr();
         e.call(0x0042_0ed0, &args![list]).u32()
     };
     if portal != 0 {
