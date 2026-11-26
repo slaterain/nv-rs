@@ -4762,6 +4762,8 @@ mod tests {
             order,
             vec![
                 0x0041fdb0,
+                0x0041_fe10,
+                0x0041_fe60,
                 PATROL_DATA_DESTROY,
                 OPERATOR_DELETE,
                 BS_EXTRA_DATA_DESTROY
@@ -4912,7 +4914,12 @@ mod tests {
         let order: Vec<u32> = log.iter().map(|(callee, _)| *callee).collect();
         assert_eq!(
             order,
-            vec![0x00420060, OPERATOR_DELETE, BS_EXTRA_DATA_DESTROY]
+            vec![
+                0x00420060,
+                0x0042_00c0,
+                OPERATOR_DELETE,
+                BS_EXTRA_DATA_DESTROY
+            ]
         );
         assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![data]]);
         assert_eq!(e.get(extra, ExtraOcclusionPlaneRefData::pData).addr(), 0);
@@ -5160,7 +5167,12 @@ mod tests {
         let order: Vec<u32> = log.iter().map(|(callee, _)| *callee).collect();
         assert_eq!(
             order,
-            vec![0x004203b0, OPERATOR_DELETE, BS_EXTRA_DATA_DESTROY]
+            vec![
+                0x004203b0,
+                0x0042_00c0,
+                OPERATOR_DELETE,
+                BS_EXTRA_DATA_DESTROY
+            ]
         );
         assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![data]]);
         assert_eq!(e.get(extra, ExtraPortalRefData::pData).addr(), 0);
@@ -5284,6 +5296,9 @@ mod tests {
             order,
             vec![
                 0x00420630,
+                0x0042_0690,
+                0x0042_06e0,
+                0x0042_0710,
                 LIST_DESTROY,
                 LIST_DESTROY,
                 OPERATOR_DELETE,
