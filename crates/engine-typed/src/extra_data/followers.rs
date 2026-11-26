@@ -117,8 +117,8 @@ fn stored(value: f32) -> u32 {
 }
 
 /// The word setters: `value == none` deletes the extra data of `kind` by type; otherwise the one
-/// there has `release` run on it (its old word) and then holds `value`, or a new one (0x10 bytes,
-/// built by `build`) is given `value` and added.
+/// there has `release_old` run on it (its old word) and then holds `value`, or a new one
+/// (0x10 bytes, built by `build`) is given `value` and added.
 fn set_word_unless(
     e: &mut Engine,
     list: u32,
@@ -126,7 +126,7 @@ fn set_word_unless(
     value: u32,
     none: u32,
     build: impl FnOnce(&mut Engine, u32) -> u32,
-    release: impl FnOnce(&mut Engine, u32),
+    release_old: impl FnOnce(&mut Engine, u32),
 ) {
     if value == none {
         remove_kind(e, list, kind);
@@ -139,7 +139,7 @@ fn set_word_unless(
             list_add(e, list, extra);
         }
         extra => {
-            release(e, extra);
+            release_old(e, extra);
             e.mem.set_u32(extra.wrapping_add(EXTRA_PAYLOAD), value);
         }
     }
