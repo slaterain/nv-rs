@@ -358,7 +358,7 @@ pub fn fn_007dbfe0(e: &mut Engine, this: Ptr, flag: u32) {
         .addr()
         .wrapping_add(group.wrapping_mul(8))
         .wrapping_add(4);
-    e.call(0x007e_0e30, &args![Ptr::new(list), 0x007d_c040, flag]);
+    e.call(0x007e_0e30, &args![list, 0x007d_c040, flag]);
 }
 
 // Translated from 007dc040 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -736,7 +736,7 @@ pub fn stats_menu_update_perks(e: &mut Engine) {
         while node != 0 && node_item(e, node) != 0 {
             let rank = node_item(e, node);
             let perk = e.mem.u32(rank);
-            if e.call(0x007d_d8a0, &args![Ptr::new(perk)]).u8() == 0 {
+            if e.call(0x007d_d8a0, &args![perk]).u8() == 0 {
                 e.call(STRING_CONSTRUCT, &args![text]);
                 let rank = node_item(e, node);
                 if e.mem.u8(rank + 4) > 1 {
@@ -759,11 +759,8 @@ pub fn stats_menu_update_perks(e: &mut Engine) {
                 let string = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, text));
                 let rank = node_item(e, node);
                 let list = open_menu(e) + 0x1e0;
-                e.call(
-                    0x007e_0e70,
-                    &args![Ptr::new(list), rank, string, 0x007e_04e0, 0],
-                )
-                .u32();
+                e.call(0x007e_0e70, &args![list, rank, string, 0x007e_04e0, 0])
+                    .u32();
                 e.call(STRING_DESTROY, &args![text]);
             }
             node = node_next(e, node);
@@ -1058,7 +1055,7 @@ pub fn stats_menu_update_healing_mode(e: &mut Engine, this: Ptr) {
     }
     let flag = u32::from(e.mem.u8(this.addr() + 0x2a0));
     let fade = e.call(0x007d_b1c0, &args![]).u32();
-    e.call(0x007d_bfe0, &args![Ptr::new(fade), flag]);
+    e.call(0x007d_bfe0, &args![fade, flag]);
 }
 
 /// The arrow and the change flag `SPECIALUpdateFn` and `SkillsUpdateFn` give a tile:
@@ -1145,7 +1142,7 @@ pub fn fn_007dfcd0(e: &mut Engine) -> u8 {
     if menu == 0 {
         return 0;
     }
-    e.call(0x007d_cc00, &args![Ptr::new(menu)]).i32() as u8
+    e.call(0x007d_cc00, &args![menu]).i32() as u8
 }
 
 // Translated from 007dfdf0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1421,7 +1418,7 @@ pub fn fn_007e0e30(e: &mut Engine, this: Ptr, callback: u32, value: u32) {
     let item = e.mem.u32(this.addr());
     if e.call(callback, &args![item, value]).bool() && e.mem.u32(this.addr() + 4) != 0 {
         let next = e.mem.u32(this.addr() + 4);
-        e.call(0x007e_0e30, &args![Ptr::new(next), callback, value]);
+        e.call(0x007e_0e30, &args![next, callback, value]);
     }
 }
 
@@ -1691,7 +1688,7 @@ pub fn stats_menu_create(e: &mut Engine) -> u32 {
         return fail(e);
     }
     e.call(MENU_SET_MENU_TILE, &args![open_menu(e), tile, 0u32]);
-    if !e.call(0x007d_b340, &args![Ptr::new(open_menu(e))]).bool() {
+    if !e.call(0x007d_b340, &args![open_menu(e)]).bool() {
         e.call(DEBUG_MESSAGE, &args![CREATION_FAILED_TEXT]);
         return 0;
     }
@@ -1809,10 +1806,7 @@ pub fn stats_menu_create(e: &mut Engine) -> u32 {
         while (e.mem.u32(index_slot) as i32) < 0x2b {
             let stat = e.mem.u32(index_slot);
             let item = e
-                .call(
-                    0x007e_1190,
-                    &args![Ptr::new(open_menu(e) + 0x210), stat, 0, 0, 0],
-                )
+                .call(0x007e_1190, &args![open_menu(e) + 0x210, stat, 0, 0, 0])
                 .u32();
             let stat = e.mem.u32(index_slot);
             let name = e.call(MISC_STAT_NAME_0078A260, &args![stat]).u32();
@@ -1821,7 +1815,7 @@ pub fn stats_menu_create(e: &mut Engine) -> u32 {
             let value = e.call(MISC_STAT_VALUE_005A3370, &args![stat]).u32();
             set_int(e, item, 0x1005, value);
             e.call(TILE_SET_NAME_00707E10, &args![item, name]);
-            e.call(0x007d_c0a0, &args![Ptr::new(index_slot)]);
+            e.call(0x007d_c0a0, &args![index_slot]);
         }
         let black = e.mem.u32(open_menu(e) + 0x14c);
         set_string(e, black, 0xfcc, SOLID_BLACK_TEXT);
@@ -1880,7 +1874,7 @@ pub fn stats_menu_create(e: &mut Engine) -> u32 {
         ] {
             let group_tile = e.mem.u32(open_menu(e) + offset);
             let fade = e.call(0x007d_b1c0, &args![]).u32();
-            e.call(0x007d_b250, &args![Ptr::new(fade), group, group_tile]);
+            e.call(0x007d_b250, &args![fade, group, group_tile]);
         }
         for (group, index, value) in [
             (0u32, 1u32, 2u32),
@@ -1902,10 +1896,10 @@ pub fn stats_menu_create(e: &mut Engine) -> u32 {
             (5, 2, 4),
         ] {
             let fade = e.call(0x007d_b1c0, &args![]).u32();
-            e.call(0x007d_b270, &args![Ptr::new(fade), group, index, value]);
+            e.call(0x007d_b270, &args![fade, group, index, value]);
         }
-        e.call(0x007d_cfc0, &args![Ptr::new(open_menu(e))]);
-        e.call(0x007d_f620, &args![Ptr::new(open_menu(e))]);
+        e.call(0x007d_cfc0, &args![open_menu(e)]);
+        e.call(0x007d_f620, &args![open_menu(e)]);
         for (setting, name) in [
             (0x011d_30c0u32, 0x0107_725cu32),
             (0x011d_1f08, 0x0107_7254),
@@ -2047,7 +2041,7 @@ pub fn stats_menu_update_active_effects(e: &mut Engine, this: Ptr) {
         let piece = text + 0x10;
         let second_piece = text + 0x18;
         e.call(STRING_CONSTRUCT, &args![text]);
-        e.call(0x007e_07f0, &args![Ptr::new(base + 0x84)]);
+        e.call(0x007e_07f0, &args![base + 0x84]);
         for slot in [0x74u32, 0x78, 0x80, 0x7c] {
             let effect = e.mem.u32(base + slot);
             if effect != 0 {
@@ -2079,9 +2073,9 @@ pub fn stats_menu_update_active_effects(e: &mut Engine, this: Ptr) {
             if e.call(EFFECT_ACTIVE_00833C20, &args![effect]).bool() {
                 let item = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, effect));
                 if !e.call(IS_USAGE_MONITOR_EFFECT, &args![item]).bool() {
-                    let setting = e.call(0x007d_f1d0, &args![Ptr::new(effect)]).u32();
-                    let skip = e.call(0x007d_f1b0, &args![Ptr::new(setting)]).bool() && {
-                        let setting = e.call(0x007d_f1d0, &args![Ptr::new(effect)]).u32();
+                    let setting = e.call(0x007d_f1d0, &args![effect]).u32();
+                    let skip = e.call(0x007d_f1b0, &args![setting]).bool() && {
+                        let setting = e.call(0x007d_f1d0, &args![effect]).u32();
                         !e.call(FLAG_TEST_00403E60, &args![setting, 0x2000u32])
                             .bool()
                     };
@@ -2337,8 +2331,7 @@ fn update_effect(e: &mut Engine, this: Ptr, effect: u32, stages: [u32; 4]) {
                 kind(e) == 1
                     || kind(e) == 6
                     || kind(e) == 0xa
-                    || (kind(e) == 4
-                        && e.call(0x007d_f210, &args![Ptr::new(effect)]).u32() as u8 != 0)
+                    || (kind(e) == 4 && e.call(0x007d_f210, &args![effect]).u32() as u8 != 0)
             };
             if register {
                 e.call(STATUS_EFFECT_LIST_REGISTER, &args![base + 0x84, effect]);
@@ -2346,7 +2339,7 @@ fn update_effect(e: &mut Engine, this: Ptr, effect: u32, stages: [u32; 4]) {
             }
         }
     }
-    let setting = e.call(0x007d_f1d0, &args![Ptr::new(effect)]).u32();
+    let setting = e.call(0x007d_f1d0, &args![effect]).u32();
     if e.call(FLAG_TEST_00403E60, &args![setting, 0x2000u32])
         .bool()
     {
@@ -2736,7 +2729,7 @@ pub fn stats_menu_do_gamepad(e: &mut Engine, this: Ptr, key: u32, value: u32) ->
         if (picked as i32) < 6 {
             let object = fade(e);
             fn_007dbfa0(e, object, picked, 1);
-            let first = e.call(0x007e_05f0, &args![Ptr::new(base + 0x28)]).bool();
+            let first = e.call(0x007e_05f0, &args![base + 0x28]).bool();
             let tile = e.mem.u32(base + 0x2c);
             set_int(e, tile, 0xfaf, u32::from(first));
             let second = fn_007e06f0(e, Ptr::new(base + 0x58));
@@ -3037,9 +3030,7 @@ pub fn stats_menu_do_enter(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
                 .bool()
             {
                 stats_menu_move_knob(e, this, tile, Ptr::new(KNOB_STEP_011DAD64));
-                let value = e
-                    .call(0x007e_1110, &args![Ptr::new(base + 0x180), tile])
-                    .u32();
+                let value = e.call(0x007e_1110, &args![base + 0x180, tile]).u32();
                 fn_007dc7e0(e, this, value);
             }
         }
@@ -3048,9 +3039,7 @@ pub fn stats_menu_do_enter(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
                 .bool()
             {
                 stats_menu_move_knob(e, this, tile, Ptr::new(KNOB_STEP_011DAD68));
-                let value = e
-                    .call(0x007e_1110, &args![Ptr::new(base + 0x1b0), tile])
-                    .u32();
+                let value = e.call(0x007e_1110, &args![base + 0x1b0, tile]).u32();
                 fn_007dc7e0(e, this, value);
             }
         }
@@ -3059,9 +3048,7 @@ pub fn stats_menu_do_enter(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
                 .bool()
             {
                 stats_menu_move_knob(e, this, tile, Ptr::new(KNOB_STEP_011DAD6C));
-                let perk = e
-                    .call(0x007e_1110, &args![Ptr::new(base + 0x1e0), tile])
-                    .u32();
+                let perk = e.call(0x007e_1110, &args![base + 0x1e0, tile]).u32();
                 fn_007dc9b0(e, this, Ptr::new(perk));
             }
         }
@@ -3074,9 +3061,7 @@ pub fn stats_menu_do_enter(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
             if e.call(LIST_BOX_HAS_TILE_007242F0, &args![base + 0x270, tile])
                 .bool()
             {
-                let reputation = e
-                    .call(0x007e_1110, &args![Ptr::new(base + 0x270), tile])
-                    .u32();
+                let reputation = e.call(0x007e_1110, &args![base + 0x270, tile]).u32();
                 fn_007dcb40(e, this, reputation);
                 stats_menu_move_knob(e, this, tile, Ptr::new(KNOB_STEP_011DAD70));
             }
@@ -3462,7 +3447,7 @@ pub fn stats_menu_set_knob_position(e: &mut Engine, flag: u8) {
     if menu == 0 {
         return;
     }
-    let page = e.call(0x007d_cc00, &args![Ptr::new(menu)]).i32();
+    let page = e.call(0x007d_cc00, &args![menu]).i32();
     let manager = pipboy_manager(e);
     e.call(
         PIPBOY_SET_TAB_KNOB_POSITION,
@@ -3476,7 +3461,7 @@ pub fn stats_menu_set_knob_position(e: &mut Engine, flag: u8) {
 pub fn stats_menu_set_current_stats_page(e: &mut Engine, page: u8) {
     let menu = open_menu(e);
     if menu != 0 {
-        e.call(0x007d_ff40, &args![Ptr::new(menu), i32::from(page)]);
+        e.call(0x007d_ff40, &args![menu, i32::from(page)]);
     }
 }
 
@@ -3573,7 +3558,7 @@ pub fn fn_007e0230(e: &mut Engine, this: Ptr) {
     let base = this.addr();
     let mode = u8::from(e.mem.u8(base + 0x2a0) == 0);
     e.mem.set_u8(base + 0x2a0, mode);
-    let first = e.call(0x007e_05f0, &args![Ptr::new(base + 0x28)]).bool();
+    let first = e.call(0x007e_05f0, &args![base + 0x28]).bool();
     let tile = e.mem.u32(base + 0x2c);
     set_int(e, tile, 0xfaf, u32::from(first));
     let second = fn_007e06f0(e, Ptr::new(base + 0x58));
@@ -3774,7 +3759,7 @@ pub fn stats_menu_status_effect_list_register(e: &mut Engine, this: Ptr, effect:
             &args![this.addr() + 4, entry, 0x007e_0480u32],
         );
     }
-    let setting = e.call(0x007d_f1d0, &args![Ptr::new(effect)]).u32();
+    let setting = e.call(0x007d_f1d0, &args![effect]).u32();
     if e.call(FLAG_TEST_00403E60, &args![setting, 0x2000u32])
         .bool()
     {
@@ -3790,13 +3775,13 @@ pub fn stats_menu_status_effect_list_register(e: &mut Engine, this: Ptr, effect:
 /// (`005f65d0`).
 pub fn fn_007e09d0(e: &mut Engine, this: Ptr, effect: u32) {
     let list = this.addr() + 4;
-    let setting = e.call(0x007d_f1d0, &args![Ptr::new(effect)]).u32();
+    let setting = e.call(0x007d_f1d0, &args![effect]).u32();
     let present = e.with_stack(4, |e, slot| {
         e.mem.set_u32(slot.addr(), setting);
         e.call(LIST_CONTAINS_005F65D0, &args![list, slot]).bool()
     });
     if !present {
-        let setting = e.call(0x007d_f1d0, &args![Ptr::new(effect)]).u32();
+        let setting = e.call(0x007d_f1d0, &args![effect]).u32();
         e.call(LIST_INSERT_SORTED, &args![list, setting, 0x007e_0540u32]);
     }
 }
