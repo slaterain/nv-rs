@@ -33,6 +33,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use super::{walk, ShadowSceneLight};
+use crate::scene_node;
 use engine_core::ptr::Ptr;
 use engine_core::{args, draw_thread, typed_call, Engine};
 
@@ -125,18 +126,14 @@ const LIGHT_LOCK: u32 = 0x011f_9ea0;
 const LIGHT_LOCK_COUNT: u32 = 0x011f_9ea4;
 const OBJECT_LOCK: u32 = 0x011f_9ec0;
 const OBJECT_LOCK_COUNT: u32 = 0x011f_9ec4;
-/// The light half's callees (`thiscall`, one stack word), by address: a new shadow caster, a new
-/// light, a dynamic light's update, a light's update, a removal; the renderer (`011f91a8`) and its
-/// map release; the portal graph's update; the list's remove-all; the reference counts.
-const LIGHT_UPDATE_SHADOW: u32 = 0x00b5_cd00;
-const LIGHT_ADD: u32 = 0x00b5_eca0;
-const LIGHT_UPDATE_DYNAMIC: u32 = 0x00b5_d930;
+/// The light half's callees by address (`thiscall`, one stack word): a light's update; the renderer
+/// (`011f91a8`) and its map release; the portal graph's update. A new shadow caster (`00b5cd00`), a
+/// new light (`00b5eca0`), a dynamic light's update (`00b5d930`), a removal (`00b5ef90`) and the
+/// list's remove-all (`00e74d40`) are the scene node family's, called typed.
 const LIGHT_UPDATE: u32 = 0x00b5_d300;
-const REMOVE_QUEUED_LIGHT: u32 = 0x00b5_ef90;
 const RENDERER: u32 = 0x011f_91a8;
 const RELEASE_MAP: u32 = 0x00b6_d4c0;
 const PORTAL_GRAPH_UPDATE: u32 = 0x00c5_b8d0;
-const LIST_REMOVE_ALL: u32 = 0x00e7_4d40;
 /// The node's queues: lights to add (+0xe4), to remove (+0xf0), to update (+0xfc), objects
 /// (+0x108) and objects for active lights only (+0x114); the portal graph (+0x1e0), the drained
 /// flag (+0x1fc); its light list (`lLightList` +0xb4, count +0xbc).
@@ -181,14 +178,14 @@ const SCENE_NODE: u32 = 0x011f_91c8;
 const ROOM_RTTI: u32 = 0x0120_2828;
 const OTHER_RTTI: u32 = 0x0120_30b8;
 /// The property's fence and fenced removal, the shader manager's accumulator (its scene node at
-/// +0x194), the multibound cast (to the record at `011f5eb4`) and its indexed child.
+/// +0x194) and the multibound cast (to the record at `011f5eb4`); its indexed child (`00b5aa40`)
+/// is the scene node family's, called typed.
 const FENCE_ALL_LIGHTS: u32 = 0x00b7_18b0;
 const REMOVE_FENCED_LIGHTS: u32 = 0x00b7_1600;
 const GET_ACCUMULATOR: u32 = 0x00b4_f5c0;
 const ACCUMULATOR_SCENE_NODE: u32 = 0x194;
 const CAST: u32 = 0x0065_3290;
 const MULTIBOUND_RTTI: u32 = 0x011f_5eb4;
-const INDEXED_CHILD: u32 = 0x00b5_aa40;
 /// The scrap heap (on the memory manager `011f6238`) and its alignment word, the CRT `qsort`, the
 /// exe's comparator of luminances and `GetLuminanceToBound`.
 const MEMORY_MANAGER: u32 = 0x011f_6238;
@@ -425,7 +422,11 @@ fn multibound_child(e: &mut Engine, node: u32) -> Option<u32> {
     if cast == 0 {
         return None;
     }
-    Some(e.call(INDEXED_CHILD, &args![cast]).u32())
+    Some(typed_call!(
+        scene_node::FAMILY,
+        0x00b5_aa40,
+        scene_node::lists::indexed_child(e, Ptr::new(cast))
+    ))
 }
 
 /// Both object walks: `leaf` for each tri-based geometry child, the walk again for any other child,
@@ -624,20 +625,30 @@ pub fn drain(e: &mut Engine, this: Ptr) {
     let node = this.addr();
     e.call(LOCK_ENTER, &args![LIGHT_LOCK, 0u32]);
     each_queued(e, node, QUEUE_ADD, &mut |e, light| {
-        let callee = if e.mem.u8(light.wrapping_add(LIGHT_CAST_SHADOW)) != 0 {
-            LIGHT_UPDATE_SHADOW
+        if e.mem.u8(light.wrapping_add(LIGHT_CAST_SHADOW)) != 0 {
+            let _: u32 = typed_call!(
+                scene_node::FAMILY,
+                0x00b5_cd00,
+                scene_node::lists::make_dynamic(e, Ptr::new(node), light)
+            );
         } else {
-            LIGHT_ADD
-        };
-        e.call(callee, &args![node, light]);
+            let _: u32 = typed_call!(
+                scene_node::FAMILY,
+                0x00b5_eca0,
+                scene_node::node::add_listed_light(e, Ptr::new(node), light)
+            );
+        }
     });
     each_queued(e, node, QUEUE_UPDATE, &mut |e, light| {
-        let callee = if e.mem.u8(light.wrapping_add(LIGHT_DYNAMIC)) != 0 {
-            LIGHT_UPDATE_DYNAMIC
+        if e.mem.u8(light.wrapping_add(LIGHT_DYNAMIC)) != 0 {
+            typed_call!(
+                scene_node::FAMILY,
+                0x00b5_d930,
+                scene_node::lists::follow_moved_light(e, Ptr::new(node), light)
+            );
         } else {
-            LIGHT_UPDATE
-        };
-        e.call(callee, &args![node, light]);
+            e.call(LIGHT_UPDATE, &args![node, light]);
+        }
     });
     each_queued(e, node, QUEUE_REMOVE, &mut |e, light| {
         let shadowed = e.mem.u8(light.wrapping_add(LIGHT_CAST_SHADOW)) != 0;
@@ -654,7 +665,11 @@ pub fn drain(e: &mut Engine, this: Ptr) {
                     e.mem.set_u32(light.wrapping_add(LIGHT_SHADOW_MAP), 0);
                 }
             }
-            e.call(REMOVE_QUEUED_LIGHT, &args![node, local]);
+            typed_call!(
+                scene_node::FAMILY,
+                0x00b5_ef90,
+                scene_node::node::remove_queued_light_of(e, Ptr::new(node), local)
+            );
             let kept = e.mem.u32(local.addr());
             if kept != 0 {
                 release(e, kept);
@@ -687,7 +702,11 @@ pub fn drain(e: &mut Engine, this: Ptr) {
         QUEUE_OBJECTS,
         QUEUE_OBJECTS_ACTIVE,
     ] {
-        e.call(LIST_REMOVE_ALL, &args![node.wrapping_add(queue)]);
+        typed_call!(
+            scene_node::FAMILY,
+            0x00e7_4d40,
+            scene_node::lists::remove_all(e, Ptr::new(node.wrapping_add(queue)))
+        );
     }
     e.mem.set_u8(node.wrapping_add(DRAINED), 1);
     leave(e, OBJECT_LOCK, OBJECT_LOCK_COUNT);

@@ -13,8 +13,8 @@ use engine_core::{args, typed_call, Engine};
 
 /// `-1.0f` (the health and charge getters' default) and the `double` 1.0 the scale setter compares
 /// with, in the exe's read-only data.
-const MINUS_ONE: u32 = 0x0101_2054;
-const ONE_DOUBLE: u32 = 0x0101_2070;
+pub(super) const MINUS_ONE: u32 = 0x0101_2054;
+pub(super) const ONE_DOUBLE: u32 = 0x0101_2070;
 /// `ExtraRadioData`'s vtable and the copy of a `RADIO_DATA` record (`thiscall(dst, src)`).
 const VTABLE_EXTRA_RADIO_DATA: u32 = 0x0101_5138;
 const RADIO_DATA_COPY: u32 = 0x0043_7240;
@@ -104,7 +104,7 @@ const REFERENCE_SET_TARGETED: u32 = 0x0056_4db0;
 
 /// The word at +0xc of the first extra data of `kind`, or `default`.
 #[inline]
-fn word_or(e: &mut Engine, list: u32, kind: u8, default: u32) -> u32 {
+pub(super) fn word_or(e: &mut Engine, list: u32, kind: u8, default: u32) -> u32 {
     match first_of_kind(e, list, kind) {
         0 => default,
         extra => word_at(e, extra, EXTRA_PAYLOAD),
@@ -114,7 +114,7 @@ fn word_or(e: &mut Engine, list: u32, kind: u8, default: u32) -> u32 {
 /// The `float` at +0xc of the first extra data of `kind`, or the one of the bits `default`; through
 /// the x87's load, so a signalling NaN comes out quiet.
 #[inline]
-fn float_or(e: &mut Engine, list: u32, kind: u8, default: u32) -> f32 {
+pub(super) fn float_or(e: &mut Engine, list: u32, kind: u8, default: u32) -> f32 {
     f32::from_bits(x87_quiet_bits(word_or(e, list, kind, default)))
 }
 
@@ -159,7 +159,13 @@ fn sound_or_empty(e: &mut Engine, list: u32, kind: u8, out: u32) -> u32 {
 
 /// A new extra data of `size` bytes built by the constructor at `construct` (with `value` when it
 /// takes one) and added to the list, a null one too when the allocation failed. Answers it.
-fn add_new(e: &mut Engine, list: u32, size: u32, construct: u32, value: Option<u32>) -> u32 {
+pub(super) fn add_new(
+    e: &mut Engine,
+    list: u32,
+    size: u32,
+    construct: u32,
+    value: Option<u32>,
+) -> u32 {
     let extra = new_object(e, size, |e, block| match value {
         Some(value) => e.call(construct, &args![block, value]).u32(),
         None => e.call(construct, &args![block]).u32(),
@@ -188,7 +194,7 @@ fn set_or_add(
 }
 
 /// The word at +0xc set to `value` in the first extra data of `kind`, or one (0x10 bytes) added.
-fn set_word_or_add(e: &mut Engine, list: u32, kind: u8, construct: u32, value: u32) {
+pub(super) fn set_word_or_add(e: &mut Engine, list: u32, kind: u8, construct: u32, value: u32) {
     set_or_add(e, list, kind, 0x10, construct, value, |e, extra| {
         e.mem.set_u32(extra.wrapping_add(EXTRA_PAYLOAD), value);
     });
@@ -196,7 +202,14 @@ fn set_word_or_add(e: &mut Engine, list: u32, kind: u8, construct: u32, value: u
 
 /// The setters whose `none` means no extra data: the one there deleted for `none`, its word at
 /// +0xc set otherwise; a new one (0x10 bytes) unless the value is `none`.
-fn set_or_remove(e: &mut Engine, list: u32, kind: u8, construct: u32, value: u32, none: u32) {
+pub(super) fn set_or_remove(
+    e: &mut Engine,
+    list: u32,
+    kind: u8,
+    construct: u32,
+    value: u32,
+    none: u32,
+) {
     match first_of_kind(e, list, kind) {
         0 => {
             if value != none {
@@ -240,13 +253,13 @@ fn set_owned_pointer(
     extra
 }
 
-/// The body of the four sound setters. With an extra data of `kind`: a handle whose id is an empty
+/// The body of the sound setters (four here, two in [`super::setters`]). With an extra data of `kind`: a handle whose id is an empty
 /// handle's deletes it, any other is copied in. Without one, a handle with another id builds one of
 /// 0x18 bytes with `construct`, the handle by value (its id, its success byte zero-extended as the
 /// exe's zeroed stack copy holds it, its state), and adds it. The exe's empty handles on the stack
 /// and their compares (`0041a250`, `0041a1f0`, `0041a220`, the empty destructor `00483710`) and the
 /// handle's copy (`00418900`) are done in place.
-fn set_sound(e: &mut Engine, list: u32, kind: u8, construct: u32, sound: u32) {
+pub(super) fn sound_setter(e: &mut Engine, list: u32, kind: u8, construct: u32, sound: u32) {
     let extra = first_of_kind(e, list, kind);
     let empty = read_word(e, sound) == NO_SOUND;
     if extra != 0 {
@@ -923,9 +936,9 @@ pub fn set_scale(e: &mut Engine, this: u32, scale: f32) {
 
 // Typed from 0041a090
 /// `ExtraDataList::SetCreatureAwakeSound` (Xbox PDB, `thiscall(list, handle)`): the type 0x7d extra
-/// data's sound handle set (`set_sound`'s cases; built by `004361e0`).
+/// data's sound handle set (`sound_setter`'s cases; built by `004361e0`).
 pub fn set_creature_awake_sound(e: &mut Engine, this: u32, sound: u32) {
-    set_sound(
+    sound_setter(
         e,
         this,
         KIND_CREATURE_AWAKE_SOUND,
@@ -959,7 +972,7 @@ pub fn sound_handle_init(e: &mut Engine, this: u32) -> u32 {
 /// As [`set_creature_awake_sound`] for type 0x8a (the creature's movement sound, built by
 /// `00436300`).
 pub fn set_creature_movement_sound(e: &mut Engine, this: u32, sound: u32) {
-    set_sound(
+    sound_setter(
         e,
         this,
         KIND_CREATURE_MOVEMENT_SOUND,
@@ -972,7 +985,7 @@ pub fn set_creature_movement_sound(e: &mut Engine, this: u32, sound: u32) {
 /// `ExtraDataList::SetWeaponIdleSound` (Xbox PDB): as [`set_creature_awake_sound`] for type 0x83
 /// (built by `00436420`).
 pub fn set_weapon_idle_sound(e: &mut Engine, this: u32, sound: u32) {
-    set_sound(
+    sound_setter(
         e,
         this,
         KIND_WEAPON_IDLE_SOUND,
@@ -985,7 +998,7 @@ pub fn set_weapon_idle_sound(e: &mut Engine, this: u32, sound: u32) {
 /// `ExtraDataList::SetWeaponAttackSound` (Xbox PDB): as [`set_creature_awake_sound`] for type 0x86
 /// (built by `00436540`).
 pub fn set_weapon_attack_sound(e: &mut Engine, this: u32, sound: u32) {
-    set_sound(
+    sound_setter(
         e,
         this,
         KIND_WEAPON_ATTACK_SOUND,

@@ -8,11 +8,12 @@
 //! lookup, `AddExtra`, `RemoveExtra` and `memset` as typed calls.
 
 use super::{
-    access, first_of_kind, list_add, list_remove, new_object, records, word_at, zero_bytes,
-    EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE, OPERATOR_NEW, SIMPLE_LIST_NEW,
+    access, cell_data, first_of_kind, list_add, list_remove, new_object, packages, records,
+    setters, word_at, zero_bytes, EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE, OPERATOR_NEW,
+    SIMPLE_LIST_NEW,
 };
 use crate::crt::{low_byte, low_half, signed};
-use crate::{cell_refs, pathing};
+use crate::{cell_refs, forms, pathing};
 use engine_core::x87::x87_quiet_bits;
 use engine_core::{args, typed_call, Engine};
 
@@ -38,8 +39,6 @@ const MESSAGE_BAD_REGION_LIST: u32 = 0x0101_45d8;
 /// `TESDataHandler` and the distant data's default third float.
 const DATA_HANDLER: u32 = 0x011c_3f2c;
 const LOD_DEFAULT: u32 = 0x0101_45a8;
-/// `TESForm::AddCompileIndex(&id, file)` (cdecl).
-const ADD_COMPILE_INDEX: u32 = 0x0048_5d50;
 /// `BSSimpleList::AddHead(&item)`.
 const LIST_ADD_HEAD: u32 = 0x005a_e3d0;
 /// Other units' constructors.
@@ -75,11 +74,6 @@ const PRIMITIVE_CREATE: u32 = 0x004a_4e90;
 /// The list's getters and setters of the other part files (by address until they are typed).
 const GET_AMMO: u32 = 0x0042_eb40;
 const SET_AMMO: u32 = 0x0042_eb60;
-const SET_SEED: u32 = 0x0041_ac30;
-const SET_REGION_LIST: u32 = 0x0041_bbd0;
-const SET_PACKAGE_START_LOCATION: u32 = 0x0041_ad00;
-const SET_DISTANT_DATA: u32 = 0x0041_d950;
-const SET_ENABLE_STATE_PARENT: u32 = 0x0041_da40;
 const SET_ENABLE_STATE_FLAGS: u32 = 0x0041_dc70;
 const SET_ACTIVATE_TEXT_OVERRIDE: u32 = 0x0041_ece0;
 const ADD_DECAL_REF: u32 = 0x0041_f080;
@@ -304,7 +298,14 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
     let chunk = e.call(GET_TES_CHUNK, &args![file]).u32();
     match chunk {
         // One word for a setter.
-        T_XACT => word_to(e, this, file, 0x0041_b3d0),
+        T_XACT => {
+            let word = file_word(e, file);
+            typed_call!(
+                FAMILY,
+                0x0041_b3d0,
+                setters::set_action_flags(e, this, word)
+            );
+        }
         T_XOWN => {
             let word = file_word(e, file);
             typed_call!(FAMILY, 0x0041_9700, access::set_ownership(e, this, word));
@@ -321,10 +322,34 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
             let word = file_word(e, file);
             typed_call!(FAMILY, 0x0041_9d10, access::set_poison(e, this, word));
         }
-        T_XCMO => word_to(e, this, file, 0x0041_bd10),
-        T_XCAS => word_to(e, this, file, 0x0041_c090),
-        T_XCCM => word_to(e, this, file, 0x0041_c190),
-        T_XCIM => word_to(e, this, file, 0x0041_c290),
+        T_XCMO => {
+            let word = file_word(e, file);
+            typed_call!(
+                FAMILY,
+                0x0041_bd10,
+                cell_data::set_music_type(e, this, word)
+            );
+        }
+        T_XCAS => {
+            let word = file_word(e, file);
+            typed_call!(
+                FAMILY,
+                0x0041_c090,
+                cell_data::set_acoustic_space(e, this, word)
+            );
+        }
+        T_XCCM => {
+            let word = file_word(e, file);
+            typed_call!(FAMILY, 0x0041_c190, cell_data::set_climate(e, this, word));
+        }
+        T_XCIM => {
+            let word = file_word(e, file);
+            typed_call!(
+                FAMILY,
+                0x0041_c290,
+                cell_data::set_image_space(e, this, word)
+            );
+        }
         T_XCWT => word_to(e, this, file, 0x0041_e160),
         T_XRTM => word_to(e, this, file, 0x0041_e250),
         T_XLKR => word_to(e, this, file, 0x0041_e440),
@@ -335,7 +360,14 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
         T_XMBR => word_to(e, this, file, 0x0042_1e40),
         T_XLCM => word_to(e, this, file, 0x0042_1540),
         // One float for a setter.
-        T_XHLP => float_to(e, this, file, 0x0041_b580),
+        T_XHLP => {
+            let value = moved_float(file_word(e, file));
+            typed_call!(
+                FAMILY,
+                0x0041_b580,
+                setters::set_health_perc(e, this, value)
+            );
+        }
         T_XTIM => {
             let value = moved_float(file_word(e, file));
             typed_call!(FAMILY, 0x0041_9bb0, access::set_time_left(e, this, value));
@@ -458,7 +490,7 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
                     e.mem.u8(local.addr())
                 })
             };
-            e.call(SET_SEED, &args![this, seed]);
+            typed_call!(FAMILY, 0x0041_ac30, setters::set_seed(e, this, seed));
         }
         T_XCLR => load_regions(e, this, file),
         // EXTRA_PACKAGESTARTLOC: a WORLD_LOCATION (0x14 bytes).
@@ -476,9 +508,10 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
             }
             let location = e.mem.u32(at);
             let z_rotation = moved_float(e.mem.u32(at + 0x10));
-            e.call(
-                SET_PACKAGE_START_LOCATION,
-                &args![this, location, 0u32, at + 4, z_rotation],
+            typed_call!(
+                FAMILY,
+                0x0041_ad00,
+                setters::set_package_start_location(e, this, location, 0, at + 4, z_rotation)
             );
         }),
         // EXTRA_RAGDOLLDATA (both names).
@@ -497,7 +530,7 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
                     e.call(SWAP_DWORD, &args![at + index * 4, 0u32]);
                 }
             }
-            e.call(SET_DISTANT_DATA, &args![this, at]);
+            typed_call!(FAMILY, 0x0041_d950, packages::set_land_normal(e, this, at));
         }),
         // EXTRA_ENABLESTATEPARENT: the parent's form id and its flags byte.
         T_XESP => e.with_stack(8, |e, local| {
@@ -508,7 +541,11 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
                 e.call(SWAP_WORD_AT, &args![at]);
             }
             let parent = e.mem.u32(at);
-            e.call(SET_ENABLE_STATE_PARENT, &args![this, parent]);
+            typed_call!(
+                FAMILY,
+                0x0041_da40,
+                packages::set_enable_state_parent(e, this, parent)
+            );
             let flags = e.mem.u8(at + 4);
             e.call(SET_ENABLE_STATE_FLAGS, &args![this, flags]);
         }),
@@ -736,7 +773,11 @@ fn load_regions(e: &mut Engine, this: u32, file: u32) {
         if file_swaps(e, file) {
             e.call(SWAP_DWORD, &args![slot, 0u32]);
         }
-        e.call(ADD_COMPILE_INDEX, &args![slot, file]);
+        typed_call!(
+            forms::FAMILY,
+            0x0048_5d50,
+            forms::tesform::add_compile_index(e, slot, file)
+        );
         let id = e.mem.u32(slot);
         let handler = e.mem.u32(DATA_HANDLER);
         let known = typed_call!(FAMILY, 0x0041_69d0, records::word_1d8(e, handler));
@@ -745,7 +786,11 @@ fn load_regions(e: &mut Engine, this: u32, file: u32) {
             e.call(REGION_LIST_ADD, &args![regions, region]);
         }
     }
-    e.call(SET_REGION_LIST, &args![this, regions]);
+    typed_call!(
+        FAMILY,
+        0x0041_bbd0,
+        cell_data::set_region_list(e, this, regions)
+    );
     e.call(OPERATOR_DELETE, &args![ids]);
 }
 

@@ -152,6 +152,14 @@ pub fn read_lit(e: &Engine) -> Option<SceneView> {
     read_with(e, true)
 }
 
+/// The reader while the player can switch the new lighting (`engine_platform::d3d9real::
+/// want_lighting_switch`): [`read_lit`] while the frame has the sun shadows on
+/// (`d3d9_wgpu::sun_shadow::enabled`), [`read`] while it has them off, as a run started in that
+/// state reads.
+pub fn read_now(e: &Engine) -> Option<SceneView> {
+    read_with(e, d3d9_wgpu::sun_shadow::enabled())
+}
+
 fn read_with(e: &Engine, sun_shadows: bool) -> Option<SceneView> {
     let tes = object(e, TES)?;
     let camera = object(e, object(e, SCENE_GRAPH)? + CAMERA)?;
@@ -207,6 +215,58 @@ mod tests {
             Some(light)
         );
         assert_eq!(pick_to_sun(true, || None, || Some(disc)), Some(disc));
+    }
+
+    /// The reader of a run where the player can switch the new lighting ([`read_now`]) reads as a
+    /// run started in the frame's state: the sun light's way while the frame has the sun shadows
+    /// on ([`read_lit`]), the sun disc's place while it has them off ([`read`]).
+    #[test]
+    fn the_reader_follows_the_frames_sun_shadows() {
+        let mut e = Engine::new();
+        e.map(0x011d_0000, 0x1_0000);
+        let place = |e: &mut Engine, at: u32| {
+            let o = e.mem.alloc(0x100);
+            e.mem.set_u32(at, o);
+            o
+        };
+        let tes = place(&mut e, TES);
+        e.mem.set_u32(tes + INTERIOR, 0);
+        let graph = place(&mut e, SCENE_GRAPH);
+        let camera = place(&mut e, graph + CAMERA);
+        for (i, v) in [-0.7f32, 0.7, 0.4, -0.4, 5.0, 5000.0]
+            .into_iter()
+            .enumerate()
+        {
+            e.mem.set_f32(camera + FRUSTUM + 4 * i as u32, v);
+        }
+        for (i, v) in [0.0f32, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+            .into_iter()
+            .enumerate()
+        {
+            e.mem.set_f32(camera + ROTATE + 4 * i as u32, v);
+        }
+        let sky = place(&mut e, SKY);
+        let sun = place(&mut e, sky + SUN);
+        let light = place(&mut e, sun + SUN_LIGHT);
+        for (i, v) in traced(-0.6273, -0.5507).into_iter().enumerate() {
+            e.mem.set_f32(light + ROTATE + 4 * i as u32, v);
+        }
+        let root = place(&mut e, sun + SUN_ROOT);
+        let disc = [0.0f32, 0.6, 0.8];
+        for (i, v) in disc.into_iter().enumerate() {
+            e.mem.set_f32(root + LOCAL_TRANSLATE + 4 * i as u32, v);
+        }
+        let lit = read_lit(&e).and_then(|v| v.to_sun);
+        assert!(lit.is_some() && lit != Some(disc), "{lit:?}");
+        assert_eq!(read(&e).and_then(|v| v.to_sun), Some(disc));
+        d3d9_wgpu::sun_shadow::enable(true);
+        assert_eq!(read_now(&e).and_then(|v| v.to_sun), lit, "sun shadows on");
+        d3d9_wgpu::sun_shadow::enable(false);
+        assert_eq!(
+            read_now(&e).and_then(|v| v.to_sun),
+            Some(disc),
+            "sun shadows off"
+        );
     }
 
     #[test]

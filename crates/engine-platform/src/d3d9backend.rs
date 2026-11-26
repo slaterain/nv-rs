@@ -1357,7 +1357,8 @@ impl RealBackend {
             Cmd::SetTransform { state, .. }
                 if state == d3d9_wgpu::sun_shadow::VIEW_STATE
                     || state == d3d9_wgpu::sun_shadow::BEGIN_STATE
-                    || state == d3d9_wgpu::sun_shadow::WORLD_STATE => {}
+                    || state == d3d9_wgpu::sun_shadow::WORLD_STATE
+                    || state == d3d9_wgpu::scene_light::SWITCH_STATE => {}
             Cmd::SetTransform { state, .. } if state == d3d9_wgpu::sun_shadow::STATE => {
                 if self.logged.insert(("sun shadows", 0, 0)) {
                     eprintln!(

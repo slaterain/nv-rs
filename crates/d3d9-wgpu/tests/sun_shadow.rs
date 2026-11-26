@@ -4638,3 +4638,469 @@ fn switched_off_a_characters_ribbon_and_list_pipelines_are_made_at_once() {
         "the face's ribbons' and list's made at once, as a still caster's"
     );
 }
+
+/// One frame of the lit scene (the ground and the box, ambient 0.2 and a sun of 0.6) with the
+/// words the platform records for a frame with `parts` on: at the scene's clear the sun shadows'
+/// camera and frame while they are on; at the depth-only clear the new lighting's camera while
+/// either part is on, then the sun shadows' frame while they are on.
+fn parts_frame(b: &mut WgpuBackend, parts: scene_light::Parts) {
+    let (view, frame) = hook_words();
+    let set = |b: &mut WgpuBackend, state: u32, m: [u32; 16]| {
+        run(
+            b,
+            Cmd::SetTransform {
+                device: DEVICE,
+                state,
+                matrix: Data::from_words(&m),
+            },
+        );
+    };
+    if parts.sun_shadows {
+        set(b, sun_shadow::VIEW_STATE, view);
+        set(b, sun_shadow::BEGIN_STATE, frame);
+    }
+    clear(b, 7);
+    let mvp = model_view_proj();
+    let regs: Vec<f32> = mvp.iter().flatten().copied().collect();
+    constants(b, 0, 0, &regs);
+    constants(b, 3, 1, &[0.2, 0.2, 0.2, 1.0]);
+    constants(b, 3, 3, &[0.6, 0.6, 0.6, 0.0]);
+    draw(b, GROUND, 2);
+    draw(b, BOX, 10);
+    if parts.ambient_occlusion || parts.sun_shadows {
+        set(b, scene_light::STATE, view);
+    }
+    if parts.sun_shadows {
+        set(b, sun_shadow::STATE, frame);
+    }
+    clear(b, 2);
+}
+
+/// `n` frames of [`parts_frame`], each ended by its `Present`, with the sun shadows' variants and
+/// casters on their way waited for after each (so every start reaches the same picture); the last
+/// frame's pixels, read before its `Present`.
+fn parts_frames(b: &mut WgpuBackend, parts: scene_light::Parts, n: u32) -> Vec<[u8; 4]> {
+    let mut px = Vec::new();
+    for f in 0..n {
+        parts_frame(b, parts);
+        let d = b.device().expect("the device");
+        let (_, _, p) = d.read_surface_pixels(RT).expect("the target's pixels");
+        px = p
+            .chunks_exact(4)
+            .map(|p| [p[0], p[1], p[2], p[3]])
+            .collect();
+        present(b, f + 1);
+        b.device().expect("the device").wait_for_sun_variants();
+    }
+    px
+}
+
+/// The frames a start (or a switch) takes to draw the same picture as any other in its state.
+const SETTLED: u32 = 4;
+
+/// The new lighting's four states as fresh starts give them (`samples` per pixel): each part on
+/// for the device from the start, as the run's choice turns it on.
+fn fresh_parts(samples: u32) -> Option<Vec<(scene_light::Parts, Vec<[u8; 4]>)>> {
+    let mut out = Vec::new();
+    let mut parts = scene_light::Parts::default();
+    for _ in 0..4 {
+        scene_light::enable(parts.ambient_occlusion);
+        sun_shadow::enable(parts.sun_shadows);
+        let b = backend(samples);
+        scene_light::enable(false);
+        sun_shadow::enable(false);
+        let mut b = b?;
+        run(
+            &mut b,
+            Cmd::SetShader {
+                device: DEVICE,
+                pixel: true,
+                shader: LIT_PS,
+            },
+        );
+        out.push((parts, parts_frames(&mut b, parts, SETTLED)));
+        parts = parts.next();
+    }
+    Some(out)
+}
+
+/// The run-wide switch and both parts put back as a test run has them (not allowed, both off) when
+/// a test that set them ends, whether it passes or fails: a failed assertion leaves nothing on for
+/// the tests after it in this binary.
+struct SwitchBack;
+
+impl Drop for SwitchBack {
+    fn drop(&mut self) {
+        scene_light::forbid_switch();
+        scene_light::enable(false);
+        sun_shadow::enable(false);
+    }
+}
+
+/// [`parts_frames`], with the pipelines, shader modules and textures the frames made on this
+/// thread (`d3d9_wgpu::made_here`), the test's own reads of the target left out.
+fn parts_frames_made(
+    b: &mut WgpuBackend,
+    parts: scene_light::Parts,
+    n: u32,
+) -> (Vec<[u8; 4]>, [u64; 3]) {
+    use d3d9_wgpu::made_here::on_this_thread;
+    let mut px = Vec::new();
+    let mut made = [0u64; 3];
+    let mut add = |from: [u64; 3], to: [u64; 3]| {
+        for (m, (a, b)) in made.iter_mut().zip(from.into_iter().zip(to)) {
+            *m += b - a;
+        }
+    };
+    for f in 0..n {
+        let start = on_this_thread();
+        parts_frame(b, parts);
+        add(start, on_this_thread());
+        let d = b.device().expect("the device");
+        let (_, _, p) = d.read_surface_pixels(RT).expect("the target's pixels");
+        px = p
+            .chunks_exact(4)
+            .map(|p| [p[0], p[1], p[2], p[3]])
+            .collect();
+        let start = on_this_thread();
+        present(b, f + 1);
+        b.device().expect("the device").wait_for_sun_variants();
+        add(start, on_this_thread());
+    }
+    (px, made)
+}
+
+/// The player's switch's word for `parts`, as the platform records it right after the game's
+/// `Present` (`scene_light::SWITCH_STATE`).
+fn switch_to(b: &mut WgpuBackend, parts: scene_light::Parts) {
+    run(
+        b,
+        Cmd::SetTransform {
+            device: DEVICE,
+            state: scene_light::SWITCH_STATE,
+            matrix: Data::from_words(&parts.to_words()),
+        },
+    );
+}
+
+/// The player's switch (Shift+F11, `scene_light::switch_key`) taken 100 times while the game draws,
+/// each at a `Present` as the platform takes it (`scene_light::switch_due`, its word recorded right
+/// after the `Present`): every state's frames are bit for bit a fresh start's in that state, with
+/// one sample a pixel and four (what the lighting thread makes taken before the frames, as it is
+/// at the present after it is there). Nothing grows from switch to switch: after the first round
+/// the device makes no pipeline again (the game's, the lighting variants and the casters' alike);
+/// no frame from a switch on makes a pipeline, a shader module or a texture on the render thread
+/// (`d3d9_wgpu::made_here`), nor a caster's pipeline where the render thread waits; switched off,
+/// the sun shadows' maps and the ambient occlusion's textures are kept (made once a run).
+#[test]
+fn switched_while_playing_each_state_is_a_fresh_starts() {
+    use d3d9_stream::hitch::{snapshot, Count};
+    use d3d9_wgpu::made_here::on_this_thread;
+    use scene_light::Parts;
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let _back = SwitchBack;
+    for samples in [1, 4] {
+        let Some(fresh) = fresh_parts(samples) else {
+            return;
+        };
+        let fresh_of = |p: Parts| &fresh.iter().find(|(q, _)| *q == p).expect("a state").1;
+        // Each part changes the picture: the comparisons below would see a part missing.
+        for (i, (p, a)) in fresh.iter().enumerate() {
+            for (q, b) in &fresh[i + 1..] {
+                assert!(a != b, "{p:?} and {q:?} draw alike ({samples} samples)");
+            }
+        }
+        // A run that lets the player switch, started with both off.
+        scene_light::allow_switch(Parts::default());
+        let b = backend(samples);
+        let mut b = b.expect("the adapter");
+        run(
+            &mut b,
+            Cmd::SetShader {
+                device: DEVICE,
+                pixel: true,
+                shader: LIT_PS,
+            },
+        );
+        assert!(
+            parts_frames(&mut b, Parts::now(), SETTLED) == *fresh_of(Parts::default()),
+            "switchable, both off: a fresh start's ({samples} samples)"
+        );
+        let d = b.device().expect("the device");
+        assert_eq!(
+            d.lighting_held(),
+            (0, false, false, true),
+            "both off from the start: of either part only the pipelines made ahead"
+        );
+        if samples > 1 {
+            assert_eq!(
+                d.surface_readable(DS),
+                Some(false),
+                "the multisampled depth not readable before a part is on"
+            );
+        }
+        let before = snapshot();
+        let mut counts: Option<(usize, usize)> = None;
+        for i in 0..100 {
+            let wanted = scene_light::switch_key().expect("the switch is allowed");
+            // The game's next Present: the frames from the next have the parts switched to, and
+            // the device is told right after it.
+            let parts = scene_light::switch_due().expect("a switch is due");
+            assert_eq!((parts, Parts::now()), (wanted, wanted));
+            assert_eq!(scene_light::switch_due(), None, "taken once");
+            let made = on_this_thread();
+            switch_to(&mut b, parts);
+            let d = b.device().expect("the device");
+            assert_eq!(d.lighting_parts(), parts, "switch {i}");
+            // The lighting thread's work, taken before the next frame (as at the present after it
+            // is made).
+            d.wait_for_lighting();
+            // What was made is kept across the switch, on or off: nothing to make again.
+            if let Some((_, casters)) = counts {
+                assert_eq!(d.lighting_held().0, casters, "switch {i}: casters kept");
+            }
+            // The first switch (to both) made the maps and the occlusion's textures; from then
+            // on they are kept, on or off.
+            let (_, textures, maps, thin) = d.lighting_held();
+            assert!(
+                maps && thin,
+                "switch {i}: the maps and the thin pipeline there"
+            );
+            assert!(
+                i == 0 || textures,
+                "switch {i}: the occlusion's textures kept"
+            );
+            if samples > 1 {
+                assert_eq!(d.surface_readable(DS), Some(true), "switch {i}: readable");
+            }
+            if !parts.sun_shadows {
+                assert_eq!(d.sun_cascades_drawn(), [None; sun_shadow::CASCADES]);
+            }
+            assert_eq!(d.lighting_note(), None, "offscreen: no note");
+            let at_switch = on_this_thread();
+            let (px, in_frames) = parts_frames_made(&mut b, parts, SETTLED);
+            assert!(
+                px == *fresh_of(parts),
+                "switch {i} to {parts:?}: not a fresh start's picture ({samples} samples)"
+            );
+            assert_eq!(
+                (at_switch, in_frames),
+                (made, [0; 3]),
+                "switch {i} to {parts:?}: pipelines, modules and textures made on the render thread"
+            );
+            let d = b.device().expect("the device");
+            let now = (d.pipelines_kept(), d.lighting_held().0);
+            // From the second round on, nothing is made again.
+            if i >= 4 {
+                assert_eq!(Some(now), counts, "switch {i} to {parts:?}: made again");
+            }
+            if i == 3 {
+                assert!(now.1 > 0, "the ground's and the box's casters were made");
+                counts = Some(now);
+            }
+        }
+        let after = snapshot();
+        assert_eq!(
+            after[Count::ShadowPipelines as usize] - before[Count::ShadowPipelines as usize],
+            0,
+            "no caster's pipeline made on the render thread at a switch ({samples} samples)"
+        );
+        scene_light::forbid_switch();
+        scene_light::enable(false);
+        sun_shadow::enable(false);
+    }
+}
+
+/// One frame's time on the render thread (the game's commands carried out and its `Present`), and
+/// with the GPU's work for it waited for, in ms.
+fn timed_frame(b: &mut WgpuBackend, parts: scene_light::Parts, n: u32) -> (f64, f64) {
+    let started = std::time::Instant::now();
+    parts_frame(b, parts);
+    present(b, n);
+    let cpu = started.elapsed();
+    b.device().expect("the device").wait_for_gpu();
+    let all = started.elapsed();
+    (cpu.as_secs_f64() * 1e3, all.as_secs_f64() * 1e3)
+}
+
+/// The middle of `v`.
+fn median(mut v: Vec<f64>) -> f64 {
+    v.sort_by(f64::total_cmp);
+    v[v.len() / 2]
+}
+
+/// The frames around each switch timed, as the game plays them (nothing waited for between
+/// frames, so what the lighting thread makes comes when it comes): each part's first switch-on in
+/// the run and a later one, and both together, at four samples a pixel (the game's anti-aliasing
+/// on: its depth surfaces made readable at the first switch-on). Said in the log (run with
+/// `--nocapture`): the median of the 8 frames before, the switch's frame, the frame after it the
+/// part first draws in, and the slowest of the frames after (which one: up to that one and 10
+/// more), each on the render thread and to the GPU's end. Checked: no frame from a switch on
+/// makes a pipeline, a shader module or a texture on the render thread, and each part draws
+/// within 3 s.
+#[test]
+fn a_switch_frame_costs_what_its_neighbours_cost() {
+    use d3d9_wgpu::made_here::on_this_thread;
+    use scene_light::Parts;
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let _back = SwitchBack;
+    let off = Parts::default();
+    let sun = Parts {
+        ambient_occlusion: false,
+        sun_shadows: true,
+    };
+    let ao = Parts {
+        ambient_occlusion: true,
+        sun_shadows: false,
+    };
+    scene_light::allow_switch(off);
+    let Some(mut b) = backend(4) else {
+        return;
+    };
+    run(
+        &mut b,
+        Cmd::SetShader {
+            device: DEVICE,
+            pixel: true,
+            shader: LIT_PS,
+        },
+    );
+    let mut n = 0;
+    let mut frame = |b: &mut WgpuBackend, parts: Parts| {
+        n += 1;
+        timed_frame(b, parts, n)
+    };
+    // The lighting thread's start (the pipelines made ahead) and the frames settling.
+    for _ in 0..20 {
+        frame(&mut b, off);
+    }
+    b.device().expect("the device").wait_for_lighting();
+    let mut lines = Vec::new();
+    for (what, from, to) in [
+        ("sun shadows, first on", off, sun),
+        ("sun shadows, off", sun, off),
+        ("sun shadows, on again", off, sun),
+        ("ambient occlusion, first on", sun, ao),
+        ("ambient occlusion, off", ao, off),
+        ("ambient occlusion, on again", off, ao),
+        ("both, on again", ao, Parts::ALL),
+        ("both, off", Parts::ALL, off),
+    ] {
+        let before: Vec<(f64, f64)> = (0..8).map(|_| frame(&mut b, from)).collect();
+        let made = on_this_thread();
+        switch_to(&mut b, to);
+        let switched = frame(&mut b, to);
+        // Frames until the part draws (what the lighting thread and the casters' threads make
+        // comes when it comes; at most 3 s), then 10 more.
+        let drawn = |b: &mut WgpuBackend| {
+            let d = b.device().expect("the device");
+            (!to.sun_shadows || d.sun_cascades_drawn().iter().all(Option::is_some))
+                && (!to.ambient_occlusion || d.occlusion_ran_last_frame())
+        };
+        let mut first = drawn(&mut b).then_some(0);
+        let started = std::time::Instant::now();
+        let mut after = Vec::new();
+        while first.is_none() && started.elapsed() < std::time::Duration::from_secs(3) {
+            after.push(frame(&mut b, to));
+            if drawn(&mut b) {
+                first = Some(after.len());
+            }
+        }
+        let first = first.unwrap_or_else(|| panic!("{what}: drawn within 3 s"));
+        for _ in 0..10 {
+            after.push(frame(&mut b, to));
+        }
+        assert_eq!(
+            on_this_thread(),
+            made,
+            "{what}: pipelines, modules and textures made on the render thread"
+        );
+        let (k, worst) = after
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1 .1.total_cmp(&b.1 .1))
+            .expect("frames");
+        lines.push(format!(
+            "{what:28} before {:6.2} / {:6.2} ms  switch {:6.2} / {:6.2} ms  drawn from frame {first:3}  slowest after {:6.2} / {:6.2} ms (frame {})",
+            median(before.iter().map(|t| t.0).collect()),
+            median(before.iter().map(|t| t.1).collect()),
+            switched.0,
+            switched.1,
+            worst.0,
+            worst.1,
+            k + 1,
+        ));
+    }
+    eprintln!("switch frames (render thread / to the GPU's end), 4 samples:");
+    for l in lines {
+        eprintln!("  {l}");
+    }
+}
+
+/// While the player can switch the sun shadows on, what they read of the textures is read from the
+/// start (a ribbon cable's mean alpha, `sun_shadow::RIBBON_ALPHA`), as with them on: a texture
+/// uploaded while they are off casts as it would on a fresh start once they are switched on. A
+/// run that cannot switch them, with them off, reads nothing. And the device asks for unclipped
+/// depth (`DEPTH_CLIP_CONTROL`, the casters clamped to the maps' near plane) where the adapter has
+/// it.
+#[test]
+fn a_switchable_device_reads_what_the_sun_shadows_need() {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let _back = SwitchBack;
+    for switchable in [false, true] {
+        if switchable {
+            scene_light::allow_switch(scene_light::Parts::default());
+        } else {
+            scene_light::forbid_switch();
+        }
+        let Some(mut b) = backend(1) else {
+            return;
+        };
+        let levels = words(&[CUT_TEX + 1]);
+        run(
+            &mut b,
+            Cmd::CreateTexture {
+                device: DEVICE,
+                texture: CUT_TEX,
+                levels: Data::Bytes(&levels),
+                width: 2,
+                height: 2,
+                usage: 0,
+                format: A8R8G8B8,
+                pool: 1,
+            },
+        );
+        // Two texels opaque, two clear: a mean alpha of a half.
+        let texels = [
+            0u8, 0, 0, 255, 0, 0, 0, 0, //
+            0, 0, 0, 0, 0, 0, 0, 255,
+        ];
+        run(
+            &mut b,
+            Cmd::UploadSurface {
+                surface: CUT_TEX + 1,
+                row: 8,
+                rows: 2,
+                data: Data::Bytes(&texels),
+            },
+        );
+        let d = b.device().expect("the device");
+        let alpha = d.texture_mean_alpha(CUT_TEX);
+        if switchable {
+            assert!(
+                alpha.is_some_and(|a| (a - 0.5).abs() < 0.01),
+                "switchable: read ({alpha:?})"
+            );
+        } else {
+            assert_eq!(alpha, None, "not switchable, off: not read");
+        }
+        let (clip, adapter_clip, readable) = d.lighting_features();
+        assert!(!readable, "both off: the depth surfaces as without them");
+        if switchable && adapter_clip {
+            assert!(clip, "switchable: unclipped depth asked for");
+        }
+        if !switchable {
+            assert!(!clip, "not switchable, off: not asked for");
+        }
+    }
+}

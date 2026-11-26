@@ -394,10 +394,12 @@ fn window_input(_window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) {
     let button = |i: &mut Input, b: usize, down: bool| i.buttons[b] = down;
     match message {
         WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP => {
-            // F11: the port's frame-rate counter on or off (its first press; `d3d9_wgpu::frame_rate`).
-            // While wgpu draws the window the key is the port's, so the game never sees it go down
-            // or up; on the real Direct3D 9 (no counter) it is the game's.
-            if d3d9_wgpu::frame_rate::window_key(message, wparam.0, lparam.0) {
+            // F11: the port's frame-rate counter on or off (its first press; `d3d9_wgpu::frame_rate`),
+            // Shift+F11 the new lighting's switch (Shift as the window's keys hold it,
+            // `input::shift_held`). While wgpu draws the window the key is the port's, so the game
+            // never sees it go down or up; on the real Direct3D 9 (no counter) it is the game's.
+            let shift = input::shift_held(&i);
+            if d3d9_wgpu::frame_rate::window_key(message, wparam.0, lparam.0, shift) {
                 return;
             }
             // F12 (the first press, not its repeats): a report for the player to send
@@ -1071,6 +1073,23 @@ mod tests {
         send(WM_KEYUP, 0x41, a | repeat | (1 << 31));
         assert!(!held_keys()[0x1e]);
         assert!(!d3d9_wgpu::frame_rate::shown());
+        // Shift held (VK_SHIFT with the left or right Shift's scan code): the window's keys hold
+        // it, the game sees it, and F11 is still taken; with the new lighting not switchable (this
+        // binary) Shift+F11 is the counter's too.
+        assert!(!d3d9_wgpu::scene_light::switchable());
+        for scan in [0x002a_0001isize, 0x0036_0001] {
+            send(WM_KEYDOWN, 0x10, scan);
+            assert!(input::shift_held(&input().lock().unwrap()), "{scan:#x}");
+            send(WM_KEYDOWN, 0x7a, f11);
+            assert!(!held_keys()[0x57], "Shift+F11 never reaches the game");
+            assert!(d3d9_wgpu::frame_rate::shown());
+            send(WM_KEYUP, 0x7a, f11 | repeat | (1 << 31));
+            send(WM_KEYDOWN, 0x7a, f11);
+            send(WM_KEYUP, 0x7a, f11 | repeat | (1 << 31));
+            assert!(!d3d9_wgpu::frame_rate::shown());
+            send(WM_KEYUP, 0x10, scan | repeat | (1 << 31));
+            assert!(!input::shift_held(&input().lock().unwrap()));
+        }
         d3d9_wgpu::frame_rate::set_window_device(false);
         // Losing the focus (Alt+Tab away: WM_ACTIVATE with WA_INACTIVE, WM_KILLFOCUS) lets go of
         // every key and button held, so none stays down when the player comes back.
