@@ -104,6 +104,10 @@ jobs:
             esac
             [ "${#COMMIT}" = 40 ] || { echo "commit must be 40 hex digits: $COMMIT"; exit 1; }
             [ "$head" = "$COMMIT" ] || { echo "checked out $head, not $COMMIT"; exit 1; }
+            # Only a commit of main is packaged here (a test build too): another commit's code
+            # would run in a run on main.
+            git merge-base --is-ancestor "$COMMIT" refs/remotes/origin/main ||
+              { echo "commit $COMMIT is not on main"; exit 1; }
           fi
           # This run's own package script (main's), outside the checkout so that stays clean.
           git show "$GITHUB_SHA:scripts/package-playtest.sh" >"$RUNNER_TEMP/package-playtest.sh"
