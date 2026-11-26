@@ -28,8 +28,8 @@ a modern 64-bit engine: high frame rates, fewer crashes, built-in modding and mo
 **[Download nv-rs 1.0](https://github.com/slaterain/nv-rs/releases/tag/v1.0)**
 for Windows, Linux or macOS (Apple silicon). You need Fallout: New Vegas, version 1.4.0.525.
 
-- **Windows:** extract the ZIP to a folder of its own (not Documents, Program Files or the game's
-  folder) and double-click `Play.exe`.
+- **Windows:** extract the ZIP to a folder of its own (not Documents, AppData, Program Files or the
+  game's folder) and double-click `Play.exe`.
 - **Linux:** extract the archive in your home folder and start `./nv-rs`.
 - **macOS:** unpack it, allow it once in Terminal (`xattr -dr com.apple.quarantine` and the
   folder), then start `./nv-rs`.
@@ -40,8 +40,7 @@ folder. It asks once whether crash reports may be sent, and sends nothing unless
 F12 in the game to save a report of anything that looks wrong. The download page has the details
 and the known issues.
 
-The team has tested on Windows only; players have run it on Linux and on Apple silicon Macs.
-Please tell us how it runs on yours.
+Players have run earlier builds on Linux and macOS too. Please tell us how it runs on yours.
 
 ## Where it stands
 
@@ -49,19 +48,19 @@ Please tell us how it runs on yours.
 dialogue, combat, V.A.T.S., the Pip-Boy, saves, mods and the DLCs, with the original graphics and
 sound. Bugs remain.
 
-**Next:** turning the game's code into native 64-bit Rust and a new renderer, for speed and to lift
+**Next:** more of the game's code in native 64-bit Rust and faster drawing, for speed and to lift
 the 4 GB memory limit. After that: co-op and VR.
 
 | | What | Today |
 | :---: | --- | --- |
-| ✅ | **The whole game** | Playable from start to finish, DLCs included. |
+| ✅ | **The whole game** | Quests, combat, dialogue, saves, the open world and the DLCs, playable. |
 | ✅ | **Fixes** | Bug fixes on by default, each with its own setting. |
 | ✅ | **Launcher** | Play, mods, saves, settings and crash reports in one window. |
-| ✅ | **Windows, Linux, macOS** | Released for all three; tested by the team on Windows. |
-| 🔨 | **Mods** | `.esp`/`.esm` mods and mod installers work; xNVSE, JIP LN NVSE and UI Organizer are built in. Players report Tale of Two Wastelands working. Other `.dll` plugins don't load yet. |
+| ✅ | **Windows, Linux, macOS** | Released for all three. |
+| 🔨 | **Mods** | `.esp`/`.esm` mods and mod installers work; xNVSE, JIP LN NVSE and UI Organizer are built in. A player reports Tale of Two Wastelands working. Other `.dll` plugins don't load yet. |
 | 🔨 | **Native code** | About 2,550 of the game's functions rewritten in native Rust so far. |
-| 🔨 | **Graphics** | Vulkan by default. Optional new lighting: ambient occlusion and sun shadows (Shift+F11 in the game). |
-| ⬜ | **Co-op, VR** | Planned. |
+| 🔨 | **Graphics** | Vulkan by default (Metal on macOS). Optional new lighting: ambient occlusion and sun shadows (Shift+F11 in the game). |
+| ⬜ | **Co-op, VR** | Planned; co-op has no design yet. |
 
 ✅ means working, not free of bugs.
 
