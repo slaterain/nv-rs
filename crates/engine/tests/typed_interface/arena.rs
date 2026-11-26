@@ -374,6 +374,8 @@ pub enum Arg {
     Object,
     /// Small numbers (a group, an index, a page, a healing option, a key): 0 to 5, 10 and -1.
     Small,
+    /// The fade object's six groups.
+    Group,
     /// The stats menu's status sub page buttons (0x1c, 0x1d, 0x1e, 0x35, 0x37, 0x39), the ids next to
     /// them and 0.
     StatsId,
@@ -412,6 +414,7 @@ const LIST_NODES: [u32; 5] = [
 const CODES: [u32; 3] = [CODE + 0x40, 0, CODE + 0x84];
 const OBJECTS_ONE: [u32; 1] = [ARENA + 3 * OBJECT];
 const SMALL: [u32; 8] = [0, 1, 2, 3, 4, 5, 0xa, 0xffff_ffff];
+const GROUPS: [u32; 6] = [0, 1, 2, 3, 4, 5];
 const STATS_IDS: [u32; 9] = [0x1c, 0x1d, 0x1e, 0x35, 0x37, 0x39, 0x1b, 0x36, 0];
 const ACTOR_VALUES: [u32; 11] = [0x10, 0xc, 0x18, 0x36, 0x14, 0x17, 0x19, 0x1e, 0x1f, 5, 0x20];
 const TILE_IDS: [u32; 13] = [
@@ -447,6 +450,7 @@ fn values(arg: Arg) -> &'static [u32] {
         Arg::Small => &SMALL,
         Arg::ActorValue => &ACTOR_VALUES,
         Arg::StatsId => &STATS_IDS,
+        Arg::Group => &GROUPS,
     }
 }
 

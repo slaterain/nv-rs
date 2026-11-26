@@ -6860,7 +6860,7 @@ fn stats_menu_fn_007dbfa0_diff() {
         0x007d_bfa0,
         interface::stats_menu::fn_007dbfa0(Ptr, u32, u8)
     ))
-    .in_fade_groups_with(&[Arg::Ptr, Arg::Small, Arg::Byte])
+    .in_fade_groups_with(&[Arg::Ptr, Arg::Group, Arg::Byte])
     .run()
     .assert_same();
 }
