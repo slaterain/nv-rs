@@ -2140,7 +2140,7 @@ fn saved_acquire_object(e: &Engine) -> u32 {
 /// A form name's characters (`00408da0` on the name at `+0x30`: its first word, or the empty text
 /// at `01011584` when that is null).
 #[inline(always)]
-fn name_characters(e: &Engine, name: u32) -> u32 {
+pub(super) fn name_characters(e: &Engine, name: u32) -> u32 {
     match e.mem.u32(name.wrapping_add(4)) {
         0 => 0x0101_1584,
         characters => characters,

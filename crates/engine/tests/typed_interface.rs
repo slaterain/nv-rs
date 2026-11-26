@@ -29,6 +29,7 @@ const CALLEES: &[u32] = &[
     0x0040_37f0,
     0x0040_46f0,
     0x0040_48e0,
+    0x0040_4920,
     0x0040_4a70,
     0x0040_4dc0,
     0x0040_4eb0,
@@ -74,6 +75,7 @@ const CALLEES: &[u32] = &[
     0x004b_5bf0,
     0x004b_71d0,
     0x004b_75a0,
+    0x004b_c810,
     0x004b_cdb0,
     0x004b_d400,
     0x004b_d510,
@@ -82,10 +84,14 @@ const CALLEES: &[u32] = &[
     0x004b_d820,
     0x004b_da70,
     0x004b_e060,
+    0x004b_e2d0,
     0x004b_e330,
     0x004b_e380,
     0x004b_f220,
+    0x004b_f630,
     0x004c_8f30,
+    0x004c_a330,
+    0x004d_e490,
     0x004e_4430,
     0x004e_ef00,
     0x004f_8a30,
@@ -95,6 +101,7 @@ const CALLEES: &[u32] = &[
     0x0052_5b20,
     0x0055_d520,
     0x0056_7790,
+    0x0057_5510,
     0x0057_85e0,
     0x0057_c730,
     0x0057_dd70,
@@ -108,6 +115,7 @@ const CALLEES: &[u32] = &[
     0x0066_29f0,
     0x0066_b0d0,
     0x006b_3eb0,
+    0x006f_fe10,
     0x0070_0320,
     0x0070_10e0,
     0x0070_4390,
@@ -143,7 +151,6 @@ const CALLEES: &[u32] = &[
     0x0071_6320,
     0x0071_64c0,
     0x0071_65d0,
-    0x0071_6980,
     0x0071_6a10,
     0x0071_7280,
     0x0071_7600,
@@ -156,8 +163,8 @@ const CALLEES: &[u32] = &[
     0x0071_b160,
     0x0071_d0a0,
     0x0071_d580,
+    0x0071_dec0,
     0x0072_69d0,
-    0x0072_6c40,
     0x0072_6df0,
     0x0072_6ff0,
     0x0072_8a30,
@@ -187,6 +194,7 @@ const CALLEES: &[u32] = &[
     0x0076_4200,
     0x0076_54f0,
     0x0076_5b80,
+    0x0076_b630,
     0x0076_bb40,
     0x0076_bfe0,
     0x0077_1700,
@@ -232,7 +240,7 @@ const CALLEES: &[u32] = &[
     0x007a_1820,
     0x007a_1850,
     0x007a_1880,
-    0x007a_1950,
+    0x007a_7eb0,
     0x007a_8a10,
     0x007a_8ba0,
     0x007a_8e60,
@@ -243,6 +251,7 @@ const CALLEES: &[u32] = &[
     0x007a_b690,
     0x007a_c1f0,
     0x007a_c730,
+    0x007b_3fa0,
     0x007b_5400,
     0x007b_5520,
     0x007b_6fb0,
@@ -303,6 +312,7 @@ const CALLEES: &[u32] = &[
     0x009f_f340,
     0x009f_f690,
     0x00a0_0940,
+    0x00a0_0e90,
     0x00a0_0f30,
     0x00a0_11b0,
     0x00a0_1230,
@@ -316,8 +326,11 @@ const CALLEES: &[u32] = &[
     0x00a0_7530,
     0x00a0_87d0,
     0x00a0_8b20,
+    0x00a0_9080,
     0x00a0_9130,
+    0x00a0_9200,
     0x00a0_9410,
+    0x00a0_a270,
     0x00a0_d9e0,
     0x00a0_f8b0,
     0x00a1_c520,
@@ -4752,9 +4765,10 @@ fn list_box_unsigned_int_num_unfiltered_diff() {
 /// time vary it against this one.
 const LIST_BOX_VARIANTS: [u32; 7] = [6, 5, 3, 2, 1, 4, 0];
 
-/// The guard words of the six list box instances' function-local statics (`IsEnabled`'s,
-/// `UpdateHighlightBoxPos`'s, `NumUnfiltered`'s of each).
-const LIST_BOX_GUARDS: [u32; 18] = [
+/// The guard words of the list box instances' function-local statics: the six of the menu manager
+/// file (`IsEnabled`'s, `UpdateHighlightBoxPos`'s, `NumUnfiltered`'s of each) and the item list
+/// box's (`UpdateHighlightBoxPos`'s, `NumUnfiltered`'s).
+const LIST_BOX_GUARDS: [u32; 20] = [
     0x011d_8dd0,
     0x011d_8ddc,
     0x011d_8e48,
@@ -4773,6 +4787,8 @@ const LIST_BOX_GUARDS: [u32; 18] = [
     0x011d_8e34,
     0x011d_8e40,
     0x011d_8e70,
+    0x011d_8cd4,
+    0x011d_8cdc,
 ];
 
 /// A world for the list boxes (`ListBox<T>`, Xbox PDB), built at both pointer arguments (objects 3
@@ -4788,18 +4804,31 @@ const LIST_BOX_GUARDS: [u32; 18] = [
 /// to scroll and the statics set; four with one filtered and one disabled, the tiles kept and the
 /// heights equal; five enabled and none highlighted; no container; six with only the last enabled
 /// (the moves search on to it); six with the first and the last disabled and the last highlighted
-/// (the moves walk back from the ends through `GetTileAt`).
+/// (the moves walk back from the ends through `GetTileAt`); and (the eighth, the item list box's
+/// only, [`ITEM_LIST_VARIANTS`]) one item, highlighted, with a scroll bar, two visible items, flags 0
+/// and 1 set.
 fn put_list_box(e: &mut Engine, variant: u32) {
     use arena::object;
     let v = variant as usize;
-    let counts = [0u32, 1, 4, 5, 3, 6, 6];
-    let filtered = [None, None, Some(1u32), None, None, None, None];
-    let enabled = [0u32, 0b1, 0b1011, 0b1_1111, 0b111, 0b10_0000, 0b01_1110];
-    let highlighted = [None, Some(0u32), Some(0), None, Some(1), Some(4), Some(5)];
-    let visible = [0.0f32, 100.0, 300.0, 25.0, 0.0, 100.0, 100.0];
-    let other = [0.0f32, 0.0, 1.0, 2.0, 0.0, 50.0, 3.0];
-    let totals = [0.0f32, 300.0, 300.0, 50.0, 100.0, 1000.0, 600.0];
-    let flags = [0u16, 2, 0, 2, 2, 0, 3];
+    let counts = [0u32, 1, 4, 5, 3, 6, 6, 1];
+    let filtered = [None, None, Some(1u32), None, None, None, None, None];
+    let enabled = [
+        0u32, 0b1, 0b1011, 0b1_1111, 0b111, 0b10_0000, 0b01_1110, 0b1,
+    ];
+    let highlighted = [
+        None,
+        Some(0u32),
+        Some(0),
+        None,
+        Some(1),
+        Some(4),
+        Some(5),
+        Some(0),
+    ];
+    let visible = [0.0f32, 100.0, 300.0, 25.0, 0.0, 100.0, 100.0, 100.0];
+    let other = [0.0f32, 0.0, 1.0, 2.0, 0.0, 50.0, 3.0, 2.0];
+    let totals = [0.0f32, 300.0, 300.0, 50.0, 100.0, 1000.0, 600.0, 300.0];
+    let flags = [0u16, 2, 0, 2, 2, 0, 3, 3];
     let tile = |k: u32| object(180 + k);
     let item = |k: u32| object(170 + k);
     let node = |k: u32| object(160 + k);
@@ -5030,22 +5059,40 @@ fn every_family() -> Vec<&'static engine_core::typed::Family> {
     engine_core::typed::all_families()
 }
 
-/// `every_family` sees each crate's families, not the core's alone: one or more of the core's
-/// (`leaves`), `engine-typed`'s (`interface`, `dispatch`, `ai`, `forms`) and the forms crate's
-/// (`topic_search`).
+/// `every_family` is exactly every crate's families: the core's table (`engine_core::typed::FAMILIES`),
+/// `engine-typed`'s list (`engine_typed::FAMILIES`, which its `units::funcs` provides) and the forms
+/// crate's two (`topic_search`, `topic_order`). One listed but not provided is never registered, and
+/// every guard over `every_family` would skip it; one provided but listed nowhere is a crate's family
+/// these lists miss.
 #[test]
 fn every_family_holds_each_crates_families() {
-    let names: Vec<&str> = every_family().iter().map(|f| f.name).collect();
-    for name in [
-        "leaves",
-        "interface",
-        "dispatch",
-        "ai",
-        "forms",
-        "topic_search",
-    ] {
-        assert!(names.contains(&name), "no family `{name}` among {names:?}");
+    let listed: Vec<&'static engine_core::typed::Family> = engine_core::typed::FAMILIES
+        .iter()
+        .chain(engine_typed::FAMILIES.iter())
+        .copied()
+        .chain([
+            &engine_fallout_forms::topic_search::TOPIC_SEARCH,
+            &engine_fallout_forms::topic_order::TOPIC_ORDER,
+        ])
+        .collect();
+    let all = every_family();
+    let name = |f: &&engine_core::typed::Family| f.name;
+    for family in &listed {
+        assert!(
+            all.iter().any(|f| std::ptr::eq(*f, *family)),
+            "family `{}` is listed but not provided; the families: {:?}",
+            family.name,
+            all.iter().map(name).collect::<Vec<_>>()
+        );
     }
+    for family in &all {
+        assert!(
+            listed.iter().any(|f| std::ptr::eq(*f, *family)),
+            "family `{}` is provided but in no crate's list",
+            family.name
+        );
+    }
+    assert_eq!(all.len(), listed.len(), "a family provided twice");
 }
 
 /// An address is in one family at most, whichever families are on by default: `NV_TYPED` can turn
@@ -5393,4 +5440,484 @@ fn no_member_of_a_family_on_by_default_holds_a_seam() {
              calls `e.site` there"
         );
     }
+}
+
+// ---- The item list box (`ListBox<ItemChange *>`), the item lists' helpers, the small units ------
+
+/// The variants of the item list box's world ([`put_item_list_box`]): [`put_list_box`]'s seven,
+/// the richest first, and its eighth (one item and two visible items, so `AddItem`'s height
+/// actions run).
+const ITEM_LIST_VARIANTS: [u32; 8] = [6, 7, 5, 3, 2, 1, 4, 0];
+
+/// [`put_list_box`]'s world for the item list box, with the groups `RemoveItemGroup` compares (the
+/// form word at `+8` of the items' data: 0 for the first and the fifth item, 1 for the third) and
+/// the local list's append (`005ae3d0`) doing its work: the word at the address it is given is the
+/// list's first item when it has none, else a new node's (objects 230 on) after its last.
+fn put_item_list_box(e: &mut Engine, variant: u32) {
+    use arena::object;
+    put_list_box(e, variant);
+    for (k, group) in [(0u32, 0u32), (2, 1), (4, 0)] {
+        e.mem.set_u32(object(190 + k) + 8, group);
+    }
+    e.mem.set_u32(object(229), 0);
+    e.register_double(0x005a_e3d0, |e, words| {
+        let (list, value) = (words[0], e.mem.u32(words[1]));
+        if e.mem.u32(list) == 0 {
+            e.mem.set_u32(list, value);
+        } else {
+            let mut node = list;
+            while e.mem.u32(node + 4) != 0 {
+                node = e.mem.u32(node + 4);
+            }
+            let made = e.mem.u32(object(229));
+            e.mem.set_u32(object(229), made + 1);
+            let fresh = object(230 + made % 16);
+            e.mem.set_u32(fresh, value);
+            e.mem.set_u32(fresh + 4, 0);
+            e.mem.set_u32(node + 4, fresh);
+        }
+        Ret::default()
+    });
+}
+
+/// The variants of [`put_inventory`]'s world.
+const INVENTORY_VARIANTS: [u32; 3] = [0, 1, 2];
+
+/// A world for the inventory fill (`00719ef0`): the list box world ([`put_list_box`]'s richest
+/// variant, or in the third its fourth, whose flag 0 is clear) with a template at both list boxes'
+/// `+0x18`; the inventory walk (`00575510`) storing an iterator and the changes (none in the second
+/// variant, so the fill stops there); the next item (`004ca330`) answering three items in turn, then
+/// 0 (their counts 3, 1 and 0, the first two with a form, the last none); `__RTDynamicCast`
+/// answering the form it is given.
+fn put_inventory(e: &mut Engine, variant: u32) {
+    use arena::object;
+    put_list_box(e, if variant == 2 { 3 } else { 6 });
+    for list_box in [object(3), object(40)] {
+        e.mem.set_u32(list_box + 0x18, object(199));
+    }
+    let walks = variant != 1;
+    e.register_double(0x0057_5510, move |e, words| {
+        if walks {
+            e.mem.set_u32(words[2], object(210));
+            e.mem.set_u32(words[3], object(211));
+        }
+        Ret::default()
+    });
+    e.mem.set_u32(object(211) + 0x10, 0);
+    e.register_double(0x004c_a330, |e, _| {
+        let next = e.mem.u32(object(211) + 0x10);
+        e.mem.set_u32(object(211) + 0x10, next + 1);
+        Ret {
+            eax: if next < 3 { object(212 + next) } else { 0 },
+            ..Ret::default()
+        }
+    });
+    for (k, count, form) in [(0u32, 3u32, object(215)), (1, 1, object(216)), (2, 0, 0)] {
+        e.mem.set_u32(object(212 + k) + 4, count);
+        e.mem.set_u32(object(212 + k) + 8, form);
+    }
+    e.register_double(0x00ec_43fb, |_, words| Ret {
+        eax: words[0],
+        ..Ret::default()
+    });
+}
+
+/// The variants of [`put_form_type`]'s world.
+const FORM_TYPE_VARIANTS: [u32; 5] = [0, 1, 2, 3, 4];
+
+/// A world for the filters by form type: both pointer arguments' items (objects 3 and 40) with a
+/// form (object 201) whose type byte is, by variant, 0x28, 0x18, 0x73, 0x1a or 0 (each filter's
+/// match, a later match, and none).
+fn put_form_type(e: &mut Engine, variant: u32) {
+    use arena::object;
+    let kind = [0x28u8, 0x18, 0x73, 0x1a, 0][variant as usize];
+    for item in [object(3), object(40)] {
+        e.mem.set_u32(item + 8, object(201));
+    }
+    e.mem.set_u8(object(201) + 4, kind);
+}
+
+/// The item list box's and the filters' worlds, as settings of a Diff.
+trait ItemWorlds {
+    /// In [`put_item_list_box`]'s world, with `max` cases.
+    fn in_item_list(self, args: &'static [Arg], max: usize) -> Diff;
+    /// In [`put_form_type`]'s world, one pointer argument.
+    fn in_form_types(self) -> Diff;
+}
+
+impl ItemWorlds for Diff {
+    fn in_item_list(self, args: &'static [Arg], max: usize) -> Diff {
+        self.in_arena_and(args, CALLEES, &[], &ITEM_LIST_VARIANTS, put_item_list_box)
+            .max_cases(max)
+    }
+
+    fn in_form_types(self) -> Diff {
+        self.in_arena_and(
+            &[Arg::Ptr],
+            CALLEES,
+            &[],
+            &FORM_TYPE_VARIANTS,
+            put_form_type,
+        )
+    }
+}
+
+#[test]
+fn item_list_box_remove_item_group_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_a200,
+        interface::item_list_box::list_box_remove_item_group(Ptr, u32)
+    ))
+    .in_item_list(&[Arg::Ptr, Arg::Byte], 48)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn item_list_box_add_item_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_a320,
+        interface::item_list_box::list_box_add_item(Ptr, u32, Ptr, u32, Ptr) -> Ptr
+    ))
+    .in_item_list(
+        &[Arg::Ptr, Arg::Word, Arg::Ptr, Arg::ListNode, Arg::Ptr],
+        64,
+    )
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn item_list_box_remove_item_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_a5c0,
+        interface::item_list_box::list_box_remove_item(Ptr, Ptr) -> bool
+    ))
+    .in_item_list(&[Arg::Ptr, Arg::ListTile], 56)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn item_list_box_synchronize_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_a670,
+        interface::item_list_box::list_box_synchronize(Ptr)
+    ))
+    .in_item_list(&[Arg::Ptr], 32)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn item_list_box_update_highlight_box_pos_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_a740,
+        interface::item_list_box::list_box_update_highlight_box_pos(Ptr)
+    ))
+    .in_item_list(&[Arg::Ptr], 32)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn item_list_box_fn_0071aa60_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_aa60,
+        interface::item_list_box::fn_0071aa60(Ptr, u8)
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Byte], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn item_list_box_fn_0071aa80_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_aa80,
+        interface::item_list_box::fn_0071aa80(Ptr) -> u8
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn item_list_box_fn_0071aaa0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_aaa0,
+        interface::item_list_box::fn_0071aaa0(Ptr, u32, u32) -> bool
+    ))
+    .in_item_list(&[Arg::Ptr, Arg::ListNode, Arg::ListNode], 64)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn item_list_box_set_total_list_height_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_ad30,
+        interface::item_list_box::list_box_set_total_list_height(Ptr)
+    ))
+    .in_item_list(&[Arg::Ptr], 32)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn item_list_box_num_unfiltered_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_ae60,
+        interface::item_list_box::list_box_num_unfiltered(Ptr) -> i32
+    ))
+    .in_item_list(&[Arg::Ptr], 32)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn item_list_box_fn_00719be0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_9be0,
+        interface::item_list_box::fn_00719be0(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn item_list_box_fn_00719c00_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_9c00,
+        interface::item_list_box::fn_00719c00(Ptr, u32, u32) -> Ptr
+    ))
+    .in_arena(&[Arg::Object, Arg::Word, Arg::Int], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn item_list_box_fn_00719ef0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_9ef0,
+        interface::item_list_box::fn_00719ef0(Ptr, u32, u32, u32, u32, u8, u8)
+    ))
+    .in_arena_and(
+        &[
+            Arg::Object,
+            Arg::Word,
+            Arg::Code,
+            Arg::Word,
+            Arg::Code,
+            Arg::Byte,
+            Arg::Byte,
+        ],
+        CALLEES,
+        &[],
+        &INVENTORY_VARIANTS,
+        put_inventory,
+    )
+    .max_cases(48)
+    .max_calls(800)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn item_list_box_fn_00719c80_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_9c80,
+        interface::item_list_box::fn_00719c80(u32, u32) -> i32
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn item_list_box_fn_00719ca0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_9ca0,
+        interface::item_list_box::fn_00719ca0(u32, u32) -> i32
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn item_list_box_fn_00719cf0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_9cf0,
+        interface::item_list_box::fn_00719cf0(u32, u32) -> i32
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn item_list_box_fn_00719da0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_9da0,
+        interface::item_list_box::fn_00719da0(u32) -> bool
+    ))
+    .in_form_types()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn item_list_box_fn_00719de0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_9de0,
+        interface::item_list_box::fn_00719de0(u32) -> bool
+    ))
+    .in_form_types()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn item_list_box_fn_00719e30_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_9e30,
+        interface::item_list_box::fn_00719e30(u32) -> bool
+    ))
+    .in_form_types()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn small_units_fn_0071b020_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_b020,
+        interface::small_units::fn_0071b020(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn small_units_fn_0071b040_diff() {
+    Diff::new(engine_core::entry!(
+        0x0071_b040,
+        interface::small_units::fn_0071b040(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn small_units_fn_00726bf0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0072_6bf0,
+        interface::small_units::fn_00726bf0(Ptr, u32, u32)
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Word, Arg::Byte], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn small_units_fn_00726c40_diff() {
+    Diff::new(engine_core::entry!(
+        0x0072_6c40,
+        interface::small_units::fn_00726c40(Ptr) -> u32
+    ))
+    .in_item_list(&[Arg::Ptr], 32)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn small_units_fn_00726c60_diff() {
+    Diff::new(engine_core::entry!(
+        0x0072_6c60,
+        interface::small_units::fn_00726c60(Ptr, u32)
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Word], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn small_units_fn_00726c90_diff() {
+    Diff::new(engine_core::entry!(
+        0x0072_6c90,
+        interface::small_units::fn_00726c90(Ptr) -> Ptr
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn small_units_fn_00726cf0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0072_6cf0,
+        interface::small_units::fn_00726cf0(Ptr)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn small_units_fn_00726d50_diff() {
+    Diff::new(engine_core::entry!(
+        0x0072_6d50,
+        interface::small_units::fn_00726d50(Ptr, u8)
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Byte], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn small_units_fn_00726d70_diff() {
+    Diff::new(engine_core::entry!(
+        0x0072_6d70,
+        interface::small_units::fn_00726d70(Ptr, u32, u8)
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Int, Arg::Byte], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn small_units_fn_00726db0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0072_6db0,
+        interface::small_units::fn_00726db0(Ptr, u8)
+    ))
+    .in_arena(&[Arg::Ptr, Arg::Byte], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+/// `GetHighlightTarget` (the six instances' one body, here `ListBox<ActorValue::Index>`'s) on the
+/// first list box for every move in every list box world and seed: the six instances' Diffs share
+/// their cases, which never pair the up moves with the world where the search goes on past a
+/// disabled item and walks on from the list's start (the sixth variant), so this one runs them all.
+#[test]
+fn list_box_get_highlight_target_every_move_diff() {
+    Diff::new(engine_core::entry!(
+        0x0072_14b0,
+        interface::menu_manager_p2::list_box_actor_value_get_highlight_target(Ptr, u32) -> u32
+    ))
+    .in_arena_and(
+        &[Arg::Object, Arg::Direction],
+        CALLEES,
+        &[],
+        &LIST_BOX_VARIANTS,
+        put_list_box,
+    )
+    .max_cases(168)
+    .run()
+    .assert_same();
 }

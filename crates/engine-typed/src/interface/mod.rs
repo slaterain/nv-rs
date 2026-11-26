@@ -22,6 +22,13 @@
 //! - [`menu_manager_p2`]: the same unit from `00721060` to its end: the six `ListBox<T>` instances
 //!   (construction, emptying, sorting, highlighting and its moves, the indices, the highlight box,
 //!   the scroll steps, the unfiltered count) and the pages' `BSSimpleArray`s.
+//! - [`item_list_box`]: the `ListBox<ItemChange *>` instance (the inventory-style lists: adding,
+//!   removing an item or a group, synchronizing, the highlight box, the scroll steps, the unfiltered
+//!   count) and the item lists' helpers (the fill from a reference's inventory, the sorts'
+//!   comparisons, the filters by form type, a word setting, a `BSSimpleArray<Tile *>`'s destructor).
+//! - [`small_units`]: a destructor of an object with two string lists, the word-sized elements'
+//!   placement loop, a list box's item count, and an object with a string, a flags byte and a tile
+//!   value.
 //!
 //! **Floats.** The menus run on the main thread ([`Threads::Main`]), at the float precision the
 //! exe's main thread computes in once Direct3D set it: plain `f32` (the camera frustum's products;
@@ -38,8 +45,10 @@ use engine_core::AbiFn;
 pub mod interface_cpp;
 pub mod interface_cpp_p2;
 pub mod interface_cpp_p3;
+pub mod item_list_box;
 pub mod menu_manager;
 pub mod menu_manager_p2;
+pub mod small_units;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(44);
@@ -62,6 +71,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
     all.extend(interface_cpp_p3::funcs());
     all.extend(menu_manager::funcs());
     all.extend(menu_manager_p2::funcs());
+    all.extend(item_list_box::funcs());
+    all.extend(small_units::funcs());
     all
 }
 

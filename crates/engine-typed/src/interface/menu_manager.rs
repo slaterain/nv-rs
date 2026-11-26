@@ -10,11 +10,11 @@
 //! `Menu` base's destructor, the lists' destructors and clears, the smart pointer assignment, the
 //! timers, the other menus' creators), its virtual calls (a menu's deleting destructor and class,
 //! whatever menu it is). What it calls that is plain stores or reads is done here with no call
-//! ([`IN_PLACE`] and the interface unit's [`in_place::ADDRESSES`]): the `Menu` base's and the
-//! 8-byte list's constructors, `memset` of a menu's tile pointers, the sound handle's and a null
-//! smart pointer's constructors (and the array constructor over null smart pointers or over the
-//! healing options), the empty constructors (`006815c0`, which answers its argument), the menus
-//! by class, the manager and its menus root, a list node's item and next, a menu's tile and
+//! ([`IN_PLACE`] and the interface unit's [`in_place::ADDRESSES`]): the `Menu` base's, the
+//! 8-byte list's and the text edit menu's editor's constructors, `memset` of a menu's tile
+//! pointers, the sound handle's and a null smart pointer's constructors (and the array
+//! constructor over null smart pointers or over the healing options), the empty constructors
+//! (`006815c0`, which answers its argument), the menus by class, the manager and its menus root, a list node's item and next, a menu's tile and
 //! state, the state stored (`007037c0`), the start menu's class (`0070ede0`, 0x3f5) and the map
 //! menu's (`00720df0`, 0x3ff). The family's functions call one another through `typed_call!`
 //! (the stats and VATS menus' list boxes and the pages' simple arrays are
@@ -51,6 +51,7 @@ pub const IN_PLACE: &[u32] = &[
     0x004f_d3a0, // the word at +0x74 (the container menu's)
     0x0067_1d10, // the word at +0x30 (the book menu's reference)
     0x007a_f430, // the word at +0x20 (the reference's object)
+    0x0071_6980, // the text edit menu's editor constructor: two empty strings and stores
 ];
 
 /// The array constructor (`eh vector constructor iterator`): done in place where every element's
@@ -108,8 +109,7 @@ const LIST_CLEAR: u32 = 0x0047_0470;
 const NAMED_EFFECTS_CLEAR: u32 = 0x007e_09b0;
 const STATUS_EFFECTS_CLEAR: u32 = 0x007e_07f0;
 const STATUS_DATA_FLUSH: u32 = 0x0040_6de0;
-/// The text edit menu's editor, and `BSString`'s set (string, text, length).
-const TEXT_EDITOR_CONSTRUCT: u32 = 0x0071_6980;
+/// The text edit menu's editor destructor, and `BSString`'s set (string, text, length).
 const TEXT_EDITOR_DESTRUCT: u32 = 0x0071_6a10;
 const STRING_SET: u32 = 0x0040_37f0;
 /// The smart pointer's assignment (`NiPointer::operator=`: the old object released, the new one
@@ -688,6 +688,20 @@ pub fn stats_menu_attach_tile_by_id(e: &mut Engine, this: Ptr, id: i32, tile: u3
     }
 }
 
+/// The text edit menu's editor constructor (`00716980`, in place): the `BSString`s at `+0` and `+8`
+/// empty (`004037b0`), the bytes `+0x21` and `+0x20` and the word `+0x10` cleared, `+0x14` -1,
+/// `+0x1c` 0, `+0x18` 1, in the exe's order.
+fn text_editor(e: &mut Engine, at: u32) {
+    in_place::empty_string(e, at);
+    in_place::empty_string(e, at.wrapping_add(8));
+    e.mem.set_u8(at.wrapping_add(0x21), 0);
+    e.mem.set_u32(at.wrapping_add(0x10), 0);
+    e.mem.set_u8(at.wrapping_add(0x20), 0);
+    e.mem.set_u32(at.wrapping_add(0x14), u32::MAX);
+    e.mem.set_u32(at.wrapping_add(0x1c), 0);
+    e.mem.set_u32(at.wrapping_add(0x18), 1);
+}
+
 // Typed from 0071fa80
 /// The `TextEditMenu` constructor: the `Menu` base and vtable, the editor (+0x34), the three tile
 /// pointers (+0x28) zeroed, the entered text global emptied (`004037f0` with null and 0), the text
@@ -696,7 +710,7 @@ pub fn fn_0071fa80(e: &mut Engine, this: Ptr) -> Ptr {
     let base = this.addr();
     menu_base(e, this.addr());
     e.mem.set_u32(base, TEXT_EDIT_MENU_VTABLE);
-    e.call(TEXT_EDITOR_CONSTRUCT, &args![base.wrapping_add(0x34)]);
+    text_editor(e, base.wrapping_add(0x34));
     zero_words(e, base.wrapping_add(0x28), 0xc);
     e.call(STRING_SET, &args![ENTERED_TEXT, 0u32, 0u32]);
     e.mem.set_u32(base.wrapping_add(0x58), 0);

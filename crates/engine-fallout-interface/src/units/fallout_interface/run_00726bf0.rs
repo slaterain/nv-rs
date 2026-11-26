@@ -74,7 +74,7 @@ pub fn fn_00726cf0(e: &mut Engine, this: Ptr) {
 /// Unnamed (`thiscall`, `RET 4`: a `bool`): sets or clears bit 2 of the flags byte
 /// (+0x28) through `00726d70`.
 pub fn fn_00726d50(e: &mut Engine, this: Ptr, set: u8) {
-    fn_00726d70(e, this, 2, set);
+    e.call(0x0072_6d70, &args![this, 2u32, u32::from(set)]);
 }
 
 // Translated from 00726d70 (decompiled, FalloutNV.exe 1.4.0.525)
