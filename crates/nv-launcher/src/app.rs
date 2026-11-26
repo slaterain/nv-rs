@@ -529,10 +529,10 @@ pub enum Kind {
     Output,
     /// play.sh has ended badly: Back or Exit.
     Ended,
-    /// The Settings list (its rows, Testing, Back).
+    /// The Settings list (its rows, the lists it opens, Back).
     Settings,
-    /// The Testing list (its rows, Back).
-    Testing,
+    /// A list Settings opens ([`SUBLISTS`]: its rows, Back).
+    Sublist,
     /// One row's choices (and Back).
     Choices,
     /// What a crash report holds, the first of the crash reports screens (at the first start,
@@ -562,7 +562,8 @@ pub enum Act {
     TypeLine(String),
     BackToStart,
     OpenSettings,
-    OpenTesting,
+    /// A list Settings opens.
+    OpenList(settings::List),
     /// The row at this place of the list on screen.
     OpenChoices(usize),
     /// The choice of the row whose choices show.
@@ -754,8 +755,8 @@ pub fn start_kind(refused: bool, answer: Consent, asked: bool) -> Kind {
 /// What Left or Right does on a Settings list's row at `index` (none: the row's own choices):
 /// the sounds row flips; the crash reports row opens its screens as Enter does, so no press
 /// there ever answers (sending is never switched on without the question).
-pub fn row_step_act(testing: bool, index: usize) -> Option<Act> {
-    if testing {
+pub fn row_step_act(list: settings::List, index: usize) -> Option<Act> {
+    if list != settings::List::Main {
         None
     } else if index == settings::ROWS.len() {
         Some(Act::ToggleSounds)
@@ -789,8 +790,16 @@ pub fn keep_consent(own: &Path, refused: bool, answer: Consent, now: bool) -> Op
     })
 }
 
-/// The Settings list's entry that opens the Testing list, and the start screen's for Settings.
-pub const TESTING_ENTRY: &str = "Testing";
+/// The lists the Settings list opens, in its order after the crash reports row: the table's keys
+/// outside the fixes, and every fix row ([`settings::List`]).
+pub const SUBLISTS: [settings::List; 2] = [settings::List::More, settings::List::Fixes];
+
+/// The Settings list's entry that opens `list` (a [`SUBLISTS`] one), and its place there.
+pub fn sublist_entry(list: settings::List) -> usize {
+    CRASH_ROW_INDEX + 1 + SUBLISTS.iter().position(|l| *l == list).unwrap_or(0)
+}
+
+/// The start screen's entry for Settings.
 pub const SETTINGS: &str = "Settings";
 pub const BACK: &str = "Back";
 
@@ -1113,12 +1122,15 @@ pub fn on_enter(kind: Kind, typed: &str, chosen: usize, entry: &str) -> Act {
         Kind::Message => Act::Answer(chosen),
         Kind::Folder => Act::Folder(typed_folder),
         Kind::Output => Act::TypeLine(typed.to_string()),
-        Kind::Settings if entry == TESTING_ENTRY => Act::OpenTesting,
+        Kind::Settings if SUBLISTS.iter().any(|l| l.name() == entry) => SUBLISTS
+            .into_iter()
+            .find(|l| l.name() == entry)
+            .map_or(Act::Nothing, Act::OpenList),
         Kind::Settings if entry.starts_with(SOUNDS_ROW) => Act::ToggleSounds,
         Kind::Settings if entry.starts_with(CRASH_ROW) => Act::OpenConsentFromSettings,
         Kind::Settings if entry == BACK => Act::BackToStart,
-        Kind::Testing if entry == BACK => Act::OpenSettings,
-        Kind::Settings | Kind::Testing => Act::OpenChoices(chosen),
+        Kind::Sublist if entry == BACK => Act::OpenSettings,
+        Kind::Settings | Kind::Sublist => Act::OpenChoices(chosen),
         Kind::Choices if entry == BACK => Act::BackToList,
         Kind::Choices => Act::Save(entry.to_string()),
         Kind::Consent if entry == CHOOSE_REPORTS => Act::OpenQuestion,
@@ -1137,27 +1149,99 @@ pub fn short(choice: &str) -> &str {
     choice.split(" (").next().unwrap_or(choice)
 }
 
-/// The Settings list's (or the Testing list's) entries for what `shown` says: each row with its
-/// value, then (the main list) the launcher's sounds (`sounds`: on or off), crash reports
-/// (`crash`: the player's answer) and Testing, then Back.
+/// A row as a list shows it: its label and its value (the value's note left out).
+pub fn row_entry(row: settings::Row, shown: &settings::Files) -> String {
+    format!("{}: {}", row.label(), short(&row.current(shown)))
+}
+
+/// A Settings list's entries for what `shown` says: each of `list`'s rows with its value, then
+/// (the main list) the launcher's sounds (`sounds`: on or off), crash reports (`crash`: the
+/// player's answer) and the lists it opens, then Back.
 pub fn settings_entries(
-    rows: &[settings::Row],
+    list: settings::List,
     shown: &settings::Files,
-    testing: bool,
     sounds: bool,
     crash: Consent,
 ) -> Vec<String> {
-    let mut e: Vec<String> = rows
-        .iter()
-        .map(|r| format!("{}: {}", r.label(), short(&r.current(shown))))
-        .collect();
-    if !testing {
+    let mut e: Vec<String> = list.rows().iter().map(|&r| row_entry(r, shown)).collect();
+    if list == settings::List::Main {
         e.push(sounds_entry(sounds));
         e.push(crash_entry(crash));
-        e.push(TESTING_ENTRY.into());
+        e.extend(SUBLISTS.iter().map(|l| l.name().to_string()));
     }
     e.push(BACK.into());
     e
+}
+
+/// A Settings list's screen for what `shown` says: `note` (a save that failed), where choices
+/// are saved (`in_files`: in the game's files at once, else for Play to move in), the list's own
+/// lines, then its entries ([`settings_entries`]), the first highlighted.
+pub fn list_screen(
+    list: settings::List,
+    shown: &settings::Files,
+    in_files: bool,
+    note: Option<String>,
+    sounds: bool,
+    crash: Consent,
+) -> Screen {
+    let mut welcome = Vec::new();
+    if let Some(note) = note {
+        welcome.push(note);
+    }
+    welcome.push(if in_files {
+        "Saved at once, for both ways of playing (with and without mods). The game reads them at its next start.".to_string()
+    } else {
+        "Saved for Play to move into the game's own files at its next start.".to_string()
+    });
+    welcome.extend(list.notes());
+    Screen {
+        title: format!("-{}-", list.name()),
+        welcome,
+        entries: settings_entries(list, shown, sounds, crash),
+        ..Default::default()
+    }
+}
+
+/// A row's choices screen for what `shown` says: what it is now (and, for a fix row, whether
+/// that comes from the preset), what it does (a table row's plain text; for the preset, how many
+/// fixes are chosen one by one), its choices with the one it has highlighted, then Back.
+/// `desktop` is the main monitor's size, for the resolution row.
+pub fn choices_screen(row: settings::Row, shown: &settings::Files, desktop: (u32, u32)) -> Screen {
+    let now = row.current(shown);
+    let mut entries = row.choices(shown, desktop);
+    let highlighted = entries.iter().position(|c| *c == now).unwrap_or(0);
+    entries.push(BACK.into());
+    let mut welcome = vec![row.now_line(shown)];
+    welcome.extend(row.about());
+    if row == settings::Row::GameFixes {
+        let chosen = settings::List::Fixes
+            .rows()
+            .iter()
+            .filter(|r| r.chosen_here(shown).is_some())
+            .count();
+        if chosen > 0 {
+            welcome.push(format!(
+                "Kept with either: the {chosen} chosen in {}.",
+                settings::List::Fixes.name()
+            ));
+        }
+    }
+    Screen {
+        title: format!("-{}-", row.label()),
+        welcome,
+        entries,
+        highlighted,
+        ..Default::default()
+    }
+}
+
+/// Where the Settings list opens from the screen `mode` shows: on the entry of the list it came
+/// back from, else at its top.
+fn settings_entry_from(mode: &Mode) -> usize {
+    match mode {
+        Mode::Settings { list } if *list != settings::List::Main => sublist_entry(*list),
+        _ => 0,
+    }
 }
 
 /// The crash reports row as the list shows it.
@@ -1223,13 +1307,13 @@ enum Mode {
     Output(Option<i32>),
     /// nv-rs may not write in its own folder: only Exit.
     Refused,
-    /// The Settings list (`testing`: the Testing list).
+    /// A Settings list: the main one, or one it opens.
     Settings {
-        testing: bool,
+        list: settings::List,
     },
-    /// The choices of the row at `index` of the Settings (or Testing) list.
+    /// The choices of the row at `index` of a Settings list.
     Choices {
-        testing: bool,
+        list: settings::List,
         index: usize,
     },
     /// One of the crash reports screens (`screen`: `Kind::Consent`, `Question` or `Sample`).
@@ -1249,20 +1333,13 @@ impl Mode {
             Mode::Output(None) => Kind::Output,
             Mode::Output(Some(_)) => Kind::Ended,
             Mode::Refused => Kind::Refused,
-            Mode::Settings { testing: false } => Kind::Settings,
-            Mode::Settings { testing: true } => Kind::Testing,
+            Mode::Settings {
+                list: settings::List::Main,
+            } => Kind::Settings,
+            Mode::Settings { .. } => Kind::Sublist,
             Mode::Choices { .. } => Kind::Choices,
             Mode::Consent { screen } => *screen,
         }
-    }
-}
-
-/// The rows of the Settings list, or of the Testing list.
-fn rows_of(testing: bool) -> &'static [settings::Row] {
-    if testing {
-        &settings::TESTING
-    } else {
-        &settings::ROWS
     }
 }
 
@@ -1819,22 +1896,27 @@ impl App {
                 self.add_output(&format!("{line}\n"));
             }
             Act::BackToStart => self.show_start(),
-            Act::OpenSettings => self.show_settings(false, 0, None),
-            Act::OpenTesting => self.show_settings(true, 0, None),
+            Act::OpenSettings => {
+                // Back from a list it opened: on that list's entry.
+                let at = settings_entry_from(&self.mode);
+                self.show_settings(settings::List::Main, at, None)
+            }
+            Act::OpenList(list) => self.show_settings(list, 0, None),
             Act::OpenChoices(index) => {
-                let testing = matches!(self.mode, Mode::Settings { testing: true });
-                if index < rows_of(testing).len() {
-                    self.show_choices(testing, index);
+                if let Mode::Settings { list } = self.mode {
+                    if index < list.rows().len() {
+                        self.show_choices(list, index);
+                    }
                 }
             }
             Act::Save(choice) => {
-                if let Mode::Choices { testing, index } = self.mode {
-                    self.save(testing, index, &choice);
+                if let Mode::Choices { list, index } = self.mode {
+                    self.save(list, index, &choice);
                 }
             }
             Act::BackToList => {
-                if let Mode::Choices { testing, index } = self.mode {
-                    self.show_settings(testing, index, None);
+                if let Mode::Choices { list, index } = self.mode {
+                    self.show_settings(list, index, None);
                 }
             }
             Act::ToggleSounds => self.toggle_sounds(),
@@ -1861,7 +1943,7 @@ impl App {
         };
         self.sounds_on = on;
         self.update_sound();
-        self.show_settings(false, settings::ROWS.len(), note);
+        self.show_settings(settings::List::Main, settings::ROWS.len(), note);
     }
 
     /// The crash reports screens opened from Settings' row (Enter, a click, Left or Right).
@@ -1949,7 +2031,7 @@ impl App {
     /// was not kept: Settings on its row, or the start screen.
     fn close_consent(&mut self, note: Option<String>) {
         if self.consent_flow.close() {
-            self.show_settings(false, CRASH_ROW_INDEX, note);
+            self.show_settings(settings::List::Main, CRASH_ROW_INDEX, note);
         } else {
             self.start_note = note;
             self.show_start();
@@ -2028,9 +2110,9 @@ impl App {
         }
     }
 
-    /// The Settings list (or the Testing list), the row at `highlight` highlighted, with `note`
-    /// (a save that failed) above it.
-    fn show_settings(&mut self, testing: bool, highlight: usize, note: Option<String>) {
+    /// A Settings list, the row at `highlight` highlighted, with `note` (a save that failed)
+    /// above it.
+    fn show_settings(&mut self, list: settings::List, highlight: usize, note: Option<String>) {
         let profiles = crate::profiles::Profiles::at(&self.place.own);
         let (shown, in_files) = match profiles.shown().and_then(|s| Ok((s, profiles.in_files()?))) {
             Ok(v) => v,
@@ -2039,91 +2121,54 @@ impl App {
                     &format!("nv-rs cannot read its settings: {e}"),
                     &[BACK.to_string()],
                 );
-                self.show(Mode::Settings { testing }, s, true);
+                self.show(Mode::Settings { list }, s, true);
                 return;
             }
         };
-        let mut welcome = Vec::new();
-        if let Some(note) = note {
-            welcome.push(note);
-        }
-        welcome.push(if in_files {
-            "Saved at once, for both ways of playing (with and without mods). The game reads them at its next start.".to_string()
-        } else {
-            "Saved for Play to move into the game's own files at its next start.".to_string()
-        });
-        if testing {
-            welcome.push(
-                "Still being tried: the new lighting draws on Vulkan only; JIP LN for mods that need it."
-                    .into(),
-            );
-        }
-        let mut s = Screen {
-            title: if testing { "-Testing-" } else { "-Settings-" }.into(),
-            welcome,
-            entries: settings_entries(
-                rows_of(testing),
-                &shown,
-                testing,
-                self.sounds_on,
-                self.consent,
-            ),
-            ..Default::default()
-        };
+        let mut s = list_screen(list, &shown, in_files, note, self.sounds_on, self.consent);
         s.highlighted = highlight.min(s.entries.len() - 1);
         let retype = !matches!(self.mode, Mode::Settings { .. } | Mode::Choices { .. });
-        self.show(Mode::Settings { testing }, s, retype);
+        self.show(Mode::Settings { list }, s, retype);
     }
 
     /// The choices of the row at `index` of the list, the one it has highlighted.
-    fn show_choices(&mut self, testing: bool, index: usize) {
-        let row = rows_of(testing)[index];
+    fn show_choices(&mut self, list: settings::List, index: usize) {
+        let row = list.rows()[index];
         let profiles = crate::profiles::Profiles::at(&self.place.own);
         let shown = match profiles.shown() {
             Ok(s) => s,
-            Err(e) => return self.show_settings(testing, index, Some(format!("Not read: {e}"))),
+            Err(e) => return self.show_settings(list, index, Some(format!("Not read: {e}"))),
         };
-        let now = row.current(&shown);
-        let mut entries = row.choices(&shown, self.desktop);
-        let highlighted = entries.iter().position(|c| *c == now).unwrap_or(0);
-        entries.push(BACK.into());
-        let s = Screen {
-            title: format!("-{}-", row.label()),
-            welcome: vec![format!("Now: {now}")],
-            entries,
-            highlighted,
-            ..Default::default()
-        };
-        self.show(Mode::Choices { testing, index }, s, false);
+        let s = choices_screen(row, &shown, self.desktop);
+        self.show(Mode::Choices { list, index }, s, false);
     }
 
     /// `choice` saved for the row at `index`, then its list again (with what went wrong when it
     /// was not saved).
-    fn save(&mut self, testing: bool, index: usize, choice: &str) {
-        let row = rows_of(testing)[index];
+    fn save(&mut self, list: settings::List, index: usize, choice: &str) {
+        let row = list.rows()[index];
         let profiles = crate::profiles::Profiles::at(&self.place.own);
         let note = profiles
             .save(row, choice)
             .err()
             .map(|e| format!("Not saved: {e}"));
-        self.show_settings(testing, index, note);
+        self.show_settings(list, index, note);
     }
 
-    /// Left or Right on a row of the Settings (or Testing) list: its next or previous choice,
-    /// saved at once.
+    /// Left or Right on a row of a Settings list: its next or previous choice, saved at once.
     fn step_row(&mut self, forward: bool) {
-        let Mode::Settings { testing } = self.mode else {
+        let Mode::Settings { list } = self.mode else {
             return;
         };
         let index = self.screen.highlighted;
         // The sounds row has two choices: either way flips it. The crash reports row opens its
         // screens ([`row_step_act`]).
-        match row_step_act(testing, index) {
+        match row_step_act(list, index) {
             Some(Act::ToggleSounds) => return self.toggle_sounds(),
             Some(Act::OpenConsentFromSettings) => return self.open_consent_from_settings(),
             _ => {}
         }
-        let Some(&row) = rows_of(testing).get(index) else {
+        let Some(&row) = list.rows().get(index) else {
             return;
         };
         let profiles = crate::profiles::Profiles::at(&self.place.own);
@@ -2135,7 +2180,7 @@ impl App {
             &row.current(&shown),
             forward,
         ) {
-            self.save(testing, index, &next);
+            self.save(list, index, &next);
         }
     }
 
@@ -3394,20 +3439,26 @@ mod tests {
 
     /// A press on each shown entry hits that entry and does not move the window; a press above
     /// the rows, left or right of their column, or below the last shown row hits none and moves
-    /// it. The start screen and the full Settings list (16 entries: it scrolls), at the top and
-    /// scrolled to the end, in the 960x720 window, a smaller one and a wider one.
+    /// it. The start screen, the full Settings list (17 entries: it scrolls) and its fixes list
+    /// (every fix row), at the top and scrolled to the end, in the 960x720 window, a smaller one
+    /// and a wider one.
     #[test]
     fn a_press_hits_the_entry_under_it_and_drags_elsewhere() {
         let look = Look::plain();
         let settings = settings_entries(
-            &settings::ROWS,
+            settings::List::Main,
             &settings::Files::default(),
-            false,
+            true,
+            Consent::Unanswered,
+        );
+        let fixes = settings_entries(
+            settings::List::Fixes,
+            &settings::Files::default(),
             true,
             Consent::Unanswered,
         );
         let start = vec![PLAY.to_string(), MODS.into(), SETTINGS.into(), EXIT.into()];
-        for entries in [start, settings] {
+        for entries in [start, settings, fixes] {
             for highlighted in [0, entries.len() - 1] {
                 let s = Screen {
                     entries: entries.clone(),
@@ -3446,21 +3497,57 @@ mod tests {
         }
     }
 
-    /// The Settings list shows each row with its value (its note left out), then Testing and
-    /// Back; the Testing list its rows and Back. Enter on a row opens its choices, on a choice
-    /// saves it; Esc goes back a list (never saving); Left and Right step round a row's choices.
+    /// The Settings list shows each row with its value (its note left out), then the two lists it
+    /// opens and Back; each of those its rows and Back. Enter on a row opens its choices, on a
+    /// choice saves it; Esc goes back a list (never saving); Left and Right step round a row's
+    /// choices.
     #[test]
     fn the_settings_lists_open_choose_and_go_back() {
         let shown = settings::Files::default();
-        let main = settings_entries(&settings::ROWS, &shown, false, true, Consent::Ask);
-        assert_eq!(main.len(), 16);
+        let main = settings_entries(settings::List::Main, &shown, true, Consent::Ask);
+        assert_eq!(main.len(), 17);
         assert_eq!(main[0], "Renderer: Vulkan");
         assert_eq!(main[12], "Launcher sounds: On");
         assert_eq!(main[CRASH_ROW_INDEX], "Crash reports: Ask each time");
-        assert_eq!(main[14], TESTING_ENTRY);
-        assert_eq!(main[15], BACK);
+        assert_eq!(main[14], "New lighting and more");
+        assert_eq!(main[15], "Fixes one by one");
+        assert_eq!(main[16], BACK);
+        for list in SUBLISTS {
+            assert_eq!(main[sublist_entry(list)], list.name());
+            assert_eq!(
+                on_enter(Kind::Settings, "", sublist_entry(list), list.name()),
+                Act::OpenList(list)
+            );
+            let e = settings_entries(list, &shown, true, Consent::Send);
+            assert!(!e.iter().any(|x| x.starts_with(CRASH_ROW)));
+            assert_eq!(e.len(), list.rows().len() + 1);
+            assert_eq!(e.last().map(String::as_str), Some(BACK));
+            assert_eq!(on_escape(Kind::Sublist, &e), Act::OpenSettings);
+            assert_eq!(on_enter(Kind::Sublist, "", 0, &e[0]), Act::OpenChoices(0));
+        }
+        // The fixes list: every fix row with the value the game plays it with.
+        let fixes = settings_entries(settings::List::Fixes, &shown, true, Consent::Ask);
+        assert_eq!(fixes[0], "Uncapped frame rate: On");
+        assert!(fixes.contains(&"JIP LN NVSE built in: On".to_string()));
+        assert!(fixes.contains(&"UI Organizer built in: On".to_string()));
+        let more = settings_entries(settings::List::More, &shown, true, Consent::Ask);
+        assert_eq!(more[0], "Ambient occlusion: Off");
+        assert!(more.contains(&"Ambient occlusion strength: 0.7".to_string()));
+        assert!(more.contains(&"Sun shadows (experimental): Off".to_string()));
+        // Back from a list Settings opened lands on its entry; anything else at the top.
+        for list in SUBLISTS {
+            assert_eq!(
+                settings_entry_from(&Mode::Settings { list }),
+                sublist_entry(list)
+            );
+        }
+        let main_list = Mode::Settings {
+            list: settings::List::Main,
+        };
+        assert_eq!(settings_entry_from(&main_list), 0);
+        assert_eq!(settings_entry_from(&Mode::Refused), 0);
         assert_eq!(
-            settings_entries(&settings::ROWS, &shown, false, false, Consent::Never)[12],
+            settings_entries(settings::List::Main, &shown, false, Consent::Never)[12],
             "Launcher sounds: Off"
         );
         // Enter on the crash reports row opens its screens (never answers on one press).
@@ -3473,10 +3560,6 @@ mod tests {
             on_enter(Kind::Settings, "", 12, &main[12]),
             Act::ToggleSounds
         );
-        let testing = settings_entries(&settings::TESTING, &shown, true, true, Consent::Send);
-        assert!(!testing.iter().any(|e| e.starts_with(CRASH_ROW)));
-        assert_eq!(testing.len(), settings::TESTING.len() + 1);
-        assert_eq!(testing.last().map(String::as_str), Some(BACK));
         assert_eq!(on_enter(Kind::Start, "", 1, SETTINGS), Act::OpenSettings);
         assert_eq!(on_enter(Kind::Start, "", 1, MODS), Act::Mods);
         assert_eq!(on_enter(Kind::Start, "", 1, IMPORT_SAVES), Act::ImportSaves);
@@ -3484,16 +3567,7 @@ mod tests {
             on_enter(Kind::Settings, "", 0, &main[0]),
             Act::OpenChoices(0)
         );
-        assert_eq!(
-            on_enter(Kind::Settings, "", 14, TESTING_ENTRY),
-            Act::OpenTesting
-        );
         assert_eq!(on_escape(Kind::Settings, &main), Act::BackToStart);
-        assert_eq!(on_escape(Kind::Testing, &testing), Act::OpenSettings);
-        assert_eq!(
-            on_enter(Kind::Testing, "", 2, &testing[2]),
-            Act::OpenChoices(2)
-        );
         let choices: Vec<String> = ["Off", "On", BACK].map(String::from).to_vec();
         assert_eq!(on_enter(Kind::Choices, "", 1, "On"), Act::Save("On".into()));
         assert_eq!(on_escape(Kind::Choices, &choices), Act::BackToList);
@@ -3571,9 +3645,8 @@ mod tests {
         assert_eq!(start_kind(true, Consent::Unanswered, false), Kind::Refused);
         // Settings' row: Enter, Left and Right all open the screens; no press there answers.
         let main = settings_entries(
-            &settings::ROWS,
+            settings::List::Main,
             &settings::Files::default(),
-            false,
             true,
             Consent::Unanswered,
         );
@@ -3583,15 +3656,17 @@ mod tests {
             Act::OpenConsentFromSettings
         );
         assert_eq!(
-            row_step_act(false, CRASH_ROW_INDEX),
+            row_step_act(settings::List::Main, CRASH_ROW_INDEX),
             Some(Act::OpenConsentFromSettings)
         );
         assert_eq!(
-            row_step_act(false, settings::ROWS.len()),
+            row_step_act(settings::List::Main, settings::ROWS.len()),
             Some(Act::ToggleSounds)
         );
-        assert_eq!(row_step_act(false, 0), None);
-        assert_eq!(row_step_act(true, CRASH_ROW_INDEX), None);
+        assert_eq!(row_step_act(settings::List::Main, 0), None);
+        for list in SUBLISTS {
+            assert_eq!(row_step_act(list, CRASH_ROW_INDEX), None);
+        }
         // The question opens on Never: quick Enters never choose sending.
         for can_send in [false, true] {
             let q = question_screen(can_send);
@@ -3683,6 +3758,104 @@ mod tests {
         }
     }
 
+    /// A fresh profile's files under `preset`: the generated sections (the fix lines notes).
+    fn generated(preset: &str) -> settings::Files {
+        let text = game_profile::game_ini::with_sections("").unwrap().text;
+        settings::Files {
+            ini: game_profile::game_ini::set_key(&text, "nv-rs General", "sPreset", preset),
+            prefs: String::new(),
+        }
+    }
+
+    /// In the launcher's own plain look, every entry of the lists Settings opens fits its row's
+    /// highlight with each of its choices, as do the entries that open them; each of their rows'
+    /// choices screens shows whole (what it is now, why it does nothing when it does nothing,
+    /// what it does, every choice), with the rows it needs on or off, its title within the
+    /// header's line; each list's own lines show whole, with rows below them.
+    #[test]
+    fn the_settings_lists_fit_the_plain_look() {
+        let look = Look::plain();
+        let fits = |entry: &str| look.font.width(&format!("> {entry}")) <= 700 - 5;
+        for list in SUBLISTS {
+            assert!(fits(list.name()), "{}", list.name());
+        }
+        let mut checked = 0;
+        let parents_off = |f: &settings::Files| {
+            ["bUncap", "bJIPInstalled", "bMenuCap"]
+                .into_iter()
+                .fold(f.clone(), |f, key| {
+                    settings::Row::of(key).unwrap().apply(&f, "Off")
+                })
+        };
+        let fixes = generated("fixes");
+        let vanilla = generated("vanilla");
+        let starts = [parents_off(&fixes), fixes, vanilla];
+        for shown in starts {
+            for list in SUBLISTS {
+                for &row in list.rows() {
+                    for choice in row.choices(&shown, (3840, 2160)) {
+                        let after = row.apply(&shown, &choice);
+                        let entry = row_entry(row, &after);
+                        assert!(fits(&entry), "{entry}");
+                        let s = choices_screen(row, &after, (3840, 2160));
+                        let rows = screen::rows_of(&look, &s);
+                        assert_eq!(
+                            (rows.first, rows.shown),
+                            (0, s.entries.len()),
+                            "{}: every choice shows",
+                            s.title
+                        );
+                        assert!(
+                            screen::shows_whole(&look, &s),
+                            "{}: {:?}",
+                            s.title,
+                            s.welcome
+                        );
+                        assert!(look.font.width(&s.title) <= screen::WIDTH, "{}", s.title);
+                        let lines = screen::line_texts(&look, &s);
+                        assert!(lines[3].starts_with("Now: "), "{}: {lines:?}", s.title);
+                        checked += 1;
+                    }
+                }
+                for (in_files, note) in [(true, None), (false, Some("Not saved: x".to_string()))] {
+                    let s = list_screen(list, &shown, in_files, note, true, Consent::Ask);
+                    let text = screen::welcome_lines(&look, &s).len();
+                    assert_eq!(
+                        screen::first_entry_line(&look, &s),
+                        3 + text,
+                        "{:?}",
+                        s.title
+                    );
+                    assert!(screen::rows_of(&look, &s).shown >= 4, "{:?}", s.title);
+                }
+            }
+        }
+        assert!(checked > 120, "{checked}");
+        // The preset's screen counts the fixes chosen one by one, and still shows whole.
+        let uncap = settings::Row::of("bUncap").unwrap();
+        let grab = settings::Row::of("bGrabPush").unwrap();
+        let two = grab.apply(&uncap.apply(&generated("fixes"), "Off"), "Off");
+        let s = choices_screen(settings::Row::GameFixes, &two, (1, 1));
+        assert_eq!(
+            s.welcome.last().map(String::as_str),
+            Some("Kept with either: the 2 chosen in Fixes one by one.")
+        );
+        assert!(screen::shows_whole(&look, &s), "{:?}", s.welcome);
+        let s = choices_screen(settings::Row::GameFixes, &generated("fixes"), (1, 1));
+        assert_eq!(s.welcome, ["Now: Fixes (recommended)"]);
+        // A fix row's screen: what it is, where that comes from, and what it does.
+        let s = choices_screen(uncap, &generated("vanilla"), (1, 1));
+        assert_eq!(s.title, "-Uncapped frame rate-");
+        assert_eq!(s.welcome[0], "Now: Off, from Game fixes");
+        assert_eq!(s.welcome[1], uncap.about().unwrap());
+        assert!(!s
+            .welcome
+            .iter()
+            .any(|l| l.contains("bUncap") || l.contains("iFrameLimit")));
+        assert_eq!(s.entries, ["Off", "On", BACK]);
+        assert_eq!(s.highlighted, 0);
+    }
+
     /// Typing, and so a paste, reaches the prompt on the start screen, Play's folder question and
     /// play.sh's output only: every other kind of screen is listed and refuses it.
     #[test]
@@ -3697,7 +3870,7 @@ mod tests {
             Kind::Output,
             Kind::Ended,
             Kind::Settings,
-            Kind::Testing,
+            Kind::Sublist,
             Kind::Choices,
             Kind::Consent,
             Kind::Question,
