@@ -8588,7 +8588,8 @@ fn xp_room_block(e: &mut Engine, d: &mut Draw, rooms: &[u32]) -> u32 {
     // A master in a quarter of the blocks (the draw as before, so the searches still meet a master
     // deeper down), its byte 1, 2 or 0x80 by the block's address.
     let master = [1, 2, 0x80][(data >> 5) as usize % 3];
-    e.mem.set_u8(data + 0x10, if d.next(4) == 0 { master } else { 0 });
+    e.mem
+        .set_u8(data + 0x10, if d.next(4) == 0 { master } else { 0 });
     let items: Vec<u32> = (0..d.next(4))
         .map(|_| rooms[d.next(rooms.len() as u32) as usize])
         .collect();
