@@ -1749,6 +1749,8 @@ fn acquire_lists_procedures_and_loads() {
         low_process::init_load_game_buffer(Ptr, u32)
     ))
     .in_world(&MOST, |w| w.process_and(1))
+    // The embedded package's typed `InitLoadGame_ov2` reads flag 0 (`008c6b00`) in place.
+    .ignore_calls(&[0x008c_6b00])
     .run()
     .assert_same();
     Diff::new(entry!(
