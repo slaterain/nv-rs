@@ -16,7 +16,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Diff, Input};
 use engine_typed::crt::CRT;
-use engine_typed::forms::{actor_base_data, tesform, FORMS};
+use engine_typed::forms::{actor_base, actor_base_data, attributes, tesform, FORMS};
 
 /// The stand-in slots: `VT_FN + slot`, each answering the word at `SLOT_ANSWERS + slot`.
 const VT_FN: u32 = 0x00ff_4000;
@@ -150,7 +150,7 @@ const SAVE_KIND_AT: u32 = 0x17;
 const HANDLER_NO_IDS: u32 = 0x620;
 
 /// Every callee answered by a word of its own.
-const ANSWERED: [u32; 71] = [
+const ANSWERED: [u32; 98] = [
     0x0047_0470, // the source file list's destructor
     0x0046_ffb0, // and its wrapper
     0x0048_6b80, // the form array's remove
@@ -190,8 +190,6 @@ const ANSWERED: [u32; 71] = [
     0x00b4_7370, // deflateEnd
     0x004f_15a0, // a component byte's setter
     0x0048_e960, // the value's setter
-    0x0048_0100, // their save
-    0x0048_0130, // their load
     0x0046_5110, // CreateFormOfType
     0x0040_37d0, // a string local's destructor
     0x0040_6f60, // sprintf
@@ -222,6 +220,35 @@ const ANSWERED: [u32; 71] = [
     0x006e_bd10, // the actor base data's callee
     0x0087_f9f0, // the actor base data's callee
     0x0084_a6d0, // the actor base data's callee
+    0x0084_a620, // the save/load game's change test
+    0x0084_a740, // and its form-changed test
+    0x0047_ee00, // the AI form's setters
+    0x0047_eed0,
+    0x0047_ef00,
+    0x0047_ef50,
+    0x0047_ef80,
+    0x0048_73d0, // GetFormHealth
+    0x0047_ea30, // the actor base data's buffer save
+    0x0047_ea70, // and load
+    0x0048_e040, // the spell list's buffer save
+    0x0048_e140, // and load
+    0x0047_f940, // the AI form's buffer save
+    0x0047_f980, // and load
+    0x0048_d8f0, // the spell list's save size
+    0x0047_f7e0, // the AI form's
+    0x0048_da20, // the spell list's save
+    0x0047_f840, // the AI form's
+    0x0048_dca0, // the spell list's load
+    0x0047_f8c0, // the AI form's
+    0x0086_5e70, // SaveString
+    0x0048_9100, // the full name's setter
+    0x0096_bbc0, // the iterator's walk
+    0x00ec_782f, // the vector constructor iterator
+    0x00ec_5fce, // and destructor iterator
+    0x0048_8f50, // TESModelRDT's base constructor
+    0x0048_04d0, // TESBipedModelForm::InitializeDataComponent
+    0x0048_0570, // and ClearDataComponent
+    0x0051_b950, // TESModelRDT's destructor
 ];
 
 fn ret(eax: u32) -> Ret {
@@ -387,8 +414,6 @@ fn world(e: &mut Engine) {
         0x00b4_7370,
         0x004f_15a0,
         0x0048_e960,
-        0x0048_0100,
-        0x0048_0130,
         0x0046_5110,
         0x0040_37d0,
         0x0040_6f60,
@@ -2056,8 +2081,6 @@ fn components(e: &mut Engine, mask: u32) {
         };
         set_cast(e, target, part);
     }
-    set_answer(e, 0x0048_0100, 3);
-    set_answer(e, 0x0048_0130, 2);
     e.mem.set_u32(SLOT_ANSWERS + 0x10, 0x1234);
 }
 
@@ -3728,4 +3751,1202 @@ fn abd_fatigue() {
         .abd_getter()
         .run()
         .assert_same();
+}
+
+// ---- TESActorBase (`actor_base`) and TESAttributes (`attributes`) ----
+
+/// The one-line bodies the actor base's and the attributes' native code does in place (see their
+/// module comments): left out of the translation's calls, with no double, as [`IN_PLACE`].
+/// This family's own bodies the callers do in place: the attribute byte, the attribute getters by actor
+/// value, the creature flag test 0x10 or 1 and the iterator's constructor. Each is left out only in its
+/// callers' tests (in its own, it is the function under test).
+const AB_ATTRIBUTE_BYTE: &[u32] = &[0x0048_0160];
+const AB_ATTRIBUTE_GETTERS: &[u32] = &[
+    0x005f_11f0,
+    0x005f_1210,
+    0x005f_1230,
+    0x005f_1250,
+    0x005f_1270,
+    0x005f_1290,
+    0x005f_12b0,
+];
+const AB_IN_PLACE: &[u32] = &[
+    0x0040_1170, // the form type
+    0x0046_1580, // the base flags' test
+    0x0044_ddc0, // the form flags
+    0x0040_3550, // and their setter
+    0x0084_e3a0, // the form id
+    0x0046_9860, // the created-id test
+    0x0047_e340, // the actor base data's change flags, set
+    0x0047_e360, // and cleared
+    0x008f_21d0, // its speed multiplier
+    0x004f_1540, // the AI form's bytes
+    0x004f_6de0,
+    0x005b_b4d0,
+    0x0047_ef30,
+    0x0062_f2f0,
+    0x0047_ee30,
+    0x006e_cd40, // the health's setter
+    0x0040_8da0, // the full name's text
+    0x0041_81e0, // a reference's base object
+    0x007a_f430,
+    0x008d_8520, // a reference's process
+    0x0072_6070, // the word at +4
+    0x0042_ce10, // the save/load game's flag 2
+    0x008c_71b0, // the change flags' word
+    0x0042_8110, // a save buffer's change flags
+    0x0042_80f0, // their bits
+    0x0040_8d60, // a setting's value
+    0x0082_5c00, // the save/load game's buffer position
+    0x004f_d3e0, // its current save entry
+    0x004f_d3c0, // and load entry
+    0x008d_f040, // its version byte
+    0x005d_8b10, // and its base's
+    0x009d_2510, // the attributes' size
+    0x0066_ec10, // ToActorValue
+    0x0040_2d30, // the base component's constructor
+];
+/// The floats the combat formulas answer (`ST0`), a double each.
+const FLOAT_ANSWERS: u32 = 0x0300_5000;
+const FLOAT_CALLEES: [u32; 5] = [
+    0x0064_4ce0, // CalcWeaponDamage
+    0x0064_7cf0, // the clothing's rating
+    0x0064_6360, // CalcArmorRating
+    0x004b_e060, // the armour's base rating
+    0x004b_e180, // and its extra
+];
+/// A text the full name holds (`Abc`).
+const NAME_TEXT: u32 = 0x0300_5100;
+/// The player reference.
+const PLAYER_REF: u32 = 0x011d_ea3c;
+
+fn float_answer<const I: u32>(e: &mut Engine, _: &[u32]) -> Ret {
+    let st0 = e.mem.f64(FLOAT_ANSWERS + 8 * I);
+    Ret {
+        st0,
+        ..Ret::default()
+    }
+}
+
+/// The actor base data world plus what the actor base reaches: the AI form's and spell list's
+/// functions, the save/load game's change tests, the combat formulas, the iterator's walk, the
+/// name's setter and the biped model form's members, all doubles; slots 0x22c and 0x468.
+fn ab_world(e: &mut Engine) {
+    actor_world(e);
+    karma_settings(e, true);
+    for page in [0x011c_a000, 0x0101_6000] {
+        e.map(page, 0x1000);
+    }
+    answered!(
+        e,
+        0x0084_a620,
+        0x0084_a740,
+        0x0047_ee00,
+        0x0047_eed0,
+        0x0047_ef00,
+        0x0047_ef50,
+        0x0047_ef80,
+        0x0048_73d0,
+        0x0047_ea30,
+        0x0047_ea70,
+        0x0048_e040,
+        0x0048_e140,
+        0x0047_f940,
+        0x0047_f980,
+        0x0048_d8f0,
+        0x0047_f7e0,
+        0x0048_da20,
+        0x0047_f840,
+        0x0048_dca0,
+        0x0047_f8c0,
+        0x0086_5e70,
+        0x0048_9100,
+        0x0096_bbc0,
+        0x00ec_782f,
+        0x00ec_5fce,
+        0x0048_8f50,
+        0x0048_04d0,
+        0x0048_0570,
+        0x0051_b950,
+    );
+    e.register(FLOAT_CALLEES[0], float_answer::<0>);
+    e.register(FLOAT_CALLEES[1], float_answer::<1>);
+    e.register(FLOAT_CALLEES[2], float_answer::<2>);
+    e.register(FLOAT_CALLEES[3], float_answer::<3>);
+    e.register(FLOAT_CALLEES[4], float_answer::<4>);
+    // The armour's base rating truncates to 65836, whose low word (300) is what the rating takes; its
+    // extra rating is a hair above half a float's step at 11 (2^-21 + 2^-56), so 11 plus it rounds
+    // up in a 24-bit add and to even (11) in a 53-bit add and the float store: the threads'
+    // precisions give different results.
+    let extra = f64::from_bits(0x3ea0_0000_0002_0000);
+    for (i, v) in [7.25f64, 3.5, 11.0, 65836.75, extra]
+        .into_iter()
+        .enumerate()
+    {
+        e.mem.set_f64(FLOAT_ANSWERS + 8 * i as u32, v);
+    }
+    // LoadString: two characters and a zero into the buffer it is given.
+    e.register(0x0086_49a0, |e, a| {
+        for (i, b) in [b'N', b'm', 0].into_iter().enumerate() {
+            e.mem.set_u8(a[1] + i as u32, b);
+        }
+        ret(0)
+    });
+    for slot in [0x22c, 0x468] {
+        e.mem.set_u32(VTABLE + slot, VT_FN + slot);
+    }
+    e.register(VT_FN + 0x22c, slot_answer::<0x22c>);
+    e.register(VT_FN + 0x468, slot_answer::<0x468>);
+    for (i, b) in b"Abc\0".iter().enumerate() {
+        e.mem.set_u8(NAME_TEXT + i as u32, *b);
+    }
+    let bgs = e.mem.alloc(0x300);
+    e.mem.set_u32(BGS_SAVE_LOAD_GAME, bgs);
+}
+
+/// An actor base: form type `kind`, form flags `flags`, id `id`, its actor base data filled from `id`
+/// (no factions), the base flags `base_flags`, the AI form's and the attributes' bytes, the health
+/// form (the test vtable, health 0x37) and the full name holding [`NAME_TEXT`] (or nothing).
+fn actor_base_form(
+    e: &mut Engine,
+    kind: u32,
+    flags: u32,
+    id: u32,
+    base_flags: u32,
+    named: bool,
+) -> u32 {
+    let a = e.mem.alloc(0x120);
+    e.mem.set_u32(a, VTABLE);
+    e.mem.set_u8(a + 4, kind as u8);
+    e.mem.set_u32(a + 8, flags);
+    e.mem.set_u32(a + 0xc, id);
+    let c = a + 0x30;
+    e.mem.set_u32(c, VTABLE);
+    for i in 2..0x0b {
+        e.mem
+            .set_u32(c + 4 * i, 0x2357_1113u32.wrapping_mul(i).wrapping_add(id));
+    }
+    e.mem.set_u32(c + 4, base_flags);
+    e.mem.set_f32(c + 0x14, 12.5);
+    for i in [0x1c, 0x20, 0x24, 0x28, 0x2c, 0x30] {
+        e.mem.set_u32(c + i, 0);
+    }
+    e.mem.set_u32(c + 0x28, 0x0f0f_0003);
+    for i in 0..0x20 {
+        e.mem.set_u8(a + 0x90 + i, (0x21 + 7 * i) as u8);
+    }
+    e.mem.set_u32(a + 0x90, VTABLE);
+    e.mem.set_u32(a + 0xb0, VTABLE);
+    e.mem.set_u32(a + 0xb4, 0x37);
+    e.mem.set_u32(a + 0xb8, VTABLE);
+    for i in 0..7 {
+        e.mem.set_u8(a + 0xbc + i, (0x41 + 5 * i) as u8);
+    }
+    e.mem.set_u32(a + 0xd0, VTABLE);
+    e.mem.set_u32(a + 0xd4, if named { NAME_TEXT } else { 0 });
+    a
+}
+
+/// Every actor base and attributes test runs in [`ab_world`].
+fn ab_cases(d: Diff) -> Diff {
+    d.forms()
+        .ignore_calls(ABD_IN_PLACE)
+        .ignore_calls(AB_IN_PLACE)
+        .goes_by_address(&[0x0056_5730])
+}
+
+const AB_TYPES: &[u32] = &[0x2a, 0x2b, 0x18];
+const BASE_FLAGS: &[u32] = &[
+    0,
+    1,
+    0x10,
+    0x20,
+    0x40,
+    0x0004_0010,
+    0x0080_0000,
+    // The bits 2, 0x20000 and 0x400000, none a tested mask's own: a widened mask shows.
+    0x0042_0002,
+    0xffff_ffff,
+];
+
+/// A flag getter's cases: a form type and base flags.
+fn ab_flag_cases(d: Diff) -> Diff {
+    d.ab()
+        .inputs(&[Input::Of(AB_TYPES), Input::Of(BASE_FLAGS)])
+        .setup(|e, case| {
+            ab_world(e);
+            vec![actor_base_form(
+                e,
+                case.word(0),
+                0,
+                0x0100_0001,
+                case.word(1),
+                false,
+            )]
+        })
+}
+
+/// The save/load set-ups: save blocks or not, the reports on or not, a current save and load
+/// entry or not, the save version (0x53 or 0x6d), and the buffer position over the stream.
+fn ab_save_setup(e: &mut Engine, case: &engine_core::typed::diff::Case, named: bool) -> u32 {
+    ab_world(e);
+    let a = actor_base_form(e, 0x2a, 0x0040_0000, 0x0100_0abc, 0x11, named);
+    let save_load = e.mem.alloc(0x100);
+    e.mem.set_u32(SAVE_LOAD_GAME, save_load);
+    set_answer(e, 0x0086_2110, case.word(0));
+    e.mem.set_u8(0x011d_e4e8 + 4, case.word(1) as u8);
+    if case.word(2) != 0 {
+        let entry = e.mem.alloc(0x10);
+        e.mem.set_u32(entry, 0x0100_0abc);
+        e.mem.set_u32(entry + 5, 0x1234_5678);
+        e.mem.set_u8(entry + 9, 0x52);
+        e.mem.set_u32(save_load + SL_SAVE_ENTRY, entry);
+        e.mem.set_u32(save_load + SL_LOAD_ENTRY, entry);
+        let m = form(e, 0x7f, 0, 0);
+        e.mem.set_u32(FORM_MAP, m);
+        set_found(e, true);
+        e.mem.set_u32(LOOKUP_VALUE, a);
+    }
+    let version = if case.word(3) != 0 { 0x6d } else { 0x53 };
+    e.mem.set_u8(save_load + SL_VERSION, version);
+    e.mem.set_u32(save_load + SL_POSITION, STREAM);
+    set_answer(e, 0x0048_d8f0, 0x0011);
+    set_answer(e, 0x0047_f7e0, 0x0103);
+    a
+}
+
+/// The actor base tests' shared cases, as steps of the `Diff` chain.
+trait AbCases {
+    fn ab(self) -> Diff;
+    fn ab_flags(self) -> Diff;
+    fn ab_attribute_getter(self) -> Diff;
+    fn ab_attribute_setter(self) -> Diff;
+    fn ab_change(self) -> Diff;
+    fn ab_buffer(self) -> Diff;
+}
+
+impl AbCases for Diff {
+    fn ab(self) -> Diff {
+        ab_cases(self)
+    }
+    fn ab_flags(self) -> Diff {
+        ab_flag_cases(self)
+    }
+    fn ab_attribute_getter(self) -> Diff {
+        self.ab()
+            .ignore_calls(AB_ATTRIBUTE_BYTE)
+            .inputs(&[Input::Of(&[0, 1])])
+            .setup(|e, case| {
+                ab_world(e);
+                let a = actor_base_form(e, 0x2a, 0, 0x0100_0002 + case.word(0), 0, false);
+                vec![a + 0xb8]
+            })
+    }
+    fn ab_attribute_setter(self) -> Diff {
+        self.ab()
+            .inputs(&[Input::Of(&[0, 7, 0xff]), Input::Flag])
+            .setup(|e, case| {
+                ab_world(e);
+                let a = actor_base_form(e, 0x2a, 0, 0x0100_0003, 0, false);
+                set_cast(e, TYPE_TES_FORM, if case.word(1) != 0 { a } else { 0 });
+                vec![a + 0xb8, case.word(0)]
+            })
+    }
+    fn ab_change(self) -> Diff {
+        self.ab()
+            .inputs(&[
+                Input::Of(&[0x0100_0001, 0xff00_0000, 0xfeff_ffff]),
+                Input::Flag,
+                Input::Of(&[0, 0x10, 0xffff_ffff]),
+            ])
+            .setup(|e, case| {
+                ab_world(e);
+                let a = actor_base_form(e, 0x2a, 0, case.word(0), 0, false);
+                registries(e, false, 0, false, true, a);
+                let bgs = e.mem.alloc(0x300);
+                e.mem.set_u32(BGS_SAVE_LOAD_GAME, bgs);
+                set_answer(e, 0x0084_a620, case.word(1));
+                set_answer(e, 0x0084_a740, case.word(1));
+                vec![a, case.word(2)]
+            })
+    }
+    fn ab_buffer(self) -> Diff {
+        self.ab()
+            .inputs(&[Input::Of(&[0, 0x20, 0xffff_ffff]), Input::Flag])
+            .setup(|e, case| {
+                ab_world(e);
+                let a = actor_base_form(e, 0x2b, 0x1234_5678, 0x14, 0x11, case.word(1) != 0);
+                let buffer = e.mem.alloc(0x20);
+                e.mem.set_u32(buffer + SAVE_KIND_AT, case.word(0));
+                vec![a, buffer]
+            })
+    }
+}
+
+#[test]
+fn ab_creature_flag_20() {
+    Diff::new(entry!(0x005f_0c40, actor_base::creature_flag_20(u32) -> bool))
+        .ab_flags()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_is_immobile() {
+    Diff::new(entry!(0x005f_0c80, actor_base::is_immobile(u32) -> bool))
+        .ab_flags()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_get_sex() {
+    Diff::new(entry!(0x005f_0cc0, actor_base::get_sex(u32) -> i32))
+        .ab_flags()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_npc_flag_10() {
+    Diff::new(entry!(0x005f_0d00, actor_base::npc_flag_10(u32) -> bool))
+        .ab_flags()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_creature_flag_10_or_1() {
+    Diff::new(entry!(0x005f_0b50, actor_base::creature_flag_10_or_1(u32) -> bool))
+        .ab_flags()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_creature_flag_40_or_1() {
+    Diff::new(entry!(0x005f_0bf0, actor_base::creature_flag_40_or_1(u32) -> bool))
+        .ab_flags()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_creature_flags_allow() {
+    Diff::new(entry!(0x005f_0ba0, actor_base::creature_flags_allow(u32) -> bool))
+        .ab_flags()
+        .ignore_calls(&[0x005f_0b50])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_starts_dead() {
+    Diff::new(entry!(0x005f_0f50, actor_base::starts_dead(u32) -> bool))
+        .ab()
+        .inputs(&[Input::Of(&[0, 0x0008_0000, 0xfff7_ffff, 0xffff_ffff])])
+        .setup(|e, case| {
+            ab_world(e);
+            vec![actor_base_form(
+                e,
+                0x2a,
+                case.word(0),
+                0x0100_0001,
+                0,
+                false,
+            )]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_set_starts_dead() {
+    Diff::new(entry!(0x0056_5210, actor_base::set_starts_dead(u32, u8)))
+        .ab()
+        .inputs(&[
+            Input::Of(&[0, 0x0008_0000, 0xffff_ffff]),
+            Input::Of(&[0, 1, 0x80]),
+        ])
+        .setup(|e, case| {
+            ab_world(e);
+            let a = actor_base_form(e, 0x2a, case.word(0), 0x0100_0001, 0, false);
+            vec![a, case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_set_npc_flag_10() {
+    Diff::new(entry!(0x005f_0d30, actor_base::set_npc_flag_10(u32, u8)))
+        .ab()
+        .inputs(&[
+            Input::Of(AB_TYPES),
+            Input::Of(&[0, 0x10, 0xffff_ffff]),
+            Input::Of(&[0, 1]),
+        ])
+        .setup(|e, case| {
+            ab_world(e);
+            let a = actor_base_form(e, case.word(0), 0, 0x0100_0001, case.word(1), false);
+            vec![a, case.word(2)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_attribute_5() {
+    Diff::new(entry!(0x005f_11f0, actor_base::attribute_5(u32) -> u32))
+        .ab_attribute_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_attribute_6() {
+    Diff::new(entry!(0x005f_1210, actor_base::attribute_6(u32) -> u32))
+        .ab_attribute_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_attribute_7() {
+    Diff::new(entry!(0x005f_1230, actor_base::attribute_7(u32) -> u32))
+        .ab_attribute_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_attribute_8() {
+    Diff::new(entry!(0x005f_1250, actor_base::attribute_8(u32) -> u32))
+        .ab_attribute_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_attribute_9() {
+    Diff::new(entry!(0x005f_1270, actor_base::attribute_9(u32) -> u32))
+        .ab_attribute_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_attribute_a() {
+    Diff::new(entry!(0x005f_1290, actor_base::attribute_a(u32) -> u32))
+        .ab_attribute_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_attribute_b() {
+    Diff::new(entry!(0x005f_12b0, actor_base::attribute_b(u32) -> u32))
+        .ab_attribute_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_set_attribute_5() {
+    Diff::new(entry!(0x005f_14b0, actor_base::set_attribute_5(u32, u8)))
+        .ab_attribute_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_set_attribute_6() {
+    Diff::new(entry!(0x005f_14d0, actor_base::set_attribute_6(u32, u8)))
+        .ab_attribute_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_set_attribute_7() {
+    Diff::new(entry!(0x005f_14f0, actor_base::set_attribute_7(u32, u8)))
+        .ab_attribute_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_set_attribute_8() {
+    Diff::new(entry!(0x005f_1510, actor_base::set_attribute_8(u32, u8)))
+        .ab_attribute_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_set_attribute_9() {
+    Diff::new(entry!(0x005f_1530, actor_base::set_attribute_9(u32, u8)))
+        .ab_attribute_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_set_attribute_a() {
+    Diff::new(entry!(0x005f_1550, actor_base::set_attribute_a(u32, u8)))
+        .ab_attribute_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_set_attribute_b() {
+    Diff::new(entry!(0x005f_1570, actor_base::set_attribute_b(u32, u8)))
+        .ab_attribute_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_get_health() {
+    Diff::new(entry!(0x005f_0b00, actor_base::get_health(u32) -> u32))
+        .ab()
+        .inputs(&[Input::Of(&[0, 0x64, 0xffff_ffff])])
+        .setup(|e, case| {
+            ab_world(e);
+            e.mem.set_u32(SLOT_ANSWERS + 0x10, case.word(0));
+            vec![actor_base_form(e, 0x2a, 0, 0x0100_0001, 0, false)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_set_health() {
+    Diff::new(entry!(0x005f_0b30, actor_base::set_health(u32, u32)))
+        .ab()
+        .inputs(&[Input::Of(WORDS)])
+        .setup(|e, case| {
+            ab_world(e);
+            vec![
+                actor_base_form(e, 0x2a, 0, 0x0100_0001, 0, false),
+                case.word(0),
+            ]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_player_or_default_value() {
+    Diff::new(entry!(0x005f_0f80, actor_base::player_or_default_value(u32) -> u32))
+        .ab()
+        .inputs(&[Input::Of(&[0, 5]), Input::Flag])
+        .setup(|e, case| {
+            ab_world(e);
+            let a = actor_base_form(e, 0x2a, 0, 0x0100_0001, 0, false);
+            e.mem.set_u32(0x011c_aff0, case.word(0));
+            e.mem.set_u32(0x011c_afec, 9);
+            let player = e.mem.alloc(0x80);
+            let base = if case.word(1) != 0 { a } else { a + 0x10 };
+            e.mem.set_u32(player + 0x20, base);
+            e.mem.set_u32(PLAYER_REF, player);
+            vec![a]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_add_change() {
+    Diff::new(entry!(0x005f_1630, actor_base::add_change(u32, u32)))
+        .ab_change()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_remove_change() {
+    Diff::new(entry!(0x005f_1690, actor_base::remove_change(u32, u32)))
+        .ab_change()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_get_actor_value() {
+    Diff::new(entry!(0x005f_0fb0, actor_base::get_actor_value(u32, u32) -> u32))
+        .ab()
+        .ignore_calls(AB_ATTRIBUTE_GETTERS)
+        .ignore_calls(AB_ATTRIBUTE_BYTE)
+        .inputs(&[
+            Input::Of(&[
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                0xa,
+                0xb,
+                0xc,
+                0x10,
+                0x15,
+                0x16,
+                0x17,
+                0x39,
+                0xffff_ffff,
+            ]),
+            // The karma: 12.75 and -7.5 truncate (to 12 and -7) where rounding would not; 12.5.
+            Input::Of(&[0x414c_0000, 0xc0f0_0000, 0x4148_0000]),
+        ])
+        .setup(|e, case| {
+            ab_world(e);
+            let a = actor_base_form(e, 0x2a, 0, 0x0100_0001, 0, false);
+            e.mem.set_u32(SLOT_ANSWERS + 0x10, 0x55);
+            e.mem.set_u32(SLOT_ANSWERS + 0x60, 0x0001_0123);
+            e.mem.set_u32(SLOT_ANSWERS + 0x64, case.word(1));
+            vec![a + 0x100, case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_set_actor_value() {
+    Diff::new(entry!(
+        0x005f_12d0,
+        actor_base::set_actor_value(u32, u32, u32)
+    ))
+    .ab()
+    .inputs(&[
+        Input::Of(&[
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            0xa,
+            0xb,
+            0xc,
+            0x10,
+            0x15,
+            0x16,
+            0x17,
+            0xffff_ffff,
+        ]),
+        Input::Of(&[0, 0x1234_5678, 0xffff_fffe, 0x0100_0001]),
+    ])
+    .setup(|e, case| {
+        ab_world(e);
+        let a = actor_base_form(e, 0x2a, 0, 0x0100_0001, 0, false);
+        set_cast(e, TYPE_TES_FORM, a);
+        vec![a, case.word(0), case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ab_get_desirability() {
+    // Each item type, its cast found or not, its health or none, and a null actor base.
+    Diff::new(entry!(0x005f_0d60, actor_base::get_desirability(u32, u32) -> f32))
+        .ab()
+        .inputs(&[
+            Input::Of(&[0x29, 0x28, 0x1a, 0x18, 0x1e, 0x2a, 0xff]),
+            Input::Flag,
+            Input::Flag,
+            Input::Of(&[0, 1, 2]),
+        ])
+        .setup(|e, case| {
+            ab_world(e);
+            let a = actor_base_form(e, 0x2a, 0, 0x0100_0001, 0, false);
+            let item = e.mem.alloc(0x80);
+            e.mem.set_u32(item, VTABLE);
+            e.mem.set_u8(item + 4, case.word(0) as u8);
+            e.mem.set_u32(item + 0xc, 0x0100_0040);
+            e.mem.set_u32(item + 0x5c, 0x0abc_0001);
+            let found = if case.word(1) != 0 { item } else { 0 };
+            for target in [0x0118_40c4, 0x0118_3998, 0x0118_6fcc, 0x0118_3a34] {
+                set_cast(e, target, found);
+            }
+            set_answer(e, 0x0048_73d0, case.word(2));
+            e.mem.set_u32(0x0101_6410, 0x7fa0_0001);
+            let this = [a, 0, a][case.word(3) as usize];
+            let item = if case.word(3) == 2 { 0 } else { item };
+            vec![this, item]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_should_run_init_default_worn() {
+    Diff::new(entry!(
+        0x005f_1590,
+        actor_base::should_run_init_default_worn(u32, u32) -> bool
+    ))
+    .ab()
+    .inputs(&[
+        Input::Of(&[0, 2]),
+        Input::Of(&[0, 0x0020_0000]),
+        Input::Flag,
+        Input::Flag,
+    ])
+    .setup(|e, case| {
+        ab_world(e);
+        let a = actor_base_form(e, 0x2a, 0, 0x0100_0001, 0, false);
+        let bgs = e.mem.u32(BGS_SAVE_LOAD_GAME);
+        e.mem.set_u32(bgs + 0x244, case.word(0) | 0x10);
+        let reference = form(e, 0x3b, case.word(1), 0x0100_0050);
+        e.mem.set_u32(SLOT_ANSWERS + 0x22c, case.word(2));
+        set_answer(e, 0x0084_a6d0, case.word(3));
+        vec![a, reference]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ab_save_to_buffer() {
+    Diff::new(entry!(0x005f_1f30, actor_base::save_to_buffer(u32, u32)))
+        .ab_buffer()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_load_from_buffer() {
+    Diff::new(entry!(0x005f_1fd0, actor_base::load_from_buffer(u32, u32)))
+        .ab_buffer()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_save_size() {
+    Diff::new(entry!(0x005f_16f0, actor_base::save_size(u32, u32) -> u16))
+        .ab()
+        .inputs(&[
+            Input::Flag,
+            Input::Flag,
+            Input::Flag,
+            Input::Flag,
+            Input::Of(&[0, 0x20, 0x22, 0xffff_ffff]),
+            Input::Flag,
+        ])
+        .setup(|e, case| {
+            let a = ab_save_setup(e, case, case.word(5) != 0);
+            vec![a, case.word(4)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_save_game() {
+    Diff::new(entry!(0x005f_18c0, actor_base::save_game(u32, u32)))
+        .ab()
+        .inputs(&[
+            Input::Flag,
+            Input::Flag,
+            Input::Flag,
+            Input::Flag,
+            Input::Of(&[0, 0x20, 0x22]),
+            Input::Flag,
+        ])
+        .setup(|e, case| {
+            let a = ab_save_setup(e, case, case.word(5) != 0);
+            vec![a, case.word(4)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_save_game_block_too_big() {
+    // A spell list save that leaves the position 0xffff or 0x10000 bytes past the block's size
+    // placeholder (4 bytes into the stream, after the tag): no warning, then the block's warning.
+    Diff::new(entry!(0x005f_18c0, actor_base::save_game(u32, u32)))
+        .ab()
+        .inputs(&[
+            Input::Of(&[1]),
+            Input::Flag,
+            Input::Of(&[0]),
+            Input::Flag,
+            Input::Of(&[0xffff, 0x1_0000]),
+        ])
+        .setup(|e, case| {
+            let a = ab_save_setup(e, case, false);
+            let past = case.word(4);
+            e.register_double(0x0048_da20, move |e, _| {
+                let save_load = e.mem.u32(SAVE_LOAD_GAME);
+                e.mem.set_u32(save_load + SL_POSITION, STREAM + 4 + past);
+                ret(0)
+            });
+            e.map(STREAM + 0x1_0000, 0x1000);
+            vec![a, 0]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_load_game() {
+    // The stream: the block's tag right or wrong; its size short, exact or long; the name's
+    // length byte and characters where the reads reach them (version 0x53).
+    Diff::new(entry!(0x005f_1b30, actor_base::load_game(u32, u32, u32)))
+        .ab()
+        .inputs(&[
+            Input::Flag,
+            Input::Flag,
+            Input::Flag,
+            Input::Flag,
+            Input::Of(&[0, 0x20]),
+            Input::Flag,
+            Input::Of(&[0, 1, 2]),
+        ])
+        .setup(|e, case| {
+            let a = ab_save_setup(e, case, false);
+            let blocks = case.word(0) != 0;
+            let named = case.word(4) != 0;
+            if blocks && case.word(5) != 0 {
+                e.mem.set_u32(STREAM, 0x424c_4f4b);
+            }
+            let header = if blocks { 6 } else { 0 };
+            let data = if blocks { 8 } else { 2 };
+            let name_at = header + data;
+            if named {
+                e.mem.set_u8(STREAM + name_at, 3);
+                for (i, b) in b"Xyz".iter().enumerate() {
+                    e.mem.set_u8(STREAM + name_at + 1 + i as u32, *b);
+                }
+            }
+            if blocks {
+                let exact = 2 + data + if named { 4 } else { 0 };
+                let size = [exact - 1, exact, exact + 5][case.word(6) as usize];
+                e.mem.set_u16(STREAM + 4, size as u16);
+            }
+            vec![a, case.word(4), 0x77]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_reset_3d() {
+    Diff::new(entry!(0x005f_20a0, actor_base::reset_3d(u32, u8)))
+        .ab()
+        .ignore_calls(&[0x005f_2150])
+        .inputs(&[Input::Of(&[0, 1, 0x80]), Input::Flag, Input::Flag])
+        .setup(|e, case| {
+            ab_world(e);
+            let a = actor_base_form(e, 0x2a, 0, 0x0100_0001, 0, false);
+            let player = e.mem.alloc(0x80);
+            let base = if case.word(1) != 0 { a } else { a + 0x10 };
+            e.mem.set_u32(player + 0x20, base);
+            if case.word(2) != 0 {
+                let process = form(e, 0, 0, 0);
+                e.mem.set_u32(player + 0x68, process);
+            }
+            e.mem.set_u32(PLAYER_REF, player);
+            vec![a, case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_construct_reset_3d_iterator() {
+    Diff::new(entry!(0x005f_2150, actor_base::construct_reset_3d_iterator(u32) -> u32))
+        .ab()
+        .setup(|e, _| {
+            ab_world(e);
+            vec![data(e, 0x10)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ab_reset_3d_operate() {
+    Diff::new(entry!(0x005f_2170, actor_base::reset_3d_operate(u32, u32)))
+        .ab()
+        .inputs(&[Input::Flag, Input::Flag])
+        .setup(|e, case| {
+            ab_world(e);
+            let iterator = data(e, 0x10);
+            let reference = e.mem.alloc(0x80);
+            e.mem.set_u32(iterator + 8, 0x0100_7000);
+            let base = if case.word(0) != 0 {
+                0x0100_7000
+            } else {
+                0x0100_7001
+            };
+            e.mem.set_u32(reference + 0x20, base);
+            if case.word(1) != 0 {
+                let process = form(e, 0, 0, 0);
+                e.mem.set_u32(reference + 0x68, process);
+            }
+            vec![iterator, reference]
+        })
+        .run()
+        .assert_same();
+}
+
+/// An attributes component: the test vtable and seven bytes from `seed`.
+fn attributes_component(e: &mut Engine, seed: u32) -> u32 {
+    let c = e.mem.alloc(0x10);
+    e.mem.set_u32(c, VTABLE);
+    for i in 0..7 {
+        e.mem.set_u8(c + 4 + i, (seed * 0x1d + 3 * i) as u8);
+    }
+    c
+}
+
+#[test]
+fn attributes_load_data() {
+    Diff::new(entry!(0x0048_0130, attributes::load_data(u32, u32) -> u32))
+        .ab()
+        .setup(|e, _| {
+            ab_world(e);
+            vec![attributes_component(e, 1), data(e, 0x10)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn attributes_save_data() {
+    Diff::new(entry!(0x0048_0100, attributes::save_data(u32, u32) -> u32))
+        .ab()
+        .setup(|e, _| {
+            ab_world(e);
+            vec![attributes_component(e, 2), data(e, 0x10)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn attributes_initialize_data_component() {
+    Diff::new(entry!(
+        0x0047_ffc0,
+        attributes::initialize_data_component(u32)
+    ))
+    .ab()
+    .setup(|e, _| {
+        ab_world(e);
+        vec![attributes_component(e, 3)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn attributes_copy_component() {
+    Diff::new(entry!(0x0048_0000, attributes::copy_component(u32, u32)))
+        .ab()
+        .ignore_calls(AB_ATTRIBUTE_BYTE)
+        .inputs(&[Input::Flag])
+        .setup(|e, case| {
+            ab_world(e);
+            let (this, source) = (attributes_component(e, 4), attributes_component(e, 5));
+            let cast = if case.word(0) != 0 { source } else { 0 };
+            set_cast(e, 0x0118_6c74, cast);
+            vec![this, source]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn attributes_compare_component() {
+    // Not an attributes component; the same bytes; one differing byte (the first or the last).
+    Diff::new(entry!(0x0048_0070, attributes::compare_component(u32, u32) -> bool))
+        .ab()
+        .ignore_calls(AB_ATTRIBUTE_BYTE)
+        .inputs(&[Input::Of(&[0, 1, 2, 3])])
+        .setup(|e, case| {
+            ab_world(e);
+            let (this, other) = (attributes_component(e, 6), attributes_component(e, 6));
+            match case.word(0) {
+                2 => e.mem.set_u8(other + 4, 0xee),
+                3 => e.mem.set_u8(other + 0xa, 0xee),
+                _ => {}
+            }
+            let cast = if case.word(0) != 0 { other } else { 0 };
+            set_cast(e, 0x0118_6c74, cast);
+            vec![this, other]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn attributes_attribute() {
+    Diff::new(entry!(0x0048_0160, attributes::attribute(u32, u32) -> u32))
+        .ab()
+        .inputs(&[Input::Of(&[1, 5, 8, 0xb, 0xfc, 0x100])])
+        .setup(|e, case| {
+            ab_world(e);
+            vec![attributes_component(e, 7), case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn attributes_set_attribute_value() {
+    Diff::new(entry!(
+        0x0048_0180,
+        attributes::set_attribute_value(u32, u32, u8, u8)
+    ))
+    .ab()
+    .inputs(&[
+        Input::Of(&[1, 5, 0xb]),
+        Input::Of(&[0, 0x99]),
+        Input::Of(&[0, 1, 0x80]),
+        Input::Flag,
+        // The form's slot 0x48: a stand-in, `TESActorBase::AddChange` or `TESForm::AddChange`.
+        Input::Of(&[0, 1, 2]),
+        // A loaded or a created form.
+        Input::Of(&[0x0100_0060, 0xff00_0010]),
+    ])
+    .setup(|e, case| {
+        ab_world(e);
+        let this = attributes_component(e, 8);
+        let form = actor_base_form(e, 0x2a, 0, case.word(5), 0, false);
+        if case.word(4) != 0 {
+            let vtable = e.mem.alloc(0x50);
+            let add_change = if case.word(4) == 1 {
+                0x005f_1630
+            } else {
+                0x0048_4b60
+            };
+            e.mem.set_u32(vtable + 0x48, add_change);
+            e.mem.set_u32(form, vtable);
+        }
+        set_cast(e, TYPE_TES_FORM, if case.word(3) != 0 { form } else { 0 });
+        vec![this, case.word(0), case.word(1), case.word(2)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn attributes_save_size() {
+    Diff::new(entry!(0x0048_01e0, attributes::save_size(u32, u32) -> u16))
+        .ab()
+        .inputs(&[Input::Of(FLAGS)])
+        .setup(|e, case| {
+            ab_world(e);
+            vec![attributes_component(e, 9), case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn attributes_save_game() {
+    Diff::new(entry!(0x0048_0210, attributes::save_game(u32, u32)))
+        .ab()
+        .inputs(&[Input::Of(FLAGS)])
+        .setup(|e, case| {
+            ab_world(e);
+            vec![attributes_component(e, 9), case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn attributes_load_game() {
+    Diff::new(entry!(0x0048_0240, attributes::load_game(u32, u32, u32)))
+        .ab()
+        .inputs(&[Input::Of(FLAGS)])
+        .setup(|e, case| {
+            ab_world(e);
+            vec![attributes_component(e, 9), case.word(0), 0x77]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn attributes_save_to_buffer() {
+    Diff::new(entry!(0x0048_0270, attributes::save_to_buffer(u32, u32)))
+        .ab()
+        .inputs(&[Input::Of(&[0, 4, 0xffff_fffb, 0xffff_ffff])])
+        .setup(|e, case| {
+            ab_world(e);
+            let buffer = e.mem.alloc(0x20);
+            e.mem.set_u32(buffer + SAVE_KIND_AT, case.word(0));
+            vec![attributes_component(e, 10), buffer]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn attributes_load_from_buffer() {
+    Diff::new(entry!(0x0048_02b0, attributes::load_from_buffer(u32, u32)))
+        .ab()
+        .inputs(&[Input::Of(&[0, 4, 0xffff_fffb, 0xffff_ffff])])
+        .setup(|e, case| {
+            ab_world(e);
+            let buffer = e.mem.alloc(0x20);
+            e.mem.set_u32(buffer + SAVE_KIND_AT, case.word(0));
+            vec![attributes_component(e, 11), buffer]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn attributes_construct_biped_model_form() {
+    Diff::new(entry!(0x0048_02f0, attributes::construct_biped_model_form(u32) -> u32))
+        .ab()
+        .setup(|e, _| {
+            ab_world(e);
+            vec![data(e, 0xdc)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn attributes_construct_model_rdt_at() {
+    Diff::new(entry!(0x0048_03e0, attributes::construct_model_rdt_at(u32) -> u32))
+        .ab()
+        .setup(|e, _| {
+            ab_world(e);
+            vec![data(e, 0x18)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn attributes_destruct_biped_model_form() {
+    Diff::new(entry!(
+        0x0048_0400,
+        attributes::destruct_biped_model_form(u32)
+    ))
+    .ab()
+    .setup(|e, _| {
+        ab_world(e);
+        vec![data(e, 0xdc)]
+    })
+    .run()
+    .assert_same();
 }
