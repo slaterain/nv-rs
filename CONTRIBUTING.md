@@ -165,7 +165,7 @@ The translation runs every function of the game through `engine-core`'s model of
 program: its memory, its calls by address, its x87 floating point. That is exact but slow. A
 native rewrite is plain Rust registered at the function's address, so every caller that calls that
 address gets it, and it is checked against the translation before it is turned on. The goal is the
-whole game native. About 48,000 functions are translated, and about 1,100 of them have a native
+whole game native. About 48,000 functions are translated, and about 2,100 of them have a native
 rewrite so far (the translation stays, as the reference the native code is tested against).
 
 ### Where to help
@@ -206,9 +206,10 @@ your file already have a native version: `git grep "Typed from <address>" -- cra
    Set `threads` to the threads that run its code (`Main`, `Other` or `Both`): the differential
    test runs under those threads' float precision. Its `mod.rs` starts with a `//!` comment saying
    what it covers, which threads run it and how its floats are done. In
-   `crates/engine-typed/src/lib.rs`, add `pub mod <family>;` and a
-   `provide(&crate::<family>::NAME)` line in `units::funcs`. In that file's tests, update the
-   `families()` list and its length, the `past` list, the two `count() == N` checks (families
+   `crates/engine-typed/src/lib.rs`, add `pub mod <family>;` and
+   `&crate::<family>::NAME` at the end of `FAMILIES` (and its length; `units::funcs` provides
+   that list, and the tests read it). In that file's tests, update the length `families()`
+   returns, the `past` list, the two `count() == N` checks (families
    minus one), and the comment saying when each family went on.
 2. **Write each function in plain Rust.** Read the translation and the executable (Ghidra or
    another disassembler) together. Mark it `// Typed from 00a6db50` directly above the function.

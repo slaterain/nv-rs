@@ -10,10 +10,10 @@ use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
 use engine_core::{args, typed_call, Engine};
 
-/// The object's geometry data (`005495f0`) and its vertex count (`004a8ae0`, `AX`): called once a
-/// morph. The locked array's start into a cursor (`00a67410`: data; cursor).
+/// The object's geometry data (`005495f0`), called once a morph, whose vertex count the morph reads
+/// in place (`004a8ae0`, `AX`: the data's 16-bit word at +8, [`DATA_VERTEX_COUNT`]). The locked
+/// array's start into a cursor (`00a67410`: data; cursor).
 const OBJECT_GEOMETRY: u32 = 0x0054_95f0;
-const GEOMETRY_VERTEX_COUNT: u32 = 0x004a_8ae0;
 const GEOMETRY_BEGIN: u32 = 0x00a6_7410;
 /// The morph extra data (`NiObjectNET::GetExtraData`, `00a5bdd0`, by address as `00653430` calls
 /// it) with the extra data's name (`011d5b8c`), the data's test (`0049ec60`) and `MarkAsChanged`
@@ -82,7 +82,7 @@ pub fn differential_apply(e: &mut Engine, this: Ptr, object: u32, _unused: u32, 
     let geometry = e.call(OBJECT_GEOMETRY, &args![object]).u32();
     let (mut at, stride) = locked_array(e, geometry);
     let count = e.mem.u32(this.addr().wrapping_add(8));
-    let vertices = u32::from(e.call(GEOMETRY_VERTEX_COUNT, &args![geometry]).u16());
+    let vertices = u32::from(e.mem.u16(geometry.wrapping_add(DATA_VERTEX_COUNT)));
     let n = vertices.min(count);
     let mut offset = e.mem.u32(this.addr().wrapping_add(4));
     for _ in 0..n {

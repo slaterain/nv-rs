@@ -198,7 +198,7 @@ pub fn list_box_remove_item_group(e: &mut Engine, this: Ptr<ListBox>, group: u32
             }
             let slot = item_slot(e, node);
             let tile = e.mem.u32(e.mem.u32(slot));
-            list_box_remove_item(e, this, Ptr::new(tile));
+            e.call(0x0071_a5c0, &args![this, tile]);
             node = next_node(e, node);
         }
         e.call(LOCAL_LIST_REMOVE_ALL, &args![local]);
@@ -264,7 +264,7 @@ pub fn list_box_add_item(
             };
             e.call(LIST_INSERT_AFTER, &args![list, item, after]);
             if e.call(LIST_BOX_FLAG, &args![this, 0u32]).bool() {
-                list_box_synchronize(e, this);
+                e.call(0x0071_a670, &args![this]);
             }
         } else {
             let block = e.call(ALLOCATE, &args![0xcu32]).u32();
@@ -280,7 +280,7 @@ pub fn list_box_add_item(
             });
             if e.call(LIST_BOX_FLAG, &args![this, 0u32]).bool() {
                 e.call(LIST_BOX_INIT_TILE_POSITION, &args![this, tile]);
-                list_box_set_total_list_height(e, this);
+                e.call(0x0071_ad30, &args![this]);
             }
             let index = u32::from(e.get(this, ListBox::usNextIndex));
             let next = e.get(this, ListBox::usNextIndex).wrapping_add(1);
@@ -350,7 +350,7 @@ pub fn list_box_remove_item(e: &mut Engine, this: Ptr<ListBox>, tile: Ptr) -> bo
         previous = node;
         node = next_node(e, node);
     }
-    fn_0071aaa0(e, this, node, previous)
+    e.call(0x0071_aaa0, &args![this, node, previous]).bool()
 }
 
 // Translated from 0071a670 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -382,8 +382,8 @@ pub fn list_box_synchronize(e: &mut Engine, this: Ptr<ListBox>) {
         }
         node = next_node(e, node);
     }
-    list_box_set_total_list_height(e, this);
-    list_box_update_highlight_box_pos(e, this);
+    e.call(0x0071_ad30, &args![this]);
+    e.call(0x0071_a740, &args![this]);
 }
 
 /// Sets the +0x35 byte (`fn_0071aa60`) of the highlight box's four edge
@@ -400,15 +400,15 @@ fn mark_highlight_box(e: &mut Engine, container: Ptr, mark: u8) {
         .call(TILE_GET_CHILD_BY_NAME, &args![boxed, TEXT_TOP])
         .u32();
     if top != 0 {
-        fn_0071aa60(e, Ptr::new(top), mark);
+        e.call(0x0071_aa60, &args![top, u32::from(mark)]);
         e.call(TILE_ADD_NEEDS_UPDATE, &args![top, 8u32]);
         for name in [TEXT_BOTTOM, TEXT_LEFT, TEXT_RIGHT] {
             let edge = e.call(TILE_GET_CHILD_BY_NAME, &args![boxed, name]).u32();
-            fn_0071aa60(e, Ptr::new(edge), mark);
+            e.call(0x0071_aa60, &args![edge, u32::from(mark)]);
             e.call(TILE_ADD_NEEDS_UPDATE, &args![edge, 8u32]);
         }
     }
-    fn_0071aa60(e, Ptr::new(boxed), mark);
+    e.call(0x0071_aa60, &args![boxed, u32::from(mark)]);
     e.call(TILE_ADD_NEEDS_UPDATE, &args![boxed, 8u32]);
 }
 
@@ -475,7 +475,7 @@ pub fn list_box_update_highlight_box_pos(e: &mut Engine, this: Ptr<ListBox>) {
     e.call(VALUE_CALCULATE, &args![height, 0u32]);
     let highlighted = e.get(this, ListBox::pHighlightedItem);
     let container = e.get(this, ListBox::pContainerRect);
-    if fn_0071aa80(e, highlighted) != 0 {
+    if e.call(0x0071_aa80, &args![highlighted]).u8() != 0 {
         mark_highlight_box(e, container, 1);
     } else {
         mark_highlight_box(e, container, 0);
@@ -583,7 +583,7 @@ pub fn fn_0071aaa0(e: &mut Engine, this: Ptr<ListBox>, node: u32, previous: u32)
         }
     }
     if e.call(LIST_BOX_FLAG, &args![this, 0u32]).bool() {
-        list_box_synchronize(e, this);
+        e.call(0x0071_a670, &args![this]);
     }
     true
 }
@@ -613,7 +613,7 @@ pub fn list_box_set_total_list_height(e: &mut Engine, this: Ptr<ListBox>) {
         let total = e.get(this, ListBox::fTotalListHeight).to_bits();
         // `FCOMPP; TEST AH,5; JP`: on only when `height < total`.
         if x87_m32(height) < x87_m32(total) {
-            let unfiltered = list_box_num_unfiltered(e, this);
+            let unfiltered = e.call(0x0071_ae60, &args![this]).i32();
             let count = f64::from(unfiltered as u32);
             let total = e.get(this, ListBox::fTotalListHeight).to_bits();
             let difference = x87_sub(x87_m32(total), x87_m32(height));

@@ -53,8 +53,35 @@
 //!
 //! **Off.** Nothing is recorded, no texture or pipeline is made, the depth surfaces are made as
 //! before ([`enabled`] is read when the device is made), so the frame is what it was.
+//!
+//! **Switched while playing.** On wgpu the host lets the player switch the new lighting's two parts,
+//! this step and the sun shadows (`crate::sun_shadow`), while the game runs ([`allow_switch`]):
+//! Shift+F11 turns them, both, the sun shadows alone, the ambient occlusion alone, neither, and
+//! round again ([`Parts::next`]), from the run's choice. The switch takes effect between two frames:
+//! at the game's `Present` the platform turns the parts on or off for the frames the game draws from
+//! then on ([`switch_due`]: what is recorded for them) and records them for the device right after
+//! the `Present` ([`SWITCH_STATE`]). No frame waits for the driver at a switch: on a device made
+//! while the switch is allowed a thread of the device's makes this step's pipelines ahead (at the
+//! device's start, and for each screen-sized target the game makes; [`Need`]), and its
+//! half-resolution textures and the multisampled depth surfaces it reads the first time it is
+//! switched on; the step runs from the frame after they are there. Switched off, it draws nothing
+//! and the device keeps all of it for the rest of the run.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+/// The F12 report's place line for the new lighting the picture was drawn with (`parts`, the
+/// device's; none where the real Direct3D 9 draws, which has none).
+pub fn place_line(parts: Option<Parts>) -> String {
+    let on = |b: bool| if b { "on" } else { "off" };
+    match parts {
+        None => "new lighting in the picture: none (Direct3D 9 draws)\n".to_string(),
+        Some(p) => format!(
+            "new lighting in the picture: sun shadows {}, ambient occlusion {} (Shift+F11 switches them)\n",
+            on(p.sun_shadows),
+            on(p.ambient_occlusion)
+        ),
+    }
+}
+
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 /// The port-private `SetTransform` state (FourCC `NVAO`, as NVIDIA's `ATOC` render state) that
 /// carries [`Params`] in its 16 words. No Direct3D 9 transform state has this number.
@@ -98,14 +125,189 @@ pub fn clamp_strength(strength: f32) -> f32 {
 
 static ON: AtomicBool = AtomicBool::new(false);
 
-/// Turns the step on or off for devices made from now on (the host, from the run's choice).
+/// Turns the step on or off for devices made from now on (the host, from the run's choice), and
+/// for the frames the game draws from now on (the platform records its words only while it is on;
+/// while the switch is allowed, [`switch_due`] turns it at a `Present`).
 pub fn enable(on: bool) {
     ON.store(on, Ordering::Relaxed);
 }
 
-/// Whether devices made now run the step.
+/// Whether devices made now run the step (and the frame the game draws now records its words).
 pub fn enabled() -> bool {
     ON.load(Ordering::Relaxed)
+}
+
+/// The new lighting's two parts, as the player switches them while playing ([`switch_key`]) and as
+/// [`SWITCH_STATE`] carries them to the device.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Parts {
+    /// The ambient occlusion: this module's step.
+    pub ambient_occlusion: bool,
+    /// The sun shadows (`crate::sun_shadow`).
+    pub sun_shadows: bool,
+}
+
+impl Parts {
+    /// Every part: the switch's turn starts from neither to both.
+    pub const ALL: Parts = Parts {
+        ambient_occlusion: true,
+        sun_shadows: true,
+    };
+
+    /// The four states: neither, both, the sun shadows alone, the ambient occlusion alone.
+    pub const EVERY: [Parts; 4] = [
+        Parts {
+            ambient_occlusion: false,
+            sun_shadows: false,
+        },
+        Parts::ALL,
+        Parts {
+            ambient_occlusion: false,
+            sun_shadows: true,
+        },
+        Parts {
+            ambient_occlusion: true,
+            sun_shadows: false,
+        },
+    ];
+
+    fn bits(self) -> u8 {
+        u8::from(self.ambient_occlusion) | (u8::from(self.sun_shadows) << 1)
+    }
+
+    fn of_bits(bits: u8) -> Parts {
+        Parts {
+            ambient_occlusion: bits & 1 != 0,
+            sun_shadows: bits & 2 != 0,
+        }
+    }
+
+    /// The parts the game's frames have now: [`enabled`] and `crate::sun_shadow::enabled`.
+    pub fn now() -> Parts {
+        Parts {
+            ambient_occlusion: enabled(),
+            sun_shadows: crate::sun_shadow::enabled(),
+        }
+    }
+
+    /// The next in the switch's turn: both, the sun shadows alone, the ambient occlusion alone,
+    /// neither, both again (from the original's look one press gives the whole new lighting).
+    pub fn next(self) -> Parts {
+        let (ambient_occlusion, sun_shadows) = match (self.sun_shadows, self.ambient_occlusion) {
+            (true, true) => (false, true),
+            (true, false) => (true, false),
+            (false, true) => (false, false),
+            (false, false) => (true, true),
+        };
+        Parts {
+            ambient_occlusion,
+            sun_shadows,
+        }
+    }
+
+    /// [`SWITCH_STATE`]'s 16 words: the parts in the first (bit 0 the ambient occlusion, bit 1 the
+    /// sun shadows), the rest 0.
+    pub fn to_words(self) -> [u32; 16] {
+        let mut w = [0u32; 16];
+        w[0] = u32::from(self.bits());
+        w
+    }
+
+    /// The parts [`SWITCH_STATE`]'s words carry; none for words no switch records (another bit
+    /// set, or not 16 words).
+    pub fn from_words(w: &[u32]) -> Option<Parts> {
+        (w.len() == 16 && w[0] <= 3 && w[1..].iter().all(|&v| v == 0))
+            .then(|| Parts::of_bits(w[0] as u8))
+    }
+
+    /// What the game's window shows (for a few seconds) and the log says after a switch.
+    pub fn note(self) -> &'static str {
+        match (self.sun_shadows, self.ambient_occlusion) {
+            (true, true) => "New lighting: sun shadows and ambient occlusion",
+            (true, false) => "New lighting: sun shadows",
+            (false, true) => "New lighting: ambient occlusion",
+            (false, false) => "New lighting: off",
+        }
+    }
+}
+
+/// The port-private `SetTransform` state (FourCC `NVLS`) that carries [`Parts`] in its 16 words:
+/// recorded by the platform right after the game's `Present` when the player switched the new
+/// lighting ([`switch_due`]), so the device turns its parts on or off between two frames. No
+/// Direct3D 9 transform state has this number.
+pub const SWITCH_STATE: u32 = u32::from_le_bytes(*b"NVLS");
+
+/// The switch: [`SWITCHABLE`] once the host allowed it ([`allow_switch`]), and the parts the
+/// player wants in the low bits ([`Parts`]).
+static SWITCH: AtomicU8 = AtomicU8::new(0);
+const SWITCHABLE: u8 = 0x80;
+
+/// Lets the player switch the new lighting while playing, from the run's choice `start` (the host,
+/// on wgpu only, before the game makes its device): devices made from now on make their depth
+/// surfaces so either part can be turned on later (`crate::device`), and Shift+F11 turns the parts
+/// ([`switch_key`]).
+pub fn allow_switch(start: Parts) {
+    SWITCH.store(SWITCHABLE | start.bits(), Ordering::Relaxed);
+}
+
+/// Tests: the switch as before [`allow_switch`] (not allowed, nothing wanted).
+#[doc(hidden)]
+pub fn forbid_switch() {
+    SWITCH.store(0, Ordering::Relaxed);
+}
+
+/// Unit tests that change the switch hold this (it is the process's).
+#[cfg(test)]
+pub(crate) static SWITCH_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Whether the player can switch the new lighting while playing ([`allow_switch`]).
+pub fn switchable() -> bool {
+    SWITCH.load(Ordering::Relaxed) & SWITCHABLE != 0
+}
+
+/// The parts the player wants now: the run's choice until the first switch.
+pub fn wanted() -> Parts {
+    Parts::of_bits(SWITCH.load(Ordering::Relaxed))
+}
+
+/// The switch's key went down (Shift+F11's first press, `crate::frame_rate::key`): the parts
+/// wanted turn to the next ([`Parts::next`]), which it answers; none (nothing changes) while the
+/// switch is not allowed.
+pub fn switch_key() -> Option<Parts> {
+    let mut was = SWITCH.load(Ordering::Relaxed);
+    loop {
+        if was & SWITCHABLE == 0 {
+            return None;
+        }
+        let next = Parts::of_bits(was).next();
+        match SWITCH.compare_exchange_weak(
+            was,
+            SWITCHABLE | next.bits(),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return Some(next),
+            Err(now) => was = now,
+        }
+    }
+}
+
+/// At each `Present` of the game's device (the platform, on the game's thread): when the parts the
+/// player wants differ from those of the frames drawn so far ([`Parts::now`]), they are turned on
+/// for the frames from the next ([`enable`], `crate::sun_shadow::enable`) and answered, for the
+/// platform to record ([`SWITCH_STATE`]) right after the `Present`. None while they are the same or
+/// the switch is not allowed.
+pub fn switch_due() -> Option<Parts> {
+    if !switchable() {
+        return None;
+    }
+    let want = wanted();
+    if want == Parts::now() {
+        return None;
+    }
+    enable(want.ambient_occlusion);
+    crate::sun_shadow::enable(want.sun_shadows);
+    Some(want)
 }
 
 /// What the game's memory gives the step for a frame, as read by the host.
@@ -667,13 +869,150 @@ fn layout(device: &wgpu::Device, textures: &[wgpu::BindingType]) -> wgpu::BindGr
     })
 }
 
+/// A step's bind group layout and pipeline.
+type Made = (wgpu::BindGroupLayout, wgpu::RenderPipeline);
+
+/// What the full-resolution step's pipeline is made for: the scene's depth multisampled, its
+/// colour target's format and its samples.
+pub(crate) type Key = (bool, wgpu::TextureFormat, u32);
+
+/// The key of the step's pipeline for the scene's colour target `format` at `samples` (its depth
+/// surface has as many).
+pub(crate) fn key_of(format: wgpu::TextureFormat, samples: u32) -> Key {
+    (samples > 1, format, samples)
+}
+
+/// The half-resolution textures' size for a scene `width` by `height`.
+fn half_size(width: u32, height: u32) -> (u32, u32) {
+    (width.div_ceil(2), height.div_ceil(2))
+}
+
+/// The distances' step for depth multisampled or not (`ms`).
+fn depth_pipeline(device: &wgpu::Device, cache: Option<&wgpu::PipelineCache>, ms: bool) -> Made {
+    let l = layout(device, &[depth_texture(ms)]);
+    let p = pipeline(
+        device,
+        &l,
+        shader(Stage::Depth, ms),
+        wgpu::ColorTargetState {
+            format: Z_FORMAT,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        },
+        1,
+        cache,
+    );
+    (l, p)
+}
+
+/// The half-resolution occlusion's step (the same for either depth).
+fn occlusion_pipeline(device: &wgpu::Device, cache: Option<&wgpu::PipelineCache>) -> Made {
+    let l = layout(device, &[FLOAT_TEXTURE]);
+    let p = pipeline(
+        device,
+        &l,
+        shader(Stage::Occlusion, false),
+        wgpu::ColorTargetState {
+            format: HALF_FORMAT,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        },
+        1,
+        cache,
+    );
+    (l, p)
+}
+
+/// The full-resolution step's for `key`.
+fn apply_pipeline(
+    device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
+    (ms, format, samples): Key,
+) -> Made {
+    let l = layout(device, &[depth_texture(ms), FLOAT_TEXTURE]);
+    let p = pipeline(
+        device,
+        &l,
+        shader(Stage::Apply, ms),
+        wgpu::ColorTargetState {
+            format,
+            // The scene's colour times the source; its alpha kept (the occlusion alone replaces
+            // it in `NV_AO_VIEW`).
+            blend: (view() == 0).then_some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Dst,
+                    dst_factor: wgpu::BlendFactor::Zero,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Zero,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            }),
+            write_mask: wgpu::ColorWrites::COLOR,
+        },
+        samples,
+        cache,
+    );
+    (l, p)
+}
+
+/// What the step needs before it can run on a scene ([`Gpu::needs`]): on a device where the player
+/// can switch it on, made on a thread of the device's own (`crate::lighting_ahead`), so no frame
+/// waits for the driver; the step runs from the frame after it is there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Need {
+    /// The distances' pipelines (both depth kinds) and the occlusion's: made at the device's start.
+    Base,
+    /// The full-resolution step's pipeline for a scene target ([`Key`]): made when the game makes
+    /// a target of the screen's size.
+    Apply(Key),
+    /// The half-resolution textures for a scene of this half size: made the first time the step
+    /// runs on it.
+    Half(u32, u32),
+}
+
+/// What [`make`] made for a [`Need`], for [`Gpu::take`].
+pub(crate) enum Ahead {
+    Base(Box<[Made; 2]>, Made),
+    Apply(Key, Made),
+    Half(u32, u32, wgpu::TextureView, wgpu::TextureView),
+}
+
+/// Makes what `need` asks for (with the driver's `cache`): on the thread that calls it.
+pub(crate) fn make(
+    device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
+    need: Need,
+) -> Ahead {
+    match need {
+        Need::Base => Ahead::Base(
+            Box::new([
+                depth_pipeline(device, cache, false),
+                depth_pipeline(device, cache, true),
+            ]),
+            occlusion_pipeline(device, cache),
+        ),
+        Need::Apply(key) => Ahead::Apply(key, apply_pipeline(device, cache, key)),
+        Need::Half(w, h) => Ahead::Half(
+            w,
+            h,
+            half_texture(device, w, h, Z_FORMAT),
+            half_texture(device, w, h, HALF_FORMAT),
+        ),
+    }
+}
+
 fn pipeline(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     source: String,
     target: wgpu::ColorTargetState,
     samples: u32,
+    cache: Option<&wgpu::PipelineCache>,
 ) -> wgpu::RenderPipeline {
+    crate::made_here::pipeline();
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("scene light"),
         source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -705,7 +1044,7 @@ fn pipeline(
             targets: &[Some(target)],
         }),
         multiview_mask: None,
-        cache: None,
+        cache,
     })
 }
 
@@ -745,6 +1084,7 @@ fn half_texture(
     height: u32,
     format: wgpu::TextureFormat,
 ) -> wgpu::TextureView {
+    crate::made_here::texture();
     device
         .create_texture(&wgpu::TextureDescriptor {
             label: Some("scene light half"),
@@ -811,89 +1151,89 @@ impl Gpu {
         )
     }
 
+    /// Takes what a thread of the device's made for it ([`make`]).
+    pub(crate) fn take(&mut self, made: Ahead) {
+        match made {
+            Ahead::Base(depth, occlusion) => {
+                let [d0, d1] = *depth;
+                for (k, d) in [d0, d1].into_iter().enumerate() {
+                    self.depth[k].get_or_insert(d);
+                }
+                self.occlusion.get_or_insert(occlusion);
+            }
+            Ahead::Apply(key, (l, p)) => {
+                if !self.apply.iter().any(|(k, _, _)| *k == key) {
+                    self.apply.push((key, l, p));
+                }
+            }
+            Ahead::Half(w, h, z, o) => self.half = Some((w, h, z, o)),
+        }
+    }
+
+    /// What the step still needs to run on `t` (none: it runs): its pipelines for `t`'s depth and
+    /// target, and its half-resolution textures at `t`'s half size.
+    pub(crate) fn needs(&self, t: &Targets<'_>) -> [Option<Need>; 3] {
+        let key = key_of(t.colour_format, t.samples);
+        let (hw, hh) = half_size(t.width, t.height);
+        [
+            (self.depth[usize::from(key.0)].is_none() || self.occlusion.is_none())
+                .then_some(Need::Base),
+            (!self.apply.iter().any(|(k, _, _)| *k == key)).then_some(Need::Apply(key)),
+            (!matches!(&self.half, Some((w, h, _, _)) if *w == hw && *h == hh))
+                .then_some(Need::Half(hw, hh)),
+        ]
+    }
+
+    /// Whether what `need` asks for is there.
+    pub(crate) fn has(&self, need: Need) -> bool {
+        match need {
+            Need::Base => self.depth.iter().all(Option::is_some) && self.occlusion.is_some(),
+            Need::Apply(key) => self.apply.iter().any(|(k, _, _)| *k == key),
+            Need::Half(w, h) => matches!(&self.half, Some((hw, hh, _, _)) if *hw == w && *hh == h),
+        }
+    }
+
+    /// Whether the half-resolution textures are there (tests: kept while switched off).
+    pub(crate) fn has_textures(&self) -> bool {
+        self.half.is_some()
+    }
+
     /// Records the three steps into `encoder`: the half-resolution distances, the
-    /// half-resolution occlusion, then the scene's colour multiplied by it.
+    /// half-resolution occlusion, then the scene's colour multiplied by it. What it still needs
+    /// ([`Gpu::needs`]) is made here first, with the driver's `cache` (a device where the player
+    /// cannot switch the step: made while the game loads, at its first frame).
     pub(crate) fn encode(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         t: &Targets<'_>,
+        cache: Option<&wgpu::PipelineCache>,
     ) {
         let ms = t.samples > 1;
-        let (hw, hh) = (t.width.div_ceil(2), t.height.div_ceil(2));
-        if !matches!(&self.half, Some((w, h, _, _)) if *w == hw && *h == hh) {
-            self.half = Some((
-                hw,
-                hh,
-                half_texture(device, hw, hh, Z_FORMAT),
-                half_texture(device, hw, hh, HALF_FORMAT),
-            ));
+        let k = usize::from(ms);
+        for need in self.needs(t).into_iter().flatten() {
+            match need {
+                // Only the kind this scene's depth is (the other is made if a scene has it).
+                Need::Base => {
+                    if self.depth[k].is_none() {
+                        self.depth[k] = Some(depth_pipeline(device, cache, ms));
+                    }
+                    if self.occlusion.is_none() {
+                        self.occlusion = Some(occlusion_pipeline(device, cache));
+                    }
+                }
+                need => {
+                    let made = make(device, cache, need);
+                    self.take(made);
+                }
+            }
         }
+        let key = key_of(t.colour_format, t.samples);
         let (z, occlusion) = self
             .half
             .as_ref()
             .map(|(_, _, z, o)| (z.clone(), o.clone()))
             .expect("made");
-        let k = usize::from(ms);
-        if self.depth[k].is_none() {
-            let l = layout(device, &[depth_texture(ms)]);
-            let p = pipeline(
-                device,
-                &l,
-                shader(Stage::Depth, ms),
-                wgpu::ColorTargetState {
-                    format: Z_FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                },
-                1,
-            );
-            self.depth[k] = Some((l, p));
-        }
-        if self.occlusion.is_none() {
-            let l = layout(device, &[FLOAT_TEXTURE]);
-            let p = pipeline(
-                device,
-                &l,
-                shader(Stage::Occlusion, ms),
-                wgpu::ColorTargetState {
-                    format: HALF_FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                },
-                1,
-            );
-            self.occlusion = Some((l, p));
-        }
-        let key = (ms, t.colour_format, t.samples);
-        if !self.apply.iter().any(|(k, _, _)| *k == key) {
-            let l = layout(device, &[depth_texture(ms), FLOAT_TEXTURE]);
-            let p = pipeline(
-                device,
-                &l,
-                shader(Stage::Apply, ms),
-                wgpu::ColorTargetState {
-                    format: t.colour_format,
-                    // The scene's colour times the source; its alpha kept (the occlusion alone
-                    // replaces it in `NV_AO_VIEW`).
-                    blend: (view() == 0).then_some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::Dst,
-                            dst_factor: wgpu::BlendFactor::Zero,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::Zero,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
-                    write_mask: wgpu::ColorWrites::COLOR,
-                },
-                t.samples,
-            );
-            self.apply.push((key, l, p));
-        }
         let (depth_layout, depth_pipeline) = self.depth[k].as_ref().expect("made");
         let g = group(device, depth_layout, &self.uniforms, &[t.depth]);
         full_screen(
@@ -1127,6 +1467,134 @@ mod tests {
         // D3DTS_VIEW 2, D3DTS_PROJECTION 3, D3DTS_TEXTURE0..7 16..23, D3DTS_WORLDMATRIX(n) 256..511.
         const { assert!(STATE > 511) };
         assert_eq!(&STATE.to_le_bytes(), b"NVAO");
+        const { assert!(SWITCH_STATE > 511) };
+        assert_eq!(&SWITCH_STATE.to_le_bytes(), b"NVLS");
+        for other in [
+            STATE,
+            crate::sun_shadow::STATE,
+            crate::sun_shadow::VIEW_STATE,
+            crate::sun_shadow::BEGIN_STATE,
+            crate::sun_shadow::WORLD_STATE,
+        ] {
+            assert_ne!(SWITCH_STATE, other);
+        }
+    }
+
+    /// The switch's turn goes through all four from any of them and back in four presses; from
+    /// the original's look the first press gives all of it, the second takes the ambient
+    /// occlusion away, the third the sun shadows (the ambient occlusion back), the fourth the rest.
+    #[test]
+    fn the_switch_turns_through_all_four_and_back() {
+        let off = Parts::default();
+        let sun = Parts {
+            ambient_occlusion: false,
+            sun_shadows: true,
+        };
+        let ao = Parts {
+            ambient_occlusion: true,
+            sun_shadows: false,
+        };
+        assert_eq!(off.next(), Parts::ALL);
+        assert_eq!(Parts::ALL.next(), sun);
+        assert_eq!(sun.next(), ao);
+        assert_eq!(ao.next(), off);
+        for start in [off, sun, ao, Parts::ALL] {
+            let mut seen = std::collections::HashSet::new();
+            let mut p = start;
+            for _ in 0..4 {
+                seen.insert(p);
+                p = p.next();
+            }
+            assert_eq!(p, start);
+            assert_eq!(seen.len(), 4, "{start:?}");
+        }
+        let notes: std::collections::HashSet<&str> =
+            [off, sun, ao, Parts::ALL].map(Parts::note).into();
+        assert_eq!(notes.len(), 4);
+        assert_eq!(off.note(), "New lighting: off");
+    }
+
+    /// The switch's words carry the parts in the first word and nothing else; words with another
+    /// bit, something after the first or not 16 of them are no switch's.
+    #[test]
+    fn the_switch_words_carry_the_parts() {
+        for bits in 0..4u8 {
+            let p = Parts::of_bits(bits);
+            let w = p.to_words();
+            assert_eq!(w[0], u32::from(bits));
+            assert!(w[1..].iter().all(|&v| v == 0));
+            assert_eq!(Parts::from_words(&w), Some(p));
+        }
+        let mut w = Parts::ALL.to_words();
+        w[0] = 4;
+        assert_eq!(Parts::from_words(&w), None);
+        let mut w = Parts::ALL.to_words();
+        w[15] = 1;
+        assert_eq!(Parts::from_words(&w), None);
+        assert_eq!(Parts::from_words(&Parts::ALL.to_words()[..15]), None);
+    }
+
+    /// The F12 report names the parts its picture was drawn with, one line; the real Direct3D 9
+    /// has none.
+    #[test]
+    fn the_report_names_the_pictures_new_lighting() {
+        let sun = Parts {
+            ambient_occlusion: false,
+            sun_shadows: true,
+        };
+        assert_eq!(
+            place_line(Some(sun)),
+            "new lighting in the picture: sun shadows on, ambient occlusion off (Shift+F11 switches them)\n"
+        );
+        assert!(place_line(Some(Parts::ALL)).contains("sun shadows on, ambient occlusion on"));
+        assert!(
+            place_line(Some(Parts::default())).contains("sun shadows off, ambient occlusion off")
+        );
+        assert_eq!(
+            place_line(None),
+            "new lighting in the picture: none (Direct3D 9 draws)\n"
+        );
+        for p in [None, Some(sun), Some(Parts::ALL)] {
+            assert_eq!(place_line(p).trim_end().lines().count(), 1);
+        }
+    }
+
+    /// The full-resolution step's pipeline is keyed by the scene's samples (multisampled depth
+    /// from two on) and format; the half-resolution textures by the scene's size halved, rounded
+    /// up.
+    #[test]
+    fn the_steps_needs_follow_the_scenes_target() {
+        let f = wgpu::TextureFormat::Rgba8Unorm;
+        assert_eq!(key_of(f, 1), (false, f, 1));
+        assert_eq!(key_of(f, 4), (true, f, 4));
+        assert!(key_of(f, 2).0);
+        assert_eq!(half_size(1920, 1080), (960, 540));
+        assert_eq!(half_size(1281, 721), (641, 361));
+    }
+
+    /// Not allowed (the real Direct3D 9, a test run): the key switches nothing. Allowed, it turns
+    /// the parts wanted from the run's choice; what the frames draw changes only at a `Present`
+    /// (`switch_due`, tested where the platform records it).
+    #[test]
+    fn the_key_switches_only_when_allowed() {
+        let _switch = SWITCH_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        forbid_switch();
+        assert!(!switchable());
+        assert_eq!(switch_key(), None);
+        assert_eq!(wanted(), Parts::default());
+        let sun = Parts {
+            ambient_occlusion: false,
+            sun_shadows: true,
+        };
+        allow_switch(sun);
+        assert!(switchable());
+        assert_eq!(wanted(), sun, "the run's choice until the first switch");
+        assert_eq!(switch_key(), Some(sun.next()));
+        assert_eq!(wanted(), sun.next());
+        assert_eq!(switch_key(), Some(sun.next().next()));
+        forbid_switch();
+        assert_eq!(switch_key(), None);
+        assert!(!switchable());
     }
 
     /// Both steps' WGSL, for both depth kinds, read and validated as wgpu reads them.

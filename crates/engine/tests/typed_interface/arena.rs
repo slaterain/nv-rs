@@ -300,8 +300,10 @@ fn known_words(e: &mut Engine, seed: u32) {
     );
     e.mem
         .set_u32(0x011d_ace4, if seed == 2 { 0 } else { object(91) });
-    // The double 0.0 the list boxes' `SetTotalListHeight` compares the heights with (`.rdata`).
+    // The doubles 0.0 the list boxes' `SetTotalListHeight` compares the heights with and 1.0 the
+    // item list box's node removal takes from the filtered count (`.rdata`).
     e.mem.set_u64(0x0101_2060, 0.0f64.to_bits());
+    e.mem.set_u64(0x0101_2070, 1.0f64.to_bits());
 }
 
 /// The manager singleton (`004b7210`'s word), the menus by class (`00a09030`'s data pointer and
@@ -335,6 +337,14 @@ pub enum Arg {
     Direction,
     /// Tiles of the list box world's items (the first, the third, the last), one of no item, null.
     ListTile,
+    /// Nodes of the list box world: the first (the list's own, at object 3's `+4`), the second, the
+    /// third, the last of six, null.
+    ListNode,
+    /// Code addresses (a filter, a callback): a stand-in, none, another stand-in.
+    Code,
+    /// One live object alone (object 3, the list box world's first list box): every case runs on
+    /// it, never on null (a constructor's store at null would make the zero page's words a vtable).
+    Object,
 }
 
 const PTRS: [u32; 3] = [ARENA + 3 * OBJECT, ARENA + 40 * OBJECT, 0];
@@ -355,6 +365,16 @@ const LIST_TILES: [u32; 5] = [
     ARENA + 198 * OBJECT,
     0,
 ];
+/// The list box world's nodes (`put_list_box` in the tests: the first node is the list's own).
+const LIST_NODES: [u32; 5] = [
+    ARENA + 3 * OBJECT + 4,
+    ARENA + 161 * OBJECT,
+    ARENA + 162 * OBJECT,
+    ARENA + 165 * OBJECT,
+    0,
+];
+const CODES: [u32; 3] = [CODE + 0x40, 0, CODE + 0x84];
+const OBJECTS_ONE: [u32; 1] = [ARENA + 3 * OBJECT];
 const TILE_IDS: [u32; 13] = [
     0xffff_ffff,
     0,
@@ -382,6 +402,9 @@ fn values(arg: Arg) -> &'static [u32] {
         Arg::TileId => &TILE_IDS,
         Arg::Direction => &DIRECTIONS,
         Arg::ListTile => &LIST_TILES,
+        Arg::ListNode => &LIST_NODES,
+        Arg::Code => &CODES,
+        Arg::Object => &OBJECTS_ONE,
     }
 }
 
@@ -410,6 +433,8 @@ const OTHER_FAMILIES: &[u32] = &[
     0x0045_cec0,
     0x00a0_1230,
     0x00a0_0f30,
+    0x00a0_0e90,
+    0x00a0_9200,
 ];
 
 /// The world's settings for a Diff of the family.
@@ -510,6 +535,8 @@ fn arena_diff(
         .ignore_calls(engine_typed::interface::interface_cpp_p2::IN_PLACE)
         .ignore_calls(engine_typed::interface::menu_manager::IN_PLACE)
         .ignore_calls(engine_typed::interface::menu_manager_p2::IN_PLACE)
+        .ignore_calls(engine_typed::interface::item_list_box::IN_PLACE)
+        .ignore_calls(engine_typed::interface::small_units::IN_PLACE)
         .ignore_calls(without)
         .goes_by_address(OTHER_FAMILIES)
         .inputs(&inputs)

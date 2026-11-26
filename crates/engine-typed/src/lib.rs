@@ -105,44 +105,53 @@ macro_rules! image {
     )*};
 }
 
+/// This crate's families, in the order [`units::funcs`] provides them: the one list the engine and
+/// its tests read (a family left out here is never registered; the engine's guard test
+/// `every_family_holds_each_crates_families` finds one provided but not listed).
+pub static FAMILIES: [&engine_core::typed::Family; 33] = [
+    &crate::lockfree::LOCKFREE,
+    &crate::culling::CULLING,
+    &crate::pathing::PATHING,
+    &crate::shader::SHADER,
+    &crate::crt::CRT,
+    &crate::dispatch::DISPATCH,
+    &crate::render::RENDER,
+    &crate::draw::DRAW,
+    &crate::scene::SCENE,
+    &crate::particles::PARTICLES,
+    &crate::collision::COLLISION,
+    &crate::multibound::MULTIBOUND,
+    &crate::geometry::GEOMETRY,
+    &crate::animation::ANIMATION,
+    &crate::draw_f::DRAW_F,
+    &crate::anim_keys::ANIM_KEYS,
+    &crate::process::PROCESS,
+    &crate::lights::LIGHTS,
+    &crate::scripts::SCRIPTS,
+    &crate::hud::HUD,
+    &crate::interface::INTERFACE,
+    &crate::script_lines::SCRIPT_LINES,
+    &crate::facegen::FACEGEN,
+    &crate::save::SAVE,
+    &crate::setup::SETUP,
+    &crate::archives::ARCHIVES,
+    &crate::ai_queries::AI_QUERIES,
+    &crate::cell_refs::CELL_REFS,
+    &crate::navmesh_edges::NAVMESH_EDGES,
+    &crate::ai::AI,
+    &crate::forms::FORMS,
+    &crate::extra_data::EXTRA_DATA,
+    &crate::scene_node::SCENE_NODE,
+];
+
 /// This crate's part in `Engine::new`, as the `engine` facade takes each engine crate's: it
 /// registers nothing at an address itself, and hands its families to the core's seam, which
 /// registers the ones `NV_TYPED` has on after every translation.
 pub mod units {
     pub fn funcs(_out: &mut Vec<(u32, engine_core::AbiFn)>) {
-        engine_core::typed::provide(&crate::lockfree::LOCKFREE);
-        engine_core::typed::provide(&crate::culling::CULLING);
-        engine_core::typed::provide(&crate::pathing::PATHING);
-        engine_core::typed::provide(&crate::shader::SHADER);
-        engine_core::typed::provide(&crate::crt::CRT);
-        engine_core::typed::provide(&crate::dispatch::DISPATCH);
-        engine_core::typed::provide(&crate::render::RENDER);
-        engine_core::typed::provide(&crate::draw::DRAW);
-        engine_core::typed::provide(&crate::scene::SCENE);
-        engine_core::typed::provide(&crate::particles::PARTICLES);
-        engine_core::typed::provide(&crate::collision::COLLISION);
-        engine_core::typed::provide(&crate::multibound::MULTIBOUND);
-        engine_core::typed::provide(&crate::geometry::GEOMETRY);
-        engine_core::typed::provide(&crate::animation::ANIMATION);
-        engine_core::typed::provide(&crate::draw_f::DRAW_F);
-        engine_core::typed::provide(&crate::anim_keys::ANIM_KEYS);
-        engine_core::typed::provide(&crate::process::PROCESS);
-        engine_core::typed::provide(&crate::lights::LIGHTS);
-        engine_core::typed::provide(&crate::scripts::SCRIPTS);
-        engine_core::typed::provide(&crate::hud::HUD);
-        engine_core::typed::provide(&crate::interface::INTERFACE);
-        engine_core::typed::provide(&crate::script_lines::SCRIPT_LINES);
-        engine_core::typed::provide(&crate::facegen::FACEGEN);
-        engine_core::typed::provide(&crate::save::SAVE);
-        engine_core::typed::provide(&crate::setup::SETUP);
-        engine_core::typed::provide(&crate::archives::ARCHIVES);
-        engine_core::typed::provide(&crate::ai_queries::AI_QUERIES);
-        engine_core::typed::provide(&crate::cell_refs::CELL_REFS);
-        engine_core::typed::provide(&crate::navmesh_edges::NAVMESH_EDGES);
-        engine_core::typed::provide(&crate::ai::AI);
-        engine_core::typed::provide(&crate::forms::FORMS);
-        engine_core::typed::provide(&crate::extra_data::EXTRA_DATA);
-        engine_core::typed::provide(&crate::scene_node::SCENE_NODE);
+        for family in crate::FAMILIES {
+            engine_core::typed::provide(family);
+        }
         crate::render::stream::note_head_check();
     }
 }
@@ -157,41 +166,7 @@ mod tests {
 
     /// This crate's families, in the order `units::funcs` provides them.
     fn families() -> [&'static Family; 33] {
-        [
-            &crate::lockfree::LOCKFREE,
-            &crate::culling::CULLING,
-            &crate::pathing::PATHING,
-            &crate::shader::SHADER,
-            &crate::crt::CRT,
-            &crate::dispatch::DISPATCH,
-            &crate::render::RENDER,
-            &crate::draw::DRAW,
-            &crate::scene::SCENE,
-            &crate::particles::PARTICLES,
-            &crate::collision::COLLISION,
-            &crate::multibound::MULTIBOUND,
-            &crate::geometry::GEOMETRY,
-            &crate::animation::ANIMATION,
-            &crate::draw_f::DRAW_F,
-            &crate::anim_keys::ANIM_KEYS,
-            &crate::process::PROCESS,
-            &crate::lights::LIGHTS,
-            &crate::scripts::SCRIPTS,
-            &crate::hud::HUD,
-            &crate::interface::INTERFACE,
-            &crate::script_lines::SCRIPT_LINES,
-            &crate::facegen::FACEGEN,
-            &crate::save::SAVE,
-            &crate::setup::SETUP,
-            &crate::archives::ARCHIVES,
-            &crate::ai_queries::AI_QUERIES,
-            &crate::cell_refs::CELL_REFS,
-            &crate::navmesh_edges::NAVMESH_EDGES,
-            &crate::ai::AI,
-            &crate::forms::FORMS,
-            &crate::extra_data::EXTRA_DATA,
-            &crate::scene_node::SCENE_NODE,
-        ]
+        crate::FAMILIES
     }
 
     /// Which of this crate's families are past their gate, and so on with no switch: all of them, the first
