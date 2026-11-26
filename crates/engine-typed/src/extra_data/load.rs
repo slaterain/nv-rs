@@ -8,9 +8,9 @@
 //! lookup, `AddExtra`, `RemoveExtra` and `memset` as typed calls.
 
 use super::{
-    access, cell_data, first_of_kind, links, list_add, list_remove, new_object, packages, records,
-    rooms, setters, word_at, zero_bytes, EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE, OPERATOR_NEW,
-    SIMPLE_LIST_NEW,
+    access, cell_data, first_of_kind, followers, links, list_add, list_remove, new_object,
+    packages, records, rooms, setters, word_at, zero_bytes, EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE,
+    OPERATOR_NEW, SIMPLE_LIST_NEW,
 };
 use crate::crt::{low_byte, low_half, signed};
 use crate::{cell_refs, forms, pathing};
@@ -74,9 +74,7 @@ const PRIMITIVE_CREATE: u32 = 0x004a_4e90;
 /// The list's getters and setters of the other part files (by address until they are typed).
 const GET_AMMO: u32 = 0x0042_eb40;
 const SET_AMMO: u32 = 0x0042_eb60;
-const SET_MULTIBOUND_DATA: u32 = 0x0042_1f30;
 const SET_NAVMESH_PORTAL: u32 = 0x0042_e2c0;
-const SET_OCCLUSION_PLANE: u32 = 0x0042_2150;
 const SET_IGNORED_BY_SANDBOX: u32 = 0x0042_f200;
 
 /// A chunk's four letters as the word the file holds.
@@ -230,18 +228,6 @@ fn special_render_of(e: &mut Engine, list: u32) -> u32 {
     )
 }
 
-/// A one-word chunk for a setter of the other part files (by address).
-fn word_to(e: &mut Engine, list: u32, file: u32, setter: u32) {
-    let word = file_word(e, file);
-    e.call(setter, &args![list, word]);
-}
-
-/// A one-`float` chunk for a setter of the other part files (by address).
-fn float_to(e: &mut Engine, list: u32, file: u32, setter: u32) {
-    let value = moved_float(file_word(e, file));
-    e.call(setter, &args![list, value]);
-}
-
 /// Whether the save buffer's form (`+0x20`, `007af430` in place) is a form of type 0x23
 /// (`00401170`'s byte at +4, in place).
 fn buffer_form_is_0x23(e: &Engine, buffer: u32) -> bool {
@@ -356,12 +342,50 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
                 links::set_linked_ref(e, this, reference)
             );
         }
-        T_XMRC => word_to(e, this, file, 0x0042_1430),
-        T_XTRG => word_to(e, this, file, 0x0042_1b70),
-        T_XEZN => word_to(e, this, file, 0x0042_1c60),
-        T_XEMI => word_to(e, this, file, 0x0042_1d50),
-        T_XMBR => word_to(e, this, file, 0x0042_1e40),
-        T_XLCM => word_to(e, this, file, 0x0042_1540),
+        T_XMRC => {
+            let word = file_word(e, file);
+            typed_call!(
+                FAMILY,
+                0x0042_1430,
+                followers::set_merchant_container(e, this, word)
+            );
+        }
+        T_XTRG => {
+            let word = file_word(e, file);
+            typed_call!(FAMILY, 0x0042_1b70, followers::set_x_target(e, this, word));
+        }
+        T_XEZN => {
+            let word = file_word(e, file);
+            typed_call!(
+                FAMILY,
+                0x0042_1c60,
+                followers::set_encounter_zone(e, this, word)
+            );
+        }
+        T_XEMI => {
+            let word = file_word(e, file);
+            typed_call!(
+                FAMILY,
+                0x0042_1d50,
+                followers::set_emittance_source(e, this, word)
+            );
+        }
+        T_XMBR => {
+            let word = file_word(e, file);
+            typed_call!(
+                FAMILY,
+                0x0042_1e40,
+                followers::set_multibound_ref(e, this, word)
+            );
+        }
+        T_XLCM => {
+            let word = file_word(e, file);
+            typed_call!(
+                FAMILY,
+                0x0042_1540,
+                followers::set_lev_crea_modifier(e, this, word)
+            );
+        }
         // One float for a setter.
         T_XHLP => {
             let value = moved_float(file_word(e, file));
@@ -379,8 +403,18 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
             let value = moved_float(file_word(e, file));
             typed_call!(FAMILY, 0x0041_9c60, access::set_charge(e, this, value));
         }
-        T_XRDS => float_to(e, this, file, 0x0042_2220),
-        T_XRAD => float_to(e, this, file, 0x0042_2350),
+        T_XRDS => {
+            let value = moved_float(file_word(e, file));
+            typed_call!(FAMILY, 0x0042_2220, followers::set_radius(e, this, value));
+        }
+        T_XRAD => {
+            let value = moved_float(file_word(e, file));
+            typed_call!(
+                FAMILY,
+                0x0042_2350,
+                followers::set_radiation(e, this, value)
+            );
+        }
         // EXTRA_HEALTH: an integer in the file, a float for the setter.
         T_XHLT => {
             let health = signed(file_word(e, file));
@@ -608,7 +642,11 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
                 e.call(MULTIBOUND_MARKER_DATA_INIT, &args![block]).u32()
             });
             e.call(MULTIBOUND_MARKER_DATA_LOAD, &args![bound, file]);
-            e.call(SET_MULTIBOUND_DATA, &args![this, bound]);
+            typed_call!(
+                FAMILY,
+                0x0042_1f30,
+                followers::set_multibound_data(e, this, bound)
+            );
         }
         T_XPCI => {
             e.call(SKIP_CHUNK, &args![file]);
@@ -984,7 +1022,11 @@ fn load_plane(e: &mut Engine, this: u32, file: u32) {
                 records::plane_set_rotation(e, plane, matrix)
             );
         });
-        e.call(SET_OCCLUSION_PLANE, &args![this, plane]);
+        typed_call!(
+            FAMILY,
+            0x0042_2150,
+            followers::set_occlusion_plane(e, this, plane)
+        );
     });
 }
 

@@ -225,6 +225,69 @@ const DOUBLES_3: &[(u32, &[u32])] = &[
 const SLOTS_3: &[u32] = &[0, 0x10];
 /// The exe's bodies a slot may hold instead, from the third stream.
 const REAL_SLOTS_3: &[(u32, u32)] = &[(0x230, 0x008d_08b0)];
+/// The callees the fourth part's functions call by address, with the words each may answer (drawn
+/// from the fourth stream).
+const DOUBLES_4: &[(u32, &[u32])] = &[
+    (0x0048_39c0, &[FORM]), // the form for an id (quiet: see `QUIET`; `TimeScale`)
+    (0x0063_f7b0, UNREAD),  // the locations list's head remove (empties the node)
+    (0x0088_1680, UNREAD),  // Actor::EndInterruptPackage
+    (0x008a_6730, UNREAD),  // Actor::RemoveFleeTarget
+    (0x008a_61b0, BOOLS),   // Actor::IsAlarmed
+    (0x0060_6540, UNREAD),  // TESNPC::InitDefaultWorn
+    (0x005f_9e00, UNREAD),  // TESCreature::InitDefaultWorn
+    (0x008b_3bb0, BOOLS),   // Actor::IsPathingComplete
+    (0x009f_3af0, UNREAD),  // the sandbox's start
+    (0x009f_3c10, &[0, TARGET, ACTOR]), // its move to the next location (stores it at +0x10)
+    (0x0057_3800, UNREAD),  // MoveRefToNewSpace
+    (0x008b_36f0, UNREAD),  // Actor::SetPathfindingGoalToReference
+    (0x0067_5a50, &[0, FORM]), // TESPackage::GetLocationWorld
+    (0x0067_5c20, &[0, LOCATION]), // TESPackage::GetLocationCell
+    (0x0042_11d0, UNREAD),  // ExtraDataList::SetActorPackageData
+    (0x0042_12e0, UNREAD),  // its remove
+    (0x006e_cd40, UNREAD),  // ActorPackage's instance data set
+    (0x0041_c930, UNREAD),  // ExtraDataList::SetPackageExtra
+    (0x0041_cb10, &[0, PACKAGE, PACKAGE_B]), // its package
+    (0x0041_cb40, &[0, 1, 7, 0xffff_ffff]), // its procedure index
+    (0x0041_cba0, BOOLS),   // its action complete flag
+    (0x0041_cc00, BOOLS),   // its target activated flag
+    (0x0041_cc30, BOOLS),   // its done once flag
+    (0x0041_cc60, UNREAD),  // its remove
+    (0x0041_cb70, &[0, TARGET]), // its target
+    (0x0084_aa90, &[0, 0x1001]), // the changed forms' id lookup
+    (0x0067_77b0, UNREAD),  // TESPackage::CalculateProcedureType
+];
+/// The fourth part's double that answers its first word on every call and writes nothing: the
+/// translation of `ProcessFlee` still asks it (inside `GetTimeDelta`, whose answer it drops), the
+/// typed version does not.
+const QUIET: u32 = 0x0048_39c0;
+/// The fourth part's functions whose doubles the second part's world had (drawn, not registered).
+const TYPED_NOW_2: &[u32] = &[0x0090_7260];
+/// The slots the fourth part's functions call, stand-ins unless the seed gives the exe's body.
+const SLOTS_4: &[u32] = &[
+    0x48, 0x64, 0x100, 0x11c, 0x128, 0x1e8, 0x234, 0x2a8, 0x304, 0x4e8, 0x524,
+];
+/// The exe's bodies a slot may hold instead, from the fourth stream.
+const REAL_SLOTS_4: &[(u32, u32)] = &[
+    (0x11c, 0x008d_7e40),
+    (0x4e8, 0x008d_7fc0),
+    (0x128, 0x008d_6f30),
+    (0x234, 0x008d_03a0),
+    (0x524, 0x0091_0b30),
+];
+/// The acquire records, the list nodes and the cached values the fourth part seeds.
+const ACQUIRE_A: u32 = BUFFER + 0x9000;
+const ACQUIRE_B: u32 = BUFFER + 0x9010;
+const ACQUIRE_C: u32 = BUFFER + 0x9020;
+const OBJECT_NODE: u32 = BUFFER + 0x9030;
+const ACQUIRE_D: u32 = BUFFER + 0x9040;
+const LOCATION_NODE: u32 = BUFFER + 0x9050;
+const EMPTY_NODE: u32 = BUFFER + 0x9060;
+const CACHED_VALUES: u32 = BUFFER + 0x9100;
+/// The globals the fourth part reads: the pursue distance (a double), the sandbox's least time (a
+/// float) and the hours of a day (24.0).
+const PURSUE_DISTANCE: u32 = 0x0101_79e0;
+const SANDBOX_LEAST_TIME: u32 = 0x0101_7b78;
+const HOURS_PER_DAY: u32 = 0x0103_56d8;
 /// The dialogue item `CreateDialogueItem` answers and a package location of the schedule's.
 const ITEM: u32 = BUFFER + 0x8000;
 const LOCATION_2: u32 = BUFFER + 0x8100;
@@ -246,6 +309,15 @@ const BY_ADDRESS: &[u32] = &[
     0x004a_7290,
     0x0040_b460,
     0x0040_19a0,
+    0x0048_39c0,
+    0x0041_c930,
+    0x0041_cb10,
+    0x0041_cb40,
+    0x0041_cb70,
+    0x0041_cba0,
+    0x0041_cc00,
+    0x0041_cc30,
+    0x0041_cc60,
 ];
 
 /// The callees the translations call and the typed code does in place (one load, store or test
@@ -313,6 +385,18 @@ const IN_PLACE: &[u32] = &[
     0x0096_a820, // the procedure count
     0x008e_7c50, // the pathing request's byte at +0x9c, its angle and flag
     0x008e_7c20,
+    0x0047_c850, // the package manager's test (`ActorPackage::Clear`: false, in place)
+    0x0046_9860, // the created id test (`InitLoadGame_ov2` of the embedded package)
+    0x0045_34f0, // the empty body the package load leaves out
+    0x0063_9b40, // the instance data's reference
+    0x0044_1b00, // the package's flag 0x200000
+    0x0090_1c50, // its location flag
+    0x0093_1850, // the reference's process level
+    0x0044_edb0, // the sandbox data's location
+    0x0072_6c60, // the locations list's item store
+    0x008d_8520, // the actor's process
+    0x008d_7e40, // the process flag tests
+    0x008d_7fc0,
 ];
 
 /// The globals the code reads.
@@ -365,11 +449,17 @@ fn double_index(addr: u32) -> usize {
         None => match DOUBLES_2.iter().position(|(a, _)| *a == addr) {
             Some(k) => DOUBLES.len() + k,
             None => {
-                let k = DOUBLES_3
-                    .iter()
-                    .position(|(a, _)| *a == addr)
-                    .expect("a double");
-                DOUBLES.len() + DOUBLES_2.len() + k
+                let first = DOUBLES.len() + DOUBLES_2.len();
+                match DOUBLES_3.iter().position(|(a, _)| *a == addr) {
+                    Some(k) => first + k,
+                    None => {
+                        let k = DOUBLES_4
+                            .iter()
+                            .position(|(a, _)| *a == addr)
+                            .expect("a double");
+                        first + DOUBLES_3.len() + k
+                    }
+                }
             }
         },
     }
@@ -380,6 +470,11 @@ fn last_answer(e: &Engine, addr: u32) -> u32 {
     let k = double_index(addr);
     let n = e.mem.u32(block(k));
     e.mem.u32(block(k) + 4 + 4 * ((n + 7) % 8))
+}
+
+/// The first word of the last call of the double at `addr`.
+fn last_first(e: &Engine, addr: u32) -> u32 {
+    e.mem.u32(block(double_index(addr)) + 0x24)
 }
 
 /// The third word of the last call of `slot`.
@@ -399,6 +494,8 @@ struct World {
     rng2: u64,
     /// The third part's stream.
     rng3: u64,
+    /// The fourth part's stream.
+    rng4: u64,
 }
 
 impl World {
@@ -408,6 +505,7 @@ impl World {
             rng: (u64::from(seed) ^ 0x9e37_79b9_7f4a_7c15).wrapping_mul(0xbf58_476d_1ce4_e5b9) | 1,
             rng2: (u64::from(seed) ^ 0x94d0_49bb_1331_11eb).wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1,
             rng3: (u64::from(seed) ^ 0x2545_f491_4f6c_dd1d).wrapping_mul(0xd6e8_feb8_6659_fd93) | 1,
+            rng4: (u64::from(seed) ^ 0x6a09_e667_f3bc_c909).wrapping_mul(0xbb67_ae85_84ca_a73b) | 1,
         };
         e.map(0, 0x1000);
         e.map(CONTROL, 0x5000);
@@ -491,6 +589,7 @@ impl World {
         w.seed_globals(e);
         w.seed_part_2(e);
         w.seed_part_3(e);
+        w.seed_part_4(e);
         w
     }
 
@@ -638,7 +737,7 @@ impl World {
                 e.mem.set_u32(block + 4 + 4 * i, answer);
             }
             // A callee done in place runs as itself on the translation's side.
-            if IN_PLACE.contains(addr) {
+            if IN_PLACE.contains(addr) || TYPED_NOW_2.contains(addr) {
                 continue;
             }
             let empties = *addr == LIST_REMOVE_ITEM;
@@ -788,6 +887,203 @@ impl World {
                 }
             }
         }
+    }
+
+    /// The fourth part's doubles, slots, globals and fields, from the fourth stream. The fields it
+    /// seeds over the first parts' words (the acquire records, the object list's head and next, the
+    /// processes' and the patrol data's words below) are drawn so the earlier parts' branches stay
+    /// reached; the lists the new functions walk end (each next word 0 or a node whose next is 0).
+    fn seed_part_4(&mut self, e: &mut Engine) {
+        let first = DOUBLES.len() + DOUBLES_2.len() + DOUBLES_3.len();
+        for (k, (addr, answers)) in DOUBLES_4.iter().enumerate() {
+            let block = block(first + k);
+            for i in 0..8 {
+                let answer = self.pick4(answers);
+                let answer = self.resolve(answer);
+                e.mem.set_u32(block + 4 + 4 * i, answer);
+            }
+            if *addr == QUIET {
+                e.register_double(*addr, move |e, _| ret(e.mem.u32(block + 4)));
+                continue;
+            }
+            let addr = *addr;
+            e.register_double(addr, move |e, a| {
+                let n = e.mem.u32(block);
+                e.mem.set_u32(block, n + 1);
+                e.mem.set_u32(block + 0x24, a.first().copied().unwrap_or(0));
+                e.mem.set_u32(block + 0x28, a.get(1).copied().unwrap_or(0));
+                let answer = e.mem.u32(block + 4 + 4 * (n % 8));
+                match addr {
+                    // The head remove leaves the node empty.
+                    0x0063_f7b0 => {
+                        e.mem.set_u32(a[0], 0);
+                        e.mem.set_u32(a[0] + 4, 0);
+                    }
+                    // The move to the next location stores it, and answers whether there is one.
+                    0x009f_3c10 => {
+                        e.mem.set_u32(a[0] + 0x10, answer);
+                        return ret(u32::from(answer != 0));
+                    }
+                    _ => {}
+                }
+                ret(answer)
+            });
+        }
+        for &slot in SLOTS_4 {
+            e.register_double(VT_FN + slot, move |e, a| {
+                let n = e.mem.u32(SLOT_COUNTS + slot);
+                let third = a.get(2).copied().unwrap_or(0);
+                e.mem.set_u32(SLOT_LAST + slot, third);
+                e.mem.set_u32(SLOT_COUNTS + slot, n + 1);
+                let vt = e.mem.u32(a[0]);
+                ret(e.mem.u32(vt + ANSWERS + slot))
+            });
+        }
+        for i in 0..=COUNT {
+            if (WITH_VTABLE..COUNT).contains(&i) {
+                continue;
+            }
+            let o = if i < COUNT { self.objects[i] } else { 0 };
+            let vt = e.mem.u32(o);
+            for &slot in SLOTS_4 {
+                e.mem.set_u32(vt + slot, VT_FN + slot);
+                let answers: &[u32] = match slot {
+                    0x100 | 0x11c | 0x304 | 0x4e8 => BOOLS,
+                    0x128 => &[0, TARGET, ACTOR],
+                    0x1e8 => &[0, FORM],
+                    _ => UNREAD,
+                };
+                let answer = self.pick4(answers);
+                let answer = self.resolve(answer);
+                e.mem.set_u32(vt + ANSWERS + slot, answer);
+            }
+            for &(slot, body) in REAL_SLOTS_4 {
+                if self.flag4() {
+                    e.mem.set_u32(vt + slot, body);
+                }
+            }
+        }
+        // The globals: the pursue distance, the sandbox's least time, the hours of a day, the
+        // changed forms (none) and the data handler (none).
+        e.map(0x0101_7000, 0x1000);
+        e.map(0x0103_5000, 0x1000);
+        e.map(0x011d_d000, 0x1000);
+        // The data handler (none: the created id test does not read it).
+        e.map(0x011c_3000, 0x1000);
+        let distance = [0.0, 100.0, 1.0e9, f64::NAN][(self.next4() % 4) as usize];
+        e.mem.set_f64(PURSUE_DISTANCE, distance);
+        let least = self.pick4(FLOATS);
+        e.mem.set_u32(SANDBOX_LEAST_TIME, least);
+        e.mem.set_f64(HOURS_PER_DAY, 24.0);
+        // The procedure lists' rows of types 2 and 3 sometimes hold the destinations' other cases:
+        // the instance data's (42), the location or target's (47) and none (9).
+        for kind in [3, 4] {
+            let row = LISTS + 0x10 + 0x20 * kind;
+            for index in 0..5 {
+                if self.next4() % 3 == 0 {
+                    let procedure = self.pick4(&[42, 47, 9]);
+                    e.mem.set_u32(row - 4 + 4 * index, procedure);
+                }
+            }
+        }
+        // The process: the acquire records (a reference at +0), the object list's head and next,
+        // the generic locations list, the record at +0x84 and the cached values.
+        let p = self.objects[0];
+        for record in [ACQUIRE_A, ACQUIRE_B, ACQUIRE_C, ACQUIRE_D] {
+            let reference = self.one_of4(&[0, TARGET, ACTOR, ACTOR]);
+            e.mem.set_u32(record, reference);
+        }
+        if self.flag4() {
+            e.mem.set_u32(p + 0x64, ACQUIRE_A);
+        }
+        let saved = self.pick4(&[0, 1, ACQUIRE_A, ACQUIRE_B]);
+        if saved != 1 {
+            e.mem.set_u32(p + 0x68, saved);
+        }
+        // A next word of 1 would read the null object's vtable unaligned: an empty node instead.
+        if e.mem.u32(p + 0x60) == 1 {
+            e.mem.set_u32(p + 0x60, EMPTY_NODE);
+        }
+        if self.flag4() {
+            e.mem.set_u32(p + 0x5c, ACQUIRE_C);
+            let next = self.pick4(&[0, OBJECT_NODE]);
+            e.mem.set_u32(p + 0x60, next);
+        }
+        e.mem.set_u32(OBJECT_NODE, ACQUIRE_D);
+        let location = self.one_of4(&[0, TARGET, ACTOR, FORM]);
+        e.mem.set_u32(p + 0x6c, location);
+        let next = self.pick4(&[0, LOCATION_NODE]);
+        e.mem.set_u32(p + 0x70, next);
+        let location = self.one_of4(&[0, TARGET, ACTOR]);
+        e.mem.set_u32(LOCATION_NODE, location);
+        // `pGenericLocation`: a word that is no object and not on the null page becomes one (the clear
+        // of a form reads its form id).
+        let location = e.mem.u32(p + 0x44);
+        if location >= 0xff0 && !self.objects.contains(&location) {
+            let location = self.one_of4(&[0, TARGET, ACTOR, FORM]);
+            e.mem.set_u32(p + 0x44, location);
+        }
+        let record = self.one_of4(&[0, OTHER]);
+        e.mem.set_u32(p + 0x84, record);
+        let cached = self.pick4(&[0, CACHED_VALUES]);
+        e.mem.set_u32(p + 0x2c, cached);
+        // The references: their processes, and sometimes the form ids the acquire lists' clear of
+        // a form looks for.
+        for (n, id) in [(1, 0x1002), (2, 0x1001), (6, 0x1003)] {
+            let o = self.objects[n];
+            if n != 6 {
+                let process = self.one_of4(&[0, OTHER, PROCESS]);
+                e.mem.set_u32(o + 0x68, process);
+            }
+            if self.flag4() {
+                e.mem.set_u32(o + 0xc, id);
+            }
+        }
+        // The running instance data (the record): the sandbox's location and the reference.
+        let r = self.objects[7];
+        let location = self.one_of4(&[0, TARGET, ACTOR]);
+        e.mem.set_u32(r + 0x10, location);
+        let reference = self.one_of4(&[0, TARGET]);
+        e.mem.set_u32(r + 0x3c, reference);
+        // The packages: the location's flag bit 4, the created flag, the flag 0x200000 and the
+        // procedure of an unequip-all or a pursue.
+        for o in [self.objects[3], self.objects[4]] {
+            let word = e.mem.u16(o + 0x24);
+            let word = if self.flag4() { word | 4 } else { word & !4 };
+            e.mem.set_u16(o + 0x24, word);
+            let mut flags = e.mem.u32(o + 0x1c);
+            if self.next4() % 4 == 0 {
+                flags |= 0x800;
+            }
+            if self.flag4() {
+                flags |= 0x0020_0000;
+            }
+            e.mem.set_u32(o + 0x1c, flags);
+            if e.mem.u8(o + 0x20) != 0xd && self.next4() % 3 == 0 {
+                let procedure = self.pick4(&[4, 0x13]);
+                e.mem.set_u8(o + 0x20, procedure as u8);
+            }
+        }
+    }
+
+    fn next4(&mut self) -> u64 {
+        self.rng4 ^= self.rng4 << 13;
+        self.rng4 ^= self.rng4 >> 7;
+        self.rng4 ^= self.rng4 << 17;
+        self.rng4
+    }
+
+    fn pick4(&mut self, from: &[u32]) -> u32 {
+        from[(self.next4() % from.len() as u64) as usize]
+    }
+
+    fn flag4(&mut self) -> bool {
+        self.next4() & 1 != 0
+    }
+
+    fn one_of4(&mut self, from: &[u32]) -> u32 {
+        let word = self.pick4(from);
+        self.resolve(word)
     }
 
     fn next3(&mut self) -> u64 {
@@ -1281,9 +1577,6 @@ fn targets_greetings_and_schedules() {
         low_process::set_current_package_from_schedule(Ptr, Ptr) -> bool
     ))
     .in_world(&MOST, |w| w.process_actor())
-    // The exe's `SetCurrentPackage` in slot 0x230 reaches `ActorPackage::InitFromPackage`, whose
-    // translation calls `Clear` and `TESPackage::IncRefCount` as plain Rust calls.
-    .translation_calls_plainly(&[0x008c_5ef0, 0x008c_6100])
     .run()
     .assert_same();
     Diff::new(entry!(
@@ -1358,6 +1651,123 @@ fn patrols_copies_and_clears() {
         low_process::objects_to_acquire_construct(Ptr) -> Ptr
     ))
     .in_world(&FEW, |w| vec![w.objects[9]])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn acquire_lists_procedures_and_loads() {
+    Diff::new(entry!(0x0090_70a0, low_process::release_acquire_data(Ptr)))
+        .in_world(&MANY, |w| vec![w.process()])
+        .run()
+        .assert_same();
+    Diff::new(entry!(
+        0x0090_cc10,
+        low_process::clear_object_from_acquire_list(Ptr, u32)
+    ))
+    .in_world(&MOST, |w| {
+        let reference = w.one_of(&[0, TARGET, ACTOR, ACTOR, FORM]);
+        vec![w.process(), reference]
+    })
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0090_cdc0,
+        low_process::clear_form_from_acquire_list(Ptr, u32)
+    ))
+    .in_world(&MOST, |w| {
+        let form = w.pick(&[0x1001, 0x1002, 0x1002, 0x1003, 7]);
+        vec![w.process(), form]
+    })
+    .run()
+    .assert_same();
+    // The time delta's float steps: SSE keeps the first NaN's payload, x87 the larger one's.
+    Diff::new(entry!(0x0090_7260, low_process::get_time_delta(Ptr, u32) -> f32))
+        .in_world(&MOST, |w| w.process_and(1))
+        .allow_nan_payloads()
+        .run()
+        .assert_same();
+    // The translation asks `GetTimeDelta` (and through it the form for an id) and drops its answer;
+    // the typed version does not ask it.
+    Diff::new(entry!(0x0090_9c90, low_process::process_flee(Ptr, u32)))
+        .in_world(&MANY, |w| w.process_actor())
+        .ignore_calls(&[0x0090_7260, QUIET])
+        .run()
+        .assert_same();
+    Diff::new(entry!(
+        0x0090_dc60,
+        low_process::process_pursue(Ptr, u32, u32, u32, u32)
+    ))
+    .in_world(&MOST, |w| {
+        let mut words = w.process_actor();
+        for _ in 0..3 {
+            words.push(w.word());
+        }
+        words
+    })
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0090_9320,
+        low_process::process_remove_worn(Ptr, u32, u8)
+    ))
+    .in_world(&MOST, |w| {
+        let mut words = w.process_actor();
+        let advance = w.pick(&[0, 1, 0x100]);
+        words.push(advance);
+        words
+    })
+    .run()
+    .assert_same();
+    Diff::new(entry!(0x0091_1f00, low_process::process_sandbox(Ptr, Ptr)))
+        .in_world(&MOST, |w| w.process_actor())
+        .run()
+        .assert_same();
+    Diff::new(entry!(
+        0x0090_f3f0,
+        low_process::current_destination_world_space(Ptr, Ptr) -> u32
+    ))
+    .in_world(&MOST, |w| w.process_actor())
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0090_f0e0,
+        low_process::current_destination_cell(Ptr, Ptr) -> u32
+    ))
+    .in_world(&MOST, |w| w.process_actor())
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0091_0250,
+        low_process::init_load_game(Ptr, u32, u32, u32)
+    ))
+    .in_world(&MANY, |w| w.process_and(3))
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0091_0820,
+        low_process::init_load_game_buffer(Ptr, u32)
+    ))
+    .in_world(&MOST, |w| w.process_and(1))
+    // The embedded package's typed `InitLoadGame_ov2` reads flag 0 (`008c6b00`) in place.
+    .ignore_calls(&[0x008c_6b00])
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0091_30f0,
+        low_process::save_package_to_extra_data(Ptr, Ptr)
+    ))
+    .in_world(&MOST, |w| w.process_actor())
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0091_3250,
+        low_process::load_package_from_extra_data(Ptr, Ptr)
+    ))
+    .in_world(&MOST, |w| w.process_actor())
+    // The translation reads the embedded package through the leaf `00559450`, the typed version in
+    // place (the first part's functions call that leaf themselves, so it is not in `IN_PLACE`).
+    .ignore_calls(&[0x0055_9450])
     .run()
     .assert_same();
 }
@@ -1675,9 +2085,9 @@ fn the_seeds_reach_every_branch() {
             "travel step",
             "at the reference",
         ],
-        |e, _| {
+        |e, seen| {
             vec![
-                calls(e, 0x0090_7260) == 0 && slot_calls(e, 0x418) == 0,
+                e.mem.u32(seen[1] + 8) == 0 && slot_calls(e, 0x418) == 0,
                 slot_calls(e, 0x418) > 0,
                 calls(e, 0x009f_2ba0) > 0,
                 calls(e, 0x0091_25b0) > 0,
@@ -1725,6 +2135,199 @@ fn the_seeds_reach_every_branch() {
                     let base = e.mem.u32(reference + 0x20);
                     e.mem.u8(base + 4) == 0x30 || base == e.mem.u32(ANGLED_FORM)
                 },
+            ]
+        },
+    );
+    reaches(
+        0x0090_70a0,
+        &MANY,
+        |w| vec![w.process()],
+        &["a record deleted", "the record at +0x84 deleted"],
+        |e, _| vec![calls(e, 0x007b_3fa0) > 0, slot_calls(e, 0x10) > 0],
+    );
+    let by_reference: fn(&mut World) -> Vec<u32> = |w| {
+        let reference = w.one_of(&[0, TARGET, ACTOR, ACTOR, FORM]);
+        vec![w.process(), reference]
+    };
+    let by_form: fn(&mut World) -> Vec<u32> = |w| {
+        let form = w.pick(&[0x1001, 0x1002, 0x1002, 0x1003, 7]);
+        vec![w.process(), form]
+    };
+    for (addr, words) in [(0x0090_cc10, by_reference), (0x0090_cdc0, by_form)] {
+        reaches(
+            addr,
+            &MOST,
+            words,
+            &[
+                "a hold deleted",
+                "an object list item taken off",
+                "a location taken off through the node before it",
+                "the head location taken off",
+            ],
+            |e, seen| {
+                let through = last_first(e, LIST_REMOVE_ITEM);
+                let removed = calls(e, LIST_REMOVE_ITEM) > 0;
+                vec![
+                    calls(e, 0x007b_3fa0) > 0,
+                    removed && through == seen[1] + 0x5c,
+                    removed && through == seen[1] + 0x6c,
+                    calls(e, 0x0063_f7b0) > 0,
+                ]
+            },
+        );
+    }
+    reaches(
+        0x0090_7260,
+        &MOST,
+        |w| w.process_and(1),
+        &["a day added", "none added"],
+        |e, seen| {
+            let global = e.mem.u32(CALENDAR + 0xc);
+            let hour = if global != 0 {
+                e.mem.u32(global + 0x24)
+            } else {
+                e.mem.u32(DEFAULT_HOUR)
+            };
+            let hour = f32::from_bits(hour);
+            let last = f32::from_bits(e.mem.u32(seen[1] + 0x20));
+            vec![hour < last, hour >= last]
+        },
+    );
+    reaches(
+        0x0090_9c90,
+        &MANY,
+        |w| w.process_actor(),
+        &["ended", "not ended"],
+        |e, _| vec![calls(e, 0x0088_1680) > 0, calls(e, 0x0088_1680) == 0],
+    );
+    reaches(
+        0x0090_dc60,
+        &MOST,
+        |w| {
+            let mut words = w.process_actor();
+            for _ in 0..3 {
+                words.push(w.word());
+            }
+            words
+        },
+        &[
+            "no target",
+            "a low target let go",
+            "far: the follow",
+            "near: the actor's slot 0x304",
+        ],
+        |e, seen| {
+            vec![
+                e.mem.u32(seen[1] + 0x40) == 0,
+                calls(e, 0x008a_6730) > 0,
+                slot_calls(e, 0x298) > 0,
+                slot_calls(e, 0x304) > 0,
+            ]
+        },
+    );
+    reaches(
+        0x0090_9320,
+        &MOST,
+        |w| {
+            let mut words = w.process_actor();
+            let advance = w.pick(&[0, 1, 0x100]);
+            words.push(advance);
+            words
+        },
+        &["an NPC", "a creature", "neither"],
+        |e, _| {
+            let npc = calls(e, 0x0060_6540) > 0;
+            let creature = calls(e, 0x005f_9e00) > 0;
+            vec![npc, creature, !npc && !creature]
+        },
+    );
+    reaches(
+        0x0091_1f00,
+        &MOST,
+        |w| w.process_actor(),
+        &[
+            "no data",
+            "started",
+            "placed",
+            "moved to the new space",
+            "paths there",
+        ],
+        |e, seen| {
+            vec![
+                e.mem.u32(seen[1] + 8) == 0,
+                calls(e, 0x009f_3af0) > 0,
+                slot_calls(e, 0x2a8) > 0,
+                calls(e, 0x0057_3800) > 0,
+                calls(e, 0x008b_36f0) > 0,
+            ]
+        },
+    );
+    reaches(
+        0x0090_f3f0,
+        &MOST,
+        |w| w.process_actor(),
+        &["the package location", "the target slot"],
+        |e, _| vec![calls(e, 0x0067_5a50) > 0, slot_calls(e, 0x128) > 0],
+    );
+    reaches(
+        0x0090_f0e0,
+        &MOST,
+        |w| w.process_actor(),
+        &["the package location", "the target slot"],
+        |e, _| vec![calls(e, 0x0067_5c20) > 0, slot_calls(e, 0x128) > 0],
+    );
+    reaches(
+        0x0091_0250,
+        &MANY,
+        |w| w.process_and(3),
+        &["a target id", "both ids resolved"],
+        |e, seen| vec![seen[5] != 0, calls(e, 0x00ec_43fb) > 1],
+    );
+    reaches(
+        0x0091_0820,
+        &MOST,
+        |w| w.process_and(1),
+        &[
+            "a location kept",
+            "one taken off through the node before it",
+            "the head taken off",
+        ],
+        |e, seen| {
+            let removed = calls(e, LIST_REMOVE_ITEM) > 0;
+            vec![
+                e.mem.u32(seen[1] + 0x6c) != 0,
+                removed && last_first(e, LIST_REMOVE_ITEM) == seen[1] + 0x6c,
+                calls(e, 0x0063_f7b0) > 0,
+            ]
+        },
+    );
+    reaches(
+        0x0091_30f0,
+        &MOST,
+        |w| w.process_actor(),
+        &["kept", "the instance data kept too", "not kept"],
+        |e, _| {
+            vec![
+                calls(e, 0x0041_c930) > 0,
+                calls(e, 0x0042_11d0) > 0,
+                calls(e, 0x0041_c930) == 0,
+            ]
+        },
+    );
+    reaches(
+        0x0091_3250,
+        &MOST,
+        |w| w.process_actor(),
+        &[
+            "started from the kept package",
+            "its instance data handed over",
+            "none kept",
+        ],
+        |e, _| {
+            vec![
+                calls(e, 0x0041_cc60) > 0,
+                calls(e, 0x006e_cd40) > 0,
+                calls(e, 0x0041_cc60) == 0,
             ]
         },
     );

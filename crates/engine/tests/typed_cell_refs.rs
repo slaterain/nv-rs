@@ -4065,6 +4065,10 @@ const XD_IN_PLACE: &[u32] = &[
     0x0042_1090,
     0x0042_1280,
     0x0042_0ba0,
+    0x0042_22f0,
+    0x0042_2420,
+    0x0042_26e0,
+    0x008c_71b0,
 ];
 
 /// The families an extra data function reaches (the extra list's with its lock, type getter,
@@ -4157,17 +4161,7 @@ const XD_NOTED: &[u32] = &[
     0x005a_bf60,
     0x005b_5e40,
     0x00ec_43fb,
-    0x0042_1540,
-    0x0042_1430,
-    0x0042_1b70,
-    0x0042_1e40,
-    0x0042_1d50,
-    0x0042_1c60,
-    0x0042_2220,
-    0x0042_2350,
     0x0042_dde0,
-    0x0042_2050,
-    0x0042_2150,
     0x0043_a160,
     0x0043_a810,
     0x0043_8bb0,
@@ -4179,8 +4173,6 @@ const XD_NOTED: &[u32] = &[
     0x0058_9450,
     0x0058_9770,
     0x0068_0890,
-    0x0042_2480,
-    0x0042_2750,
     0x0043_3b70,
     0x0043_42b0,
     0x0042_e2c0,
@@ -4189,7 +4181,6 @@ const XD_NOTED: &[u32] = &[
     0x0043_6f80,
     0x0043_8f50,
     0x0043_9120,
-    0x0042_1f30,
     0x0043_46f0,
     0x0043_4c80,
     0x004a_4d40,
@@ -4239,6 +4230,7 @@ fn xd_stand_ins(e: &mut Engine) {
     }
     xe_stand_ins(e);
     xp_stand_ins(e);
+    xq_stand_ins(e);
 }
 
 /// The extra list's world (`extra_world`) for the family: page 0 mapped (a failed allocation's
@@ -6256,18 +6248,8 @@ const XF_NOTED: &[u32] = &[
     0x0067_dd20,
     0x0043_0a90,
     0x004a_4e90,
-    0x0042_1430,
-    0x0042_1b70,
-    0x0042_1c60,
-    0x0042_1d50,
-    0x0042_1e40,
-    0x0042_1540,
-    0x0042_2220,
-    0x0042_2350,
     0x0042_eb60,
-    0x0042_1f30,
     0x0042_e2c0,
-    0x0042_2150,
     0x0042_f200,
     0x0048_4e60,
     0x0046_1630,
@@ -6328,7 +6310,7 @@ fn xf_stand_ins(e: &mut Engine) {
     }
     // `BSString::Length` (`004048e0`): the string's 16-bit length at +4 (no 0xffff strings here).
     e.register(0x0040_48e0, |e, a| ret(u32::from(e.mem.u16(a[0] + 4))));
-    for addr in [0x0042_eb40, 0x004f_66c0, 0x0042_2120] {
+    for addr in [0x0042_eb40, 0x004f_66c0] {
         e.register(addr, xf_maybe);
     }
 }
@@ -10468,6 +10450,1274 @@ fn xp_guard_two_words() {
         extra_data::rooms::guard_two_words(u32, u32, u32)
     ))
     .xe_pair(&[0x7c], XD_VALUES, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+// ---- The extra data family's part 4 range (`00421400` to `0042dd70`) ----------------------------
+
+/// What the part 4 range calls by address in other units: each a stand-in that counts (the friend
+/// hits' `AddHit` and `GetHitCount`, the saved buffers' warning, `DeleteBuffer` and loaders, the
+/// flags record's member, the actor cause's handle, the destructors of `ExtraLock`,
+/// `ExtraTeleport`, `ExtraScript`, `ExtraTresPassPackage` and `ExtraHeadingTarget`).
+const XQ_NOTED: &[u32] = &[
+    0x0043_5d40,
+    0x0043_5e20,
+    0x0084_5cc0,
+    0x0043_5c10,
+    0x0086_4b00,
+    0x0086_4d80,
+    0x0042_f570,
+    0x0042_f730,
+    0x0042_f780,
+    0x0042_f760,
+    0x0043_0ca0,
+    0x0043_1260,
+    0x0043_2040,
+    0x0043_2900,
+    0x0043_5ef0,
+];
+
+/// The part 4 range's stand-ins (`xd_stand_ins` holds them): the counted callees and the
+/// constructors of the saved animation and havok data, the last finished sequence (given its name)
+/// and the friend hits, each giving its type, and the leveled creature modifier's two getters.
+fn xq_stand_ins(e: &mut Engine) {
+    for &addr in XQ_NOTED {
+        e.register(addr, noted);
+    }
+    e.register(0x0043_5a60, built::<0x42>);
+    e.register(0x0043_5b50, built::<0x3d>);
+    e.register(0x0043_51d0, built::<0x41>);
+    e.register(0x0043_5c40, built::<0x45>);
+    e.register(0x0043_50c0, xq_lev_float);
+    e.register(0x0043_5100, xq_lev_word);
+}
+
+/// The leveled creature modifier's `float` (`004350c0`: 1.0 for the neutral index 4, else the game
+/// setting the index names): 1.0 or the payload's bits, in ST0.
+fn xq_lev_float(e: &mut Engine, a: &[u32]) -> Ret {
+    match e.mem.u32(a[0] + 0xc) {
+        4 => float_ret(1.0f32.to_bits()),
+        word => float_ret(word),
+    }
+}
+
+/// The leveled creature modifier's word (`00435100`): 1 for the index 0, 0 for 4, else all ones.
+fn xq_lev_word(e: &mut Engine, a: &[u32]) -> Ret {
+    ret(match e.mem.u32(a[0] + 0xc) {
+        0 => 1,
+        4 => 0,
+        _ => u32::MAX,
+    })
+}
+
+/// The leveled creature modifier's setter's values: 4 (its neutral value), 0, 1, all ones.
+const XQ_LEV_VALUES: &[u32] = &[4, 0, 1, u32::MAX];
+/// The leveled creature's two words: none, one, a pointer-like word.
+const XQ_PAIR: &[u32] = &[0, 1, 0x1234_5678];
+/// The player character's pointer.
+const XQ_PLAYER: u32 = 0x011d_ea3c;
+/// The types whose getters and setters the reach test looks at.
+const XQ_KINDS: [u32; 10] = [0x05, 0x1e, 0x2e, 0x3d, 0x41, 0x42, 0x48, 0x5c, 0x61, 0x62];
+
+/// [`XqShapes::xq_followers`]' world: the follower list (type 0x1d) placed or not, its payload a
+/// list of up to four of [`XP_REFS`] (repeats too) or, in some seeds, none; the player none or the
+/// second reference.
+fn xq_follower_world(e: &mut Engine, seed: u32) -> ExtraWorld {
+    let w = xd_world(e, seed);
+    let placed = place_kind(e, &w, seed, 0x1d);
+    let mut d = Draw(seed.wrapping_mul(0x2f6b_6f5d) ^ 0x1d);
+    let [item, next] = xp_ref_words(e, &mut d);
+    let head = if seed % 5 == 4 {
+        0
+    } else {
+        let head = e.mem.alloc(8);
+        e.mem.set_u32(head, item);
+        e.mem.set_u32(head + 4, next);
+        head
+    };
+    xe_hold(e, placed, 0x1d, head);
+    e.mem.set_u32(XQ_PLAYER, [0, 0x22][(seed / 2 % 2) as usize]);
+    w
+}
+
+/// The part 4 range's test shapes.
+trait XqShapes {
+    fn xq_outs(self, kind: u32) -> Diff;
+    fn xq_followers(self) -> Diff;
+    fn xq_seeded(self, n: u32) -> Diff;
+    fn xq_list_word(self) -> Diff;
+    fn xq_given_word(self) -> Diff;
+}
+
+impl XqShapes for Diff {
+    /// (list, out float, out word) with an extra data of `kind` placed or not.
+    fn xq_outs(self, kind: u32) -> Diff {
+        self.extra_data_case()
+            .inputs(&[Input::Of(EXTRA_SEEDS)])
+            .setup(move |e, case| {
+                let w = xd_world(e, case.word(0));
+                place_kind(e, &w, case.word(0), kind);
+                vec![w.list, junk(e, 0x10), junk(e, 0x10)]
+            })
+    }
+
+    /// (list, follower) over [`xq_follower_world`].
+    fn xq_followers(self) -> Diff {
+        self.extra_data_case()
+            .max_cases(EXTRA_SEEDS.len() * XP_REFS.len())
+            .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(XP_REFS)])
+            .setup(|e, case| {
+                let w = xq_follower_world(e, case.word(0));
+                vec![w.list, case.word(1)]
+            })
+    }
+
+    /// A constructor's block of `n` bytes in the world, whose `operator new` fails in some seeds and
+    /// whose -1.0 at `01012054` a record copies.
+    fn xq_seeded(self, n: u32) -> Diff {
+        self.extra_data_case()
+            .inputs(&[Input::Of(&EXTRA_SEEDS[..12])])
+            .setup(move |e, case| {
+                xd_world(e, case.word(0));
+                vec![xd_block(e, n, 0x5a)]
+            })
+    }
+
+    /// A word pointing at a list's head node: no item and no next, an item, a next, both, or a null
+    /// head (page 0 mapped in the world).
+    fn xq_list_word(self) -> Diff {
+        self.extra_data_case()
+            .inputs(&[Input::Of(&[0, 1, 2, 3, 4])])
+            .setup(|e, case| {
+                xd_world(e, 3);
+                let which = case.word(0);
+                let node = if which == 4 {
+                    0
+                } else {
+                    let node = e.mem.alloc(8);
+                    e.mem.set_u32(node, [0, 0x11, 0, 0x11][which as usize]);
+                    e.mem.set_u32(node + 4, [0, 0, 0x22, 0x22][which as usize]);
+                    node
+                };
+                let at = e.mem.alloc(4);
+                e.mem.set_u32(at, node);
+                vec![at]
+            })
+    }
+
+    /// No words; the word at `011c6444` drawn from [`XD_VALUES`].
+    fn xq_given_word(self) -> Diff {
+        self.extra_data_case()
+            .inputs(&[Input::Of(XD_VALUES)])
+            .setup(|e, case| {
+                e.map(0x011c_6000, 0x1000);
+                e.mem.set_u32(0x011c_6444, case.word(0));
+                vec![]
+            })
+    }
+}
+
+/// The part 4 range's worlds reach what its functions branch on (every miss listed at once): the
+/// extra data of each type found or not, and with none a failed allocation or not; a follower that
+/// is the player, held or not, a follower list with no list and a list without the extra data; the
+/// neutral values and others; a lock record whose allocation fails.
+#[test]
+fn the_part_4_worlds_reach_every_branch() {
+    let mut reached = std::collections::BTreeSet::<String>::new();
+    for &seed in EXTRA_SEEDS {
+        for kind in XQ_KINDS {
+            let mut e = Engine::new_untyped_for_test();
+            let w = xd_world(&mut e, seed);
+            place_kind(&mut e, &w, seed, kind);
+            let found = e.call(0x0041_0220, &args![w.list, kind]).u32() != 0;
+            reached.insert(format!("type {kind:#x} found {found}"));
+            if !found {
+                let fails = e.mem.u32(XD_NEW_FAILS) != 0;
+                reached.insert(format!("type {kind:#x} missing, new fails {fails}"));
+            }
+        }
+        for &follower in XP_REFS {
+            let mut e = Engine::new_untyped_for_test();
+            let w = xq_follower_world(&mut e, seed);
+            if follower == e.mem.u32(XQ_PLAYER) {
+                reached.insert("follower is the player".into());
+                continue;
+            }
+            let extra = e.call(0x0041_0220, &args![w.list, 0x1du32]).u32();
+            if extra == 0 {
+                reached.insert("no follower list".into());
+                continue;
+            }
+            let mut node = e.mem.u32(extra + 0xc);
+            if node == 0 {
+                reached.insert("follower list empty".into());
+            }
+            let mut held = false;
+            for _ in 0..8 {
+                if node == 0 {
+                    break;
+                }
+                held |= e.mem.u32(node) == follower;
+                node = e.mem.u32(node + 4);
+            }
+            reached.insert(format!("follower held {held}"));
+        }
+    }
+    for &value in XD_FLOATS {
+        reached.insert(format!("float zero {}", f32::from_bits(value) == 0.0));
+    }
+    for &first in XQ_PAIR {
+        for &second in XQ_PAIR {
+            reached.insert(format!("pair removes {}", first == 0 || second == 0));
+        }
+    }
+    for &value in XQ_LEV_VALUES {
+        reached.insert(format!("modifier neutral {}", value == 4));
+    }
+    for &seed in &EXTRA_SEEDS[..12] {
+        let mut e = Engine::new_untyped_for_test();
+        xd_world(&mut e, seed);
+        let fails = e.mem.u32(XD_NEW_FAILS) != 0;
+        reached.insert(format!("lock record new fails {fails}"));
+    }
+    let mut wanted: Vec<String> = Vec::new();
+    for kind in XQ_KINDS {
+        for found in [true, false] {
+            wanted.push(format!("type {kind:#x} found {found}"));
+            wanted.push(format!("type {kind:#x} missing, new fails {found}"));
+        }
+    }
+    for fact in [
+        "follower is the player",
+        "no follower list",
+        "follower list empty",
+        "follower held true",
+        "follower held false",
+        "float zero true",
+        "float zero false",
+        "pair removes true",
+        "pair removes false",
+        "modifier neutral true",
+        "modifier neutral false",
+        "lock record new fails true",
+        "lock record new fails false",
+    ] {
+        wanted.push(fact.into());
+    }
+    let missed: Vec<&String> = wanted.iter().filter(|w| !reached.contains(*w)).collect();
+    assert!(missed.is_empty(), "never reached: {missed:?}");
+}
+
+#[test]
+fn xq_merchant_container() {
+    Diff::new(entry!(0x0042_1400, extra_data::followers::merchant_container(u32) -> u32))
+        .xd_getter(0x3c)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_set_merchant_container() {
+    Diff::new(entry!(
+        0x0042_1430,
+        extra_data::followers::set_merchant_container(u32, u32)
+    ))
+    .xd_setter(0x3c, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_lev_crea_modifier() {
+    Diff::new(entry!(
+        0x0042_14f0,
+        extra_data::followers::lev_crea_modifier(u32, u32, u32)
+    ))
+    .xq_outs(0x1e)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_set_lev_crea_modifier() {
+    Diff::new(entry!(
+        0x0042_1540,
+        extra_data::followers::set_lev_crea_modifier(u32, u32)
+    ))
+    .xd_setter(0x1e, XQ_LEV_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_set_no_rumors() {
+    Diff::new(entry!(
+        0x0042_1600,
+        extra_data::followers::set_no_rumors(u32, u8)
+    ))
+    .xd_setter(0x4e, XE_BYTES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_remove_no_rumors() {
+    Diff::new(entry!(
+        0x0042_16b0,
+        extra_data::followers::remove_no_rumors(u32)
+    ))
+    .xd_getter(0x4e)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_has_leveled_creature() {
+    Diff::new(entry!(0x0042_16d0, extra_data::followers::has_leveled_creature(u32) -> bool))
+        .xd_getter(0x2e)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_lev_crea_original_base() {
+    Diff::new(entry!(0x0042_16f0, extra_data::followers::lev_crea_original_base(u32) -> u32))
+        .xd_getter(0x2e)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_leveled_creature_word() {
+    Diff::new(entry!(0x0042_1720, extra_data::followers::leveled_creature_word(u32) -> u32))
+        .xd_getter(0x2e)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_set_leveled_creature() {
+    Diff::new(entry!(
+        0x0042_1750,
+        extra_data::followers::set_leveled_creature(u32, u32, u32)
+    ))
+    .xe_pair(&[0x2e], XQ_PAIR, XQ_PAIR)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_detach_time() {
+    Diff::new(entry!(0x0042_1820, extra_data::followers::detach_time(u32) -> u32))
+        .xd_getter(0x0b)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_set_detach_time() {
+    Diff::new(entry!(
+        0x0042_1850,
+        extra_data::followers::set_detach_time(u32, u32)
+    ))
+    .xd_setter(0x0b, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_seen_data() {
+    Diff::new(entry!(0x0042_1910, extra_data::followers::seen_data(u32) -> u32))
+        .xd_getter(0x05)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_set_seen_data() {
+    Diff::new(entry!(
+        0x0042_1940,
+        extra_data::followers::set_seen_data(u32, u32)
+    ))
+    .xe_owned(0x05, false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_north_rotation() {
+    Diff::new(entry!(0x0042_1a40, extra_data::followers::north_rotation(u32) -> f32))
+        .xd_getter(0x43)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_set_north_rotation() {
+    Diff::new(entry!(
+        0x0042_1a70,
+        extra_data::followers::set_north_rotation(u32, f32)
+    ))
+    .xd_setter(0x43, XD_FLOATS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_x_target() {
+    Diff::new(entry!(0x0042_1b40, extra_data::followers::x_target(u32) -> u32))
+        .xd_getter(0x44)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_set_x_target() {
+    Diff::new(entry!(
+        0x0042_1b70,
+        extra_data::followers::set_x_target(u32, u32)
+    ))
+    .xd_setter(0x44, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_encounter_zone() {
+    Diff::new(entry!(0x0042_1c30, extra_data::followers::encounter_zone(u32) -> u32))
+        .xd_getter(0x74)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_set_encounter_zone() {
+    Diff::new(entry!(
+        0x0042_1c60,
+        extra_data::followers::set_encounter_zone(u32, u32)
+    ))
+    .xd_setter(0x74, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_emittance_source() {
+    Diff::new(entry!(0x0042_1d20, extra_data::followers::emittance_source(u32) -> u32))
+        .xd_getter(0x67)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_set_emittance_source() {
+    Diff::new(entry!(
+        0x0042_1d50,
+        extra_data::followers::set_emittance_source(u32, u32)
+    ))
+    .xd_setter(0x67, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_multibound_ref() {
+    Diff::new(entry!(0x0042_1e10, extra_data::followers::multibound_ref(u32) -> u32))
+        .xd_getter(0x63)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_set_multibound_ref() {
+    Diff::new(entry!(
+        0x0042_1e40,
+        extra_data::followers::set_multibound_ref(u32, u32)
+    ))
+    .xd_setter(0x63, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_multibound_data() {
+    Diff::new(entry!(0x0042_1f00, extra_data::followers::multibound_data(u32) -> u32))
+        .xd_getter(0x62)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_set_multibound_data() {
+    Diff::new(entry!(
+        0x0042_1f30,
+        extra_data::followers::set_multibound_data(u32, u32)
+    ))
+    .xd_setter(0x62, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_multi_bound() {
+    Diff::new(entry!(0x0042_2020, extra_data::followers::multi_bound(u32) -> u32))
+        .xd_getter(0x61)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_set_multi_bound() {
+    Diff::new(entry!(
+        0x0042_2050,
+        extra_data::followers::set_multi_bound(u32, u32)
+    ))
+    .xd_setter(0x61, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_occlusion_plane() {
+    Diff::new(entry!(0x0042_2120, extra_data::followers::occlusion_plane(u32) -> u32))
+        .xd_getter(0x71)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_set_occlusion_plane() {
+    Diff::new(entry!(
+        0x0042_2150,
+        extra_data::followers::set_occlusion_plane(u32, u32)
+    ))
+    .xd_setter(0x71, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_set_radius() {
+    Diff::new(entry!(
+        0x0042_2220,
+        extra_data::followers::set_radius(u32, f32)
+    ))
+    .xd_setter(0x5c, XD_FLOATS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_radius_extra_new() {
+    Diff::new(entry!(0x0042_22f0, extra_data::followers::radius_extra_new(u32, f32) -> u32))
+        .xp_on(0x20, 0x0042_22f0, XD_FLOATS)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_radius() {
+    Diff::new(entry!(0x0042_2320, extra_data::followers::radius(u32) -> f32))
+        .xd_getter(0x5c)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_set_radiation() {
+    Diff::new(entry!(
+        0x0042_2350,
+        extra_data::followers::set_radiation(u32, f32)
+    ))
+    .xd_setter(0x5d, XD_FLOATS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_radiation_extra_new() {
+    Diff::new(entry!(0x0042_2420, extra_data::followers::radiation_extra_new(u32, f32) -> u32))
+        .xp_on(0x20, 0x0042_2420, XD_FLOATS)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_radiation() {
+    Diff::new(entry!(0x0042_2450, extra_data::followers::radiation(u32) -> f32))
+        .xd_getter(0x5d)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_add_follower() {
+    Diff::new(entry!(
+        0x0042_2480,
+        extra_data::followers::add_follower(u32, u32)
+    ))
+    .xq_followers()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_has_follower() {
+    Diff::new(entry!(0x0042_2550, extra_data::followers::has_follower(u32, u32) -> bool))
+        .xq_followers()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_add_friend_hit() {
+    Diff::new(entry!(0x0042_2590, extra_data::followers::add_friend_hit(u32) -> u32))
+        .xd_getter(0x45)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_friend_hit_count() {
+    Diff::new(entry!(0x0042_2640, extra_data::followers::friend_hit_count(u32) -> u32))
+        .xd_getter(0x45)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_remove_friend_hits() {
+    Diff::new(entry!(
+        0x0042_2670,
+        extra_data::followers::remove_friend_hits(u32)
+    ))
+    .xd_getter(0x45)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_remove_follower() {
+    Diff::new(entry!(
+        0x0042_2690,
+        extra_data::followers::remove_follower(u32, u32)
+    ))
+    .xq_followers()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_clearing_data() {
+    Diff::new(entry!(0x0042_26e0, extra_data::followers::clearing_data(u32) -> u8))
+        .xd_on_pattern(0x620, 0x0042_26e0)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_remove_follower_extra() {
+    Diff::new(entry!(
+        0x0042_2720,
+        extra_data::followers::remove_follower_extra(u32)
+    ))
+    .xd_getter(0x1d)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_set_refraction_property() {
+    Diff::new(entry!(
+        0x0042_2750,
+        extra_data::followers::set_refraction_property(u32, u8, f32)
+    ))
+    .xe_pair(&[0x48], XE_FLAGS, XD_FLOATS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_refraction_property_extra() {
+    Diff::new(entry!(0x0042_2820, extra_data::followers::refraction_property_extra(u32) -> u32))
+        .xd_getter(0x48)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_set_last_finished_sequence() {
+    Diff::new(entry!(
+        0x0042_2850,
+        extra_data::followers::set_last_finished_sequence(u32, u32)
+    ))
+    .xd_setter(0x41, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_last_finished_sequence() {
+    Diff::new(entry!(0x0042_28f0, extra_data::followers::last_finished_sequence(u32) -> u32))
+        .xd_getter(0x41)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_remove_last_finished_sequence() {
+    Diff::new(entry!(
+        0x0042_2920,
+        extra_data::followers::remove_last_finished_sequence(u32)
+    ))
+    .xd_getter(0x41)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_set_saved_animation() {
+    Diff::new(entry!(
+        0x0042_2940,
+        extra_data::followers::set_saved_animation(u32, u32)
+    ))
+    .xd_setter(0x42, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_saved_animation() {
+    Diff::new(entry!(0x0042_2a10, extra_data::followers::saved_animation(u32) -> u32))
+        .xd_getter(0x42)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_restore_saved_animation() {
+    Diff::new(
+        entry!(0x0042_2a40, extra_data::followers::restore_saved_animation(u32, u32) -> bool),
+    )
+    .xd_setter(0x42, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_remove_saved_animation() {
+    Diff::new(entry!(
+        0x0042_2aa0,
+        extra_data::followers::remove_saved_animation(u32)
+    ))
+    .xd_getter(0x42)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_set_saved_havok_data() {
+    Diff::new(entry!(
+        0x0042_2ac0,
+        extra_data::followers::set_saved_havok_data(u32, u32)
+    ))
+    .xd_setter(0x3d, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_saved_havok_data() {
+    Diff::new(entry!(0x0042_2b90, extra_data::followers::saved_havok_data(u32) -> u32))
+        .xd_getter(0x3d)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_restore_saved_havok_data() {
+    Diff::new(
+        entry!(0x0042_2bc0, extra_data::followers::restore_saved_havok_data(u32, u32) -> bool),
+    )
+    .xd_setter(0x3d, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_remove_saved_havok_data() {
+    Diff::new(entry!(
+        0x0042_2c20,
+        extra_data::followers::remove_saved_havok_data(u32)
+    ))
+    .xd_getter(0x3d)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_byte_at_c() {
+    Diff::new(entry!(0x0042_4940, extra_data::classes::byte_at_c(u32) -> u8))
+        .xd_on_pattern(0x20, 0x0042_4940)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_first_string_to() {
+    Diff::new(entry!(0x0042_8070, extra_data::classes::first_string_to(u32, u32) -> u32))
+        .extra_data_case_but(0x0042_8070)
+        .setup(|e, _| {
+            xd_stand_ins(e);
+            vec![xd_block(e, 0x20, 0x11), xd_block(e, 0x10, 0x22)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_second_string_to() {
+    Diff::new(entry!(0x0042_80b0, extra_data::classes::second_string_to(u32, u32) -> u32))
+        .extra_data_case_but(0x0042_80b0)
+        .setup(|e, _| {
+            xd_stand_ins(e);
+            vec![xd_block(e, 0x20, 0x11), xd_block(e, 0x10, 0x22)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_has_any() {
+    Diff::new(entry!(0x0042_80f0, extra_data::classes::has_any(u32, u32) -> bool))
+        .xp_on(0x10, 0x0042_80f0, XD_VALUES)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_save_kind_to() {
+    Diff::new(entry!(0x0042_8110, extra_data::classes::save_kind_to(u32, u32) -> u32))
+        .xd_copies(0x0042_8110)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_set_save_kind() {
+    Diff::new(entry!(
+        0x0042_8130,
+        extra_data::classes::set_save_kind(u32, u32)
+    ))
+    .xp_on(0x20, 0x0042_8130, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_flags_record_new() {
+    Diff::new(entry!(0x0042_c470, extra_data::classes::flags_record_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c470)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_lock_extra_new() {
+    Diff::new(entry!(0x0042_c4b0, extra_data::classes::lock_extra_new(u32) -> u32))
+        .xq_seeded(0x20)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_lock_extra_delete() {
+    Diff::new(entry!(0x0042_c550, extra_data::classes::lock_extra_delete(u32, u32) -> u32))
+        .xd_data_delete()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_teleport_extra_new() {
+    Diff::new(entry!(0x0042_c580, extra_data::classes::teleport_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c580)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_teleport_extra_delete() {
+    Diff::new(entry!(0x0042_c5b0, extra_data::classes::teleport_extra_delete(u32, u32) -> u32))
+        .xd_data_delete()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_ownership_extra_new() {
+    Diff::new(entry!(0x0042_c5e0, extra_data::classes::ownership_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c5e0)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_global_extra_new() {
+    Diff::new(entry!(0x0042_c610, extra_data::classes::global_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c610)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_rank_extra_new() {
+    Diff::new(entry!(0x0042_c640, extra_data::classes::rank_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c640)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_count_extra_new() {
+    Diff::new(entry!(0x0042_c670, extra_data::classes::count_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c670)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_health_extra_new() {
+    Diff::new(entry!(0x0042_c6a0, extra_data::classes::health_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c6a0)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_uses_extra_new() {
+    Diff::new(entry!(0x0042_c6d0, extra_data::classes::uses_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c6d0)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_time_left_extra_new() {
+    Diff::new(entry!(0x0042_c700, extra_data::classes::time_left_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c700)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_charge_extra_new() {
+    Diff::new(entry!(0x0042_c730, extra_data::classes::charge_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c730)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_script_extra_new() {
+    Diff::new(entry!(0x0042_c760, extra_data::classes::script_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c760)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_script_extra_delete() {
+    Diff::new(entry!(0x0042_c7a0, extra_data::classes::script_extra_delete(u32, u32) -> u32))
+        .xd_data_delete()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_scale_extra_new() {
+    Diff::new(entry!(0x0042_c7d0, extra_data::classes::scale_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c7d0)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_hot_key_extra_new() {
+    Diff::new(entry!(0x0042_c800, extra_data::classes::hot_key_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c800)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_reference_pointer_extra_new() {
+    Diff::new(entry!(0x0042_c830, extra_data::classes::reference_pointer_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c830)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_trespass_package_extra_new() {
+    Diff::new(entry!(0x0042_c860, extra_data::classes::trespass_package_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c860)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_trespass_package_extra_delete() {
+    Diff::new(
+        entry!(0x0042_c890, extra_data::classes::trespass_package_extra_delete(u32, u32) -> u32),
+    )
+    .xd_data_delete()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_leveled_item_extra_new() {
+    Diff::new(entry!(0x0042_c8c0, extra_data::classes::leveled_item_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c8c0)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_poison_extra_new() {
+    Diff::new(entry!(0x0042_c900, extra_data::classes::poison_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c900)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_head_track_target_extra_new() {
+    Diff::new(entry!(0x0042_c930, extra_data::classes::head_track_target_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c930)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_head_track_target_extra_delete() {
+    Diff::new(
+        entry!(0x0042_c960, extra_data::classes::head_track_target_extra_delete(u32, u32) -> u32),
+    )
+    .xd_data_delete()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_no_rumors_extra_new() {
+    Diff::new(entry!(0x0042_c990, extra_data::classes::no_rumors_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c990)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_object_health_extra_new() {
+    Diff::new(entry!(0x0042_c9c0, extra_data::classes::object_health_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c9c0)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_model_swap_extra_new() {
+    Diff::new(entry!(0x0042_c9f0, extra_data::classes::model_swap_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_c9f0)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_radius_extra_default() {
+    Diff::new(entry!(0x0042_ca30, extra_data::classes::radius_extra_default(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_ca30)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_radiation_extra_default() {
+    Diff::new(entry!(0x0042_ca60, extra_data::classes::radiation_extra_default(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_ca60)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_actor_cause_extra_new() {
+    Diff::new(entry!(0x0042_ca90, extra_data::classes::actor_cause_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_ca90)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_actor_cause_extra_delete() {
+    Diff::new(entry!(0x0042_cb00, extra_data::classes::actor_cause_extra_delete(u32, u32) -> u32))
+        .xd_data_delete()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_actor_cause_extra_drop() {
+    Diff::new(entry!(
+        0x0042_cb30,
+        extra_data::classes::actor_cause_extra_drop(u32)
+    ))
+    .xd_on_pattern(0x20, 0x0042_cb30)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_ammo_extra_new() {
+    Diff::new(entry!(0x0042_cba0, extra_data::classes::ammo_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_cba0)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_package_data_extra_new() {
+    Diff::new(entry!(0x0042_cbe0, extra_data::classes::package_data_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_cbe0)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_record_new() {
+    Diff::new(entry!(0x0042_cc10, extra_data::classes::record_new(u32) -> u32))
+        .xq_seeded(0x20)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_weapon_mod_slots_extra_new() {
+    Diff::new(entry!(0x0042_cc40, extra_data::classes::weapon_mod_slots_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_cc40)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_weapon_mod_slots_extra_delete() {
+    Diff::new(
+        entry!(0x0042_cc70, extra_data::classes::weapon_mod_slots_extra_delete(u32, u32) -> u32),
+    )
+    .xd_data_delete()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_weapon_mod_slots_extra_drop() {
+    Diff::new(entry!(
+        0x0042_cca0,
+        extra_data::classes::weapon_mod_slots_extra_drop(u32)
+    ))
+    .xd_on_pattern(0x20, 0x0042_cca0)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_securitron_face_extra_new() {
+    Diff::new(entry!(0x0042_ccc0, extra_data::classes::securitron_face_extra_new(u32) -> u32))
+        .xd_on_pattern(0x20, 0x0042_ccc0)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_securitron_face_extra_delete() {
+    Diff::new(
+        entry!(0x0042_cd40, extra_data::classes::securitron_face_extra_delete(u32, u32) -> u32),
+    )
+    .xd_data_delete()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_securitron_face_extra_drop() {
+    Diff::new(entry!(
+        0x0042_cd70,
+        extra_data::classes::securitron_face_extra_drop(u32)
+    ))
+    .xd_on_pattern(0x20, 0x0042_cd70)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_list_at_is_empty() {
+    Diff::new(entry!(0x0042_cde0, extra_data::classes::list_at_is_empty(u32) -> bool))
+        .xq_list_word()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_given_word() {
+    Diff::new(entry!(0x0042_ce00, extra_data::classes::given_word() -> u32))
+        .xq_given_word()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_flag_2_of_244() {
+    Diff::new(entry!(0x0042_ce10, extra_data::classes::flag_2_of_244(u32) -> bool))
+        .xd_on_pattern(0x250, 0x0042_ce10)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_buffer_flags_to() {
+    Diff::new(entry!(0x0042_ce30, extra_data::classes::buffer_flags_to(u32, u32) -> u32))
+        .xd_copies(0x0042_ce30)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_set_flag_8_of_28() {
+    Diff::new(entry!(
+        0x0042_ce50,
+        extra_data::classes::set_flag_8_of_28(u32, u8)
+    ))
+    .xp_on(0x30, 0x0042_ce50, XE_BYTES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xq_flag_8_of_28() {
+    Diff::new(entry!(0x0042_ce90, extra_data::classes::flag_8_of_28(u32) -> bool))
+        .xd_on_pattern(0x30, 0x0042_ce90)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xq_copy_byte_d_to_c() {
+    Diff::new(entry!(
+        0x0042_dd70,
+        extra_data::classes::copy_byte_d_to_c(u32)
+    ))
+    .xd_on_pattern(0x20, 0x0042_dd70)
     .run()
     .assert_same();
 }

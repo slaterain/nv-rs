@@ -599,10 +599,6 @@ impl InWorld for Diff {
 }
 
 /// The `ActorPackage` translations' calls of their siblings, which are plain Rust calls.
-const CLEAR: u32 = 0x008c_5ef0;
-const INIT_FROM_PACKAGE: u32 = 0x008c_6080;
-const INC_REF_COUNT: u32 = 0x008c_6100;
-const SET_FLAG: u32 = 0x008c_6920;
 
 #[test]
 fn answers_without_reading() {
@@ -801,7 +797,6 @@ fn current_package() {
         let package = w.one_of(&[0, FORM_A, FORM_B]);
         vec![w.process(), package, w.word()]
     })
-    .translation_calls_plainly(&[CLEAR, INC_REF_COUNT])
     .run()
     .assert_same();
     Diff::new(entry!(
@@ -809,7 +804,6 @@ fn current_package() {
         base_process::handle_deleted_reference(Ptr, u32)
     ))
     .in_world(&MANY, |w| w.process_and(1))
-    .translation_calls_plainly(&[0x008d_0430])
     .run()
     .assert_same();
 }
@@ -863,7 +857,6 @@ fn char_controller_and_destructor() {
         let flags = w.pick(&[0, 1, 2, 3, 0xffff_ffff]);
         vec![w.process(), flags]
     })
-    .translation_calls_plainly(&[0x008d_0640])
     .run()
     .assert_same();
 }
@@ -897,7 +890,6 @@ fn save_and_load() {
         base_process::load_game(Ptr, u32, u32, u32)
     ))
     .in_world(&MOST, |w| w.process_and(3))
-    .translation_calls_plainly(&[CLEAR, INIT_FROM_PACKAGE, INC_REF_COUNT])
     .run()
     .assert_same();
     Diff::new(entry!(
@@ -934,7 +926,6 @@ fn save_and_load_of_a_buffer() {
         base_process::load_game_buffer(Ptr, u32)
     ))
     .in_world(&MANY, |w| w.with_buffer(false))
-    .translation_calls_plainly(&[SET_FLAG, CLEAR])
     .run()
     .assert_same();
     Diff::new(entry!(
@@ -942,7 +933,8 @@ fn save_and_load_of_a_buffer() {
         base_process::init_load_game_buffer(Ptr, u32)
     ))
     .in_world(&MANY, |w| w.with_buffer(false))
-    .translation_calls_plainly(&[0x008d_1030, INC_REF_COUNT])
+    // The package's typed `InitLoadGame_ov2` reads flag 0 (`008c6b00`) in place.
+    .ignore_calls(&[0x008c_6b00])
     .run()
     .assert_same();
     Diff::new(entry!(
@@ -957,11 +949,12 @@ fn save_and_load_of_a_buffer() {
         base_process::finish_load_game(Ptr, u32)
     ))
     .in_world(&MANY, |w| w.with_buffer(false))
+    // The package's typed `FinishLoadGame` reads and clears flag 0 (`008c6b00`, `008c6920`) in place.
+    .ignore_calls(&[0x008c_6b00, 0x008c_6920])
     .run()
     .assert_same();
     Diff::new(entry!(0x008d_1070, base_process::revert_buffer(Ptr, u32)))
         .in_world(&MANY, |w| w.process_and(1))
-        .translation_calls_plainly(&[0x008d_1030, CLEAR])
         .run()
         .assert_same();
 }
@@ -1006,7 +999,6 @@ fn package_record() {
         let package = w.one_of(&[0, FORM_A, FORM_B]);
         vec![w.package(), package, w.word()]
     })
-    .translation_calls_plainly(&[CLEAR, INC_REF_COUNT])
     .run()
     .assert_same();
     Diff::new(entry!(0x008c_6130, actor_package::move_to(Ptr, Ptr)))
@@ -1046,7 +1038,6 @@ fn package_save_and_load() {
         .assert_same();
     Diff::new(entry!(0x008c_6320, actor_package::load_game(Ptr, u32, u32)))
         .in_world(&MOST, |w| w.package_and(2))
-        .translation_calls_plainly(&[CLEAR, INIT_FROM_PACKAGE, INC_REF_COUNT])
         .run()
         .assert_same();
     Diff::new(entry!(
@@ -1062,7 +1053,6 @@ fn package_save_and_load() {
         .assert_same();
     Diff::new(entry!(0x008c_6c80, actor_package::revert(Ptr, u32)))
         .in_world(&MANY, |w| w.package_and(1))
-        .translation_calls_plainly(&[CLEAR])
         .run()
         .assert_same();
 }
@@ -1078,7 +1068,6 @@ fn package_save_and_load_of_a_buffer() {
         actor_package::load_game_buffer(Ptr, Ptr)
     ))
     .in_world(&MOST, |w| w.with_buffer(true))
-    .translation_calls_plainly(&[SET_FLAG, CLEAR])
     .run()
     .assert_same();
     Diff::new(entry!(
@@ -1086,7 +1075,8 @@ fn package_save_and_load_of_a_buffer() {
         actor_package::init_load_game_buffer(Ptr, Ptr)
     ))
     .in_world(&MOST, |w| w.with_buffer(true))
-    .translation_calls_plainly(&[INC_REF_COUNT])
+    // The typed version reads flag 0 (`008c6b00`) in place.
+    .ignore_calls(&[0x008c_6b00])
     .run()
     .assert_same();
     Diff::new(entry!(
@@ -1094,6 +1084,8 @@ fn package_save_and_load_of_a_buffer() {
         actor_package::finish_load_game(Ptr, Ptr)
     ))
     .in_world(&MOST, |w| w.with_buffer(true))
+    // The typed version reads and clears flag 0 (`008c6b00`, `008c6920`) in place.
+    .ignore_calls(&[0x008c_6b00, 0x008c_6920])
     .run()
     .assert_same();
 }
