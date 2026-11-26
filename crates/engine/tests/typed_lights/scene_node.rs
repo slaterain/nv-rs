@@ -1,24 +1,29 @@
-//! The shadow scene node's functions (`engine_typed::lights::scene_node`) against their
-//! translations. One world for the node functions: a scene node whose `lLightList` holds three
-//! lights and a null element and whose `lShadowLightList` holds two lights, each light counted,
-//! with its `NiLight` (an RTTI of its own or one of the exe's `GetRTTI` bodies), flags, cull word,
-//! shadow scene, shadow map and point; its portal graph and remove-queue flag; and a tree of nodes,
-//! geometries and lights for the walks. The seed word picks each choice (see [`Seed`]). The arrays
-//! and the list move get worlds of their own.
+//! The shadow scene node's functions (`engine_typed::scene_node`) against their translations. One
+//! world for the node functions: a scene node whose `lLightList` holds three lights and a null
+//! element and whose `lShadowLightList` holds two lights, each light counted, with its `NiLight` (an
+//! RTTI of its own or one of the exe's `GetRTTI` bodies), flags, cull word, shadow scene, shadow map
+//! and point; its portal graph and remove-queue flag; and a tree of nodes, geometries and lights for
+//! the walks. The seed word picks each choice (see [`Seed`]). The arrays, the list move, the counted
+//! list's `RemoveAll` and the node's passes (sun light, occlusion planes, queued removals, light
+//! value, dynamic shadows, destructors) add worlds of their own on top.
 //!
 //! What stands in (logging their words): the queues' lock, the counted list's add, the allocation,
-//! the light's constructor, `SetLight`, shadow flag and geometry removal (their own Diff tests are
-//! the lights family's), the set-up family's shadow drop, the list's `RemoveAll`, the object update,
-//! the cast, `NiLight`'s constructor, the light update and cull, the renderer's map release and end,
-//! the property's light walk, the arrays' moves, reallocation and slots, and the search's compare.
+//! the light's constructor, `SetLight`, shadow flag, luminance, depth map and geometry removal (their
+//! own Diff tests are the lights family's), the set-up family's shadow drop, the object update, the
+//! cast, the shader accumulator, the culling process's frustum, `NiLight`'s, `NiDirectionalLight`'s,
+//! the culling process's and the cube camera's constructors, the light update and cull, the
+//! occlusion plane's tests, the lists' `RemovePos` and `Remove`, the renderer's map calls, the
+//! rendering system's call, the property's light walk, the arrays' allocator slots (their moves
+//! and growth run as the exe has them), the searches' compares, the scene graph slot release, the
+//! compound frustum's and `NiNode`'s destructors, the free and the deleting destructor slot.
 
 use super::{
-    block, log, logged, object, ret, set_logged_answer, stand_ins, words, EXE_BODIES, HALF, LOG,
-    MINUS_ONE, ONE, OTHER_RTTI, TWO, VT_FN, VT_SLOTS,
+    block, log, logged, object, ret, ret_f, set_logged_answer, stand_ins, words, EXE_BODIES, HALF,
+    LOG, MINUS_ONE, ONE, OTHER_RTTI, THIRD, TWO, VT_FN, VT_SLOTS,
 };
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
-use engine_typed::scene_node::{lists, SCENE_NODE};
+use engine_typed::scene_node::{lists, node, SCENE_NODE};
 
 /// The records: `NiLight` (`011f4a28`), `NiPointLight` (`011f4a98`), the radius-free light
 /// (`011f4a68`, `NiDirectionalLight`'s), and the exe's `GetRTTI` bodies of the point and directional
@@ -36,8 +41,9 @@ const RENDERER: u32 = 0x011f_91a8;
 const COMPARE: u32 = 0x00ff_3000;
 /// The other families' functions these call with `typed_call!` (stand-ins here; their own tests run
 /// them): the queues' lock, the counted list's add, the shadow drop, the light's constructor,
-/// `SetLight`, shadow flag and `RemoveTriGeom`, the object update and the cast.
-const CROSS: [u32; 9] = [
+/// `SetLight`, shadow flag and `RemoveTriGeom`, the object update, the cast, the culling process's
+/// frustum, the light's luminance at a point and depth map draw, and the shader accumulator.
+const CROSS: [u32; 13] = [
     0x0040_fbf0,
     0x00a5_a310,
     0x00b5_c3c0,
@@ -47,9 +53,22 @@ const CROSS: [u32; 9] = [
     0x00ba_01a0,
     0x00a5_9c60,
     0x0065_3290,
+    0x00a6_94a0,
+    0x00b9_bc50,
+    0x00b9_f780,
+    0x00b4_f5c0,
 ];
-/// What the typed code does in place: `NiPoint3`'s `!=` and `==`.
-const IN_PLACE: [u32; 2] = [0x0043_9090, 0x0043_90c0];
+/// What the typed code does in place: `NiPoint3`'s `!=` and `==`, `NiPlane`'s constructor, the
+/// culling process's destructor, the arrays' move (with its `memmove`) and the renderer's getter.
+const IN_PLACE: [u32; 7] = [
+    0x0043_9090,
+    0x0043_90c0,
+    0x00a6_9940,
+    0x00a6_93e0,
+    0x00cb_9930,
+    0x00ec_7230,
+    0x00b6_d120,
+];
 
 fn count_up(e: &mut Engine, a: &[u32]) -> Ret {
     let n = e.mem.u32(a[0]).wrapping_add(1);
@@ -153,7 +172,6 @@ fn world(e: &mut Engine) {
     e.register(0x00b9_dcb0, logged::<0x2d>);
     e.register(0x00ba_01a0, logged::<0x2e>);
     e.register(0x00b5_c3c0, logged::<0x2f>);
-    e.register(0x00e7_4d40, logged::<0x30>);
     e.register(0x00a5_9c60, update);
     e.register(0x0065_3290, cast);
     e.register(0x00a7_d670, this_logged::<0x33>);
@@ -162,9 +180,12 @@ fn world(e: &mut Engine) {
     e.register(0x00b6_d4c0, release_map);
     e.register(0x00b6_d130, logged::<0x37>);
     e.register(0x00b7_0490, next_light);
-    e.register(0x00cb_9930, logged::<0x39>);
-    e.register(0x00cb_9ce0, logged::<0x3a>);
     e.register(COMPARE, compare);
+    // The item pool of the counted list's `RemoveAll`: its lock (held twice) and free head.
+    e.map(0x011c_5000, 0x1000);
+    words(e, 0x011c_5f80, &[0x0077_0000, 2]);
+    e.mem.set_u32(0x011c_5f58, 0x0bad_0000);
+    passes_stand_ins(e);
 }
 
 trait Node {
@@ -249,17 +270,25 @@ struct NodeWorld {
     /// The lights of `lLightList` (a null element after the first) and of `lShadowLightList`.
     lights: [u32; 3],
     shadow_lights: [u32; 2],
+    /// The light without an `NiLight` at the end of `lLightList`, or 0.
+    dark: u32,
     /// An `NiLight` no light has.
     stray: u32,
     /// A tree: a node with a geometry, a light, a node with a light and a geometry, and a null child.
     tree: u32,
 }
 
-/// A shadow scene light of the seed's choices `i..`: its `NiLight`, flags, cull word, shadow scene,
-/// map and point.
+/// A shadow scene light of the seed's choices `i..`: its `NiLight` (at a point whose last float is
+/// -1.0, +0.0 or a NaN), flags, cull word (3, 0xff, or 0x1ff, which only a 16-bit compare tells
+/// from 0xff), shadow scene, map and point (the `NiLight`'s, or one differing from it, its last
+/// float's sign flipped among them: so +0/-0 and NaN/NaN pairs too).
 fn shadow_light(e: &mut Engine, s: &Seed, i: u32, scene: u32) -> u32 {
     let l = counted(e, 0x250, 1 + s.pick(i, 2));
-    let at = [ONE, HALF, MINUS_ONE];
+    let at = match s.pick(i + 9, 3) {
+        0 => [ONE, HALF, MINUS_ONE],
+        1 => [ONE, HALF, 0],
+        _ => [ONE, HALF, 0x7fc0_0000],
+    };
     let culled = s.pick(i + 1, 4) == 3;
     let ni = ni_light(e, s.pick(i + 2, 4), at, u32::from(culled) | 0x10);
     e.mem.set_u32(l + 0xf8, ni);
@@ -267,15 +296,20 @@ fn shadow_light(e: &mut Engine, s: &Seed, i: u32, scene: u32) -> u32 {
     e.mem.set_u8(l + 0xed, 1);
     e.mem.set_u8(l + 0xf4, u8::from(s.pick(i + 4, 4) != 0));
     e.mem.set_u8(l + 0xfc, u8::from(s.pick(i + 5, 4) != 1));
-    let point = match s.pick(i + 6, 4) {
+    let point = match s.pick(i + 6, 5) {
         0 => at,
         1 => [ONE, HALF, 0x7fc0_0000],
         2 => [ONE, TWO, MINUS_ONE],
-        _ => [0x8000_0000 | ONE, HALF, MINUS_ONE],
+        3 => [0x8000_0000 | ONE, HALF, MINUS_ONE],
+        _ => [at[0], at[1], at[2] ^ 0x8000_0000],
     };
     words(e, l + 0x100, &point);
-    e.mem
-        .set_u16(l + 0x110, if s.pick(i + 1, 3) == 2 { 0xff } else { 3 });
+    let cull = match s.pick(i + 10, 4) {
+        0 | 1 => 3,
+        2 => 0xff,
+        _ => 0x1ff,
+    };
+    e.mem.set_u16(l + 0x110, cull);
     if s.pick(i + 7, 3) != 0 {
         let map = counted(e, 0x40, 1 + s.pick(i + 7, 3) / 2);
         e.mem.set_u32(l + 0x10c, map);
@@ -325,7 +359,20 @@ fn node_world(e: &mut Engine, seed: u32) -> NodeWorld {
     let scene = counted(e, 0x40, 2);
     let lights = [0u32, 4, 8].map(|i| shadow_light(e, &s, i, scene));
     let shadow_lights = [9u32, 11].map(|i| shadow_light(e, &s, i, if i == 9 { 0 } else { scene }));
-    list(e, node + 0xb4, &[lights[0], 0, lights[1], lights[2]]);
+    // For some seeds a light without an `NiLight` ends the list (what `GetLight` of no `NiLight`
+    // finds).
+    let dark = if s.pick(18, 3) == 0 {
+        let l = shadow_light(e, &s, 16, scene);
+        e.mem.set_u32(l + 0xf8, 0);
+        l
+    } else {
+        0
+    };
+    let mut listed = vec![lights[0], 0, lights[1], lights[2]];
+    if dark != 0 {
+        listed.push(dark);
+    }
+    list(e, node + 0xb4, &listed);
     list(e, node + 0xc0, &shadow_lights);
     words(e, node + 0xd0, &[0x0f0f_0000, 0x0e0e_0000]);
     e.mem.set_u32(node + 0x1e0, 0x0ddd_0000);
@@ -352,6 +399,7 @@ fn node_world(e: &mut Engine, seed: u32) -> NodeWorld {
         node,
         lights,
         shadow_lights,
+        dark,
         stray,
         tree,
     }
@@ -900,33 +948,57 @@ fn scene_node_get_rtti() {
 }
 
 /// An array (`BSSimpleArray`-shaped) with its own vtable: `count` of `capacity`, its buffer holding
-/// words `0x100 + i` (none when `capacity` is 0 and `with_buffer` is false).
+/// words `0x100 + i` for the larger of the two (none when `with_buffer` is false); the allocate
+/// slot answers a block as large (the moves into it run as the exe's do).
 fn array(e: &mut Engine, count: u32, capacity: u32, with_buffer: bool) -> u32 {
     let a = object(e, 0x10, 0, 0, OTHER_RTTI);
+    let size = count.max(capacity).clamp(1, 0x1000);
     let buffer = if with_buffer {
-        let words: Vec<u32> = (0..capacity.clamp(1, 0x40)).map(|i| 0x100 + i).collect();
+        let words: Vec<u32> = (0..size).map(|i| 0x100 + i).collect();
         block(e, 4 * words.len() as u32, &words)
     } else {
         0
     };
     words(e, a + 4, &[buffer, count, capacity]);
     // The allocate slot's answer.
-    let fresh = block(e, 0x100, &[]);
+    let fresh = block(e, 4 * size.max(0x40), &[]);
     set_logged_answer(e, 0x3b, fresh);
     a
 }
 
 #[test]
 fn scene_node_reserve_slot() {
-    // Full with no capacity, full at 4, 0x400 and 0x401, not full.
+    // Full with no capacity, full at 4 (with a buffer or none), 0x400 and 0x401, not full.
     Diff::new(entry!(0x00b5_c360, lists::reserve_slot(Ptr<_>) -> u32))
         .node()
-        .inputs(&[Input::Of(&[0, 1, 2, 3, 4])])
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5])])
         .setup(|e, case| {
             world(e);
-            let (count, capacity) =
-                [(0, 0), (4, 4), (0x400, 0x400), (0x401, 0x401), (2, 8)][case.word(0) as usize];
-            vec![array(e, count, capacity, capacity != 0)]
+            let (count, capacity, buffer) = [
+                (0, 0, false),
+                (4, 4, true),
+                (0x400, 0x400, true),
+                (0x401, 0x401, true),
+                (2, 8, true),
+                (4, 4, false),
+            ][case.word(0) as usize];
+            vec![array(e, count, capacity, buffer)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn scene_node_grow() {
+    // No buffer, or one with a count equal to the capacity (4) or not (0, 2: moved into the new
+    // buffer); the capacity asked for.
+    Diff::new(entry!(0x00cb_9ce0, lists::grow(Ptr<_>, u32, u32)))
+        .node()
+        .inputs(&[Input::Flag, Input::Of(&[0, 2, 4]), Input::Of(&[8, 0x800])])
+        .setup(|e, case| {
+            world(e);
+            let a = array(e, 2, 4, case.word(0) != 0);
+            vec![a, case.word(2), case.word(1)]
         })
         .run()
         .assert_same();
@@ -956,12 +1028,13 @@ fn scene_node_find() {
 
 #[test]
 fn scene_node_remove_at() {
-    // Capacities each side of 0x400 and 0x800, counts each side of a quarter (and of the
-    // capacity less 0x800); indexes; the shrink byte (0, 1, a word whose low byte is 0).
+    // Capacities each side of 0x400 and 0x800 (0x600: the capacity less 0x800 wraps, so any count
+    // shrinks; 0x800: it is 0, so none does), counts each side of a quarter (and of the capacity
+    // less 0x800); indexes; the shrink byte (0, 1, a word whose low byte is 0).
     Diff::new(entry!(0x00b5_ade0, lists::remove_at(Ptr<_>, u32, u8)))
         .node()
         .inputs(&[
-            Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7]),
+            Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
             Input::Of(&[0, 1, 2]),
             Input::Of(&[0, 1, 0x100]),
         ])
@@ -976,9 +1049,12 @@ fn scene_node_remove_at() {
                 (0x102, 0x901),
                 (0x10, 0x801),
                 (3, 0),
+                (0x300, 0x600),
+                (0x10, 0x800),
             ][case.word(0) as usize];
             let a = array(e, count, capacity, true);
-            vec![a, case.word(1), case.word(2)]
+            // An index below the count (past it the exe's move runs away, as the exe would).
+            vec![a, case.word(1).min(count - 1), case.word(2)]
         })
         .run()
         .assert_same();
@@ -1031,7 +1107,9 @@ fn scene_node_move_after() {
 }
 
 /// With every family on (`Engine::new()`), the scene node's members are registered once and run:
-/// `GetLight` finds a light by its `NiLight` and `00b5ac60` counts the lights.
+/// `GetLight` finds a light by its `NiLight`, `00b5ac60` counts the lights, a light with a listed
+/// light's `NiLight` added (`00b5eca0`) answers the listed one, and `RemoveAll` (`00e74d40`)
+/// empties a list, letting each light go once.
 #[test]
 fn scene_node_members_run_with_every_family_on() {
     let mut e = Engine::new();
@@ -1039,19 +1117,33 @@ fn scene_node_members_run_with_every_family_on() {
     let ni = e.mem.u32(w.lights[1] + 0xf8);
     assert_eq!(e.call(0x00b5_b4a0, &args![w.node, ni]).u32(), w.lights[1]);
     assert_eq!(e.call(0x00b5_b4a0, &args![w.node, w.stray]).u32(), 0);
-    let culled = w
+    let in_frustum = w
         .lights
         .iter()
-        .filter(|&&l| e.mem.u16(l + 0x110) == 0xff)
+        .chain(std::iter::once(&w.dark))
+        .filter(|&&l| l != 0 && e.mem.u16(l + 0x110) != 0xff)
         .count() as u32;
-    assert_eq!(e.call(0x00b5_ac60, &args![w.node]).u32(), 3 - culled);
+    assert_eq!(e.call(0x00b5_ac60, &args![w.node]).u32(), in_frustum);
+    let again = counted(&mut e, 0x250, 1);
+    e.mem.set_u32(again + 0xf8, ni);
+    assert_eq!(
+        e.call(0x00b5_eca0, &args![w.node, again]).u32(),
+        w.lights[1]
+    );
+    let before: Vec<u32> = w.shadow_lights.iter().map(|&l| e.mem.u32(l + 4)).collect();
+    e.call(0x00e7_4d40, &args![w.node + 0xc0]);
+    assert_eq!(e.mem.bytes(w.node + 0xc0, 12), vec![0; 12]);
+    for (&l, n) in w.shadow_lights.iter().zip(before) {
+        assert_eq!(e.mem.u32(l + 4), n - 1);
+    }
 }
 
 /// The node world's seeds reach the branches, read on the world: lights with and without
-/// `bCastShadow`, point and not, dynamic and not, culled `NiLight`s and not, cull words 0xff and
-/// not, maps none, deleted and kept, the remove-queue flag on and off, the four `NiLight` kinds,
-/// the point equal, unequal and unordered, the exe's bodies in the tree and stand-ins, the
-/// allocation failing and not.
+/// `bCastShadow`, point and not, dynamic and not, culled `NiLight`s and not, cull words 3, 0xff and
+/// 0x1ff, maps none, deleted and kept, the remove-queue flag on and off, the four `NiLight` kinds,
+/// the point equal, unequal and unordered (+0/-0 and NaN/NaN pairs among them), a listed light
+/// without an `NiLight`, the exe's bodies in the tree and stand-ins. (A failed allocation is an
+/// input of the tests that take one: `SetSunLight`'s and `UpdateDynamicShadows`'.)
 #[test]
 fn the_node_seeds_reach_every_branch() {
     let mut reached = std::collections::BTreeSet::<String>::new();
@@ -1074,8 +1166,16 @@ fn the_node_seeds_reach_every_branch() {
             reached.insert(format!("rtti slot {:x}", e.mem.u32(vt + 8)));
             let same = (0..3).all(|i| e.mem.f32(l + 0x100 + 4 * i) == e.mem.f32(ni + 0x8c + 4 * i));
             reached.insert(format!("point same {same}"));
+            let (z, nz) = (e.mem.u32(l + 0x108), e.mem.u32(ni + 0x94));
+            if z != nz && z & 0x7fff_ffff == 0 && nz & 0x7fff_ffff == 0 {
+                reached.insert("point pair zeros".into());
+            }
+            if f32::from_bits(z).is_nan() && f32::from_bits(nz).is_nan() {
+                reached.insert("point pair nans".into());
+            }
         }
         reached.insert(format!("allow {}", e.mem.u8(w.node + 0x1fc)));
+        reached.insert(format!("dark {}", u8::from(w.dark != 0)));
         let vt = e.mem.u32(w.tree);
         reached.insert(format!("tree slot {:x}", e.mem.u32(vt + 0xc)));
     }
@@ -1090,6 +1190,11 @@ fn the_node_seeds_reach_every_branch() {
         "culled 1",
         "cull word 3",
         "cull word ff",
+        "cull word 1ff",
+        "point pair zeros",
+        "point pair nans",
+        "dark 0",
+        "dark 1",
         "map 0",
         "map 1",
         "map 2",
@@ -1116,4 +1221,653 @@ fn the_node_seeds_reach_every_branch() {
         reached.iter().any(|r| r.starts_with("tree slot ff")),
         "{reached:?}"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The node's passes (`engine_typed::scene_node::node`) and the counted list's `RemoveAll`.
+
+/// The answers of [`answer`] (`ANSWERS + 4 * K`) and of the allocation in turn (`ALLOCATIONS`,
+/// the turn at `ALLOCATION_TURN`).
+const ANSWERS: u32 = LOG + 0x3e80;
+const ALLOCATIONS: u32 = LOG + 0x3e40;
+const ALLOCATION_TURN: u32 = LOG + 0x3e3c;
+
+/// Logs its words under `0x60 + K` and answers the word at `ANSWERS + 4 * K`.
+fn answer<const K: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+    for w in a {
+        log(e, 0x60 + K, *w);
+    }
+    ret(e.mem.u32(ANSWERS + 4 * K))
+}
+
+fn set_answer(e: &mut Engine, k: u32, word: u32) {
+    e.mem.set_u32(ANSWERS + 4 * k, word);
+}
+
+/// The allocation: logs the size and answers the next of the words [`set_allocations`] set.
+fn allocation(e: &mut Engine, a: &[u32]) -> Ret {
+    log(e, 0x2a, a[0]);
+    let turn = e.mem.u32(ALLOCATION_TURN);
+    e.mem.set_u32(ALLOCATION_TURN, turn + 1);
+    ret(e.mem.u32(ALLOCATIONS + 4 * turn.min(3)))
+}
+
+fn set_allocations(e: &mut Engine, blocks: &[u32]) {
+    e.register(0x00aa_13e0, allocation);
+    words(e, ALLOCATIONS, blocks);
+}
+
+/// The culling process's constructor: logs, gives the local a vtable word and answers it.
+fn culler_construct(e: &mut Engine, a: &[u32]) -> Ret {
+    log(e, 0x54, a[0]);
+    log(e, 0x54, a[1]);
+    words(e, a[0], &[0x0109_c2a0, 0x5555]);
+    ret(a[0])
+}
+
+/// An occlusion plane's test: logs its words, answers the plane's byte at `AT`.
+fn plane_test<const AT: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+    for w in a {
+        log(e, 0x50 + AT, *w);
+    }
+    ret(u32::from(e.mem.u8(a[0] + AT)))
+}
+
+/// A list removal with an out `NiPointer`: logs the list, the out word and the argument, then
+/// writes answer `K` (a counted light or none) into the out word.
+fn out_removed<const K: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+    log(e, 0x60 + K, a[0]);
+    log(e, 0x60 + K, e.mem.u32(a[1]));
+    log(e, 0x60 + K, a[2]);
+    let removed = e.mem.u32(ANSWERS + 4 * K);
+    e.mem.set_u32(a[1], removed);
+    ret(0)
+}
+
+/// The arrays' compare: 1 when the element's word is the value's.
+fn compare_words(e: &mut Engine, a: &[u32]) -> Ret {
+    log(e, 0x5f, a[0]);
+    ret(u32::from(e.mem.u32(a[0]) == e.mem.u32(a[1])))
+}
+
+/// The light's luminance at a point: logs its words, answers the float at the light's +0x1f0.
+fn luminance(e: &mut Engine, a: &[u32]) -> Ret {
+    for w in a {
+        log(e, 0x5e, *w);
+    }
+    ret_f(f64::from(f32::from_bits(e.mem.u32(a[0] + 0x1f0))))
+}
+
+/// The passes' stand-ins and data (part of [`world`]).
+fn passes_stand_ins(e: &mut Engine) {
+    // The sun colour, the zero point, the renderer's map word.
+    words(e, 0x011f_4998, &[ONE, HALF, TWO]);
+    words(e, 0x011f_426c, &[HALF, 0, MINUS_ONE]);
+    e.mem.set_u32(0x011f_9508, 0x0909);
+    // The renderer: its word +0xa8 (what `00b6d120` answers).
+    let renderer = block(e, 0x100, &[]);
+    e.mem.set_u32(renderer + 0xa8, 7);
+    e.mem.set_u32(RENDERER, renderer);
+    e.register(VT_FN, logged::<0x53>);
+    e.register(VT_FN + 0xac, logged::<0x55>);
+    e.register(VT_FN + 0xb0, logged::<0x56>);
+    e.register(0x00a7_5c20, this_logged::<0x52>);
+    e.register(0x00a6_9400, culler_construct);
+    e.register(0x00a6_94a0, logged::<0x57>);
+    e.register(0x00c3_3cf0, plane_test::<0x44>);
+    e.register(0x00c3_58a0, plane_test::<0x45>);
+    e.register(0x00b6_e110, answer::<0>);
+    e.register(0x00b6_b260, answer::<1>);
+    e.register(0x00b6_d3f0, answer::<3>);
+    e.register(0x00b4_f5c0, answer::<4>);
+    e.register(0x00b9_efa0, out_removed::<5>);
+    e.register(0x00b9_fcc0, out_removed::<6>);
+    e.register(0x00b5_a980, compare_words);
+    e.register(0x00b9_bc50, luminance);
+    e.register(0x00bd_8290, this_logged::<0x58>);
+    e.register(0x00b9_f780, logged::<0x59>);
+    e.register(0x00ba_3130, logged::<0x5a>);
+    e.register(0x00b4_f2f0, logged::<0x5b>);
+    e.register(0x00b6_da10, logged::<0x5c>);
+    e.register(0x00c4_7770, logged::<0x5d>);
+    e.register(0x00a5_e930, logged::<0x4e>);
+    e.register(0x00aa_1460, logged::<0x4f>);
+}
+
+/// A counted list at `at` of `n` elements (index 1 null when `n > 2`), each counted once or twice
+/// by the seed; an empty one keeps a stale tail and count.
+fn counted_list(e: &mut Engine, s: &Seed, at: u32, n: u32) -> Vec<u32> {
+    let elements: Vec<u32> = (0..n)
+        .map(|i| {
+            if i == 1 && n > 2 {
+                0
+            } else {
+                counted(e, 0x40, 1 + s.pick(20 + i, 2))
+            }
+        })
+        .collect();
+    list(e, at, &elements);
+    if n == 0 {
+        words(e, at + 4, &[0x1234, 5]);
+    }
+    elements
+}
+
+fn remove_all_setup(e: &mut Engine, case: &Case) -> Vec<u32> {
+    world(e);
+    let s = Seed::new(case.word(0));
+    // The pool's count reaches zero at the first item, the second, or not at all.
+    e.mem
+        .set_u32(0x011c_5f84, [1, 2, 9][s.pick(19, 3) as usize]);
+    let at = block(e, 0xc, &[]);
+    counted_list(e, &s, at, case.word(1));
+    vec![at]
+}
+
+#[test]
+fn scene_node_remove_all() {
+    Diff::new(entry!(0x00e7_4d40, lists::remove_all(Ptr<_>)))
+        .node()
+        .inputs(&seeds_and(&[Input::Of(&[0, 1, 2, 4])]))
+        .setup(remove_all_setup)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn scene_node_remove_all_jump() {
+    Diff::new(entry!(0x00b5_c7c0, node::remove_all_jump(Ptr<_>)))
+        .node()
+        .inputs(&seeds_and(&[Input::Of(&[0, 3])]))
+        .setup(remove_all_setup)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn scene_node_set_sun_light() {
+    // A sun light or none; a light given or none; the allocations all made, the first failing,
+    // the second failing (a failed `NiDirectionalLight` writes the low page, where the exe would
+    // fault).
+    Diff::new(entry!(0x00b5_aac0, node::set_sun_light(Ptr<_>, u32)))
+        .node()
+        .inputs(&[
+            Input::Of(&[0, 1, 2, 3]),
+            Input::Flag,
+            Input::Flag,
+            Input::Of(&[0, 1, 2]),
+        ])
+        .setup(|e, case| {
+            let w = node_world(e, case.word(0));
+            e.map(0, 0x1000);
+            if case.word(1) != 0 {
+                let sun = counted(e, 0x250, 1);
+                e.mem.set_u32(w.node + 0xe0, sun);
+            }
+            let light = if case.word(2) != 0 {
+                ni_light(e, 1, [0; 3], 0)
+            } else {
+                0
+            };
+            let blocks = [block(e, 0x250, &[]), block(e, 0x250, &[])];
+            e.mem.set_u32(blocks[0] + 0xa8, 5);
+            let answers = match case.word(3) {
+                0 => [blocks[0], blocks[1]],
+                1 => [0, blocks[1]],
+                _ => [blocks[0], 0],
+            };
+            set_allocations(e, &answers);
+            vec![w.node, light]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn scene_node_update_occlusion_plane_visibility() {
+    // No graph, an empty plane list, or four planes (one null) whose two tests answer 0, 1 or 2
+    // (2 and 1 meet in no bit).
+    Diff::new(entry!(
+        0x00b5_ac90,
+        node::update_occlusion_plane_visibility(Ptr<_>, u32)
+    ))
+    .node()
+    .inputs(&seeds_and(&[Input::Of(&[0, 1, 2])]))
+    .setup(|e, case| {
+        let w = node_world(e, case.word(0));
+        let s = Seed::new(case.word(0));
+        let graph = if case.word(1) == 0 {
+            0
+        } else {
+            block(e, 0x40, &[])
+        };
+        e.mem.set_u32(w.node + 0x1e0, graph);
+        if case.word(1) == 2 {
+            let planes: Vec<u32> = (0..4u32)
+                .map(|i| {
+                    if i == 2 {
+                        return 0;
+                    }
+                    let p = block(e, 0x50, &[]);
+                    e.mem.set_u32(p + 0x40, 9);
+                    e.mem.set_u8(p + 0x44, s.pick(30 + i, 3) as u8);
+                    e.mem.set_u8(p + 0x45, s.pick(34 + i, 3) as u8);
+                    p
+                })
+                .collect();
+            list(e, graph + 8, &planes);
+        }
+        let camera = block(e, 0x200, &[]);
+        words(e, camera + 0x8c, &[ONE, TWO, HALF]);
+        words(
+            e,
+            camera + 0xdc,
+            &[MINUS_ONE, ONE, ONE, MINUS_ONE, HALF, TWO],
+        );
+        vec![w.node, camera]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn scene_node_add_listed_light() {
+    // A new light with the `NiLight` of the first or the last listed light, or one of its own;
+    // casting shadows or not; the byte at 0xed set or not.
+    Diff::new(entry!(
+        0x00b5_eca0,
+        node::add_listed_light(Ptr<_>, u32) -> u32
+    ))
+    .node()
+    .inputs(&seeds_and(&[
+        Input::Of(&[0, 1, 2]),
+        Input::Flag,
+        Input::Flag,
+    ]))
+    .setup(|e, case| {
+        let w = node_world(e, case.word(0));
+        let s = Seed::new(case.word(0));
+        e.map(0, 0x1000);
+        e.mem.set_u8(0xed, case.word(3) as u8);
+        let light = shadow_light(e, &s, 24, 0);
+        let ni = match case.word(1) {
+            0 => e.mem.u32(w.lights[0] + 0xf8),
+            1 => e.mem.u32(w.lights[2] + 0xf8),
+            _ => ni_light(e, 1, [0; 3], 0),
+        };
+        e.mem.set_u32(light + 0xf8, ni);
+        e.mem.set_u8(light + 0xec, case.word(2) as u8);
+        e.mem.set_u8(light + 0xfc, 2 + s.pick(17, 2) as u8);
+        let map = counted(e, 0x40, 1);
+        let target = object(e, 0x40, 0, 0, OTHER_RTTI);
+        let other = counted(e, 0x40, 2);
+        set_answer(e, 0, map);
+        set_answer(e, 1, target);
+        set_answer(e, 3, other);
+        vec![w.node, light]
+    })
+    .run()
+    .assert_same();
+}
+
+/// An array (`BSSimpleArray`-shaped, vtable `vt`) at `at`: `count` words of four, the light at
+/// `place` when it is below the count.
+fn light_array(e: &mut Engine, at: u32, vt: u32, count: u32, place: u32, light: u32) {
+    let buffer = block(e, 0x20, &[0x11, 0x22, 0x33, 0x44]);
+    if place < count {
+        e.mem.set_u32(buffer + 4 * place, light);
+    }
+    words(e, at, &[vt, buffer, count, 8]);
+}
+
+/// The queued-removal world: the node's portal graph (input 1: none, one whose word +0x28 is
+/// clear, one where it is set), a light of `lLightList` or `lShadowLightList` held in a word, its
+/// rooms (one null, one with an empty array, one whose array holds the light at the seed's place
+/// or not) and its portals (one null, two whose object's array holds the light or not, one with a
+/// null buffer for some seeds), and the out word's answers (a counted light or none). Answers the
+/// world, the holder and the light.
+fn queued_world(e: &mut Engine, case: &Case) -> (NodeWorld, u32, u32) {
+    let w = node_world(e, case.word(0));
+    let s = Seed::new(case.word(0));
+    let graph = block(e, 0x40, &[]);
+    e.mem.set_u32(graph + 0x28, u32::from(case.word(1) == 2));
+    let node_graph = if case.word(1) == 0 { 0 } else { graph };
+    e.mem.set_u32(w.node + 0x1e0, node_graph);
+    let light = if s.pick(40, 2) == 0 {
+        w.lights[0]
+    } else {
+        w.shadow_lights[1]
+    };
+    let holder = block(e, 4, &[light]);
+    let owner = object(e, 0x10, 0, 0, OTHER_RTTI);
+    let vt = e.mem.u32(owner);
+    // A shrinking removal's new buffer (the allocate slot's answer).
+    let fresh = block(e, 0x40, &[]);
+    set_logged_answer(e, 0x3b, fresh);
+    let mut rooms = vec![0u32; 3];
+    for (i, room) in (0u32..).zip(rooms.iter_mut()) {
+        if i == 1 {
+            continue;
+        }
+        let r = block(e, 0x100, &[]);
+        let count = if i == 0 { 0 } else { 2 + s.pick(41, 3) };
+        light_array(e, r + 0xdc, vt, count, s.pick(42, 4), light);
+        *room = r;
+    }
+    let mut portals = vec![0u32; 3];
+    for (i, portal) in (0u32..).zip(portals.iter_mut()) {
+        if i == 0 {
+            continue;
+        }
+        let object = block(e, 0x100, &[]);
+        light_array(
+            e,
+            object + 0xb0,
+            vt,
+            1 + s.pick(43 + i, 3),
+            s.pick(45 + i, 3),
+            light,
+        );
+        if i == 2 && s.pick(47, 4) == 0 {
+            e.mem.set_u32(object + 0xb4, 0);
+        }
+        let p = block(e, 0x110, &[]);
+        e.mem.set_u32(p + 0x104, object);
+        *portal = p;
+    }
+    let rooms = block(e, 12, &rooms);
+    let portals = block(e, 12, &portals);
+    words(e, light + 0x214, &[rooms, 3]);
+    words(e, light + 0x224, &[portals, 3]);
+    // The light's graph: the node's or another.
+    let light_graph = if s.pick(48, 2) == 0 {
+        node_graph
+    } else {
+        0x0ddd_0000
+    };
+    e.mem.set_u32(light + 0x240, light_graph);
+    for k in [5, 6] {
+        let removed = if s.pick(49, 3) == 0 {
+            0
+        } else {
+            counted(e, 0x40, s.pick(50, 2) + 1)
+        };
+        set_answer(e, k, removed);
+    }
+    (w, holder, light)
+}
+
+#[test]
+fn scene_node_remove_queued_light() {
+    Diff::new(entry!(
+        0x00b5_d040,
+        node::remove_queued_light(Ptr<_>, Ptr<_>, u32)
+    ))
+    .node()
+    .inputs(&seeds_and(&[Input::Of(&[0, 1, 2])]))
+    .setup(|e, case| {
+        let (w, holder, _) = queued_world(e, case);
+        let item = e.mem.u32(w.node + 0xb4);
+        let position = block(e, 4, &[item]);
+        vec![w.node, holder, position]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn scene_node_remove_queued_light_of() {
+    // The light listed or not (a light of no list), of the node's graph or another.
+    Diff::new(entry!(
+        0x00b5_ef90,
+        node::remove_queued_light_of(Ptr<_>, Ptr<_>)
+    ))
+    .node()
+    .inputs(&seeds_and(&[Input::Of(&[0, 1, 2]), Input::Flag]))
+    .setup(|e, case| {
+        let (w, holder, light) = queued_world(e, case);
+        if case.word(2) != 0 {
+            let s = Seed::new(case.word(0));
+            let unlisted = shadow_light(e, &s, 32, 0);
+            let (rooms, portals) = (e.mem.u32(light + 0x214), e.mem.u32(light + 0x224));
+            words(e, unlisted + 0x214, &[rooms, 3]);
+            words(e, unlisted + 0x224, &[portals, 3]);
+            let graph = e.mem.u32(light + 0x240);
+            e.mem.set_u32(unlisted + 0x240, graph);
+            e.mem.set_u32(holder, unlisted);
+        }
+        vec![w.node, holder]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The lights' luminances (a float of each light's +0x1f0) and the sun colours' components.
+const LUMINANCES: [u32; 5] = [0, ONE, MINUS_ONE, THIRD, 0x8000_0000];
+const COMPONENTS: [u32; 6] = [ONE, HALF, TWO, 0x7fc0_0000, 0x7f80_0001, 0x8000_0000];
+
+#[test]
+fn scene_node_light_value_at() {
+    // The point; the excluded `NiLight` (none, or the first light's); the seed's luminances (a
+    // running sum that goes above, to and below 0.0) and colours (NaNs, a signalling one, -0.0).
+    Diff::new(entry!(
+        0x00b5_b4d0,
+        node::light_value_at(Ptr<_>, u32, u32, u32, Ptr<_>, Ptr<_>, Ptr<_>, u32) -> f32
+    ))
+    .node()
+    .inputs(&seeds_and(&[Input::Flag]))
+    .setup(|e, case| {
+        let w = node_world(e, case.word(0));
+        let s = Seed::new(case.word(0));
+        for (i, &l) in (0u32..).zip(&w.lights) {
+            e.mem
+                .set_u32(l + 0x1f0, LUMINANCES[s.pick(50 + i, 5) as usize]);
+        }
+        let sun = counted(e, 0x250, 1);
+        let sun_light = block(e, 0x100, &[]);
+        e.mem.set_u32(sun + 0xf8, sun_light);
+        for (i, at) in (0u32..).zip([0xc8u32, 0xcc, 0xd0, 0xd4, 0xd8, 0xdc]) {
+            let component = COMPONENTS[s.pick(53 + i, 6) as usize];
+            e.mem.set_u32(sun_light + at, component);
+        }
+        e.mem.set_u32(w.node + 0xe0, sun);
+        let count = block(e, 4, &[s.pick(59, 3)]);
+        let ambient = block(e, 4, &[]);
+        let diffuse = block(e, 4, &[]);
+        let excluded = if case.word(1) != 0 {
+            e.mem.u32(w.lights[0] + 0xf8)
+        } else {
+            0
+        };
+        vec![w.node, ONE, HALF, TWO, count, ambient, diffuse, excluded]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn scene_node_update_dynamic_shadows() {
+    // A camera or none (made: allocated, or the allocation failing); the shadow lights as they
+    // are, none, the first without an `NiLight`, or all five lights drawn (no rendering system
+    // call left).
+    Diff::new(entry!(
+        0x00b5_b880,
+        node::update_dynamic_shadows(Ptr<_>, u32)
+    ))
+    .node()
+    .inputs(&seeds_and(&[
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 1, 2, 3]),
+    ]))
+    .setup(|e, case| {
+        let w = node_world(e, case.word(0));
+        let s = Seed::new(case.word(0));
+        e.map(0, 0x1000);
+        let camera = counted(e, 0x140, 1 + s.pick(60, 2));
+        let held = if s.pick(61, 3) == 0 {
+            0
+        } else {
+            counted(e, 0x40, 1 + s.pick(62, 2))
+        };
+        e.mem.set_u32(camera + 0x130, held);
+        match case.word(1) {
+            0 => e.mem.set_u32(w.node + 0x128, camera),
+            1 => {
+                e.mem.set_u32(camera + 4, 0);
+                set_allocations(e, &[camera]);
+            }
+            _ => set_allocations(e, &[0]),
+        }
+        match case.word(2) {
+            1 => {
+                list(e, w.node + 0xc0, &[]);
+            }
+            2 => e.mem.set_u32(w.shadow_lights[0] + 0xf8, 0),
+            3 => {
+                let all = [
+                    w.lights[0],
+                    w.lights[1],
+                    w.lights[2],
+                    w.shadow_lights[0],
+                    w.shadow_lights[1],
+                ];
+                for l in all {
+                    e.mem.set_u16(l + 0x110, 3);
+                    let ni = e.mem.u32(l + 0xf8);
+                    let flags = e.mem.u32(ni + 0x30) & !1;
+                    e.mem.set_u32(ni + 0x30, flags);
+                }
+                list(e, w.node + 0xc0, &all);
+            }
+            _ => {}
+        }
+        let tls = e.tls();
+        e.mem.set_u32(tls + 0x2b4, 0x55);
+        vec![w.node, 0x1234]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The doomed node: its sun light, fence objects, reflection map, cube camera and fog (each
+/// counted or none), its queues (counted lists of up to two), its scene graph index (the node at
+/// that index or another), and the accumulator (none, one whose scene node is this, another).
+fn doomed_world(e: &mut Engine, seed: u32) -> u32 {
+    let w = node_world(e, seed);
+    let s = Seed::new(seed);
+    let node = w.node;
+    for (i, member) in (0u32..).zip([0xe0u32, 0xd8, 0xdc, 0x124, 0x128, 0x134]) {
+        let held = if s.pick(70 + i, 3) == 0 {
+            0
+        } else {
+            counted(e, 0x40, 1 + s.pick(76 + i, 2))
+        };
+        e.mem.set_u32(node + member, held);
+    }
+    for (i, queue) in (0u32..).zip([0xe4u32, 0xf0, 0xfc, 0x108, 0x114]) {
+        counted_list(e, &s, node + queue, s.pick(82 + i, 3));
+    }
+    let index = s.pick(87, 3);
+    e.mem.set_u8(node + 0x120, index as u8);
+    let at_index = if s.pick(88, 2) == 0 {
+        node
+    } else {
+        0x0abc_d000
+    };
+    e.mem.set_u32(0x011f_91c8 + 4 * index, at_index);
+    let accumulator = match s.pick(89, 3) {
+        0 => 0,
+        k => {
+            let a = block(e, 0x200, &[]);
+            e.mem
+                .set_u32(a + 0x194, if k == 1 { node } else { 0x0abc_e000 });
+            a
+        }
+    };
+    set_answer(e, 4, accumulator);
+    node
+}
+
+#[test]
+fn scene_node_destruct() {
+    Diff::new(entry!(0x00b5_e5a0, node::destruct(Ptr<_>)))
+        .node()
+        .inputs(&seeds_and(&[]))
+        .setup(|e, case| vec![doomed_world(e, case.word(0))])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn scene_node_delete() {
+    Diff::new(entry!(0x00b5_f980, node::delete(Ptr<_>, u32) -> Ptr))
+        .node()
+        .inputs(&seeds_and(&[Input::Of(&[0, 1, 2, 3])]))
+        .setup(|e, case| vec![doomed_world(e, case.word(0)), case.word(1)])
+        .run()
+        .assert_same();
+}
+
+/// The passes' seeds reach their branches: the plane tests' answers, the queued-removal world's
+/// choices (the light's list and graph, the arrays' places, a null buffer, the removed pointer),
+/// the luminance sums' signs and the colours' NaNs, the doomed node's members, queues, index and
+/// accumulator.
+#[test]
+fn the_pass_seeds_reach_every_branch() {
+    let mut reached = std::collections::BTreeSet::<String>::new();
+    for &seed in SEEDS {
+        let s = Seed::new(seed);
+        for i in 0..4 {
+            reached.insert(format!("plane within {}", s.pick(30 + i, 3)));
+            reached.insert(format!("plane side {}", s.pick(34 + i, 3)));
+        }
+        reached.insert(format!("queued light {}", s.pick(40, 2)));
+        reached.insert(format!(
+            "room place below {}",
+            s.pick(42, 4) < 2 + s.pick(41, 3)
+        ));
+        reached.insert(format!("null buffer {}", s.pick(47, 4) == 0));
+        reached.insert(format!("light graph {}", s.pick(48, 2)));
+        reached.insert(format!("removed {}", s.pick(49, 3).min(1)));
+        let mut sum = 0.0f32;
+        for i in 0..3 {
+            sum += f32::from_bits(LUMINANCES[s.pick(50 + i, 5) as usize]);
+            reached.insert(format!("sum above {}", sum > 0.0));
+        }
+        for i in 0..6 {
+            reached.insert(format!("component {}", s.pick(53 + i, 6)));
+        }
+        for i in 0..6 {
+            reached.insert(format!("member {}", s.pick(70 + i, 3).min(1)));
+        }
+        reached.insert(format!("at index {}", s.pick(88, 2)));
+        reached.insert(format!("accumulator {}", s.pick(89, 3)));
+    }
+    let mut want: Vec<String> = Vec::new();
+    for v in 0..3 {
+        want.push(format!("plane within {v}"));
+        want.push(format!("plane side {v}"));
+        want.push(format!("accumulator {v}"));
+    }
+    for v in 0..2 {
+        want.push(format!("queued light {v}"));
+        want.push(format!("light graph {v}"));
+        want.push(format!("removed {v}"));
+        want.push(format!("member {v}"));
+        want.push(format!("at index {v}"));
+    }
+    for v in 0..6 {
+        want.push(format!("component {v}"));
+    }
+    for b in [false, true] {
+        want.push(format!("room place below {b}"));
+        want.push(format!("null buffer {b}"));
+        want.push(format!("sum above {b}"));
+    }
+    for w in want {
+        assert!(
+            reached.contains(&w),
+            "not reached: {w} (reached {reached:?})"
+        );
+    }
 }

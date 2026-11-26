@@ -8,7 +8,8 @@
 //! node flag test and set, the rendering system's address) are read in place: their bodies are one
 //! or two loads or stores, and the differential test leaves them out of the translation's calls. What
 //! stays a call: the depth-pass test (`005bf7b0`, it asks the renderer), the shadow scene node's own
-//! passes, the actor tests, the lock, the lights' updates and the rendering system's stages.
+//! passes (the scene node family's, called typed), the actor tests, the lock, the lights' updates
+//! and the rendering system's stages.
 //!
 //! **Floats**: the caster's range test and the light's weight cut-off compare a stored float with a
 //! `double`. The range test's product (`largest * scale`) stays a `double` as the translation computes
@@ -18,6 +19,7 @@
 
 use super::lists;
 use super::FAMILY;
+use crate::scene_node;
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
 use engine_core::x87::x87_quiet;
@@ -35,11 +37,9 @@ const SCENE_NODE_TABLE: u32 = 0x011f_91c8;
 /// The renderer (`011f4748`) and the texture manager (`011f91a8`).
 const RENDERER: u32 = 0x011f_4748;
 const TEXTURE_MANAGER: u32 = 0x011f_91a8;
-/// The shadow scene node's set-up passes and the texture manager's shadow-map count.
-const SCENE_PREPARE: u32 = 0x00b5_b1f0;
+/// The texture manager's shadow-map count and the shadow pass's start.
 const SHADOW_MAPS_SET: u32 = 0x00b6_ee70;
 const SHADOW_PASS_BEGIN: u32 = 0x00b4_f570;
-const SCENE_DYNAMIC_SHADOWS: u32 = 0x00b5_b880;
 /// The byte settings (each value at +4): the shadows' switch, the player's flag and the light's add.
 const SETTING_SHADOWS: u32 = 0x011c_74d4;
 const SETTING_KEEP_SAVED: u32 = 0x011c_71dc;
@@ -168,7 +168,11 @@ pub fn prepare(e: &mut Engine, this: Ptr) {
         e.set_global(DEPTH_STATE, value);
         set_depth_flag(e, false);
         let scene = e.global::<u32>(SCENE_NODE_TABLE);
-        e.call(SCENE_PREPARE, &args![scene]);
+        typed_call!(
+            scene_node::FAMILY,
+            0x00b5_b1f0,
+            scene_node::lists::drop_all_shadow_maps(e, Ptr::new(scene))
+        );
         set_shadow_maps(e, 0);
     } else if e.global::<u8>(DEPTH_STATE) != 0 && e.global::<u8>(DEPTH_REQUEST) == 0 {
         e.set_global(DEPTH_STATE, 0u8);
@@ -330,7 +334,11 @@ fn casters_and_lights(e: &mut Engine, scene: u32, limit: i32) {
         set_flag(e, saved, saved_flag);
     }
     e.set_global(WATER_BYTE, 1u8);
-    e.call(SCENE_DYNAMIC_SHADOWS, &args![scene, target]);
+    typed_call!(
+        scene_node::FAMILY,
+        0x00b5_b880,
+        scene_node::node::update_dynamic_shadows(e, Ptr::new(scene), target)
+    );
     set_flag(e, player_model, model_flag);
 }
 
