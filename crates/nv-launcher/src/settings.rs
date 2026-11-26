@@ -190,7 +190,7 @@ const PLAIN: [(&str, &str, &str); 43] = [
     ("bSunShadowsCharacters", "Characters' sun shadows", "You (in third person), people, creatures and bodies cast sun and moon shadows that move with them, in place of the game's own."),
     ("bNotBackground", "Full speed in the background", "Windows does not slow the game down while its window is not the active one. Off: Windows decides, saving power and heat."),
     ("bUncap", "Uncapped frame rate", "Frames are not held to the original game's pace. Frame rate limit sets the most frames a second."),
-    ("bHighFrameRateLanding", "Landing at high frame rates", "At high frame rates, landing while standing still falls as far as at 60 frames a second."),
+    ("bHighFrameRateLanding", "Landing at high frame rates", "At high frame rates, when you land while standing still you fall as far as at 60 frames a second."),
     ("bHighFrameRateSlowMotion", "Slow motion at high frame rates", "Slow motion, as in V.A.T.S., comes on and goes off in the same time at any frame rate."),
     ("bMenuCap", "Menus use their own limit", "Menus run at most at Frame rate limit in menus; loading screens are not limited."),
     ("bGrabPush", "Dragging at high frame rates", "Something you hold and drag is pulled as it is at 60 frames a second, whatever the frame rate."),
@@ -225,7 +225,7 @@ const PLAIN: [(&str, &str, &str); 43] = [
     ("bNVSEUISortPaths", "Mod menu list sorting fix", "Mods' menu lists sorted by something inside each item sort every item, not only the first."),
     ("bNVSEListGuard", "Script loops and long names fix", "Mod scripts that walk a list that loops back, scan too far, or pass a very long name no longer stop or hang the game."),
     ("bNVSEExtractArgs", "xNVSE expressions in scripts", "Mods' scripts written for xNVSE (expressions in the game's commands) run as with xNVSE; off, such a script can crash the game."),
-    ("bHavokRefCounts", "No physics wait", "The game no longer waits for each physics step to end before it handles a physics object, so frames stall less. Still being checked."),
+    ("bHavokRefCounts", "No physics wait", "The game no longer waits for the physics step to end each time it takes up or lets go of a physics object, so frames stall less. Still being checked."),
 ];
 
 /// The mark of a row still being tried, in its label.
