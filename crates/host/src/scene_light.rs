@@ -152,6 +152,14 @@ pub fn read_lit(e: &Engine) -> Option<SceneView> {
     read_with(e, true)
 }
 
+/// The reader while the player can switch the new lighting (`engine_platform::d3d9real::
+/// want_lighting_switch`): [`read_lit`] while the frame has the sun shadows on
+/// (`d3d9_wgpu::sun_shadow::enabled`), [`read`] while it has them off, as a run started in that
+/// state reads.
+pub fn read_now(e: &Engine) -> Option<SceneView> {
+    read_with(e, d3d9_wgpu::sun_shadow::enabled())
+}
+
 fn read_with(e: &Engine, sun_shadows: bool) -> Option<SceneView> {
     let tes = object(e, TES)?;
     let camera = object(e, object(e, SCENE_GRAPH)? + CAMERA)?;

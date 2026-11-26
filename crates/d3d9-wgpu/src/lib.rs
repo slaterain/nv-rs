@@ -448,6 +448,11 @@ impl Backend for WgpuBackend {
             Cmd::SetTransform { state, matrix, .. } if state == sun_shadow::BEGIN_STATE => {
                 d.sun_lookup(&matrix.to_words());
             }
+            // The new lighting switched while playing, recorded right after the game's `Present`:
+            // its parts on or off from the next frame ([`scene_light::SWITCH_STATE`]).
+            Cmd::SetTransform { state, matrix, .. } if state == scene_light::SWITCH_STATE => {
+                d.switch_lighting(&matrix.to_words());
+            }
             // The game's brightness: kept for the frames shown in the window ([`ramp`]).
             Cmd::SetGammaRamp {
                 swap_chain, ramp, ..

@@ -93,7 +93,8 @@ pub type RealWindow = isize;
 ///   made known by its [`RealWindow`] (on Windows `d3d9_wgpu` reads the same four from Windows on
 ///   the `HWND`, in the window's own DPI awareness);
 /// - its keyboard and mouse by DirectInput's codes into [`Input`] (`input.rs`: `key`, `button`,
-///   `moved`; F11 the frame-rate counter's by `d3d9_wgpu::frame_rate::key`, F12 the report's),
+///   `moved`; F11 the frame-rate counter's by `d3d9_wgpu::frame_rate::key`, Shift+F11 the new
+///   lighting's switch, F12 the report's),
 ///   `input::focus_lost` when it loses the focus, [`window_closed`] when the player closes it, and
 ///   `d3d9_wgpu::window_changed` when it is activated, shown again or its scale changes. The
 ///   Win32 window keeps its own message handling for keys and the mouse (moved unchanged in PR 3a)
@@ -844,20 +845,69 @@ pub fn want_scene_light(read: fn(&Engine) -> Option<SceneView>, strength: f32) {
     engine_core::world_drawn::install_depth_clear_skipped(depth_clear_skipped);
 }
 
+/// The new lighting switchable while playing (`d3d9_wgpu::scene_light::allow_switch`; the run's
+/// choice `start`, `host::fixes::Choice::ambient_occlusion` and `sun_shadows`, on wgpu only),
+/// before the game makes its device: the reader `read` (the game's camera and sun, the sun light's
+/// way while the sun shadows are on) and both parts' points are installed whatever the start, and
+/// each frame records the words of the parts it has on ([`d3d9_wgpu::scene_light::enabled`],
+/// [`d3d9_wgpu::sun_shadow::enabled`]; none while both are off, so the frame is what it was). The
+/// player's switch (Shift+F11) takes effect at the game's next `Present` ([`present`]: the parts
+/// turned for the frames after it, and recorded for the device right after it). The ambient
+/// occlusion at `strength`, as [`want_scene_light`].
+pub fn want_lighting_switch(
+    read: fn(&Engine) -> Option<SceneView>,
+    start: d3d9_wgpu::scene_light::Parts,
+    strength: f32,
+) {
+    d3d9_wgpu::scene_light::enable(start.ambient_occlusion);
+    d3d9_wgpu::sun_shadow::enable(start.sun_shadows);
+    d3d9_wgpu::scene_light::allow_switch(start);
+    SCENE_LIGHT_STRENGTH.store(
+        d3d9_wgpu::scene_light::clamp_strength(strength).to_bits(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    let _ = SCENE_LIGHT.set(read);
+    engine_core::world_drawn::install(world_drawn);
+    engine_core::world_drawn::install_depth_clear_skipped(depth_clear_skipped);
+}
+
+/// Whether the sun shadows draw this frame: wgpu draws ([`wgpu_draws`]) and the frame has them on
+/// ([`d3d9_wgpu::sun_shadow::enabled`]: the run's choice, or the player's switch since). What
+/// the sun light from the sky asks each frame (`engine::sky_sun::want_light_from_sky`): the game's
+/// light turns to the sky's discs only while the shadows draw.
+pub fn sun_shadows_drawn() -> bool {
+    wgpu_draws() && d3d9_wgpu::sun_shadow::enabled()
+}
+
+/// The new lighting's reader while this frame has a part of it on (none while both are off: the
+/// frame records nothing for them).
+fn frame_reader() -> Option<fn(&Engine) -> Option<SceneView>> {
+    SCENE_LIGHT
+        .get()
+        .copied()
+        .filter(|_| d3d9_wgpu::scene_light::enabled() || d3d9_wgpu::sun_shadow::enabled())
+}
+
 /// The frame draw's port-added point ([`engine_core::world_drawn`], installed by
-/// [`want_scene_light`]): the camera and sun recorded on the game's device.
+/// [`want_scene_light`] and [`want_lighting_switch`]): the camera and sun recorded on the game's
+/// device while the frame has the ambient occlusion on.
 fn world_drawn(e: &mut Engine) {
-    if let Some(read) = SCENE_LIGHT.get().copied() {
+    if let Some(read) = SCENE_LIGHT
+        .get()
+        .copied()
+        .filter(|_| d3d9_wgpu::scene_light::enabled())
+    {
         world_drawn_lit(e, read);
     }
 }
 
 /// The depth-only clear skipped (`engine_core::world_drawn::depth_clear_skipped`: JIP's
-/// `ToggleDepthClear 0`; installed by [`want_scene_light`] and [`want_sun_shadows`]): the marks
-/// the clear gives ([`world_drawn_marks`]) on the game's device, under the device lock, so the
-/// first-person arms and weapon after it still neither cast nor take the sun's shadows.
+/// `ToggleDepthClear 0`; installed by [`want_scene_light`], [`want_sun_shadows`] and
+/// [`want_lighting_switch`]): the marks the clear gives ([`world_drawn_marks`]) on the game's
+/// device, under the device lock, so the first-person arms and weapon after it still neither cast
+/// nor take the sun's shadows. Nothing while the frame has neither part on.
 fn depth_clear_skipped(e: &mut Engine) {
-    if let Some(read) = SCENE_LIGHT.get().copied() {
+    if let Some(read) = frame_reader() {
         depth_clear_skipped_lit(e, read);
     }
 }
@@ -1447,7 +1497,7 @@ pub fn clear(
     stencil: u32,
     model: u32,
 ) {
-    let light = SCENE_LIGHT.get().copied();
+    let light = frame_reader();
     clear_lit(
         e, this, count, rects, flags, colour, z, stencil, model, light,
     );
@@ -1584,6 +1634,49 @@ pub fn present(
             dirty: dirty != 0,
             model,
             frame: 0,
+        },
+    );
+    lighting_switched(e, this, switch_due);
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: the player's switch the next `Present` on this thread takes ([`switch_due`]; `None`:
+    /// the run's own), so a test sees where it is recorded without the run-wide switch.
+    static TEST_SWITCH_DUE: std::cell::Cell<Option<d3d9_wgpu::scene_light::Parts>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The player's switch due at this `Present` (`d3d9_wgpu::scene_light::switch_due`).
+fn switch_due() -> Option<d3d9_wgpu::scene_light::Parts> {
+    #[cfg(test)]
+    if let Some(parts) = TEST_SWITCH_DUE.with(std::cell::Cell::take) {
+        return Some(parts);
+    }
+    d3d9_wgpu::scene_light::switch_due()
+}
+
+/// After the game's `Present` on the device `this`: when the player switched the new lighting since
+/// the frame before ([`want_lighting_switch`]; `due`, `d3d9_wgpu::scene_light::switch_due`, which
+/// turns the parts for the frames from the next: what they record), the device is told right here,
+/// between the two frames (`d3d9_wgpu::scene_light::SWITCH_STATE`), so the frame the game draws next
+/// is the first the device draws so. Nothing while nothing changed or the switch is not allowed.
+fn lighting_switched(
+    e: &mut Engine,
+    this: u32,
+    due: impl FnOnce() -> Option<d3d9_wgpu::scene_light::Parts>,
+) {
+    let Some(parts) = due() else {
+        return;
+    };
+    let m = parts.to_words();
+    record(
+        e,
+        this,
+        Cmd::SetTransform {
+            device: this,
+            state: d3d9_wgpu::scene_light::SWITCH_STATE,
+            matrix: Data::from_words(&m),
         },
     );
 }
@@ -4184,6 +4277,89 @@ mod tests {
 
     /// The sun shadows' switch is the run's: the tests that turn it on hold this.
     static SUN_SWITCH: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// The player's switch of the new lighting reaches the device right after the game's
+    /// `Present`, as one `SetTransform` of the switch's state carrying the parts, once; nothing when
+    /// no switch is due (in this binary the run-wide switch is never allowed: a `Present` records
+    /// itself alone).
+    #[test]
+    fn a_switch_of_the_new_lighting_is_recorded_after_the_present() {
+        const DEVICE: u32 = 0x1000;
+        type Seen = std::sync::Arc<std::sync::Mutex<Vec<(&'static str, u32, Vec<u32>)>>>;
+        struct Words(Seen);
+        impl d3d9_stream::Backend for Words {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                let seen = match &cmd {
+                    Cmd::SetTransform { state, matrix, .. } => {
+                        (cmd.name(), *state, matrix.to_words().to_vec())
+                    }
+                    _ => (cmd.name(), 0, Vec::new()),
+                };
+                self.0.lock().unwrap().push(seen);
+                Reply::None
+            }
+        }
+        let seen: Seen = std::sync::Arc::default();
+        let mut e = Engine::new();
+        {
+            let r = real(&mut e);
+            r.stream = Some(Stream::direct(Box::new(Words(std::sync::Arc::clone(
+                &seen,
+            )))));
+            r.devices.push((DEVICE, None));
+        }
+        let take = || std::mem::take(&mut *seen.lock().unwrap());
+        let parts = d3d9_wgpu::scene_light::Parts {
+            ambient_occlusion: false,
+            sun_shadows: true,
+        };
+        lighting_switched(&mut e, DEVICE, || Some(parts));
+        let got = take();
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].1, d3d9_wgpu::scene_light::SWITCH_STATE);
+        assert_eq!(
+            d3d9_wgpu::scene_light::Parts::from_words(&got[0].2),
+            Some(parts)
+        );
+        lighting_switched(&mut e, DEVICE, || None);
+        assert!(take().is_empty());
+        // At the game's Present: the switch right after it, once.
+        TEST_SWITCH_DUE.with(|d| d.set(Some(parts)));
+        present(&mut e, DEVICE, 0, 0, 0, 0, 0);
+        let got = take();
+        let names: Vec<&str> = got.iter().map(|(n, _, _)| *n).collect();
+        assert_eq!(names, ["Present", "SetTransform"]);
+        assert_eq!(got[1].1, d3d9_wgpu::scene_light::SWITCH_STATE);
+        assert_eq!(
+            d3d9_wgpu::scene_light::Parts::from_words(&got[1].2),
+            Some(parts)
+        );
+        // Never allowed in this binary: the next Present records itself alone.
+        assert!(!d3d9_wgpu::scene_light::switchable());
+        present(&mut e, DEVICE, 0, 0, 0, 0, 0);
+        let names: Vec<&str> = take().iter().map(|(n, _, _)| *n).collect();
+        assert_eq!(names, ["Present"]);
+    }
+
+    /// The sun light from the sky asks each frame whether the sun shadows draw: only while wgpu
+    /// draws and the frame has them on (the run's choice or the player's switch since); the real
+    /// Direct3D 9 drawing, never.
+    #[test]
+    fn the_sun_shadows_draw_only_on_wgpu_while_on() {
+        let _switch = SUN_SWITCH.lock().unwrap_or_else(|p| p.into_inner());
+        for (wgpu, on, drawn) in [
+            (true, true, true),
+            (true, false, false),
+            (false, true, false),
+            (false, false, false),
+        ] {
+            TEST_WGPU_DRAWS.with(|d| d.set(Some(wgpu)));
+            d3d9_wgpu::sun_shadow::enable(on);
+            assert_eq!(sun_shadows_drawn(), drawn, "wgpu {wgpu}, on {on}");
+        }
+        d3d9_wgpu::sun_shadow::enable(false);
+        TEST_WGPU_DRAWS.with(|d| d.set(None));
+    }
 
     /// JIP's `ToggleDepthClear 0` skips the game's depth-only clear; the frame then reaches
     /// `engine_core::world_drawn::depth_clear_skipped` in its place, whose hook records the same

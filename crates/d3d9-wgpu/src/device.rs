@@ -1503,8 +1503,18 @@ pub struct Device {
     /// `END`s (query, number) whose counts are awaited.
     pub(crate) answers: Option<Arc<QueryAnswers>>,
     awaiting: Vec<(Handle, u64)>,
+    /// The new lighting can be switched while playing ([`scene_light::switchable`] when this
+    /// device was made): its multisampled depth surfaces are made readable and what the sun
+    /// shadows read of the textures is read, so either part can be switched on at a frame
+    /// boundary and draw as on a fresh start ([`Device::switch_lighting`]); what was kept of the
+    /// sun shadows while they are off ([`SunKept`]); the note the window shows after a switch,
+    /// and until when ([`frame_rate::NOTE_TIME`]).
+    lighting_switch: bool,
+    sun_kept: Option<SunKept>,
+    lighting_note: Option<(&'static str, std::time::Instant)>,
     /// The new lighting ([`scene_light`]): on for this device ([`scene_light::enabled`] when it
-    /// was made), its GPU objects once it first runs, and the present it last ran in.
+    /// was made, then as switched), its GPU objects once it first runs, and the present it last
+    /// ran in.
     scene_light_on: bool,
     scene_light: Option<Box<scene_light::Gpu>>,
     scene_light_ran: Option<u64>,
@@ -1512,7 +1522,7 @@ pub struct Device {
     scene_light_said: Option<scene_light::Params>,
     scene_light_alternate: bool,
     /// The sun shadows ([`sun_shadow`]): present only when on for this device
-    /// ([`sun_shadow::enabled`] when it was made).
+    /// ([`sun_shadow::enabled`] when it was made, then as switched).
     sun: Option<Box<SunState>>,
     /// The sun shadows' variant pipelines on their way ([`Device::sun_variant_ready`]) and those
     /// that could not be made.
@@ -1750,9 +1760,19 @@ impl SunState {
         self.forgotten += 1;
     }
 
-    fn new(device: &wgpu::Device) -> SunState {
+    /// The sun shadows as a fresh start has them, with what was `kept` from the run's earlier sun
+    /// shadows (the player switched them off, [`SunKept`]: their pipelines, none made again);
+    /// `ahead`: still casters' pipelines made on threads of their own ([`sun_shadow::casters_ahead`]).
+    fn new(device: &wgpu::Device, kept: Option<SunKept>, ahead: bool) -> SunState {
+        let kept = kept.unwrap_or_else(|| SunKept {
+            gpu: None,
+            pipes: Map::default(),
+            ribbon_pipes: Map::default(),
+            caster_pending: Map::default(),
+            characters: sun_shadow::characters(),
+        });
         SunState {
-            gpu: sun_shadow::Gpu::new(device, sun_shadow::characters()),
+            gpu: sun_shadow::Gpu::new(device, kept.characters, kept.gpu),
             lists: sun_shadow::Lists::default(),
             cache: sun_shadow::Cache::default(),
             far: sun_shadow::Cache::default(),
@@ -1768,8 +1788,8 @@ impl SunState {
             rewritten: crate::fxhash::Set::default(),
             bounds: Map::default(),
             prune_at: SUN_PRUNE_FROM,
-            pipes: Map::default(),
-            ribbon_pipes: Map::default(),
+            pipes: kept.pipes,
+            ribbon_pipes: kept.ribbon_pipes,
             keep: [sun_shadow::SunKeep::default(); sun_shadow::CASCADES],
             anchors: [None; sun_shadow::CASCADES],
             view: None,
@@ -1806,18 +1826,43 @@ impl SunState {
                 .ok()
                 .and_then(|v| v.trim().parse().ok())
                 .unwrap_or(0),
-            characters: sun_shadow::characters(),
-            ahead: sun_shadow::casters_ahead(),
+            characters: kept.characters,
+            ahead,
             skins: Map::default(),
             skinned: Vec::new(),
             skinned_seen: 0,
-            caster_pending: Map::default(),
+            caster_pending: kept.caster_pending,
             caster_waiting: crate::fxhash::Set::default(),
             skin_before: Vec::new(),
             skin_now: Vec::new(),
             allow_override: None,
         }
     }
+
+    /// What is kept while the player has the sun shadows switched off ([`SunKept`]); the maps and
+    /// everything of the scene go with `self`.
+    fn into_kept(self) -> SunKept {
+        SunKept {
+            gpu: Some(self.gpu.into_kept()),
+            pipes: self.pipes,
+            ribbon_pipes: self.ribbon_pipes,
+            caster_pending: self.caster_pending,
+            characters: self.characters,
+        }
+    }
+}
+
+/// What a device keeps of its sun shadows while the player has them switched off
+/// ([`Device::switch_lighting`]): what is made once a run (the casters' pipelines, where each kind's
+/// is, those on their way, the lookup's layout the lighting variants were made with, and whether
+/// characters cast, which the variants were made for), not the maps or anything of the scene. So
+/// switching them on again draws as a fresh start does, without a pipeline made again.
+struct SunKept {
+    gpu: Option<sun_shadow::Kept>,
+    pipes: Map<PipeOf, Option<u32>>,
+    ribbon_pipes: Map<PipeOf, Option<u32>>,
+    caster_pending: Map<(SunMap, PipeOf), CasterPending>,
+    characters: bool,
 }
 
 impl Shader {
@@ -2008,7 +2053,9 @@ impl Device {
         // The pipelines to make before play: the shipped list and this machine's.
         let list = cache_dir.map(Listed::load);
         let casters = cache_dir
-            .filter(|_| sun_shadow::enabled() && sun_shadow::casters_ahead())
+            .filter(|_| {
+                (sun_shadow::enabled() || scene_light::switchable()) && sun_shadow::casters_ahead()
+            })
             .map(CasterList::load);
         let warm_start = pipeline_cache.as_ref().is_some_and(|c| c.warm);
         let listed_shaders: HashSet<u64> = list
@@ -2258,12 +2305,15 @@ impl Device {
             stale_textures: 0,
             answers: None,
             awaiting: Vec::new(),
+            lighting_switch: scene_light::switchable(),
+            sun_kept: None,
+            lighting_note: None,
             scene_light_on: scene_light::enabled(),
             scene_light: None,
             scene_light_ran: None,
             scene_light_said: None,
-            scene_light_alternate: scene_light::enabled()
-                && std::env::var("NV_AO_ALTERNATE").is_ok_and(|v| v.trim() == "1"),
+            // Read whether the step is on now or switched on later (it is read only while on).
+            scene_light_alternate: std::env::var("NV_AO_ALTERNATE").is_ok_and(|v| v.trim() == "1"),
             sun: None,
             sun_pending: Map::default(),
             sun_failed: HashSet::new(),
@@ -2285,7 +2335,11 @@ impl Device {
         }
         // The sun shadows: their maps and light list only when on for this device.
         if sun_shadow::enabled() {
-            d.sun = Some(Box::new(SunState::new(&d.device)));
+            d.sun = Some(Box::new(SunState::new(
+                &d.device,
+                None,
+                sun_shadow::casters_ahead(),
+            )));
         }
         d.surface = shown_in;
         // The frame-rate counter can show (F11 is taken) while a device draws the game's window.
@@ -2493,9 +2547,13 @@ impl Device {
             // colour one by a shader that reads its samples).
             usage: if samples > 1 && gamma_resolved(format.wgpu) {
                 wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
-            } else if samples > 1 && format.depth && (self.scene_light_on || self.sun.is_some()) {
+            } else if samples > 1
+                && format.depth
+                && (self.scene_light_on || self.sun.is_some() || self.lighting_switch)
+            {
                 // The new lighting and the sun shadows read the scene's depth
-                // ([`Device::scene_light`], [`Device::sun_shadows`]).
+                // ([`Device::scene_light`], [`Device::sun_shadows`]); while they can be switched
+                // on later, from the start.
                 wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
             } else if samples > 1 {
                 wgpu::TextureUsages::RENDER_ATTACHMENT
@@ -3112,8 +3170,9 @@ impl Device {
         }
         let bytes = format::convert(&s.format, &data[..(row * rows) as usize]);
         // The sun shadows tell a ribbon cable's texture (mostly clear) from a fence's by the mean
-        // alpha of its smallest level (only read with them on).
-        if self.sun.is_some() && s.level + 1 == tex.levels && s.layer == 0 {
+        // alpha of its smallest level (only read with them on, or while they can be switched on).
+        if (self.sun.is_some() || self.lighting_switch) && s.level + 1 == tex.levels && s.layer == 0
+        {
             let mean = if s.format.opaque {
                 Some(1.0)
             } else {
@@ -6929,7 +6988,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// time.
     fn queue_modules(&mut self, s: &Arc<Shader>) {
         self.queue_modules_as(s, self.storage_regs);
-        if self.storage_regs && self.sun.is_some() && s.program.stage == Stage::Vertex {
+        if self.storage_regs
+            && (self.sun.is_some() || self.lighting_switch)
+            && s.program.stage == Stage::Vertex
+        {
             self.queue_modules_as(s, false);
         }
     }
@@ -8132,6 +8194,81 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         for t in [&colour_tex, &depth_tex] {
             t.batch.store(self.batch, Ordering::Relaxed);
         }
+    }
+
+    /// The new lighting's parts this device draws now ([`scene_light::Parts`]).
+    pub fn lighting_parts(&self) -> scene_light::Parts {
+        scene_light::Parts {
+            ambient_occlusion: self.scene_light_on,
+            sun_shadows: self.sun.is_some(),
+        }
+    }
+
+    /// The player switched the new lighting ([`scene_light::SWITCH_STATE`], `words` its
+    /// [`scene_light::Parts`]), recorded by the platform right after the game's `Present`: the
+    /// frames from the next are drawn with the parts on and without the others, as on a fresh start
+    /// in that state. The ambient occlusion switched off lets its textures go and keeps its
+    /// pipelines; switched on, it runs from the next frame's world. The sun shadows switched off let
+    /// their maps and everything of the scene go and keep what is made once a run ([`SunKept`]);
+    /// switched on, they start as on a fresh start with those pipelines, still casters of a kind
+    /// not seen before made on threads of their own (no frame waits for the driver: a caster casts
+    /// from the frame its pipeline is there), their maps drawn at the next frame's scene clear from
+    /// that frame's casters. Said in the log and, on the game's window, shown for a few seconds.
+    pub(crate) fn switch_lighting(&mut self, words: &[u32]) {
+        let Some(parts) = scene_light::Parts::from_words(words) else {
+            self.warn("new lighting: a switch it cannot read (skipped)");
+            return;
+        };
+        if parts == self.lighting_parts() {
+            return;
+        }
+        self.scene_light_on = parts.ambient_occlusion;
+        if !parts.ambient_occlusion {
+            if let Some(gpu) = &mut self.scene_light {
+                gpu.release_textures();
+            }
+            self.scene_light_said = None;
+        }
+        match (parts.sun_shadows, self.sun.take()) {
+            (true, None) => {
+                let kept = self.sun_kept.take();
+                self.sun = Some(Box::new(SunState::new(&self.device, kept, true)));
+            }
+            (false, Some(sun)) => self.sun_kept = Some(sun.into_kept()),
+            (_, sun) => self.sun = sun,
+        }
+        eprintln!(
+            "NV_D3D9 wgpu: the new lighting switched at present {}: sun shadows {}, ambient occlusion {}",
+            self.presents,
+            if parts.sun_shadows { "on" } else { "off" },
+            if parts.ambient_occlusion { "on" } else { "off" },
+        );
+        if self.surface.is_some() {
+            self.lighting_note = Some((
+                parts.note(),
+                std::time::Instant::now() + frame_rate::NOTE_TIME,
+            ));
+        }
+    }
+
+    /// Tests: the sun shadows' caster pipelines this device has (live or kept while switched off),
+    /// and whether the ambient occlusion holds its textures now.
+    #[doc(hidden)]
+    pub fn lighting_held(&self) -> (usize, bool) {
+        let casters = match (&self.sun, &self.sun_kept) {
+            (Some(s), _) => s.gpu.pipelines.len(),
+            (None, Some(k)) => k.gpu.as_ref().map_or(0, sun_shadow::Kept::pipelines),
+            (None, None) => 0,
+        };
+        let textures = self.scene_light.as_ref().is_some_and(|g| g.has_textures());
+        (casters, textures)
+    }
+
+    /// Tests: how many pipelines the device keeps for the game's draws (the plain ones and the sun
+    /// shadows' lighting variants).
+    #[doc(hidden)]
+    pub fn pipelines_kept(&self) -> usize {
+        self.pipelines.len()
     }
 
     /// Keeps the draw just made in the sun shadows' light list ([`sun_shadow::Caster`]) when it is
@@ -11074,6 +11211,35 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.fps_overlay = Some(overlay);
     }
 
+    /// The note `text` drawn into the window's frame `view` (`format`, `width` by `height`) as the
+    /// counter is ([`Device::draw_frame_rate`]), under it while it shows (`below`).
+    fn draw_note(
+        &mut self,
+        view: &wgpu::TextureView,
+        (format, width, height): (wgpu::TextureFormat, u32, u32),
+        text: &'static str,
+        below: bool,
+    ) {
+        self.end_pass();
+        let mut overlay = match self.fps_overlay.take() {
+            Some(o) if o.format == format => o,
+            _ => frame_rate::Overlay::new(&self.device, format),
+        };
+        let (device, queue) = (self.device.clone(), self.queue.clone());
+        let span = self.span_begin(Kind::Other);
+        overlay.draw_note(
+            &device,
+            &queue,
+            self.encoder(),
+            view,
+            (width, height),
+            text,
+            below,
+        );
+        self.span_end(span);
+        self.fps_overlay = Some(overlay);
+    }
+
     /// Shows `p` in the game's window ([`loading`]): for a long step of the backend's own before
     /// play, which calls it as it goes. Only a device on the game's window draws it; every call
     /// also writes one log line with the same numbers (for a launcher). The game's own frames
@@ -11304,6 +11470,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             // an F12 report and the game's captures read), so in no capture or report.
             if fps {
                 self.draw_frame_rate(&view, (format, cw, ch));
+            }
+            // The new lighting's switch said for a few seconds, the same way: under the counter.
+            if let Some((note, until)) = self.lighting_note {
+                if std::time::Instant::now() < until {
+                    self.draw_note(&view, (format, cw, ch), note, fps);
+                } else {
+                    self.lighting_note = None;
+                }
             }
             frame_texture = Some(t);
         }
@@ -12090,8 +12264,9 @@ fn open(
         | wgpu::Features::FLOAT32_BLENDABLE
         | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
         | wgpu::Features::PIPELINE_CACHE;
-    // The sun shadows clamp casters between the sun and a map's near plane (only when on).
-    let wanted = if crate::sun_shadow::enabled() {
+    // The sun shadows clamp casters between the sun and a map's near plane (only when on, or
+    // while they can be switched on).
+    let wanted = if crate::sun_shadow::enabled() || crate::scene_light::switchable() {
         wanted | wgpu::Features::DEPTH_CLIP_CONTROL
     } else {
         wanted

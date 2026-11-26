@@ -4638,3 +4638,188 @@ fn switched_off_a_characters_ribbon_and_list_pipelines_are_made_at_once() {
         "the face's ribbons' and list's made at once, as a still caster's"
     );
 }
+
+/// One frame of the lit scene (the ground and the box, ambient 0.2 and a sun of 0.6) with the
+/// words the platform records for a frame with `parts` on: at the scene's clear the sun shadows'
+/// camera and frame while they are on; at the depth-only clear the new lighting's camera while
+/// either part is on, then the sun shadows' frame while they are on.
+fn parts_frame(b: &mut WgpuBackend, parts: scene_light::Parts) {
+    let (view, frame) = hook_words();
+    let set = |b: &mut WgpuBackend, state: u32, m: [u32; 16]| {
+        run(
+            b,
+            Cmd::SetTransform {
+                device: DEVICE,
+                state,
+                matrix: Data::from_words(&m),
+            },
+        );
+    };
+    if parts.sun_shadows {
+        set(b, sun_shadow::VIEW_STATE, view);
+        set(b, sun_shadow::BEGIN_STATE, frame);
+    }
+    clear(b, 7);
+    let mvp = model_view_proj();
+    let regs: Vec<f32> = mvp.iter().flatten().copied().collect();
+    constants(b, 0, 0, &regs);
+    constants(b, 3, 1, &[0.2, 0.2, 0.2, 1.0]);
+    constants(b, 3, 3, &[0.6, 0.6, 0.6, 0.0]);
+    draw(b, GROUND, 2);
+    draw(b, BOX, 10);
+    if parts.ambient_occlusion || parts.sun_shadows {
+        set(b, scene_light::STATE, view);
+    }
+    if parts.sun_shadows {
+        set(b, sun_shadow::STATE, frame);
+    }
+    clear(b, 2);
+}
+
+/// `n` frames of [`parts_frame`], each ended by its `Present`, with the sun shadows' variants and
+/// casters on their way waited for after each (so every start reaches the same picture); the last
+/// frame's pixels, read before its `Present`.
+fn parts_frames(b: &mut WgpuBackend, parts: scene_light::Parts, n: u32) -> Vec<[u8; 4]> {
+    let mut px = Vec::new();
+    for f in 0..n {
+        parts_frame(b, parts);
+        let d = b.device().expect("the device");
+        let (_, _, p) = d.read_surface_pixels(RT).expect("the target's pixels");
+        px = p
+            .chunks_exact(4)
+            .map(|p| [p[0], p[1], p[2], p[3]])
+            .collect();
+        present(b, f + 1);
+        b.device().expect("the device").wait_for_sun_variants();
+    }
+    px
+}
+
+/// The frames a start (or a switch) takes to draw the same picture as any other in its state.
+const SETTLED: u32 = 4;
+
+/// The new lighting's four states as fresh starts give them (`samples` per pixel): each part on
+/// for the device from the start, as the run's choice turns it on.
+fn fresh_parts(samples: u32) -> Option<Vec<(scene_light::Parts, Vec<[u8; 4]>)>> {
+    let mut out = Vec::new();
+    let mut parts = scene_light::Parts::default();
+    for _ in 0..4 {
+        scene_light::enable(parts.ambient_occlusion);
+        sun_shadow::enable(parts.sun_shadows);
+        let b = backend(samples);
+        scene_light::enable(false);
+        sun_shadow::enable(false);
+        let mut b = b?;
+        run(
+            &mut b,
+            Cmd::SetShader {
+                device: DEVICE,
+                pixel: true,
+                shader: LIT_PS,
+            },
+        );
+        out.push((parts, parts_frames(&mut b, parts, SETTLED)));
+        parts = parts.next();
+    }
+    Some(out)
+}
+
+/// The player's switch (Shift+F11, `scene_light::switch_key`) taken 100 times while the game draws,
+/// each at a `Present` as the platform takes it (`scene_light::switch_due`, its word recorded right
+/// after the `Present`): every state's frames are bit for bit a fresh start's in that state, with
+/// one sample a pixel and four. Nothing grows from switch to switch: after the first round the
+/// device makes no pipeline again (the game's, the lighting variants and the casters' alike), and
+/// none ever on the render thread for a caster (the first time the sun shadows are switched on,
+/// a still caster's is made on a thread of its own: no frame waits for the driver); switched off,
+/// the sun shadows' maps and the ambient occlusion's textures are let go at the switch.
+#[test]
+fn switched_while_playing_each_state_is_a_fresh_starts() {
+    use d3d9_stream::hitch::{snapshot, Count};
+    use scene_light::Parts;
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    for samples in [1, 4] {
+        let Some(fresh) = fresh_parts(samples) else {
+            return;
+        };
+        let fresh_of = |p: Parts| &fresh.iter().find(|(q, _)| *q == p).expect("a state").1;
+        // Each part changes the picture: the comparisons below would see a part missing.
+        for (i, (p, a)) in fresh.iter().enumerate() {
+            for (q, b) in &fresh[i + 1..] {
+                assert!(a != b, "{p:?} and {q:?} draw alike ({samples} samples)");
+            }
+        }
+        // A run that lets the player switch, started with both off.
+        scene_light::allow_switch(Parts::default());
+        let b = backend(samples);
+        let mut b = b.expect("the adapter");
+        run(
+            &mut b,
+            Cmd::SetShader {
+                device: DEVICE,
+                pixel: true,
+                shader: LIT_PS,
+            },
+        );
+        assert!(
+            parts_frames(&mut b, Parts::now(), SETTLED) == *fresh_of(Parts::default()),
+            "switchable, both off: a fresh start's ({samples} samples)"
+        );
+        let before = snapshot();
+        let mut counts: Option<(usize, usize)> = None;
+        for i in 0..100 {
+            let wanted = scene_light::switch_key().expect("the switch is allowed");
+            // The game's next Present: the frames from the next have the parts switched to, and
+            // the device is told right after it.
+            let parts = scene_light::switch_due().expect("a switch is due");
+            assert_eq!((parts, Parts::now()), (wanted, wanted));
+            assert_eq!(scene_light::switch_due(), None, "taken once");
+            run(
+                &mut b,
+                Cmd::SetTransform {
+                    device: DEVICE,
+                    state: scene_light::SWITCH_STATE,
+                    matrix: Data::from_words(&parts.to_words()),
+                },
+            );
+            let d = b.device().expect("the device");
+            assert_eq!(d.lighting_parts(), parts, "switch {i}");
+            // The casters' pipelines are kept across the switch, on or off: none to make again.
+            if let Some((_, casters)) = counts {
+                assert_eq!(d.lighting_held().0, casters, "switch {i}: casters kept");
+            }
+            if !parts.ambient_occlusion {
+                assert!(
+                    !d.lighting_held().1,
+                    "switch {i}: the occlusion's textures let go"
+                );
+            }
+            if !parts.sun_shadows {
+                assert_eq!(d.sun_cascades_drawn(), [None; sun_shadow::CASCADES]);
+            }
+            let px = parts_frames(&mut b, parts, SETTLED);
+            assert!(
+                px == *fresh_of(parts),
+                "switch {i} to {parts:?}: not a fresh start's picture ({samples} samples)"
+            );
+            let d = b.device().expect("the device");
+            let now = (d.pipelines_kept(), d.lighting_held().0);
+            // From the second round on, nothing is made again.
+            if i >= 4 {
+                assert_eq!(Some(now), counts, "switch {i} to {parts:?}: made again");
+            }
+            if i == 3 {
+                assert!(now.1 > 0, "the ground's and the box's casters were made");
+                counts = Some(now);
+            }
+        }
+        let after = snapshot();
+        assert_eq!(
+            after[Count::ShadowPipelines as usize] - before[Count::ShadowPipelines as usize],
+            0,
+            "no caster's pipeline made on the render thread at a switch ({samples} samples)"
+        );
+        scene_light::forbid_switch();
+        scene_light::enable(false);
+        sun_shadow::enable(false);
+    }
+}

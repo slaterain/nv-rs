@@ -74,7 +74,10 @@
 //! clear (an engineers' tool, never the shadows players see).
 //!
 //! **Off.** Nothing is recorded, read or made; the depth surfaces and pipelines are made as before
-//! ([`enabled`] is read when the device is made), so the frame is what it was (GPU-tested).
+//! ([`enabled`] is read when the device is made), so the frame is what it was (GPU-tested). On wgpu
+//! the player can switch them on and off while playing (`crate::scene_light::allow_switch`,
+//! Shift+F11): between two frames the device makes them as a fresh start has them, or lets their
+//! maps go, keeping their pipelines for the next time (GPU-tested against fresh starts).
 //!
 //! **Limits.** Characters (skinned) cast no shadow of ours yet (the game's own character shadows
 //! stay); leaves, fronds and distant trees are not shadowed yet; objects the game has not drawn
@@ -174,7 +177,9 @@ pub(crate) fn forgot_bodies() {
     BODIES_FORGOTTEN.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Turns the sun shadows on or off for devices made from now on (the host, from the run's choice).
+/// Turns the sun shadows on or off for devices made from now on (the host, from the run's choice),
+/// and for the frames the game draws from now on (the platform records their words only while they
+/// are on; while the switch is allowed, `crate::scene_light::switch_due` turns them at a `Present`).
 pub fn enable(on: bool) {
     MODE.store(u8::from(on), Ordering::Relaxed);
 }
@@ -2906,8 +2911,33 @@ type MapList<'a> = Vec<(&'a Draw, World, [u32; 2])>;
 /// The register ring's alignment (wgpu's dynamic uniform offsets).
 const ALIGN: usize = 256;
 
+/// What a device keeps of its [`Gpu`] while the player has the sun shadows switched off
+/// (`crate::scene_light::Parts`, `crate::device`): what is made once a run, the casters' depth-only
+/// pipelines, the coverage and debug pipelines and the lookup's layout the lighting variants are
+/// made with; not the maps, which are let go.
+pub(crate) struct Kept {
+    light_layout: wgpu::BindGroupLayout,
+    pipelines: Vec<Option<wgpu::RenderPipeline>>,
+    thin_pipe: Option<wgpu::RenderPipeline>,
+    #[allow(clippy::type_complexity)]
+    apply: Vec<(
+        (bool, wgpu::TextureFormat, u32),
+        wgpu::BindGroupLayout,
+        wgpu::RenderPipeline,
+    )>,
+}
+
+impl Kept {
+    /// The casters' pipelines kept (tests: the same after every switch once each was made).
+    pub(crate) fn pipelines(&self) -> usize {
+        self.pipelines.len()
+    }
+}
+
 impl Gpu {
-    pub(crate) fn new(device: &wgpu::Device, characters: bool) -> Gpu {
+    /// The maps and what draws them; with what was `kept` from the run's earlier sun shadows (the
+    /// pipelines, [`Kept`]: none are made again), else all new.
+    pub(crate) fn new(device: &wgpu::Device, characters: bool, kept: Option<Kept>) -> Gpu {
         // One texture of a layer a cascade (one binding, one sample instruction a tap), for the
         // maps the lookups read and for the still casters' maps.
         let texture = |label, count: usize| {
@@ -3008,7 +3038,17 @@ impl Gpu {
                 .create_view(&Default::default())
         };
         let far_views = [far_view(), far_view()];
-        let light_layout = light_layout(device);
+        let Kept {
+            light_layout,
+            pipelines,
+            thin_pipe,
+            apply,
+        } = kept.unwrap_or_else(|| Kept {
+            light_layout: light_layout(device),
+            pipelines: Vec::new(),
+            thin_pipe: None,
+            apply: Vec::new(),
+        });
         let light_ring = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sun shadow lookup"),
             size: LIGHT_SLOT * LIGHT_SLOTS,
@@ -3073,7 +3113,7 @@ impl Gpu {
             thin_array,
             thin_in: [false; CASCADES],
             thin_moving: [false; CASCADES],
-            thin_pipe: None,
+            thin_pipe,
             linear,
             thin_quads: None,
             compare,
@@ -3086,9 +3126,9 @@ impl Gpu {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
-            apply: Vec::new(),
+            apply,
             ring: None,
-            pipelines: Vec::new(),
+            pipelines,
             far_views,
             far_front: 0,
             far_back: None,
@@ -3741,6 +3781,17 @@ impl Gpu {
         self.far_drawn = None;
         self.far_back = None;
         self.far_old = None;
+    }
+
+    /// What is kept while the sun shadows are switched off ([`Kept`]); the maps and the rest go
+    /// with `self`.
+    pub(crate) fn into_kept(self) -> Kept {
+        Kept {
+            light_layout: self.light_layout,
+            pipelines: self.pipelines,
+            thin_pipe: self.thin_pipe,
+            apply: self.apply,
+        }
     }
 
     /// The step's uniform buffer.

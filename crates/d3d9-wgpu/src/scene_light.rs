@@ -53,8 +53,17 @@
 //!
 //! **Off.** Nothing is recorded, no texture or pipeline is made, the depth surfaces are made as
 //! before ([`enabled`] is read when the device is made), so the frame is what it was.
+//!
+//! **Switched while playing.** On wgpu the host lets the player switch the new lighting's two parts,
+//! this step and the sun shadows (`crate::sun_shadow`), while the game runs ([`allow_switch`]):
+//! Shift+F11 turns them, both, the sun shadows alone, the ambient occlusion alone, neither, and
+//! round again ([`Parts::next`]), from the run's choice. The switch takes effect between two frames:
+//! at the game's `Present` the platform turns the parts on or off for the frames the game draws from
+//! then on ([`switch_due`]: what is recorded for them) and records them for the device right after
+//! the `Present` ([`SWITCH_STATE`]), which then makes or drops what the parts draw with. A device
+//! made while the switch is allowed makes its depth surfaces so either part can be turned on later.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 /// The port-private `SetTransform` state (FourCC `NVAO`, as NVIDIA's `ATOC` render state) that
 /// carries [`Params`] in its 16 words. No Direct3D 9 transform state has this number.
@@ -98,14 +107,172 @@ pub fn clamp_strength(strength: f32) -> f32 {
 
 static ON: AtomicBool = AtomicBool::new(false);
 
-/// Turns the step on or off for devices made from now on (the host, from the run's choice).
+/// Turns the step on or off for devices made from now on (the host, from the run's choice), and
+/// for the frames the game draws from now on (the platform records its words only while it is on;
+/// while the switch is allowed, [`switch_due`] turns it at a `Present`).
 pub fn enable(on: bool) {
     ON.store(on, Ordering::Relaxed);
 }
 
-/// Whether devices made now run the step.
+/// Whether devices made now run the step (and the frame the game draws now records its words).
 pub fn enabled() -> bool {
     ON.load(Ordering::Relaxed)
+}
+
+/// The new lighting's two parts, as the player switches them while playing ([`switch_key`]) and as
+/// [`SWITCH_STATE`] carries them to the device.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Parts {
+    /// The ambient occlusion: this module's step.
+    pub ambient_occlusion: bool,
+    /// The sun shadows (`crate::sun_shadow`).
+    pub sun_shadows: bool,
+}
+
+impl Parts {
+    /// Every part: the switch's turn starts from neither to both.
+    pub const ALL: Parts = Parts {
+        ambient_occlusion: true,
+        sun_shadows: true,
+    };
+
+    fn bits(self) -> u8 {
+        u8::from(self.ambient_occlusion) | (u8::from(self.sun_shadows) << 1)
+    }
+
+    fn of_bits(bits: u8) -> Parts {
+        Parts {
+            ambient_occlusion: bits & 1 != 0,
+            sun_shadows: bits & 2 != 0,
+        }
+    }
+
+    /// The parts the game's frames have now: [`enabled`] and `crate::sun_shadow::enabled`.
+    pub fn now() -> Parts {
+        Parts {
+            ambient_occlusion: enabled(),
+            sun_shadows: crate::sun_shadow::enabled(),
+        }
+    }
+
+    /// The next in the switch's turn: both, the sun shadows alone, the ambient occlusion alone,
+    /// neither, both again (from the original's look one press gives the whole new lighting).
+    pub fn next(self) -> Parts {
+        let (ambient_occlusion, sun_shadows) = match (self.sun_shadows, self.ambient_occlusion) {
+            (true, true) => (false, true),
+            (true, false) => (true, false),
+            (false, true) => (false, false),
+            (false, false) => (true, true),
+        };
+        Parts {
+            ambient_occlusion,
+            sun_shadows,
+        }
+    }
+
+    /// [`SWITCH_STATE`]'s 16 words: the parts in the first (bit 0 the ambient occlusion, bit 1 the
+    /// sun shadows), the rest 0.
+    pub fn to_words(self) -> [u32; 16] {
+        let mut w = [0u32; 16];
+        w[0] = u32::from(self.bits());
+        w
+    }
+
+    /// The parts [`SWITCH_STATE`]'s words carry; none for words no switch records (another bit
+    /// set, or not 16 words).
+    pub fn from_words(w: &[u32]) -> Option<Parts> {
+        (w.len() == 16 && w[0] <= 3 && w[1..].iter().all(|&v| v == 0))
+            .then(|| Parts::of_bits(w[0] as u8))
+    }
+
+    /// What the game's window shows (for a few seconds) and the log says after a switch.
+    pub fn note(self) -> &'static str {
+        match (self.sun_shadows, self.ambient_occlusion) {
+            (true, true) => "New lighting: sun shadows and ambient occlusion",
+            (true, false) => "New lighting: sun shadows",
+            (false, true) => "New lighting: ambient occlusion",
+            (false, false) => "New lighting: off",
+        }
+    }
+}
+
+/// The port-private `SetTransform` state (FourCC `NVLS`) that carries [`Parts`] in its 16 words:
+/// recorded by the platform right after the game's `Present` when the player switched the new
+/// lighting ([`switch_due`]), so the device turns its parts on or off between two frames. No
+/// Direct3D 9 transform state has this number.
+pub const SWITCH_STATE: u32 = u32::from_le_bytes(*b"NVLS");
+
+/// The switch: [`SWITCHABLE`] once the host allowed it ([`allow_switch`]), and the parts the
+/// player wants in the low bits ([`Parts`]).
+static SWITCH: AtomicU8 = AtomicU8::new(0);
+const SWITCHABLE: u8 = 0x80;
+
+/// Lets the player switch the new lighting while playing, from the run's choice `start` (the host,
+/// on wgpu only, before the game makes its device): devices made from now on make their depth
+/// surfaces so either part can be turned on later (`crate::device`), and Shift+F11 turns the parts
+/// ([`switch_key`]).
+pub fn allow_switch(start: Parts) {
+    SWITCH.store(SWITCHABLE | start.bits(), Ordering::Relaxed);
+}
+
+/// Tests: the switch as before [`allow_switch`] (not allowed, nothing wanted).
+#[doc(hidden)]
+pub fn forbid_switch() {
+    SWITCH.store(0, Ordering::Relaxed);
+}
+
+/// Unit tests that change the switch hold this (it is the process's).
+#[cfg(test)]
+pub(crate) static SWITCH_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Whether the player can switch the new lighting while playing ([`allow_switch`]).
+pub fn switchable() -> bool {
+    SWITCH.load(Ordering::Relaxed) & SWITCHABLE != 0
+}
+
+/// The parts the player wants now: the run's choice until the first switch.
+pub fn wanted() -> Parts {
+    Parts::of_bits(SWITCH.load(Ordering::Relaxed))
+}
+
+/// The switch's key went down (Shift+F11's first press, `crate::frame_rate::key`): the parts
+/// wanted turn to the next ([`Parts::next`]), which it answers; none (nothing changes) while the
+/// switch is not allowed.
+pub fn switch_key() -> Option<Parts> {
+    let mut was = SWITCH.load(Ordering::Relaxed);
+    loop {
+        if was & SWITCHABLE == 0 {
+            return None;
+        }
+        let next = Parts::of_bits(was).next();
+        match SWITCH.compare_exchange_weak(
+            was,
+            SWITCHABLE | next.bits(),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return Some(next),
+            Err(now) => was = now,
+        }
+    }
+}
+
+/// At each `Present` of the game's device (the platform, on the game's thread): when the parts the
+/// player wants differ from those of the frames drawn so far ([`Parts::now`]), they are turned on
+/// for the frames from the next ([`enable`], `crate::sun_shadow::enable`) and answered, for the
+/// platform to record ([`SWITCH_STATE`]) right after the `Present`. None while they are the same or
+/// the switch is not allowed.
+pub fn switch_due() -> Option<Parts> {
+    if !switchable() {
+        return None;
+    }
+    let want = wanted();
+    if want == Parts::now() {
+        return None;
+    }
+    enable(want.ambient_occlusion);
+    crate::sun_shadow::enable(want.sun_shadows);
+    Some(want)
 }
 
 /// What the game's memory gives the step for a frame, as read by the host.
@@ -811,6 +978,17 @@ impl Gpu {
         )
     }
 
+    /// The half-resolution textures let go (the player switched the step off): the pipelines stay,
+    /// so switching it on again makes none; the textures are made again at the next run.
+    pub(crate) fn release_textures(&mut self) {
+        self.half = None;
+    }
+
+    /// Whether the half-resolution textures are there (tests: none while switched off).
+    pub(crate) fn has_textures(&self) -> bool {
+        self.half.is_some()
+    }
+
     /// Records the three steps into `encoder`: the half-resolution distances, the
     /// half-resolution occlusion, then the scene's colour multiplied by it.
     pub(crate) fn encode(
@@ -1127,6 +1305,96 @@ mod tests {
         // D3DTS_VIEW 2, D3DTS_PROJECTION 3, D3DTS_TEXTURE0..7 16..23, D3DTS_WORLDMATRIX(n) 256..511.
         const { assert!(STATE > 511) };
         assert_eq!(&STATE.to_le_bytes(), b"NVAO");
+        const { assert!(SWITCH_STATE > 511) };
+        assert_eq!(&SWITCH_STATE.to_le_bytes(), b"NVLS");
+        for other in [
+            STATE,
+            crate::sun_shadow::STATE,
+            crate::sun_shadow::VIEW_STATE,
+            crate::sun_shadow::BEGIN_STATE,
+            crate::sun_shadow::WORLD_STATE,
+        ] {
+            assert_ne!(SWITCH_STATE, other);
+        }
+    }
+
+    /// The switch's turn goes through all four from any of them and back in four presses; from
+    /// the original's look the first press gives all of it, the second takes the ambient
+    /// occlusion away, the third the sun shadows (the ambient occlusion back), the fourth the rest.
+    #[test]
+    fn the_switch_turns_through_all_four_and_back() {
+        let off = Parts::default();
+        let sun = Parts {
+            ambient_occlusion: false,
+            sun_shadows: true,
+        };
+        let ao = Parts {
+            ambient_occlusion: true,
+            sun_shadows: false,
+        };
+        assert_eq!(off.next(), Parts::ALL);
+        assert_eq!(Parts::ALL.next(), sun);
+        assert_eq!(sun.next(), ao);
+        assert_eq!(ao.next(), off);
+        for start in [off, sun, ao, Parts::ALL] {
+            let mut seen = std::collections::HashSet::new();
+            let mut p = start;
+            for _ in 0..4 {
+                seen.insert(p);
+                p = p.next();
+            }
+            assert_eq!(p, start);
+            assert_eq!(seen.len(), 4, "{start:?}");
+        }
+        let notes: std::collections::HashSet<&str> =
+            [off, sun, ao, Parts::ALL].map(Parts::note).into();
+        assert_eq!(notes.len(), 4);
+        assert_eq!(off.note(), "New lighting: off");
+    }
+
+    /// The switch's words carry the parts in the first word and nothing else; words with another
+    /// bit, something after the first or not 16 of them are no switch's.
+    #[test]
+    fn the_switch_words_carry_the_parts() {
+        for bits in 0..4u8 {
+            let p = Parts::of_bits(bits);
+            let w = p.to_words();
+            assert_eq!(w[0], u32::from(bits));
+            assert!(w[1..].iter().all(|&v| v == 0));
+            assert_eq!(Parts::from_words(&w), Some(p));
+        }
+        let mut w = Parts::ALL.to_words();
+        w[0] = 4;
+        assert_eq!(Parts::from_words(&w), None);
+        let mut w = Parts::ALL.to_words();
+        w[15] = 1;
+        assert_eq!(Parts::from_words(&w), None);
+        assert_eq!(Parts::from_words(&Parts::ALL.to_words()[..15]), None);
+    }
+
+    /// Not allowed (the real Direct3D 9, a test run): the key switches nothing. Allowed, it turns
+    /// the parts wanted from the run's choice; what the frames draw changes only at a `Present`
+    /// (`switch_due`, tested where the platform records it).
+    #[test]
+    fn the_key_switches_only_when_allowed() {
+        let _switch = SWITCH_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        forbid_switch();
+        assert!(!switchable());
+        assert_eq!(switch_key(), None);
+        assert_eq!(wanted(), Parts::default());
+        let sun = Parts {
+            ambient_occlusion: false,
+            sun_shadows: true,
+        };
+        allow_switch(sun);
+        assert!(switchable());
+        assert_eq!(wanted(), sun, "the run's choice until the first switch");
+        assert_eq!(switch_key(), Some(sun.next()));
+        assert_eq!(wanted(), sun.next());
+        assert_eq!(switch_key(), Some(sun.next().next()));
+        forbid_switch();
+        assert_eq!(switch_key(), None);
+        assert!(!switchable());
     }
 
     /// Both steps' WGSL, for both depth kinds, read and validated as wgpu reads them.
