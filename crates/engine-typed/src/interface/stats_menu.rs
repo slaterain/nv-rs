@@ -1038,12 +1038,14 @@ pub fn stats_menu_update_player_title(e: &mut Engine) {
 /// `StatsMenu::UpdateHealingMode` (Xbox PDB): the `"_xbox_button"` and `"_enabled"` ids looked up
 /// once (function-local statics). With the healing tile (`+0xb4`) and `004b71d0`: its button 10 in
 /// limb mode, else 11, its text the mode's setting, and the eleven page tiles enabled outside limb
-/// mode. Then the fade object's current group fades in limb mode (`007dbfe0`).
+/// mode. Then the fade object's current group fades in limb mode (`007dbfe0`, given the mode byte
+/// itself).
 pub fn stats_menu_update_healing_mode(e: &mut Engine, this: Ptr) {
     let at = this.addr();
     let button = static_trait(e, HEALING_GUARD, 1, XBOX_BUTTON_TRAIT, XBOX_BUTTON_TEXT);
     let enabled = static_trait(e, HEALING_GUARD, 2, ENABLED_TRAIT, ENABLED_TEXT);
-    let limb = limb_mode(e, at) != 0;
+    let mode = limb_mode(e, at);
+    let limb = mode != 0;
     let healing = field(e, at, HEALING_TILE);
     if healing != 0 && e.call(MANAGER_STATE_TEST, &args![]).bool() {
         tile_set_int(e, healing, button, if limb { 0xa } else { 0xb });
@@ -1064,7 +1066,7 @@ pub fn stats_menu_update_healing_mode(e: &mut Engine, this: Ptr) {
     typed_call!(
         super::FAMILY,
         0x007d_bfe0,
-        fn_007dbfe0(e, Ptr::new(fade), u32::from(limb))
+        fn_007dbfe0(e, Ptr::new(fade), u32::from(mode))
     );
 }
 
