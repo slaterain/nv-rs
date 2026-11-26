@@ -54,6 +54,7 @@ use engine_core::x87::fistp_chop64;
 pub const IN_PLACE: &[u32] = &[
     0x0082_56d0, // a list's emptiness: both its words zero
     0x007a_62e0, // the `ListBoxItem` constructor: the tile, the data, a zero byte
+    0x0040_4920, // the word setting's base constructor: three stores
 ];
 
 /// `UpdateHighlightBoxPos`'s statics' guard (bit 0 the `"_highlight_y"` id 4 bytes below it, bit 1
@@ -66,10 +67,10 @@ const VISIBLE_ITEMS_TEXT: u32 = 0x0106_f860;
 const TRAIT_ID: i32 = 0xfaa;
 const TRAIT_STRING: i32 = 0xfc4;
 const TRAIT_FOCUS: u32 = 0xfc3;
-/// The value action that adds a float (`Tile::Value::AddAction`, thiscall: action, float) and its
-/// action.
+/// The value action with a float operand (`Tile::Value::AddAction`, thiscall: action, float) and
+/// the multiply operator (`CalculateValue`'s switch: `0x7d1` adds, `0x7d3` multiplies).
 const VALUE_ADD_FLOAT: u32 = 0x00a0_9080;
-const ACTION_ADD: u32 = 0x7d3;
+const ACTION_MULTIPLY: u32 = 0x7d3;
 /// `Tile::GetMenu` (thiscall) and `Menu::RenderTemplate` (thiscall: parent, template, 0).
 const TILE_GET_MENU: u32 = 0x00a0_3c90;
 const RENDER_TEMPLATE: u32 = 0x00a1_ddb0;
@@ -113,9 +114,8 @@ const HEALTH_SLOT: u32 = 0x10;
 /// The sorts' callees: `ItemChange::GetFullName` (thiscall) and the names' compare (cdecl).
 const ITEM_FULL_NAME: u32 = 0x004b_e2d0;
 const COMPARE_NAMES: u32 = 0x0046_9880;
-/// The word setting's base constructor (thiscall: name, value), its vtable and the collection the
-/// interface settings are added to (`004de490`, its add the vtable's `+4`).
-const SETTING_CONSTRUCT: u32 = 0x0040_4920;
+/// The word setting's vtable and the collection the interface settings are added to (`004de490`,
+/// its add the vtable's `+4`).
 const SETTING_VTABLE: u32 = 0x0102_2738;
 const SETTING_COLLECTION: u32 = 0x004d_e490;
 const COLLECTION_ADD_SLOT: u32 = 4;
@@ -145,7 +145,7 @@ fn new_item(e: &mut Engine, block: u32, tile: u32, data: u32) -> u32 {
 /// A new `ListBoxItem` of `tile` and `data` in a fresh 12-byte block, or 0 when the allocator
 /// answers 0.
 #[inline]
-fn allocate_item(e: &mut Engine, tile: u32, data: u32) -> u32 {
+pub(super) fn allocate_item(e: &mut Engine, tile: u32, data: u32) -> u32 {
     let block = e.call(ALLOCATE, &args![0xcu32]).u32();
     if block == 0 {
         0
@@ -201,7 +201,7 @@ pub fn list_box_remove_item_group(e: &mut Engine, this: Ptr, group: u32) {
 /// given; a new `ListBoxItem` of the tile and `data` is inserted after `after` (then `Synchronize`
 /// when flag 0 is set) or appended (then, with flag 0, the tile's position and
 /// `SetTotalListHeight`; the tile numbered with the next index). With exactly one item and a
-/// `"_number_of_visible_items"` above 0.0, the container's height becomes the tile's height plus
+/// `"_number_of_visible_items"` above 0.0, the container's height becomes the tile's height times
 /// that number (two actions, then calculated). The new tile, or null.
 pub fn list_box_add_item(
     e: &mut Engine,
@@ -299,7 +299,7 @@ pub fn list_box_add_item(
                 .i32();
             let container = e.mem.u32(at.wrapping_add(CONTAINER));
             let count = tile_float(e, container, visible);
-            e.call(VALUE_ADD_FLOAT, &args![value, ACTION_ADD, count]);
+            e.call(VALUE_ADD_FLOAT, &args![value, ACTION_MULTIPLY, count]);
             e.call(VALUE_CALCULATE, &args![value, 0u32]);
         }
     }
@@ -560,8 +560,9 @@ pub fn fn_0071aaa0(e: &mut Engine, this: Ptr, node: u32, previous: u32) -> bool 
 /// `max(_ftol2(004e4430(unfiltered * (total - visible) / total)) + 1, 2)`; with both above 0.0 and
 /// more than one step, the container's `"_scroll_delta"` becomes `(total - visible) / (steps - 1)`;
 /// with a scroll bar its `"_number_of_items"` becomes the steps. Each step rounds to a float (the
-/// main thread's precision), as the other instances' (a list's count is far below 2^29, so its
-/// product with a float is exact in an `f64` and rounded once).
+/// main thread's precision), as the other instances' (while `_num_filtered` is no more than the
+/// list's count, the unfiltered count is far below 2^29, so its product with a float is exact in an
+/// `f64` and rounded once).
 pub fn list_box_set_total_list_height(e: &mut Engine, this: Ptr) {
     let at = this.addr();
     let container = e.mem.u32(at.wrapping_add(CONTAINER));
@@ -633,11 +634,14 @@ pub fn fn_00719be0(e: &mut Engine, this: Ptr) {
 
 // Typed from 00719c00
 /// A word setting of the interface settings (thiscall, `RET 8`: the name, the value): the word
-/// setting's base (`00404920`), its vtable, then added to the collection (`004de490`, its vtable's
-/// `+4`). `this`.
+/// setting's base (`00404920`, in place: its name at `+8` and its value at `+4`; the base vtable it
+/// stores first is overwritten at once), its vtable, then added to the collection (`004de490`, its
+/// vtable's `+4`). `this`.
 pub fn fn_00719c00(e: &mut Engine, this: Ptr, name: u32, value: u32) -> Ptr {
-    e.call(SETTING_CONSTRUCT, &args![this, name, value]);
-    e.mem.set_u32(this.addr(), SETTING_VTABLE);
+    let at = this.addr();
+    e.mem.set_u32(at.wrapping_add(8), name);
+    e.mem.set_u32(at.wrapping_add(4), value);
+    e.mem.set_u32(at, SETTING_VTABLE);
     let collection = e.call(SETTING_COLLECTION, &[]).u32();
     e.vcall(collection, COLLECTION_ADD_SLOT, &args![this]);
     this

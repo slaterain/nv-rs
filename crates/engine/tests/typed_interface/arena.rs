@@ -345,6 +345,12 @@ pub enum Arg {
     /// One live object alone (object 3, the list box world's first list box): every case runs on
     /// it, never on null (a constructor's store at null would make the zero page's words a vtable).
     Object,
+    /// Small numbers (a group, an index, a page, a healing option): 0 to 5 and -1.
+    Small,
+    /// The stats menu's actor values, one of each `UpdateActorValue` case: health, action points,
+    /// experience, radiation, 0x14, karma, the first and the last body part, the first value past
+    /// them, a SPECIAL value, a skill.
+    ActorValue,
 }
 
 const PTRS: [u32; 3] = [ARENA + 3 * OBJECT, ARENA + 40 * OBJECT, 0];
@@ -375,6 +381,8 @@ const LIST_NODES: [u32; 5] = [
 ];
 const CODES: [u32; 3] = [CODE + 0x40, 0, CODE + 0x84];
 const OBJECTS_ONE: [u32; 1] = [ARENA + 3 * OBJECT];
+const SMALL: [u32; 7] = [0, 1, 2, 3, 4, 5, 0xffff_ffff];
+const ACTOR_VALUES: [u32; 11] = [0x10, 0xc, 0x18, 0x36, 0x14, 0x17, 0x19, 0x1e, 0x1f, 5, 0x20];
 const TILE_IDS: [u32; 13] = [
     0xffff_ffff,
     0,
@@ -405,6 +413,8 @@ fn values(arg: Arg) -> &'static [u32] {
         Arg::ListNode => &LIST_NODES,
         Arg::Code => &CODES,
         Arg::Object => &OBJECTS_ONE,
+        Arg::Small => &SMALL,
+        Arg::ActorValue => &ACTOR_VALUES,
     }
 }
 
@@ -435,6 +445,10 @@ const OTHER_FAMILIES: &[u32] = &[
     0x00a0_0f30,
     0x00a0_0e90,
     0x00a0_9200,
+    0x00a0_11f0,
+    0x0047_e040,
+    0x0047_e0e0,
+    0x0040_4010,
 ];
 
 /// The world's settings for a Diff of the family.
@@ -537,6 +551,7 @@ fn arena_diff(
         .ignore_calls(engine_typed::interface::menu_manager_p2::IN_PLACE)
         .ignore_calls(engine_typed::interface::item_list_box::IN_PLACE)
         .ignore_calls(engine_typed::interface::small_units::IN_PLACE)
+        .ignore_calls(engine_typed::interface::stats_menu::IN_PLACE)
         .ignore_calls(without)
         .goes_by_address(OTHER_FAMILIES)
         .inputs(&inputs)

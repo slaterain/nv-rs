@@ -270,7 +270,7 @@ fn above(a: f64, b: f64) -> bool {
 /// freed (`007e0850`), then the embedded list destroyed (`0046ffb0` on +4).
 pub fn fn_00406de0(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), STATUS_DATA_LIST_VTABLE);
-    fn_007e0850(e, this);
+    e.call(0x007e_0850, &args![this]);
     e.call(LIST_DESTRUCT, &args![this.addr() + 4]);
 }
 
@@ -282,7 +282,7 @@ pub fn fn_007db1c0(e: &mut Engine) -> u32 {
     if e.global::<u32>(FADE_OBJECT_011DACE4) == 0 {
         let block = e.call(ALLOCATE, &args![0x4cu32]).u32();
         let object = if block != 0 {
-            fn_007db2c0(e, Ptr::new(block)).addr()
+            e.call(0x007d_b2c0, &args![block]).u32()
         } else {
             0
         };
@@ -358,7 +358,7 @@ pub fn fn_007dbfe0(e: &mut Engine, this: Ptr, flag: u32) {
         .addr()
         .wrapping_add(group.wrapping_mul(8))
         .wrapping_add(4);
-    fn_007e0e30(e, Ptr::new(list), 0x007d_c040, flag);
+    e.call(0x007e_0e30, &args![Ptr::new(list), 0x007d_c040, flag]);
 }
 
 // Translated from 007dc040 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -413,7 +413,7 @@ pub fn stats_menu_do_idle(e: &mut Engine, this: Ptr) {
         if e.call(INTERFACE_MANAGER_IS_IN_PIPBOY_MENU, &args![]).bool() {
             let time = e.call(TIME_00457FE0, &args![]).u32();
             if time >= e.global::<u32>(NEXT_UPDATE_011DAD74) {
-                fn_007ddb00(e, this);
+                e.call(0x007d_db00, &args![this]);
                 if player(e) != 0 && e.call(HARDCORE_004D1360, &args![player(e)]).bool() {
                     e.call(STATS_007DDC20, &args![this]);
                     e.call(STATS_007DDD10, &args![this]);
@@ -435,8 +435,8 @@ pub fn stats_menu_do_idle(e: &mut Engine, this: Ptr) {
             e.call(STATS_007E0230, &args![this]);
         }
     }
-    if fn_007dcc00(e, this) == 0 {
-        let page = fn_007dcc40(e, this);
+    if e.call(0x007d_cc00, &args![this]).i32() == 0 {
+        let page = e.call(0x007d_cc40, &args![this]).i32();
         let limit = if e.call(HARDCORE_004D1360, &args![player(e)]).bool() {
             5
         } else {
@@ -499,10 +499,10 @@ pub fn fn_007dcc40(e: &mut Engine, this: Ptr) -> i32 {
 /// index; then `UpdateActorValue(0x17)`.
 pub fn stats_menu_update_all_actor_values(e: &mut Engine, this: Ptr) {
     for value in [0x10u32, 0xc, 0x18, 0x36, 0x14] {
-        stats_menu_update_actor_value(e, this, value);
+        e.call(0x007d_d090, &args![this, value]);
     }
     for value in 0x19..0x20u32 {
-        stats_menu_update_actor_value(e, this, value);
+        e.call(0x007d_d090, &args![this, value]);
     }
     for (tile, list, callback) in [
         (0xa8u32, 0x180u32, 0x007d_fa30u32),
@@ -515,7 +515,7 @@ pub fn stats_menu_update_all_actor_values(e: &mut Engine, this: Ptr) {
             &args![this.addr() + list, callback, 0u32, 0x7fff_ffffu32],
         );
     }
-    stats_menu_update_actor_value(e, this, 0x17);
+    e.call(0x007d_d090, &args![this, 0x17]);
 }
 
 /// `UpdateActorValue`'s strings and settings: `"%d/%d"`, the face path format, the
@@ -562,7 +562,7 @@ fn show_value_pair(e: &mut Engine, this: Ptr, text: u32, value: u32) {
 /// The string's text on the menu's tile at the trait `007dfdf0` gives for `value`.
 fn show_on_menu_tile(e: &mut Engine, this: Ptr, text: u32, value: u32) {
     let string = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, text));
-    let trait_id = fn_007dfdf0(e, this, value);
+    let trait_id = e.call(0x007d_fdf0, &args![this, value]).u32();
     let root = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, this));
     set_string(e, root, trait_id, string);
 }
@@ -595,13 +595,13 @@ pub fn stats_menu_update_actor_value(e: &mut Engine, this: Ptr, value: u32) {
         e.call(STRING_CONSTRUCT, &args![text]);
         match value {
             0x10 => {
-                let face = fn_007dfe40(e, this);
+                let face = e.call(0x007d_fe40, &args![this]).i32();
                 e.call(STRING_FORMAT, &args![text, FACE_FORMAT, face]);
                 let string = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, text));
                 let tile = e.mem.u32(this.addr() + 0xf0);
                 set_string(e, tile, 0xfcc, string);
                 show_value_pair(e, this, text, 0x10);
-                stats_menu_update_healing_options(e, this, 0);
+                e.call(0x007d_f230, &args![this, 0]);
             }
             0xc => show_value_pair(e, this, text, 0xc),
             0x18 => {
@@ -626,9 +626,9 @@ pub fn stats_menu_update_actor_value(e: &mut Engine, this: Ptr, value: u32) {
                 show_on_menu_tile(e, this, text, 0x18);
             }
             0x36 => {
-                fn_007ddb00(e, this);
-                stats_menu_update_healing_options(e, this, 2);
-                stats_menu_update_active_effects(e, this);
+                e.call(0x007d_db00, &args![this]);
+                e.call(0x007d_f230, &args![this, 2]);
+                e.call(0x007d_df00, &args![this]);
             }
             0x14 => {
                 let clamped = e
@@ -643,7 +643,7 @@ pub fn stats_menu_update_actor_value(e: &mut Engine, this: Ptr, value: u32) {
                 let string = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, text));
                 let tile = e.mem.u32(this.addr() + 0x128);
                 set_string(e, tile, 0xfc4, string);
-                stats_menu_update_active_effects(e, this);
+                e.call(0x007d_df00, &args![this]);
             }
             0x17 => {
                 let karma = x87_store32(e.vcall(actor_values(e), AV_FLOAT, &args![0x17u32]).f64());
@@ -664,7 +664,7 @@ pub fn stats_menu_update_actor_value(e: &mut Engine, this: Ptr, value: u32) {
                     let name_tile = e.mem.u32(this.addr() + 0x11c);
                     set_string(e, name_tile, 0xfc4, name);
                 }
-                stats_menu_update_player_title(e);
+                e.call(0x007d_f5d0, &args![]);
             }
             0x19..=0x1e => {
                 let image = 0xc + 2 * (value - 0x19);
@@ -692,7 +692,7 @@ pub fn stats_menu_update_actor_value(e: &mut Engine, this: Ptr, value: u32) {
                     &args![tile, value_trait, x87_quiet_bits(fraction), 1u32],
                 );
                 if e.mem.u8(this.addr() + 0x2a0) != 0 {
-                    stats_menu_update_healing_options(e, this, 0);
+                    e.call(0x007d_f230, &args![this, 0]);
                 }
             }
             _ => {
@@ -705,9 +705,9 @@ pub fn stats_menu_update_actor_value(e: &mut Engine, this: Ptr, value: u32) {
                         )
                         .u32();
                     if update {
-                        stats_menu_special_update_fn(e, tile, value);
+                        e.call(0x007d_fa30, &args![tile, value]);
                     } else {
-                        stats_menu_skills_update_fn(e, tile, value);
+                        e.call(0x007d_fb00, &args![tile, value]);
                     }
                 }
             }
@@ -736,7 +736,7 @@ pub fn stats_menu_update_perks(e: &mut Engine) {
         while node != 0 && node_item(e, node) != 0 {
             let rank = node_item(e, node);
             let perk = e.mem.u32(rank);
-            if fn_007dd8a0(e, Ptr::new(perk)) == 0 {
+            if e.call(0x007d_d8a0, &args![Ptr::new(perk)]).u8() == 0 {
                 e.call(STRING_CONSTRUCT, &args![text]);
                 let rank = node_item(e, node);
                 if e.mem.u8(rank + 4) > 1 {
@@ -759,7 +759,11 @@ pub fn stats_menu_update_perks(e: &mut Engine) {
                 let string = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, text));
                 let rank = node_item(e, node);
                 let list = open_menu(e) + 0x1e0;
-                fn_007e0e70(e, Ptr::new(list), rank, string, 0x007e_04e0, 0);
+                e.call(
+                    0x007e_0e70,
+                    &args![Ptr::new(list), rank, string, 0x007e_04e0, 0],
+                )
+                .u32();
                 e.call(STRING_DESTROY, &args![text]);
             }
             node = node_next(e, node);
@@ -784,7 +788,7 @@ pub fn fn_007ddad0(e: &mut Engine, this: Ptr, stat: u32) {
         let tile = e
             .call(LIST_BOX_GET_TILE_FOR, &args![this.addr() + 0x210, slot])
             .u32();
-        fn_007dfc60(e, tile, stat);
+        e.call(0x007d_fc60, &args![tile, stat]);
     });
 }
 
@@ -1053,8 +1057,8 @@ pub fn stats_menu_update_healing_mode(e: &mut Engine, this: Ptr) {
         }
     }
     let flag = u32::from(e.mem.u8(this.addr() + 0x2a0));
-    let fade = fn_007db1c0(e);
-    fn_007dbfe0(e, Ptr::new(fade), flag);
+    let fade = e.call(0x007d_b1c0, &args![]).u32();
+    e.call(0x007d_bfe0, &args![Ptr::new(fade), flag]);
 }
 
 /// The arrow and the change flag `SPECIALUpdateFn` and `SkillsUpdateFn` give a tile:
@@ -1141,7 +1145,7 @@ pub fn fn_007dfcd0(e: &mut Engine) -> u8 {
     if menu == 0 {
         return 0;
     }
-    fn_007dcc00(e, Ptr::new(menu)) as u8
+    e.call(0x007d_cc00, &args![Ptr::new(menu)]).i32() as u8
 }
 
 // Translated from 007dfdf0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1360,7 +1364,7 @@ pub fn stats_menu_status_data_list_register(e: &mut Engine, this: Ptr, effect: u
         return;
     }
     let key = e.call(EFFECT_KEY_00403EA0, &args![effect]).u32();
-    let found = fn_007e0ce0(e, this, key);
+    let found = e.call(0x007e_0ce0, &args![this, key]).u32();
     if found != 0 {
         let magnitude = e.call(EFFECT_GET_MAGNITUDE, &args![effect]).u32();
         let total = magnitude.wrapping_add(e.mem.u32(found));
@@ -1417,7 +1421,7 @@ pub fn fn_007e0e30(e: &mut Engine, this: Ptr, callback: u32, value: u32) {
     let item = e.mem.u32(this.addr());
     if e.call(callback, &args![item, value]).bool() && e.mem.u32(this.addr() + 4) != 0 {
         let next = e.mem.u32(this.addr() + 4);
-        fn_007e0e30(e, Ptr::new(next), callback, value);
+        e.call(0x007e_0e30, &args![Ptr::new(next), callback, value]);
     }
 }
 
@@ -1687,7 +1691,7 @@ pub fn stats_menu_create(e: &mut Engine) -> u32 {
         return fail(e);
     }
     e.call(MENU_SET_MENU_TILE, &args![open_menu(e), tile, 0u32]);
-    if !fn_007db340(e, Ptr::new(open_menu(e))) {
+    if !e.call(0x007d_b340, &args![Ptr::new(open_menu(e))]).bool() {
         e.call(DEBUG_MESSAGE, &args![CREATION_FAILED_TEXT]);
         return 0;
     }
@@ -1707,7 +1711,7 @@ pub fn stats_menu_create(e: &mut Engine) -> u32 {
         TUTORIAL_SHOW_MESSAGE,
         &args![interface.wrapping_add(0x4d4), 0x19u32, class, 0x200u32],
     );
-    stats_menu_update_player_name(e);
+    e.call(0x007d_f4e0, &args![]);
     let limit = x87_quiet_bits(e.global::<u32>(FLOAT_MAX_01016970));
     let stage = e.call(FIND_STAGE_FOR_RAD_LEVEL, &args![limit]).u32();
     let stage_limit = if stage != 0 {
@@ -1792,7 +1796,7 @@ pub fn stats_menu_create(e: &mut Engine) -> u32 {
             LIST_BOX_INITIALIZE,
             &args![open_menu(e) + 0x1e0, container, template],
         );
-        stats_menu_update_perks(e);
+        e.call(0x007d_d710, &args![]);
         for (list, container) in [(0x270u32, 0x148u32), (0x210, 0xb0)] {
             let template = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, text));
             let container = e.mem.u32(open_menu(e) + container);
@@ -1804,8 +1808,12 @@ pub fn stats_menu_create(e: &mut Engine) -> u32 {
         e.mem.set_u32(index_slot, 0);
         while (e.mem.u32(index_slot) as i32) < 0x2b {
             let stat = e.mem.u32(index_slot);
-            let item =
-                list_box_misc_stat_id_add_item(e, Ptr::new(open_menu(e) + 0x210), stat, 0, 0, 0);
+            let item = e
+                .call(
+                    0x007e_1190,
+                    &args![Ptr::new(open_menu(e) + 0x210), stat, 0, 0, 0],
+                )
+                .u32();
             let stat = e.mem.u32(index_slot);
             let name = e.call(MISC_STAT_NAME_0078A260, &args![stat]).u32();
             set_string(e, item, 0xfc4, name);
@@ -1813,7 +1821,7 @@ pub fn stats_menu_create(e: &mut Engine) -> u32 {
             let value = e.call(MISC_STAT_VALUE_005A3370, &args![stat]).u32();
             set_int(e, item, 0x1005, value);
             e.call(TILE_SET_NAME_00707E10, &args![item, name]);
-            fn_007dc0a0(e, Ptr::new(index_slot));
+            e.call(0x007d_c0a0, &args![Ptr::new(index_slot)]);
         }
         let black = e.mem.u32(open_menu(e) + 0x14c);
         set_string(e, black, 0xfcc, SOLID_BLACK_TEXT);
@@ -1871,8 +1879,8 @@ pub fn stats_menu_create(e: &mut Engine) -> u32 {
             (5, 0xe4),
         ] {
             let group_tile = e.mem.u32(open_menu(e) + offset);
-            let fade = fn_007db1c0(e);
-            fn_007db250(e, Ptr::new(fade), group, group_tile);
+            let fade = e.call(0x007d_b1c0, &args![]).u32();
+            e.call(0x007d_b250, &args![Ptr::new(fade), group, group_tile]);
         }
         for (group, index, value) in [
             (0u32, 1u32, 2u32),
@@ -1893,11 +1901,11 @@ pub fn stats_menu_create(e: &mut Engine) -> u32 {
             (5, 0, 2),
             (5, 2, 4),
         ] {
-            let fade = fn_007db1c0(e);
-            fn_007db270(e, Ptr::new(fade), group, index, value);
+            let fade = e.call(0x007d_b1c0, &args![]).u32();
+            e.call(0x007d_b270, &args![Ptr::new(fade), group, index, value]);
         }
-        stats_menu_update_all_actor_values(e, Ptr::new(open_menu(e)));
-        stats_menu_update_healing_mode(e, Ptr::new(open_menu(e)));
+        e.call(0x007d_cfc0, &args![Ptr::new(open_menu(e))]);
+        e.call(0x007d_f620, &args![Ptr::new(open_menu(e))]);
         for (setting, name) in [
             (0x011d_30c0u32, 0x0107_725cu32),
             (0x011d_1f08, 0x0107_7254),
@@ -2039,7 +2047,7 @@ pub fn stats_menu_update_active_effects(e: &mut Engine, this: Ptr) {
         let piece = text + 0x10;
         let second_piece = text + 0x18;
         e.call(STRING_CONSTRUCT, &args![text]);
-        fn_007e07f0(e, Ptr::new(base + 0x84));
+        e.call(0x007e_07f0, &args![Ptr::new(base + 0x84)]);
         for slot in [0x74u32, 0x78, 0x80, 0x7c] {
             let effect = e.mem.u32(base + slot);
             if effect != 0 {
@@ -2071,9 +2079,9 @@ pub fn stats_menu_update_active_effects(e: &mut Engine, this: Ptr) {
             if e.call(EFFECT_ACTIVE_00833C20, &args![effect]).bool() {
                 let item = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, effect));
                 if !e.call(IS_USAGE_MONITOR_EFFECT, &args![item]).bool() {
-                    let setting = fn_007df1d0(e, Ptr::new(effect));
-                    let skip = fn_007df1b0(e, Ptr::new(setting)) && {
-                        let setting = fn_007df1d0(e, Ptr::new(effect));
+                    let setting = e.call(0x007d_f1d0, &args![Ptr::new(effect)]).u32();
+                    let skip = e.call(0x007d_f1b0, &args![Ptr::new(setting)]).bool() && {
+                        let setting = e.call(0x007d_f1d0, &args![Ptr::new(effect)]).u32();
                         !e.call(FLAG_TEST_00403E60, &args![setting, 0x2000u32])
                             .bool()
                     };
@@ -2329,7 +2337,8 @@ fn update_effect(e: &mut Engine, this: Ptr, effect: u32, stages: [u32; 4]) {
                 kind(e) == 1
                     || kind(e) == 6
                     || kind(e) == 0xa
-                    || (kind(e) == 4 && fn_007df210(e, Ptr::new(effect)) as u8 != 0)
+                    || (kind(e) == 4
+                        && e.call(0x007d_f210, &args![Ptr::new(effect)]).u32() as u8 != 0)
             };
             if register {
                 e.call(STATUS_EFFECT_LIST_REGISTER, &args![base + 0x84, effect]);
@@ -2337,7 +2346,7 @@ fn update_effect(e: &mut Engine, this: Ptr, effect: u32, stages: [u32; 4]) {
             }
         }
     }
-    let setting = fn_007df1d0(e, Ptr::new(effect));
+    let setting = e.call(0x007d_f1d0, &args![Ptr::new(effect)]).u32();
     if e.call(FLAG_TEST_00403E60, &args![setting, 0x2000u32])
         .bool()
     {
@@ -2506,7 +2515,7 @@ fn menu_click(e: &mut Engine, this: Ptr, id: u32) {
 
 /// The fade object (`007db1c0`).
 fn fade(e: &mut Engine) -> Ptr {
-    Ptr::new(fn_007db1c0(e))
+    Ptr::new(e.call(0x007d_b1c0, &args![]).u32())
 }
 
 /// The tile the description box keeps in a slot (`0073ac90` or `007b5370` on +0xf8, plus 4).
@@ -2589,7 +2598,7 @@ pub fn stats_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
         stats_menu_get_page_for(e, this, id as u32, slot).then(|| e.mem.u32(slot.addr()))
     });
     if let Some(page) = page {
-        stats_menu_set_current_page(e, this, page as i32);
+        e.call(0x007d_ff40, &args![this, page as i32]);
         return;
     }
     let status = e.with_stack(4, |e, slot| {
@@ -2639,10 +2648,10 @@ pub fn stats_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
             while node != 0 && node_item(e, node) != 0 {
                 let effect = node_item(e, node);
                 let value = e.call(EFFECT_KEY_00403EA0, &args![effect]).u32();
-                stats_menu_update_actor_value(e, this, value);
+                e.call(0x007d_d090, &args![this, value]);
                 node = node_next(e, node);
             }
-            stats_menu_update_healing_options(e, this, index);
+            e.call(0x007d_f230, &args![this, index]);
             e.mem.set_u8(base + 0x2a1, 0);
             stats_menu_update_active_effects(e, this);
             index = 4;
@@ -2727,7 +2736,7 @@ pub fn stats_menu_do_gamepad(e: &mut Engine, this: Ptr, key: u32, value: u32) ->
         if (picked as i32) < 6 {
             let object = fade(e);
             fn_007dbfa0(e, object, picked, 1);
-            let first = fn_007e05f0(e, Ptr::new(base + 0x28));
+            let first = e.call(0x007e_05f0, &args![Ptr::new(base + 0x28)]).bool();
             let tile = e.mem.u32(base + 0x2c);
             set_int(e, tile, 0xfaf, u32::from(first));
             let second = fn_007e06f0(e, Ptr::new(base + 0x58));
@@ -2747,30 +2756,30 @@ pub fn stats_menu_do_gamepad(e: &mut Engine, this: Ptr, key: u32, value: u32) ->
         return true;
     }
     if key == 4 {
-        let page = fn_007dcc00(e, this);
+        let page = e.call(0x007d_cc00, &args![this]).i32();
         let page = if page == 0 { 4 } else { page - 1 };
-        stats_menu_set_current_page(e, this, page);
+        e.call(0x007d_ff40, &args![this, page]);
         let tile = e.mem.u32(base + 0x90);
         e.call(TILE_PLAY_TILE_SOUND, &args![tile, 0xfcbu32]);
         return true;
     }
     if key == 3 {
-        let page = fn_007dcc00(e, this);
+        let page = e.call(0x007d_cc00, &args![this]).i32();
         let page = if page == 4 { 0 } else { page + 1 };
-        stats_menu_set_current_page(e, this, page);
+        e.call(0x007d_ff40, &args![this, page]);
         let tile = e.mem.u32(base + 0x90);
         e.call(TILE_PLAY_TILE_SOUND, &args![tile, 0xfcbu32]);
         return true;
     }
-    if fn_007dcc00(e, this) == 4 {
+    if e.call(0x007d_cc00, &args![this]).i32() == 4 {
         if key == 0xb {
             menu_click(e, this, 0x31);
             return true;
         }
-    } else if fn_007dcc00(e, this) == 0 {
+    } else if e.call(0x007d_cc00, &args![this]).i32() == 0 {
         if key == 1 || key == 2 {
             let step: i32 = if key != 1 { 1 } else { -1 };
-            let target = fn_007dcc40(e, this).wrapping_add(step);
+            let target = e.call(0x007d_cc40, &args![this]).i32().wrapping_add(step);
             if fn_007e0060(e, this, target) {
                 e.with_stack(4, |e, status| {
                     e.mem.set_u32(status.addr(), 6);
@@ -2802,7 +2811,7 @@ pub fn stats_menu_do_gamepad(e: &mut Engine, this: Ptr, key: u32, value: u32) ->
                 return true;
             }
         } else if key == 9 {
-            return match fn_007dcc40(e, this) {
+            return match e.call(0x007d_cc40, &args![this]).i32() {
                 0 => {
                     menu_click(e, this, 0xa);
                     true
@@ -2814,7 +2823,7 @@ pub fn stats_menu_do_gamepad(e: &mut Engine, this: Ptr, key: u32, value: u32) ->
                 _ => false,
             };
         } else if key == 0xb {
-            return match fn_007dcc40(e, this) {
+            return match e.call(0x007d_cc40, &args![this]).i32() {
                 0 => {
                     let button = e.mem.u32(base + 0xb4);
                     if e.mem.u8(base + 0x2a0) == 0
@@ -2834,7 +2843,7 @@ pub fn stats_menu_do_gamepad(e: &mut Engine, this: Ptr, key: u32, value: u32) ->
                 _ => false,
             };
         } else if key == 0xc {
-            return match fn_007dcc40(e, this) {
+            return match e.call(0x007d_cc40, &args![this]).i32() {
                 0 => {
                     let button = e.mem.u32(base + 0xb4);
                     if e.call(TILE_IS_TRUE, &args![button, 0xfafu32]).bool() {
@@ -2886,7 +2895,7 @@ fn scroll_with_the_stick(e: &mut Engine, this: Ptr) {
     }
     if step != 0 && e.call(TIME_00457FE0, &args![]).u32() > e.global::<u32>(SCROLL_REPEAT_011DAD5C)
     {
-        let tile = if fn_007dcc00(e, this) == 0 {
+        let tile = if e.call(0x007d_cc00, &args![this]).i32() == 0 {
             e.call(WORD_AT_14_00825C00, &args![base + 0x240]).u32()
         } else {
             description_tile(e, this, SCROLL_TILE_SLOT_007B5370)
@@ -2927,11 +2936,11 @@ fn scroll_with_the_stick(e: &mut Engine, this: Ptr) {
 /// current and started after (`007dbfe0(1)`); without it the group is only stored.
 pub fn fn_007dbfa0(e: &mut Engine, this: Ptr, group: u32, flag: u8) {
     if flag != 0 {
-        fn_007dbfe0(e, this, 0);
+        e.call(0x007d_bfe0, &args![this, 0]);
     }
     e.mem.set_u32(this.addr(), group);
     if flag != 0 {
-        fn_007dbfe0(e, this, 1);
+        e.call(0x007d_bfe0, &args![this, 1]);
     }
 }
 
@@ -2993,7 +3002,7 @@ pub fn stats_menu_do_enter(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
     if tile == 0 && (0..0x3c).contains(&id) {
         tile = e.mem.u32(base + 0x90 + 4 * id as u32);
     }
-    match fn_007dcc00(e, this) as u32 {
+    match e.call(0x007d_cc00, &args![this]).i32() as u32 {
         0 => {
             let value = e.call(TILE_GET_FLOAT, &args![tile, 0xfacu32]).f64();
             let zero: f64 = e.global(ZERO_DOUBLE);
@@ -3028,7 +3037,9 @@ pub fn stats_menu_do_enter(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
                 .bool()
             {
                 stats_menu_move_knob(e, this, tile, Ptr::new(KNOB_STEP_011DAD64));
-                let value = fn_007e1110(e, Ptr::new(base + 0x180), tile);
+                let value = e
+                    .call(0x007e_1110, &args![Ptr::new(base + 0x180), tile])
+                    .u32();
                 fn_007dc7e0(e, this, value);
             }
         }
@@ -3037,7 +3048,9 @@ pub fn stats_menu_do_enter(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
                 .bool()
             {
                 stats_menu_move_knob(e, this, tile, Ptr::new(KNOB_STEP_011DAD68));
-                let value = fn_007e1110(e, Ptr::new(base + 0x1b0), tile);
+                let value = e
+                    .call(0x007e_1110, &args![Ptr::new(base + 0x1b0), tile])
+                    .u32();
                 fn_007dc7e0(e, this, value);
             }
         }
@@ -3046,7 +3059,9 @@ pub fn stats_menu_do_enter(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
                 .bool()
             {
                 stats_menu_move_knob(e, this, tile, Ptr::new(KNOB_STEP_011DAD6C));
-                let perk = fn_007e1110(e, Ptr::new(base + 0x1e0), tile);
+                let perk = e
+                    .call(0x007e_1110, &args![Ptr::new(base + 0x1e0), tile])
+                    .u32();
                 fn_007dc9b0(e, this, Ptr::new(perk));
             }
         }
@@ -3059,7 +3074,9 @@ pub fn stats_menu_do_enter(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
             if e.call(LIST_BOX_HAS_TILE_007242F0, &args![base + 0x270, tile])
                 .bool()
             {
-                let reputation = fn_007e1110(e, Ptr::new(base + 0x270), tile);
+                let reputation = e
+                    .call(0x007e_1110, &args![Ptr::new(base + 0x270), tile])
+                    .u32();
                 fn_007dcb40(e, this, reputation);
                 stats_menu_move_knob(e, this, tile, Ptr::new(KNOB_STEP_011DAD70));
             }
@@ -3204,10 +3221,10 @@ const UPDATE_ALL_CHILDREN: [(u32, u32, bool); 7] = [
 /// menu tile's `0x100d` and `0x100e`, and seven named children (`GetChildByName`) on
 /// `0xfc4` or `"_Title"`.
 pub fn stats_menu_update_all(e: &mut Engine, this: Ptr) {
-    stats_menu_update_all_actor_values(e, this);
+    e.call(0x007d_cfc0, &args![this]);
     fn_007ddaa0(e, this);
     fn_007dd8c0(e, this);
-    stats_menu_update_healing_options(e, this, 4);
+    e.call(0x007d_f230, &args![this, 4]);
     fn_007df920(e, this);
     let setting = setting_string(e, SETTING_011C3CB4);
     if e.call(COMPARE_00408B20, &args![setting, COMPARED_STRING_01018348])
@@ -3445,7 +3462,7 @@ pub fn stats_menu_set_knob_position(e: &mut Engine, flag: u8) {
     if menu == 0 {
         return;
     }
-    let page = fn_007dcc00(e, Ptr::new(menu));
+    let page = e.call(0x007d_cc00, &args![Ptr::new(menu)]).i32();
     let manager = pipboy_manager(e);
     e.call(
         PIPBOY_SET_TAB_KNOB_POSITION,
@@ -3459,7 +3476,7 @@ pub fn stats_menu_set_knob_position(e: &mut Engine, flag: u8) {
 pub fn stats_menu_set_current_stats_page(e: &mut Engine, page: u8) {
     let menu = open_menu(e);
     if menu != 0 {
-        stats_menu_set_current_page(e, Ptr::new(menu), i32::from(page));
+        e.call(0x007d_ff40, &args![Ptr::new(menu), i32::from(page)]);
     }
 }
 
@@ -3507,7 +3524,7 @@ pub fn fn_007e0060(e: &mut Engine, this: Ptr, page: i32) -> bool {
     } else {
         2
     };
-    if page > last || fn_007dcc40(e, this) == page {
+    if page > last || e.call(0x007d_cc40, &args![this]).i32() == page {
         return false;
     }
     if e.mem.u8(this.addr() + 0x2a0) != 0 {
@@ -3556,13 +3573,13 @@ pub fn fn_007e0230(e: &mut Engine, this: Ptr) {
     let base = this.addr();
     let mode = u8::from(e.mem.u8(base + 0x2a0) == 0);
     e.mem.set_u8(base + 0x2a0, mode);
-    let first = fn_007e05f0(e, Ptr::new(base + 0x28));
+    let first = e.call(0x007e_05f0, &args![Ptr::new(base + 0x28)]).bool();
     let tile = e.mem.u32(base + 0x2c);
     set_int(e, tile, 0xfaf, u32::from(first));
     let second = fn_007e06f0(e, Ptr::new(base + 0x58));
     let tile = e.mem.u32(base + 0x5c);
     set_int(e, tile, 0xfaf, u32::from(second));
-    stats_menu_update_healing_mode(e, this);
+    e.call(0x007d_f620, &args![this]);
 }
 
 // Translated from 007e02b0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3698,7 +3715,7 @@ pub fn fn_007e06b0(e: &mut Engine) -> u32 {
     if !e.call(FLAG_0070ED80, &args![]).bool() {
         return 0xffff_ffff;
     }
-    let object = fn_007db1c0(e);
+    let object = e.call(0x007d_b1c0, &args![]).u32();
     let group = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, object));
     fn_007df9c0(e, group)
 }
@@ -3757,7 +3774,7 @@ pub fn stats_menu_status_effect_list_register(e: &mut Engine, this: Ptr, effect:
             &args![this.addr() + 4, entry, 0x007e_0480u32],
         );
     }
-    let setting = fn_007df1d0(e, Ptr::new(effect));
+    let setting = e.call(0x007d_f1d0, &args![Ptr::new(effect)]).u32();
     if e.call(FLAG_TEST_00403E60, &args![setting, 0x2000u32])
         .bool()
     {
@@ -3773,13 +3790,13 @@ pub fn stats_menu_status_effect_list_register(e: &mut Engine, this: Ptr, effect:
 /// (`005f65d0`).
 pub fn fn_007e09d0(e: &mut Engine, this: Ptr, effect: u32) {
     let list = this.addr() + 4;
-    let setting = fn_007df1d0(e, Ptr::new(effect));
+    let setting = e.call(0x007d_f1d0, &args![Ptr::new(effect)]).u32();
     let present = e.with_stack(4, |e, slot| {
         e.mem.set_u32(slot.addr(), setting);
         e.call(LIST_CONTAINS_005F65D0, &args![list, slot]).bool()
     });
     if !present {
-        let setting = fn_007df1d0(e, Ptr::new(effect));
+        let setting = e.call(0x007d_f1d0, &args![Ptr::new(effect)]).u32();
         e.call(LIST_INSERT_SORTED, &args![list, setting, 0x007e_0540u32]);
     }
 }
@@ -3797,7 +3814,7 @@ pub fn fn_007e0a20(e: &mut Engine, this: Ptr, effect: u32) {
     }
     let item = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, effect));
     let key = e.call(EFFECT_KEY_00403EA0, &args![item]).u32();
-    let found = fn_007e0ce0(e, this, key);
+    let found = e.call(0x007e_0ce0, &args![this, key]).u32();
     if found != 0 {
         let magnitude = e.call(MAGNITUDE_00495460, &args![effect]).f64();
         let magnitude = e.call(FTOL2, &args![magnitude]).u32();
@@ -3845,7 +3862,7 @@ pub fn fn_007e0c50(e: &mut Engine, this: Ptr, key: u32) -> u32 {
 /// `StatsMenu::DoControllerSwitch` (engine map, vtable; `RET 4`, an unread word): the
 /// healing mode is shown again (`007df620`).
 pub fn stats_menu_do_controller_switch(e: &mut Engine, this: Ptr, _unused_1: u32) {
-    stats_menu_update_healing_mode(e, this);
+    e.call(0x007d_f620, &args![this]);
 }
 
 // Translated from 007e0d80 (decompiled, FalloutNV.exe 1.4.0.525)

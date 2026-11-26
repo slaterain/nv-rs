@@ -105,10 +105,6 @@ const ITEM_DELETE: u32 = 0x0044_59e0;
 /// The 8-byte list's destructor and clear (thiscall; its constructor is [`empty_list`]).
 const LIST_DESTRUCT: u32 = 0x0046_ffb0;
 const LIST_CLEAR: u32 = 0x0047_0470;
-/// The named and status effect lists' empties, and a status effect's data flush.
-const NAMED_EFFECTS_CLEAR: u32 = 0x007e_09b0;
-const STATUS_EFFECTS_CLEAR: u32 = 0x007e_07f0;
-const STATUS_DATA_FLUSH: u32 = 0x0040_6de0;
 /// The text edit menu's editor destructor, and `BSString`'s set (string, text, length).
 const TEXT_EDITOR_DESTRUCT: u32 = 0x0071_6a10;
 const STRING_SET: u32 = 0x0040_37f0;
@@ -515,7 +511,11 @@ pub fn fn_0071f540(e: &mut Engine, this: Ptr) -> Ptr {
 /// destroyed.
 pub fn fn_0071f570(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), NAMED_EFFECTS_LIST_VTABLE);
-    e.call(NAMED_EFFECTS_CLEAR, &args![this]);
+    typed_call!(
+        super::FAMILY,
+        0x007e_09b0,
+        super::stats_menu::fn_007e09b0(e, this)
+    );
     e.call(LIST_DESTRUCT, &args![this.addr().wrapping_add(4)]);
 }
 
@@ -532,7 +532,11 @@ pub fn fn_0071f5d0(e: &mut Engine, this: Ptr) -> Ptr {
 /// destroyed.
 pub fn fn_0071f600(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), STATUS_EFFECT_LIST_VTABLE);
-    e.call(STATUS_EFFECTS_CLEAR, &args![this]);
+    typed_call!(
+        super::FAMILY,
+        0x007e_07f0,
+        super::stats_menu::fn_007e07f0(e, this)
+    );
     e.call(LIST_DESTRUCT, &args![this.addr().wrapping_add(4)]);
 }
 
@@ -670,7 +674,11 @@ pub fn fn_0071f9f0(e: &mut Engine, this: Ptr) {
         0x0071_f570,
         fn_0071f570(e, Ptr::new(this.addr().wrapping_add(0x10)))
     );
-    e.call(STATUS_DATA_FLUSH, &args![this.addr().wrapping_add(4)]);
+    typed_call!(
+        super::FAMILY,
+        0x0040_6de0,
+        super::stats_menu::fn_00406de0(e, Ptr::new(this.addr().wrapping_add(4)))
+    );
 }
 
 /// `AttachTileByID`'s store: `tile` at `base + 4 * index`.
