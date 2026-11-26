@@ -8372,14 +8372,18 @@ fn xe_set_enable_state_parent() {
 /// The master room search's visited set (the stand-ins keep it here): its count, then its keys.
 const XP_VISITED: u32 = CONTROL + 0x700;
 const XP_VISITED_MAX: u32 = 16;
+/// How often the visited set was searched in this run, and the most a search may take: the
+/// translation's searches over three references stay far below it, so a search that loops (a
+/// visited mark missed) stops the run cleanly instead of overflowing the stack.
+const XP_SEARCHES: u32 = CONTROL + 0x780;
+const XP_SEARCHES_MAX: u32 = 64;
 
 /// What the part 3 range calls by address in other units and only counts: the decal list's add,
-/// the reflect lists' remove and flag set, the guards' add and two-word method, the patrol data's
+/// the reflect lists' flag set, the guards' add and two-word method, the patrol data's
 /// destructor body, a simple list's destructor body, the strings' copy and C string constructors,
 /// the visited set's destructor and the remover of a list's head node.
 const XP_NOTED: &[u32] = &[
     0x0043_4480,
-    0x0043_4800,
     0x0043_48a0,
     0x0043_10d0,
     0x0043_1120,
@@ -8420,14 +8424,51 @@ fn xp_activate_find(e: &mut Engine, a: &[u32]) -> Ret {
     ret(0)
 }
 
+/// The reflect lists' remove (`00434800`, `thiscall(extra, reference)`): counted, and the first node
+/// of the list at +0xc whose entry is for `reference` unlinked (the next node's words moved into the
+/// head when it is the head; the head's item cleared when it is alone), so a flag clear can empty
+/// the list and delete the extra data.
+fn xp_reflect_remove(e: &mut Engine, a: &[u32]) -> Ret {
+    noted(e, a);
+    let (mut node, mut previous) = (a[0].wrapping_add(0xc), 0);
+    for _ in 0..64 {
+        if node == 0 {
+            break;
+        }
+        let entry = e.mem.u32(node);
+        if entry != 0 && e.mem.u32(entry) == a[1] {
+            let next = e.mem.u32(node + 4);
+            if previous != 0 {
+                e.mem.set_u32(previous + 4, next);
+            } else if next != 0 {
+                e.mem.set_u32(node, e.mem.u32(next));
+                e.mem.set_u32(node + 4, e.mem.u32(next + 4));
+            } else {
+                e.mem.set_u32(node, 0);
+            }
+            break;
+        }
+        previous = node;
+        node = e.mem.u32(node + 4);
+    }
+    ret(0)
+}
+
 /// The visited set's constructor (`0042f4e0`): empty.
 fn xp_visited_new(e: &mut Engine, a: &[u32]) -> Ret {
     e.mem.set_u32(XP_VISITED, 0);
     ret(a[0])
 }
 
-/// `NiTMap::GetAt(key, &value)` (`0057c850`): true, with the value byte 1, for a key recorded.
+/// `NiTMap::GetAt(key, &value)` (`0057c850`): true, with the value byte 1, for a key recorded; the
+/// run stopped past [`XP_SEARCHES_MAX`] searches.
 fn xp_visited_find(e: &mut Engine, a: &[u32]) -> Ret {
+    let searches = e.mem.u32(XP_SEARCHES).wrapping_add(1);
+    e.mem.set_u32(XP_SEARCHES, searches);
+    assert!(
+        searches <= XP_SEARCHES_MAX,
+        "the master room search asked the visited set more than {XP_SEARCHES_MAX} times"
+    );
     let n = e.mem.u32(XP_VISITED).min(XP_VISITED_MAX);
     if (0..n).any(|i| e.mem.u32(XP_VISITED + 4 + 4 * i) == a[1]) {
         e.mem.set_u8(a[2], 1);
@@ -8462,6 +8503,7 @@ fn xp_stand_ins(e: &mut Engine) {
     e.register(0x0043_5820, built_list::<0x78>);
     e.register(0x0043_58a0, built_list::<0x79>);
     e.register(0x0043_3a00, xp_activate_find);
+    e.register(0x0043_4800, xp_reflect_remove);
     e.register(0x0042_f4e0, xp_visited_new);
     e.register(0x0057_c850, xp_visited_find);
     e.register(0x0084_d310, xp_visited_insert);
@@ -8539,11 +8581,12 @@ fn xp_entry_words(e: &mut Engine, d: &mut Draw, kind: u32) -> [u32; 2] {
     xp_nodes(e, &items)
 }
 
-/// A room data (0x20 bytes): its master flag in some seeds, a room list of up to three of
-/// `rooms`.
+/// A room data (0x20 bytes): its master flag (1, 2 or 0x80) in some seeds, a room list of up to
+/// three of `rooms`.
 fn xp_room_block(e: &mut Engine, d: &mut Draw, rooms: &[u32]) -> u32 {
     let data = xp_zeros(e, 0x20);
-    e.mem.set_u8(data + 0x10, u8::from(d.next(4) == 0));
+    e.mem
+        .set_u8(data + 0x10, [0, 0, 1, 2, 0x80][d.next(5) as usize]);
     let items: Vec<u32> = (0..d.next(4))
         .map(|_| rooms[d.next(rooms.len() as u32) as usize])
         .collect();
@@ -8613,7 +8656,8 @@ fn xp_compare_data(e: &mut Engine, words: u32, variant: u32) -> u32 {
     }
     let data = xp_zeros(e, 0x20);
     if words == 0 {
-        // A room data: no master, rooms 0x11 then 0x22.
+        // A room data: master flag 1 (2 in the one differing there, so a compare of the flags as
+        // booleans shows), rooms 0x11 then 0x22.
         let rooms: &[u32] = match variant {
             4 => &[0x11, 0x33],
             5 => &[0x11],
@@ -8622,7 +8666,7 @@ fn xp_compare_data(e: &mut Engine, words: u32, variant: u32) -> u32 {
         let [item, next] = xp_nodes(e, rooms);
         e.mem.set_u32(data + 8, item);
         e.mem.set_u32(data + 0xc, next);
-        e.mem.set_u8(data + 0x10, u8::from(variant == 3));
+        e.mem.set_u8(data + 0x10, if variant == 3 { 2 } else { 1 });
         return data;
     }
     for i in 0..words {
@@ -8638,6 +8682,62 @@ fn xp_compare_data(e: &mut Engine, words: u32, variant: u32) -> u32 {
 
 /// The flags a scalar deleting destructor is given.
 const XP_DELETE_FLAGS: &[u32] = &[0, 1, 2, 3];
+
+/// The bytes an enable state parent's flags (+0x10) hold in the flag tests: none, each of the low
+/// three bits alone, all but bit 0, all.
+const XP_FLAG_BYTES: &[u32] = &[0, 1, 2, 4, 0xfe, 0xff];
+
+/// The enable state parent's flag tests over each of [`XP_FLAG_BYTES`].
+trait XpFlags {
+    fn xp_flag_getter(self, kind: u32) -> Diff;
+    fn xp_flag_leaf(self, own: u32) -> Diff;
+    fn xp_flag_leaf_set(self, own: u32) -> Diff;
+}
+
+impl XpFlags for Diff {
+    /// (list) with the extra data of `kind` placed or not, its byte at +0x10 (and the cached
+    /// entry's) one of [`XP_FLAG_BYTES`] by seed.
+    fn xp_flag_getter(self, kind: u32) -> Diff {
+        self.extra_data_case()
+            .inputs(&[Input::Of(EXTRA_SEEDS)])
+            .setup(move |e, case| {
+                let w = xd_world(e, case.word(0));
+                let placed = place_kind(e, &w, case.word(0), kind);
+                let byte = XP_FLAG_BYTES[(case.word(0) % 6) as usize] as u8;
+                for x in [placed, xe_cached(e, kind)] {
+                    if x != 0 {
+                        e.mem.set_u8(x + 0x10, byte);
+                    }
+                }
+                vec![w.list]
+            })
+    }
+
+    /// (extra data) whose byte at +0x10 is each of [`XP_FLAG_BYTES`].
+    fn xp_flag_leaf(self, own: u32) -> Diff {
+        self.extra_data_case_but(own)
+            .inputs(&[Input::Of(XP_FLAG_BYTES)])
+            .setup(|e, case| {
+                xd_stand_ins(e);
+                let x = xd_block(e, 0x20, 0x5a);
+                e.mem.set_u8(x + 0x10, case.word(0) as u8);
+                vec![x]
+            })
+    }
+
+    /// (extra data, value) whose byte at +0x10 is each of [`XP_FLAG_BYTES`], the value each flag.
+    fn xp_flag_leaf_set(self, own: u32) -> Diff {
+        self.extra_data_case_but(own)
+            .max_cases(XP_FLAG_BYTES.len() * XE_FLAGS.len())
+            .inputs(&[Input::Of(XP_FLAG_BYTES), Input::Of(XE_FLAGS)])
+            .setup(|e, case| {
+                xd_stand_ins(e);
+                let x = xd_block(e, 0x20, 0x5a);
+                e.mem.set_u8(x + 0x10, case.word(0) as u8);
+                vec![x, case.word(1)]
+            })
+    }
+}
 
 /// The part 3 range's test shapes.
 trait XpShapes {
@@ -8981,6 +9081,50 @@ impl XpShapes for Diff {
     }
 }
 
+/// The master room search (`00420950`) walked as the exe walks it, noting in `reached` a visited
+/// reference passed over and a reference whose search found nothing with another reference after
+/// it. The lookup and the master flag are the translations' (`00410220`, `00420810`).
+fn xp_master_walk(
+    e: &mut Engine,
+    list: u32,
+    visited: &mut Vec<u32>,
+    reached: &mut std::collections::BTreeSet<String>,
+    depth: u32,
+) -> u32 {
+    let extra = e.call(0x0041_0220, &args![list, 0x7bu32]).u32();
+    if extra == 0 || depth > 8 {
+        return 0;
+    }
+    let rooms = e.mem.u32(extra + 0xc).wrapping_add(8);
+    let mut node = rooms;
+    while node != 0 && e.mem.u32(node) != 0 {
+        let room = e.mem.u32(node);
+        if e.call(0x0042_0810, &args![room + 0x44]).bool() {
+            return room;
+        }
+        node = e.mem.u32(node + 4);
+    }
+    let mut node = rooms;
+    while node != 0 && e.mem.u32(node) != 0 {
+        let room = e.mem.u32(node);
+        if visited.contains(&room) {
+            reached.insert("a visited reference passed over".to_string());
+        } else {
+            visited.push(room);
+            let found = xp_master_walk(e, room + 0x44, visited, reached, depth + 1);
+            if found != 0 {
+                return found;
+            }
+            let next = e.mem.u32(node + 4);
+            if next != 0 && e.mem.u32(next) != 0 {
+                reached.insert("a search that found nothing, a reference after it".to_string());
+            }
+        }
+        node = e.mem.u32(node + 4);
+    }
+    0
+}
+
 /// The part 3 range's worlds reach what its functions branch on (run as the translations, every
 /// miss listed at once): a reference list that holds the item or not and that a removal empties, an
 /// activate parent found or not and emptied, a reflect entry whose last flag is cleared, a null entry
@@ -9069,6 +9213,40 @@ fn the_part_3_worlds_reach_every_branch() {
                 }
             }
         }
+        // The reflect flags' clears: the last entry removed, the list emptied and its extra data
+        // deleted, or not.
+        for (setter, kind) in [
+            (0x0041_f1a0u32, 0x66u32),
+            (0x0041_f330, 0x66),
+            (0x0041_f4c0, 0x65),
+            (0x0041_f650, 0x65),
+        ] {
+            for &item in &XP_REFS[1..] {
+                let mut e = Engine::new_untyped_for_test();
+                let w = xd_world(&mut e, seed);
+                let placed = place_kind(&mut e, &w, seed, kind);
+                let mut d = Draw(seed.wrapping_mul(0x3c6e_f372) ^ kind);
+                let words = xp_entry_words(&mut e, &mut d, kind);
+                xp_hold(&mut e, placed, kind, &words);
+                let extra = e.call(0x0041_0220, &args![w.list, kind]).u32();
+                if extra == 0 {
+                    continue;
+                }
+                let deletes = e.mem.u32(extra + EXTRA_DELETES);
+                e.call(setter, &args![w.list, item, 0u32]);
+                let emptied = e.mem.u32(extra + EXTRA_DELETES) != deletes;
+                reached.insert(format!("reflect list emptied {emptied}"));
+            }
+        }
+        // The master room search, walked here as the exe walks it (the lookup and the master flag
+        // as the translations answer them): a visited reference passed over, and a reference whose
+        // search found nothing with another after it.
+        for preload in [false, true] {
+            let mut e = Engine::new_untyped_for_test();
+            let (w, refs) = xp_rooms_world(&mut e, seed);
+            let mut visited: Vec<u32> = if preload { vec![refs[0]] } else { Vec::new() };
+            xp_master_walk(&mut e, w.list, &mut visited, &mut reached, 0);
+        }
         // The master room search.
         let mut e = Engine::new_untyped_for_test();
         let (w, _) = xp_rooms_world(&mut e, seed);
@@ -9126,6 +9304,11 @@ fn the_part_3_worlds_reach_every_branch() {
     for flags in [1, 2, 3] {
         wanted.push(format!("reflect flags {flags}"));
     }
+    for flag in [true, false] {
+        wanted.push(format!("reflect list emptied {flag}"));
+    }
+    wanted.push("a visited reference passed over".to_string());
+    wanted.push("a search that found nothing, a reference after it".to_string());
     for name in [
         "no master room",
         "a master room of the list",
@@ -9142,7 +9325,7 @@ fn the_part_3_worlds_reach_every_branch() {
 #[test]
 fn xp_parent_flag_0() {
     Diff::new(entry!(0x0041_db00, extra_data::links::parent_flag_0(u32) -> bool))
-        .xd_getter(0x37)
+        .xp_flag_getter(0x37)
         .run()
         .assert_same();
 }
@@ -9150,7 +9333,7 @@ fn xp_parent_flag_0() {
 #[test]
 fn xp_parent_flags_bit_0() {
     Diff::new(entry!(0x0041_db30, extra_data::links::parent_flags_bit_0(u32) -> bool))
-        .xd_on_pattern(0x20, 0x0041_db30)
+        .xp_flag_leaf(0x0041_db30)
         .run()
         .assert_same();
 }
@@ -9172,7 +9355,7 @@ fn xp_set_parent_flags_bit_0() {
         0x0041_db80,
         extra_data::links::set_parent_flags_bit_0(u32, bool)
     ))
-    .xp_on(0x20, 0x0041_db80, XE_FLAGS)
+    .xp_flag_leaf_set(0x0041_db80)
     .run()
     .assert_same();
 }
@@ -9182,7 +9365,7 @@ fn xp_should_pop_in_when_enabled_by_parent() {
     Diff::new(
         entry!(0x0041_dbd0, extra_data::links::should_pop_in_when_enabled_by_parent(u32) -> bool),
     )
-    .xd_getter(0x37)
+    .xp_flag_getter(0x37)
     .run()
     .assert_same();
 }
@@ -9190,7 +9373,7 @@ fn xp_should_pop_in_when_enabled_by_parent() {
 #[test]
 fn xp_parent_flags_bit_1() {
     Diff::new(entry!(0x0041_dc00, extra_data::links::parent_flags_bit_1(u32) -> bool))
-        .xd_on_pattern(0x20, 0x0041_dc00)
+        .xp_flag_leaf(0x0041_dc00)
         .run()
         .assert_same();
 }
@@ -9198,7 +9381,7 @@ fn xp_parent_flags_bit_1() {
 #[test]
 fn xp_parent_flag_2() {
     Diff::new(entry!(0x0041_dc20, extra_data::links::parent_flag_2(u32) -> bool))
-        .xd_getter(0x37)
+        .xp_flag_getter(0x37)
         .run()
         .assert_same();
 }
@@ -9206,7 +9389,7 @@ fn xp_parent_flag_2() {
 #[test]
 fn xp_parent_flags_bit_2() {
     Diff::new(entry!(0x0041_dc50, extra_data::links::parent_flags_bit_2(u32) -> bool))
-        .xd_on_pattern(0x20, 0x0041_dc50)
+        .xp_flag_leaf(0x0041_dc50)
         .run()
         .assert_same();
 }
