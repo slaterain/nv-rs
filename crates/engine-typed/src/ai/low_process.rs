@@ -1,8 +1,10 @@
-//! `LowProcess` (the Xbox PDB's source unit of that name, in `fallout/ai`), part 1: the process
-//! lock map (`NiTMap<LowProcess*, LP_LOCK_DATA>` and its base), the processed date's parts, the
-//! flags and timers, the target and location setters, the damage modifiers, the package tests and
-//! starts, the door lock and unlock callbacks and the small procedure steps, each as its translation
-//! in `engine-fallout-ai` does it.
+//! `LowProcess` (the Xbox PDB's source unit of that name, in `fallout/ai`), the functions typed so
+//! far: the process lock map (`NiTMap<LowProcess*, LP_LOCK_DATA>` and its base), the processed
+//! date's parts, the flags and timers, the target and location setters and `ResetTarget`, the damage
+//! modifiers, the package tests, starts, schedule and done step, the greeting, the procedure index
+//! steps, the patrol (its init, wait at a reference and travel to the next), the clear of the
+//! current data, the level copy, the time update, the door lock and unlock callbacks and the small
+//! procedure steps, each as its translation in `engine-fallout-ai` does it.
 //!
 //! The fields read here (Xbox PDB names, checked against the PC code): the embedded current package
 //! (+4; its start hour the float at +0x10 of it), `iDateLastProcessed` (+0x24), `m_uFlags` (the
@@ -31,13 +33,14 @@
 //! the actor's test `00566950`, the target's setter `00403550`); a getter whose answer the exe never
 //! reads (`0055b980` in [`set_location_for_package`]) is left out.
 
+use super::actor_package::procedure_count;
 use super::middle_low_process::{
     calendar_hour, current_package, loaded, package_kind, procedure, procedure_index_running,
-    set_procedure_index_running, value_has_flag,
+    process_flag, set_procedure_index_running, set_process_flag, value_has_flag,
 };
-use super::FAMILY;
+use super::{actor_package, base_process, FAMILY};
 use crate::native::to_float;
-use crate::{ai_queries, crt, dispatch, pathing, slot_target};
+use crate::{ai_queries, cell_refs, crt, dispatch, draw_f, pathing, slot_target};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
 use engine_core::x87::x87_quiet_bits;
@@ -112,7 +115,6 @@ const EXTRA_SET_PACKAGE_TARGET: u32 = 0x0041_cab0;
 const EXTRA_SCRIPT_LOCALS: u32 = 0x0041_8830;
 const SCRIPT_RUN: u32 = 0x005a_c1e0;
 const ACTOR_AFTER_NEW_PACKAGE: u32 = 0x0088_4f80;
-const PROCESS_PATROL_START_TRAVEL: u32 = 0x0091_2340;
 const REFERENCE_DISTANCE: u32 = 0x0057_23b0;
 const ACTOR_STOP_MOVING: u32 = 0x008b_3ab0;
 const PACKAGE_SET_IS_CREATED: u32 = 0x0067_4d70;
@@ -291,7 +293,7 @@ pub fn float_zero(_e: &mut Engine, _this: Ptr, _unused_0: u32, _unused_1: u32) -
 /// `LowProcess::ProcessAvoidArea` (engine map): the running procedure moves on by one (the
 /// process's slot 0x288 with the actor and 1).
 pub fn process_avoid_area(e: &mut Engine, this: Ptr, actor: u32) {
-    e.vcall(this.addr(), 0x288, &args![actor, 1u32]);
+    add_to_procedure_index_running_slot(e, this.addr(), actor, 1);
 }
 
 // Typed from 00911ed0
@@ -680,13 +682,13 @@ pub fn process_use_item_at(e: &mut Engine, this: Ptr, actor: Ptr) -> bool {
     if current_package(e, process) != 0 {
         let package = current_package(e, process);
         if !package_slot_13c(e, package, actor) {
-            e.vcall(process, 0x288, &args![actor, u32::MAX]);
+            add_to_procedure_index_running_slot(e, process, actor, u32::MAX);
             return false;
         }
     }
     let package = current_package(e, process);
     if e.mem.u32(package.wrapping_add(0x1c)) & 4 != 0 {
-        e.vcall(process, 0x288, &args![actor, 1u32]);
+        add_to_procedure_index_running_slot(e, process, actor, 1);
     }
     false
 }
@@ -706,9 +708,27 @@ fn run_package_script(e: &mut Engine, script: u32, actor: u32) {
     e.call(SCRIPT_RUN, &args![script, actor, locals, 0u32, 1u32]);
 }
 
-/// Greets with a package's topic: `ProcessGreet(actor, topic, 0, 0, 1, 0)` (slot 0x2a4).
+/// Greets with a package's topic: `ProcessGreet(actor, topic, 0, 0, 1, 0)` (slot 0x2a4: the typed
+/// [`process_greet`] when it holds `009136b0`).
 fn greet_with_topic(e: &mut Engine, process: u32, actor: u32, topic: u32) {
-    e.vcall(process, 0x2a4, &args![actor, topic, 0u32, 0u32, 1u32, 0u32]);
+    if slot_target(e, process, 0x2a4) == 0x0091_36b0 {
+        typed_call!(
+            FAMILY,
+            0x0091_36b0,
+            process_greet(
+                e,
+                Ptr::new(process),
+                Ptr::new(actor),
+                Ptr::new(topic),
+                0,
+                0,
+                1,
+                0
+            )
+        );
+    } else {
+        e.vcall(process, 0x2a4, &args![actor, topic, 0u32, 0u32, 1u32, 0u32]);
+    }
 }
 
 // Typed from 009135a0
@@ -766,7 +786,11 @@ pub fn process_patrol_init(e: &mut Engine, this: Ptr, actor: Ptr, data: Ptr) -> 
         set_procedure_index_running(e, process, u32::MAX);
         return false;
     }
-    e.call(PROCESS_PATROL_START_TRAVEL, &args![this, actor, data]);
+    typed_call!(
+        FAMILY,
+        0x0091_2340,
+        process_patrol_start_travel_to_next_ref(e, this, actor, data)
+    );
     true
 }
 
@@ -897,7 +921,7 @@ pub fn process_movement_blocked(e: &mut Engine, this: Ptr, actor: u32) {
     );
     let limit = e.mem.f64(BLOCKED_TIME_LIMIT);
     if f64::from(elapsed) >= limit {
-        e.vcall(process, 0x288, &args![actor, 1u32]);
+        add_to_procedure_index_running_slot(e, process, actor, 1);
         let package = typed_call!(
             leaf::FAMILY,
             0x0055_9450,
@@ -931,4 +955,739 @@ pub fn process_flee_non_combat(e: &mut Engine, this: Ptr, actor: Ptr) {
     } else {
         package_slot_13c(e, package, actor);
     }
+}
+
+/// The embedded package's procedure index (its word at +0xc: the process's word at +0x10).
+const PROCEDURE_INDEX: u32 = 4 + 0xc;
+/// The embedded package's instance data (its word at +4: the process's word at +8, `008d0430`).
+const INSTANCE_DATA: u32 = 4 + 4;
+/// The hour last processed (a float; `007df1f0` reads it, `00693d50` stores it).
+const HOUR_LAST_PROCESSED: u32 = 0x20;
+/// `pItemBeingUsed`, the combat delay timer (two words; its float at +4 the one `00910b10`
+/// clears), `iNumberItemsActivate`, `pAcquireObject`, `pSavedAcquireObject` and the death time.
+const ITEM_BEING_USED: u32 = 0x34;
+const COMBAT_DELAY_TIMER: u32 = 0x38;
+const NUMBER_ITEMS_ACTIVATE: u32 = 0x58;
+const OBJECT_LIST: u32 = 0x5c;
+const ACQUIRE_OBJECT: u32 = 0x64;
+const SAVED_ACQUIRE_OBJECT: u32 = 0x68;
+const GENERIC_LOCATIONS_LIST: u32 = 0x6c;
+const DEATH_TIME: u32 = 0xa8;
+/// An actor's (a reference's) dialogue speaker (+0x70), extra data list (+0x44), parent cell
+/// (+0x40, `008d6f30`), base form (+0x20, `007af430`) and start location (+0x24, `00430830`; its
+/// float at +8 the angle).
+const SPEAKER: u32 = 0x70;
+const EXTRA_LIST: u32 = 0x44;
+const PARENT_CELL: u32 = 0x40;
+const BASE_FORM: u32 = 0x20;
+const START_LOCATION: u32 = 0x24;
+/// A topic's flag that it has dialogue to run (its flags word at +8, `00508d70`).
+const TOPIC_HAS_DIALOGUE: u32 = 0x2000;
+/// A package's done script and topic (+0x60 and +0x64: `00903e20`, `00903e00`).
+const DONE_SCRIPT: u32 = 0x60;
+const DONE_TOPIC: u32 = 0x64;
+/// The patrol's base form type and form whose references give the travel an angle.
+const ANGLED_FORM_TYPE: u8 = 0x30;
+const ANGLED_FORM: u32 = 0x011c_a248;
+/// The player character and `TES` (globals).
+const PLAYER: u32 = 0x011d_ea3c;
+const TES: u32 = 0x011d_ea10;
+/// The doubles `0.0`, 3600.0 (seconds in an hour) and the patrol's near limit.
+const ZERO_DOUBLE: u32 = 0x0101_2060;
+const SECONDS_PER_HOUR: u32 = 0x0101_2640;
+const PATROL_NEAR: u32 = 0x0101_6978;
+/// `__RTDynamicCast`'s type descriptors of `MobileObject` and `Actor`.
+const MOBILE_OBJECT_TYPE: u32 = 0x0118_4920;
+const ACTOR_TYPE: u32 = 0x0118_46d4;
+/// The pathing request a patrol's travel builds on the stack (its size as the translation keeps
+/// it).
+const PATHING_REQUEST_SIZE: u32 = 0xb4;
+
+/// More callees called by address (not typed yet).
+const CREATE_DIALOGUE_ITEM: u32 = 0x0061_b320;
+const DIALOGUE_RUN_RESULT: u32 = 0x0083_c850;
+const SET_SAY_TO_TOPIC: u32 = 0x0057_ad20;
+const SET_SAY_TO_TOPIC_INFO: u32 = 0x0057_ace0;
+const SAY_TO_CALLBACK: u32 = 0x0093_6a20;
+const SET_ACTION_FLAG: u32 = 0x005a_c750;
+const ACTOR_GET_PACKAGE: u32 = 0x0088_1450;
+const ACTOR_CLEAR_LOOK_AT_TARGET: u32 = 0x008b_3d30;
+const REFERENCE_WORLD_SPACE: u32 = 0x0057_5d70;
+const SET_PACKAGE_START_LOCATION: u32 = 0x0056_ae10;
+const COMBAT_UPDATE_PACKAGE_DATA: u32 = 0x0098_0ae0;
+const DELETE_EMPTY_DESTRUCTOR: u32 = 0x007b_3fa0;
+const LIST_REMOVE_ITEM: u32 = 0x0090_5330;
+const LIST_CLEAR: u32 = 0x0047_0470;
+const GET_TIME_DELTA: u32 = 0x0090_7260;
+const PATROL_TRAVEL_STEP: u32 = 0x0091_25b0;
+const EXTRA_PATROL_WAIT: u32 = 0x0041_fe90;
+const POINT_SUBTRACT: u32 = 0x0045_78c0;
+const PLAYER_IS_SLEEPING_OR_RESTING: u32 = 0x0094_df60;
+const PATROL_TRAVEL_TIME: u32 = 0x006e_25d0;
+const PACKAGE_COUNT_FOR: u32 = 0x0067_6280;
+const PATHING_REQUEST_CONSTRUCT: u32 = 0x006e_2420;
+const PATHING_REQUEST_DESTRUCT: u32 = 0x006e_2620;
+const ACTOR_BUILD_REQUEST: u32 = 0x008b_3880;
+const ACTOR_SET_PATHFINDING_GOAL: u32 = 0x008b_3630;
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const MODIFIER_LIST_COPY: u32 = 0x0093_7160;
+
+/// A package target's reference (`PackageTarget::GetTargReference`, `00680020`): its word at +4
+/// when its kind byte (+0, `00519b00`) is 0, else none.
+#[inline]
+fn target_reference(e: &Engine, target: u32) -> u32 {
+    if e.mem.u8(target) == 0 {
+        e.mem.u32(target.wrapping_add(4))
+    } else {
+        0
+    }
+}
+
+/// The process's slot 0x23c (`GetCurrentProcedureIndex`): the embedded package's index in place
+/// when the slot holds `008d03e0`.
+fn current_procedure_index(e: &mut Engine, process: u32) -> u32 {
+    if slot_target(e, process, 0x23c) == 0x008d_03e0 {
+        e.mem.u32(process.wrapping_add(PROCEDURE_INDEX))
+    } else {
+        e.vcall(process, 0x23c, &[]).u32()
+    }
+}
+
+/// The process's slot 0x238 (`SetCurrentProcedureIndex`): the store in place when the slot holds
+/// `008d03c0`.
+fn set_current_procedure_index(e: &mut Engine, process: u32, index: u32) {
+    if slot_target(e, process, 0x238) == 0x008d_03c0 {
+        e.mem.set_u32(process.wrapping_add(PROCEDURE_INDEX), index);
+    } else {
+        e.vcall(process, 0x238, &args![index]);
+    }
+}
+
+/// The process's slot 0x240 (`AddToCurrentProcedureIndex`): the sum in place when the slot holds
+/// `008d0400`.
+fn add_to_current_procedure_index(e: &mut Engine, process: u32, delta: u32) {
+    if slot_target(e, process, 0x240) == 0x008d_0400 {
+        let at = process.wrapping_add(PROCEDURE_INDEX);
+        let index = e.mem.u32(at).wrapping_add(delta);
+        e.mem.set_u32(at, index);
+    } else {
+        e.vcall(process, 0x240, &args![delta]);
+    }
+}
+
+/// The process's slot 0x288 ([`add_to_procedure_index_running`] on the low processes).
+pub(super) fn add_to_procedure_index_running_slot(
+    e: &mut Engine,
+    process: u32,
+    actor: u32,
+    delta: u32,
+) {
+    if slot_target(e, process, 0x288) == 0x0091_19b0 {
+        typed_call!(
+            FAMILY,
+            0x0091_19b0,
+            add_to_procedure_index_running(e, Ptr::new(process), Ptr::new(actor), delta)
+        );
+    } else {
+        e.vcall(process, 0x288, &args![actor, delta]);
+    }
+}
+
+/// The process's slot 0x5a0 ([`package_done`] on all but `HighProcess`).
+pub(super) fn package_done_slot(e: &mut Engine, process: u32, actor: u32, package: u32) {
+    if slot_target(e, process, 0x5a0) == 0x0091_3630 {
+        typed_call!(
+            FAMILY,
+            0x0091_3630,
+            package_done(e, Ptr::new(process), Ptr::new(actor), Ptr::new(package))
+        );
+    } else {
+        e.vcall(process, 0x5a0, &args![actor, package]);
+    }
+}
+
+// Typed from 0090a070
+/// `LowProcess::ResetTarget` (Xbox PDB): the current package's target's reference becomes the
+/// target (slot 0x12c), unless there is no package, target or reference, the reference has the
+/// form flag 0x20 (`00440d80`) or it is `pTarget` already. The exe asks for the current package
+/// (slot 0x22c) before each step; so does this.
+pub fn reset_target(e: &mut Engine, this: Ptr) {
+    let process = this.addr();
+    if current_package(e, process) == 0 {
+        return;
+    }
+    let package = current_package(e, process);
+    if e.mem.u32(package.wrapping_add(0x30)) == 0 {
+        return;
+    }
+    let package = current_package(e, process);
+    let target = e.mem.u32(package.wrapping_add(0x30));
+    if target_reference(e, target) == 0 {
+        return;
+    }
+    let package = current_package(e, process);
+    let target = e.mem.u32(package.wrapping_add(0x30));
+    let reference = target_reference(e, target);
+    if e.mem.u32(reference.wrapping_add(8)) & 0x20 != 0
+        || reference == e.mem.u32(process.wrapping_add(TARGET))
+    {
+        return;
+    }
+    set_target_slot(e, process, reference);
+}
+
+// Typed from 00913630
+/// `LowProcess::PackageDone` (Xbox PDB): with a package, its done script runs on the actor and its
+/// done topic is greeted with.
+pub fn package_done(e: &mut Engine, this: Ptr, actor: Ptr, package: Ptr) {
+    let package = package.addr();
+    if package == 0 {
+        return;
+    }
+    let actor = actor.addr();
+    let script = e.mem.u32(package.wrapping_add(DONE_SCRIPT));
+    if script != 0 {
+        run_package_script(e, script, actor);
+    }
+    let topic = e.mem.u32(package.wrapping_add(DONE_TOPIC));
+    if topic != 0 {
+        greet_with_topic(e, this.addr(), actor, topic);
+    }
+}
+
+// Typed from 009136b0
+/// `LowProcess::ProcessGreet` (Xbox PDB; six words, the third to fifth unread): the actor's
+/// speaker (+0x70) is taken and cleared (the exe reads it again when it was 0: 0 again); for a
+/// topic with dialogue (its flag 0x2000) a dialogue item is made (`CreateDialogueItem(actor,
+/// speaker, 0, 0, 1)`), set to its first response (`0083c7b0`: its iterator at +8 is the list at
+/// +0) and, when there is a current response (the iterator's item), its result runs; with
+/// `say_to`, the actor says the topic (`SetSayToTopic`, `SetSayToTopicInfo` with the item's info
+/// at +0xc, `SayToCallBack` with the actor's word at +0xc and 1, the actor's slot 0x140). The
+/// current package the exe asks for first (slot 0x22c) is unread, but asked as the exe asks.
+#[allow(clippy::too_many_arguments)]
+pub fn process_greet(
+    e: &mut Engine,
+    this: Ptr,
+    actor: Ptr,
+    topic: Ptr,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    say_to: u8,
+) {
+    let process = this.addr();
+    current_package(e, process);
+    let actor = actor.addr();
+    let topic = topic.addr();
+    let speaker_at = actor.wrapping_add(SPEAKER);
+    let speaker = e.mem.u32(speaker_at);
+    e.mem.set_u32(speaker_at, 0);
+    if e.mem.u32(topic.wrapping_add(8)) & TOPIC_HAS_DIALOGUE == 0 {
+        return;
+    }
+    let item = e
+        .call(
+            CREATE_DIALOGUE_ITEM,
+            &args![topic, actor, speaker, 0u32, 0u32, 1u32],
+        )
+        .u32();
+    if item == 0 {
+        return;
+    }
+    e.mem.set_u32(item.wrapping_add(8), item);
+    if e.mem.u32(item) == 0 {
+        return;
+    }
+    e.call(DIALOGUE_RUN_RESULT, &args![item, 0u32]);
+    if say_to == 0 {
+        return;
+    }
+    e.call(SET_SAY_TO_TOPIC, &args![actor, topic]);
+    let info = e.mem.u32(item.wrapping_add(0xc));
+    e.call(SET_SAY_TO_TOPIC_INFO, &args![actor, info]);
+    let object = e.mem.u32(actor.wrapping_add(0xc));
+    e.call(SAY_TO_CALLBACK, &args![object, 1u32]);
+    e.vcall(actor, 0x140, &[]);
+}
+
+// Typed from 009119b0
+/// `LowProcess::AddToProcedureIndexRunning` (Xbox PDB): the current procedure index moves by
+/// `delta` (slot 0x240), not below 0 (slot 0x238). With a current package it stays below the
+/// count of its type's procedures (`Procedure::GetProcedureCount`); at the done procedure (0x36),
+/// unless the package is done once (slot 0x5a4), the script action flag 0x400 is set for the
+/// package on the actor's extra data (`Script::SetActionFlag`), `PackageDone` runs (slot 0x5a0)
+/// and the package is marked done once (slot 0x5a8).
+pub fn add_to_procedure_index_running(e: &mut Engine, this: Ptr, actor: Ptr, delta: u32) {
+    let process = this.addr();
+    let actor = actor.addr();
+    let package = current_package(e, process);
+    add_to_current_procedure_index(e, process, delta);
+    if (current_procedure_index(e, process) as i32) < 0 {
+        set_current_procedure_index(e, process, 0);
+    }
+    if package == 0 {
+        return;
+    }
+    let count = procedure_count(e, package);
+    if current_procedure_index(e, process) as i32 >= count {
+        set_current_procedure_index(e, process, count.wrapping_sub(1) as u32);
+    }
+    let index = current_procedure_index(e, process);
+    if listed_procedure(e, package_kind(e, package), index) != PROCEDURE_DONE
+        || process_flag(e, process, 0x5a4, 0x008d_8000, 0x20)
+    {
+        return;
+    }
+    e.call(
+        SET_ACTION_FLAG,
+        &args![package, actor.wrapping_add(EXTRA_LIST), 0x400u32],
+    );
+    package_done_slot(e, process, actor, package);
+    set_process_flag(e, process, 0x5a8, 0x008d_8020, 0x20, 1);
+}
+
+// Typed from 00907700
+/// `LowProcess::SetCurrentPackageFromSchedule` (Xbox PDB): `false` when the actor's package
+/// (`Actor::GetPackage`) is the current one already. Otherwise it becomes current (slot 0x230),
+/// the new package is set up (slot 0x244), the actor stops looking at its target
+/// (`ClearLookAtTarget`) and, for a current package without a location or with one of type 2,
+/// the actor's package start location is set (`SetPackageStartLocation` with its world space,
+/// parent cell, location (slot 0x1f4) and start angle); the actor's combat controller (slot
+/// 0x428) takes the package and `CheckAndStartCombatControllerForPackage(actor, package, 0)`
+/// runs (slot 0xb0). Answers `true`.
+pub fn set_current_package_from_schedule(e: &mut Engine, this: Ptr, actor: Ptr) -> bool {
+    let process = this.addr();
+    let actor = actor.addr();
+    let package = e.call(ACTOR_GET_PACKAGE, &args![actor]).u32();
+    if package == current_package(e, process) {
+        return false;
+    }
+    if slot_target(e, process, 0x230) == 0x008d_08b0 {
+        typed_call!(
+            FAMILY,
+            0x008d_08b0,
+            base_process::set_current_package(e, this, package, actor)
+        );
+    } else {
+        e.vcall(process, 0x230, &args![package, actor]);
+    }
+    if slot_target(e, process, 0x244) != 0x0048_3710 {
+        e.vcall(process, 0x244, &[]);
+    }
+    e.call(ACTOR_CLEAR_LOOK_AT_TARGET, &args![actor]);
+    if current_package(e, process) != 0 {
+        let current = current_package(e, process);
+        let starts = e.mem.u32(current.wrapping_add(0x2c)) == 0 || {
+            let current = current_package(e, process);
+            let location = e.mem.u32(current.wrapping_add(0x2c));
+            e.mem.i8(location) == 2
+        };
+        if starts {
+            let angle = x87_quiet_bits(e.mem.u32(actor.wrapping_add(START_LOCATION + 8)));
+            let location = e.vcall(actor, 0x1f4, &[]).u32();
+            let cell = e.mem.u32(actor.wrapping_add(PARENT_CELL));
+            let world_space = e.call(REFERENCE_WORLD_SPACE, &args![actor]).u32();
+            e.call(
+                SET_PACKAGE_START_LOCATION,
+                &args![actor, world_space, cell, location, angle],
+            );
+        }
+    }
+    let controller = ai_queries::queries::actor_slot_428(e, actor);
+    if controller != 0 {
+        e.call(COMBAT_UPDATE_PACKAGE_DATA, &args![controller, package]);
+    }
+    if slot_target(e, process, 0xb0) == 0x0090_7840 {
+        typed_call!(
+            FAMILY,
+            0x0090_7840,
+            check_and_start_combat_controller_for_package(
+                e,
+                this,
+                Ptr::new(actor),
+                Ptr::new(package),
+                0
+            )
+        );
+    } else {
+        e.vcall(process, 0xb0, &args![actor, package, 0u32]);
+    }
+    true
+}
+
+/// Deletes an object of the acquire lists (`007b3fa0` with 1), when there is one.
+fn delete_object(e: &mut Engine, object: u32) {
+    if object != 0 {
+        e.call(DELETE_EMPTY_DESTRUCTOR, &args![object, 1u32]);
+    }
+}
+
+// Typed from 00910b30
+/// `LowProcess::ClearCurrentDataforProcess` (Xbox PDB; the word unread): the action complete
+/// flag (slot 0x118), the flag 0x40 ([`set_flag_40`]) and the target activated flag (slot 0x4ec)
+/// are cleared, the target (slot 0x12c with 0) and `pGenericLocation` too. The acquire object is
+/// deleted and cleared; the saved one is taken off `ObjectList` (`00905330` with the field's
+/// address), deleted and cleared. Every item left on `ObjectList` is deleted and taken off
+/// (through a stack word holding it), and `GenericLocationsList` is emptied (`00470470`).
+pub fn clear_current_data_for_process(e: &mut Engine, this: Ptr, _unused: u32) {
+    let process = this.addr();
+    set_process_flag(e, process, 0x118, 0x008d_7de0, 2, 0);
+    typed_call!(FAMILY, 0x0090_ac20, set_flag_40(e, this, 0));
+    set_process_flag(e, process, 0x4ec, 0x008d_7fe0, 1, 0);
+    set_target_slot(e, process, 0);
+    e.mem.set_u32(process.wrapping_add(GENERIC_LOCATION), 0);
+    let acquire_at = process.wrapping_add(ACQUIRE_OBJECT);
+    let acquire = e.mem.u32(acquire_at);
+    if acquire != 0 {
+        delete_object(e, acquire);
+        e.mem.set_u32(acquire_at, 0);
+    }
+    let list = process.wrapping_add(OBJECT_LIST);
+    let saved_at = process.wrapping_add(SAVED_ACQUIRE_OBJECT);
+    if e.mem.u32(saved_at) != 0 {
+        e.call(LIST_REMOVE_ITEM, &args![list, saved_at]);
+        let saved = e.mem.u32(saved_at);
+        delete_object(e, saved);
+        e.mem.set_u32(saved_at, 0);
+    }
+    // `008256d0`: the list is empty when its words at +4 and +0 are both 0.
+    while e.mem.u32(list.wrapping_add(4)) != 0 || e.mem.u32(list) != 0 {
+        let item = e.mem.u32(list);
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), item);
+            delete_object(e, item);
+            e.call(LIST_REMOVE_ITEM, &args![list, slot]);
+        });
+    }
+    e.call(
+        LIST_CLEAR,
+        &args![process.wrapping_add(GENERIC_LOCATIONS_LIST)],
+    );
+}
+
+// Typed from 009121e0
+/// `LowProcess::ProcessPatrol` (Xbox PDB): without running instance data (the embedded package's
+/// word at +4) the running procedure index becomes -1 (slot 0x284); an actor whose slot 0x214
+/// answers non-zero runs its slot 0x418 instead. Otherwise the time since the last update
+/// (`GetTimeDelta`, stored as a float) is spent while it is above 0.0, by the patrol data's state
+/// (+4): 0 `ProcessPatrolInit` (on failure the time becomes 0.0), 1 the travel step `009125b0`, 2
+/// [`process_patrol_at_ref`] (each answers the time left), any other 0.0.
+pub fn process_patrol(e: &mut Engine, this: Ptr, actor: Ptr) {
+    let process = this.addr();
+    let data = e.mem.u32(process.wrapping_add(INSTANCE_DATA));
+    if data == 0 {
+        set_procedure_index_running(e, process, u32::MAX);
+        return;
+    }
+    let actor_word = actor.addr();
+    if e.vcall(actor_word, 0x214, &[]).u32() != 0 {
+        e.vcall(actor_word, 0x418, &[]);
+        return;
+    }
+    let mut time = to_float(e.call(GET_TIME_DELTA, &args![process, actor_word]).f64());
+    let zero = e.mem.f64(ZERO_DOUBLE);
+    let data_ptr = Ptr::new(data);
+    while f64::from(time) > zero {
+        time = match e.mem.u32(data.wrapping_add(4)) {
+            0 => {
+                if typed_call!(
+                    FAMILY,
+                    0x0091_22e0,
+                    process_patrol_init(e, this, actor, data_ptr)
+                ) {
+                    time
+                } else {
+                    0.0
+                }
+            }
+            1 => to_float(
+                e.call(
+                    PATROL_TRAVEL_STEP,
+                    &args![process, actor_word, data, time.to_bits()],
+                )
+                .f64(),
+            ),
+            2 => typed_call!(
+                FAMILY,
+                0x0091_2990,
+                process_patrol_at_ref(e, this, actor, data_ptr, time)
+            ),
+            _ => 0.0,
+        };
+    }
+}
+
+// Typed from 00912990
+/// `LowProcess::ProcessPatrolAtRef` (Xbox PDB): waiting at the patrol's current reference; without
+/// one the running procedure index becomes -1 (slot 0x284) and the answer is 0.0. The wait is the
+/// float of the reference's patrol extra (`0041fe90`, its float through `006a7f50`; 0.0 without
+/// it) less the time waited already (the data's float at +8), at least 0.0 (`00404010`); the time
+/// left is `time` less that (each difference one float operation, the exe's on either thread).
+/// With time left the patrol moves to its next reference (`SetNextReferenceForPatrol(1)`; on
+/// failure the running procedure moves on, slot 0x288 with 1, and the answer is 0.0): the time
+/// left becomes 0.0 when that is the same reference or one nearer than the limit (the squared
+/// length of the difference of their locations, slot 0x1f4, on a stack copy of the next one's),
+/// and the travel to it starts ([`process_patrol_start_travel_to_next_ref`]). Without time left
+/// the whole `time` is added to the time waited. Answers the time left.
+pub fn process_patrol_at_ref(e: &mut Engine, this: Ptr, actor: Ptr, data: Ptr, time: f32) -> f32 {
+    let process = this.addr();
+    let data_word = data.addr();
+    let reference = e.call(PATROL_CURRENT_REFERENCE, &args![data_word]).u32();
+    if reference == 0 {
+        set_procedure_index_running(e, process, u32::MAX);
+        return 0.0;
+    }
+    let extra = reference.wrapping_add(EXTRA_LIST);
+    let mut wait = 0.0;
+    if e.call(EXTRA_PATROL_WAIT, &args![extra]).u32() != 0 {
+        let object = e.call(EXTRA_PATROL_WAIT, &args![extra]).u32();
+        wait = to_float(typed_call!(
+            pathing::FAMILY,
+            0x006a_7f50,
+            pathing::search::first_float(e, Ptr::new(object))
+        ));
+    }
+    let waited_at = data_word.wrapping_add(8);
+    let remaining = to_float(f64::from(wait) - loaded(e.mem.u32(waited_at)));
+    let wait = typed_call!(
+        draw_f::FAMILY,
+        0x0040_4010,
+        draw_f::helpers::float_max(e, 0.0, remaining)
+    );
+    let mut left = to_float(loaded(time.to_bits()) - f64::from(wait));
+    if f64::from(left) > e.mem.f64(ZERO_DOUBLE) {
+        if !e
+            .call(PATROL_SET_NEXT_REFERENCE, &args![data_word, 1u32])
+            .bool()
+        {
+            add_to_procedure_index_running_slot(e, process, actor.addr(), 1);
+            return 0.0;
+        }
+        if e.call(PATROL_CURRENT_REFERENCE, &args![data_word]).u32() == reference {
+            left = 0.0;
+        } else {
+            let next = e.call(PATROL_CURRENT_REFERENCE, &args![data_word]).u32();
+            let position = e.vcall(next, 0x1f4, &[]).u32();
+            let near = e.with_stack(12, |e, point| {
+                let point = point.addr();
+                for offset in [0, 4, 8] {
+                    let word = e.mem.u32(position.wrapping_add(offset));
+                    e.mem.set_u32(point.wrapping_add(offset), word);
+                }
+                let other = e.vcall(reference, 0x1f4, &[]).u32();
+                e.call(POINT_SUBTRACT, &args![point, other]);
+                let squared = typed_call!(
+                    pathing::FAMILY,
+                    0x004a_7290,
+                    pathing::point::length_squared(e, Ptr::new(point))
+                );
+                f64::from(squared) < e.mem.f64(PATROL_NEAR)
+            });
+            if near {
+                left = 0.0;
+            }
+        }
+        typed_call!(
+            FAMILY,
+            0x0091_2340,
+            process_patrol_start_travel_to_next_ref(e, this, actor, data)
+        );
+    } else {
+        let waited = to_float(loaded(e.mem.u32(waited_at)) + loaded(time.to_bits()));
+        e.mem.set_u32(waited_at, waited.to_bits());
+    }
+    left
+}
+
+/// Whether neither cell (when set) is loaded (`TES::IsCellLoaded` with 0 for each).
+fn cells_unloaded(e: &mut Engine, first: u32, second: u32) -> bool {
+    for cell in [first, second] {
+        if cell != 0 {
+            let tes = e.mem.u32(TES);
+            if typed_call!(
+                cell_refs::FAMILY,
+                0x0045_11e0,
+                cell_refs::attach::is_cell_loaded(e, tes, cell, 0)
+            ) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+// Typed from 00912340
+/// `LowProcess::ProcessPatrolStartTravelToNextRef` (Xbox PDB): without a current patrol reference
+/// the running procedure index becomes -1 (slot 0x284). Otherwise the reference becomes the target
+/// (slot 0x12c) and, unless the player sleeps or rests or (with the actor's slot 0x1d0 answering
+/// 0) neither the actor's nor the reference's parent cell is loaded, the actor gets a pathing
+/// request to it: a stack `PathingRequest` whose time is the larger of `006e25d0`'s and, with a
+/// running package (slot 0x27c), the package's count for the actor (`00676280`, as a float);
+/// `BuildRequest(request, location (slot 0x1f4), cell, world space, time, 0)`, its byte at +0x9c
+/// cleared (`008e7c50`, in place), the reference's start angle and its flag (`008e7c20`, in place)
+/// when its base form is of type 0x30 or the form at `011ca248`, `SetPathfindingGoal`, the request's
+/// destructor. Then the patrol data's state (+4) is 1 (also when the travel is skipped). The exe's
+/// exception frame only destroys the request on unwinding.
+pub fn process_patrol_start_travel_to_next_ref(e: &mut Engine, this: Ptr, actor: Ptr, data: Ptr) {
+    let process = this.addr();
+    let actor = actor.addr();
+    let data = data.addr();
+    let reference = e.call(PATROL_CURRENT_REFERENCE, &args![data]).u32();
+    if reference == 0 {
+        set_procedure_index_running(e, process, u32::MAX);
+        return;
+    }
+    set_target_slot(e, process, reference);
+    let player = e.mem.u32(PLAYER);
+    let skip = e.call(PLAYER_IS_SLEEPING_OR_RESTING, &args![player]).bool()
+        || (e.vcall(actor, 0x1d0, &[]).u32() == 0 && {
+            let actor_cell = e.mem.u32(actor.wrapping_add(PARENT_CELL));
+            let reference_cell = e.mem.u32(reference.wrapping_add(PARENT_CELL));
+            cells_unloaded(e, actor_cell, reference_cell)
+        });
+    if !skip {
+        let mut time = to_float(e.call(PATROL_TRAVEL_TIME, &[]).f64());
+        let package = running_package(e, process);
+        if package != 0 {
+            let count = e.call(PACKAGE_COUNT_FOR, &args![package, actor]).u32();
+            let count = to_float(f64::from(count));
+            time = typed_call!(
+                draw_f::FAMILY,
+                0x0040_4010,
+                draw_f::helpers::float_max(e, time, count)
+            );
+        }
+        e.with_stack(PATHING_REQUEST_SIZE, |e, request| {
+            let request = request.addr();
+            e.call(PATHING_REQUEST_CONSTRUCT, &args![request]);
+            let world_space = e.call(REFERENCE_WORLD_SPACE, &args![reference]).u32();
+            let cell = e.mem.u32(reference.wrapping_add(PARENT_CELL));
+            let location = e.vcall(reference, 0x1f4, &[]).u32();
+            e.call(
+                ACTOR_BUILD_REQUEST,
+                &args![
+                    actor,
+                    request,
+                    location,
+                    cell,
+                    world_space,
+                    time.to_bits(),
+                    0u32
+                ],
+            );
+            // `008e7c50` with 0: the request's byte at +0x9c.
+            e.mem.set_u8(request.wrapping_add(0x9c), 0);
+            let base_form = e.mem.u32(reference.wrapping_add(BASE_FORM));
+            if e.mem.u8(base_form.wrapping_add(4)) == ANGLED_FORM_TYPE
+                || base_form == e.mem.u32(ANGLED_FORM)
+            {
+                let at = reference.wrapping_add(START_LOCATION + 8);
+                let angle = x87_quiet_bits(e.mem.u32(at));
+                // `008e7c20`: the request's angle (+0x8c, through the x87 stack again) and
+                // its flag (+0x99).
+                e.mem.set_u32(request.wrapping_add(0x8c), angle);
+                e.mem.set_u8(request.wrapping_add(0x99), 1);
+            }
+            e.call(ACTOR_SET_PATHFINDING_GOAL, &args![actor, request]);
+            e.call(PATHING_REQUEST_DESTRUCT, &args![request]);
+        });
+    }
+    e.mem.set_u32(data.wrapping_add(4), 1);
+}
+
+// Typed from 0090c360
+/// `LowProcess::Update` of a time (Xbox PDB `Update_ov2`): for an actor that is one
+/// (`__RTDynamicCast` from `MobileObject` to `Actor`), the missed packages are updated (slot 0x14
+/// with the actor and 1) when `time` is above an hour's seconds (not when equal, below or NaN),
+/// then the actor's slot 0x25c runs with 0.0.
+pub fn update_buffer(e: &mut Engine, this: Ptr, actor: Ptr, time: f32) {
+    let actor = actor.addr();
+    if actor == 0 {
+        return;
+    }
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![actor, 0u32, MOBILE_OBJECT_TYPE, ACTOR_TYPE, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return;
+    }
+    if f64::from(time) > e.mem.f64(SECONDS_PER_HOUR) {
+        e.vcall(this.addr(), 0x14, &args![actor, 1u32]);
+    }
+    e.vcall(cast, 0x25c, &args![0u32]);
+}
+
+// Typed from 00907510
+/// The `LowProcess` level of `BaseProcess::Copy` (`008d0660` calls it; no map name): `source`'s
+/// low-process state moves into `this`: the hour last processed (a float load and store, which
+/// quiets a signalling NaN), the embedded package (`ActorPackage::MoveTo`), the flags byte, the
+/// acquire object (moved: the source's cleared), the combat delay timer's two words, the item
+/// being used, the saved acquire object (moved when set), the date last processed, the target
+/// (slot 0x12c), the items activated, the damage modifiers (`00937160`) and the three floats at
+/// +0xa4, +0xa8 and +0xac (each quieted as the hour).
+pub fn copy_level(e: &mut Engine, this: Ptr, source: Ptr) {
+    let to = this.addr();
+    let from = source.addr();
+    let hour = x87_quiet_bits(e.mem.u32(from.wrapping_add(HOUR_LAST_PROCESSED)));
+    e.mem.set_u32(to.wrapping_add(HOUR_LAST_PROCESSED), hour);
+    typed_call!(
+        FAMILY,
+        0x008c_6130,
+        actor_package::move_to(
+            e,
+            Ptr::new(from.wrapping_add(4)),
+            Ptr::new(to.wrapping_add(4))
+        )
+    );
+    let flags = e.mem.u8(from.wrapping_add(PROCESS_FLAGS));
+    e.mem.set_u8(to.wrapping_add(PROCESS_FLAGS), flags);
+    let acquire = e.mem.u32(from.wrapping_add(ACQUIRE_OBJECT));
+    e.mem.set_u32(to.wrapping_add(ACQUIRE_OBJECT), acquire);
+    e.mem.set_u32(from.wrapping_add(ACQUIRE_OBJECT), 0);
+    for offset in [COMBAT_DELAY_TIMER, COMBAT_DELAY_TIMER + 4, ITEM_BEING_USED] {
+        let word = e.mem.u32(from.wrapping_add(offset));
+        e.mem.set_u32(to.wrapping_add(offset), word);
+    }
+    let saved = e.mem.u32(from.wrapping_add(SAVED_ACQUIRE_OBJECT));
+    if saved != 0 {
+        e.mem.set_u32(to.wrapping_add(SAVED_ACQUIRE_OBJECT), saved);
+        e.mem.set_u32(from.wrapping_add(SAVED_ACQUIRE_OBJECT), 0);
+    }
+    let date = e.mem.u32(from.wrapping_add(DATE_LAST_PROCESSED));
+    e.mem.set_u32(to.wrapping_add(DATE_LAST_PROCESSED), date);
+    let target = e.mem.u32(from.wrapping_add(TARGET));
+    set_target_slot(e, to, target);
+    let activated = e.mem.u32(from.wrapping_add(NUMBER_ITEMS_ACTIVATE));
+    e.mem
+        .set_u32(to.wrapping_add(NUMBER_ITEMS_ACTIVATE), activated);
+    e.call(
+        MODIFIER_LIST_COPY,
+        &args![
+            to.wrapping_add(DAMAGE_MODIFIERS),
+            from.wrapping_add(DAMAGE_MODIFIERS)
+        ],
+    );
+    for offset in [ESSENTIAL_DOWN_TIMER, DEATH_TIME, TRACKED_DAMAGE] {
+        let bits = x87_quiet_bits(e.mem.u32(from.wrapping_add(offset)));
+        e.mem.set_u32(to.wrapping_add(offset), bits);
+    }
+}
+
+// Typed from 0090e600
+/// The constructor of a 0x1c-byte acquire record (`ObjectstoAcquire`; no map name): the words at
+/// +0, +4, +0xc and +0x14 and the bytes at +8 and +9 cleared, +0x10 set to 0x7fffffff and +0x18 to
+/// -1. Answers `this`.
+pub fn objects_to_acquire_construct(e: &mut Engine, this: Ptr) -> Ptr {
+    let at = this.addr();
+    for offset in [0, 4, 0xc, 0x14] {
+        e.mem.set_u32(at.wrapping_add(offset), 0);
+    }
+    e.mem.set_u8(at.wrapping_add(8), 0);
+    e.mem.set_u8(at.wrapping_add(9), 0);
+    e.mem.set_u32(at.wrapping_add(0x10), 0x7fff_ffff);
+    e.mem.set_u32(at.wrapping_add(0x18), u32::MAX);
+    this
 }
