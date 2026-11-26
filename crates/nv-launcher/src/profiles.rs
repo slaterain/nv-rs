@@ -430,11 +430,17 @@ impl Profiles {
                     }),
             );
             // A table row: its own switch's line, which Play (or the game's first start) moves
-            // into the key. A fix row has one only when chosen here, or when a profile's own
-            // Fallout.ini holds the key (only a line can change it there); with none it follows
-            // the preset.
-            let held = self
-                .dirs
+            // into the key. A fix row has one only when chosen here, or when a Fallout.ini this
+            // settings.ini reaches holds the key (only a line can change it there: then it hands
+            // it back to the preset); with none it follows the preset. The shared file reaches
+            // both profiles, a profile's own only its own, each read as it is before this save
+            // (a profile that is not ready takes nothing in place).
+            let reached = if path == self.pending {
+                &self.dirs[..]
+            } else {
+                std::slice::from_ref(&self.dirs[i])
+            };
+            let held = reached
                 .iter()
                 .any(|d| Self::files(d).is_ok_and(|f| row.chosen_here(&f).is_some()));
             if let Some(line) = row.pending_line(&chosen, held) {
@@ -602,17 +608,31 @@ mod tests {
         assert!(!pending.contains("NV_UNCAP"), "{pending}");
         assert!(pending.contains("\r\nNV_GRAB_PUSH=0\r\n"), "{pending}");
         assert_eq!(uncap.current(&p.shown().unwrap()), "On");
-        // A profile's own file that holds the key: the line says the choice, so the move changes it.
+        // A profile's own file that holds the key: the line hands it back to the preset (a 0 or 1
+        // would pin it), so the move makes it the generated note again, and a later preset
+        // change moves it as it moves the other profile.
         std::fs::create_dir_all(&p.dirs[1]).unwrap();
-        std::fs::write(
-            p.dirs[1].join("Fallout.ini"),
-            text.replace(";bUncap=1", "bUncap=0"),
-        )
-        .unwrap();
+        let held = text.replace(";bUncap=1", "bUncap=0");
+        std::fs::write(p.dirs[1].join("Fallout.ini"), &held).unwrap();
         p.save(uncap, "Off").unwrap();
         p.save(uncap, "On").unwrap();
         let pending = std::fs::read_to_string(&p.pending).unwrap();
-        assert!(pending.contains("\r\nNV_UNCAP=1\r\n"), "{pending}");
+        assert!(pending.contains("\r\nNV_UNCAP=preset\r\n"), "{pending}");
+        assert_eq!(uncap.current(&p.shown().unwrap()), "On");
+        p.save(Row::GameFixes, "Vanilla (the original game)")
+            .unwrap();
+        let pending = usable(&Settings::parse(
+            &std::fs::read_to_string(&p.pending).unwrap(),
+        ));
+        for start in [&held, &text] {
+            let moved = game_ini::apply_choices(start, Some(&pending)).0;
+            let files = Files {
+                ini: moved,
+                prefs: String::new(),
+            };
+            assert_eq!(uncap.chosen_here(&files), None, "{}", files.ini);
+            assert_eq!(uncap.current(&files), "Off");
+        }
         std::fs::remove_dir_all(&own).unwrap();
     }
 
@@ -736,6 +756,64 @@ mod tests {
         let mut p = Profiles::at(own);
         p.own_pending = Some([own.join("game"), own.join("mods")].map(|d| d.join("settings.ini")));
         p
+    }
+
+    /// Off Windows with only the game profile ready, a fix turned off and back on follows the
+    /// preset in both: the game profile's file has the generated note again, and the mods
+    /// profile's own settings.ini no line for it (the game profile's file held the key before the
+    /// save, which is not the mods profile's); a later preset change then moves both alike. Where
+    /// the mods profile's own file holds the key, its line hands it back to the preset.
+    #[test]
+    fn off_windows_a_fix_handed_back_follows_the_preset_in_both_profiles() {
+        let own = scratch("fix-per-profile");
+        let p = per_profile(&own);
+        let text = format!("{SECTIONS}[nv-rs Fixes]\r\n; Uncapped.\r\n;bUncap=1\r\n");
+        std::fs::create_dir_all(&p.dirs[0]).unwrap();
+        std::fs::write(p.dirs[0].join("Fallout.ini"), &text).unwrap();
+        let uncap = Row::of("bUncap").unwrap();
+        let mods = own.join("mods").join("settings.ini");
+        let mods_profile = |start: &str| {
+            let pending = usable(&Settings::parse(&std::fs::read_to_string(&mods).unwrap()));
+            Files {
+                ini: game_ini::apply_choices(start, Some(&pending)).0,
+                prefs: String::new(),
+            }
+        };
+        p.save(uncap, "Off").unwrap();
+        assert_eq!(uncap.current(&mods_profile(&text)), "Off");
+        p.save(uncap, "On").unwrap();
+        let game = std::fs::read_to_string(p.dirs[0].join("Fallout.ini")).unwrap();
+        assert_eq!(game, text);
+        let lines = std::fs::read_to_string(&mods).unwrap();
+        assert!(!lines.contains("NV_UNCAP"), "{lines}");
+        // A later preset change: both profiles follow it, the mods profile once its first start
+        // moves its file in.
+        for (preset, now) in [
+            ("Vanilla (the original game)", "Off"),
+            ("Fixes (recommended)", "On"),
+        ] {
+            p.save(Row::GameFixes, preset).unwrap();
+            let game = Files {
+                ini: std::fs::read_to_string(p.dirs[0].join("Fallout.ini")).unwrap(),
+                prefs: String::new(),
+            };
+            for files in [game, mods_profile(&text)] {
+                assert_eq!(uncap.chosen_here(&files), None, "{}", files.ini);
+                assert_eq!(uncap.current(&files), now, "{preset}");
+            }
+        }
+        // The mods profile's own Fallout.ini holds the key: its line hands it back.
+        std::fs::create_dir_all(&p.dirs[1]).unwrap();
+        let held = text.replace(";bUncap=1", "bUncap=0");
+        std::fs::write(p.dirs[1].join("Fallout.ini"), &held).unwrap();
+        p.save(uncap, "Off").unwrap();
+        p.save(uncap, "On").unwrap();
+        let lines = std::fs::read_to_string(&mods).unwrap();
+        assert!(lines.contains("\r\nNV_UNCAP=preset\r\n"), "{lines}");
+        assert_eq!(uncap.chosen_here(&mods_profile(&held)), None);
+        assert_eq!(uncap.current(&mods_profile(&held)), "On");
+        assert!(!own.join("game").join("settings.ini").exists());
+        std::fs::remove_dir_all(&own).unwrap();
     }
 
     /// Off Windows a d3d9 the game profile holds is never passed on: the other profile's own

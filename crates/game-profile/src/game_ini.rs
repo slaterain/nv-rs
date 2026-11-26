@@ -461,12 +461,18 @@ pub fn unset_key(text: &str, section: &str, key: &str, value: &str) -> String {
     out
 }
 
+/// A fix row's settings.ini value that hands the key back to `sPreset`: [`apply_choices`] turns
+/// the key into the generated note again ([`unset_key`]), so the preset decides it. The launcher
+/// writes it when a fix chosen in a profile's own file is chosen back to the preset's value while
+/// that profile is not ready (a 0 or 1 there would pin it).
+pub const FOLLOWS_PRESET: &str = "preset";
+
 /// `fallout_ini` (with our sections: [`with_sections`]) with the player's choices in our keys.
 ///
 /// `settings` is a `settings.ini` being moved in, when there is one. Each line it has wins over
 /// what the file says, the same rule the launcher's Settings screen follows while that file exists; a key no line
-/// names keeps the file's value. V-sync goes to `[Display] iPresentInterval`, where the original
-/// reads it.
+/// names keeps the file's value; a fix row's line [`FOLLOWS_PRESET`] makes its key the generated
+/// note again. V-sync goes to `[Display] iPresentInterval`, where the original reads it.
 ///
 /// Play.exe has no values of its own: a key nothing chose keeps what the file says, the
 /// generated sections' value (the host table's default) for a key added just now. A key the
@@ -499,7 +505,14 @@ pub fn apply_choices(fallout_ini: &str, settings: Option<&Settings>) -> (String,
     };
     let mut text = fallout_ini.to_string();
     let mut used: Vec<&str> = Vec::new();
-    for (section, key, variable, _) in rows() {
+    for (section, key, variable, default) in rows() {
+        if section == FIXES_SECTION
+            && line(variable).is_some_and(|v| v.eq_ignore_ascii_case(FOLLOWS_PRESET))
+        {
+            used.push(variable);
+            text = unset_key(&text, section, key, default);
+            continue;
+        }
         let value = match variable {
             "NV_PRESET" => line("Preset").and(switch(variable)),
             "NV_FRAME_LIMIT" => line("FrameLimit").and(switch(variable)),
@@ -1100,6 +1113,25 @@ mod tests {
             assert_eq!(value.as_deref(), Some("0.7"), "{word}: the file's own");
             assert_eq!(unused, ["NV_AO_STRENGTH"]);
         }
+        // A fix line handed back to the preset: the key the file holds becomes the generated
+        // note again (any case of the word); another fix's key stays, and a key outside the fixes
+        // takes no such word.
+        let held = set_key(
+            &set_key(&fresh, FIXES_SECTION, "bUncap", "0"),
+            FIXES_SECTION,
+            "bGrabPush",
+            "0",
+        );
+        let back = "NV_UNCAP=Preset\nNV_AO=preset\n";
+        let (out, unused) = apply_choices(&held, Some(&Settings::parse(back)));
+        assert_eq!(out, set_key(&fresh, FIXES_SECTION, "bGrabPush", "0"));
+        assert_eq!(ini_value(&out, FIXES_SECTION, "bUncap"), None);
+        assert_eq!(unused, ["NV_AO"]);
+        let (same, _) = apply_choices(&fresh, Some(&Settings::parse("NV_UNCAP=preset\n")));
+        assert_eq!(
+            same, fresh,
+            "a key that follows the preset already: nothing changes"
+        );
     }
 
     /// While a settings.ini exists it wins, line by line, over a file that already has the

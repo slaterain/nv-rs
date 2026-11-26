@@ -1203,7 +1203,7 @@ pub fn list_screen(
 }
 
 /// A row's choices screen for what `shown` says: what it is now (and, for a fix row, whether
-/// that comes from the preset), what it does (a table row's note; for the preset, how many
+/// that comes from the preset), what it does (a table row's plain text; for the preset, how many
 /// fixes are chosen one by one), its choices with the one it has highlighted, then Back.
 /// `desktop` is the main monitor's size, for the resolution row.
 pub fn choices_screen(row: settings::Row, shown: &settings::Files, desktop: (u32, u32)) -> Screen {
@@ -1212,7 +1212,7 @@ pub fn choices_screen(row: settings::Row, shown: &settings::Files, desktop: (u32
     let highlighted = entries.iter().position(|c| *c == now).unwrap_or(0);
     entries.push(BACK.into());
     let mut welcome = vec![row.now_line(shown)];
-    welcome.extend(row.note().map(str::to_string));
+    welcome.extend(row.about());
     if row == settings::Row::GameFixes {
         let chosen = settings::List::Fixes
             .rows()
@@ -1227,11 +1227,20 @@ pub fn choices_screen(row: settings::Row, shown: &settings::Files, desktop: (u32
         }
     }
     Screen {
-        title: format!("-{}-", row.title()),
+        title: format!("-{}-", row.label()),
         welcome,
         entries,
         highlighted,
         ..Default::default()
+    }
+}
+
+/// Where the Settings list opens from the screen `mode` shows: on the entry of the list it came
+/// back from, else at its top.
+fn settings_entry_from(mode: &Mode) -> usize {
+    match mode {
+        Mode::Settings { list } if *list != settings::List::Main => sublist_entry(*list),
+        _ => 0,
     }
 }
 
@@ -1889,10 +1898,7 @@ impl App {
             Act::BackToStart => self.show_start(),
             Act::OpenSettings => {
                 // Back from a list it opened: on that list's entry.
-                let at = match self.mode {
-                    Mode::Settings { list } if list != settings::List::Main => sublist_entry(list),
-                    _ => 0,
-                };
+                let at = settings_entry_from(&self.mode);
                 self.show_settings(settings::List::Main, at, None)
             }
             Act::OpenList(list) => self.show_settings(list, 0, None),
@@ -3525,9 +3531,21 @@ mod tests {
         assert!(fixes.contains(&"JIP LN NVSE built in: On".to_string()));
         assert!(fixes.contains(&"UI Organizer built in: On".to_string()));
         let more = settings_entries(settings::List::More, &shown, true, Consent::Ask);
-        assert_eq!(more[0], "Ambient occlusion: Off");
-        assert!(more.contains(&"Ambient occlusion strength: 0.7".to_string()));
-        assert!(more.contains(&"Sun shadows: Off".to_string()));
+        assert_eq!(more[0], "Corner shading (experimental): Off");
+        assert!(more.contains(&"Corner shading strength: 0.7".to_string()));
+        assert!(more.contains(&"Sun shadows (experimental): Off".to_string()));
+        // Back from a list Settings opened lands on its entry; anything else at the top.
+        for list in SUBLISTS {
+            assert_eq!(
+                settings_entry_from(&Mode::Settings { list }),
+                sublist_entry(list)
+            );
+        }
+        let main_list = Mode::Settings {
+            list: settings::List::Main,
+        };
+        assert_eq!(settings_entry_from(&main_list), 0);
+        assert_eq!(settings_entry_from(&Mode::Refused), 0);
         assert_eq!(
             settings_entries(settings::List::Main, &shown, false, Consent::Never)[12],
             "Launcher sounds: Off"
@@ -3751,9 +3769,9 @@ mod tests {
 
     /// In the launcher's own plain look, every entry of the lists Settings opens fits its row's
     /// highlight with each of its choices, as do the entries that open them; each of their rows'
-    /// choices screens shows its first line (what it is now) and every choice at once (a long
-    /// note scrolls below it), its title within the header's line; each list's own lines show
-    /// whole, with rows below them.
+    /// choices screens shows whole (what it is now, why it does nothing when it does nothing,
+    /// what it does, every choice), with the rows it needs on or off, its title within the
+    /// header's line; each list's own lines show whole, with rows below them.
     #[test]
     fn the_settings_lists_fit_the_plain_look() {
         let look = Look::plain();
@@ -3762,7 +3780,17 @@ mod tests {
             assert!(fits(list.name()), "{}", list.name());
         }
         let mut checked = 0;
-        for shown in [generated("fixes"), generated("vanilla")] {
+        let parents_off = |f: &settings::Files| {
+            ["bUncap", "bJIPInstalled", "bMenuCap"]
+                .into_iter()
+                .fold(f.clone(), |f, key| {
+                    settings::Row::of(key).unwrap().apply(&f, "Off")
+                })
+        };
+        let fixes = generated("fixes");
+        let vanilla = generated("vanilla");
+        let starts = [parents_off(&fixes), fixes, vanilla];
+        for shown in starts {
             for list in SUBLISTS {
                 for &row in list.rows() {
                     for choice in row.choices(&shown, (3840, 2160)) {
@@ -3776,6 +3804,12 @@ mod tests {
                             (0, s.entries.len()),
                             "{}: every choice shows",
                             s.title
+                        );
+                        assert!(
+                            screen::shows_whole(&look, &s),
+                            "{}: {:?}",
+                            s.title,
+                            s.welcome
                         );
                         assert!(look.font.width(&s.title) <= screen::WIDTH, "{}", s.title);
                         let lines = screen::line_texts(&look, &s);
@@ -3796,7 +3830,7 @@ mod tests {
                 }
             }
         }
-        assert!(checked > 80, "{checked}");
+        assert!(checked > 120, "{checked}");
         // The preset's screen counts the fixes chosen one by one, and still shows whole.
         let uncap = settings::Row::of("bUncap").unwrap();
         let grab = settings::Row::of("bGrabPush").unwrap();
@@ -3809,11 +3843,15 @@ mod tests {
         assert!(screen::shows_whole(&look, &s), "{:?}", s.welcome);
         let s = choices_screen(settings::Row::GameFixes, &generated("fixes"), (1, 1));
         assert_eq!(s.welcome, ["Now: Fixes (recommended)"]);
-        // A fix row's screen: what it is, where that comes from, and its note.
+        // A fix row's screen: what it is, where that comes from, and what it does.
         let s = choices_screen(uncap, &generated("vanilla"), (1, 1));
         assert_eq!(s.title, "-Uncapped frame rate-");
         assert_eq!(s.welcome[0], "Now: Off, from Game fixes");
-        assert!(s.welcome[1].starts_with("Uncapped frame rate: "));
+        assert_eq!(s.welcome[1], uncap.about().unwrap());
+        assert!(!s
+            .welcome
+            .iter()
+            .any(|l| l.contains("bUncap") || l.contains("iFrameLimit")));
         assert_eq!(s.entries, ["Off", "On", BACK]);
         assert_eq!(s.highlighted, 0);
     }
