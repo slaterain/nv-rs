@@ -1116,7 +1116,7 @@ pub fn extra_data_list_set_radius(e: &mut Engine, this: Ptr<ExtraDataList>, radi
         let extra: Ptr<BSExtraData> = if block == 0 {
             Ptr::NULL
         } else {
-            fn_004222f0(e, Ptr::new(block), radius).cast()
+            e.call(0x0042_22f0, &args![block, x87_float(radius)]).ptr()
         };
         add_extra(e, this, extra);
     } else {
@@ -1157,7 +1157,8 @@ pub fn fn_00422350(e: &mut Engine, this: Ptr<ExtraDataList>, radiation: f32) {
         let extra: Ptr<BSExtraData> = if block == 0 {
             Ptr::NULL
         } else {
-            fn_00422420(e, Ptr::new(block), radiation).cast()
+            e.call(0x0042_2420, &args![block, x87_float(radiation)])
+                .ptr()
         };
         add_extra(e, this, extra);
     } else {
@@ -1287,7 +1288,7 @@ pub fn extra_data_list_remove_follower(e: &mut Engine, this: Ptr<ExtraDataList>,
     let unavailable = e.call(SAVE_LOAD_UNAVAILABLE, &args![save_load]).bool();
     if !unavailable {
         let handler = e.global::<u32>(DATA_HANDLER);
-        fn_004226e0(e, Ptr::new(handler));
+        e.call(0x0042_26e0, &args![handler]);
     }
 }
 
@@ -1318,7 +1319,9 @@ pub fn extra_data_list_remove_follower_extra(e: &mut Engine, this: Ptr<ExtraData
 /// the name of its getter): a zero `enable` removes the extra data (and
 /// deletes it, `RemoveExtra(extra, true)`) when there is one; otherwise the
 /// `float` `value` is stored at +0x0C of the existing extra data, or of a new
-/// 0x10-byte one (built with the value by `00435f20`, added first).
+/// 0x10-byte one (built with the value by `00435f20`, added first). The value
+/// is pushed for the constructor through the x87 (`FLD`, `FSTP`), so a
+/// signalling NaN reaches it quiet.
 pub fn fn_00422750(e: &mut Engine, this: Ptr<ExtraDataList>, enable: u8, value: f32) {
     let mut extra = find_extra(e, this, EXTRA_REFRACTION_PROPERTY);
     if enable == 0 {
@@ -1332,7 +1335,8 @@ pub fn fn_00422750(e: &mut Engine, this: Ptr<ExtraDataList>, enable: u8, value: 
         extra = if block == 0 {
             Ptr::NULL
         } else {
-            e.call(REFRACTION_PROPERTY_INIT, &args![block, value]).ptr()
+            e.call(REFRACTION_PROPERTY_INIT, &args![block, x87_float(value)])
+                .ptr()
         };
         add_extra(e, this, extra);
     }
@@ -1356,7 +1360,7 @@ pub fn extra_data_list_get_refraction_property_extra(
 /// `name`, builds a new 0x10-byte extra data with it (`004351d0`, which copies
 /// the string) and adds it.
 pub fn fn_00422850(e: &mut Engine, this: Ptr<ExtraDataList>, name: u32) {
-    extra_data_list_remove_last_finished_sequence(e, this);
+    e.call(0x0042_2920, &args![this]);
     if name != 0 {
         let extra = new_extra_with(e, 0x10, LAST_FINISHED_SEQUENCE_INIT, name);
         add_extra(e, this, extra);
@@ -2228,7 +2232,7 @@ pub fn extra_data_list_load_game(
                 let followers = load_local(e, 2) & 0xffff;
                 for _ in 0..followers {
                     let id = load_id(e);
-                    extra_data_list_add_follower(e, this, Ptr::new(id));
+                    e.call(0x0042_2480, &args![this, id]);
                 }
             }
             // EXTRA_GHOST
@@ -2309,7 +2313,7 @@ pub fn extra_data_list_load_game(
                         if (index as i32) < 0xf5 {
                             let entry = SEQUENCE_NAME_TABLE.wrapping_add(index.wrapping_mul(0x24));
                             let name = e.mem.u32(entry);
-                            fn_00422850(e, this, name);
+                            e.call(0x0042_2850, &args![this, name]);
                         }
                     }
                     if save_version(e) < 0x15 || save_version(e) >= 0x17 {
@@ -2317,7 +2321,7 @@ pub fn extra_data_list_load_game(
                         e.with_stack(TEXT_SEQUENCE_BUFFER_SIZE, |e, buffer| {
                             e.call(MEMSET, &args![buffer, 0u32, TEXT_SEQUENCE_BUFFER_SIZE]);
                             load_bytes(e, buffer.addr(), length);
-                            fn_00422850(e, this, buffer.addr());
+                            e.call(0x0042_2850, &args![this, buffer.addr()]);
                         });
                     }
                 }
@@ -2347,7 +2351,7 @@ pub fn extra_data_list_load_game(
             // EXTRA_NO_RUMORS
             0x4e => {
                 let flag = load_local(e, 1) as u8;
-                fn_00421600(e, this, flag);
+                e.call(0x0042_1600, &args![this, u32::from(flag)]);
             }
             // No payload.
             0x2e | 0x45 | 0x90 | 0x91 => {}
@@ -2539,8 +2543,8 @@ pub fn extra_data_list_save_game_ov2(e: &mut Engine, this: Ptr<ExtraDataList>, b
         let mut saved = false;
         if kinds != 0 {
             e.with_stack(4, |e, out| {
-                let out_value = fn_00428110(e, Ptr::new(buffer), out);
-                saved = fn_004280f0(e, out_value, kinds);
+                let out_value = e.call(0x0042_8110, &args![buffer, out]).u32();
+                saved = e.call(0x0042_80f0, &args![out_value, kinds]).bool();
             });
         }
         if !file_form && saved && kinds & 0x4000_0000 != 0 {
@@ -2756,7 +2760,7 @@ fn save_extra_ov2(e: &mut Engine, buffer: u32, extra: u32, extra_type: u8, flag:
         0x2c => {
             let data = word(e, 0x0c);
             let flags = if data != 0 {
-                fn_00424940(e, Ptr::new(data))
+                e.call(0x0042_4940, &args![data]).u8()
             } else {
                 0
             };
@@ -2874,12 +2878,12 @@ fn save_extra_ov2(e: &mut Engine, buffer: u32, extra: u32, extra_type: u8, flag:
             );
             buffer_save_local(e, buffer, marker, 4);
             let saved = e.with_stack(4, |e, out| {
-                fn_00428110(e, Ptr::new(buffer), out);
+                e.call(0x0042_8110, &args![buffer, out]);
                 e.mem.u32(out.addr())
             });
-            fn_00428130(e, Ptr::new(buffer), marker);
+            e.call(0x0042_8130, &args![buffer, marker]);
             e.vcall(object, 0x54, &args![buffer]);
-            fn_00428130(e, Ptr::new(buffer), saved);
+            e.call(0x0042_8130, &args![buffer, saved]);
         }
         // 4 bytes at +0x14.
         0x54 => buffer_save(e, buffer, at(0x14), 4),
@@ -2920,9 +2924,9 @@ fn save_extra_ov2(e: &mut Engine, buffer: u32, extra: u32, extra_type: u8, flag:
             for second in [false, true] {
                 e.with_stack(8, |e, text| {
                     let copy = if second {
-                        fn_004280b0(e, Ptr::new(extra), text.addr())
+                        e.call(0x0042_80b0, &args![extra, text.addr()]).u32()
                     } else {
-                        fn_00428070(e, Ptr::new(extra), text.addr())
+                        e.call(0x0042_8070, &args![extra, text.addr()]).u32()
                     };
                     let characters =
                         typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, copy));
@@ -3083,22 +3087,10 @@ fn buffer_version(e: &mut Engine, buffer: u32) -> u8 {
     e.vcall(buffer, 0, &args![]).u8()
 }
 
-/// Runs the constructor at `address` on the block. The constructors of this
-/// file are called directly.
+/// Runs the constructor at `address` on the block (by address, the constructors
+/// of this file too).
 fn construct_extra_at(e: &mut Engine, address: u32, block: u32) -> u32 {
-    let this = Ptr::new(block);
-    match address {
-        0x0042_c470 => fn_0042c470(e, this).addr(),
-        0x0042_c4b0 => fn_0042c4b0(e, this).addr(),
-        0x0042_c580 => fn_0042c580(e, this).addr(),
-        0x0042_c5e0 => fn_0042c5e0(e, this).addr(),
-        0x0042_c610 => fn_0042c610(e, this).addr(),
-        0x0042_c640 => fn_0042c640(e, this).addr(),
-        0x0042_c670 => fn_0042c670(e, this).addr(),
-        0x0042_c6a0 => fn_0042c6a0(e, this).addr(),
-        0x0042_c6d0 => fn_0042c6d0(e, this).addr(),
-        _ => e.call(address, &args![block]).u32(),
-    }
+    e.call(address, &args![block]).u32()
 }
 
 /// The extra data of `extra_type` for the loader: the one the list has when
@@ -3161,8 +3153,8 @@ pub fn extra_data_list_load_game_ov2(e: &mut Engine, this: Ptr<ExtraDataList>, b
             .u32(SAVE_KIND_TABLE.wrapping_add(extra_type as u32 * 4));
         if kinds != 0 {
             let allowed = e.with_stack(4, |e, out| {
-                let out_value = fn_00428110(e, Ptr::new(buffer), out);
-                fn_004280f0(e, out_value, kinds)
+                let out_value = e.call(0x0042_8110, &args![buffer, out]).u32();
+                e.call(0x0042_80f0, &args![out_value, kinds]).bool()
             });
             if allowed {
                 present[extra_type as usize] = 1;
@@ -3472,7 +3464,7 @@ fn load_extra_ov2(
                 e.call(COMBAT_TIME_STAMP_LOAD_GAME, &args![hit, buffer]);
             }
             if typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, extra + 0x0c)) == 0 {
-                fn_00422670(e, this);
+                e.call(0x0042_2670, &args![this]);
             }
         }
         // A list of `(form, byte)` records, the ones without a form dropped.
@@ -3790,7 +3782,7 @@ fn load_dismembered_limbs(
     } else {
         let asks = e.with_stack(4, |e, out| {
             let out_value = e.call(BUFFER_FIELD_COPY_42CE30, &args![buffer, out]).u32();
-            fn_004280f0(e, Ptr::new(out_value), 0x2_0000)
+            e.call(0x0042_80f0, &args![out_value, 0x2_0000u32]).bool()
         });
         if asks && e.vcall(owner, 0x1d0, &args![]).u32() != 0 {
             e.call(OWNER_NOTIFY_BEGIN, &args![owner]);
@@ -3816,7 +3808,7 @@ fn load_dismembered_limbs(
         let entry = if block == 0 {
             0
         } else {
-            fn_0042c470(e, Ptr::new(block)).addr()
+            e.call(0x0042_c470, &args![block]).u32()
         };
         e.mem.set_u32(slot, entry);
         load_bytes_ov2(e, buffer, entry, 1);
@@ -3916,8 +3908,9 @@ fn load_leveled_creature(
     let mut kind_not_allowed = false;
     if old_template != e.mem.u32(extra + 0x10) {
         let allowed = e.with_stack(4, |e, out| {
-            let out_value = fn_00428110(e, Ptr::new(buffer), out);
-            fn_004280f0(e, out_value, 0x0800_0020)
+            let out_value = e.call(0x0042_8110, &args![buffer, out]).u32();
+            e.call(0x0042_80f0, &args![out_value, 0x0800_0020u32])
+                .bool()
         });
         if !allowed {
             kind_not_allowed = true;
@@ -3976,7 +3969,7 @@ fn load_leveled_creature(
     }
     // The buffer's three fields are replaced while the creature loads.
     let saved_kind = e.with_stack(4, |e, out| {
-        fn_00428110(e, Ptr::new(buffer), out);
+        e.call(0x0042_8110, &args![buffer, out]);
         e.mem.u32(out.addr())
     });
     let saved_second = e.with_stack(4, |e, out| {
@@ -3984,12 +3977,12 @@ fn load_leveled_creature(
         e.mem.u32(out.addr())
     });
     let saved_flag = e.call(BUFFER_FLAG_42CE90, &args![buffer]).u8();
-    fn_00428130(e, Ptr::new(buffer), marker);
+    e.call(0x0042_8130, &args![buffer, marker]);
     e.call(BUFFER_SET_FIELD_86CF00, &args![buffer, 0u32]);
     e.call(BUFFER_SET_FLAG_42CE50, &args![buffer, 0u32]);
     e.vcall(creature, 0x5c, &args![buffer]);
     e.call(CREATURE_SET_MARKER, &args![creature + 0x30, marker]);
-    fn_00428130(e, Ptr::new(buffer), saved_kind);
+    e.call(0x0042_8130, &args![buffer, saved_kind]);
     e.call(BUFFER_SET_FIELD_86CF00, &args![buffer, saved_second]);
     e.call(BUFFER_SET_FLAG_42CE50, &args![buffer, saved_flag as u32]);
     if built && creature != 0 {
@@ -4322,7 +4315,7 @@ pub fn fn_0042ca90(e: &mut Engine, this: Ptr) -> Ptr {
 /// destructor ([`fn_0042cb30`]), then `operator delete` when bit 0 of
 /// `flags` is set. Returns `this`.
 pub fn extra_actor_cause_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_0042cb30(e, this);
+    e.call(0x0042_cb30, &args![this]);
     finish_scalar_deleting_destructor(e, this, flags)
 }
 
@@ -4389,7 +4382,7 @@ pub fn fn_0042cc40(e: &mut Engine, this: Ptr) -> Ptr {
 /// ([`fn_0042cca0`]), then `operator delete` when bit 0 of `flags` is set.
 /// Returns `this`.
 pub fn fn_0042cc70(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_0042cca0(e, this);
+    e.call(0x0042_cca0, &args![this]);
     finish_scalar_deleting_destructor(e, this, flags)
 }
 
@@ -4425,7 +4418,7 @@ pub fn extra_securitron_face_scalar_deleting_destructor(
     this: Ptr,
     flags: u32,
 ) -> Ptr {
-    fn_0042cd70(e, this);
+    e.call(0x0042_cd70, &args![this]);
     finish_scalar_deleting_destructor(e, this, flags)
 }
 
@@ -4492,8 +4485,8 @@ pub fn fn_0042ce90(e: &mut Engine, this: Ptr) -> bool {
 fn buffer_allows(e: &mut Engine, buffer: u32, extra_type: u8) -> bool {
     let mask = e.mem.u32(SAVE_KIND_TABLE + extra_type as u32 * 4);
     e.with_stack(4, |e, out| {
-        let kind = fn_00428110(e, Ptr::new(buffer), out);
-        fn_004280f0(e, kind, mask)
+        let kind = e.call(0x0042_8110, &args![buffer, out]).u32();
+        e.call(0x0042_80f0, &args![kind, mask]).bool()
     })
 }
 
@@ -4651,7 +4644,7 @@ pub fn fn_0042ceb0(e: &mut Engine, this: Ptr<ExtraDataList>, buffer: u32, form: 
             fix_followers(e, extra.addr());
             if buffer_version(e, buffer) < 0x0e {
                 let player = e.global::<u32>(PLAYER_SINGLETON);
-                extra_data_list_remove_follower(e, this, player);
+                e.call(0x0042_2690, &args![this, player]);
             }
         }
     }
@@ -4826,11 +4819,11 @@ pub fn fn_0042dae0(e: &mut Engine, this: Ptr<ExtraDataList>, buffer: u32) {
         }
         let marker = e.call(GET_MAP_MARKER, &args![this]).u32();
         if marker != 0 {
-            fn_0042dd70(e, Ptr::new(marker));
+            e.call(0x0042_dd70, &args![marker]);
         }
         let timer_flag = e.with_stack(4, |e, out| {
-            let word = fn_0042ce30(e, Ptr::new(buffer), out);
-            fn_004280f0(e, word, 0x0400_0000)
+            let word = e.call(0x0042_ce30, &args![buffer, out]).u32();
+            e.call(0x0042_80f0, &args![word, 0x0400_0000u32]).bool()
         });
         if timer_flag {
             e.call(SET_ACTIVATE_CHILDREN_TIMER, &args![this, 0u32]);
@@ -4852,8 +4845,8 @@ pub fn fn_0042dae0(e: &mut Engine, this: Ptr<ExtraDataList>, buffer: u32) {
         let mut remove = false;
         if mask != 0 {
             remove = e.with_stack(4, |e, out| {
-                let word = fn_0042ce30(e, Ptr::new(buffer), out);
-                fn_004280f0(e, word, mask)
+                let word = e.call(0x0042_ce30, &args![buffer, out]).u32();
+                e.call(0x0042_80f0, &args![word, mask]).bool()
             });
         }
         if !is_file_form && remove && mask & 0x4000_0000 != 0 {
@@ -6069,6 +6062,27 @@ mod tests {
         assert_eq!(calls_to(&log, DESTRUCTOR), vec![vec![extra.addr(), 1]]);
         assert!(chain_types(&e, list).is_empty());
         assert_eq!(e.call(0x0042_2820, &args![list]).u32(), 0);
+    }
+
+    #[test]
+    fn refraction_property_constructor_is_given_the_float_through_the_x87() {
+        // The exe pushes the value with `FLD`, `FSTP`: a signalling NaN reaches the constructor
+        // quiet, as it reaches the extra data.
+        let mut e = engine();
+        let list = new_list(&mut e);
+        let signalling = f32::from_bits(0x7fa0_0001);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042_2750, &args![list, 1u8, signalling]);
+        });
+        let built: Vec<u32> = calls_to(&log, REFRACTION_PROPERTY_INIT)
+            .iter()
+            .map(|a| a[1])
+            .collect();
+        assert_eq!(built, vec![0x7fe0_0001]);
+        assert_eq!(
+            word_of(&mut e, list, EXTRA_REFRACTION_PROPERTY),
+            0x7fe0_0001
+        );
     }
 
     #[test]
@@ -9026,6 +9040,7 @@ mod tests {
             order,
             vec![
                 0x0042_cb00,
+                0x0042_cb30,
                 ASSIGN_HANDLE_AT,
                 ACTOR_CAUSE_MEMBER_RELEASE,
                 BS_EXTRA_DATA_DESTROY,
@@ -9086,11 +9101,12 @@ mod tests {
             assert_eq!(e.call(0x0042_cd40, &args![object, 1u32]).u32(), object);
         });
         assert_eq!(e.mem.u32(object), VTABLE_EXTRA_SECURITRON_FACE);
-        // The second string goes first, then the base, then the memory.
+        // The destructor (by address): the second string, the first, the base, then the memory.
         let order: Vec<(u32, Vec<u32>)> = log.into_iter().skip(1).collect();
         assert_eq!(
             order,
             vec![
+                (0x0042_cd70, vec![object]),
                 (STRING_MEMBER_DESTROY, vec![object + 0x14]),
                 (STRING_MEMBER_DESTROY, vec![object + 0x0c]),
                 (BS_EXTRA_DATA_DESTROY, vec![object]),

@@ -8,15 +8,21 @@
 //! cell's extra data ([`cell_data`]) and the package extra data with the rest of that range
 //! ([`packages`]), and from its part 3 file the extra data linking references ([`links`]) and the
 //! reflections, primitives, occlusion planes, portals, rooms, collision, package and guard data
-//! ([`rooms`]). The list's own operations (its constructors, `AddExtra`, `RemoveExtra`, the type
-//! bitmap, the thread's cache) are the cell references family's (`cell_refs::extra_list`), the
-//! lookup `GetExtraData` (`00410220`) the dispatch family's. Every caller reaches these functions
-//! by address; the unit's translation that stays (`GetCanNotWear` `00418b10`) and the unit's other
-//! part files call the native functions by address too. Four functions of the part 2 and 3 ranges
-//! are other families': `ScriptLocals`' scalar deleting destructor `0041af70` (native in the script
-//! lines family, the one that holds xNVSE's wraps), a package's type `0041ca90` (the AI queries',
-//! read in place here), `GetPackageExtraTarget` `0041cb70` and `GetActorPackageData` `004212b0`
-//! (the dispatch family's).
+//! ([`rooms`]), and from its part 4 file the next run of getters and setters with the followers,
+//! the friend hits, the refraction property and the saved animation and havok data ([`followers`])
+//! and the constructors and destructors of the small classes with the save buffer's accessors
+//! ([`classes`]). The part 4 file's save size (`00422c40`), its save writers and loaders of both
+//! formats, the buffered load's fix-up (`0042ceb0`), `FinishLoadGame` and the clean-up after a load
+//! (`0042dae0`) stay translated for now and reach these by address. The list's own operations (its
+//! constructors, `AddExtra`, `RemoveExtra`, the type bitmap, the thread's cache) are the cell
+//! references family's (`cell_refs::extra_list`), the lookup `GetExtraData` (`00410220`) the
+//! dispatch family's. Every caller reaches these functions by address; the unit's translation that
+//! stays (`GetCanNotWear` `00418b10`) and the unit's other part files call the native functions by
+//! address too. Four functions of the part 2 and 3 ranges are other families': `ScriptLocals`'
+//! scalar deleting destructor `0041af70` (native in the script lines family, the one that holds
+//! xNVSE's wraps), a package's type `0041ca90` (the AI queries', read in place here),
+//! `GetPackageExtraTarget` `0041cb70` and `GetActorPackageData` `004212b0` (the dispatch family's),
+//! and one of part 4's: the followers' getter `00422700` (the dispatch family's).
 //!
 //! **Native.** The exe's order of work. The lookup (`00410220`), the lock (`0040fbf0`, `0040fba0`),
 //! `AddExtra`, both `RemoveExtra`s, `ItemsInList` and the cache's clear are typed calls into their
@@ -30,14 +36,17 @@
 //! stamp's byte (`0086a460`), the save/load singleton's test that always answers false
 //! (`0047c850`), an `NiPointer`'s compare with a pointer (`00822510`), a getter's temporary
 //! `NiPointer` made from null (`00633c90`, released by `0045cec0`: 0), and for part 3 a simple
-//! list's test for an item (`005f65d0`) and for emptiness (`008256d0`), a form's type
-//! (`00401170`), a reference's extra list (`005d43c0`), the store of a payload word (`0041fd00`), a
-//! portal's two rooms (`009707f0`, `00420ba0`), the enable state parent's flag leaves and the
-//! constructors of the file's own classes. Each type, next or word is read once where the exe
-//! reads it again with nothing in between that could change it. A virtual call (an extra data's
-//! slot 0 delete, its slot 4 `Compare`, the type 0x92 copy's slot 0xc, a primitive's slot 0) stays
-//! a call through the slot: each class has its own body. The constructors, destructors and setters
-//! of other units, `operator new` and `operator delete` are called by address.
+//! list's test for an item (`005f65d0`) and for emptiness (`008256d0`), a form's type (`00401170`),
+//! a reference's extra list (`005d43c0`), the store of a payload word (`0041fd00`), a portal's two
+//! rooms (`009707f0`, `00420ba0`), the enable state parent's flag leaves and the constructors of
+//! the file's own classes, and for part 4 the radius and radiation constructors (`004222f0`,
+//! `00422420`) where their setters build one, the data handler's `bClearingData` (`004226e0`, whose
+//! answer the follower removal never uses) and a one-word local's store (`008c71b0`). Each type,
+//! next or word is read once where the exe reads it again with nothing in between that could change
+//! it. A virtual call (an extra data's slot 0 delete, its slot 4 `Compare`, the type 0x92 copy's
+//! slot 0xc, a primitive's slot 0) stays a call through the slot: each class has its own body. The
+//! constructors, destructors and setters of other units, `operator new` and `operator delete` are
+//! called by address.
 //!
 //! **Extenders.** JIP LN NVSE has seven sites here, each kept where the translation has it:
 //! `AddExtraCopy`'s arm for its keyed data's type 0x27 (`0x411978`) and that type's entries in the
@@ -58,7 +67,9 @@
 
 pub mod access;
 pub mod cell_data;
+pub mod classes;
 pub mod copy;
+pub mod followers;
 pub mod init_item;
 pub mod links;
 pub mod load;
@@ -451,6 +462,117 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0042_12e0, rooms::remove_actor_package_data(u32)),
         entry!(0x0042_1310, rooms::add_guard(u32, u32)),
         entry!(0x0042_13c0, rooms::guard_two_words(u32, u32, u32)),
+        entry!(0x0042_1400, followers::merchant_container(u32) -> u32),
+        entry!(0x0042_1430, followers::set_merchant_container(u32, u32)),
+        entry!(0x0042_14f0, followers::lev_crea_modifier(u32, u32, u32)),
+        entry!(0x0042_1540, followers::set_lev_crea_modifier(u32, u32)),
+        entry!(0x0042_1600, followers::set_no_rumors(u32, u8)),
+        entry!(0x0042_16b0, followers::remove_no_rumors(u32)),
+        entry!(0x0042_16d0, followers::has_leveled_creature(u32) -> bool),
+        entry!(0x0042_16f0, followers::lev_crea_original_base(u32) -> u32),
+        entry!(0x0042_1720, followers::leveled_creature_word(u32) -> u32),
+        entry!(0x0042_1750, followers::set_leveled_creature(u32, u32, u32)),
+        entry!(0x0042_1820, followers::detach_time(u32) -> u32),
+        entry!(0x0042_1850, followers::set_detach_time(u32, u32)),
+        entry!(0x0042_1910, followers::seen_data(u32) -> u32),
+        entry!(0x0042_1940, followers::set_seen_data(u32, u32)),
+        entry!(0x0042_1a40, followers::north_rotation(u32) -> f32),
+        entry!(0x0042_1a70, followers::set_north_rotation(u32, f32)),
+        entry!(0x0042_1b40, followers::x_target(u32) -> u32),
+        entry!(0x0042_1b70, followers::set_x_target(u32, u32)),
+        entry!(0x0042_1c30, followers::encounter_zone(u32) -> u32),
+        entry!(0x0042_1c60, followers::set_encounter_zone(u32, u32)),
+        entry!(0x0042_1d20, followers::emittance_source(u32) -> u32),
+        entry!(0x0042_1d50, followers::set_emittance_source(u32, u32)),
+        entry!(0x0042_1e10, followers::multibound_ref(u32) -> u32),
+        entry!(0x0042_1e40, followers::set_multibound_ref(u32, u32)),
+        entry!(0x0042_1f00, followers::multibound_data(u32) -> u32),
+        entry!(0x0042_1f30, followers::set_multibound_data(u32, u32)),
+        entry!(0x0042_2020, followers::multi_bound(u32) -> u32),
+        entry!(0x0042_2050, followers::set_multi_bound(u32, u32)),
+        entry!(0x0042_2120, followers::occlusion_plane(u32) -> u32),
+        entry!(0x0042_2150, followers::set_occlusion_plane(u32, u32)),
+        entry!(0x0042_2220, followers::set_radius(u32, f32)),
+        entry!(0x0042_22f0, followers::radius_extra_new(u32, f32) -> u32),
+        entry!(0x0042_2320, followers::radius(u32) -> f32),
+        entry!(0x0042_2350, followers::set_radiation(u32, f32)),
+        entry!(0x0042_2420, followers::radiation_extra_new(u32, f32) -> u32),
+        entry!(0x0042_2450, followers::radiation(u32) -> f32),
+        entry!(0x0042_2480, followers::add_follower(u32, u32)),
+        entry!(0x0042_2550, followers::has_follower(u32, u32) -> bool),
+        entry!(0x0042_2590, followers::add_friend_hit(u32) -> u32),
+        entry!(0x0042_2640, followers::friend_hit_count(u32) -> u32),
+        entry!(0x0042_2670, followers::remove_friend_hits(u32)),
+        entry!(0x0042_2690, followers::remove_follower(u32, u32)),
+        entry!(0x0042_26e0, followers::clearing_data(u32) -> u8),
+        entry!(0x0042_2720, followers::remove_follower_extra(u32)),
+        entry!(0x0042_2750, followers::set_refraction_property(u32, u8, f32)),
+        entry!(0x0042_2820, followers::refraction_property_extra(u32) -> u32),
+        entry!(0x0042_2850, followers::set_last_finished_sequence(u32, u32)),
+        entry!(0x0042_28f0, followers::last_finished_sequence(u32) -> u32),
+        entry!(0x0042_2920, followers::remove_last_finished_sequence(u32)),
+        entry!(0x0042_2940, followers::set_saved_animation(u32, u32)),
+        entry!(0x0042_2a10, followers::saved_animation(u32) -> u32),
+        entry!(0x0042_2a40, followers::restore_saved_animation(u32, u32) -> bool),
+        entry!(0x0042_2aa0, followers::remove_saved_animation(u32)),
+        entry!(0x0042_2ac0, followers::set_saved_havok_data(u32, u32)),
+        entry!(0x0042_2b90, followers::saved_havok_data(u32) -> u32),
+        entry!(0x0042_2bc0, followers::restore_saved_havok_data(u32, u32) -> bool),
+        entry!(0x0042_2c20, followers::remove_saved_havok_data(u32)),
+        entry!(0x0042_4940, classes::byte_at_c(u32) -> u8),
+        entry!(0x0042_8070, classes::first_string_to(u32, u32) -> u32),
+        entry!(0x0042_80b0, classes::second_string_to(u32, u32) -> u32),
+        entry!(0x0042_80f0, classes::has_any(u32, u32) -> bool),
+        entry!(0x0042_8110, classes::save_kind_to(u32, u32) -> u32),
+        entry!(0x0042_8130, classes::set_save_kind(u32, u32)),
+        entry!(0x0042_c470, classes::flags_record_new(u32) -> u32),
+        entry!(0x0042_c4b0, classes::lock_extra_new(u32) -> u32),
+        entry!(0x0042_c550, classes::lock_extra_delete(u32, u32) -> u32),
+        entry!(0x0042_c580, classes::teleport_extra_new(u32) -> u32),
+        entry!(0x0042_c5b0, classes::teleport_extra_delete(u32, u32) -> u32),
+        entry!(0x0042_c5e0, classes::ownership_extra_new(u32) -> u32),
+        entry!(0x0042_c610, classes::global_extra_new(u32) -> u32),
+        entry!(0x0042_c640, classes::rank_extra_new(u32) -> u32),
+        entry!(0x0042_c670, classes::count_extra_new(u32) -> u32),
+        entry!(0x0042_c6a0, classes::health_extra_new(u32) -> u32),
+        entry!(0x0042_c6d0, classes::uses_extra_new(u32) -> u32),
+        entry!(0x0042_c700, classes::time_left_extra_new(u32) -> u32),
+        entry!(0x0042_c730, classes::charge_extra_new(u32) -> u32),
+        entry!(0x0042_c760, classes::script_extra_new(u32) -> u32),
+        entry!(0x0042_c7a0, classes::script_extra_delete(u32, u32) -> u32),
+        entry!(0x0042_c7d0, classes::scale_extra_new(u32) -> u32),
+        entry!(0x0042_c800, classes::hot_key_extra_new(u32) -> u32),
+        entry!(0x0042_c830, classes::reference_pointer_extra_new(u32) -> u32),
+        entry!(0x0042_c860, classes::trespass_package_extra_new(u32) -> u32),
+        entry!(0x0042_c890, classes::trespass_package_extra_delete(u32, u32) -> u32),
+        entry!(0x0042_c8c0, classes::leveled_item_extra_new(u32) -> u32),
+        entry!(0x0042_c900, classes::poison_extra_new(u32) -> u32),
+        entry!(0x0042_c930, classes::head_track_target_extra_new(u32) -> u32),
+        entry!(0x0042_c960, classes::head_track_target_extra_delete(u32, u32) -> u32),
+        entry!(0x0042_c990, classes::no_rumors_extra_new(u32) -> u32),
+        entry!(0x0042_c9c0, classes::object_health_extra_new(u32) -> u32),
+        entry!(0x0042_c9f0, classes::model_swap_extra_new(u32) -> u32),
+        entry!(0x0042_ca30, classes::radius_extra_default(u32) -> u32),
+        entry!(0x0042_ca60, classes::radiation_extra_default(u32) -> u32),
+        entry!(0x0042_ca90, classes::actor_cause_extra_new(u32) -> u32),
+        entry!(0x0042_cb00, classes::actor_cause_extra_delete(u32, u32) -> u32),
+        entry!(0x0042_cb30, classes::actor_cause_extra_drop(u32)),
+        entry!(0x0042_cba0, classes::ammo_extra_new(u32) -> u32),
+        entry!(0x0042_cbe0, classes::package_data_extra_new(u32) -> u32),
+        entry!(0x0042_cc10, classes::record_new(u32) -> u32),
+        entry!(0x0042_cc40, classes::weapon_mod_slots_extra_new(u32) -> u32),
+        entry!(0x0042_cc70, classes::weapon_mod_slots_extra_delete(u32, u32) -> u32),
+        entry!(0x0042_cca0, classes::weapon_mod_slots_extra_drop(u32)),
+        entry!(0x0042_ccc0, classes::securitron_face_extra_new(u32) -> u32),
+        entry!(0x0042_cd40, classes::securitron_face_extra_delete(u32, u32) -> u32),
+        entry!(0x0042_cd70, classes::securitron_face_extra_drop(u32)),
+        entry!(0x0042_cde0, classes::list_at_is_empty(u32) -> bool),
+        entry!(0x0042_ce00, classes::given_word() -> u32),
+        entry!(0x0042_ce10, classes::flag_2_of_244(u32) -> bool),
+        entry!(0x0042_ce30, classes::buffer_flags_to(u32, u32) -> u32),
+        entry!(0x0042_ce50, classes::set_flag_8_of_28(u32, u8)),
+        entry!(0x0042_ce90, classes::flag_8_of_28(u32) -> bool),
+        entry!(0x0042_dd70, classes::copy_byte_d_to_c(u32)),
     ]
 }
 

@@ -11,7 +11,7 @@
 //! id, `AddCompileIndex` and `TESForm::GetFile` are typed calls; the casts, the log and the targets'
 //! own fix-ups are called by address.
 
-use super::{access, links, records, rooms, FAMILY, OPERATOR_DELETE};
+use super::{access, followers, links, records, rooms, FAMILY, OPERATOR_DELETE};
 use super::{give_lock, head_of, kind_of, list_remove, next_of, take_lock, word_at, EXTRA_PAYLOAD};
 use crate::forms;
 use engine_core::{args, typed_call, Engine};
@@ -40,7 +40,6 @@ const REFLECTOR_REFS_INIT_ITEM: u32 = 0x0043_3ed0;
 const LIT_WATER_REFS_INIT_ITEM: u32 = 0x0043_4050;
 const REFERENCE_GET_INTERIOR: u32 = 0x0057_5d10;
 const PATROL_REF_DATA_INIT_ITEM: u32 = 0x0067_c6c0;
-const GET_OCCLUSION_PLANE: u32 = 0x0042_2120;
 const IMPACT_SWAP_INIT_ITEM: u32 = 0x0058_f210;
 const LIST_REMOVE_AFTER: u32 = 0x0090_5330;
 const LIST_REMOVE_HEAD: u32 = 0x0063_f7b0;
@@ -429,15 +428,18 @@ fn fix_up_plane_refs(e: &mut Engine, this: u32, file: u32, extra: u32) {
             drop_extra(e, this, extra);
             break;
         }
-        let plane = e.call(GET_OCCLUSION_PLANE, &args![this]).u32();
+        let plane = typed_call!(FAMILY, 0x0042_2120, followers::occlusion_plane(e, this));
         if plane == 0 {
             note(e, MESSAGE_NO_OCCLUSION_PLANE, &[]);
         } else {
             let linked = e.mem.u32(slot);
             if linked != 0 {
-                let linked_plane = e
-                    .call(GET_OCCLUSION_PLANE, &args![extra_list_of(linked)])
-                    .u32();
+                let linked_list = extra_list_of(linked);
+                let linked_plane = typed_call!(
+                    FAMILY,
+                    0x0042_2120,
+                    followers::occlusion_plane(e, linked_list)
+                );
                 typed_call!(
                     FAMILY,
                     0x0041_81c0,
