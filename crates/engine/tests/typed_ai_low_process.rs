@@ -1281,9 +1281,6 @@ fn targets_greetings_and_schedules() {
         low_process::set_current_package_from_schedule(Ptr, Ptr) -> bool
     ))
     .in_world(&MOST, |w| w.process_actor())
-    // The exe's `SetCurrentPackage` in slot 0x230 reaches `ActorPackage::InitFromPackage`, whose
-    // translation calls `Clear` and `TESPackage::IncRefCount` as plain Rust calls.
-    .translation_calls_plainly(&[0x008c_5ef0, 0x008c_6100])
     .run()
     .assert_same();
     Diff::new(entry!(
