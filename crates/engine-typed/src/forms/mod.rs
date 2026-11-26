@@ -35,14 +35,25 @@
 //!   JIP LN NVSE rewrites): `TESObject`'s and the bound objects' constructors and destructors, the
 //!   `OBND` box (its points, size, save and load), `Clone3D`, the model registration and the scaled
 //!   model name.
+//! - [`package_list`]: the package list's functions (`PackageList`'s unit and the units beside it):
+//!   the destructor, clear, append, copy and compare, `InitItem`, the schedule window,
+//!   `FindCurrentPackage` and the missed packages' walk and sort, and the missable flag's test.
+//! - [`schedule`]: a package's schedule (`PSDT`): its order, getters and setters, constructor,
+//!   assignment and compare, its chunk, and the three-word swap of its unit.
+//! - [`package_data`]: the package data classes' constructors, destructors and save game loads
+//!   (`TESPackageData` and its dialogue, eat, escort, follow, patrol and use item data), their
+//!   chunk swaps, and the package event action's constructor, clear and copy.
+//! - [`conditions`]: a condition list's constructor, destructor and clear, a condition's compare of
+//!   two values and its function data's swap.
 //!
 //! Reached: each function stays registered at its exe address, so the translations' calls by
 //! address and the vtable slots that hold them (`TESForm`'s vtable `0101c794` and the form classes
 //! that keep its slots) reach the typed functions; between them the calls are typed calls. The
 //! translations that called one of them as a plain Rust function (in `tesform.rs`,
 //! `tesactorbasedata.rs`, `tesactorbase.rs`, `tesattributes.rs`, `run_004801e0.rs`, `tesaiform.rs`,
-//! `run_0047f940.rs` and `tesobject.rs` themselves) call it by address now, so the game reaches the
-//! typed function from there too.
+//! `run_0047f940.rs`, `tesobject.rs`, `packagelist.rs`, `run_0067ad20.rs`, `run_0067c330.rs`,
+//! `run_0067ec40.rs` and `run_0067fcb0.rs` themselves) call it by address now, so the game reaches
+//! the typed function from there too.
 //!
 //! Native: the one-line bodies the exe calls (the form type, its flag tests, the byte swaps, the
 //! files' and save buffers' fields, the components' accessors) are done in place, the leaves', the
@@ -69,8 +80,9 @@
 //! Stage 1: the objects stay in guest memory where the game made them. The loading threads read and
 //! write forms too, so the row is [`Threads::Both`], and the float maths is the exe's x87 maths under
 //! the running thread's control word, as the translation does it: the calculated level's
-//! multiply and divide and an item's desirability's add (`x87_mul`, `x87_div`, `x87_add`), each
-//! result stored as the `f32` the exe stores; the karma loaded from an integer exactly and read
+//! multiply and divide, an item's desirability's add and the missed packages' hour step (`x87_mul`,
+//! `x87_div`, `x87_add`), each result stored as the `f32` the exe stores; the karma loaded from an
+//! integer exactly and read
 //! back through the C runtime's typed `_ftol2`. A float becomes an integer through
 //! `x87::fistp_chop` where the exe's `FISTP` runs under the truncating control word it sets (the
 //! loaded quality, the armour's base rating, the statistics' fields). The components' weight and
@@ -87,8 +99,12 @@ pub mod actor_base_data;
 pub mod ai_form;
 pub mod animation;
 pub mod attributes;
+pub mod conditions;
 pub mod debug_string;
 pub mod object;
+pub mod package_data;
+pub mod package_list;
+pub mod schedule;
 pub mod tesform;
 
 /// This family's bit: what each `typed_call!` of it names. Id 45: past the families in main
@@ -431,6 +447,54 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0050_fbf0, object::register_form_model(u32, u32)),
         entry!(0x0050_fd90, object::model_path(u32, u32) -> u32),
         entry!(0x0050_fdf0, object::scaled_model_file_name(u32, u32, u32)),
+        entry!(0x0067_e3a0, package_list::destruct(u32)),
+        entry!(0x0067_e400, package_list::free(u32)),
+        entry!(0x0067_e420, package_list::add_tail(u32, u32)),
+        entry!(0x0067_e440, package_list::copy(u32, u32)),
+        entry!(0x0067_e4a0, package_list::lists_differ(u32, u32) -> bool),
+        entry!(0x0067_e560, package_list::init_item(u32, u32)),
+        entry!(0x0067_e700, package_list::in_schedule_window(i32, i32, f32) -> bool),
+        entry!(0x0067_e780, package_list::find_current_package(u32, u32) -> u32),
+        entry!(0x0067_ec40, package_list::missed_packages(u32, u32, u32, u32, f32)),
+        entry!(0x0067_efd0, package_list::is_missable(u32) -> bool),
+        entry!(0x0067_8a80, schedule::compare(u32, u32) -> i32),
+        entry!(0x0067_8cc0, schedule::day_of_week(u32) -> i8),
+        entry!(0x0067_8ce0, schedule::date(u32) -> u8),
+        entry!(0x0067_fcb0, schedule::construct(u32) -> u32),
+        entry!(0x0067_fcf0, schedule::assign(u32, u32) -> u32),
+        entry!(0x0067_fd40, schedule::set_from(u32, u32)),
+        entry!(0x0067_fdb0, schedule::set_day_of_week(u32, u8)),
+        entry!(0x0067_fdd0, schedule::set_date(u32, u8)),
+        entry!(0x0067_fdf0, schedule::set_hour(u32, u8)),
+        entry!(0x0067_fe10, schedule::differs(u32, u32) -> bool),
+        entry!(0x0067_fec0, schedule::save(u32)),
+        entry!(0x0067_ff10, schedule::swap_three_words(u32)),
+        entry!(0x0067_ad20, package_data::construct(u32) -> u32),
+        entry!(0x0067_ad40, package_data::scalar_deleting_destructor(u32, u32) -> u32),
+        entry!(0x0067_ad70, package_data::destruct(u32)),
+        entry!(0x0067_b050, package_data::dialogue_load_game(u32, u32)),
+        entry!(0x0067_b100, package_data::dialogue_swap_endian(u32)),
+        entry!(0x0067_b170, package_data::dialogue_construct(u32) -> u32),
+        entry!(0x0067_b950, package_data::eat_construct(u32) -> u32),
+        entry!(0x0067_bbf0, package_data::escort_construct(u32) -> u32),
+        entry!(0x0067_bfd0, package_data::follow_construct(u32) -> u32),
+        entry!(0x0067_c330, package_data::patrol_load_game(u32, u32)),
+        entry!(0x0067_c3f0, package_data::patrol_construct(u32) -> u32),
+        entry!(0x0067_c420, package_data::patrol_scalar_deleting_destructor(u32, u32) -> u32),
+        entry!(0x0067_c450, package_data::patrol_construct_from(u32, u32) -> u32),
+        entry!(0x0067_c490, package_data::patrol_destruct(u32)),
+        entry!(0x0067_c770, package_data::use_item_construct(u32) -> u32),
+        entry!(0x0067_ca10, package_data::use_weapon_swap_endian(u32)),
+        entry!(0x0067_da20, package_data::clear_word_4(u32, u32)),
+        entry!(0x0067_da40, package_data::event_action_construct(u32) -> u32),
+        entry!(0x0067_da80, package_data::event_action_clear(u32)),
+        entry!(0x0067_dad0, package_data::event_action_copy(u32, u32)),
+        entry!(0x0067_eff0, package_data::location_swap_endian(u32)),
+        entry!(0x0068_0890, conditions::construct(u32) -> u32),
+        entry!(0x0068_08b0, conditions::destruct(u32)),
+        entry!(0x0068_0fe0, conditions::clear(u32)),
+        entry!(0x0068_1050, conditions::compare_values(u32, f32, f32) -> bool),
+        entry!(0x0068_1110, conditions::swap_function_data(u32)),
     ]
 }
 

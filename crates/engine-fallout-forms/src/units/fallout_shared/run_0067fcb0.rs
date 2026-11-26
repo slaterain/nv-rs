@@ -46,13 +46,13 @@ pub fn fn_0067fd40(e: &mut Engine, this: Ptr, source: Ptr) {
         return;
     }
     let value = e.call(0x0067_8cc0, &args![source]).u32();
-    fn_0067fdb0(e, this, value as u8);
+    e.call(0x0067_fdb0, &args![this, value as u8]);
     let location_type = e.call(0x0067_8ca0, &args![source]).u32();
     e.call(0x0054_07b0, &args![this, location_type]);
     let value = e.call(0x0067_8ce0, &args![source]).u8();
-    fn_0067fdd0(e, this, value);
+    e.call(0x0067_fdd0, &args![this, value]);
     let value = e.call(0x0086_a460, &args![source]).u8();
-    fn_0067fdf0(e, this, value);
+    e.call(0x0067_fdf0, &args![this, value]);
     let value = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, source));
     e.call(0x006e_cd40, &args![this, value]);
 }

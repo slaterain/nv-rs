@@ -20,16 +20,17 @@
 //! buffer's change flags (`00428110`, the word at +0x17, and `004280f0`, its bits) and a
 //! reference's base form (`004181e0`, the word at +0x20). The compare reads the compared fields
 //! once each, as words where the exe compares every byte of them. This unit's functions call each
-//! other as typed calls. The vtable slot that marks the form changed is this family's typed call
-//! when it holds `TESActorBase::AddChange` (`005f1630`) or `TESForm::AddChange` (`00484b60`), and a
-//! call through the slot otherwise. What stays a call by address: the RTTI cast, the package
-//! list's operations, the equip type, the save/load game's and the save buffers' reads and writes.
+//! other as typed calls, and so are the package list's operations ([`package_list`], this
+//! family's). The vtable slot that marks the form changed is this family's typed call when it
+//! holds `TESActorBase::AddChange` (`005f1630`) or `TESForm::AddChange` (`00484b60`), and a call
+//! through the slot otherwise. What stays a call by address: the RTTI cast, the equip type, the
+//! save/load game's and the save buffers' reads and writes.
 //!
 //! Floats are only moved: the five copied settings and the two package query floats pass through
 //! `FLD`/`FSTP` in the exe, which quiets a signalling NaN, and the copied setting a getter answers
 //! is loaded the same way ([`x87_quiet_bits`]).
 
-use super::{actor_base, tesform, FAMILY};
+use super::{actor_base, package_list, tesform, FAMILY};
 use crate::slot_target;
 use engine_core::x87::x87_quiet_bits;
 use engine_core::{args, typed_call, Engine};
@@ -69,15 +70,6 @@ const FIRST_SKILL: u32 = 0x20;
 const MOOD_COUNT: u8 = 8;
 const CONFIDENCE_COUNT: u8 = 5;
 
-// The package list's operations (`ECX` = the list).
-const PACKAGE_LIST_CLEAR: u32 = 0x0067_e400;
-const PACKAGE_LIST_DESTRUCT: u32 = 0x0067_e3a0;
-const PACKAGE_LIST_COPY: u32 = 0x0067_e440;
-const PACKAGE_LIST_ADD: u32 = 0x0067_e420;
-const PACKAGE_LIST_INIT_ITEM: u32 = 0x0067_e560;
-const PACKAGE_LIST_CURRENT: u32 = 0x0067_e780;
-const PACKAGE_LIST_MISSED: u32 = 0x0067_ec40;
-const PACKAGE_LISTS_DIFFER: u32 = 0x0067_e4a0;
 /// `BGSEquipType::GetEquipType` (cdecl: a form).
 const GET_EQUIP_TYPE: u32 = 0x0047_9430;
 
@@ -141,7 +133,8 @@ fn is_training_skill(value: u32) -> bool {
 // Typed from 0047ede0
 /// `TESAIForm::ClearDataComponent` (Xbox PDB): the package list cleared.
 pub fn clear_data_component(e: &mut Engine, this: u32) {
-    e.call(PACKAGE_LIST_CLEAR, &args![at(this, PACKAGE_LIST)]);
+    let list = at(this, PACKAGE_LIST);
+    typed_call!(FAMILY, 0x0067_e400, package_list::free(e, list));
 }
 
 // Typed from 0047ee00
@@ -318,7 +311,8 @@ pub fn construct(e: &mut Engine, this: u32) -> u32 {
 pub fn destruct(e: &mut Engine, this: u32) {
     e.mem.set_u32(this, TES_AI_FORM_VTABLE);
     typed_call!(FAMILY, 0x0047_ede0, clear_data_component(e, this));
-    e.call(PACKAGE_LIST_DESTRUCT, &args![at(this, PACKAGE_LIST)]);
+    let list = at(this, PACKAGE_LIST);
+    typed_call!(FAMILY, 0x0067_e3a0, package_list::destruct(e, list));
 }
 
 // Typed from 0047f0b0
@@ -390,10 +384,8 @@ pub fn copy_ai_data(e: &mut Engine, this: u32, other: u32) {
 // Typed from 0047f2d0
 /// `other`'s package list copied into this component's.
 pub fn copy_packages(e: &mut Engine, this: u32, other: u32) {
-    e.call(
-        PACKAGE_LIST_COPY,
-        &args![at(this, PACKAGE_LIST), at(other, PACKAGE_LIST)],
-    );
+    let (list, other_list) = (at(this, PACKAGE_LIST), at(other, PACKAGE_LIST));
+    typed_call!(FAMILY, 0x0067_e440, package_list::copy(e, list, other_list));
 }
 
 // Typed from 0047f190
@@ -411,7 +403,12 @@ pub fn copy_component(e: &mut Engine, this: u32, other: u32) {
 // Typed from 0047f500
 /// `package` added at the end of the package list.
 pub fn add_package(e: &mut Engine, this: u32, package: u32) {
-    e.call(PACKAGE_LIST_ADD, &args![at(this, PACKAGE_LIST), package]);
+    let list = at(this, PACKAGE_LIST);
+    typed_call!(
+        FAMILY,
+        0x0067_e420,
+        package_list::add_tail(e, list, package)
+    );
 }
 
 // Typed from 0047f4c0
@@ -420,7 +417,8 @@ pub fn init_item(e: &mut Engine, this: u32, form: u32) {
     if e.mem.u8(at(INIT_ITEM_SETTING, SETTING_VALUE)) != 0 {
         return;
     }
-    e.call(PACKAGE_LIST_INIT_ITEM, &args![at(this, PACKAGE_LIST), form]);
+    let list = at(this, PACKAGE_LIST);
+    typed_call!(FAMILY, 0x0067_e560, package_list::init_item(e, list, form));
 }
 
 /// The `TESAIForm` of `reference`'s base form (the word at +0x20, `004181e0`; the component at
@@ -445,11 +443,12 @@ pub fn current_package(e: &mut Engine, reference: u32) -> u32 {
     if ai == 0 {
         return 0;
     }
-    e.call(
-        PACKAGE_LIST_CURRENT,
-        &args![at(ai, PACKAGE_LIST), reference],
+    let list = at(ai, PACKAGE_LIST);
+    typed_call!(
+        FAMILY,
+        0x0067_e780,
+        package_list::find_current_package(e, list, reference)
     )
-    .u32()
 }
 
 // Typed from 0047f590
@@ -464,15 +463,13 @@ pub fn missed_packages(e: &mut Engine, reference: u32, value: u32, first: f32, s
     if ai == 0 {
         return;
     }
-    e.call(
-        PACKAGE_LIST_MISSED,
-        &args![
-            at(ai, PACKAGE_LIST),
-            reference,
-            value,
-            x87_quiet_bits(first.to_bits()),
-            x87_quiet_bits(second.to_bits())
-        ],
+    let list = at(ai, PACKAGE_LIST);
+    let first = x87_quiet_bits(first.to_bits());
+    let second = f32::from_bits(x87_quiet_bits(second.to_bits()));
+    typed_call!(
+        FAMILY,
+        0x0067_ec40,
+        package_list::missed_packages(e, list, reference, value, first, second)
     );
 }
 
@@ -512,12 +509,12 @@ pub fn compare_component(e: &mut Engine, this: u32, other: u32) -> bool {
     {
         return true;
     }
-    e.call(
-        PACKAGE_LISTS_DIFFER,
-        &args![at(this, PACKAGE_LIST), at(other, PACKAGE_LIST)],
+    let (list, other_list) = (at(this, PACKAGE_LIST), at(other, PACKAGE_LIST));
+    typed_call!(
+        FAMILY,
+        0x0067_e4a0,
+        package_list::lists_differ(e, list, other_list)
     )
-    .u8()
-        != 0
 }
 
 // Typed from 0047f600
