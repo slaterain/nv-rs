@@ -1,11 +1,15 @@
-//! The stats menu's unit (`fallout/interface/menus/statsmenu`, Xbox PDB), its first part: the
-//! status data list's destructor and clean-ups, the fade object (made on first use, its groups,
-//! their tiles and fade bytes, the fade callback), the idle, the pages, the actor values, perks,
-//! healing options and mode, the SPECIAL and skill rows, the face image and the radiation meter, the
-//! sorts and the availability callbacks, the status data list's `Register` and look-up, the list
-//! walk with a callback, and the `AddItem`s of the perk rank and misc stat list boxes. The
-//! translations are engine-fallout-interface's `statsmenu.rs`, which these replace at the same
-//! addresses. (`007df1f0`, the float at `+0x20`, is the process family's.)
+//! The stats menu's unit (`fallout/interface/menus/statsmenu`, Xbox PDB), all but seven of its
+//! functions: the status data list's destructor and clean-ups, the fade object (made on first use,
+//! its groups, their tiles and fade bytes, the fade callback, the group of a tile), the idle, the
+//! pages and sub pages, the knob, limb mode and the general and reputation modes, the actor values,
+//! perks, healing options and mode, the SPECIAL and skill rows, the face image, the radiation and
+//! hardcore meters, the icon and description, a reputation, the leave and gamepad up events, the
+//! sorts and the availability callbacks, the status data and status effect lists' `Register`s and
+//! look-ups, the list walk with a callback, a string's append, and the `AddItem`s of the perk rank,
+//! misc stat, status effect and reputation list boxes. The translations are
+//! engine-fallout-interface's `statsmenu.rs`, which these replace at the same addresses.
+//! (`007df1f0`, the float at `+0x20`, is the process family's. Still translated: `Create`,
+//! `DoClick`, `DoGamepad`, `DoEnter`, `UpdateAll`, the reputation list and `UpdateActiveEffects`.)
 //!
 //! **Native.** The exe's order of work, with its calls by address of functions no family types (the
 //! strings' format, destructor and assignment, the tile's menu and template rendering, the fade
@@ -35,7 +39,7 @@ use super::menu_manager_p2::{
     ADD_USER_TRAIT, CONTAINER, FREE, INIT_TILE_POSITION, ITEM_DELETE, TEMPLATE_NAME,
     VALUE_ADD_ACTION, VALUE_CALCULATE,
 };
-use crate::{dispatch, draw_f, forms};
+use crate::{crt, dispatch, draw_f, forms};
 use engine_core::prelude::*;
 use engine_core::typed_call;
 use engine_core::x87::{fistp_chop64, x87_quiet};
@@ -54,6 +58,13 @@ pub const IN_PLACE: &[u32] = &[
     0x0040_3ba0, // the status entry's constructor: four zero words and -1
     0x0055_b980, // an active effect's kind (+0x2c)
     0x0083_3c20, // an active effect's active byte (+0x10)
+    0x005f_65d0, // whether a list holds a word
+    0x0073_ac90, // the description box's text tile slot: `[this] + 8`
+    0x007b_5370, // its scroll tile slot: `[this + 4] + 8`
+    0x0070_ed80, // an open stats menu in limb mode
+    0x0045_3a70, // the audio object (the word at `011f6d98`)
+    0x0040_6db0, // the status data list's constructor: an empty list, its vtable
+    0x0040_39a0, // a string's capacity (`+6`)
 ];
 
 /// The open stats menu (`StatsMenu::Create` stores it), the fade object made on first use, the time
@@ -238,7 +249,8 @@ const EFFECT_GET_DURATION: u32 = 0x0040_44d0;
 const PERK_SORT: u32 = 0x007e_04e0;
 /// `AddItem`'s callees: `Tile::GetMenu`, `Menu::RenderTemplate` (thiscall: parent, template, 0),
 /// the list's insert (`007a7eb0`: item, compare) and append of the pointed-to word (`00905820`);
-/// `"_number_of_visible_items"`, the value actions' add of a float (`00a09080`) and their actions.
+/// `"_number_of_visible_items"`, the value action with a float operand (`00a09080`) and the copy and
+/// multiply operators (`CalculateValue`'s `0x7d0` and `0x7d3`).
 const TILE_GET_MENU: u32 = 0x00a0_3c90;
 const RENDER_TEMPLATE: u32 = 0x00a1_ddb0;
 const LIST_INSERT: u32 = 0x007a_7eb0;
@@ -246,7 +258,7 @@ const LIST_APPEND_ITEM: u32 = 0x0090_5820;
 const VISIBLE_ITEMS_TEXT: u32 = 0x0106_f860;
 const VALUE_ADD_FLOAT: u32 = 0x00a0_9080;
 const ACTION_COPY: u32 = 0x7d0;
-const ACTION_ADD: u32 = 0x7d3;
+const ACTION_MULTIPLY: u32 = 0x7d3;
 
 /// The player.
 #[inline(always)]
@@ -1355,6 +1367,8 @@ pub fn stats_menu_status_data_list_register(e: &mut Engine, this: Ptr, effect: u
         }
         e.mem.set_u32(block.wrapping_add(0x10), u32::MAX);
     }
+    // The key read again, as the exe does after the constructor.
+    let key = effect_key(e, effect);
     e.mem.set_u32(block.wrapping_add(0x10), key);
     let magnitude = e.call(EFFECT_GET_MAGNITUDE, &args![effect]).u32();
     let setting = effect_setting(e, effect);
@@ -1417,7 +1431,7 @@ pub fn fn_007e0e30(e: &mut Engine, this: Ptr, callback: u32, value: u32) {
 /// in place) inserted by `compare` (then `Synchronize` with flag 0) or appended (then, with flag 0,
 /// the tile's position and `SetTotalListHeight`; the tile numbered with the next index). With
 /// exactly one item and a `"_number_of_visible_items"` above 0.0, the container's height becomes the
-/// tile's height plus that number. The new tile, or 0.
+/// tile's height times that number. The new tile, or 0.
 fn add_item_of(
     e: &mut Engine,
     of: Of,
@@ -1518,7 +1532,7 @@ fn add_item_of(
                 .i32();
             let container = field(e, at, CONTAINER);
             let count = tile_float(e, container, visible);
-            e.call(VALUE_ADD_FLOAT, &args![value, ACTION_ADD, count]);
+            e.call(VALUE_ADD_FLOAT, &args![value, ACTION_MULTIPLY, count]);
             e.call(VALUE_CALCULATE, &args![value, 0u32]);
         }
     }
@@ -1574,6 +1588,873 @@ pub fn list_box_misc_stat_id_add_item(
     add_item_of(e, Of::MiscStatId, this, data, text, compare, template)
 }
 
+// ---- The unit's second part: the fade groups, the description, the knob, the pages and modes,
+// the status effect lists, the string append, the hardcore meters, two more `AddItem`s ------------
+
+/// The second part's callees: the sound by name (`BSAudio::GetSoundHandleByName`, `RET 0xc`, the
+/// handle through its first word; `BSSoundHandle::Play`, `RET 4`) and the audio object (`00453a70`
+/// answers the word at `011f6d98`); the button sound; `Tile::TextToTrait` (cdecl), `Tile::UpdateTile`
+/// (`RET 4`); the actor values' icon, description and weapon type badge (cdecl); the reputation's
+/// icon and title (thiscall); `004e4430` (cdecl, a float: rounded, `ST0`); the Pip-Boy's
+/// `SetTabKnobPosition` (`RET 8`) and `MoveKnob` (`RET 0x10`) and the two settings the knob moves
+/// by; `00501c10` (thiscall, `RET 4`: `BSStringT::Set` on its object); an active effect's magnitude
+/// (`00495460`, `ST0`); `__RTDynamicCast` (cdecl, five words); the strings' `BSStringT::Set`
+/// (`RET 4`), growth (`004037f0`, `RET 8`), length (`004048e0`) and length with the terminator (`004f4280`) and an entry's
+/// text into a string (`004046b0`, `RET 4`).
+const GET_SOUND_HANDLE_BY_NAME: u32 = 0x00ad_7550;
+const SOUND_HANDLE_PLAY: u32 = 0x00ad_8830;
+const AUDIO: u32 = 0x011f_6d98;
+const BUTTON_SOUND: u32 = 0x0106_f380;
+const TEXT_TO_TRAIT: u32 = 0x00a0_1860;
+const UPDATE_TILE: u32 = 0x00a0_4640;
+const AV_ICON: u32 = 0x0066_e9f0;
+const AV_DESCRIPTION: u32 = 0x0066_e9b0;
+const AV_BADGE: u32 = 0x0066_ea20;
+const REPUTATION_ICON: u32 = 0x0061_66e0;
+const REPUTATION_TITLE: u32 = 0x0061_6710;
+const ROUND_FLOAT: u32 = 0x004e_4430;
+const SET_TAB_KNOB_POSITION: u32 = 0x007f_a0f0;
+const MOVE_KNOB: u32 = 0x007f_8610;
+const KNOB_SPEED_SETTING: u32 = 0x011d_b358;
+const KNOB_DISTANCE_SETTING: u32 = 0x011d_b2f0;
+const STRING_OBJECT_SET: u32 = 0x0050_1c10;
+const EFFECT_MAGNITUDE: u32 = 0x0049_5460;
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const STRING_SET: u32 = 0x0043_8470;
+const STRING_GROW: u32 = 0x0040_37f0;
+const STRING_LENGTH: u32 = 0x0040_48e0;
+const STRING_COPY_LENGTH: u32 = 0x004f_4280;
+const ENTRY_TEXT: u32 = 0x0040_46b0;
+/// The RTTI type descriptors the casts name: `TESForm`, `TESFullName`, an effect's target.
+const TYPE_FORM: u32 = 0x0118_3028;
+const TYPE_FULL_NAME: u32 = 0x0118_3158;
+const TYPE_TARGET: u32 = 0x0118_3140;
+/// The scroll traits' names (the scroll tile's scale, its first, second and third traits).
+const SCROLL_SCALE_TEXT: u32 = 0x0107_4eb8;
+const SCROLL_FIRST_TEXT: u32 = 0x0106_f8f8;
+const SCROLL_SECOND_TEXT: u32 = 0x0107_02d8;
+const SCROLL_THIRD_TEXT: u32 = 0x0107_0250;
+/// The largest float (`01016970`), the lowest limb's start.
+const FLOAT_MAX: u32 = 0x0101_6970;
+/// `ToggleGenRepMode`'s function-local statics (the guard word, the `"_enabled"` id at bit 1 and the
+/// id of the name at `01077564` at bit 2), the mode byte and the two settings it shows.
+const GEN_REP_GUARD: u32 = 0x011d_ad8c;
+const GEN_REP_ENABLED: u32 = 0x011d_ad88;
+const GEN_REP_SECOND: u32 = 0x011d_ad84;
+const GEN_REP_SECOND_TEXT: u32 = 0x0107_7564;
+const GEN_REP_MODE: u32 = 0x011a_0ae0;
+const REPUTATIONS_SETTING: u32 = 0x011d_4ef4;
+const GENERAL_SETTING: u32 = 0x011d_4144;
+/// The sorts the status effect lists insert with.
+const EFFECT_SORT: u32 = 0x007e_0480;
+const STAGE_SORT: u32 = 0x007e_0540;
+/// The fade object's group count and the description box (`+0xf8`), the badge tile (`+0x160`).
+const GROUPS: u32 = 6;
+const DESCRIPTION_BOX: u32 = 0xf8;
+const BADGE_TILE: u32 = 0x160;
+
+/// `005f65d0` on a list (in place): whether a node from `list` on holds `word` (the exe is given
+/// the address of a word holding it).
+#[inline]
+fn list_holds(e: &Engine, list: u32, word: u32) -> bool {
+    let mut node = list;
+    while node != 0 {
+        if e.mem.u32(node) == word {
+            return true;
+        }
+        node = e.mem.u32(node.wrapping_add(4));
+    }
+    false
+}
+
+/// A menu sound by name: the handle from the audio object (`GetSoundHandleByName(&handle, name,
+/// 0x121)`), played (`Play(0)`); its destructor (`00483710`) does nothing.
+fn play_sound(e: &mut Engine, name: u32) {
+    e.with_stack(0xc, |e, handle| {
+        let audio = e.mem.u32(AUDIO);
+        let found = e
+            .call(
+                GET_SOUND_HANDLE_BY_NAME,
+                &args![audio, handle, name, 0x121u32],
+            )
+            .u32();
+        e.call(SOUND_HANDLE_PLAY, &args![found, 0u32]);
+    });
+}
+
+/// The menu's click (its virtual `+0xc` with an id and 0; JIP LN's click hook may hold the slot).
+fn menu_click(e: &mut Engine, this: Ptr, id: u32) {
+    e.vcall(this.addr(), 0xc, &args![id, 0u32]);
+}
+
+/// The description box's text tile (`0073ac90` on its `+4`: the word at `[box + 4] + 8`) and scroll
+/// tile (`007b5370`: the word at `[box + 8] + 8`), in place.
+#[inline]
+fn description_tiles(e: &Engine, this: u32) -> (u32, u32) {
+    let window = field(e, this, DESCRIPTION_BOX).wrapping_add(4);
+    let text = e.mem.u32(e.mem.u32(window).wrapping_add(8));
+    let scroll = e.mem.u32(e.mem.u32(window.wrapping_add(4)).wrapping_add(8));
+    (text, scroll)
+}
+
+/// A trait's id by name (`Tile::TextToTrait`, by address).
+#[inline]
+fn trait_named(e: &mut Engine, name: u32) -> i32 {
+    e.call(TEXT_TO_TRAIT, &args![name]).i32()
+}
+
+/// The scroll tile's scale (its trait named at `01074eb8`), as the float the exe stores.
+fn scroll_scale(e: &mut Engine, scroll: u32) -> f32 {
+    let id = trait_named(e, SCROLL_SCALE_TEXT);
+    tile_float(e, scroll, id)
+}
+
+/// The tail `SetIconAndDescription` and `007dc9b0` share: the text tile updated, the scroll range
+/// its height less its child's (`+0x28`; `0xfb0`, a float), at least 0.0, over the scale and through
+/// `004e4430`; that plus 1.0 the scroll tile's first trait, its second 0.0 (flag 0), its third poked
+/// with 1.0.
+fn update_description_scroll(e: &mut Engine, text: u32, scroll: u32, scale: f32) {
+    e.call(UPDATE_TILE, &args![text, 0u32]);
+    let height = tile_float(e, text, TRAIT_HEIGHT);
+    let child = e.mem.u32(text.wrapping_add(0x28));
+    let child_height = tile_float(e, child, TRAIT_HEIGHT);
+    let range = typed_call!(
+        draw_f::FAMILY,
+        0x0040_4010,
+        draw_f::helpers::float_max(e, 0.0, height - child_height)
+    );
+    let ratio = range / scale;
+    let rounded = e.call(ROUND_FLOAT, &args![ratio]).f64();
+    let first = super::narrow(rounded + constant(e, ONE));
+    let id = trait_named(e, SCROLL_FIRST_TEXT);
+    tile_set_float(e, scroll, id, first);
+    let id = trait_named(e, SCROLL_SECOND_TEXT);
+    typed_call!(
+        dispatch::FAMILY,
+        0x00a0_12d0,
+        dispatch::tile::set_float(e, Ptr::new(scroll), id, 0.0, 0)
+    );
+    let id = trait_named(e, SCROLL_THIRD_TEXT);
+    typed_call!(
+        dispatch::FAMILY,
+        0x00a0_1290,
+        dispatch::tile::poke(e, Ptr::new(scroll), id, 1.0)
+    );
+}
+
+/// `Tile::IsTrue` of the tile's `0xfaf` (the dispatch family's).
+#[inline]
+fn is_enabled(e: &mut Engine, tile: u32) -> bool {
+    typed_call!(
+        dispatch::FAMILY,
+        0x00a0_1230,
+        dispatch::tile::is_true(e, Ptr::new(tile), TRAIT_ENABLED)
+    )
+}
+
+// Typed from 00704390
+/// `StatsMenu::ToggleHealingMode` (Xbox PDB): with an open stats menu in limb mode, limb mode
+/// toggled (`007e0230`).
+pub fn stats_menu_toggle_healing_mode(e: &mut Engine) {
+    let menu = open_menu(e);
+    if menu != 0 && limb_mode(e, menu) != 0 {
+        typed_call!(super::FAMILY, 0x007e_0230, fn_007e0230(e, Ptr::new(menu)));
+    }
+}
+
+// Typed from 007db630
+/// The first of the fade object's six groups whose list holds `tile` (`005f65d0`, in place), or 6.
+pub fn fn_007db630(e: &mut Engine, this: Ptr, tile: u32) -> u32 {
+    (0..GROUPS)
+        .find(|&group| list_holds(e, group_list(this, group), tile))
+        .unwrap_or(GROUPS)
+}
+
+// Typed from 007dbfa0
+/// The fade object's current group becomes `group`; with `flag`, the old group's fade stopped first
+/// (`007dbfe0(0)`) and the new one's started after (`007dbfe0(1)`).
+pub fn fn_007dbfa0(e: &mut Engine, this: Ptr, group: u32, flag: u8) {
+    if flag != 0 {
+        typed_call!(super::FAMILY, 0x007d_bfe0, fn_007dbfe0(e, this, 0));
+    }
+    e.mem.set_u32(this.addr(), group);
+    if flag != 0 {
+        typed_call!(super::FAMILY, 0x007d_bfe0, fn_007dbfe0(e, this, 1));
+    }
+}
+
+// Typed from 007dc010
+/// Byte `index` of the fade object's group word `group` (`+0x34`; the shifts by `CL`, modulo 32).
+pub fn fn_007dc010(e: &mut Engine, this: Ptr, group: u32, index: u32) -> u32 {
+    let at = this
+        .addr()
+        .wrapping_add(group.wrapping_mul(4))
+        .wrapping_add(0x34);
+    let shift = index.wrapping_shl(3);
+    (e.mem.u32(at) & 0xffu32.wrapping_shl(shift)).wrapping_shr(shift)
+}
+
+// Typed from 007dc0c0
+/// The word at `value` less one; `value`.
+pub fn fn_007dc0c0(e: &mut Engine, value: Ptr) -> Ptr {
+    let word = e.mem.u32(value.addr()).wrapping_sub(1);
+    e.mem.set_u32(value.addr(), word);
+    value
+}
+
+// Typed from 007dc0e0
+/// `StatsMenu::DoGamepadUpEvent` (engine map, vtable): in limb mode, key 10 with the healing tile
+/// (`+0xb4`) enabled clicks 9, plays the button sound and answers true; anything else false.
+pub fn stats_menu_do_gamepad_up_event(e: &mut Engine, this: Ptr, key: u32, _unused: u32) -> bool {
+    if limb_mode(e, this.addr()) == 0 || key != 0xa {
+        return false;
+    }
+    let healing = field(e, this.addr(), HEALING_TILE);
+    if !is_enabled(e, healing) {
+        return false;
+    }
+    menu_click(e, this, 9);
+    play_sound(e, BUTTON_SOUND);
+    true
+}
+
+// Typed from 007dc490
+/// `StatsMenu::DoLeave` (engine map, vtable): in limb mode without `004b71d0`, leaving a tile of a
+/// fade group toggles limb mode off (`007e0230`); the badge tile (`+0x160`) is hidden.
+pub fn stats_menu_do_leave(e: &mut Engine, this: Ptr, _unused: u32, tile: u32) {
+    if limb_mode(e, this.addr()) != 0 && !e.call(MANAGER_STATE_TEST, &args![]).bool() {
+        let fade = Ptr::new(typed_call!(super::FAMILY, 0x007d_b1c0, fn_007db1c0(e)));
+        if typed_call!(super::FAMILY, 0x007d_b630, fn_007db630(e, fade, tile)) != GROUPS {
+            typed_call!(super::FAMILY, 0x007e_0230, fn_007e0230(e, this));
+        }
+    }
+    tile_set_int(e, field(e, this.addr(), BADGE_TILE), TRAIT_VISIBLE, 0);
+}
+
+// Typed from 007dc7e0
+/// `StatsMenu::SetIconAndDescription` (Xbox PDB; an actor value): the icon tile (`+0xf4`) shown
+/// with the value's icon, the description box's text tile its description; a weapon type badge
+/// shows on the badge tile, else that is hidden. Then the description's scroll.
+pub fn fn_007dc7e0(e: &mut Engine, this: Ptr, value: u32) {
+    let at = this.addr();
+    let (text, scroll) = description_tiles(e, at);
+    let scale = scroll_scale(e, scroll);
+    let icon_tile = field(e, at, ICON_TILE);
+    tile_set_int(e, icon_tile, TRAIT_VISIBLE, 1);
+    let icon = e.call(AV_ICON, &args![value]).u32();
+    set_text(e, field(e, at, ICON_TILE), TRAIT_IMAGE, icon);
+    let description = e.call(AV_DESCRIPTION, &args![value]).u32();
+    set_text(e, text, TRAIT_STRING, description);
+    let badge = e.call(AV_BADGE, &args![value]).u32();
+    let badge_tile = field(e, at, BADGE_TILE);
+    if badge == 0 {
+        tile_set_int(e, badge_tile, TRAIT_VISIBLE, 0);
+    } else {
+        tile_set_int(e, badge_tile, TRAIT_VISIBLE, 1);
+        set_text(e, field(e, at, BADGE_TILE), TRAIT_IMAGE, badge);
+    }
+    update_description_scroll(e, text, scroll, scale);
+}
+
+// Typed from 007dc9b0
+/// `SetIconAndDescription` for a perk (a perk list item's data: the perk its first word): the
+/// icon tile shows the perk's icon (the name at `+0x2c`), the text tile its description (virtual
+/// `+0x10` of its description at `+0x24`, given 0 and `'CSED'`); no badge. Then the scroll.
+pub fn fn_007dc9b0(e: &mut Engine, this: Ptr, data: Ptr) {
+    let at = this.addr();
+    let (text, scroll) = description_tiles(e, at);
+    let scale = scroll_scale(e, scroll);
+    tile_set_int(e, field(e, at, ICON_TILE), TRAIT_VISIBLE, 1);
+    let perk = e.mem.u32(data.addr());
+    let icon = name_characters(e, perk.wrapping_add(0x2c));
+    set_text(e, field(e, at, ICON_TILE), TRAIT_IMAGE, icon);
+    let perk = e.mem.u32(data.addr());
+    let description = e
+        .vcall(perk.wrapping_add(0x24), 0x10, &args![0u32, 0x4353_4544u32])
+        .u32();
+    set_text(e, text, TRAIT_STRING, description);
+    update_description_scroll(e, text, scroll, scale);
+}
+
+// Typed from 007dcb40
+/// A reputation (when there is one) shows: its icon on tile `+0x14c`, the tiles `+0x14c`, `+0x150`
+/// and `+0x15c` visible, its name (`+0x18`) on `+0x15c` and its title on `+0x150`.
+pub fn fn_007dcb40(e: &mut Engine, this: Ptr, reputation: u32) {
+    if reputation == 0 {
+        return;
+    }
+    let at = this.addr();
+    let icon = e.call(REPUTATION_ICON, &args![reputation]).u32();
+    set_text(e, field(e, at, 0x14c), TRAIT_IMAGE, icon);
+    for offset in [0x14cu32, 0x150, 0x15c] {
+        tile_set_int(e, field(e, at, offset), TRAIT_VISIBLE, 1);
+    }
+    let name = name_characters(e, reputation.wrapping_add(0x18));
+    set_text(e, field(e, at, 0x15c), TRAIT_STRING, name);
+    let title = e.call(REPUTATION_TITLE, &args![reputation]).u32();
+    set_text(e, field(e, at, 0x150), TRAIT_STRING, title);
+}
+
+// Typed from 007dda60
+/// With an open stats menu whose perk tile is set, its perk list emptied (its `RemoveAll` slot).
+pub fn fn_007dda60(e: &mut Engine) {
+    let menu = open_menu(e);
+    if menu != 0 && field(e, menu, PERK_TILE) != 0 {
+        e.vcall(menu.wrapping_add(PERK_LIST), 0x1c, &args![]);
+    }
+}
+
+// Typed from 007ddaa0
+/// The general list's rows each show their misc stat's value (`007314c0` with `007dfc60`).
+pub fn fn_007ddaa0(e: &mut Engine, this: Ptr) {
+    e.call(
+        LIST_WALK,
+        &args![
+            this.addr().wrapping_add(GENERAL_LIST),
+            0x007d_fc60u32,
+            0u32,
+            0x7fff_ffffu32
+        ],
+    );
+}
+
+/// The three hardcore meters: the larger of 0.0 and the player's actor value. The exe also reads
+/// the menu tile's `0x1008` and `005c5420` and computes a knob angle from them as the radiation
+/// meter (`007ddb00`) does, then never uses it: the two calls are made, the sums are not. A value strictly between 0 and 1 shows as 1, any
+/// other as `004bd510(value, 1.0)`, on the menu tile's `trait_id`.
+fn hardcore_meter(e: &mut Engine, this: Ptr, value: u32, trait_id: i32) {
+    let root = field(e, this.addr(), MENU_TILE);
+    tile_float(e, root, USER_5);
+    e.call(METER_SCALE, &args![]);
+    let current = super::narrow(
+        e.vcall(actor_values(player(e)), AV_FLOAT, &args![value])
+            .f64(),
+    );
+    let d = typed_call!(
+        draw_f::FAMILY,
+        0x0040_4010,
+        draw_f::helpers::float_max(e, 0.0, current)
+    );
+    let shown = if f64::from(d) > constant(e, ZERO) && f64::from(d) < constant(e, ONE) {
+        1.0
+    } else {
+        super::narrow(
+            e.call(ROUND_UP_TO_MULTIPLE, &args![x87_quiet(d), 1.0f32])
+                .f64(),
+        )
+    };
+    tile_set_float(
+        e,
+        field(e, this.addr(), MENU_TILE),
+        trait_id,
+        x87_quiet(shown),
+    );
+}
+
+// Typed from 007ddc20
+/// The hardcore meter of actor value 0x49 on `0x100f`.
+pub fn fn_007ddc20(e: &mut Engine, this: Ptr) {
+    hardcore_meter(e, this, 0x49, 0x100f);
+}
+
+// Typed from 007ddd10
+/// The hardcore meter of actor value 0x4a on `0x1010`.
+pub fn fn_007ddd10(e: &mut Engine, this: Ptr) {
+    hardcore_meter(e, this, 0x4a, 0x1010);
+}
+
+// Typed from 007dde00
+/// The hardcore meter of actor value 0x4b on `0x1011`.
+pub fn fn_007dde00(e: &mut Engine, this: Ptr) {
+    hardcore_meter(e, this, 0x4b, 0x1011);
+}
+
+// Typed from 007df120
+/// `00501c10` (a string set) on `+0x20` with `value`.
+pub fn fn_007df120(e: &mut Engine, this: Ptr, value: u32) {
+    e.call(
+        STRING_OBJECT_SET,
+        &args![this.addr().wrapping_add(0x20), value],
+    );
+}
+
+// Typed from 007df140
+/// The 0x1c-byte status effect's constructor: a status data list at `+4` (`00406db0`, in place: its
+/// list empty, then its vtable) and a named effects list at `+0x10` (`0071f540`), then `value` at
+/// `+0`. `this`.
+pub fn fn_007df140(e: &mut Engine, this: Ptr, value: u32) -> Ptr {
+    let at = this.addr();
+    super::menu_manager::empty_list(e, at.wrapping_add(8));
+    e.mem.set_u32(at.wrapping_add(4), STATUS_DATA_LIST_VTABLE);
+    typed_call!(
+        super::FAMILY,
+        0x0071_f540,
+        super::menu_manager::fn_0071f540(e, Ptr::new(at.wrapping_add(0x10)))
+    );
+    e.mem.set_u32(at, value);
+    this
+}
+
+// Typed from 007df920
+/// The limb with the lowest condition: over the six groups' actor values (`007df9c0`, floats), the
+/// first strictly below the lowest so far (from the largest float) wins (6 for none); the fade
+/// object makes it current (`007dbfa0`), fading in limb mode.
+pub fn fn_007df920(e: &mut Engine, this: Ptr) {
+    let mut best_group = GROUPS;
+    let mut best = load_float(e, FLOAT_MAX);
+    for group in 0..GROUPS {
+        let value = typed_call!(super::FAMILY, 0x007d_f9c0, fn_007df9c0(e, group));
+        let condition = super::narrow(
+            e.vcall(actor_values(player(e)), AV_FLOAT, &args![value])
+                .f64(),
+        );
+        if best > condition {
+            best = condition;
+            best_group = group;
+        }
+    }
+    let flag = limb_mode(e, this.addr());
+    let fade = Ptr::new(typed_call!(super::FAMILY, 0x007d_b1c0, fn_007db1c0(e)));
+    typed_call!(
+        super::FAMILY,
+        0x007d_bfa0,
+        fn_007dbfa0(e, fade, best_group, flag)
+    );
+}
+
+// Typed from 007df9c0
+/// A limb group's actor value (0x19, 0x1c, 0x1a, 0x1b, 0x1e, 0x1d), -1 for any other.
+pub fn fn_007df9c0(_e: &mut Engine, group: u32) -> u32 {
+    match group {
+        0 => 0x19,
+        1 => 0x1c,
+        2 => 0x1a,
+        3 => 0x1b,
+        4 => 0x1e,
+        5 => 0x1d,
+        _ => u32::MAX,
+    }
+}
+
+/// The interface manager's Pip-Boy object (in place).
+#[inline(always)]
+fn pipboy(e: &Engine) -> u32 {
+    in_place::pipboy(e, in_place::manager(e))
+}
+
+// Typed from 007dfc90
+/// `StatsMenu::SetKnobPosition` (Xbox PDB): with an open stats menu, the Pip-Boy's tab knob goes to
+/// its page (`SetTabKnobPosition(page, flag)`).
+pub fn stats_menu_set_knob_position(e: &mut Engine, flag: u8) {
+    let menu = open_menu(e);
+    if menu == 0 {
+        return;
+    }
+    let page = typed_call!(super::FAMILY, 0x007d_cc00, fn_007dcc00(e, Ptr::new(menu)));
+    let pipboy = pipboy(e);
+    e.call(
+        SET_TAB_KNOB_POSITION,
+        &args![pipboy, super::bits(page), u32::from(flag)],
+    );
+}
+
+// Typed from 007dfd00
+/// `StatsMenu::SetCurrentStatsPage` (Xbox PDB): `SetCurrentPage` of the open stats menu, if any.
+pub fn stats_menu_set_current_stats_page(e: &mut Engine, page: u8) {
+    let menu = open_menu(e);
+    if menu != 0 {
+        typed_call!(
+            super::FAMILY,
+            0x007d_ff40,
+            stats_menu_set_current_page(e, Ptr::new(menu), i32::from(page))
+        );
+    }
+}
+
+// Typed from 007dfd20
+/// `StatsMenu::MoveKnob` (Xbox PDB; a tile and the address of the last step): the tile's `0xfac`
+/// truncated (`FISTP qword`, chopping; the low word); above the last step (unsigned) the Pip-Boy's
+/// knob moves forward (`MoveKnob(0, distance, speed, 1)`), below it backward (the distance
+/// negated); the step is kept.
+pub fn stats_menu_move_knob(e: &mut Engine, _this: Ptr, tile: u32, last: Ptr) {
+    let value = tile_float(e, tile, TRAIT_INDEX);
+    let step = super::bits(super::low_dword_signed(fistp_chop64(f64::from(value))));
+    let previous = e.mem.u32(last.addr());
+    if previous != step {
+        let speed = float_setting(e, KNOB_SPEED_SETTING);
+        let distance = float_setting(e, KNOB_DISTANCE_SETTING);
+        let distance = if previous < step { distance } else { -distance };
+        let pipboy = pipboy(e);
+        e.call(MOVE_KNOB, &args![pipboy, 0u32, distance, speed, 1u32]);
+    }
+    e.mem.set_u32(last.addr(), step);
+}
+
+// Typed from 007e0060
+/// A sub page from 0 to 2 (5 in hardcore mode) other than the current one becomes current: limb
+/// mode ended, the tile `+0xa4`'s `0x1004` the page; true. Otherwise false.
+pub fn fn_007e0060(e: &mut Engine, this: Ptr, page: i32) -> bool {
+    if page < 0 {
+        return false;
+    }
+    let last = if hardcore(e, player(e)) { 5 } else { 2 };
+    if page > last || typed_call!(super::FAMILY, 0x007d_cc40, fn_007dcc40(e, this)) == page {
+        return false;
+    }
+    if limb_mode(e, this.addr()) != 0 {
+        typed_call!(super::FAMILY, 0x007e_0230, fn_007e0230(e, this));
+    }
+    tile_set_int(e, field(e, this.addr(), SKILL_PAGE_TILE), USER_1, page);
+    true
+}
+
+// Typed from 007e00e0
+/// `StatsMenu::GetPageFor` (Xbox PDB): ids 0 to 4 are the page buttons: the page stored, true; any
+/// other id false.
+pub fn stats_menu_get_page_for(e: &mut Engine, _this: Ptr, id: u32, page: Ptr) -> bool {
+    if id > 4 {
+        return false;
+    }
+    e.mem.set_u32(page.addr(), id);
+    true
+}
+
+// Typed from 007e0160
+/// The status sub page buttons (ids 0x1c, 0x1d, 0x1e, 0x35, 0x37, 0x39) are sub pages 0 to 5: the
+/// sub page stored, true; any other id false.
+pub fn fn_007e0160(e: &mut Engine, _this: Ptr, id: u32, page: Ptr) -> bool {
+    let value = match id {
+        0x1c => 0,
+        0x1d => 1,
+        0x1e => 2,
+        0x35 => 3,
+        0x37 => 4,
+        0x39 => 5,
+        _ => return false,
+    };
+    e.mem.set_u32(page.addr(), value);
+    true
+}
+
+// Typed from 007e0230
+/// Limb mode toggled; the first and fourth healing options' tiles enabled by their availability
+/// (`007e05f0`, `007e06f0`); the healing mode shown (`007df620`).
+pub fn fn_007e0230(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    let mode = u8::from(limb_mode(e, at) == 0);
+    e.mem.set_u8(at.wrapping_add(LIMB_MODE), mode);
+    let first = Ptr::new(at.wrapping_add(HEALING_OPTIONS));
+    let first = typed_call!(super::FAMILY, 0x007e_05f0, fn_007e05f0(e, first));
+    tile_set_int(e, field(e, at, 0x2c), TRAIT_ENABLED, i32::from(first));
+    let fourth = Ptr::new(at.wrapping_add(HEALING_OPTIONS + 0x30));
+    let fourth = typed_call!(super::FAMILY, 0x007e_06f0, fn_007e06f0(e, fourth));
+    tile_set_int(e, field(e, at, 0x5c), TRAIT_ENABLED, i32::from(fourth));
+    typed_call!(
+        super::FAMILY,
+        0x007d_f620,
+        stats_menu_update_healing_mode(e, this)
+    );
+}
+
+// Typed from 007e02b0
+/// `StatsMenu::ToggleGenRepMode` (Xbox PDB): the function-local ids (`"_enabled"`, the name at
+/// `01077564`) looked up once; the mode byte (`011a0ae0`) toggled; the open menu's reputation tile
+/// (`+0x148`) enabled and shown by the mode, the general tile (`+0xb0`) by its opposite; the title
+/// tile (`+0x154`) shows the reputations' or the general setting and tile `+0x158`'s `0x1004` is 1
+/// or 0.
+pub fn stats_menu_toggle_gen_rep_mode(e: &mut Engine, _this: Ptr) {
+    let enabled = static_trait(e, GEN_REP_GUARD, 1, GEN_REP_ENABLED, ENABLED_TEXT);
+    static_trait(e, GEN_REP_GUARD, 2, GEN_REP_SECOND, GEN_REP_SECOND_TEXT);
+    let mode = e.mem.u8(GEN_REP_MODE) == 0;
+    e.mem.set_u8(GEN_REP_MODE, u8::from(mode));
+    let menu = open_menu(e);
+    let reputations = field(e, menu, 0x148);
+    tile_set_int(e, reputations, enabled, i32::from(mode));
+    tile_set_int(e, reputations, TRAIT_VISIBLE, i32::from(mode));
+    let general = field(e, menu, 0xb0);
+    tile_set_int(e, general, enabled, i32::from(!mode));
+    tile_set_int(e, general, TRAIT_VISIBLE, i32::from(!mode));
+    let setting = if mode {
+        REPUTATIONS_SETTING
+    } else {
+        GENERAL_SETTING
+    };
+    let label = in_place::setting_text(e, setting);
+    set_text(e, field(e, menu, 0x154), TRAIT_STRING, label);
+    tile_set_int(e, field(e, menu, 0x158), USER_1, i32::from(mode));
+}
+
+/// A form's full name's characters: `__RTDynamicCast` from `TESForm` to `TESFullName`, then
+/// `00408da0` (in place).
+fn full_name(e: &mut Engine, form: u32) -> u32 {
+    let named = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, TYPE_FORM, TYPE_FULL_NAME, 0u32],
+        )
+        .u32();
+    name_characters(e, named)
+}
+
+// Typed from 007e0480
+/// The effect list's sort: the names' compare of the entries' forms' full names, the second's
+/// looked up first.
+pub fn fn_007e0480(e: &mut Engine, first: u32, second: u32) -> i32 {
+    let second = full_name(e, e.mem.u32(second));
+    let first = full_name(e, e.mem.u32(first));
+    e.call(COMPARE_NAMES, &args![first, second]).i32()
+}
+
+// Typed from 007e0510
+/// The reputation list's sort: the names' compare of the items' reputations' names (`+0x18` of the
+/// data at `+4`), the second's first.
+pub fn fn_007e0510(e: &mut Engine, first: u32, second: u32) -> i32 {
+    let second = name_characters(e, e.mem.u32(second.wrapping_add(4)).wrapping_add(0x18));
+    let first = name_characters(e, e.mem.u32(first.wrapping_add(4)).wrapping_add(0x18));
+    e.call(COMPARE_NAMES, &args![first, second]).i32()
+}
+
+// Typed from 007e0540
+/// The stage list's sort: each stage effect's text (`004046b0` into a local, the second's first)
+/// compared (first, second); the locals destroyed, the first's then the second's.
+pub fn fn_007e0540(e: &mut Engine, first: u32, second: u32) -> i32 {
+    e.with_stack(8, |e, second_text| {
+        let made = e.call(ENTRY_TEXT, &args![second, second_text]).u32();
+        let second_chars = e.mem.u32(made);
+        e.with_stack(8, |e, first_text| {
+            let made = e.call(ENTRY_TEXT, &args![first, first_text]).u32();
+            let first_chars = e.mem.u32(made);
+            let result = e
+                .call(COMPARE_NAMES, &args![first_chars, second_chars])
+                .i32();
+            e.call(STRING_DESTROY, &args![first_text]);
+            e.call(STRING_DESTROY, &args![second_text]);
+            result
+        })
+    })
+}
+
+// Typed from 007e06b0
+/// With an open stats menu in limb mode (`0070ed80`, in place), the actor value of the fade
+/// object's current group (`007df9c0`); otherwise -1.
+pub fn fn_007e06b0(e: &mut Engine) -> u32 {
+    let menu = open_menu(e);
+    if menu == 0 || limb_mode(e, menu) == 0 {
+        return u32::MAX;
+    }
+    let fade = typed_call!(super::FAMILY, 0x007d_b1c0, fn_007db1c0(e));
+    let group = e.mem.u32(fade);
+    typed_call!(super::FAMILY, 0x007d_f9c0, fn_007df9c0(e, group))
+}
+
+// Typed from 007e06f0
+/// The limb option's availability: false without an inventory entry (`+8`), and outside hardcore
+/// mode with a limb picked (`007e06b0` not -1); else whether any limb (0x19 to 0x1e) is below its
+/// base.
+pub fn fn_007e06f0(e: &mut Engine, record: Ptr) -> bool {
+    let player = player(e);
+    let hardcore = hardcore(e, player);
+    if field(e, record.addr(), 8) == 0 {
+        return false;
+    }
+    let limb = typed_call!(super::FAMILY, 0x007e_06b0, fn_007e06b0(e));
+    if !hardcore && limb != u32::MAX {
+        return false;
+    }
+    let values = actor_values(player);
+    for value in 0x19u32..0x1f {
+        let current = e.vcall(values, AV_VALUE, &args![value]).i32();
+        let base = e.vcall(values, AV_BASE, &args![value]).i32();
+        if current < base {
+            return true;
+        }
+    }
+    false
+}
+
+// Typed from 007e08a0
+/// `StatsMenu::StatusEffectList::Register` (Xbox PDB; an active effect): the effect's target
+/// (`+8`) cast to a form; the entry for its form id (`+0xc`, `007e0c50`) found or made (0x1c bytes,
+/// `007df140`) and inserted sorted (`007e0480`). An effect whose setting has flag 0x2000 goes to the
+/// entry's stage list (`+0x10`, `007e09d0`), any other to its data list (`+4`, `007e0a20`).
+pub fn stats_menu_status_effect_list_register(e: &mut Engine, this: Ptr, effect: u32) {
+    let target = e.mem.u32(effect.wrapping_add(8));
+    let form = e
+        .call(
+            DYNAMIC_CAST,
+            &args![target, 0u32, TYPE_TARGET, TYPE_FORM, 0u32],
+        )
+        .u32();
+    let key = e.mem.u32(form.wrapping_add(0xc));
+    let mut entry = typed_call!(super::FAMILY, 0x007e_0c50, fn_007e0c50(e, this, key));
+    if entry == 0 {
+        let block = e.call(ALLOCATE, &args![0x1cu32]).u32();
+        if block != 0 {
+            entry = typed_call!(
+                super::FAMILY,
+                0x007d_f140,
+                fn_007df140(e, Ptr::new(block), form)
+            )
+            .addr();
+        }
+        e.call(
+            LIST_INSERT,
+            &args![this.addr().wrapping_add(4), entry, EFFECT_SORT],
+        );
+    }
+    let setting = typed_call!(super::FAMILY, 0x007d_f1d0, fn_007df1d0(e, Ptr::new(effect)));
+    if setting_flag(e, setting, 0x2000) {
+        let stages = Ptr::new(entry.wrapping_add(0x10));
+        typed_call!(super::FAMILY, 0x007e_09d0, fn_007e09d0(e, stages, effect));
+    } else {
+        let data = Ptr::new(entry.wrapping_add(4));
+        typed_call!(super::FAMILY, 0x007e_0a20, fn_007e0a20(e, data, effect));
+    }
+}
+
+// Typed from 007e09d0
+/// A stage list gains the effect's setting (`007df1d0`, asked again for the insert), sorted by
+/// `007e0540`, unless its list (`+4`) holds it already (`005f65d0`, in place).
+pub fn fn_007e09d0(e: &mut Engine, this: Ptr, effect: u32) {
+    let list = this.addr().wrapping_add(4);
+    let setting = typed_call!(super::FAMILY, 0x007d_f1d0, fn_007df1d0(e, Ptr::new(effect)));
+    if !list_holds(e, list, setting) {
+        let setting = typed_call!(super::FAMILY, 0x007d_f1d0, fn_007df1d0(e, Ptr::new(effect)));
+        e.call(LIST_INSERT, &args![list, setting, STAGE_SORT]);
+    }
+}
+
+// Typed from 007e0a20
+/// A status data list's `Register` for an active effect: the key of its effect item (`+0xc`), the
+/// magnitude `_ftol2` of `00495460`. An entry with the key gains the magnitude; otherwise a new
+/// 0x14-byte entry (`00403ba0`, in place) takes the key and the magnitude and is appended (`+4`).
+pub fn fn_007e0a20(e: &mut Engine, this: Ptr, effect: u32) {
+    if effect == 0 {
+        return;
+    }
+    let key = effect_key(e, e.mem.u32(effect.wrapping_add(0xc)));
+    let found = typed_call!(super::FAMILY, 0x007e_0ce0, fn_007e0ce0(e, this, key));
+    if found != 0 {
+        let magnitude = e.call(EFFECT_MAGNITUDE, &args![effect]).f64();
+        let magnitude = super::bits(ftol2(e, magnitude));
+        let total = magnitude.wrapping_add(e.mem.u32(found));
+        e.mem.set_u32(found, total);
+        return;
+    }
+    let block = e.call(ALLOCATE, &args![0x14u32]).u32();
+    if block != 0 {
+        for offset in [0u32, 4, 8, 0xc] {
+            e.mem.set_u32(block.wrapping_add(offset), 0);
+        }
+        e.mem.set_u32(block.wrapping_add(0x10), u32::MAX);
+    }
+    // The effect item and its key read again, as the exe does after the constructor.
+    let key = effect_key(e, e.mem.u32(effect.wrapping_add(0xc)));
+    e.mem.set_u32(block.wrapping_add(0x10), key);
+    let magnitude = e.call(EFFECT_MAGNITUDE, &args![effect]).f64();
+    let magnitude = super::bits(ftol2(e, magnitude));
+    e.mem.set_u32(block, magnitude);
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), block);
+        e.call(LIST_APPEND, &args![this.addr().wrapping_add(4), slot]);
+    });
+}
+
+// Typed from 007e0c50
+/// A status effect list's first entry whose form's id (`+0xc` of its first word) is `key`, or 0 (the
+/// walk stops at a node with no entry).
+pub fn fn_007e0c50(e: &mut Engine, this: Ptr, key: u32) -> u32 {
+    let mut node = first_node(this.addr());
+    while node != 0 {
+        let entry = e.mem.u32(node);
+        if entry == 0 {
+            break;
+        }
+        if e.mem.u32(e.mem.u32(entry).wrapping_add(0xc)) == key {
+            return entry;
+        }
+        node = e.mem.u32(node.wrapping_add(4));
+    }
+    0
+}
+
+// Typed from 007e0d60
+/// `StatsMenu::DoControllerSwitch` (engine map, vtable): the healing mode shown again.
+pub fn stats_menu_do_controller_switch(e: &mut Engine, this: Ptr, _unused: u32) {
+    typed_call!(
+        super::FAMILY,
+        0x007d_f620,
+        stats_menu_update_healing_mode(e, this)
+    );
+}
+
+/// A string's length (`004048e0`, by address: for the length 0xffff it counts the characters).
+fn string_length(e: &mut Engine, string: u32) -> u32 {
+    e.call(STRING_LENGTH, &args![string]).u32()
+}
+
+// Typed from 007e0d80
+/// `BSStringT<char>::operator+=` with another string (engine map): a source with characters is
+/// appended to a string with characters (grown with `004037f0` when the summed length passes the
+/// capacity (`+6`, `004039a0` in place), copied with its terminator (`00401460`) to the end, the
+/// length set (`004039c0` in place: at most 0xffff)); a string without characters takes the source (`BSStringT::Set`). `this`.
+pub fn bs_string_operator_add_assign_ov2(e: &mut Engine, this: Ptr, source: u32) -> Ptr {
+    let at = this.addr();
+    if e.mem.u32(source) == 0 {
+        return this;
+    }
+    if e.mem.u32(at) == 0 {
+        e.call(STRING_SET, &args![this, source]);
+        return this;
+    }
+    let own = string_length(e, at);
+    let added = string_length(e, source);
+    let length = own.wrapping_add(added);
+    if length > u32::from(e.mem.u16(at.wrapping_add(6))) {
+        let characters = e.mem.u32(at);
+        e.call(STRING_GROW, &args![this, characters, length]);
+    }
+    let count = e.call(STRING_COPY_LENGTH, &args![source]).u32();
+    let from = e.mem.u32(source);
+    let to = string_length(e, at).wrapping_add(e.mem.u32(at));
+    typed_call!(
+        crt::FAMILY,
+        0x0040_1460,
+        crt::mem::memcpy_wrapper(e, Ptr::new(to), Ptr::new(from), count)
+    );
+    let stored = u16::try_from(length).unwrap_or(u16::MAX);
+    e.mem.set_u16(at.wrapping_add(4), stored);
+    this
+}
+
+// Typed from 007e1430
+/// `ListBox<StatusEffect *>::AddItem`: the template's body ([`add_item_of`]) with its own
+/// `Synchronize` and `SetTotalListHeight`.
+pub fn list_box_status_effect_add_item(
+    e: &mut Engine,
+    this: Ptr,
+    data: u32,
+    text: u32,
+    compare: u32,
+    template: u32,
+) -> u32 {
+    add_item_of(e, Of::StatusEffect, this, data, text, compare, template)
+}
+
+// Typed from 007e16d0
+/// `ListBox<TESReputation *>::AddItem` (the reputation list's): the template's body
+/// ([`add_item_of`]) with its own `Synchronize` and `SetTotalListHeight`.
+pub fn fn_007e16d0(
+    e: &mut Engine,
+    this: Ptr,
+    data: u32,
+    text: u32,
+    compare: u32,
+    template: u32,
+) -> u32 {
+    add_item_of(e, Of::Reputation, this, data, text, compare, template)
+}
+
 /// The file's functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     use engine_core::entry;
@@ -1626,5 +2507,48 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x007e_1190,
             list_box_misc_stat_id_add_item(Ptr, u32, u32, u32, u32) -> u32
         ),
+        entry!(0x0070_4390, stats_menu_toggle_healing_mode()),
+        entry!(0x007d_b630, fn_007db630(Ptr, u32) -> u32),
+        entry!(0x007d_bfa0, fn_007dbfa0(Ptr, u32, u8)),
+        entry!(0x007d_c010, fn_007dc010(Ptr, u32, u32) -> u32),
+        entry!(0x007d_c0c0, fn_007dc0c0(Ptr) -> Ptr),
+        entry!(0x007d_c0e0, stats_menu_do_gamepad_up_event(Ptr, u32, u32) -> bool),
+        entry!(0x007d_c490, stats_menu_do_leave(Ptr, u32, u32)),
+        entry!(0x007d_c7e0, fn_007dc7e0(Ptr, u32)),
+        entry!(0x007d_c9b0, fn_007dc9b0(Ptr, Ptr)),
+        entry!(0x007d_cb40, fn_007dcb40(Ptr, u32)),
+        entry!(0x007d_da60, fn_007dda60()),
+        entry!(0x007d_daa0, fn_007ddaa0(Ptr)),
+        entry!(0x007d_dc20, fn_007ddc20(Ptr)),
+        entry!(0x007d_dd10, fn_007ddd10(Ptr)),
+        entry!(0x007d_de00, fn_007dde00(Ptr)),
+        entry!(0x007d_f120, fn_007df120(Ptr, u32)),
+        entry!(0x007d_f140, fn_007df140(Ptr, u32) -> Ptr),
+        entry!(0x007d_f920, fn_007df920(Ptr)),
+        entry!(0x007d_f9c0, fn_007df9c0(u32) -> u32),
+        entry!(0x007d_fc90, stats_menu_set_knob_position(u8)),
+        entry!(0x007d_fd00, stats_menu_set_current_stats_page(u8)),
+        entry!(0x007d_fd20, stats_menu_move_knob(Ptr, u32, Ptr)),
+        entry!(0x007e_0060, fn_007e0060(Ptr, i32) -> bool),
+        entry!(0x007e_00e0, stats_menu_get_page_for(Ptr, u32, Ptr) -> bool),
+        entry!(0x007e_0160, fn_007e0160(Ptr, u32, Ptr) -> bool),
+        entry!(0x007e_0230, fn_007e0230(Ptr)),
+        entry!(0x007e_02b0, stats_menu_toggle_gen_rep_mode(Ptr)),
+        entry!(0x007e_0480, fn_007e0480(u32, u32) -> i32),
+        entry!(0x007e_0510, fn_007e0510(u32, u32) -> i32),
+        entry!(0x007e_0540, fn_007e0540(u32, u32) -> i32),
+        entry!(0x007e_06b0, fn_007e06b0() -> u32),
+        entry!(0x007e_06f0, fn_007e06f0(Ptr) -> bool),
+        entry!(
+            0x007e_08a0,
+            stats_menu_status_effect_list_register(Ptr, u32)
+        ),
+        entry!(0x007e_09d0, fn_007e09d0(Ptr, u32)),
+        entry!(0x007e_0a20, fn_007e0a20(Ptr, u32)),
+        entry!(0x007e_0c50, fn_007e0c50(Ptr, u32) -> u32),
+        entry!(0x007e_0d60, stats_menu_do_controller_switch(Ptr, u32)),
+        entry!(0x007e_0d80, bs_string_operator_add_assign_ov2(Ptr, u32) -> Ptr),
+        entry!(0x007e_1430, list_box_status_effect_add_item(Ptr, u32, u32, u32, u32) -> u32),
+        entry!(0x007e_16d0, fn_007e16d0(Ptr, u32, u32, u32, u32) -> u32),
     ]
 }

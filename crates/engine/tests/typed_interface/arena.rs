@@ -324,6 +324,9 @@ fn known_words(e: &mut Engine, seed: u32) {
     );
     e.mem
         .set_u32(0x011d_ace4, if seed == 2 { 0 } else { object(91) });
+    // The fade object's current group (its first word): a group number, so a fade over it walks a
+    // group's list.
+    e.mem.set_u32(object(91), seed);
     // The doubles 0.0 the list boxes' `SetTotalListHeight` compares the heights with and 1.0 the
     // item list box's node removal takes from the filtered count (`.rdata`).
     e.mem.set_u64(0x0101_2060, 0.0f64.to_bits());
@@ -369,8 +372,15 @@ pub enum Arg {
     /// One live object alone (object 3, the list box world's first list box): every case runs on
     /// it, never on null (a constructor's store at null would make the zero page's words a vtable).
     Object,
-    /// Small numbers (a group, an index, a page, a healing option): 0 to 5 and -1.
+    /// Small numbers (a group, an index, a page, a healing option, a key): 0 to 5, 10 and -1.
     Small,
+    /// The fade object's six groups.
+    Group,
+    /// Two active effects of the status effect world (objects 50 and 51).
+    Effect,
+    /// The stats menu's status sub page buttons (0x1c, 0x1d, 0x1e, 0x35, 0x37, 0x39), the ids next to
+    /// them and 0.
+    StatsId,
     /// The stats menu's actor values, one of each `UpdateActorValue` case: health, action points,
     /// experience, radiation, 0x14, karma, the first and the last body part, the first value past
     /// them, a SPECIAL value, a skill.
@@ -405,7 +415,10 @@ const LIST_NODES: [u32; 5] = [
 ];
 const CODES: [u32; 3] = [CODE + 0x40, 0, CODE + 0x84];
 const OBJECTS_ONE: [u32; 1] = [ARENA + 3 * OBJECT];
-const SMALL: [u32; 7] = [0, 1, 2, 3, 4, 5, 0xffff_ffff];
+const SMALL: [u32; 8] = [0, 1, 2, 3, 4, 5, 0xa, 0xffff_ffff];
+const GROUPS: [u32; 6] = [0, 1, 2, 3, 4, 5];
+const EFFECTS: [u32; 2] = [ARENA + 50 * OBJECT, ARENA + 51 * OBJECT];
+const STATS_IDS: [u32; 9] = [0x1c, 0x1d, 0x1e, 0x35, 0x37, 0x39, 0x1b, 0x36, 0];
 const ACTOR_VALUES: [u32; 11] = [0x10, 0xc, 0x18, 0x36, 0x14, 0x17, 0x19, 0x1e, 0x1f, 5, 0x20];
 const TILE_IDS: [u32; 13] = [
     0xffff_ffff,
@@ -439,6 +452,9 @@ fn values(arg: Arg) -> &'static [u32] {
         Arg::Object => &OBJECTS_ONE,
         Arg::Small => &SMALL,
         Arg::ActorValue => &ACTOR_VALUES,
+        Arg::StatsId => &STATS_IDS,
+        Arg::Group => &GROUPS,
+        Arg::Effect => &EFFECTS,
     }
 }
 
@@ -473,6 +489,8 @@ const OTHER_FAMILIES: &[u32] = &[
     0x0047_e040,
     0x0047_e0e0,
     0x0040_4010,
+    0x00a0_1290,
+    0x0040_1460,
 ];
 
 /// The world's settings for a Diff of the family.
@@ -553,6 +571,9 @@ impl InArena for Diff {
     }
 }
 
+/// A world input that is no argument: its values, and the function that writes each into the world.
+type Extra = (&'static [u32], fn(&mut Engine, u32));
+
 /// The Diff of [`InArena`]'s methods.
 fn arena_diff(
     diff: Diff,
@@ -560,7 +581,7 @@ fn arena_diff(
     callees: &'static [u32],
     plain: &[u32],
     without: &'static [u32],
-    extra: Option<(&'static [u32], fn(&mut Engine, u32))>,
+    extra: Option<Extra>,
 ) -> Diff {
     let mut inputs = vec![Input::Of(SEEDS)];
     inputs.extend(args.iter().map(|a| Input::Of(&INDEX[..values(*a).len()])));
