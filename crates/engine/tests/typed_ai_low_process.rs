@@ -211,6 +211,20 @@ const REAL_SLOTS_2: &[(u32, u32)] = &[
     (0x240, 0x008d_0400),
     (0xb0, 0x0090_7840),
 ];
+/// The callees the exe's `BaseProcess::SetCurrentPackage` (slot 0x230's body, `008d08b0`) reaches
+/// through the typed `ActorPackage::InitFromPackage` and `Clear`, with the words each may answer
+/// (drawn from the third stream).
+const DOUBLES_3: &[(u32, &[u32])] = &[
+    (0x0067_59e0, &[0, TARGET, LOCATION]), // TESPackage::ComputeInitialTarget
+    (0x008c_6ca0, &[0, RECORD]),           // the new package data for a type
+    (0x0040_b460, &[1, 2]),                // the package's count up
+    (0x0040_19a0, &[0, 1]),                // the count down
+];
+/// The slots the third part's code calls, stand-ins on every object: the data's and the package's
+/// deleting destructors.
+const SLOTS_3: &[u32] = &[0, 0x10];
+/// The exe's bodies a slot may hold instead, from the third stream.
+const REAL_SLOTS_3: &[(u32, u32)] = &[(0x230, 0x008d_08b0)];
 /// The dialogue item `CreateDialogueItem` answers and a package location of the schedule's.
 const ITEM: u32 = BUFFER + 0x8000;
 const LOCATION_2: u32 = BUFFER + 0x8100;
@@ -230,11 +244,14 @@ const BY_ADDRESS: &[u32] = &[
     0x0040_4010,
     0x006a_7f50,
     0x004a_7290,
+    0x0040_b460,
+    0x0040_19a0,
 ];
 
 /// The callees the translations call and the typed code does in place (one load, store or test
 /// each), or leaves out (a getter whose answer the exe never reads).
 const IN_PLACE: &[u32] = &[
+    0x0067_4d40, // the package's created flag (`ActorPackage::Clear` under slot 0x230's body)
     0x008d_7e00, // the process flags' setter
     0x0084_d030, // the frame timer's step
     0x0056_6950, // the actor's byte
@@ -345,13 +362,16 @@ fn calls(e: &Engine, addr: u32) -> u32 {
 fn double_index(addr: u32) -> usize {
     match DOUBLES.iter().position(|(a, _)| *a == addr) {
         Some(k) => k,
-        None => {
-            let k = DOUBLES_2
-                .iter()
-                .position(|(a, _)| *a == addr)
-                .expect("a double");
-            DOUBLES.len() + k
-        }
+        None => match DOUBLES_2.iter().position(|(a, _)| *a == addr) {
+            Some(k) => DOUBLES.len() + k,
+            None => {
+                let k = DOUBLES_3
+                    .iter()
+                    .position(|(a, _)| *a == addr)
+                    .expect("a double");
+                DOUBLES.len() + DOUBLES_2.len() + k
+            }
+        },
     }
 }
 
@@ -377,6 +397,8 @@ struct World {
     rng: u64,
     /// The second part's stream.
     rng2: u64,
+    /// The third part's stream.
+    rng3: u64,
 }
 
 impl World {
@@ -385,6 +407,7 @@ impl World {
             objects: [0; COUNT],
             rng: (u64::from(seed) ^ 0x9e37_79b9_7f4a_7c15).wrapping_mul(0xbf58_476d_1ce4_e5b9) | 1,
             rng2: (u64::from(seed) ^ 0x94d0_49bb_1331_11eb).wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1,
+            rng3: (u64::from(seed) ^ 0x2545_f491_4f6c_dd1d).wrapping_mul(0xd6e8_feb8_6659_fd93) | 1,
         };
         e.map(0, 0x1000);
         e.map(CONTROL, 0x5000);
@@ -467,6 +490,7 @@ impl World {
         w.seed_fields(e);
         w.seed_globals(e);
         w.seed_part_2(e);
+        w.seed_part_3(e);
         w
     }
 
@@ -721,6 +745,64 @@ impl World {
         }
         let kind = self.pick2(&[0, 1, 2, 2]);
         e.mem.set_u8(LOCATION_2, kind as u8);
+    }
+
+    /// The third part's doubles and slots, from the third stream, so the first two parts' worlds
+    /// stay as they were.
+    fn seed_part_3(&mut self, e: &mut Engine) {
+        let first = DOUBLES.len() + DOUBLES_2.len();
+        for (k, (addr, answers)) in DOUBLES_3.iter().enumerate() {
+            let block = block(first + k);
+            for i in 0..8 {
+                let answer = self.pick3(answers);
+                let answer = self.resolve(answer);
+                e.mem.set_u32(block + 4 + 4 * i, answer);
+            }
+            e.register_double(*addr, move |e, a| {
+                let n = e.mem.u32(block);
+                e.mem.set_u32(block, n + 1);
+                e.mem.set_u32(block + 0x24, a.first().copied().unwrap_or(0));
+                e.mem.set_u32(block + 0x28, a.get(1).copied().unwrap_or(0));
+                ret(e.mem.u32(block + 4 + 4 * (n % 8)))
+            });
+        }
+        for &slot in SLOTS_3 {
+            e.register_double(VT_FN + slot, move |e, _| {
+                let n = e.mem.u32(SLOT_COUNTS + slot);
+                e.mem.set_u32(SLOT_COUNTS + slot, n + 1);
+                ret(0)
+            });
+        }
+        for i in 0..=COUNT {
+            if (WITH_VTABLE..COUNT).contains(&i) {
+                continue;
+            }
+            let o = if i < COUNT { self.objects[i] } else { 0 };
+            let vt = e.mem.u32(o);
+            for &slot in SLOTS_3 {
+                e.mem.set_u32(vt + slot, VT_FN + slot);
+            }
+            for &(slot, body) in REAL_SLOTS_3 {
+                if self.flag3() {
+                    e.mem.set_u32(vt + slot, body);
+                }
+            }
+        }
+    }
+
+    fn next3(&mut self) -> u64 {
+        self.rng3 ^= self.rng3 << 13;
+        self.rng3 ^= self.rng3 >> 7;
+        self.rng3 ^= self.rng3 << 17;
+        self.rng3
+    }
+
+    fn pick3(&mut self, from: &[u32]) -> u32 {
+        from[(self.next3() % from.len() as u64) as usize]
+    }
+
+    fn flag3(&mut self) -> bool {
+        self.next3() & 1 != 0
     }
 
     fn next2(&mut self) -> u64 {
@@ -1199,6 +1281,9 @@ fn targets_greetings_and_schedules() {
         low_process::set_current_package_from_schedule(Ptr, Ptr) -> bool
     ))
     .in_world(&MOST, |w| w.process_actor())
+    // The exe's `SetCurrentPackage` in slot 0x230 reaches `ActorPackage::InitFromPackage`, whose
+    // translation calls `Clear` and `TESPackage::IncRefCount` as plain Rust calls.
+    .translation_calls_plainly(&[0x008c_5ef0, 0x008c_6100])
     .run()
     .assert_same();
     Diff::new(entry!(
@@ -1234,6 +1319,7 @@ fn patrols_copies_and_clears() {
     Diff::new(entry!(0x0091_21e0, low_process::process_patrol(Ptr, Ptr)))
         .in_world(&MOST, |w| w.process_actor())
         .allow_nan_payloads()
+        .stack_bytes(REQUEST_BYTES)
         .run()
         .assert_same();
     Diff::new(entry!(
@@ -1248,6 +1334,7 @@ fn patrols_copies_and_clears() {
         words
     })
     .allow_nan_payloads()
+    .stack_bytes(REQUEST_BYTES)
     .run()
     .assert_same();
     Diff::new(entry!(
@@ -1259,6 +1346,7 @@ fn patrols_copies_and_clears() {
         words.push(w.objects[7]);
         words
     })
+    .stack_bytes(REQUEST_BYTES)
     .run()
     .assert_same();
     Diff::new(entry!(0x0090_7510, low_process::copy_level(Ptr, Ptr)))
@@ -1274,9 +1362,15 @@ fn patrols_copies_and_clears() {
     .assert_same();
 }
 
+/// The bytes of the travel's `PathingRequest` on the stack (0xb4): the Diffs that reach it compare all
+/// of them behind the stack word `SetPathfindingGoal` gets, so its stores at +0x8c, +0x99 and +0x9c
+/// show (64 bytes are compared by default).
+const REQUEST_BYTES: u32 = 0xb4;
+
 /// Runs the translation at `addr` in each seed's world and counts the seeds whose `check` says each
 /// branch was taken; every branch must be taken by one. `seen` is the answer, the call's words, then
-/// the process's `pTarget` and `fTrackedDamage` as they were before the call.
+/// the process's `pTarget`, `fTrackedDamage` and the patrol data's time waited (the record's +8) as
+/// they were before the call.
 fn reaches(
     addr: u32,
     seeds: &[u32],
@@ -1289,7 +1383,8 @@ fn reaches(
         let mut e = Engine::new_untyped_for_test();
         let mut w = World::new(&mut e, seed);
         let args = words(&mut w);
-        let before = [w.process() + 0x40, w.process() + 0xac].map(|at| e.mem.u32(at));
+        let before =
+            [w.process() + 0x40, w.process() + 0xac, w.objects[7] + 8].map(|at| e.mem.u32(at));
         let answer = e.call(addr, &args).eax;
         let mut seen = vec![answer];
         seen.extend_from_slice(&args);
@@ -1359,12 +1454,15 @@ fn the_seeds_reach_every_branch() {
         &MOST,
         |w| w.process_actor(),
         &["back", "on", "neither"],
-        |e, _| {
+        |e, seen| {
+            // The exe's body in the slot (about half the seeds) moves the index without the stand-in
+            // counting: only the stand-in's seeds count here.
+            let stand_in = e.mem.u32(e.mem.u32(seen[1]) + 0x288) == VT_FN + 0x288;
             let moved = slot_calls(e, 0x288) > 0;
             vec![
                 moved && slot_last(e, 0x288) == 0xffff_ffff,
                 moved && slot_last(e, 0x288) == 1,
-                !moved,
+                stand_in && !moved,
             ]
         },
     );
@@ -1482,6 +1580,19 @@ fn the_seeds_reach_every_branch() {
         },
     );
     reaches(
+        0x0091_3630,
+        &MANY,
+        |w| w.process_actor_package(),
+        &["no package", "script", "topic"],
+        |e, seen| {
+            vec![
+                seen[3] == 0 && calls(e, 0x005a_c1e0) == 0 && slot_calls(e, 0x2a4) == 0,
+                calls(e, 0x005a_c1e0) > 0,
+                slot_calls(e, 0x2a4) > 0,
+            ]
+        },
+    );
+    reaches(
         0x0091_36b0,
         &MOST,
         |w| {
@@ -1515,12 +1626,18 @@ fn the_seeds_reach_every_branch() {
         0x0090_7700,
         &MOST,
         |w| w.process_actor(),
-        &["the same package", "start location", "combat controller"],
+        &[
+            "the same package",
+            "start location",
+            "combat controller",
+            "the exe's SetCurrentPackage",
+        ],
         |e, seen| {
             vec![
                 seen[0] & 0xff == 0,
                 calls(e, 0x0056_ae10) > 0,
                 calls(e, 0x0098_0ae0) > 0,
+                calls(e, 0x0067_59e0) > 0,
             ]
         },
     );
@@ -1579,12 +1696,14 @@ fn the_seeds_reach_every_branch() {
             words
         },
         &["travels on", "the next one failed", "waits"],
-        |e, _| {
+        |e, seen| {
             let next = calls(e, 0x009f_2ea0) > 0;
+            let failed = next && last_answer(e, 0x009f_2ea0) & 0xff == 0;
+            let waited = e.mem.u32(seen[3] + 8) != seen[7];
             vec![
                 calls(e, 0x0094_df60) > 0,
-                next && calls(e, 0x0094_df60) == 0,
-                calls(e, 0x009f_3390) > 0 && !next,
+                failed && calls(e, 0x0094_df60) == 0,
+                calls(e, 0x009f_3390) > 0 && !next && waited,
             ]
         },
     );

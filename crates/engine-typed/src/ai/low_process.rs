@@ -1076,7 +1076,12 @@ fn add_to_current_procedure_index(e: &mut Engine, process: u32, delta: u32) {
 }
 
 /// The process's slot 0x288 ([`add_to_procedure_index_running`] on the low processes).
-fn add_to_procedure_index_running_slot(e: &mut Engine, process: u32, actor: u32, delta: u32) {
+pub(super) fn add_to_procedure_index_running_slot(
+    e: &mut Engine,
+    process: u32,
+    actor: u32,
+    delta: u32,
+) {
     if slot_target(e, process, 0x288) == 0x0091_19b0 {
         typed_call!(
             FAMILY,
