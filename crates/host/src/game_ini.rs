@@ -355,6 +355,7 @@ mod tests {
                 "bSunShadows",
                 "bSunLightFromSky",
                 "bSunShadowsCharacters",
+                "sDrawItems",
                 "bSteppedThreads",
                 "bRenderThread",
                 "bNotBackground"
