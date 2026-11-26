@@ -235,6 +235,16 @@ fn calls(e: &Engine, addr: u32) -> u32 {
     e.mem.u32(block(k))
 }
 
+/// The answer the double at `addr` gave last.
+fn last_answer(e: &Engine, addr: u32) -> u32 {
+    let k = DOUBLES
+        .iter()
+        .position(|(a, _)| *a == addr)
+        .expect("a double");
+    let n = e.mem.u32(block(k));
+    e.mem.u32(block(k) + 4 + 4 * ((n + 7) % 8))
+}
+
 /// The third word of the last call of `slot`.
 fn slot_last(e: &Engine, slot: u32) -> u32 {
     e.mem.u32(SLOT_LAST + slot)
@@ -634,7 +644,7 @@ fn dates_flags_and_timers() {
         .assert_same();
     Diff::new(entry!(0x0090_ac20, low_process::set_flag_40(Ptr, u8)))
         .in_world(&MANY, |w| {
-            let set = w.pick(&[0, 1, 0x100, 0xff]);
+            let set = w.pick(&[0, 1, 2, 0x100, 0xff]);
             vec![w.process(), set]
         })
         .run()
@@ -758,7 +768,7 @@ fn targets_and_locations() {
     ))
     .in_world(&MANY, |w| {
         let mut words = w.process_actor();
-        let second = w.pick(&[0, 1, 0x100]);
+        let second = w.pick(&[0, 1, 2, 0x100]);
         words.push(second);
         words
     })
@@ -816,7 +826,7 @@ fn packages() {
     ))
     .in_world(&MOST, |w| {
         let package = w.one_of(&[PACKAGE, PACKAGE_B]);
-        let flag = w.pick(&[0, 1, 0x100]);
+        let flag = w.pick(&[0, 1, 2, 0x100]);
         vec![w.process(), package, flag]
     })
     .run()
@@ -838,7 +848,7 @@ fn packages() {
     ))
     .in_world(&MOST, |w| {
         let mut words = w.process_actor_package();
-        let flag = w.pick(&[0, 1]);
+        let flag = w.pick(&[0, 1, 2]);
         words.push(flag);
         words
     })
@@ -880,7 +890,8 @@ fn doors() {
 }
 
 /// Runs the translation at `addr` in each seed's world and counts the seeds whose `check` says each
-/// branch was taken; every branch must be taken by one.
+/// branch was taken; every branch must be taken by one. `seen` is the answer, the call's words, then
+/// the process's `pTarget` and `fTrackedDamage` as they were before the call.
 fn reaches(
     addr: u32,
     seeds: &[u32],
@@ -893,9 +904,11 @@ fn reaches(
         let mut e = Engine::new_untyped_for_test();
         let mut w = World::new(&mut e, seed);
         let args = words(&mut w);
+        let before = [w.process() + 0x40, w.process() + 0xac].map(|at| e.mem.u32(at));
         let answer = e.call(addr, &args).eax;
         let mut seen = vec![answer];
         seen.extend_from_slice(&args);
+        seen.extend_from_slice(&before);
         for (n, hit) in taken.iter_mut().zip(check(&e, &seen)) {
             *n += u32::from(hit);
         }
@@ -918,12 +931,26 @@ fn the_seeds_reach_every_branch() {
             let amount = w.pick(FLOATS);
             vec![w.process(), actor, amount]
         },
-        &["no actor", "slot no, byte no", "added"],
+        &[
+            "no actor",
+            "slot no, byte no: unchanged",
+            "added: the sum stored",
+        ],
         |e, seen| {
+            let actor = seen[2];
+            let before = seen[5];
+            let after = e.mem.u32(seen[1] + 0xac);
+            // The actor's slot 0x360 is always a stand-in here: its answer's low byte.
+            let adds = actor != 0
+                && (e.mem.u8(e.mem.u32(actor) + ANSWERS + 0x360) != 0
+                    || e.mem.u8(actor + 0x18d) != 0);
+            let sum =
+                (f64::from(f32::from_bits(before)) + f64::from(f32::from_bits(seen[3]))) as f32;
+            let stored = after == sum.to_bits() || (sum.is_nan() && f32::from_bits(after).is_nan());
             vec![
-                seen[2] == 0,
-                seen[2] != 0 && slot_calls(e, 0x360) > 0,
-                e.mem.u32(seen[1] + 0xac) != 0,
+                actor == 0,
+                actor != 0 && !adds && after == before,
+                adds && stored,
             ]
         },
     );
@@ -931,8 +958,16 @@ fn the_seeds_reach_every_branch() {
         0x0091_2150,
         &MOST,
         |w| w.process_actor(),
-        &["moves on", "stops"],
-        |e, _| vec![calls(e, 0x0067_4d70) > 0, calls(e, 0x008b_3ab0) > 0],
+        &["moves on", "stops", "moves on: exactly at the limit"],
+        |e, _| {
+            let elapsed = f64::from(f32::from_bits(last_answer(e, 0x0040_8840)));
+            let at_limit = elapsed == e.mem.f64(BLOCKED_TIME_LIMIT);
+            vec![
+                calls(e, 0x0067_4d70) > 0,
+                calls(e, 0x008b_3ab0) > 0,
+                at_limit && calls(e, 0x0067_4d70) > 0,
+            ]
+        },
     );
     reaches(
         0x0090_8e90,
@@ -952,11 +987,16 @@ fn the_seeds_reach_every_branch() {
         0x0090_9d00,
         &MOST,
         |w| w.process_actor(),
-        &["measured", "no target"],
-        |e, _| {
+        &[
+            "measured",
+            "no target",
+            "measured: the target the package's slots set",
+        ],
+        |e, seen| {
             vec![
                 calls(e, 0x0057_23b0) > 0,
                 calls(e, 0x0057_23b0) == 0 && slot_calls(e, 0x13c) > 0,
+                seen[3] == 0 && e.mem.u32(seen[1] + 0x40) != 0 && calls(e, 0x0057_23b0) > 0,
             ]
         },
     );
@@ -976,7 +1016,7 @@ fn the_seeds_reach_every_branch() {
         &MOST,
         |w| {
             let package = w.one_of(&[PACKAGE, PACKAGE_B]);
-            let flag = w.pick(&[0, 1, 0x100]);
+            let flag = w.pick(&[0, 1, 2, 0x100]);
             vec![w.process(), package, flag]
         },
         &["used", "not used"],
@@ -998,7 +1038,7 @@ fn the_seeds_reach_every_branch() {
         &MOST,
         |w| {
             let mut words = w.process_actor_package();
-            let flag = w.pick(&[0, 1]);
+            let flag = w.pick(&[0, 1, 2]);
             words.push(flag);
             words
         },

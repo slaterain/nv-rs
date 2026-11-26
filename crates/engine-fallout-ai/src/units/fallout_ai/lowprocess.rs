@@ -1535,7 +1535,7 @@ pub fn low_process_process_patrol(e: &mut Engine, this: Ptr<LowProcess>, actor: 
     while x87_load32(time) > zero {
         time = match e.mem.u32(data.wrapping_add(4)) {
             0 => {
-                if low_process_process_patrol_init(e, this, actor, Ptr::new(data)) {
+                if e.call(0x0091_22e0, &args![this, actor, data]).bool() {
                     time
                 } else {
                     0
@@ -2141,9 +2141,9 @@ pub fn fn_009125b0(e: &mut Engine, this: Ptr<LowProcess>, actor: Ptr, data: Ptr,
         let spent = x87_div(x87_load32(distance), x87_m32(speed));
         left = x87_store32(x87_sub(x87_m32(left), spent));
         e.call(ACTOR_MOVE_TO_008AD910, &args![actor, reference, 1u32, 0u32]);
-        low_process_process_patrol_start_at_ref_behavior(e, this, actor.addr(), data);
+        e.call(0x0091_2960, &args![this, actor, data]);
     } else if e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool() {
-        low_process_process_patrol_start_at_ref_behavior(e, this, actor.addr(), data);
+        e.call(0x0091_2960, &args![this, actor, data]);
     } else {
         left = 0;
     }
@@ -7285,12 +7285,12 @@ pub fn low_process_should_update_combat_controller_or_end_combat(
     }
     let extra = e.call(REFERENCE_GET_EXTRA_LIST, &args![actor]).u32();
     let index = e.call(EXTRA_GET_PACKAGE_INDEX, &args![extra]).u32();
-    if low_process_should_stop_combat_controller_to_finish_package(e, this, package, index) {
+    if e.call(0x0090_7960, &args![this, package, index]).bool() {
         e.vcall(base, PROCESS_SLOT_328, &args![1u32]);
         e.mem.set_u32(out, 0);
         return true;
     }
-    if low_process_update_package_target_for_combat(e, this, actor, package) {
+    if e.call(0x0090_79f0, &args![this, actor, package]).bool() {
         e.mem.set_u32(out, package);
         return false;
     }
@@ -7354,7 +7354,7 @@ pub fn low_process_should_update_combat_controller_or_end_combat(
         e.call(EXTRA_SET_ACTOR_PACKAGE_DATA, &args![extra, data]);
     }
     e.vcall(base, START_NEW_PACKAGE_SLOT, &args![actor, next]);
-    low_process_update_package_target_for_combat(e, this, actor, next);
+    e.call(0x0090_79f0, &args![this, actor, next]);
     e.vcall(actor, ACTOR_SLOT_48, &args![0x8000_0000u32]);
     e.mem.set_u32(out, next);
     false

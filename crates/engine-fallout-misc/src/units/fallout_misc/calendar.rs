@@ -106,7 +106,7 @@ pub fn calendar_get_date_string(e: &mut Engine, this: Ptr<Calendar>, result: Ptr
     let text = e.mem.alloc(8);
     e.call(0x0040_37b0, &args![text]);
     let year = fn_00867c60(e, this) as u32;
-    let day = calendar_get_day(e, this) as i8;
+    let day = e.call(0x0086_7d60, &args![this]).u32() as i8;
     let month = calendar_get_month(e, this);
     e.call(
         0x0040_6f60,
