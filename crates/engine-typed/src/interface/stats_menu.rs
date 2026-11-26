@@ -1367,6 +1367,8 @@ pub fn stats_menu_status_data_list_register(e: &mut Engine, this: Ptr, effect: u
         }
         e.mem.set_u32(block.wrapping_add(0x10), u32::MAX);
     }
+    // The key read again, as the exe does after the constructor.
+    let key = effect_key(e, effect);
     e.mem.set_u32(block.wrapping_add(0x10), key);
     let magnitude = e.call(EFFECT_GET_MAGNITUDE, &args![effect]).u32();
     let setting = effect_setting(e, effect);
@@ -2346,6 +2348,8 @@ pub fn fn_007e0a20(e: &mut Engine, this: Ptr, effect: u32) {
         }
         e.mem.set_u32(block.wrapping_add(0x10), u32::MAX);
     }
+    // The effect item and its key read again, as the exe does after the constructor.
+    let key = effect_key(e, e.mem.u32(effect.wrapping_add(0xc)));
     e.mem.set_u32(block.wrapping_add(0x10), key);
     let magnitude = e.call(EFFECT_MAGNITUDE, &args![effect]).f64();
     let magnitude = super::bits(ftol2(e, magnitude));

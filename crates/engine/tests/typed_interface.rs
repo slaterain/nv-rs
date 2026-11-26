@@ -6235,6 +6235,20 @@ fn put_status_effects(e: &mut Engine, variant: u32) {
                 .set_u32(object(k) + slot, if one { object(244) } else { 0 });
         }
     }
+    // Two active effects (objects 50 and 51, `Arg::Effect`): a target (object 236), an effect item
+    // each (objects 237 and 238, keys 0x36 and 0x37) of one setting (object 239, archetype 0 with
+    // bit 2; the stage flag 0x2000 in the variant 0).
+    for k in [0u32, 1] {
+        let (effect, item) = (object(50 + k), object(237 + k));
+        e.mem.set_u32(effect + 8, object(236));
+        e.mem.set_u32(effect + 0xc, item);
+        e.mem.set_u32(item + 0x10, 0x36 + k);
+        e.mem.set_u32(item + 0x14, object(239));
+    }
+    e.mem.set_u32(object(239) + 0x98, 0);
+    e.mem
+        .set_u32(object(239) + 0x58, if full { 0x2000 } else { 0 });
+    e.mem.set_u32(0x0118_3328, 2);
 }
 
 /// The variants of [`put_fade_groups`]'s and [`put_archetypes`]'s worlds.
@@ -7190,7 +7204,7 @@ fn stats_menu_status_effect_list_register_diff() {
         0x007e_08a0,
         interface::stats_menu::stats_menu_status_effect_list_register(Ptr, u32)
     ))
-    .in_status_effects(&[Arg::Ptr, Arg::Ptr], &[])
+    .in_status_effects(&[Arg::Ptr, Arg::Effect], &[])
     .run()
     .assert_same();
 }
