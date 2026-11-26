@@ -126,6 +126,9 @@ const FLOATS: &[u32] = &[
 const UNREAD: &[u32] = &[0, 1];
 /// Bytes answers (a `bool` in `AL`, with high bits that must not count).
 const BOOLS: &[u32] = &[0, 1, 0x100, 0xff];
+/// Mostly true byte answers (0x100: a high byte that is false), so the travel seeds more often find
+/// the path done and set its goal.
+const DONE: &[u32] = &[1, 1, 0xff, 0x100];
 /// The block tag, twice as likely as each other word a block read may give.
 const TAG: u32 = 0x424c_4f4b;
 /// The actions a procedure may give: every arm of `Update`'s switch, the finish and past the end.
@@ -191,10 +194,9 @@ const DOUBLES: &[(u32, &[u32], Kind)] = &[
     ), // its reader
     (0x0048_39c0, &[FORM, PACKAGE], Kind::Plain), // the form for an id
     (0x005b_5e40, UNREAD, Kind::Plain), // the SAVELOAD warnings
-    (0x0086_7d60, &[0, 3, 0x1_0001], Kind::Plain), // Calendar::GetDay
     (0x008a_8f60, UNREAD, Kind::Plain), // the actor's package re-evaluation
     (0x0090_a070, UNREAD, Kind::Plain), // LowProcess::ResetTarget
-    (0x008b_3bb0, BOOLS, Kind::Plain),  // Actor::IsPathingComplete
+    (0x008b_3bb0, DONE, Kind::Plain),   // Actor::IsPathingComplete
     (0x008b_3bf0, BOOLS, Kind::Plain),  // Actor::IsWaitingOnPath
     (0x0067_8670, FLOATS, Kind::Plain), // TESPackage::GetPackageRadiusActorToLocation
     (0x0067_5a50, &[0, FORM], Kind::Plain), // TESPackage::GetLocationWorld
@@ -270,6 +272,7 @@ const IN_PLACE: &[u32] = &[
 const AV_INFOS: u32 = 0x011d_61c8;
 const CALENDAR: u32 = 0x011d_e7b8;
 const DEFAULT_HOUR: u32 = 0x0101_8f7c;
+const DEFAULT_DAY: u32 = 0x0101_8f8c;
 const ROUNDS_SETTING: u32 = 0x011c_d6d0;
 const INTERIOR_REACH: u32 = 0x011c_dbb0;
 const REACH: u32 = 0x011c_d830;
@@ -570,10 +573,13 @@ impl World {
             0x0101_1000,
             0x0101_d000,
             0x0103_0000,
+            0x0103_5000,
             0x0127_0000,
         ] {
             e.map(page, 0x1000);
         }
+        // The hours of a day (the exe's 24.0), which the travel's dead hours read past midnight.
+        e.mem.set_f64(0x0103_56d8, 24.0);
         // The actor value infos: four infos with seeded flags, every entry one of them.
         let mut infos = [0u32; 4];
         for info in &mut infos {
@@ -585,13 +591,16 @@ impl World {
             let info = infos[(self.next() % 4) as usize];
             e.mem.set_u32(AV_INFOS - 4 + 4 * i, info);
         }
-        // The calendar's hour and day globals, and the default hour.
+        // The calendar's hour and day globals, the default hour and the default day (days 3 and
+        // 31, a signalling NaN and 2^32, which truncate to 0x8000_0000).
         let global = self.one_of(&[0, FORM]);
         e.mem.set_u32(CALENDAR + 0xc, global);
         let day = self.one_of(&[0, FORM]);
         e.mem.set_u32(CALENDAR + 8, day);
         let hour = self.pick(&[0x4140_0000, 0x41a0_0000, 0x7f80_0001]);
         e.mem.set_u32(DEFAULT_HOUR, hour);
+        let day = self.pick(&[0x4040_0000, 0x41f8_0000, 0x7f80_0001, 0x4f80_0000]);
+        e.mem.set_u32(DEFAULT_DAY, day);
         // The settings: the combat rounds (small and not below 0, so the rounds end), the reaches
         // and the follower limit.
         let rounds = self.pick(&[0, 0x3f00_0000, 0x3f80_0000, 0x3fc0_0000, 0x4000_0000]);
@@ -720,7 +729,6 @@ impl InWorld for Diff {
             .family(&MULTIBOUND)
             .ignore_calls(IN_PLACE)
             .goes_by_address(&[0x0070_3180])
-            .allow_nan_payloads()
             .inputs(&[Input::Of(seeds)])
             .setup(move |e, case| {
                 let mut w = World::new(e, case.word(0));
@@ -736,6 +744,9 @@ fn actor_values() {
         middle_low_process::get_actor_float_value(Ptr, u32, u32, u32) -> f64
     ))
     .in_world(&MOST, |w| w.modifier_call(false))
+    // The sum of two NaNs: SSE keeps the first one's payload, x87's FADD the larger one's. Only
+    // here: every other Diff compares NaN-looking words exactly.
+    .allow_nan_payloads()
     .run()
     .assert_same();
     Diff::new(entry!(
@@ -883,7 +894,8 @@ fn save_and_load() {
         0x0092_e730,
         middle_low_process::load_game(Ptr, u32, u32, u32)
     ))
-    .in_world(&MOST, |w| {
+    // Every seed: the block's clean end needs a run of reader answers that few seeds give.
+    .in_world(&ALL, |w| {
         let flags = w.pick(&[0, 0x0010_0000, 0xffff_ffff]);
         vec![w.process(), flags, w.word(), w.word()]
     })
@@ -939,6 +951,16 @@ fn update_words(w: &mut World) -> Vec<u32> {
 /// The callees `Update` leaves out besides the ones done in place: the travel's form lookup and the
 /// process's hour (the seconds they give are never read).
 const UPDATE_LEFT_OUT: &[u32] = &[0x0048_39c0, 0x007d_f1f0];
+
+/// `Calendar::GetDay`: the day global's value or the default day (days, a signalling NaN, 2^32),
+/// truncated.
+#[test]
+fn calendar_day() {
+    Diff::new(entry!(0x0086_7d60, middle_low_process::calendar_day(Ptr) -> u32))
+        .in_world(&MANY, |_| vec![CALENDAR])
+        .run()
+        .assert_same();
+}
 
 #[test]
 fn update() {
@@ -1076,7 +1098,7 @@ fn the_seeds_reach_every_branch() {
     );
     reaches(
         0x0092_e730,
-        &MOST,
+        &ALL,
         |w| vec![w.process(), 0x0010_0000, 0, 0],
         &[
             "bad header",

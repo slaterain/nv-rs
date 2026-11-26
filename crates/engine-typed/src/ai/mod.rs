@@ -11,10 +11,14 @@
 //!   class keeps in its vtable (the stubs that answer false, 0, -1 or 0.0 and those that do
 //!   nothing), the embedded current package's getters and setters, the destructor, `Copy`, the
 //!   save and load of the process block and the breath timer.
+//! - [`low_process`]: `LowProcess` (its Xbox PDB source unit), part 1: the process lock map, the
+//!   processed date's parts, the flags and timers, the target and location setters, the damage
+//!   modifier, the package tests and starts, the door lock and unlock callbacks and the small
+//!   procedure steps.
 //! - [`middle_low_process`]: `MiddleLowProcess` (its Xbox PDB source unit): the temporary and
 //!   damage modifiers on top of `LowProcess`'s actor values, the hourly package check, the combat
 //!   rounds, `Update` (the package's procedure actions), the destructors, the copy and the save,
-//!   load and revert of its part of the process.
+//!   load and revert of its part of the process; and `Calendar::GetDay`, which the processes ask.
 //!
 //! Reached: each stays registered at its exe address, so the translations' calls by address and
 //! the vtable slots that hold them reach the typed functions; between them the calls are typed
@@ -37,6 +41,7 @@ use engine_core::{entry, AbiFn};
 
 pub mod actor_package;
 pub mod base_process;
+pub mod low_process;
 pub mod middle_low_process;
 
 /// This family's bit: what each `typed_call!` of it names (39).
@@ -58,6 +63,7 @@ pub static AI: Family = Family {
 fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0040_1280, base_process::empty_name(Ptr) -> u32),
+        entry!(0x0086_7d60, middle_low_process::calendar_day(Ptr) -> u32),
         entry!(0x008c_5e70, actor_package::destroy_data(Ptr)),
         entry!(0x008c_5ec0, actor_package::handle_deleted_reference(Ptr, u32)),
         entry!(0x008c_5ef0, actor_package::clear(Ptr)),
@@ -138,6 +144,71 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x008d_1070, base_process::revert_buffer(Ptr, u32)),
         entry!(0x008d_10c0, base_process::breath_timer(Ptr) -> f32),
         entry!(0x0090_7430, middle_low_process::damage_mod_actor_value(Ptr, u32, u32, i32)),
+        entry!(0x0090_74f0, low_process::damage_modifier(Ptr, u8) -> f64),
+        entry!(0x0090_7460, low_process::damage_mod_actor_value(Ptr, u32, u32, f32)),
+        entry!(0x0090_7620, low_process::mod_essential_down_timer(Ptr)),
+        entry!(0x0090_76a0, low_process::processed_day(Ptr) -> u32),
+        entry!(0x0090_76c0, low_process::processed_month(Ptr) -> u32),
+        entry!(0x0090_76e0, low_process::processed_year(Ptr) -> u32),
+        entry!(
+            0x0090_7840,
+            low_process::check_and_start_combat_controller_for_package(Ptr, Ptr, Ptr, u8) -> bool
+        ),
+        entry!(
+            0x0090_78d0,
+            low_process::should_use_combat_controller_for_package(Ptr, Ptr, u8) -> bool
+        ),
+        entry!(
+            0x0090_7960,
+            low_process::should_stop_combat_controller_to_finish_package(Ptr, u32, u32) -> bool
+        ),
+        entry!(
+            0x0090_79f0,
+            low_process::update_package_target_for_combat(Ptr, u32, u32) -> bool
+        ),
+        entry!(0x0090_8bf0, low_process::set_target_for_package(Ptr, Ptr) -> bool),
+        entry!(0x0090_8c50, low_process::set_location_for_package(Ptr, Ptr, u8) -> u32),
+        entry!(0x0090_8e90, low_process::process_use_item_at(Ptr, Ptr) -> bool),
+        entry!(0x0090_8f40, low_process::process_avoid_area(Ptr, u32)),
+        entry!(0x0090_9d00, low_process::process_flee_non_combat(Ptr, Ptr)),
+        entry!(0x0090_a130, low_process::current_package_location(Ptr, u32, u32) -> u32),
+        entry!(0x0090_ac20, low_process::set_flag_40(Ptr, u8)),
+        entry!(0x0090_cfa0, low_process::is_wandering(Ptr) -> bool),
+        entry!(0x0090_d480, low_process::lock_door(Ptr, Ptr) -> bool),
+        entry!(0x0090_d570, low_process::unlock_door(Ptr, Ptr) -> bool),
+        entry!(
+            0x0090_dc10,
+            low_process::enter_combat(
+                Ptr, u32, u32, u32, u32, u32, u8, u32, u8, u32, u8, u32, u8, u32
+            ) -> bool
+        ),
+        entry!(0x0091_1ae0, low_process::float_zero(Ptr, u32, u32) -> f32),
+        entry!(0x0091_1e80, low_process::set_target(Ptr, Ptr)),
+        entry!(0x0091_1ed0, low_process::process_summon_creature_defend(Ptr, u32)),
+        entry!(0x0091_2150, low_process::process_movement_blocked(Ptr, u32)),
+        entry!(0x0091_22e0, low_process::process_patrol_init(Ptr, Ptr, Ptr) -> bool),
+        entry!(
+            0x0091_2960,
+            low_process::process_patrol_start_at_ref_behavior(Ptr, u32, Ptr)
+        ),
+        entry!(0x0091_3460, low_process::is_package_done(Ptr, u32) -> bool),
+        entry!(0x0091_34c0, low_process::mod_tracked_damage(Ptr, u32, f32)),
+        entry!(0x0091_3510, low_process::start_new_package(Ptr, Ptr, Ptr)),
+        entry!(0x0091_35a0, low_process::change_package(Ptr, Ptr, Ptr)),
+        entry!(0x0091_37b0, low_process::lock_map_construct(Ptr, u32) -> Ptr),
+        entry!(
+            0x0091_37e0,
+            low_process::lock_map_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x0091_3810, low_process::lock_map_base_construct(Ptr, u32) -> Ptr),
+        entry!(0x0091_3880, low_process::lock_map_destructor(Ptr)),
+        entry!(0x0091_38e0, low_process::lock_map_base_destructor(Ptr)),
+        entry!(0x0091_3910, low_process::lock_map_delete_item(Ptr, u32)),
+        entry!(0x0091_3950, low_process::lock_data_construct(Ptr, u32) -> Ptr),
+        entry!(
+            0x0091_3980,
+            low_process::lock_map_base_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
         entry!(0x0092_c9d0, middle_low_process::scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x0092_ca00, middle_low_process::destructor(Ptr)),
         entry!(0x0092_ca70, middle_low_process::copy(Ptr, Ptr)),
