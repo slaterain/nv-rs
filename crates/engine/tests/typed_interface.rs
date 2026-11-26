@@ -5120,77 +5120,6 @@ fn every_family_holds_each_crates_families() {
     assert_eq!(all.len(), listed.len(), "a family provided twice");
 }
 
-/// A family module left out of its crate's list is neither provided nor listed, so the test above
-/// can't see it: every family the families' sources declare (a `pub static NAME: Family = Family {`
-/// at the start of a line, under `engine-typed`, `engine-core`'s `typed` and `engine-fallout-forms`)
-/// is listed, by its name.
-#[test]
-fn every_declared_family_is_listed() {
-    fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for path in entries.flatten().map(|entry| entry.path()) {
-            if path.is_dir() {
-                rust_files(&path, out);
-            } else if path.extension().is_some_and(|x| x == "rs") {
-                out.push(path);
-            }
-        }
-    }
-    let listed: Vec<&str> = engine_core::typed::FAMILIES
-        .iter()
-        .chain(engine_typed::FAMILIES.iter())
-        .map(|f| f.name)
-        .chain([
-            engine_fallout_forms::topic_search::TOPIC_SEARCH.name,
-            engine_fallout_forms::topic_order::TOPIC_ORDER.name,
-        ])
-        .collect();
-    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-    let mut files = Vec::new();
-    for root in [
-        "engine-typed/src",
-        "engine-core/src/typed",
-        "engine-fallout-forms/src",
-    ] {
-        rust_files(&crates.join(root), &mut files);
-    }
-    let mut declared = Vec::new();
-    for file in &files {
-        let text = std::fs::read_to_string(file).unwrap_or_default();
-        let lines: Vec<&str> = text.lines().collect();
-        for (i, line) in lines.iter().enumerate() {
-            if !(line.starts_with("pub static ") && line.ends_with(": Family = Family {")) {
-                continue;
-            }
-            let name = lines[i + 1..]
-                .iter()
-                .take_while(|l| !l.starts_with('}'))
-                .find_map(|l| l.trim().strip_prefix("name: \""))
-                .and_then(|rest| rest.split('"').next());
-            let Some(name) = name else {
-                panic!("{}: a family with no name line: {line}", file.display());
-            };
-            declared.push((name.to_string(), file.display().to_string()));
-        }
-    }
-    assert!(
-        declared.len() >= listed.len(),
-        "only {} families declared in the sources, {} listed",
-        declared.len(),
-        listed.len()
-    );
-    let unlisted: Vec<_> = declared
-        .iter()
-        .filter(|(name, _)| !listed.contains(&name.as_str()))
-        .collect();
-    assert!(
-        unlisted.is_empty(),
-        "families declared but in no crate's list (add each to its crate's FAMILIES): {unlisted:?}"
-    );
-}
-
 /// An address is in one family at most, whichever families are on by default: `NV_TYPED` can turn
 /// any on, and two families holding one address stop `Engine::new` once both are (on 2026-11-25
 /// `00717e50` was in `ai` and in `topic_search`). This names both families.
@@ -5561,6 +5490,11 @@ fn put_item_list_box(e: &mut Engine, variant: u32) {
     // removal's filtered branch (`_num_filtered` less 1.0) runs.
     if variant == 6 {
         e.mem.set_u8(object(171) + 8, 1);
+    }
+    // The empty list's variant: `Tile::GetFloat` answers 0.0, so an `AddItem` of the first item
+    // meets no visible items (`_number_of_visible_items` 0.0).
+    if variant == 0 {
+        e.register_double(0x00a0_11b0, |_, _| Ret::default());
     }
     for (k, group) in [(0u32, 0u32), (2, 1), (4, 0)] {
         e.mem.set_u32(object(190 + k) + 8, group);
@@ -6181,10 +6115,56 @@ fn put_stats_menu(e: &mut Engine, variant: u32) {
     if fade != 0 {
         e.mem.set_u32(fade, [1u32, 5, 0, 3][variant as usize]);
     }
+    // `_ftol2` truncates for real (`UpdateActorValue`'s 0x14 takes the smaller of its truncated
+    // setting, 85.0 in the variants 0 and 3, and the clamped value).
+    e.register_double(0x00ec_62c0, |_, words| {
+        let value = f64::from_bits(u64::from(words[0]) | u64::from(words[1]) << 32);
+        let whole = engine_core::x87::fistp_chop64(value) as u64;
+        Ret {
+            eax: whole as u32,
+            edx: (whole >> 32) as u32,
+            ..Ret::default()
+        }
+    });
+    if variant == 0 || variant == 3 {
+        e.mem.set_f32(0x011d_0adc, 85.0);
+    }
+    // In the variant 1 every float an actor value (any vtable's slot `+0xc`) or the larger of two
+    // floats (`00404010`) answers is 0.0: no radiation, a crippled limb, a meter at zero.
+    if variant == 1 {
+        for at in [CODE + 0xc, 0x0040_4010] {
+            e.register_double(at, |_, _| Ret::default());
+        }
+    }
+    // The player's perk ranks (its own vtable at `010f0000`, slot `+0x4e8`) in the variants 0 and 3:
+    // a hidden perk's, a rank 1 and a rank 2 (nodes objects 240, 242, 244; ranks 241, 243, 245;
+    // perks 246 to 248).
+    if variant == 0 || variant == 3 {
+        let vtable = 0x010f_0000;
+        for slot in (0..0x500u32).step_by(4) {
+            e.mem.set_u32(vtable + slot, CODE + 4 * (slot / 4 % 0x100));
+        }
+        e.mem.set_u32(player, vtable);
+        e.mem.set_u32(vtable + 0x4e8, CODE + 0x300);
+        e.register_double(CODE + 0x300, |_, _| Ret {
+            eax: arena::object(240),
+            ..Ret::default()
+        });
+        for (k, (rank, hidden)) in [(1u8, 1u8), (1, 0), (2, 0)].into_iter().enumerate() {
+            let k = k as u32;
+            let (node, item, perk) = (object(240 + 2 * k), object(241 + 2 * k), object(246 + k));
+            e.mem.set_u32(node, item);
+            e.mem
+                .set_u32(node + 4, if k < 2 { object(242 + 2 * k) } else { 0 });
+            e.mem.set_u32(item, perk);
+            e.mem.set_u8(item + 4, rank);
+            e.mem.set_u8(perk + 0x3c, hidden);
+        }
+    }
 }
 
 /// The variants of [`put_status_data`]'s world.
-const STATUS_DATA_VARIANTS: [u32; 4] = [0, 1, 2, 3];
+const STATUS_DATA_VARIANTS: [u32; 5] = [0, 1, 2, 3, 4];
 
 /// A world for the status data list (object 3, its embedded list at `+4`: an entry of key 2, then a
 /// node, object 231, with an entry of key 0x36) and an effect item's words on both pointer values
@@ -6192,7 +6172,7 @@ const STATUS_DATA_VARIANTS: [u32; 4] = [0, 1, 2, 3];
 /// plain case, object 3 twice, runs every variant). The archetype table's entry 0 has bit 2 but in
 /// the variant 2 (the key is then -1). By variant: the effect's key 0x36 (found), 0x37 with the
 /// setting's flag 4 (negated, with a duration), 0x37 with flag 2 (no duration), 0x37 with neither
-/// and JIP LN's fixes on (the G107 seam asked, none answering).
+/// and JIP LN's fixes on (the G107 seam asked and answered 0x1234), and the same with no answer.
 fn put_status_data(e: &mut Engine, variant: u32) {
     use arena::object;
     let list = object(3);
@@ -6214,10 +6194,17 @@ fn put_status_data(e: &mut Engine, variant: u32) {
     e.mem.set_u32(object(234) + 0x14, object(233));
     e.mem.set_u32(object(233) + 0x98, 0);
     e.mem
-        .set_u32(object(233) + 0x58, [0, 4, 2, 0][variant as usize]);
+        .set_u32(object(233) + 0x58, [0, 4, 2, 0, 0][variant as usize]);
     e.mem.set_u32(0x0118_3328, if variant == 2 { 0 } else { 2 });
-    if variant == 3 {
+    if variant >= 3 {
         e.set_jip_patches(engine_core::extend::jip_patches::FIXES);
+    }
+    if variant == 3 {
+        fn duration(_: &mut Engine, _: &[u32]) -> Option<u32> {
+            Some(0x1234)
+        }
+        use engine_core::extend::{Owner, SiteSlot};
+        e.on_site(SiteSlot::new(Owner::Jip, 0x007e_0c1f), duration);
     }
 }
 

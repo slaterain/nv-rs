@@ -249,7 +249,8 @@ const EFFECT_GET_DURATION: u32 = 0x0040_44d0;
 const PERK_SORT: u32 = 0x007e_04e0;
 /// `AddItem`'s callees: `Tile::GetMenu`, `Menu::RenderTemplate` (thiscall: parent, template, 0),
 /// the list's insert (`007a7eb0`: item, compare) and append of the pointed-to word (`00905820`);
-/// `"_number_of_visible_items"`, the value actions' add of a float (`00a09080`) and their actions.
+/// `"_number_of_visible_items"`, the value action with a float operand (`00a09080`) and the copy and
+/// multiply operators (`CalculateValue`'s `0x7d0` and `0x7d3`).
 const TILE_GET_MENU: u32 = 0x00a0_3c90;
 const RENDER_TEMPLATE: u32 = 0x00a1_ddb0;
 const LIST_INSERT: u32 = 0x007a_7eb0;
@@ -257,7 +258,7 @@ const LIST_APPEND_ITEM: u32 = 0x0090_5820;
 const VISIBLE_ITEMS_TEXT: u32 = 0x0106_f860;
 const VALUE_ADD_FLOAT: u32 = 0x00a0_9080;
 const ACTION_COPY: u32 = 0x7d0;
-const ACTION_ADD: u32 = 0x7d3;
+const ACTION_MULTIPLY: u32 = 0x7d3;
 
 /// The player.
 #[inline(always)]
@@ -1428,7 +1429,7 @@ pub fn fn_007e0e30(e: &mut Engine, this: Ptr, callback: u32, value: u32) {
 /// in place) inserted by `compare` (then `Synchronize` with flag 0) or appended (then, with flag 0,
 /// the tile's position and `SetTotalListHeight`; the tile numbered with the next index). With
 /// exactly one item and a `"_number_of_visible_items"` above 0.0, the container's height becomes the
-/// tile's height plus that number. The new tile, or 0.
+/// tile's height times that number. The new tile, or 0.
 fn add_item_of(
     e: &mut Engine,
     of: Of,
@@ -1529,7 +1530,7 @@ fn add_item_of(
                 .i32();
             let container = field(e, at, CONTAINER);
             let count = tile_float(e, container, visible);
-            e.call(VALUE_ADD_FLOAT, &args![value, ACTION_ADD, count]);
+            e.call(VALUE_ADD_FLOAT, &args![value, ACTION_MULTIPLY, count]);
             e.call(VALUE_CALCULATE, &args![value, 0u32]);
         }
     }
@@ -1590,7 +1591,7 @@ pub fn list_box_misc_stat_id_add_item(
 
 /// The second part's callees: the sound by name (`BSAudio::GetSoundHandleByName`, `RET 0xc`, the
 /// handle through its first word; `BSSoundHandle::Play`, `RET 4`) and the audio object (`00453a70`
-/// answers the word at `011f6d98`); the two sounds; `Tile::TextToTrait` (cdecl), `Tile::UpdateTile`
+/// answers the word at `011f6d98`); the button sound; `Tile::TextToTrait` (cdecl), `Tile::UpdateTile`
 /// (`RET 4`); the actor values' icon, description and weapon type badge (cdecl); the reputation's
 /// icon and title (thiscall); `004e4430` (cdecl, a float: rounded, `ST0`); the Pip-Boy's
 /// `SetTabKnobPosition` (`RET 8`) and `MoveKnob` (`RET 0x10`) and the two settings the knob moves
