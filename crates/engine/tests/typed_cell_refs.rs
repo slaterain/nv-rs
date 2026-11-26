@@ -10480,7 +10480,7 @@ const XQ_NOTED: &[u32] = &[
 
 /// The part 4 range's stand-ins (`xd_stand_ins` holds them): the counted callees and the
 /// constructors of the saved animation and havok data, the last finished sequence (given its name)
-/// and the friend hits, each giving its type.
+/// and the friend hits, each giving its type, and the leveled creature modifier's two getters.
 fn xq_stand_ins(e: &mut Engine) {
     for &addr in XQ_NOTED {
         e.register(addr, noted);
@@ -10489,6 +10489,26 @@ fn xq_stand_ins(e: &mut Engine) {
     e.register(0x0043_5b50, built::<0x3d>);
     e.register(0x0043_51d0, built::<0x41>);
     e.register(0x0043_5c40, built::<0x45>);
+    e.register(0x0043_50c0, xq_lev_float);
+    e.register(0x0043_5100, xq_lev_word);
+}
+
+/// The leveled creature modifier's `float` (`004350c0`: 1.0 for the neutral index 4, else the game
+/// setting the index names): 1.0 or the payload's bits, in ST0.
+fn xq_lev_float(e: &mut Engine, a: &[u32]) -> Ret {
+    match e.mem.u32(a[0] + 0xc) {
+        4 => float_ret(1.0f32.to_bits()),
+        word => float_ret(word),
+    }
+}
+
+/// The leveled creature modifier's word (`00435100`): 1 for the index 0, 0 for 4, else all ones.
+fn xq_lev_word(e: &mut Engine, a: &[u32]) -> Ret {
+    ret(match e.mem.u32(a[0] + 0xc) {
+        0 => 1,
+        4 => 0,
+        _ => u32::MAX,
+    })
 }
 
 /// The leveled creature modifier's setter's values: 4 (its neutral value), 0, 1, all ones.
@@ -11247,7 +11267,11 @@ fn xq_byte_at_c() {
 #[test]
 fn xq_first_string_to() {
     Diff::new(entry!(0x0042_8070, extra_data::classes::first_string_to(u32, u32) -> u32))
-        .xd_copies(0x0042_8070)
+        .extra_data_case_but(0x0042_8070)
+        .setup(|e, _| {
+            xd_stand_ins(e);
+            vec![xd_block(e, 0x20, 0x11), xd_block(e, 0x10, 0x22)]
+        })
         .run()
         .assert_same();
 }
@@ -11255,7 +11279,11 @@ fn xq_first_string_to() {
 #[test]
 fn xq_second_string_to() {
     Diff::new(entry!(0x0042_80b0, extra_data::classes::second_string_to(u32, u32) -> u32))
-        .xd_copies(0x0042_80b0)
+        .extra_data_case_but(0x0042_80b0)
+        .setup(|e, _| {
+            xd_stand_ins(e);
+            vec![xd_block(e, 0x20, 0x11), xd_block(e, 0x10, 0x22)]
+        })
         .run()
         .assert_same();
 }
