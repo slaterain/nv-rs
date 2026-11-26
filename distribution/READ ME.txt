@@ -90,6 +90,12 @@ at the start unless you choose "Shown" under Frame rate counter in Play.exe's Se
 the same section). It shows with the Vulkan renderer only. With Vulkan, F11 is kept for the counter:
 it cannot be bound to anything in the game's controls or by mods; with Direct3D 9 it is the game's.
 
+Press Shift+F11 in the game to switch the new lighting (Sun shadows and Ambient occlusion under New lighting
+and more in Play.exe's Settings) while you play: each press goes to the next of both, the sun shadows
+alone, the ambient occlusion alone and neither, and the top-right corner says which for a few seconds.
+Settings decides how a game starts. Once on, the sun shadows keep about 256 MB of video memory until
+the game ends, so switching them again is instant. Vulkan only.
+
 
 Bug fixes
 ---------

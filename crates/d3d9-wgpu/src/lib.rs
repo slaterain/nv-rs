@@ -39,6 +39,7 @@ pub mod format;
 pub mod frame_rate;
 mod fxhash;
 pub mod gpu_times;
+mod lighting_ahead;
 pub mod loading;
 mod prepare;
 pub mod ramp;
@@ -48,6 +49,44 @@ pub mod sm;
 pub mod state;
 pub mod sun_shadow;
 mod window;
+
+/// The driver's slow work done on the calling thread so far: pipelines, shader modules and
+/// textures made, counted where the device makes the game's (and the shaders' modules), and where
+/// the new lighting's parts, the counter and the notes make theirs. The render thread's count over
+/// a frame says whether that frame waited for the driver (tests of the new lighting's switch).
+pub mod made_here {
+    use std::cell::Cell;
+
+    thread_local! {
+        static MADE: Cell<[u64; 3]> = const { Cell::new([0; 3]) };
+    }
+
+    fn add(k: usize) {
+        MADE.with(|m| {
+            let mut v = m.get();
+            v[k] += 1;
+            m.set(v);
+        });
+    }
+
+    pub(crate) fn pipeline() {
+        add(0);
+    }
+
+    pub(crate) fn module() {
+        add(1);
+    }
+
+    pub(crate) fn texture() {
+        add(2);
+    }
+
+    /// The pipelines, shader modules and textures this thread made so far.
+    #[doc(hidden)]
+    pub fn on_this_thread() -> [u64; 3] {
+        MADE.with(Cell::get)
+    }
+}
 
 /// Writes every live wgpu device's pipeline cache and pipeline list now, when they changed: for
 /// the end of the run (the host's exit hooks; the process ends with `std::process::exit`).
@@ -447,6 +486,11 @@ impl Backend for WgpuBackend {
             }
             Cmd::SetTransform { state, matrix, .. } if state == sun_shadow::BEGIN_STATE => {
                 d.sun_lookup(&matrix.to_words());
+            }
+            // The new lighting switched while playing, recorded right after the game's `Present`:
+            // its parts on or off from the next frame ([`scene_light::SWITCH_STATE`]).
+            Cmd::SetTransform { state, matrix, .. } if state == scene_light::SWITCH_STATE => {
+                d.switch_lighting(&matrix.to_words());
             }
             // The game's brightness: kept for the frames shown in the window ([`ramp`]).
             Cmd::SetGammaRamp {

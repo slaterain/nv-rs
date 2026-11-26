@@ -758,12 +758,14 @@ pub struct Choice {
     /// Whether the new lighting is on (ambient occlusion,
     /// `d3d9_wgpu::scene_light`, Vulkan only): `NV_AO` when set (`1` on, else off); else, in a
     /// launcher's play run, `Fallout.ini`'s `[nv-rs Display] bAmbientOcclusion`; else
-    /// [`PLAY_AMBIENT_OCCLUSION`], off. Not part of any preset.
+    /// [`PLAY_AMBIENT_OCCLUSION`], off. Not part of any preset. On Vulkan the start: Shift+F11 in the
+    /// game switches it and the sun shadows while playing (`d3d9_wgpu::scene_light::Parts`).
     pub ambient_occlusion: bool,
     /// Whether the sun shadows are on (`d3d9_wgpu::sun_shadow`, Vulkan only): `NV_SUN_SHADOWS` when
     /// set (`1` or `debug` on, else off: `1` puts the shadows in the game's own lighting, `debug`
     /// shows an engineers' overlay instead); else, in a launcher's play run, `Fallout.ini`'s `[nv-rs Display] bSunShadows`;
-    /// else [`PLAY_SUN_SHADOWS`], off. Not part of any preset.
+    /// else [`PLAY_SUN_SHADOWS`], off. Not part of any preset. On Vulkan the start: Shift+F11 in the
+    /// game switches them and the ambient occlusion while playing.
     pub sun_shadows: bool,
     /// Whether the sun light comes from the sky's discs (`engine_fallout_env` `sun::LightFromSky`)
     /// while the sun shadows are on: `NV_SUN_LIGHT_FROM_SKY` when set (`1` on, else off); else, in a
@@ -802,9 +804,11 @@ pub struct Choice {
 }
 
 impl Choice {
-    /// Whether the sun light is turned to come from the sky's discs: only with the sun shadows on
-    /// and [`Choice::sun_light_from_sky`] (on by default). With the sun shadows off the game's light
-    /// is the exe's, whatever the key says.
+    /// Whether a game starts with the sun light from the sky's discs: the sun shadows on from the
+    /// start and [`Choice::sun_light_from_sky`] (on by default). It does not decide the install
+    /// (tests read it): on wgpu the light is installed with the key on whatever the start
+    /// (`crate::light_from_sky_wanted`) and turns only while the sun shadows draw, as the player
+    /// switches them; anywhere else the game's light is the exe's.
     pub fn light_from_sky(&self) -> bool {
         self.sun_shadows && self.sun_light_from_sky
     }
