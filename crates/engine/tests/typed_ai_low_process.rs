@@ -386,6 +386,7 @@ const IN_PLACE: &[u32] = &[
     0x008e_7c50, // the pathing request's byte at +0x9c, its angle and flag
     0x008e_7c20,
     0x0047_c850, // the package manager's test (`ActorPackage::Clear`: false, in place)
+    0x0046_9860, // the created id test (`InitLoadGame_ov2` of the embedded package)
     0x0045_34f0, // the empty body the package load leaves out
     0x0063_9b40, // the instance data's reference
     0x0044_1b00, // the package's flag 0x200000
@@ -962,11 +963,13 @@ impl World {
                 }
             }
         }
-        // The globals: the pursue distance, the sandbox's least time, the hours of a day and the
-        // changed forms (none).
+        // The globals: the pursue distance, the sandbox's least time, the hours of a day, the
+        // changed forms (none) and the data handler (none).
         e.map(0x0101_7000, 0x1000);
         e.map(0x0103_5000, 0x1000);
         e.map(0x011d_d000, 0x1000);
+        // The data handler (none: the created id test does not read it).
+        e.map(0x011c_3000, 0x1000);
         let distance = [0.0, 100.0, 1.0e9, f64::NAN][(self.next4() % 4) as usize];
         e.mem.set_f64(PURSUE_DISTANCE, distance);
         let least = self.pick4(FLOATS);
