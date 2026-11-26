@@ -4133,7 +4133,7 @@ mod tests {
         };
         for window in WINDOWS {
             let f = gpu::framing(SCREEN, window, 8192);
-            let whole = f.screen_to_window((0, 0, screen::WIDTH, screen::HEIGHT));
+            let whole = f.screen_area_in_window((0, 0, screen::WIDTH, screen::HEIGHT));
             assert!(inside(window, whole), "{window:?}: {whole:?}");
             assert!(
                 (whole.2 / whole.3 - 4.0 / 3.0).abs() < 0.01,
@@ -4146,7 +4146,7 @@ mod tests {
             // The buttons: in the window's top-right corner, hit there.
             let scale = f.rect.2 as f64 / f.picture.0 as f64;
             for (b, area) in screen::buttons(&look, f.picture.0) {
-                let (x, y, w, h) = f.to_window(area);
+                let (x, y, w, h) = f.area_in_window(area);
                 assert!(inside(window, (x, y, w, h)), "{window:?} {b:?}");
                 assert!(y <= 10.0 * scale + 1.0, "{window:?} {b:?} at {y}");
                 assert!(
@@ -4156,7 +4156,7 @@ mod tests {
                 let centre = (x + w / 2.0, y + h / 2.0);
                 assert_eq!(button_hit(&f, &look, centre), Some(b), "{window:?}");
             }
-            let exit = f.to_window(screen::buttons(&look, f.picture.0)[1].1);
+            let exit = f.area_in_window(screen::buttons(&look, f.picture.0)[1].1);
             let right = window.0 as f64 - (exit.0 + exit.2);
             assert!(
                 right <= 10.0 * scale + 2.0,
@@ -4171,7 +4171,7 @@ mod tests {
                         rows.width,
                         rows.row,
                     );
-                    let (x, y, w, h) = f.screen_to_window(area);
+                    let (x, y, w, h) = f.screen_area_in_window(area);
                     assert!(
                         inside(window, (x, y, w, h)),
                         "{window:?} {}: row {k}",

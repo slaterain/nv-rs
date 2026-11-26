@@ -633,6 +633,7 @@ fn scale(picture: (u32, u32), target: (u32, u32)) -> f32 {
 }
 
 /// Where a picture of `picture`'s size goes in `target`, centred, at [`scale`]'s size.
+#[cfg(test)]
 pub fn fit(picture: (u32, u32), target: (u32, u32)) -> (u32, u32, u32, u32) {
     let s = scale(picture, target);
     let (w, h) = (
@@ -643,7 +644,7 @@ pub fn fit(picture: (u32, u32), target: (u32, u32)) -> (u32, u32, u32, u32) {
 }
 
 /// How the terminal's 4:3 screen (`screen`, its size in its own units) stands in a window of
-/// `window` pixels: at the scale [`fit`] gives it, centred, with black bars beside it (a wide
+/// `window` pixels: at the scale `fit` gives it, centred, with black bars beside it (a wide
 /// window) or above and below it (a tall one). The picture drawn is the window's own shape at
 /// that scale, the screen in its middle, so what belongs to the window (its buttons) goes in the
 /// window's corner; on neither side larger than `most` (the device's largest texture).
@@ -706,7 +707,7 @@ impl Framing {
     /// The window rectangle (x, y, width, height, in pixels) of the picture's area `a` (in its
     /// units: the window's buttons).
     #[cfg(test)]
-    pub fn to_window(&self, a: (i32, i32, u32, u32)) -> (f64, f64, f64, f64) {
+    pub fn area_in_window(&self, a: (i32, i32, u32, u32)) -> (f64, f64, f64, f64) {
         let (x, y, w, h) = self.rect;
         let (sx, sy) = (
             w as f64 / self.picture.0 as f64,
@@ -722,8 +723,8 @@ impl Framing {
 
     /// The window rectangle of the screen's own area `a` (in its units: its rows).
     #[cfg(test)]
-    pub fn screen_to_window(&self, a: (i32, i32, u32, u32)) -> (f64, f64, f64, f64) {
-        self.to_window((a.0 + self.screen_at.0, a.1 + self.screen_at.1, a.2, a.3))
+    pub fn screen_area_in_window(&self, a: (i32, i32, u32, u32)) -> (f64, f64, f64, f64) {
+        self.area_in_window((a.0 + self.screen_at.0, a.1 + self.screen_at.1, a.2, a.3))
     }
 }
 
@@ -895,7 +896,7 @@ mod tests {
     }
 
     /// In a 4:3 window the picture is the screen itself, as before; in a wider or taller one it
-    /// is the window's shape, the screen whole in its middle at the same scale as [`fit`]'s, so
+    /// is the window's shape, the screen whole in its middle at the same scale as `fit`'s, so
     /// the picture fills the window (to a pixel) and the screen goes where `fit` puts it. The
     /// device's largest texture caps the picture, centred then.
     #[test]
@@ -924,7 +925,7 @@ mod tests {
             );
             // The screen where `fit` puts it, to a pixel.
             let (fx, fy, fw, fh) = fit(screen, window);
-            let (sx, sy, sw, sh) = f.screen_to_window((0, 0, screen.0, screen.1));
+            let (sx, sy, sw, sh) = f.screen_area_in_window((0, 0, screen.0, screen.1));
             assert!((sx - fx as f64).abs() <= 1.0 && (sy - fy as f64).abs() <= 1.0);
             assert!((sw - fw as f64).abs() <= 1.0 && (sh - fh as f64).abs() <= 1.0);
             // Window positions come back to the screen's units.
