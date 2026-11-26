@@ -2570,7 +2570,7 @@ pub fn low_process_process_follow(
         return;
     }
     // The time delta is computed and stored, its value unused.
-    low_process_get_time_delta(e, this, actor.addr());
+    e.call(0x0090_7260, &args![this, actor]);
     let package = current(e);
     let radius = e
         .call(PACKAGE_RADIUS_ACTOR_TO_TARGET, &args![package, actor, 0u32])
@@ -3642,7 +3642,7 @@ pub fn low_process_process_activate(
         }
     }
     // The time delta is computed and stored, its value unused.
-    low_process_get_time_delta(e, this, actor.addr());
+    e.call(0x0090_7260, &args![this, actor]);
     let current = e.vcall(base, GET_CURRENT_PACKAGE_SLOT, &args![]).u32();
     let radius = e
         .call(PACKAGE_RADIUS_ACTOR_TO_TARGET, &args![current, actor, 0u32])
@@ -5188,7 +5188,7 @@ pub fn low_process_update(e: &mut Engine, this: Ptr<LowProcess>, mobile: Ptr) {
                         }
                     }
                     // The time delta is computed and stored, its value unused.
-                    low_process_get_time_delta(e, this, actor);
+                    e.call(0x0090_7260, &args![this, actor]);
                     let process =
                         typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, actor));
                     if typed_call!(leaf::FAMILY, 0x0045_cd60, leaf::word_at_28(e, process)) == 3 {
@@ -5561,7 +5561,7 @@ pub fn low_process_process_flee(e: &mut Engine, this: Ptr<LowProcess>, actor: u3
         )
         .bool()
     {
-        low_process_get_time_delta(e, this, actor);
+        e.call(0x0090_7260, &args![this, actor]);
     } else {
         e.call(ACTOR_END_INTERRUPT_PACKAGE, &args![actor, 0u32]);
     }
@@ -5888,7 +5888,7 @@ pub fn fn_00913980(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
 pub fn low_process_revert_ov2(e: &mut Engine, this: Ptr<LowProcess>, buffer: u32) {
     let base = this.addr();
     e.call(BASE_PROCESS_REVERT_OV2, &args![this, buffer]);
-    fn_009070a0(e, this);
+    e.call(LOW_PROCESS_RELEASE, &args![this]);
     e.mem.set_u32(base + NUMBER_ITEMS_ACTIVATE, 0);
     e.vcall(base, SET_TARGET_SLOT, &args![0u32]);
     e.mem.set_u32(base + ESSENTIAL_DOWN_TIMER, x87_store32(0.0));
@@ -8515,7 +8515,7 @@ pub fn low_process_process_escort(e: &mut Engine, this: Ptr<LowProcess>, actor: 
         }
         return;
     }
-    low_process_get_time_delta(e, this, actor);
+    e.call(0x0090_7260, &args![this, actor]);
     let package = e.vcall(base, GET_CURRENT_PACKAGE_SLOT, &args![]).u32();
     let minus_one = x87_quiet_bits(e.global::<u32>(MINUS_ONE));
     if e.vcall(

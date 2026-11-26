@@ -568,7 +568,7 @@ pub fn base_process_scalar_deleting_destructor(
     this: Ptr<BaseProcess>,
     flags: u32,
 ) -> Ptr<BaseProcess> {
-    fn_008d0640(e, this);
+    e.call(0x008d_0640, &args![this]);
     if flags & 1 != 0 {
         e.call(0x0040_1030, &args![this]);
     }
@@ -655,7 +655,7 @@ pub fn base_process_handle_deleted_reference(
 ) {
     let package = this.addr().wrapping_add(CURRENT_PACKAGE);
     e.call(0x008c_5ec0, &args![package, reference]);
-    let running = fn_008d0430(e, this);
+    let running = e.call(0x008d_0430, &args![this]).u32();
     if running != 0 {
         e.vcall(running, 0x4, &args![reference]);
     }
@@ -989,7 +989,7 @@ pub fn base_process_init_load_game_ov2(e: &mut Engine, this: Ptr<BaseProcess>, b
     e.call(0x008c_6970, &args![package, buffer]);
     let cached = e.get(this, BaseProcess::pCachedValues);
     if !cached.is_null() {
-        fn_008d1030(e, cached);
+        e.call(0x008d_1030, &args![cached]);
     }
 }
 
@@ -1024,7 +1024,7 @@ pub fn base_process_revert_ov2(e: &mut Engine, this: Ptr<BaseProcess>, buffer: u
     e.call(0x008c_6c80, &args![package, buffer]);
     let cached = e.get(this, BaseProcess::pCachedValues);
     if !cached.is_null() {
-        fn_008d1030(e, cached);
+        e.call(0x008d_1030, &args![cached]);
     }
 }
 
@@ -1695,7 +1695,8 @@ mod tests {
             assert_eq!(calls_to(&e, 0x008c_5ec0), [vec![0x2004, 0x7777]]);
             assert_eq!(calls_to(&e, 0x0072_6070), [vec![0x2004]]);
             if running == 0 {
-                assert_eq!(targets(&e), [0x008c_5ec0, 0x0072_6070]);
+                // The running package word is asked by address (`008d0430`), then its leaf.
+                assert_eq!(targets(&e), [0x008c_5ec0, 0x008d_0430, 0x0072_6070]);
             } else {
                 assert_eq!(calls_to(&e, 0x0070_0004), [vec![instance, 0x7777]]);
             }

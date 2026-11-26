@@ -3,8 +3,11 @@
 //! date's parts, the flags and timers, the target and location setters and `ResetTarget`, the damage
 //! modifiers, the package tests, starts, schedule and done step, the greeting, the procedure index
 //! steps, the patrol (its init, wait at a reference and travel to the next), the clear of the
-//! current data, the level copy, the time update, the door lock and unlock callbacks and the small
-//! procedure steps, each as its translation in `engine-fallout-ai` does it.
+//! current data, the level copy, the time update, the door lock and unlock callbacks, the small
+//! procedure steps, the release and clears of the acquire lists, the time delta, the flee, pursue,
+//! remove-worn and sandbox procedures, the current destination's world space and cell, the loads'
+//! resolves and the package's save to and load from the extra data, each as its translation in
+//! `engine-fallout-ai` does it.
 //!
 //! The fields read here (Xbox PDB names, checked against the PC code): the embedded current package
 //! (+4; its start hour the float at +0x10 of it), `iDateLastProcessed` (+0x24), `m_uFlags` (the
@@ -40,10 +43,14 @@ use super::middle_low_process::{
 };
 use super::{actor_package, base_process, FAMILY};
 use crate::native::to_float;
-use crate::{ai_queries, cell_refs, crt, dispatch, draw_f, pathing, slot_target};
+use crate::{
+    ai_queries, cell_refs, crt, dispatch, draw_f, extra_data, forms, pathing, slot_target,
+};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
-use engine_core::x87::x87_quiet_bits;
+use engine_core::x87::{
+    x87_add, x87_div, x87_load32, x87_m32, x87_mul, x87_quiet_bits, x87_store32, x87_sub,
+};
 use engine_core::{args, typed_call, Engine};
 
 /// The lock map's vtables: `NiTMap<LowProcess*, LP_LOCK_DATA>` and its base `NiTMapBase`.
@@ -1018,7 +1025,6 @@ const COMBAT_UPDATE_PACKAGE_DATA: u32 = 0x0098_0ae0;
 const DELETE_EMPTY_DESTRUCTOR: u32 = 0x007b_3fa0;
 const LIST_REMOVE_ITEM: u32 = 0x0090_5330;
 const LIST_CLEAR: u32 = 0x0047_0470;
-const GET_TIME_DELTA: u32 = 0x0090_7260;
 const PATROL_TRAVEL_STEP: u32 = 0x0091_25b0;
 const EXTRA_PATROL_WAIT: u32 = 0x0041_fe90;
 const POINT_SUBTRACT: u32 = 0x0045_78c0;
@@ -1384,7 +1390,11 @@ pub fn process_patrol(e: &mut Engine, this: Ptr, actor: Ptr) {
         e.vcall(actor_word, 0x418, &[]);
         return;
     }
-    let mut time = to_float(e.call(GET_TIME_DELTA, &args![process, actor_word]).f64());
+    let mut time = typed_call!(
+        FAMILY,
+        0x0090_7260,
+        get_time_delta(e, Ptr::new(process), actor_word)
+    );
     let zero = e.mem.f64(ZERO_DOUBLE);
     let data_ptr = Ptr::new(data);
     while f64::from(time) > zero {
@@ -1690,4 +1700,888 @@ pub fn objects_to_acquire_construct(e: &mut Engine, this: Ptr) -> Ptr {
     e.mem.set_u32(at.wrapping_add(0x10), 0x7fff_ffff);
     e.mem.set_u32(at.wrapping_add(0x18), u32::MAX);
     this
+}
+
+// ---- Part 3: the acquire lists, the time delta, the flee, pursue, remove-worn and sandbox
+// procedures, the destinations, the loads' resolves and the package's extra data ----
+
+/// `TempObjectList` and `TempLocList`, and the `ObjectstoAcquire` record (`pObjectToAcquire`).
+const TEMP_OBJECT_LIST: u32 = 0x74;
+const TEMP_LOCATIONS_LIST: u32 = 0x7c;
+const OBJECT_TO_ACQUIRE: u32 = 0x84;
+/// The embedded package's running instance data (`008d0430`: the process's word at +8).
+const RUNNING_INSTANCE_DATA: u32 = 8;
+/// The package's flags (+0x1c): created (`00674d40`), and the one `00441b00` tests.
+const PACKAGE_FLAGS: u32 = 0x1c;
+const PACKAGE_CREATED: u32 = 0x800;
+const PACKAGE_FLAG_200000: u32 = 0x0020_0000;
+/// The package's type of an unequip-all package (`0041ca90`'s procedure 4) and of a pursue
+/// package's own procedure (0x13).
+const PROCEDURE_REMOVE_WORN_ALL: i32 = 4;
+const PROCEDURE_PURSUE: i32 = 0x13;
+/// `TimeScale`'s form id, the hours of a day (24.0, a double), the pursue distance (a double) and
+/// the sandbox's least time (a float).
+const TIME_SCALE_ID: u32 = 0x3a;
+const HOURS_PER_DAY: u32 = 0x0103_56d8;
+const PURSUE_DISTANCE: u32 = 0x0101_79e0;
+const SANDBOX_LEAST_TIME: u32 = 0x0101_7b78;
+/// The RTTI type descriptors of the casts.
+const TYPE_FORM: u32 = 0x0118_3028;
+const TYPE_BOUND_OBJECT: u32 = 0x0118_3108;
+const TYPE_REFERENCE: u32 = 0x0118_41cc;
+const TYPE_NPC: u32 = 0x0118_3a1c;
+const TYPE_CREATURE: u32 = 0x0118_3a00;
+
+const LIST_REMOVE_HEAD: u32 = 0x0063_f7b0;
+const ACTOR_END_INTERRUPT_PACKAGE: u32 = 0x0088_1680;
+const ACTOR_IS_ALARMED: u32 = 0x008a_61b0;
+const ACTOR_REMOVE_FLEE_TARGET: u32 = 0x008a_6730;
+const NPC_INIT_DEFAULT_WORN: u32 = 0x0060_6540;
+const CREATURE_INIT_DEFAULT_WORN: u32 = 0x005f_9e00;
+const ACTOR_IS_PATHING_COMPLETE: u32 = 0x008b_3bb0;
+const SANDBOX_START: u32 = 0x009f_3af0;
+const SANDBOX_MOVE_TO_NEXT_LOCATION: u32 = 0x009f_3c10;
+const REFERENCE_MOVE_TO_NEW_SPACE: u32 = 0x0057_3800;
+const ACTOR_SET_PATHFINDING_GOAL_TO_REFERENCE: u32 = 0x008b_36f0;
+const PACKAGE_LOCATION_WORLD_SPACE: u32 = 0x0067_5a50;
+const PACKAGE_LOCATION_CELL: u32 = 0x0067_5c20;
+const EXTRA_SET_ACTOR_PACKAGE_DATA: u32 = 0x0042_11d0;
+const EXTRA_REMOVE_ACTOR_PACKAGE_DATA: u32 = 0x0042_12e0;
+const SET_INSTANCE_DATA: u32 = 0x006e_cd40;
+
+/// The acquire record at `field` (`pAcquireObject` or `pSavedAcquireObject`) deleted and cleared
+/// when there is one and `matches` it.
+fn clear_acquire_if(e: &mut Engine, field: u32, matches: impl FnOnce(&Engine, u32) -> bool) {
+    let object = e.mem.u32(field);
+    if object == 0 || !matches(e, object) {
+        return;
+    }
+    delete_object(e, object);
+    e.mem.set_u32(field, 0);
+}
+
+/// Every record on `ObjectList` that `matches` taken off (`00905330` with a stack word holding it)
+/// and deleted (the word as the remove leaves it); the walk starts over after each.
+fn clear_objects_if(e: &mut Engine, process: u32, matches: impl Fn(&Engine, u32) -> bool) {
+    let list = process.wrapping_add(OBJECT_LIST);
+    let mut node = list;
+    while node != 0 {
+        let item = e.mem.u32(node);
+        if item == 0 {
+            break;
+        }
+        if matches(e, item) {
+            let removed = e.with_stack(4, |e, slot| {
+                e.mem.set_u32(slot.addr(), item);
+                e.call(LIST_REMOVE_ITEM, &args![list, slot]);
+                e.mem.u32(slot.addr())
+            });
+            delete_object(e, removed);
+            node = list;
+        } else {
+            node = e.mem.u32(node.wrapping_add(4));
+        }
+    }
+}
+
+/// Every location on `GenericLocationsList` that `matches` taken off: through the node before it
+/// (`00905330` on that node with a stack word holding it, then on from that node's next), or the
+/// head (`0063f7b0`, the walk staying on it).
+fn clear_locations_if(e: &mut Engine, process: u32, matches: impl Fn(&Engine, u32) -> bool) {
+    let mut node = process.wrapping_add(GENERIC_LOCATIONS_LIST);
+    let mut previous = 0u32;
+    while node != 0 {
+        let location = e.mem.u32(node);
+        if location == 0 {
+            break;
+        }
+        if !matches(e, location) {
+            previous = node;
+            node = e.mem.u32(node.wrapping_add(4));
+        } else if previous != 0 {
+            e.with_stack(4, |e, slot| {
+                e.mem.set_u32(slot.addr(), location);
+                e.call(LIST_REMOVE_ITEM, &args![previous, slot]);
+            });
+            node = e.mem.u32(previous.wrapping_add(4));
+        } else {
+            e.call(LIST_REMOVE_HEAD, &args![node]);
+        }
+    }
+}
+
+/// Every record on the list at `list` taken off (`00905330` with a stack word holding the head's)
+/// and deleted (the word as the remove leaves it), until the list is empty (`008256d0`: both its
+/// words 0).
+fn delete_list_records(e: &mut Engine, list: u32) {
+    while e.mem.u32(list.wrapping_add(4)) != 0 || e.mem.u32(list) != 0 {
+        let item = e.mem.u32(list);
+        let removed = e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), item);
+            e.call(LIST_REMOVE_ITEM, &args![list, slot]);
+            e.mem.u32(slot.addr())
+        });
+        delete_object(e, removed);
+    }
+}
+
+// Typed from 009070a0
+/// `LowProcess`'s release of its acquire data (no map name; the destructor and `Revert_ov2` call
+/// it): the acquire record deleted and cleared (the saved one cleared first when it is the same),
+/// then the saved one; `ObjectList` and `TempObjectList` emptied with their records deleted,
+/// `GenericLocationsList` and `TempLocList` cleared (`00470470`), `pGenericLocation` cleared, and
+/// the record at +0x84 deleted (its slot 0x10 with 1) and cleared.
+pub fn release_acquire_data(e: &mut Engine, this: Ptr) {
+    let process = this.addr();
+    let acquire_at = process.wrapping_add(ACQUIRE_OBJECT);
+    let saved_at = process.wrapping_add(SAVED_ACQUIRE_OBJECT);
+    let acquire = e.mem.u32(acquire_at);
+    if acquire != 0 {
+        if e.mem.u32(saved_at) == acquire {
+            e.mem.set_u32(saved_at, 0);
+        }
+        delete_object(e, acquire);
+        e.mem.set_u32(acquire_at, 0);
+    }
+    let saved = e.mem.u32(saved_at);
+    if saved != 0 {
+        delete_object(e, saved);
+        e.mem.set_u32(saved_at, 0);
+    }
+    delete_list_records(e, process.wrapping_add(OBJECT_LIST));
+    e.call(
+        LIST_CLEAR,
+        &args![process.wrapping_add(GENERIC_LOCATIONS_LIST)],
+    );
+    e.mem.set_u32(process.wrapping_add(GENERIC_LOCATION), 0);
+    delete_list_records(e, process.wrapping_add(TEMP_OBJECT_LIST));
+    e.call(
+        LIST_CLEAR,
+        &args![process.wrapping_add(TEMP_LOCATIONS_LIST)],
+    );
+    let record_at = process.wrapping_add(OBJECT_TO_ACQUIRE);
+    let record = e.mem.u32(record_at);
+    if record != 0 {
+        e.vcall(record, 0x10, &args![1u32]);
+    }
+    e.mem.set_u32(record_at, 0);
+}
+
+// Typed from 0090cc10
+/// `LowProcess::ClearObjectFromAcquireList` (Xbox PDB): every hold of `reference` let go: the
+/// acquire and saved acquire records whose reference (their word at +0) it is deleted and cleared,
+/// its records taken off `ObjectList` and deleted, `pGenericLocation` cleared when it is that, and
+/// it taken off `GenericLocationsList`.
+pub fn clear_object_from_acquire_list(e: &mut Engine, this: Ptr, reference: u32) {
+    let process = this.addr();
+    let holds = |e: &Engine, record: u32| e.mem.u32(record) == reference;
+    clear_acquire_if(e, process.wrapping_add(ACQUIRE_OBJECT), holds);
+    clear_acquire_if(e, process.wrapping_add(SAVED_ACQUIRE_OBJECT), holds);
+    clear_objects_if(e, process, holds);
+    let location_at = process.wrapping_add(GENERIC_LOCATION);
+    if e.mem.u32(location_at) == reference {
+        e.mem.set_u32(location_at, 0);
+    }
+    clear_locations_if(e, process, |_, location| location == reference);
+}
+
+// Typed from 0090cdc0
+/// `LowProcess::ClearObjectFromAcquireList` of a form (Xbox PDB `ClearObjectFromAcquireList_ov2`):
+/// as [`clear_object_from_acquire_list`], for every reference whose form id (its word at +0xc,
+/// `0084e3a0`) is `form`'s word.
+pub fn clear_form_from_acquire_list(e: &mut Engine, this: Ptr, form: u32) {
+    let process = this.addr();
+    let is_form = move |e: &Engine, reference: u32| e.mem.u32(reference.wrapping_add(0xc)) == form;
+    let holds = move |e: &Engine, record: u32| is_form(e, e.mem.u32(record));
+    clear_acquire_if(e, process.wrapping_add(ACQUIRE_OBJECT), holds);
+    clear_acquire_if(e, process.wrapping_add(SAVED_ACQUIRE_OBJECT), holds);
+    clear_objects_if(e, process, holds);
+    let location_at = process.wrapping_add(GENERIC_LOCATION);
+    let location = e.mem.u32(location_at);
+    if location != 0 && is_form(e, location) {
+        e.mem.set_u32(location_at, 0);
+    }
+    clear_locations_if(e, process, is_form);
+}
+
+// Typed from 00907260
+/// `LowProcess::GetTimeDelta` (Xbox PDB; the word unread): the game seconds since the hour last
+/// processed (`fHourLastProcessed`, +0x20): the calendar's hour (`00867da0`, stored as a float),
+/// a day (24.0) on when it is below that hour, the hour last processed taken off (stored as a
+/// float), times an hour's seconds over the time scale (`TimeScale`, form 0x3a, through
+/// `004839c0`; a global's value is its float at +0x24, `00526ac0`), stored as a float. The x87
+/// steps (`FADD qword`, `FSUBR dword`, `FDIVR qword`, `FMUL dword`) round at the running
+/// thread's precision ([`engine_core::x87`]). The hour last processed the exe reads twice is read
+/// once (nothing writes it between).
+pub fn get_time_delta(e: &mut Engine, this: Ptr, _unused: u32) -> f32 {
+    let scale_form = typed_call!(
+        forms::FAMILY,
+        0x0048_39c0,
+        forms::tesform::form_by_id(e, TIME_SCALE_ID)
+    );
+    let mut hour = calendar_hour(e);
+    let last = loaded(e.mem.u32(this.addr().wrapping_add(HOUR_LAST_PROCESSED)));
+    if x87_load32(hour) < last {
+        hour = x87_store32(x87_add(x87_load32(hour), e.mem.f64(HOURS_PER_DAY)));
+    }
+    let delta = x87_store32(x87_sub(x87_m32(hour), last));
+    let scale = loaded(e.mem.u32(scale_form.wrapping_add(0x24)));
+    let per_hour = x87_div(e.mem.f64(SECONDS_PER_HOUR), scale);
+    f32::from_bits(x87_store32(x87_mul(per_hour, x87_m32(delta))))
+}
+
+// Typed from 00909c90
+/// `LowProcess::ProcessFlee` (Xbox PDB): when the current package's slot 0x13c (with the actor,
+/// 0, -1.0 and 0) holds, the actor's interrupt package ends (`Actor::EndInterruptPackage(0)`).
+/// Otherwise the exe asks [`get_time_delta`] and drops its answer; that reads only (the form
+/// lookup `004839c0` is a map read), so it is not asked.
+pub fn process_flee(e: &mut Engine, this: Ptr, actor: u32) {
+    let package = current_package(e, this.addr());
+    if package_slot_13c(e, package, actor) {
+        e.call(ACTOR_END_INTERRUPT_PACKAGE, &args![actor, 0u32]);
+    }
+}
+
+/// `MobileObject::GetProcessLevel` (`00931850`): the level of the reference's process (+0x68; its
+/// word at +0x28), -1 without one.
+fn process_level(e: &Engine, reference: u32) -> i32 {
+    let process = e.mem.u32(reference.wrapping_add(0x68));
+    if process == 0 {
+        -1
+    } else {
+        e.mem.i32(process.wrapping_add(0x28))
+    }
+}
+
+// Typed from 0090dc60
+/// `LowProcess::ProcessPursue` (Xbox PDB; the third and fourth words unread): without a target
+/// the package's (slot 0x8c); still none, the procedure moves on by one (slot 0x288). A target
+/// whose process is low (level below 1) while the actor is not alarmed (`008a61b0`) moves it on by
+/// two and is taken off the flee targets (`008a6730`). Farther than the pursue distance
+/// (`GetDistanceFromReference`), the follow runs (slot 0x298 with the actor, 0, `word` and 1);
+/// otherwise the procedure moves on by one unless the actor's slot 0x304 holds and the current
+/// package's procedure is not the pursue (0x13).
+pub fn process_pursue(
+    e: &mut Engine,
+    this: Ptr,
+    actor: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+    word: u32,
+) {
+    let process = this.addr();
+    let target_at = process.wrapping_add(TARGET);
+    if e.mem.u32(target_at) == 0 {
+        set_target_for_package_slot(e, process, actor);
+    }
+    let target = e.mem.u32(target_at);
+    if target == 0 {
+        add_to_procedure_index_running_slot(e, process, actor, 1);
+        return;
+    }
+    if process_level(e, target) < 1 && !e.call(ACTOR_IS_ALARMED, &args![actor]).bool() {
+        add_to_procedure_index_running_slot(e, process, actor, 2);
+        e.call(ACTOR_REMOVE_FLEE_TARGET, &args![target, actor]);
+    }
+    let target = e.mem.u32(target_at);
+    let distance = e
+        .call(REFERENCE_DISTANCE, &args![actor, target, 0u32, 0u32])
+        .f64();
+    if distance > e.mem.f64(PURSUE_DISTANCE) {
+        e.vcall(process, 0x298, &args![actor, 0u32, word, 1u32]);
+        return;
+    }
+    if e.vcall(actor, 0x304, &[]).bool() {
+        let package = current_package(e, process);
+        if procedure(e, package) != PROCEDURE_PURSUE {
+            return;
+        }
+    }
+    add_to_procedure_index_running_slot(e, process, actor, 1);
+}
+
+// Typed from 00909320
+/// `LowProcess::ProcessRemoveWorn` (Xbox PDB): the actor's base form (+0x20) as an NPC or a
+/// creature (`__RTDynamicCast`, asked for each as the exe asks); an NPC's default outfit is worn
+/// again (`TESNPC::InitDefaultWorn` with the actor's slot 0x1e8 and 1), a creature's
+/// (`TESCreature::InitDefaultWorn` with two flags and 1): both clear for an unequip-all package
+/// (procedure 4), the second clear for a package with the flag 0x200000 (`00441b00`). With
+/// `advance`, the procedure moves on by one (slot 0x288).
+pub fn process_remove_worn(e: &mut Engine, this: Ptr, actor: u32, advance: u8) {
+    let process = this.addr();
+    let base = e.mem.u32(actor.wrapping_add(BASE_FORM));
+    let npc = base_process::runtime_cast(e, base, TYPE_BOUND_OBJECT, TYPE_NPC);
+    let base = e.mem.u32(actor.wrapping_add(BASE_FORM));
+    let creature = base_process::runtime_cast(e, base, TYPE_BOUND_OBJECT, TYPE_CREATURE);
+    let package = current_package(e, process);
+    let (first, second) = if package == 0 {
+        (true, true)
+    } else if procedure(e, package) == PROCEDURE_REMOVE_WORN_ALL {
+        (false, false)
+    } else {
+        (
+            true,
+            e.mem.u32(package.wrapping_add(PACKAGE_FLAGS)) & PACKAGE_FLAG_200000 == 0,
+        )
+    };
+    if npc != 0 {
+        let worn = e.vcall(actor, 0x1e8, &[]).u32();
+        e.call(NPC_INIT_DEFAULT_WORN, &args![npc, actor, worn, 1u32]);
+    } else if creature != 0 {
+        e.call(
+            CREATURE_INIT_DEFAULT_WORN,
+            &args![creature, actor, u32::from(first), u32::from(second), 1u32],
+        );
+    }
+    if advance != 0 {
+        add_to_procedure_index_running_slot(e, process, actor, 1);
+    }
+}
+
+/// A process slot holding one of `LowProcess`'s flag tests (`body`, of `flag`), as the byte the exe
+/// passes on: 0 or 1 in place (`008d7e60`), the slot's own byte otherwise.
+fn process_flag_byte(e: &mut Engine, process: u32, slot: u32, body: u32, flag: u8) -> u8 {
+    if slot_target(e, process, slot) == body {
+        u8::from(e.mem.u8(process.wrapping_add(PROCESS_FLAGS)) & flag != 0)
+    } else {
+        e.vcall(process, slot, &[]).u8()
+    }
+}
+
+// Typed from 00911f00
+/// `LowProcess::ProcessSandbox` (Xbox PDB): with no running instance data the procedure moves on
+/// by one (slot 0x288). The data's state (+4): 0 starts it (state 2, `009f3af0` with the running
+/// package's location); 1 and 2 become 3; 3 goes on; any other ends. Going on, once the actor's
+/// path is done (`008b3bb0`) and the data moves to its next location (`009f3c10`) that is another
+/// one (its location the word at +0x10, `0044edb0`): when neither location's parent cell (+0x40)
+/// is loaded, the actor is put at the next one (its slot 0x2a8 with the next's slot 0x1f4) and,
+/// for another cell, moved to it (`MoveToNewSpace` with the next's world space); otherwise the
+/// actor paths to it (`SetPathfindingGoalToReference`) for the package's count (`00676280`, as a
+/// float) or the least time when that is larger (`00404010`).
+pub fn process_sandbox(e: &mut Engine, this: Ptr, actor: Ptr) {
+    let process = this.addr();
+    let data = e.mem.u32(process.wrapping_add(RUNNING_INSTANCE_DATA));
+    if data == 0 {
+        add_to_procedure_index_running_slot(e, process, actor.addr(), 1);
+        return;
+    }
+    let state_at = data.wrapping_add(4);
+    match e.mem.u32(state_at) {
+        0 => {
+            let package = running_package(e, process);
+            e.mem.set_u32(state_at, 2);
+            let location = e.mem.u32(package.wrapping_add(0x2c));
+            e.call(SANDBOX_START, &args![data, actor, location]);
+            return;
+        }
+        1 | 2 => e.mem.set_u32(state_at, 3),
+        3 => {}
+        _ => return,
+    }
+    if !e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool() {
+        return;
+    }
+    let old = e.mem.u32(data.wrapping_add(0x10));
+    if !e.call(SANDBOX_MOVE_TO_NEXT_LOCATION, &args![data]).bool() {
+        return;
+    }
+    let next = e.mem.u32(data.wrapping_add(0x10));
+    if next == 0 || next == old {
+        return;
+    }
+    let old_cell = e.mem.u32(old.wrapping_add(PARENT_CELL));
+    let next_cell = e.mem.u32(next.wrapping_add(PARENT_CELL));
+    if cells_unloaded(e, old_cell, next_cell) {
+        let position = e.vcall(next, 0x1f4, &[]).u32();
+        e.vcall(actor.addr(), 0x2a8, &args![position]);
+        if old_cell == 0 || old_cell != next_cell {
+            let world_space = e.call(REFERENCE_WORLD_SPACE, &args![next]).u32();
+            e.call(
+                REFERENCE_MOVE_TO_NEW_SPACE,
+                &args![actor, next_cell, world_space],
+            );
+        }
+        return;
+    }
+    let package = running_package(e, process);
+    let count = e.call(PACKAGE_COUNT_FOR, &args![package, actor]).u32();
+    let time = x87_store32(f64::from(count));
+    let least = x87_quiet_bits(e.mem.u32(SANDBOX_LEAST_TIME));
+    let time = typed_call!(
+        draw_f::FAMILY,
+        0x0040_4010,
+        draw_f::helpers::float_max(
+            e,
+            f32::from_bits(x87_quiet_bits(time)),
+            f32::from_bits(least)
+        )
+    );
+    e.call(
+        ACTOR_SET_PATHFINDING_GOAL_TO_REFERENCE,
+        &args![actor, next, x87_quiet_bits(time.to_bits()), 0u32],
+    );
+}
+
+/// Where a procedure's destination is ([`current_destination_world_space`],
+/// [`current_destination_cell`]).
+enum Destination {
+    /// The package's location (when it has one), else the actor's.
+    PackageLocation,
+    /// The target's, else the actor's.
+    TargetOrActor,
+    /// The actor's.
+    Actor,
+    /// The running instance data's reference's (when there is one).
+    InstanceData,
+    /// The package location when the package's word at +0x24 has no bit 4 (`00901c50`) and it has
+    /// one, else the target's (slot 0x128), else the actor's.
+    LocationOrTarget,
+    /// The actor's (as it was first found).
+    Keep,
+}
+
+fn destination(procedure: u32) -> Destination {
+    match procedure {
+        0 | 4 | 5 | 7 | 50 => Destination::PackageLocation,
+        1 | 2 | 3 | 6 | 8 | 13 | 14 | 15 | 30 => Destination::TargetOrActor,
+        27 | 54 => Destination::Actor,
+        42 => Destination::InstanceData,
+        47 => Destination::LocationOrTarget,
+        _ => Destination::Keep,
+    }
+}
+
+/// The process's slot 0x128 (`GetTarget`): `pTarget` in place when the slot holds `008d6f30`.
+fn target_slot(e: &mut Engine, process: u32) -> u32 {
+    if slot_target(e, process, 0x128) == 0x008d_6f30 {
+        e.mem.u32(process.wrapping_add(TARGET))
+    } else {
+        e.vcall(process, 0x128, &[]).u32()
+    }
+}
+
+/// The running procedure of `package`'s type: its list's procedure at the running index (slot
+/// 0x280).
+fn running_procedure(e: &mut Engine, process: u32, package: u32) -> u32 {
+    let kind = package_kind(e, package);
+    let index = procedure_index_running(e, process);
+    listed_procedure(e, kind, index)
+}
+
+/// The running instance data's reference (`00639b40`: the data's word at +0x3c), none without
+/// data.
+fn instance_data_reference(e: &Engine, process: u32) -> u32 {
+    let data = e.mem.u32(process.wrapping_add(RUNNING_INSTANCE_DATA));
+    if data == 0 {
+        0
+    } else {
+        e.mem.u32(data.wrapping_add(0x3c))
+    }
+}
+
+/// Whether a package has a location that `LocationOrTarget` goes to: no bit 4 in its word at +0x24
+/// (`00901c50`).
+#[inline]
+fn location_first(e: &Engine, package: u32) -> bool {
+    e.mem.u16(package.wrapping_add(0x24)) & 4 == 0
+}
+
+/// A reference's world space (`TESObjectREFR::GetWorldSpace`).
+fn world_space_of(e: &mut Engine, reference: u32) -> u32 {
+    e.call(REFERENCE_WORLD_SPACE, &args![reference]).u32()
+}
+
+/// A reference's parent cell (+0x40, `008d6f30`).
+#[inline]
+fn cell_of(e: &Engine, reference: u32) -> u32 {
+    e.mem.u32(reference.wrapping_add(PARENT_CELL))
+}
+
+// Typed from 0090f3f0
+/// `LowProcess::GetCurrentDestinationWorldSpace` (Xbox PDB): the actor's world space (asked again
+/// for a null actor where the exe asks), or, with a current package (slot 0x22c, asked once), the
+/// world space of where its running procedure goes ([`Destination`]; the package location's
+/// through `00675a50`; the target through slot 0x128, asked twice as the exe asks).
+pub fn current_destination_world_space(e: &mut Engine, this: Ptr, actor: Ptr) -> u32 {
+    let process = this.addr();
+    let actor = actor.addr();
+    let mut result = if actor != 0 {
+        world_space_of(e, actor)
+    } else {
+        0
+    };
+    let package = current_package(e, process);
+    if package == 0 {
+        return result;
+    }
+    let location = |e: &mut Engine| {
+        e.call(PACKAGE_LOCATION_WORLD_SPACE, &args![package, actor])
+            .u32()
+    };
+    match destination(running_procedure(e, process, package)) {
+        Destination::PackageLocation => {
+            result = if e.mem.u32(package.wrapping_add(0x2c)) != 0 {
+                location(e)
+            } else {
+                world_space_of(e, actor)
+            };
+        }
+        Destination::TargetOrActor => {
+            let target = e.mem.u32(process.wrapping_add(TARGET));
+            result = world_space_of(e, if target != 0 { target } else { actor });
+        }
+        Destination::Actor => result = world_space_of(e, actor),
+        Destination::InstanceData => {
+            let reference = instance_data_reference(e, process);
+            if reference != 0 {
+                result = world_space_of(e, reference);
+            }
+        }
+        Destination::LocationOrTarget => {
+            result = if location_first(e, package) && e.mem.u32(package.wrapping_add(0x2c)) != 0 {
+                location(e)
+            } else if target_slot(e, process) != 0 {
+                let target = target_slot(e, process);
+                world_space_of(e, target)
+            } else {
+                world_space_of(e, actor)
+            };
+        }
+        Destination::Keep => {}
+    }
+    result
+}
+
+// Typed from 0090f0e0
+/// `LowProcess::GetCurrentDestinationCell` (Xbox PDB): as [`current_destination_world_space`], for
+/// the parent cell (a reference's word at +0x40; the package location's through `00675c20`); this
+/// one asks the current package (slot 0x22c) before each use, as the exe does.
+pub fn current_destination_cell(e: &mut Engine, this: Ptr, actor: Ptr) -> u32 {
+    let process = this.addr();
+    let actor = actor.addr();
+    let mut result = if actor != 0 { cell_of(e, actor) } else { 0 };
+    if current_package(e, process) == 0 {
+        return result;
+    }
+    let package = current_package(e, process);
+    let location = |e: &mut Engine| {
+        let package = current_package(e, process);
+        e.call(PACKAGE_LOCATION_CELL, &args![package, actor]).u32()
+    };
+    match destination(running_procedure(e, process, package)) {
+        Destination::PackageLocation => {
+            let package = current_package(e, process);
+            result = if e.mem.u32(package.wrapping_add(0x2c)) != 0 {
+                location(e)
+            } else {
+                cell_of(e, actor)
+            };
+        }
+        Destination::TargetOrActor => {
+            let target = e.mem.u32(process.wrapping_add(TARGET));
+            result = cell_of(e, if target != 0 { target } else { actor });
+        }
+        Destination::Actor => result = cell_of(e, actor),
+        Destination::InstanceData => {
+            let reference = instance_data_reference(e, process);
+            if reference != 0 {
+                result = cell_of(e, reference);
+            }
+        }
+        Destination::LocationOrTarget => {
+            let package = current_package(e, process);
+            let located = location_first(e, package) && {
+                let package = current_package(e, process);
+                e.mem.u32(package.wrapping_add(0x2c)) != 0
+            };
+            result = if located {
+                location(e)
+            } else if target_slot(e, process) != 0 {
+                let target = target_slot(e, process);
+                cell_of(e, target)
+            } else {
+                cell_of(e, actor)
+            };
+        }
+        Destination::Keep => {}
+    }
+    result
+}
+
+/// The form of a saved id as a `TESObjectREFR` (`004839c0`, `__RTDynamicCast`).
+fn reference_of_id(e: &mut Engine, id: u32) -> u32 {
+    let form = typed_call!(
+        forms::FAMILY,
+        0x0048_39c0,
+        forms::tesform::form_by_id(e, id)
+    );
+    base_process::runtime_cast(e, form, TYPE_FORM, TYPE_REFERENCE)
+}
+
+// Typed from 00910250
+/// `LowProcess::InitLoadGame` (Xbox PDB): `BaseProcess`'s, then the loaded target id becomes its
+/// reference (slot 0x12c), marked targeted (`SetTargeted(1)`, in place: its flag 0x40000) when
+/// set, and the loaded `pGenericLocation` id becomes its reference.
+pub fn init_load_game(e: &mut Engine, this: Ptr, first: u32, second: u32, third: u32) {
+    let process = this.addr();
+    typed_call!(
+        FAMILY,
+        0x008d_0e60,
+        base_process::init_load_game(e, this, first, second, third)
+    );
+    let target_at = process.wrapping_add(TARGET);
+    let id = e.mem.u32(target_at);
+    if id != 0 {
+        let target = reference_of_id(e, id);
+        set_target_slot(e, process, target);
+        let target = e.mem.u32(target_at);
+        if target != 0 {
+            // `TESObjectREFR::SetTargeted(1)` (`00564db0`): its flag 0x40000 set.
+            let at = target.wrapping_add(8);
+            let flags = e.mem.u32(at);
+            e.mem.set_u32(at, flags | TARGETED);
+        }
+    }
+    let location_at = process.wrapping_add(GENERIC_LOCATION);
+    let id = e.mem.u32(location_at);
+    if id != 0 {
+        let location = reference_of_id(e, id);
+        e.mem.set_u32(location_at, location);
+    }
+}
+
+/// The saved id at `at` replaced by its reference (none for 0).
+fn resolve_reference_at(e: &mut Engine, at: u32) {
+    let id = e.mem.u32(at);
+    let reference = if id != 0 { reference_of_id(e, id) } else { 0 };
+    e.mem.set_u32(at, reference);
+}
+
+// Typed from 00910820
+/// `LowProcess::InitLoadGame` of a buffer (Xbox PDB `InitLoadGame_ov2`): `BaseProcess`'s; the
+/// loaded target id's reference set (`pTarget` cleared first, then slot 0x12c); the ids at +0x44,
+/// +0x48 and +0x54 replaced by their references; and each id on `GenericLocationsList` replaced by
+/// its reference (`00726c60`, in place), or taken off when it has none (after the first
+/// node through the node before it, `00905330`; the head through `0063f7b0`).
+pub fn init_load_game_buffer(e: &mut Engine, this: Ptr, buffer: u32) {
+    let process = this.addr();
+    typed_call!(
+        FAMILY,
+        0x008d_1000,
+        base_process::init_load_game_buffer(e, this, buffer)
+    );
+    let target_at = process.wrapping_add(TARGET);
+    let id = e.mem.u32(target_at);
+    let target = if id != 0 { reference_of_id(e, id) } else { 0 };
+    e.mem.set_u32(target_at, 0);
+    set_target_slot(e, process, target);
+    for offset in [GENERIC_LOCATION, GENERIC_SECOND_LOCATION, 0x54] {
+        resolve_reference_at(e, process.wrapping_add(offset));
+    }
+    let mut node = process.wrapping_add(GENERIC_LOCATIONS_LIST);
+    let mut previous = 0u32;
+    // `008256d0`: the walk ends at a node whose words at +4 and +0 are both 0.
+    while node != 0 && (e.mem.u32(node.wrapping_add(4)) != 0 || e.mem.u32(node) != 0) {
+        let id = e.mem.u32(node);
+        let reference = if id != 0 { reference_of_id(e, id) } else { 0 };
+        if reference != 0 {
+            // `00726c60` through the exe's stack word holding the reference: the store in place.
+            e.mem.set_u32(node, reference);
+            previous = node;
+            node = e.mem.u32(node.wrapping_add(4));
+        } else if previous != 0 {
+            e.call(LIST_REMOVE_ITEM, &args![previous, node]);
+            node = e.mem.u32(previous.wrapping_add(4));
+        } else {
+            e.call(LIST_REMOVE_HEAD, &args![node]);
+        }
+    }
+}
+
+// Typed from 009130f0
+/// `LowProcess::SavePackageToExtraData` (Xbox PDB): with a current package that is not a created
+/// one (its flag 0x800), the actor's extra data (+0x44) keeps it (`ExtraPackage`'s set, `0041c930`)
+/// with the current procedure index (slot 0x23c), the target and the action complete, target
+/// activated and done once flags (slots 0x11c, 0x4e8, 0x5a4), and the actor's slot 0x48 runs with
+/// 0x80000000. With running instance data, the extra data keeps that too (`004211d0`; the exe's
+/// read of the actor's process's running package's word at +8 is unread) and the embedded
+/// package's instance data is cleared (`ActorPackage::NullInstanceData`).
+pub fn save_package_to_extra_data(e: &mut Engine, this: Ptr, actor: Ptr) {
+    let process = this.addr();
+    if current_package(e, process) == 0 {
+        return;
+    }
+    let package = current_package(e, process);
+    if e.mem.u32(package.wrapping_add(PACKAGE_FLAGS)) & PACKAGE_CREATED != 0 {
+        return;
+    }
+    let extra = actor.addr().wrapping_add(EXTRA_LIST);
+    let done_once = process_flag_byte(e, process, 0x5a4, 0x008d_8000, 0x20);
+    let activated = process_flag_byte(e, process, 0x4e8, 0x008d_7fc0, 1);
+    let complete = process_flag_byte(e, process, 0x11c, 0x008d_7e40, 2);
+    let target = e.mem.u32(process.wrapping_add(TARGET));
+    let index = current_procedure_index(e, process);
+    let package = current_package(e, process);
+    typed_call!(
+        extra_data::FAMILY,
+        0x0041_c930,
+        extra_data::packages::set_package(
+            e,
+            extra,
+            package,
+            i32::from_ne_bytes(index.to_ne_bytes()),
+            target,
+            complete,
+            activated,
+            done_once
+        )
+    );
+    e.vcall(actor.addr(), 0x48, &args![0x8000_0000u32]);
+    let data = e.mem.u32(process.wrapping_add(RUNNING_INSTANCE_DATA));
+    if data == 0 {
+        return;
+    }
+    // The actor's process's running package (slot 0x278), asked again when there is one (the
+    // process read again after the slot, as the exe does); its word at +8 the exe then reads is
+    // unread.
+    let process_at = actor.addr().wrapping_add(0x68);
+    if e.mem.u32(process_at) != 0 {
+        let other = e.mem.u32(process_at);
+        if running_actor_package(e, other) != 0 {
+            let other = e.mem.u32(process_at);
+            running_actor_package(e, other);
+        }
+    }
+    e.call(EXTRA_SET_ACTOR_PACKAGE_DATA, &args![extra, data]);
+    typed_call!(
+        FAMILY,
+        0x008c_6060,
+        actor_package::null_instance_data(e, Ptr::new(process.wrapping_add(4)))
+    );
+}
+
+// Typed from 00913250
+/// `LowProcess::LoadPackageFromExtraData` (Xbox PDB): with a package kept in the actor's extra data
+/// (`ExtraPackage`): the current data cleared when the actor's slot 0x100 holds (slot 0x524), the
+/// embedded package started from it with its target (`ActorPackage::InitFromPackage`), the actor
+/// told (`004534f0`, the empty body: left out), the kept procedure index set (slot 0x238; 0 when
+/// it is past the package's procedure count), the target (slot 0x12c) and the three flags (slots
+/// 0x118, 0x5a8, 0x4ec) set, the kept package taken off, and kept instance data handed to the
+/// embedded package (`006ecd40`) and taken off. Without one: the current data cleared as above,
+/// the current package (slot 0x234), the target and the flags cleared.
+pub fn load_package_from_extra_data(e: &mut Engine, this: Ptr, actor: Ptr) {
+    let process = this.addr();
+    let extra = actor.addr().wrapping_add(EXTRA_LIST);
+    let kept = typed_call!(
+        extra_data::FAMILY,
+        0x0041_cb10,
+        extra_data::packages::package(e, extra)
+    );
+    if e.vcall(actor.addr(), 0x100, &[]).bool() {
+        clear_current_data_slot(e, process, actor.addr());
+    }
+    if kept == 0 {
+        clear_current_package_slot(e, process);
+        set_target_slot(e, process, 0);
+        set_process_flag(e, process, 0x118, 0x008d_7de0, 2, 0);
+        typed_call!(FAMILY, 0x0090_ac20, set_flag_40(e, this, 0));
+        set_process_flag(e, process, 0x5a8, 0x008d_8020, 0x20, 0);
+        set_process_flag(e, process, 0x4ec, 0x008d_7fe0, 1, 0);
+        return;
+    }
+    let target = typed_call!(
+        dispatch::FAMILY,
+        0x0041_cb70,
+        dispatch::extra::package_target(e, Ptr::new(extra))
+    );
+    let package = typed_call!(
+        extra_data::FAMILY,
+        0x0041_cb10,
+        extra_data::packages::package(e, extra)
+    );
+    typed_call!(
+        FAMILY,
+        0x008c_6080,
+        actor_package::init_from_package(
+            e,
+            Ptr::new(process.wrapping_add(4)),
+            Ptr::new(package),
+            target
+        )
+    );
+    current_package(e, process);
+    let mut index = typed_call!(
+        extra_data::FAMILY,
+        0x0041_cb40,
+        extra_data::packages::package_index(e, extra)
+    );
+    let package = e.mem.u32(process.wrapping_add(4));
+    if package_kind(e, package) != u32::MAX && index >= procedure_count(e, package) {
+        index = 0;
+    }
+    set_current_procedure_index(e, process, u32::from_ne_bytes(index.to_ne_bytes()));
+    let target = typed_call!(
+        dispatch::FAMILY,
+        0x0041_cb70,
+        dispatch::extra::package_target(e, Ptr::new(extra))
+    );
+    set_target_slot(e, process, target);
+    let complete = typed_call!(
+        extra_data::FAMILY,
+        0x0041_cba0,
+        extra_data::packages::package_action_complete(e, extra)
+    );
+    set_process_flag(e, process, 0x118, 0x008d_7de0, 2, complete);
+    let done_once = typed_call!(
+        extra_data::FAMILY,
+        0x0041_cc30,
+        extra_data::packages::package_done_once(e, extra)
+    );
+    set_process_flag(e, process, 0x5a8, 0x008d_8020, 0x20, done_once);
+    let activated = typed_call!(
+        extra_data::FAMILY,
+        0x0041_cc00,
+        extra_data::packages::package_activated(e, extra)
+    );
+    set_process_flag(e, process, 0x4ec, 0x008d_7fe0, 1, activated);
+    typed_call!(
+        extra_data::FAMILY,
+        0x0041_cc60,
+        extra_data::packages::remove_package(e, extra)
+    );
+    let data = typed_call!(
+        dispatch::FAMILY,
+        0x0042_12b0,
+        dispatch::extra::actor_package_data(e, Ptr::new(extra))
+    );
+    if data != 0 {
+        e.call(SET_INSTANCE_DATA, &args![process.wrapping_add(4), data]);
+        e.call(EXTRA_REMOVE_ACTOR_PACKAGE_DATA, &args![extra]);
+    }
+}
+
+/// The process's slot 0x524 ([`clear_current_data_for_process`] on the low processes).
+fn clear_current_data_slot(e: &mut Engine, process: u32, actor: u32) {
+    if slot_target(e, process, 0x524) == 0x0091_0b30 {
+        typed_call!(
+            FAMILY,
+            0x0091_0b30,
+            clear_current_data_for_process(e, Ptr::new(process), actor)
+        );
+    } else {
+        e.vcall(process, 0x524, &args![actor]);
+    }
+}
+
+/// The process's slot 0x234 (`BaseProcess::ClearCurrentPackage` on every process class).
+fn clear_current_package_slot(e: &mut Engine, process: u32) {
+    if slot_target(e, process, 0x234) == 0x008d_03a0 {
+        typed_call!(
+            FAMILY,
+            0x008d_03a0,
+            base_process::clear_current_package(e, Ptr::new(process))
+        );
+    } else {
+        e.vcall(process, 0x234, &[]);
+    }
 }

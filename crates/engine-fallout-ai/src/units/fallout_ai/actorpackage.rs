@@ -106,6 +106,17 @@ pub fn actor_package_move_to(
     e.set(this, ActorPackage::fPackageStartTime, empty_start_time);
 }
 
+/// `ActorPackage::Clear` (`008c5ef0`), called by address so its native version runs.
+const ACTOR_PACKAGE_CLEAR: u32 = 0x008c_5ef0;
+/// `TESPackage::IncRefCount` (`008c6100`), called by address so its native version runs.
+const PACKAGE_INC_REF_COUNT: u32 = 0x008c_6100;
+/// `ActorPackage::InitFromPackage` (`008c6080`), called by address so its native version runs.
+const INIT_FROM_PACKAGE: u32 = 0x008c_6080;
+/// Sets or clears a flag bit of the package data (`008c6920`), called by address so its native
+/// version runs.
+const SET_FLAG: u32 = 0x008c_6920;
+/// Reads a flag bit of the package data (`008c6b00`), called by address so its native version runs.
+const FLAG: u32 = 0x008c_6b00;
 /// Interlocked decrement of the word at the address (`004019a0`, cdecl;
 /// the engine map's name `WaitForSingleObjectEx` belongs to folded code).
 const INTERLOCKED_DECREMENT: u32 = 0x0040_19a0;
@@ -165,11 +176,11 @@ pub fn actor_package_init_from_package(e: &mut Engine, this: Ptr, package: Ptr, 
     if package.addr() == e.mem.u32(base) {
         return;
     }
-    actorpackage_clear(e, this);
+    e.call(ACTOR_PACKAGE_CLEAR, &args![this]);
     if package.is_null() {
         return;
     }
-    tes_package_inc_ref_count(e, package);
+    e.call(PACKAGE_INC_REF_COUNT, &args![package]);
     let hour = e.call(CALENDAR_GET_HOUR, &args![CALENDAR]).f64();
     e.mem.set_u32(base + 0x10, x87_store32(hour));
     e.mem.set_u32(base, package.addr());
@@ -424,7 +435,7 @@ pub fn actor_package_load_game(e: &mut Engine, this: Ptr, word: u32, _unused_2: 
         let kind_at = locals.addr() + 4;
         let save_load = e.global::<u32>(SAVE_LOAD_GAME);
         let answer = e.call(LOAD_NUMERIC_ID, &args![save_load, id_at, 4u32]).u8();
-        actorpackage_clear(e, this);
+        e.call(ACTOR_PACKAGE_CLEAR, &args![this]);
         let mut failed = false;
         let id = e.mem.u32(id_at);
         if id != 0 {
@@ -438,17 +449,17 @@ pub fn actor_package_load_game(e: &mut Engine, this: Ptr, word: u32, _unused_2: 
                         .call(LOAD_PACKAGE_OF_TYPE, &args![save_load, id, kind])
                         .u32();
                     e.vcall(package, 0x154, &args![]);
-                    actor_package_init_from_package(e, this, Ptr::new(package), 0);
+                    e.call(INIT_FROM_PACKAGE, &args![this, package, 0u32]);
                     if e.call(PACKAGE_PROCEDURE, &args![package]).u32() == 0xffff_ffff {
                         let target = e.mem.u32(base + 8);
                         e.call(CALCULATE_PROCEDURE_TYPE, &args![package, target]);
                     }
                 } else {
-                    actor_package_init_from_package(e, this, Ptr::new(id), 0);
+                    e.call(INIT_FROM_PACKAGE, &args![this, id, 0u32]);
                 }
             } else {
                 let package = cast_form(e, id, TYPE_TES_PACKAGE);
-                actor_package_init_from_package(e, this, Ptr::new(package), 0);
+                e.call(INIT_FROM_PACKAGE, &args![this, package, 0u32]);
                 if e.mem.u32(base) != 0 {
                     let target = e.mem.u32(base + 8);
                     let package = e.mem.u32(base);
@@ -495,7 +506,7 @@ pub fn actor_package_init_load_game(e: &mut Engine, this: Ptr, word: u32, _unuse
         if word & FOLDED_MASK != 0 {
             let package = e.mem.u32(base);
             let cast = cast_form(e, package, TYPE_TES_PACKAGE);
-            actor_package_init_from_package(e, this, Ptr::new(cast), 0);
+            e.call(INIT_FROM_PACKAGE, &args![this, cast, 0u32]);
         } else {
             let package = e.mem.u32(base);
             let id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, package));
@@ -516,7 +527,7 @@ pub fn actor_package_init_load_game(e: &mut Engine, this: Ptr, word: u32, _unuse
 /// build; translated as the exe has it.
 pub fn fn_008c65a0(e: &mut Engine, this: Ptr, word: u32) {
     if word & FOLDED_MASK != 0 && e.mem.u32(this.addr()) != 0 {
-        actorpackage_clear(e, this);
+        e.call(ACTOR_PACKAGE_CLEAR, &args![this]);
     }
 }
 
@@ -595,10 +606,10 @@ pub fn actor_package_load_game_ov2(e: &mut Engine, this: Ptr, buffer: Ptr) {
         }
         e.call(LOAD_FORM_ID, &args![buffer, base + 8]);
         if marked {
-            fn_008c6920(e, this, 0, 1);
+            e.call(SET_FLAG, &args![this, 0u32, 1u32]);
         }
         if answer != 0 {
-            actorpackage_clear(e, this);
+            e.call(ACTOR_PACKAGE_CLEAR, &args![this]);
         }
     });
 }
@@ -629,7 +640,7 @@ pub fn fn_008c6920(e: &mut Engine, this: Ptr, bit: u32, set: u8) {
 /// targeted (`00564db0` with 1).
 pub fn actor_package_init_load_game_ov2(e: &mut Engine, this: Ptr, buffer: Ptr) {
     let base = this.addr();
-    if fn_008c6b00(e, this, 0) as u8 != 0 {
+    if e.call(FLAG, &args![this, 0u32]).u8() != 0 {
         let changed = e.global::<u32>(CHANGED_FORMS);
         let package = e.mem.u32(base);
         let id = e.call(CHANGED_FORM_LOOKUP, &args![changed, package]).u32();
@@ -654,7 +665,7 @@ pub fn actor_package_init_load_game_ov2(e: &mut Engine, this: Ptr, buffer: Ptr) 
             e.call(CALCULATE_PROCEDURE_TYPE, &args![package, 0u32]);
         }
         let package = e.mem.u32(base);
-        tes_package_inc_ref_count(e, Ptr::new(package));
+        e.call(PACKAGE_INC_REF_COUNT, &args![package]);
         clamp_procedure_index(e, base);
     }
     if e.mem.u32(base + 4) != 0 {
@@ -694,8 +705,8 @@ pub fn fn_008c6b00(e: &mut Engine, this: Ptr, bit: u32) -> u32 {
 /// (`ActorPackageData::CreateActorPackageData`).
 pub fn actor_package_finish_load_game(e: &mut Engine, this: Ptr, buffer: Ptr) {
     let base = this.addr();
-    if fn_008c6b00(e, this, 0) as u8 != 0 {
-        fn_008c6920(e, this, 0, 0);
+    if e.call(FLAG, &args![this, 0u32]).u8() != 0 {
+        e.call(SET_FLAG, &args![this, 0u32, 0u32]);
     } else if e.mem.u32(base) != 0 {
         let package = e.mem.u32(base);
         let id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, package));
@@ -746,7 +757,7 @@ pub fn actor_package_finish_load_game(e: &mut Engine, this: Ptr, buffer: Ptr) {
 /// `ActorPackage::Revert` (Xbox PDB; `thiscall`, one word it does not read; `RET 4`):
 /// [`actorpackage_clear`].
 pub fn actor_package_revert(e: &mut Engine, this: Ptr, _unused_1: u32) {
-    actorpackage_clear(e, this);
+    e.call(ACTOR_PACKAGE_CLEAR, &args![this]);
 }
 
 /// This unit's translated functions, by exe address.
