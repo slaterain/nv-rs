@@ -26,6 +26,7 @@ use super::scene_light::{release, set_held_1a0};
 use super::ShadowSceneLight;
 use super::FAMILY;
 use crate::native::{float_precision, to_float, Real};
+use crate::scene_node;
 use engine_core::ptr::Ptr;
 use engine_core::sync_direct::interlocked_increment;
 use engine_core::types::NiTListItem;
@@ -600,11 +601,10 @@ fn test_frustum_cull_in<R: Real>(e: &mut Engine, this: Ptr<ShadowSceneLight>, cu
 // ---------------------------------------------------------------------------------------------
 // 00b9dfc0: MTSetupFrustumDepthMap.
 
-/// The renderer's free shadow map (`00b6d3f0`), the light's map setter (`00b5aee0`, `RET 4`),
+/// The renderer's free shadow map (`00b6d3f0`),
 /// the rendering system (`01200088`) and its `SetThreadStage` (`00ba30f0`, `RET 8`) and
 /// `AddAccumTask` (`00ba3390`, `RET 0x24`); the dimmer limit (`double` 0.05 at `01082cb0`).
 const RENDERER_GET_MAP: u32 = 0x00b6_d3f0;
-const SET_SHADOW_MAP: u32 = 0x00b5_aee0;
 const RENDERING_SYSTEM: u32 = 0x0120_0088;
 const SET_THREAD_STAGE: u32 = 0x00ba_30f0;
 const ADD_ACCUM_TASK: u32 = 0x00ba_3390;
@@ -658,11 +658,11 @@ fn release_map_and_accumulator(e: &mut Engine, this: Ptr<ShadowSceneLight>) {
 
 // Typed from 00b9dfc0
 /// `ShadowSceneLight::MTSetupFrustumDepthMap` (`thiscall`, `RET 8`: an unread word, the light's
-/// index). A light with the cube maps on (`bCastShadow`) or a shadow spotlight gets a shadow map
-/// from the renderer when it has none (its `NiLight` culled when there is none to get). Unless it
-/// is that kind of light, not culled, with a shadow dimmer above 0.05 and a map, its map and
-/// accumulator are released; otherwise its orthographic frustum and shadow camera are set up
-/// ([`setup_frustum`]). The thread stage of the index is set last.
+/// index). Every light without a shadow map gets one from the renderer (its `NiLight` culled when
+/// there is none to get). Unless it is a light with the cube maps on (`bCastShadow`) or a shadow
+/// spotlight, not culled, with a shadow dimmer above 0.05 and a map, its map and accumulator are
+/// released; otherwise its orthographic frustum and shadow camera are set up ([`setup_frustum`]).
+/// The thread stage of the index is set last.
 pub fn setup_frustum_depth_map(
     e: &mut Engine,
     this: Ptr<ShadowSceneLight>,
@@ -679,7 +679,12 @@ pub fn setup_frustum_depth_map(
             let flags = e.mem.u32(light.wrapping_add(FLAGS));
             e.mem.set_u32(light.wrapping_add(FLAGS), flags | 1);
         }
-        e.call(SET_SHADOW_MAP, &args![this, map]);
+        let light = Ptr::new(this.addr());
+        typed_call!(
+            scene_node::FAMILY,
+            0x00b5_aee0,
+            scene_node::lists::set_shadow_map(e, light, map)
+        );
     }
     let dimmer = f64::from(e.get(this, ShadowSceneLight::fShadowLODDimmer));
     let limit: f64 = e.global(SHADOW_DIMMER_LIMIT);
