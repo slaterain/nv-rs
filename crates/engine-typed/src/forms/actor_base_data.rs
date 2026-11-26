@@ -22,7 +22,9 @@
 //! entries (`004fd3e0`, `004fd3c0`) and version byte (`008df040`), and the container's empty-list
 //! test (`0042cde0`). `TESForm`'s functions (`AddChunkData`, `AddChunk` of a word, `GetFile`,
 //! `AddCompileIndex`, the form lookup) are this family's typed calls, `memcpy` the C runtime
-//! family's; a word the exe reads twice with nothing between that could change it is read once.
+//! family's, and the template walk's extra data getters (the container changes, `00418520`, and the
+//! thread's flag 4, `004121b0`) the extra data family's; a word the exe reads twice with nothing
+//! between that could change it is read once.
 //!
 //! Floats: the loading threads and the AI ask these too, so the exe's extended precision is kept
 //! as the translation keeps it: `f64` maths, rounded to `f32` where the exe stores a float, and a
@@ -30,7 +32,7 @@
 //! word it sets around it). Comparisons are of the values the exe compares.
 
 use super::{tesform, FAMILY};
-use crate::{cell_refs, crt};
+use crate::{cell_refs, crt, extra_data};
 use engine_core::typed::leaf;
 use engine_core::x87::{fistp_chop, x87_div, x87_mul, x87_quiet};
 use engine_core::{args, typed_call, Engine, Ptr};
@@ -40,10 +42,8 @@ const OPERATOR_DELETE: u32 = 0x0040_1030;
 const FLOATS_NEAR: u32 = 0x0040_eb10;
 /// The game's printf-style log (YUP and xNVSE may replace it).
 const MESSAGE_LOG: u32 = 0x005b_5e40;
-const GET_CONTAINER_CHANGES: u32 = 0x0041_8520;
 const EXTRA_LIST_CLEAR_A: u32 = 0x0041_aeb0;
 const EXTRA_LIST_CLEAR_B: u32 = 0x0041_af50;
-const TLS_FLAG_FOUR: u32 = 0x0041_21b0;
 const TLS_FLAG_ONE_SET: u32 = 0x0046_23f0;
 const CREATE_FORM_OF_TYPE: u32 = 0x0046_5110;
 const CHAINED_CONTAINER_DESTRUCT: u32 = 0x0046_ffb0;
@@ -549,7 +549,13 @@ pub fn apply_template(e: &mut Engine, this: u32, actor: u32) {
         let first = node_item(e, list);
         let first_entry_word = e.mem.u32(first.wrapping_add(4));
         let handler = e.mem.u32(BGS_SAVE_LOAD_GAME);
-        if handler == 0 || !e.call(TLS_FLAG_FOUR, &args![handler]).bool() {
+        if handler == 0
+            || !typed_call!(
+                extra_data::FAMILY,
+                0x0041_21b0,
+                extra_data::copy::thread_flag_4(e, handler)
+            )
+        {
             if e.vcall(actor, 0xfc, &args![]).bool()
                 && typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, actor)) != 0
             {
@@ -560,7 +566,11 @@ pub fn apply_template(e: &mut Engine, this: u32, actor: u32) {
         let manager = typed_call!(FAMILY, 0x0047_d0b0, path_manager_instance(e));
         if typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, manager)) != 0 {
             let extra_list = actor.wrapping_add(0x44);
-            let changes = e.call(GET_CONTAINER_CHANGES, &args![extra_list]).u32();
+            let changes = typed_call!(
+                extra_data::FAMILY,
+                0x0041_8520,
+                extra_data::access::container_changes(e, extra_list)
+            );
             let manager = typed_call!(FAMILY, 0x0047_d0b0, path_manager_instance(e));
             e.call(
                 PATH_MANAGER_CLEAR_INVENTORY_POINTERS,

@@ -110,14 +110,14 @@ pub fn fn_0047f790(e: &mut Engine, this: Ptr, flags: u32) {
 /// Sets `cAssistance` (+0x12) and marks the form changed (`0047f790`, 8).
 pub fn fn_0047ee50(e: &mut Engine, this: Ptr, value: u8) {
     e.mem.set_u8(this.addr() + 0x12, value);
-    fn_0047f790(e, this, 8);
+    e.call(0x0047_f790, &args![this, 8u32]);
 }
 
 // Translated from 0047ee70 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Sets `bAggroRadius` (+0x13) and marks the form changed (`0047f790`, 8).
 pub fn fn_0047ee70(e: &mut Engine, this: Ptr, value: u8) {
     e.mem.set_u8(this.addr() + 0x13, value);
-    fn_0047f790(e, this, 8);
+    e.call(0x0047_f790, &args![this, 8u32]);
 }
 
 // Translated from 0047ee90 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -125,7 +125,7 @@ pub fn fn_0047ee70(e: &mut Engine, this: Ptr, value: u8) {
 /// 8).
 pub fn fn_0047ee90(e: &mut Engine, this: Ptr, value: u32) {
     e.mem.set_u32(this.addr() + 0x14, value);
-    fn_0047f790(e, this, 8);
+    e.call(0x0047_f790, &args![this, 8u32]);
 }
 
 // Translated from 0047ef80 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -134,7 +134,7 @@ pub fn fn_0047ee90(e: &mut Engine, this: Ptr, value: u32) {
 pub fn fn_0047ef80(e: &mut Engine, this: Ptr, value: u8) {
     if i32::from(value) < 8 {
         e.mem.set_u8(this.addr() + 8, value);
-        fn_0047f790(e, this, 8);
+        e.call(0x0047_f790, &args![this, 8u32]);
     }
 }
 
@@ -144,7 +144,7 @@ pub fn fn_0047ef80(e: &mut Engine, this: Ptr, value: u8) {
 pub fn fn_0047efb0(e: &mut Engine, this: Ptr, flags: u32, notify: u8) {
     e.mem.set_u32(this.addr() + 0xc, flags);
     if notify != 0 {
-        fn_0047f790(e, this, 8);
+        e.call(0x0047_f790, &args![this, 8u32]);
     }
 }
 
@@ -159,11 +159,11 @@ pub fn fn_0047f000(e: &mut Engine, this: Ptr) -> u32 {
 /// `0x20..=0x2D` (`0047f060`), then marks the form changed (`0047f790`, 8)
 /// either way.
 pub fn fn_0047f020(e: &mut Engine, this: Ptr, skill: u32) {
-    if fn_0047f060(e, skill as i32) {
+    if e.call(0x0047_f060, &args![skill]).bool() {
         e.mem
             .set_u8(this.addr() + 0x10, skill.wrapping_sub(0x20) as u8);
     }
-    fn_0047f790(e, this, 8);
+    e.call(0x0047_f790, &args![this, 8u32]);
 }
 
 // Translated from 0047f090 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -171,7 +171,7 @@ pub fn fn_0047f020(e: &mut Engine, this: Ptr, skill: u32) {
 /// 8).
 pub fn fn_0047f090(e: &mut Engine, this: Ptr, value: u8) {
     e.mem.set_u8(this.addr() + 0x11, value);
-    fn_0047f790(e, this, 8);
+    e.call(0x0047_f790, &args![this, 8u32]);
 }
 
 // Translated from 0047ed10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -212,7 +212,7 @@ pub fn tes_ai_form_tes_ai_form(e: &mut Engine, this: Ptr) -> Ptr {
     e.call(0x0040_2d30, &args![this]);
     e.mem.set_u32(this.addr(), TES_AI_FORM_VTABLE);
     e.call(0x0068_0890, &args![this.addr() + 0x18]);
-    tes_ai_form_initialize_data_component(e, this);
+    e.call(0x0047_ed10, &args![this]);
     this
 }
 
@@ -222,7 +222,7 @@ pub fn tes_ai_form_tes_ai_form(e: &mut Engine, this: Ptr) -> Ptr {
 /// (`0047ede0`), then the package list (`0067e3a0` on +0x18).
 pub fn fn_0047ecb0(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), TES_AI_FORM_VTABLE);
-    fn_0047ede0(e, this);
+    e.call(0x0047_ede0, &args![this]);
     e.call(0x0067_e3a0, &args![this.addr() + 0x18]);
 }
 
@@ -241,23 +241,23 @@ pub fn fn_0047f0b0(e: &mut Engine, this: Ptr, data: Ptr) {
     let base = this.addr();
     let byte = |e: &Engine, offset: u32| e.mem.u8(d + offset);
     let v = byte(e, 0);
-    fn_0047ee00(e, this, v, 1);
+    e.call(0x0047_ee00, &args![this, u32::from(v), 1u32]);
     let v = byte(e, 0xe);
-    fn_0047ee50(e, this, v);
+    e.call(0x0047_ee50, &args![this, u32::from(v)]);
     let v = byte(e, 1);
-    fn_0047eed0(e, this, v, 1);
+    e.call(0x0047_eed0, &args![this, u32::from(v), 1u32]);
     let v = byte(e, 2);
-    fn_0047ef00(e, this, v, 1);
+    e.call(0x0047_ef00, &args![this, u32::from(v), 1u32]);
     let v = byte(e, 3);
-    fn_0047ef50(e, this, v, 1);
+    e.call(0x0047_ef50, &args![this, u32::from(v), 1u32]);
     let flags = e.mem.u32(d + 8);
-    fn_0047efb0(e, this, flags, 1);
+    e.call(0x0047_efb0, &args![this, flags, 1u32]);
     let v = byte(e, 4);
-    fn_0047ef80(e, this, v);
+    e.call(0x0047_ef80, &args![this, u32::from(v)]);
     let v = byte(e, 0xf);
-    fn_0047ee70(e, this, v);
+    e.call(0x0047_ee70, &args![this, u32::from(v)]);
     let radius = e.mem.u32(d + 0x10);
-    fn_0047ee90(e, this, radius);
+    e.call(0x0047_ee90, &args![this, radius]);
     let v = byte(e, 0xc);
     e.mem.set_u8(base + 0x10, v);
     let v = byte(e, 0xd);
@@ -276,27 +276,27 @@ pub fn fn_0047f0b0(e: &mut Engine, this: Ptr, data: Ptr) {
 pub fn fn_0047f1e0(e: &mut Engine, this: Ptr, other: Ptr) {
     let get = |e: &mut Engine, getter: u32| e.call(getter, &args![other]).u32();
     let v = get(e, 0x004f_1540) as u8;
-    fn_0047ee00(e, this, v, 1);
-    let v = fn_0047ee30(e, other);
-    fn_0047ee50(e, this, v);
+    e.call(0x0047_ee00, &args![this, u32::from(v), 1u32]);
+    let v = e.call(0x0047_ee30, &args![other]).u8();
+    e.call(0x0047_ee50, &args![this, u32::from(v)]);
     let v = get(e, 0x004f_6de0) as u8;
-    fn_0047eed0(e, this, v, 1);
+    e.call(0x0047_eed0, &args![this, u32::from(v), 1u32]);
     let v = get(e, 0x005b_b4d0) as u8;
-    fn_0047ef00(e, this, v, 1);
-    let v = fn_0047ef30(e, other);
-    fn_0047ef50(e, this, v, 1);
+    e.call(0x0047_ef00, &args![this, u32::from(v), 1u32]);
+    let v = e.call(0x0047_ef30, &args![other]).u8();
+    e.call(0x0047_ef50, &args![this, u32::from(v), 1u32]);
     let v = get(e, 0x0062_f2f0) as u8;
-    fn_0047ef80(e, this, v);
+    e.call(0x0047_ef80, &args![this, u32::from(v)]);
     let v = get(e, 0x0070_5cf0) as u8;
-    fn_0047ee70(e, this, v);
+    e.call(0x0047_ee70, &args![this, u32::from(v)]);
     let v = get(e, 0x0082_5c00);
-    fn_0047ee90(e, this, v);
+    e.call(0x0047_ee90, &args![this, v]);
     let v = get(e, 0x0084_e3a0);
-    fn_0047efb0(e, this, v, 1);
-    let v = fn_0047f000(e, other);
-    fn_0047f020(e, this, v);
+    e.call(0x0047_efb0, &args![this, v, 1u32]);
+    let v = e.call(0x0047_f000, &args![other]).u32();
+    e.call(0x0047_f020, &args![this, v]);
     let v = get(e, 0x0082_4060) as u8;
-    fn_0047f090(e, this, v);
+    e.call(0x0047_f090, &args![this, u32::from(v)]);
 }
 
 // Translated from 0047f2d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -322,8 +322,8 @@ pub fn tes_ai_form_copy_component(e: &mut Engine, this: Ptr, other: Ptr) {
     if cast == 0 {
         return;
     }
-    fn_0047f1e0(e, this, Ptr::new(cast));
-    fn_0047f2d0(e, this, Ptr::new(cast));
+    e.call(0x0047_f1e0, &args![this, cast]);
+    e.call(0x0047_f2d0, &args![this, cast]);
 }
 
 // Translated from 0047f500 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -477,7 +477,7 @@ pub fn tes_ai_form_compare_component(e: &mut Engine, this: Ptr, other: Ptr) -> b
     if byte(e, 0x004f_1540, this) != byte(e, 0x004f_1540, cast) {
         return true;
     }
-    if fn_0047ee30(e, this) != fn_0047ee30(e, cast) {
+    if e.call(0x0047_ee30, &args![this]).u8() != e.call(0x0047_ee30, &args![cast]).u8() {
         return true;
     }
     if byte(e, 0x004f_6de0, this) != byte(e, 0x004f_6de0, cast) {
@@ -486,7 +486,7 @@ pub fn tes_ai_form_compare_component(e: &mut Engine, this: Ptr, other: Ptr) -> b
     if byte(e, 0x005b_b4d0, this) != byte(e, 0x005b_b4d0, cast) {
         return true;
     }
-    if fn_0047ef30(e, this) != fn_0047ef30(e, cast) {
+    if e.call(0x0047_ef30, &args![this]).u8() != e.call(0x0047_ef30, &args![cast]).u8() {
         return true;
     }
     if byte(e, 0x0062_f2f0, this) != byte(e, 0x0062_f2f0, cast) {
@@ -501,7 +501,7 @@ pub fn tes_ai_form_compare_component(e: &mut Engine, this: Ptr, other: Ptr) -> b
     if word(e, 0x0084_e3a0, this) != word(e, 0x0084_e3a0, cast) {
         return true;
     }
-    if fn_0047f000(e, this) != fn_0047f000(e, cast) {
+    if e.call(0x0047_f000, &args![this]).u32() != e.call(0x0047_f000, &args![cast]).u32() {
         return true;
     }
     if byte(e, 0x0082_4060, this) != byte(e, 0x0082_4060, cast) {
@@ -524,17 +524,17 @@ pub fn tes_ai_form_sell_buys_item(e: &mut Engine, this: Ptr, item: Ptr) -> bool 
     // The compiler's switch: a byte table (`0047f728`, indexed by type -
     // 0x18, compared as unsigned up to 0x4F) picks one of seven cases.
     match kind.wrapping_sub(0x18) {
-        0 => fn_0047efe0(e, this, 2),
-        1 => fn_0047efe0(e, this, 8),
-        7 | 26 | 79 => fn_0047efe0(e, this, 0x400),
-        16 | 17 => fn_0047efe0(e, this, 1),
+        0 => e.call(0x0047_efe0, &args![this, 2u32]).bool(),
+        1 => e.call(0x0047_efe0, &args![this, 8u32]).bool(),
+        7 | 26 | 79 => e.call(0x0047_efe0, &args![this, 0x400u32]).bool(),
+        16 | 17 => e.call(0x0047_efe0, &args![this, 1u32]).bool(),
         23 => {
             let equip = e.call(GET_EQUIP_TYPE, &args![item]).u32();
             match equip.wrapping_sub(0xa) {
-                0 => fn_0047efe0(e, this, 0x20),
-                1 => fn_0047efe0(e, this, 0x40),
-                2 => fn_0047efe0(e, this, 0x10),
-                3 => fn_0047efe0(e, this, 4),
+                0 => e.call(0x0047_efe0, &args![this, 0x20u32]).bool(),
+                1 => e.call(0x0047_efe0, &args![this, 0x40u32]).bool(),
+                2 => e.call(0x0047_efe0, &args![this, 0x10u32]).bool(),
+                3 => e.call(0x0047_efe0, &args![this, 4u32]).bool(),
                 _ => false,
             }
         }
@@ -846,7 +846,11 @@ mod b020_tests {
         assert_eq!(e.mem.u8(p + 5), 4);
         assert_eq!(
             calls(&mut e, 0x0047_ec40),
-            vec![(0x0040_2d30, vec![p]), (0x0068_0890, vec![p + 0x18])]
+            vec![
+                (0x0040_2d30, vec![p]),
+                (0x0068_0890, vec![p + 0x18]),
+                (0x0047_ed10, vec![p])
+            ]
         );
         e.mem.set_u32(p, 0);
         e.call_log = Some(vec![]);
@@ -854,7 +858,11 @@ mod b020_tests {
         assert_eq!(e.mem.u32(p), TES_AI_FORM_VTABLE);
         assert_eq!(
             calls(&mut e, 0x0047_ecb0),
-            vec![(0x0067_e400, vec![p + 0x18]), (0x0067_e3a0, vec![p + 0x18])]
+            vec![
+                (0x0047_ede0, vec![p]),
+                (0x0067_e400, vec![p + 0x18]),
+                (0x0067_e3a0, vec![p + 0x18])
+            ]
         );
     }
 

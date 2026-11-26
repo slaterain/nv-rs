@@ -186,6 +186,9 @@ impl Common for Diff {
             // The translations construct their stack point (`006815c0`, a leaf that only answers its
             // `this`); the typed loops keep the point in registers.
             .ignore_calls(&[0x0068_15c0])
+            // The geometry data's vertex count (`004a8ae0`, its word at +8): the typed morph reads it
+            // in place.
+            .ignore_calls(&[0x004a_8ae0])
             .local_at(0x00a6_7410, 1, 0xc)
             .allow_nan_payloads()
             .max_cases(160)
