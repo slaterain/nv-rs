@@ -571,6 +571,9 @@ impl InArena for Diff {
     }
 }
 
+/// A world input that is no argument: its values, and the function that writes each into the world.
+type Extra = (&'static [u32], fn(&mut Engine, u32));
+
 /// The Diff of [`InArena`]'s methods.
 fn arena_diff(
     diff: Diff,
@@ -578,7 +581,7 @@ fn arena_diff(
     callees: &'static [u32],
     plain: &[u32],
     without: &'static [u32],
-    extra: Option<(&'static [u32], fn(&mut Engine, u32))>,
+    extra: Option<Extra>,
 ) -> Diff {
     let mut inputs = vec![Input::Of(SEEDS)];
     inputs.extend(args.iter().map(|a| Input::Of(&INDEX[..values(*a).len()])));
