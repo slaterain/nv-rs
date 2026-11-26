@@ -287,10 +287,9 @@ fn known_words(e: &mut Engine, seed: u32) {
         e.mem.set_u64(0x0106_ede0, 0.0f64.to_bits());
     }
     e.mem.set_u32(0x0103_0020, 0x459c_4000);
-    // The menu manager's instance (none in seeds 1 and 3, so `Instance` makes one), the stats
-    // menu's body part controller (none in seed 2), and `GetFrontmostMenu`'s start (-1e8; 0.0 in
-    // seed 3) and the kind it passes over (6008.0; 1.0 in seed 2, one of the stand-ins' answers, so
-    // that test goes both ways).
+    // The menu manager's instance (none in seeds 1 and 3, so `Instance` makes one) and the stats
+    // menu's body part controller (none in seed 2). (`GetFrontmostMenu`'s start and the kind it
+    // passes over are its own world's, `put_menu_list`.)
     e.mem.set_u32(
         0x011d_8d54,
         if seed == 1 || seed == 3 {
@@ -301,10 +300,8 @@ fn known_words(e: &mut Engine, seed: u32) {
     );
     e.mem
         .set_u32(0x011d_ace4, if seed == 2 { 0 } else { object(91) });
-    e.mem
-        .set_f32(0x0107_0218, if seed == 3 { 0.0 } else { -1.0e8 });
-    let excluded: f64 = if seed == 2 { 1.0 } else { 6008.0 };
-    e.mem.set_u64(0x0107_0210, excluded.to_bits());
+    // The double 0.0 the list boxes' `SetTotalListHeight` compares the heights with (`.rdata`).
+    e.mem.set_u64(0x0101_2060, 0.0f64.to_bits());
 }
 
 /// The manager singleton (`004b7210`'s word), the menus by class (`00a09030`'s data pointer and
@@ -334,6 +331,10 @@ pub enum Arg {
     /// Tile ids at the edges of each menu's `AttachTileByID` range: -1, 0 to 3, 7, 8, 18, 19, 31, 32,
     /// 59, 60.
     TileId,
+    /// A list box's moves (`GetHighlightTarget`): down, up, a page up, a page down, none, another.
+    Direction,
+    /// Tiles of the list box world's items (the first, the third, the last), one of no item, null.
+    ListTile,
 }
 
 const PTRS: [u32; 3] = [ARENA + 3 * OBJECT, ARENA + 40 * OBJECT, 0];
@@ -344,6 +345,15 @@ const F32S: [u32; 5] = [0x3f80_0000, 0xbf00_0000, 0, 0x7fc0_0000, 0x7149_f2ca];
 const CLASSES: [u32; 22] = [
     0x3ff, 0x40b, 0x425, 0x3ea, 0x3eb, 0x3ec, 0x3f5, 0x3ef, 0x403, 0x3f0, 0x402, 0x3f8, 0x423,
     0x41b, 0x41e, 0x420, 0x424, 0x432, 0x3e9, 0x3f2, 0x43d, 0,
+];
+const DIRECTIONS: [u32; 6] = [2, 1, 0xf, 0x10, 0, 3];
+/// The list box world's item tiles (`put_list_box` in the tests): objects 180 on.
+const LIST_TILES: [u32; 5] = [
+    ARENA + 180 * OBJECT,
+    ARENA + 182 * OBJECT,
+    ARENA + 185 * OBJECT,
+    ARENA + 198 * OBJECT,
+    0,
 ];
 const TILE_IDS: [u32; 13] = [
     0xffff_ffff,
@@ -370,6 +380,8 @@ fn values(arg: Arg) -> &'static [u32] {
         Arg::F32 => &F32S,
         Arg::Class => &CLASSES,
         Arg::TileId => &TILE_IDS,
+        Arg::Direction => &DIRECTIONS,
+        Arg::ListTile => &LIST_TILES,
     }
 }
 
@@ -397,6 +409,7 @@ const OTHER_FAMILIES: &[u32] = &[
     0x004c_8f30,
     0x0045_cec0,
     0x00a0_1230,
+    0x00a0_0f30,
 ];
 
 /// The world's settings for a Diff of the family.
@@ -423,6 +436,16 @@ pub trait InArena {
         args: &'static [Arg],
         callees: &'static [u32],
         plain: &[u32],
+        extra: &'static [u32],
+        put: fn(&mut Engine, u32),
+    ) -> Diff;
+    /// [`InArena::in_arena_without`] with [`InArena::in_arena_and`]'s one more input.
+    fn in_arena_without_and(
+        self,
+        args: &'static [Arg],
+        callees: &'static [u32],
+        plain: &[u32],
+        without: &'static [u32],
         extra: &'static [u32],
         put: fn(&mut Engine, u32),
     ) -> Diff;
@@ -453,6 +476,18 @@ impl InArena for Diff {
     ) -> Diff {
         arena_diff(self, args, callees, plain, &[], Some((extra, put)))
     }
+
+    fn in_arena_without_and(
+        self,
+        args: &'static [Arg],
+        callees: &'static [u32],
+        plain: &[u32],
+        without: &'static [u32],
+        extra: &'static [u32],
+        put: fn(&mut Engine, u32),
+    ) -> Diff {
+        arena_diff(self, args, callees, plain, without, Some((extra, put)))
+    }
 }
 
 /// The Diff of [`InArena`]'s methods.
@@ -474,6 +509,7 @@ fn arena_diff(
         .ignore_calls(engine_typed::interface::interface_cpp::in_place::ADDRESSES)
         .ignore_calls(engine_typed::interface::interface_cpp_p2::IN_PLACE)
         .ignore_calls(engine_typed::interface::menu_manager::IN_PLACE)
+        .ignore_calls(engine_typed::interface::menu_manager_p2::IN_PLACE)
         .ignore_calls(without)
         .goes_by_address(OTHER_FAMILIES)
         .inputs(&inputs)
