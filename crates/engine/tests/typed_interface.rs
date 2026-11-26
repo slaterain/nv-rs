@@ -5680,7 +5680,7 @@ fn item_list_box_fn_00719c00_diff() {
         0x0071_9c00,
         interface::item_list_box::fn_00719c00(Ptr, u32, u32) -> Ptr
     ))
-    .in_arena(&[Arg::Ptr, Arg::Word, Arg::Int], CALLEES, &[])
+    .in_arena(&[Arg::Object, Arg::Word, Arg::Int], CALLEES, &[])
     .run()
     .assert_same();
 }
@@ -5693,7 +5693,7 @@ fn item_list_box_fn_00719ef0_diff() {
     ))
     .in_arena_and(
         &[
-            Arg::ListBox,
+            Arg::Object,
             Arg::Word,
             Arg::Code,
             Arg::Word,
@@ -5905,7 +5905,7 @@ fn list_box_get_highlight_target_every_move_diff() {
         interface::menu_manager_p2::list_box_actor_value_get_highlight_target(Ptr, u32) -> u32
     ))
     .in_arena_and(
-        &[Arg::ListBox, Arg::Direction],
+        &[Arg::Object, Arg::Direction],
         CALLEES,
         &[],
         &LIST_BOX_VARIANTS,

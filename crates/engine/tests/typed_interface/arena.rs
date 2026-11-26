@@ -342,8 +342,9 @@ pub enum Arg {
     ListNode,
     /// Code addresses (a filter, a callback): a stand-in, none, another stand-in.
     Code,
-    /// The list box world's first list box (object 3) alone, so every case runs on its list.
-    ListBox,
+    /// One live object alone (object 3, the list box world's first list box): every case runs on
+    /// it, never on null (a constructor's store at null would make the zero page's words a vtable).
+    Object,
 }
 
 const PTRS: [u32; 3] = [ARENA + 3 * OBJECT, ARENA + 40 * OBJECT, 0];
@@ -373,7 +374,7 @@ const LIST_NODES: [u32; 5] = [
     0,
 ];
 const CODES: [u32; 3] = [CODE + 0x40, 0, CODE + 0x84];
-const LIST_BOXES: [u32; 1] = [ARENA + 3 * OBJECT];
+const OBJECTS_ONE: [u32; 1] = [ARENA + 3 * OBJECT];
 const TILE_IDS: [u32; 13] = [
     0xffff_ffff,
     0,
@@ -403,7 +404,7 @@ fn values(arg: Arg) -> &'static [u32] {
         Arg::ListTile => &LIST_TILES,
         Arg::ListNode => &LIST_NODES,
         Arg::Code => &CODES,
-        Arg::ListBox => &LIST_BOXES,
+        Arg::Object => &OBJECTS_ONE,
     }
 }
 
