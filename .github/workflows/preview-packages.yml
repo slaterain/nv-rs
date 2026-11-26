@@ -1,15 +1,24 @@
 name: Preview packages (Linux, macOS)
 # Builds the Linux and macOS preview packages (scripts/package-playtest.sh) and keeps them as this
-# run's artifacts, for the maintainer to download, check and publish BY HAND. CI has no game, so these
-# are built without it (--test-build: the archive's name ends in -test, and BUILD.txt names this run, its
-# branch and commit, and says the program was not checked against the game here): the check that no
-# data of the game's FalloutNV.exe is in the program (package-check --game --max-run 4096, which the
-# Windows package always makes) is made by the maintainer on the downloaded archive, unchanged, with
-# scripts/check-unix-package.ps1, which also refuses an archive built from any branch but main and
-# writes the CHECKED.txt published beside it; package-playtest.sh refuses a package without the
-# game unless made that way.
+# run's artifacts, for the maintainer to download, check and publish BY HAND. CI has no game, so the
+# check that no data of the game's FalloutNV.exe is in the program (package-check --game --max-run
+# 4096, which the Windows package always makes) is never made here: it is made on the downloaded
+# archive, unchanged, with scripts/check-unix-package.ps1 on Windows, which also refuses an archive
+# built from any branch but main and writes the CHECKED.txt published beside it. Two kinds:
+# - a test build (the default): --test-build, the archive's name ends in -test, no crash-reports.txt
+#   (it sends no crash reports), and BUILD.txt says the program was not checked against the game here;
+# - a release package (input "release"): --game-check-later, the release name, crash-reports.txt in
+#   it as the repository has it, HEAD on origin's main, and BUILD.txt says the game check is made on
+#   Windows before it is published, with its CHECKED.txt beside it.
+# package-playtest.sh refuses a release package without the game unless made that way.
+# Input "commit" packages a commit of main other than this branch's head (for example the one a
+# release was played on): this workflow and the package script are this branch's (main's), run on
+# that commit's checkout (package-playtest.sh --source); its tests and programs are that commit's.
+# The run's name says the version, the kind and the commit, as GitHub shows it: check-unix-package.ps1
+# reads it from GitHub when the run's own commit is not the package's.
 # Nothing here makes a release, a tag or anything public, and it never runs by itself: only by
-# hand (Actions > this workflow > Run workflow, or `gh workflow run preview-packages.yml --ref BRANCH -f version=...`).
+# hand (Actions > this workflow > Run workflow, or `gh workflow run preview-packages.yml --ref main
+# -f version=... [-f release=true] [-f commit=<40 hex digits>]`).
 #
 # The runners are the oldest GitHub has for each system, so the programs start on as many
 # systems as possible:
@@ -24,6 +33,7 @@ name: Preview packages (Linux, macOS)
 # Record from it each job's time against timeout-minutes.
 #
 # Each job uses runners from the account's shared limit (20 jobs at a time); one run is two jobs.
+run-name: Preview packages ${{ inputs.version }} (${{ inputs.release && 'release' || 'test' }}) of ${{ inputs.commit || github.sha }}
 on:
   workflow_dispatch:
     inputs:
@@ -31,6 +41,14 @@ on:
         description: Package version (BUILD.txt), for example 2026-11-16.1
         required: true
         default: test
+      release:
+        description: A release package (crash-reports.txt, the release name; checked against the game on Windows before publishing)
+        type: boolean
+        default: false
+      commit:
+        description: The commit to package (40 hex digits, on main); empty for this branch's head
+        required: false
+        default: ''
 permissions:
   contents: read
 concurrency:
@@ -64,10 +82,40 @@ jobs:
       # the runner's SDK; ignored on Linux.
       MACOSX_DEPLOYMENT_TARGET: '11.0'
     steps:
+      # The commit asked for (or this branch's head) with the whole history: a release package must
+      # be on origin's main (git merge-base), and the package script is this run's own commit's
+      # (github.sha), which the full fetch holds too.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.commit || github.sha }}
+          fetch-depth: 0
           # The job token is not kept in .git/config (nothing here pushes).
           persist-credentials: false
+      - name: The commit and the package script
+        shell: bash
+        env:
+          COMMIT: ${{ inputs.commit }}
+          RELEASE: ${{ inputs.release }}
+        run: |
+          head=$(git rev-parse HEAD)
+          if [ -n "$COMMIT" ]; then
+            case $COMMIT in
+              *[!0-9a-f]*) echo "commit must be 40 lower-case hex digits: $COMMIT"; exit 1 ;;
+            esac
+            [ "${#COMMIT}" = 40 ] || { echo "commit must be 40 hex digits: $COMMIT"; exit 1; }
+            [ "$head" = "$COMMIT" ] || { echo "checked out $head, not $COMMIT"; exit 1; }
+          fi
+          # This run's own package script (main's), outside the checkout so that stays clean.
+          git show "$GITHUB_SHA:scripts/package-playtest.sh" >"$RUNNER_TEMP/package-playtest.sh"
+          if [ "$RELEASE" = true ]; then
+            name=nv-rs-preview-${{ matrix.system }}
+            kind=--game-check-later
+          else
+            name=nv-rs-preview-${{ matrix.system }}-test
+            kind=--test-build
+          fi
+          { echo "PACKAGER=$RUNNER_TEMP/package-playtest.sh"; echo "NAME=$name"; echo "KIND=$kind"; } >>"$GITHUB_ENV"
+          echo "Packaging $head with the package script of $GITHUB_SHA: $name"
       - name: Install the pinned Rust tools (rust-toolchain.toml)
         run: rustup toolchain install
       # The sound output (cpal's ALSA backend) links libasound: its development files and
@@ -77,36 +125,42 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev
       # The cheap tests first, so the READ MEs' words hold for this very build: play.sh's own
-      # test under this system's /bin/sh, the package checker's tests, and the script's refusal
-      # of a release package without the game.
+      # test under this system's /bin/sh, the package checker's tests, and the script's refusals
+      # of a release package without the game and of a package of both kinds.
       - name: Test play.sh and the package checker
         shell: bash
         run: |
           SH=/bin/sh /bin/sh distribution/unix/test-play.sh
           cargo test --locked --manifest-path scripts/package-check/Cargo.toml
-          if sh scripts/package-playtest.sh --version x --system ${{ matrix.system }} 2>refusal.txt; then
+          if sh "$PACKAGER" --source "$PWD" --version x --system ${{ matrix.system }} 2>refusal.txt; then
             echo "a release package without --game was not refused"; exit 1
           fi
           grep -q -- "needs --game" refusal.txt
+          if sh "$PACKAGER" --source "$PWD" --version x --system ${{ matrix.system }} --test-build --game-check-later 2>refusal.txt; then
+            echo "a package of both kinds was not refused"; exit 1
+          fi
+          grep -q -- "give one of them" refusal.txt
           rm -f refusal.txt
-      - name: Build and package (a test build)
+      # The play-opt profile: the release profile's settings under the name of the build the project
+      # plays and measures (Cargo.toml).
+      - name: Build and package
         shell: bash
         env:
           VERSION: ${{ inputs.version || 'ci-test' }}
         run: |
-          sh scripts/package-playtest.sh --version "$VERSION" --system ${{ matrix.system }} --test-build
-          cat "dist/nv-rs-preview-${{ matrix.system }}-test/BUILD.txt"
+          sh "$PACKAGER" --source "$PWD" --version "$VERSION" --system ${{ matrix.system }} --profile play-opt "$KIND"
+          cat "dist/$NAME/BUILD.txt"
       # The packaged program itself on play.sh's test trees: it takes and refuses the same game
       # folders as play.sh's stand-in, and ends with its expected stop (the game does not run here).
       - name: The packaged program on play.sh's tests
         shell: bash
         run: |
-          NV_RS_REAL_PROGRAM="$PWD/dist/nv-rs-preview-${{ matrix.system }}-test/app/nv-viewer" SH=/bin/sh /bin/sh distribution/unix/test-play.sh
+          NV_RS_REAL_PROGRAM="$PWD/dist/$NAME/app/nv-viewer" SH=/bin/sh /bin/sh distribution/unix/test-play.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: nv-rs-preview-${{ matrix.system }}-test
+          name: ${{ env.NAME }}
           path: |
-            dist/nv-rs-preview-${{ matrix.system }}-test.tar.gz
-            dist/nv-rs-preview-${{ matrix.system }}-test.tar.gz.sha256
+            dist/${{ env.NAME }}.tar.gz
+            dist/${{ env.NAME }}.tar.gz.sha256
           if-no-files-found: error
           retention-days: 14

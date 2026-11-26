@@ -1255,6 +1255,51 @@ mod tests {
         assert_eq!(s.text("in /home/jtest2"), "in <path>/<user>2");
     }
 
+    /// A Mac player, as [`Known::from_system`] finds one: home `/Users/jtest`, nv-rs's own folder
+    /// `~/Library/Application Support/nv-rs`, the game in a Steam folder of the home: every one
+    /// taken out, and another user's `/Users/<name>` too.
+    #[test]
+    fn a_mac_players_folders_go() {
+        let s = Scrubber::new(&Known {
+            roots: vec![
+                (
+                    "/Users/jtest/Library/Application Support/Steam/steamapps/common/Fallout New Vegas"
+                        .into(),
+                    "<game>",
+                ),
+                (
+                    "/Users/jtest/Library/Application Support/nv-rs".into(),
+                    "<nv-rs-data>",
+                ),
+                ("/Users/jtest/Downloads/nv-rs-preview-macos-arm64".into(), "<nv-rs>"),
+                ("/Users/jtest".into(), "<home>"),
+            ],
+            words: vec![("jtest".into(), "<user>")],
+        });
+        assert_eq!(
+            s.text("Log: /Users/jtest/Library/Application Support/nv-rs/logs/game.log"),
+            "Log: <nv-rs-data>/logs/game.log"
+        );
+        assert_eq!(
+            s.text("/Users/jtest/Library/Application Support/Steam/steamapps/common/Fallout New Vegas/Data/x.esm"),
+            "<game>/Data/x.esm"
+        );
+        assert_eq!(
+            s.text("at /Users/jtest/Downloads/nv-rs-preview-macos-arm64/app/nv-viewer"),
+            "at <nv-rs>/app/nv-viewer"
+        );
+        assert_eq!(s.text("/Users/jtest/Desktop/notes"), "<home>/.../notes");
+        // Another user's folder: no part of it stays but its last.
+        assert_eq!(s.text("/Users/someone/Documents/x"), "<path>/x");
+        for line in [
+            s.text("Log: /Users/jtest/Library/Application Support/nv-rs/logs/game.log"),
+            s.text("/Users/jtest/Desktop/notes"),
+            s.text("jtest's Mac"),
+        ] {
+            assert!(!line.contains("jtest"), "{line}");
+        }
+    }
+
     /// Below the home folder (and OneDrive's) never the part right below it (a work OneDrive
     /// names the employer) and only the last two parts; a Steam account's number is `<id>`.
     #[test]
