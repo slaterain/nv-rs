@@ -425,6 +425,44 @@ check "28 status 0" '[ $st = 0 ]'
 check "28 said plainly" 'printf "%s" "$out" | grep -qF "nv-rs is in the game'"'"'s folder"'
 check "28 nothing written in the game's folder" '[ "$(cd "$game28" && find . | sort)" = "$before28" ]'
 
+# 29. --mod-manager (Amethyst): the manager profile; the game's own folder as the manager deployed
+# it (no modgame build); the program told the first appdata record (the manager's plugin list in
+# the game's Proton prefix, Amethyst's plain lines); the script extender plugins not built in named
+# once in the log, the built-in ones not; nothing written in the game's folder or the prefix.
+# --mods with it is refused; with no plugin list found, a plain stop before the game; plain play
+# is as before.
+own29="$T/own29"
+game29="$T/game29"
+local29="$T/pfx29/drive_c/users/steamuser/AppData/Local"
+mkdir -p "$game29/Data/NVSE/Plugins" "$local29/FalloutNV"
+echo x >"$game29/Data/FalloutNV.esm"
+echo x >"$game29/FalloutNV.exe"
+echo x >"$game29/Data/NVSE/Plugins/kNVSE.dll"
+echo x >"$game29/Data/NVSE/Plugins/jip_nvse.dll"
+echo x >"$game29/Data/NVSE/Plugins/jip_nvse.ini"
+printf 'FalloutNV.esm\nMod One.esp\n' >"$local29/FalloutNV/plugins.txt"
+printf 'own%s%s\ngame%sSteam%s%s\nappdata%s%s\n' "$tab" "$own29" "$tab" "$tab" "$game29" "$tab" "$local29" >"$T/find29.txt"
+outside29() { (cd "$T" && find game29 pfx29 | sort && cksum "$local29/FalloutNV/plugins.txt"); }
+before29=$(outside29)
+out=$(env FAKE_FIND="$T/find29.txt" NV_RS_GAME="$game29" $SH "$pkg/play.sh" --mod-manager </dev/null 2>&1); st=$?
+check "29 status 0" '[ $st = 0 ]'
+check "29 manager profile" 'printf "%s" "$out" | grep -qx "NV_RS_PROFILE=manager"'
+check "29 the manager's plugin list" 'printf "%s" "$out" | grep -qxF "NV_RS_MANAGER_APPDATA=$local29"'
+check "29 plays the game's own folder" 'printf "%s" "$out" | grep -qxF "program args: $game29"'
+check "29 no mods build" '! printf "%s" "$out" | grep -q "^built:" && [ ! -e "$own29/modgame" ]'
+check "29 manager profile saves" 'printf "%s" "$out" | grep -qF "NV_SAVE_OUT=$own29/manager/Documents/My Games/FalloutNV/Saves"'
+check "29 a plugin that can't load, named once in the log" '[ "$(cat "$own29"/logs/game-*.log | grep -c "plugin kNVSE.dll can")" = 1 ]'
+check "29 a built-in plugin not named" '! cat "$own29"/logs/game-*.log | grep -q "jip_nvse"'
+check "29 nothing written in the game's folder or the prefix" '[ "$(outside29)" = "$before29" ]'
+out=$(env FAKE_FIND="$T/find29.txt" NV_RS_GAME="$game29" $SH "$pkg/play.sh" --mods --mod-manager </dev/null 2>&1); st=$?
+check "29 --mods with it refused" '[ $st = 1 ] && printf "%s" "$out" | grep -qF "choose one"'
+printf 'own%s%s\ngame%sSteam%s%s\n' "$tab" "$own29" "$tab" "$tab" "$game29" >"$T/find29b.txt"
+out=$(env FAKE_FIND="$T/find29b.txt" NV_RS_GAME="$game29" $SH "$pkg/play.sh" --mod-manager </dev/null 2>&1); st=$?
+check "29 no plugin list found: a plain stop" '[ $st = 1 ] && printf "%s" "$out" | grep -qF "plugin list was not found" && ! printf "%s" "$out" | grep -q "program args:"'
+out=$(env FAKE_FIND="$T/find29.txt" NV_RS_GAME="$game29" $SH "$pkg/play.sh" </dev/null 2>&1)
+check "29 plain play as before: the game profile, no manager list" 'printf "%s" "$out" | grep -qx "NV_RS_PROFILE=game" && ! printf "%s" "$out" | grep -q "NV_RS_MANAGER_APPDATA" && ! printf "%s" "$out" | grep -q "kNVSE"'
+check "29 nothing written in the game's folder or the prefix, after all" '[ "$(outside29)" = "$before29" ]'
+
 # 24. CI's Linux job (NV_RS_REAL_PROGRAM: the built nv-viewer): the real program takes and refuses
 # the same game folders as the stand-in. Taken, it checks the game's FalloutNV.exe before its
 # expected stop (69: the game does not run on this system yet); these trees' exe is a made-up file,

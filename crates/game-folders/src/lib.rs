@@ -4,7 +4,8 @@
 //! Everything here is a plain function over a [`Home`] (the home folder and the XDG variables), so
 //! the tests run on made-up folder trees on any system. Nothing here writes anything: the stores'
 //! files and the game's folders are only read. On Windows the launcher (`crates/nv-launcher`, `play/`
-//! `find.rs`) finds the game through the registry instead; this crate is not used there.
+//! `find.rs`) finds the game through the registry instead; only [`nvse_plugins_not_built_in`] is used
+//! there.
 //!
 //! Where a Linux player's game is (docs: the Linux/macOS census, "Run-time matters"):
 //! - Steam for Linux keeps the Windows game in a Steam library:
@@ -661,6 +662,10 @@ pub struct Scan {
     pub saves: Vec<Saves>,
     /// The Wine prefixes Heroic and Lutris name, and the Wine tools' prefixes that exist.
     pub prefixes: Vec<PathBuf>,
+    /// The local AppData folders holding the game's plugin list (`FalloutNV/plugins.txt`) that a
+    /// mod manager deploys into a prefix ([`prefix_local_appdata`]): Proton's for the game's Steam
+    /// ids first, then every other Proton prefix's, then the other prefixes'; each once.
+    pub appdata: Vec<PathBuf>,
     /// What could not be read, for the player (a Steam library list that is there but unreadable).
     pub problems: Vec<String>,
 }
@@ -685,6 +690,55 @@ pub fn prefix_saves(prefix: &Path) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+/// The local AppData folders inside a Wine prefix that hold the game's plugin list, where a mod
+/// manager (Amethyst) deploys it: `drive_c/users/<user>/AppData/Local` for each user but `Public`
+/// whose `FalloutNV/plugins.txt` is a file, every case variant tried. Only read: the "mod
+/// manager" way to play (`play.sh --mod-manager`) reads the game's plugin list there, and every
+/// file the game writes stays in memory.
+pub fn prefix_local_appdata(prefix: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for users in resolve_all(prefix, &["drive_c", "users"]) {
+        for user in folders_in(&users) {
+            let public = user
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("public"));
+            if public {
+                continue;
+            }
+            out.extend(
+                resolve_all(&user, &["AppData", "Local"])
+                    .into_iter()
+                    .filter(|local| {
+                        resolve_all(local, &["FalloutNV", "plugins.txt"])
+                            .iter()
+                            .any(|f| f.is_file())
+                    }),
+            );
+        }
+    }
+    out
+}
+
+/// The script extender plugins of xNVSE, JIP LN, UI Organizer and JohnnyGuitar NVSE, which nv-rs
+/// has built in (lower case): every other DLL in `Data/NVSE/Plugins` can't load in nv-rs.
+pub const BUILT_IN_NVSE_PLUGINS: [&str; 3] =
+    ["jip_nvse.dll", "johnnyguitarnvse.dll", "ui_organizer.dll"];
+
+/// The names of the script extender plugin DLLs in the game's `data` folder (`NVSE/Plugins/*.dll`,
+/// any case) that nv-rs has not built in ([`BUILT_IN_NVSE_PLUGINS`]): sorted without case, each
+/// once. Only read.
+pub fn nvse_plugins_not_built_in(data: &Path) -> Vec<String> {
+    let mut names: Vec<String> = resolve_all(data, &["NVSE", "Plugins"])
+        .iter()
+        .flat_map(|dir| files_in(dir, "dll"))
+        .filter_map(|f| f.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .filter(|n| !BUILT_IN_NVSE_PLUGINS.contains(&n.to_ascii_lowercase().as_str()))
+        .collect();
+    names.sort_by_key(|n| n.to_ascii_lowercase());
+    names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    names
 }
 
 /// Looks at the player's folders once ([`Scan`]). macOS: no store installs the game there, so no
@@ -827,6 +881,24 @@ pub fn scan(home: &Home) -> Scan {
     ));
     scan.prefixes = prefixes;
     scan.saves = saves_in(&proton, &scan.prefixes);
+    // A mod manager's plugin list: in the game's own Proton prefixes first.
+    let game_ids: Vec<PathBuf> = scan
+        .libraries
+        .iter()
+        .flat_map(|l| {
+            STEAM_APPS
+                .iter()
+                .map(move |id| l.join(format!("steamapps/compatdata/{id}/pfx")))
+        })
+        .collect();
+    scan.appdata = distinct(
+        game_ids
+            .iter()
+            .chain(&proton)
+            .chain(&scan.prefixes)
+            .flat_map(|p| prefix_local_appdata(p))
+            .collect(),
+    );
     scan
 }
 
@@ -1228,7 +1300,9 @@ pub fn path_bytes(path: &Path) -> Vec<u8> {
 /// player should know (the own folder inside one of their folders, a Steam library list that
 /// could not be read), `refused<TAB>TEXT` when nv-rs's own folder may not be written at all
 /// ([`own_folder_refusal`]: play.sh stops before its first write and shows TEXT), `game<TAB>STORE<TAB>FOLDER` for each game found, `saves<TAB>FROM<TAB>FOLDER`
-/// for each saves folder found. Read by `play.sh`.
+/// for each saves folder found, `appdata<TAB>FOLDER` for each local AppData folder a mod manager
+/// deployed the game's plugin list into ([`Scan::appdata`]; `play.sh --mod-manager` takes the
+/// first). Read by `play.sh`.
 pub fn report(home: &Home) -> String {
     let scan = scan(home);
     let never = never_written_from(home, &scan);
@@ -1255,6 +1329,9 @@ pub fn report(home: &Home) -> String {
             escape(saves.from.as_bytes()),
             escape(&path_bytes(&saves.folder))
         ));
+    }
+    for local in &scan.appdata {
+        out.push_str(&format!("appdata\t{}\n", escape(&path_bytes(local))));
     }
     out
 }

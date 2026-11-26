@@ -11,6 +11,10 @@
 #                              "my mods" folder in nv-rs's own folder (it says where), laid over a
 #                              copy of the game's folder made of links in nv-rs's own folder (saves
 #                              made with mods stay apart; --mods --import-saves copies saves in)
+#   ./play.sh --mod-manager    play a mod manager's game (Amethyst): the game's own Data folder as the
+#                              manager deployed it, and the plugin list it put in Steam's Proton
+#                              folder (only read); saves and settings stay apart in nv-rs's own
+#                              folder (--mod-manager --import-saves copies saves in)
 #   ./play.sh --install-mods   install mods put in the "my mods" folder (.7z, .zip, .fomod),
 #                              answering each installer's questions; or remove one
 #   ./play.sh --help           this text
@@ -115,6 +119,35 @@ has_game() {
     done)" ]
 }
 
+# The script extender plugin DLLs in the Data folder of FOLDER (the game's folder or its Data) in
+# NVSE/Plugins (any case) that nv-rs has not built in (game-folders' BUILT_IN_NVSE_PLUGINS: those
+# of JIP LN, UI Organizer and JohnnyGuitar NVSE; xNVSE itself is built in): each named, a line.
+nvse_not_built_in() {
+    if has_master "$1"; then
+        nv_data=$1
+    else
+        nv_data=$(children "$1" Data | while IFS= read -r d; do
+            if [ -d "$d" ] && has_master "$d"; then
+                printf '%s\n' "$d"
+                break
+            fi
+        done)
+    fi
+    [ -n "$nv_data" ] || return 0
+    children "$nv_data" NVSE | while IFS= read -r nv_nvse; do
+        children "$nv_nvse" Plugins | while IFS= read -r nv_plugins; do
+            ls -1 -- "$nv_plugins" 2>/dev/null | while IFS= read -r nv_name; do
+                case $(lower "$nv_name") in
+                (jip_nvse.dll | johnnyguitarnvse.dll | ui_organizer.dll) ;;
+                (*.dll) printf '%s\n' "$nv_name" ;;
+                esac
+            done
+        done
+    done | sort -u | while IFS= read -r nv_name; do
+        say "nv-rs: the script extender plugin $nv_name can't load in nv-rs (xNVSE, JIP LN, UI Organizer and JohnnyGuitar NVSE are built in): mods that need it may not work"
+    done
+}
+
 # Each field of --find is escaped: every byte but ASCII letters, digits and ` /._-+,:@=~()` is
 # written %XX, so no field holds a tab or a line break. decode undoes it, byte for byte (through
 # printf's octal escapes; CI checks it against the program's own escaping). A shell's $(...) drops
@@ -176,6 +209,7 @@ opt_forget=0
 opt_import=0
 opt_check=0
 opt_mods=0
+opt_manager=0
 opt_install=0
 while [ $# -gt 0 ]; do
     case $1 in
@@ -188,6 +222,7 @@ while [ $# -gt 0 ]; do
     (--import-saves) opt_import=1 ;;
     (--check) opt_check=1 ;;
     (--mods) opt_mods=1 ;;
+    (--mod-manager) opt_manager=1 ;;
     (--install-mods) opt_install=1 ;;
     (-h | --help)
         usage
@@ -197,6 +232,9 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+if [ "$opt_mods" = 1 ] && [ "$opt_manager" = 1 ]; then
+    fail "--mods and --mod-manager are two ways to play with mods: choose one"
+fi
 
 # Never as root: nv-rs's folder and saves in your home would become root's, and later starts
 # could not write them.
@@ -266,6 +304,8 @@ remembered=$own/game-folder.txt
 # reads NV_RS_PROFILE for the game's Documents and AppData folders (engine-platform machine_table).
 profile=game
 [ "$opt_mods" = 0 ] || profile=mods
+# A mod manager's game (--mod-manager) has its own profile, as Windows' userdata\manager.
+[ "$opt_manager" = 0 ] || profile=manager
 NV_RS_PROFILE=$profile
 export NV_RS_PROFILE
 # The note that the saves were offered, one a profile: a first start with mods offers them into
@@ -536,6 +576,9 @@ fi
 if [ "$profile" = mods ] && ! has_own_saves; then
     say "Saves made with mods are kept apart from your other nv-rs saves, in $saves. To copy saves from Steam's Proton folder into them: ./play.sh --mods --import-saves"
 fi
+if [ "$profile" = manager ] && ! has_own_saves; then
+    say "Saves made with your mod manager's mods are kept apart from your other nv-rs saves, in $saves. To copy saves from Steam's Proton folder into them: ./play.sh --mod-manager --import-saves"
+fi
 
 # The start: nv-rs's own folders, the program's switches, its output in a log too.
 mkdir -p -- "$saves" "$own/logs" "$own/reports" "$own/machine" || fail "could not make nv-rs's folders in $own"
@@ -567,6 +610,19 @@ if starts_here; then
         NV_SETTINGS=$own/$profile/settings.ini
     fi
     export NV_SETTINGS
+fi
+# A mod manager's game (--mod-manager): the game's own Data folder as the manager deployed it
+# (Amethyst's links), and the plugin list the manager put in a prefix's local AppData (Amethyst:
+# the game's Proton prefix), the first the program found (--find's appdata records). The program
+# answers the game's local AppData with it (NV_RS_MANAGER_APPDATA, engine-platform machine_table):
+# only read, every file the game writes stays in memory. Its Documents (INIs, saves) are the
+# manager profile's in nv-rs's own folder.
+if [ "$opt_manager" = 1 ]; then
+    appdata=$(decode "$(field appdata 2)")
+    [ -n "$appdata" ] || fail "your mod manager's plugin list was not found. nv-rs looks for FalloutNV/plugins.txt in the local AppData folder (drive_c/users/steamuser/AppData/Local) of Steam's Proton folder for the game and of the Wine prefixes it finds. Deploy your mods in the manager first, or play without --mod-manager"
+    NV_RS_MANAGER_APPDATA=$appdata
+    export NV_RS_MANAGER_APPDATA
+    say "Playing your mod manager's game: its mods in $game, its plugin list $appdata/FalloutNV/plugins.txt (only read)"
 fi
 cd -- "$own" || fail "could not enter $own"
 
@@ -617,6 +673,8 @@ say "Starting the game ($game). Log: $log"
 status_file=$own/logs/.status
 rm -f -- "$status_file"
 {
+    # The mod manager's game: each script extender plugin that can't load, named once, in the log.
+    [ "$opt_manager" = 0 ] || nvse_not_built_in "$game"
     "$program" "$game" 2>&1
     printf '%s\n' "$?" >"$status_file"
 } | tee -- "$log"

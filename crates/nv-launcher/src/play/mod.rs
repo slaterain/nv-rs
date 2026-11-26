@@ -6,6 +6,10 @@
 //!
 //!   Play.exe                  the start screen (`> Play` plays)
 //!   Play.exe --mods           plays with the mods in the `mods` folder
+//!   Play.exe --mod-manager    plays a mod manager's game (Mod Organizer 2, Vortex): the game's
+//!                             own Data and the player's real plugin list (read only), in the
+//!                             `manager` profile; on by itself when Play.exe runs under Mod
+//!                             Organizer 2 ([`manager_reason`])
 //!   Play.exe --import-saves   copies the saves from Documents\My Games\FalloutNV (read only)
 //!   Play.exe --install-mods   the mod installer, in the launcher's terminal
 //!   Play.exe --check          everything up to starting the game, then says what it found
@@ -14,8 +18,9 @@
 //!
 //! Scripted tests set `NV_RS_NO_WINDOWS=1` (no window shown, and no start screen: it plays; every
 //! message is in `userdata\logs\launcher.log` either way), `NV_RS_REAL_DOCUMENTS=DIR` (where the
-//! player's Documents are read from), `NV_RS_NO_SHORT_PATHS=1`, `NV_RS_NO_STORES=1` (look in no
-//! store) and `NV_RS_SYSTEM_FOLDER=DIR`.
+//! player's Documents are read from), `NV_RS_REAL_LOCAL_APPDATA=DIR` (the player's local AppData
+//! the `manager` profile reads), `NV_RS_NO_SHORT_PATHS=1`, `NV_RS_NO_STORES=1` (look in no store)
+//! and `NV_RS_SYSTEM_FOLDER=DIR`.
 
 mod find;
 use game_profile::game_ini;
@@ -144,7 +149,13 @@ struct Profile {
     saves: PathBuf,
     prefs: PathBuf,
     table: PathBuf,
+    /// `local` is the player's own (the mod manager's way to play): only read, never made. The
+    /// game reads its `FalloutNV\plugins.txt` there and keeps every file it writes in memory.
+    local_read_only: bool,
 }
+
+/// The mod manager's profile's name: `userdata\manager`, beside `game` and `mods`.
+const MANAGER: &str = "manager";
 
 impl Profile {
     fn at(userdata: &Path, name: &str) -> Profile {
@@ -157,8 +168,21 @@ impl Profile {
             saves: game_documents.join("Saves"),
             prefs: game_documents.join("FalloutPrefs.ini"),
             table: base.join("adapter.tsv"),
+            local_read_only: false,
 
             documents,
+        }
+    }
+
+    /// The mod manager's way to play (`userdata\manager`): its Documents (INIs, saves) and roaming
+    /// AppData in the package as the other profiles', and the local AppData the player's real one
+    /// (`local`, read only), where Mod Organizer 2's files layer shows its profile's plugin list
+    /// and Vortex writes it.
+    fn manager(userdata: &Path, local: PathBuf) -> Profile {
+        Profile {
+            local,
+            local_read_only: true,
+            ..Profile::at(userdata, MANAGER)
         }
     }
 
@@ -168,7 +192,12 @@ impl Profile {
     }
 
     fn make(&self) -> std::io::Result<()> {
-        for dir in [&self.saves, &self.roaming, &self.local.join("FalloutNV")] {
+        let local = self.local.join("FalloutNV");
+        let mut dirs = vec![&self.saves, &self.roaming];
+        if !self.local_read_only {
+            dirs.push(&local);
+        }
+        for dir in dirs {
             std::fs::create_dir_all(dir)?;
         }
         Ok(())
@@ -237,6 +266,29 @@ fn real_documents() -> Option<PathBuf> {
     std::env::var_os("NV_RS_REAL_DOCUMENTS")
         .map(PathBuf::from)
         .or_else(|| win::known_folder(5))
+}
+
+/// Where the player's real local AppData is (only read: the `manager` profile's plugin list).
+fn real_local_appdata() -> Option<PathBuf> {
+    std::env::var_os("NV_RS_REAL_LOCAL_APPDATA")
+        .map(PathBuf::from)
+        .or_else(|| win::known_folder(0x1c))
+}
+
+/// Mod Organizer 2's files layer (usvfs), which it loads into every program it starts: in Play.exe
+/// it shows MO2's mods in the game's Data and its profile's plugin list in the local AppData.
+const MO2_LAYER: &str = "usvfs_x64.dll";
+
+/// Why Play.exe plays the mod manager's way, for the log, or `None`: `--mod-manager` (`flag`), or
+/// Mod Organizer 2's files layer loaded in Play.exe's own process (`layer`).
+fn manager_reason(flag: bool, layer: bool) -> Option<&'static str> {
+    if flag {
+        Some("--mod-manager")
+    } else if layer {
+        Some("Mod Organizer 2 started Play.exe (its usvfs_x64.dll is loaded)")
+    } else {
+        None
+    }
 }
 
 /// The player's folders under `profile` (`%USERPROFILE%`) by their text, wherever Windows says
@@ -804,8 +856,9 @@ fn prepare_profile(
     Ok(prepared)
 }
 
-/// Both profiles' files made ready ([`prepare_profile`]), so the Settings screen finds them to edit; a
-/// `settings.ini` goes into both and is renamed `settings.ini.migrated` ([`migrated_name`]).
+/// The profiles' files made ready ([`prepare_profile`]): the one played, and the game and mods
+/// profiles so the Settings screen finds them to edit; a `settings.ini` goes into each and is
+/// renamed `settings.ini.migrated` ([`migrated_name`]).
 ///
 /// While a `settings.ini` exists it is the settings for both: the Settings screen reads and
 /// writes it, and its lines win here over what the files say. So when it can't be renamed, or a
@@ -813,7 +866,7 @@ fn prepare_profile(
 /// moves it in again: the same result every time.
 fn prepare_files(
     package: &Package,
-    profiles: [&Profile; 2],
+    profiles: &[&Profile],
     real: Option<&Path>,
     game_folder: &Path,
     device: Option<&str>,
@@ -846,7 +899,7 @@ fn prepare_files(
         .map(|s| game_ini::apply_choices("", Some(s)).1)
         .unwrap_or_default();
     let mut all_seeded = true;
-    for profile in profiles {
+    for &profile in profiles {
         let done = profile.make().and_then(|()| {
             prepare_profile(
                 package,
@@ -981,6 +1034,11 @@ fn log_tail(path: &Path) -> String {
 
 struct Options {
     mods: bool,
+    /// `--mod-manager` given.
+    mod_manager: bool,
+    /// Why this run plays the mod manager's way (the `manager` profile; [`manager_reason`]), set by
+    /// [`run_play`]; `None`: the other ways, as before.
+    manager: Option<&'static str>,
     install: bool,
     import: bool,
     check_only: bool,
@@ -991,6 +1049,8 @@ struct Options {
 fn parse_options(raw: &[String]) -> Options {
     let mut options = Options {
         mods: false,
+        mod_manager: false,
+        manager: None,
         install: false,
         import: false,
         check_only: false,
@@ -1001,6 +1061,7 @@ fn parse_options(raw: &[String]) -> Options {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--mods" => options.mods = true,
+            "--mod-manager" => options.mod_manager = true,
             "--import-saves" => options.import = true,
             "--install-mods" => options.install = true,
             "--check" => options.check_only = true,
@@ -1116,12 +1177,54 @@ fn import_saves(package: &Package, profile: &Profile, from: Option<&Path>) -> Re
     Ok(0)
 }
 
+/// The log lines of a start the mod manager's way: where the plugin list is read from, and each
+/// script extender plugin DLL in the game's `data` that can't load in nv-rs (only those of xNVSE,
+/// JIP LN, UI Organizer and JohnnyGuitar NVSE are built in), by name.
+fn manager_lines(data: &Path, local: &Path) -> Vec<String> {
+    let mut lines = vec![format!(
+        "mod manager: the plugin list is read from {} (only read)",
+        local.join("FalloutNV\\plugins.txt").display()
+    )];
+    lines.extend(
+        game_folders::nvse_plugins_not_built_in(data)
+            .into_iter()
+            .map(|name| format!("mod manager: the script extender plugin {name} can't load in nv-rs (xNVSE, JIP LN, UI Organizer and JohnnyGuitar NVSE are built in): mods that need it may not work")),
+    );
+    lines
+}
+
+/// The name of the profile `options` play in: `manager` for the mod manager's way, else `mods` or
+/// `game`, as before.
+fn played_name(options: &Options) -> &'static str {
+    match (options.manager, options.mods) {
+        (Some(_), _) => MANAGER,
+        (None, true) => "mods",
+        (None, false) => "game",
+    }
+}
+
+/// The profile `options` play in ([`played_name`]); the `manager` one with the player's real local
+/// AppData (`local`, read only).
+fn played_profile(
+    userdata: &Path,
+    options: &Options,
+    local: impl FnOnce() -> Option<PathBuf>,
+) -> Result<Profile, Stop> {
+    if options.manager.is_none() {
+        return Ok(Profile::at(userdata, played_name(options)));
+    }
+    match local() {
+        Some(local) => Ok(Profile::manager(userdata, local)),
+        None => stop(
+            STOP_LOCATION,
+            "Windows did not say where your local AppData folder is, where your mod manager keeps the game's plugin list.",
+        ),
+    }
+}
+
 fn run(package: &Package, options: &Options) -> Result<i32, Stop> {
     check_location(package)?;
-    let profile = Profile::at(
-        &package.userdata,
-        if options.mods { "mods" } else { "game" },
-    );
+    let profile = played_profile(&package.userdata, options, real_local_appdata)?;
     if options.import {
         clear_for_writing(package, None)?;
         return import_saves(package, &profile, options.from.as_deref());
@@ -1175,6 +1278,11 @@ fn play(
     first_write(package, &game.folder)?;
     for line in &check_lines {
         package.log(line);
+    }
+    if options.manager.is_some() {
+        for line in manager_lines(&game.data, &profile.local) {
+            package.log(&line);
+        }
     }
     let _ = std::fs::write(
         &package.remembered,
@@ -1317,7 +1425,19 @@ fn play(
     let documents =
         guest_bytes(&profile.documents).ok_or_else(|| refuse_path(&profile.documents))?;
     let roaming = guest_bytes(&profile.roaming).ok_or_else(|| refuse_path(&profile.roaming))?;
-    let local = guest_bytes(&profile.local).ok_or_else(|| refuse_path(&profile.local))?;
+    let local = guest_bytes(&profile.local).ok_or_else(|| {
+        if profile.local_read_only {
+            Stop {
+                code: STOP_LOCATION,
+                message: format!(
+                    "The game can't use your local AppData folder's path, where your mod manager keeps the game's plugin list, because of the letters in it on this Windows' language setting:\n{}\n\nPlay without the mod manager, or with nv-rs's own Play with mods.",
+                    profile.local.display()
+                ),
+            }
+        } else {
+            refuse_path(&profile.local)
+        }
+    })?;
     if path_too_long(documents.len()) {
         return stop(
             STOP_LOCATION,
@@ -1350,15 +1470,18 @@ fn play(
     })?;
 
     // Both ways of playing get their files, so the Settings screen can edit them; the profile not played
-    // takes the game's own folder's defaults (the mods install's are the same files).
-    let other = Profile::at(
-        &package.userdata,
-        if options.mods { "game" } else { "mods" },
-    );
+    // takes the game's own folder's defaults (the mods install's are the same files). The mod
+    // manager's way makes its own ready and both of those.
+    let others: Vec<Profile> = ["game", "mods"]
+        .into_iter()
+        .filter(|name| options.manager.is_some() || *name != played_name(options))
+        .map(|name| Profile::at(&package.userdata, name))
+        .collect();
+    let profiles: Vec<&Profile> = std::iter::once(profile).chain(&others).collect();
     let real = real_documents().map(|d| d.join("My Games\\FalloutNV"));
     prepare_files(
         package,
-        [profile, &other],
+        &profiles,
         real.as_deref(),
         &game.folder,
         device.as_deref(),
@@ -1615,7 +1738,7 @@ fn package_root() -> PathBuf {
 pub fn run_play(raw: &[String]) -> i32 {
     // A new run: no stop code of an earlier one.
     crate::session::set_stop_code(i32::MIN);
-    let options = parse_options(raw);
+    let mut options = parse_options(raw);
     let package = Package::at(package_root());
     package.log(&format!(
         "Play.exe {:?} in {}; Windows {}; code page {}",
@@ -1624,6 +1747,16 @@ pub fn run_play(raw: &[String]) -> i32 {
         win::windows_build(),
         win::ansi_code_page()
     ));
+    options.manager = manager_reason(options.mod_manager, win::module_loaded(MO2_LAYER));
+    if let Some(why) = options.manager {
+        package.log(&format!(
+            "playing the mod manager's way ({why}): the game's own Data, the plugin list in your local AppData (only read), the manager profile"
+        ));
+        if options.mods {
+            options.mods = false;
+            package.log("--mods is not used in the mod manager's way: the manager's mods are");
+        }
+    }
     match run(&package, &options) {
         Ok(code) => code,
         Err(why) => {
@@ -1776,6 +1909,197 @@ mod tests {
         assert!(parse_options(&["--install-mods".to_owned()]).install);
         assert_eq!(o.game.unwrap(), PathBuf::from("D:\\x"));
         assert_eq!(o.from.unwrap(), PathBuf::from("E:\\y"));
+        assert!(!o.mod_manager && o.manager.is_none());
+        let m = parse_options(&["--mod-manager".to_owned(), "--check".to_owned()]);
+        assert!(m.mod_manager && m.check_only && !m.mods);
+        // Decided by run_play, with Mod Organizer 2's layer ([`manager_reason`]).
+        assert!(m.manager.is_none());
+    }
+
+    /// The mod manager's way: by `--mod-manager`, or by itself when Mod Organizer 2's files layer
+    /// is loaded in Play.exe's own process; otherwise not (this test's process has no such layer,
+    /// and Windows' own kernel32.dll is found as loaded).
+    #[test]
+    fn the_mod_managers_way_is_the_flag_or_mod_organizer_2s_layer() {
+        assert_eq!(manager_reason(true, false), Some("--mod-manager"));
+        assert!(manager_reason(false, true)
+            .unwrap()
+            .contains("Mod Organizer 2"));
+        assert_eq!(manager_reason(true, true), Some("--mod-manager"));
+        assert_eq!(manager_reason(false, false), None);
+        assert_eq!(MO2_LAYER, "usvfs_x64.dll");
+        assert!(!win::module_loaded(MO2_LAYER));
+        assert!(win::module_loaded("kernel32.dll"));
+    }
+
+    /// The `manager` profile: its Documents (INIs, saves), roaming AppData and table in
+    /// `userdata\manager`, beside `game` and `mods`; its local AppData the player's real one, read
+    /// only (made nowhere, nothing written there); `game` and `mods` as before.
+    #[test]
+    fn the_manager_profile_reads_the_players_local_appdata_only() {
+        let dir = scratch("manager-profile");
+        let userdata = dir.join("nv-rs\\userdata");
+        let real = dir.join("Local");
+        let options = |mods: bool, manager: Option<&'static str>| Options {
+            mods,
+            manager,
+            ..parse_options(&[])
+        };
+        let manager = played_profile(&userdata, &options(false, Some("test")), || {
+            Some(real.clone())
+        })
+        .unwrap();
+        let base = userdata.join("manager");
+        assert_eq!(manager.local, real);
+        assert!(manager.local_read_only);
+        assert_eq!(manager.documents, base.join("Documents"));
+        assert_eq!(manager.roaming, base.join("AppData\\Roaming"));
+        assert_eq!(
+            manager.saves,
+            base.join("Documents\\My Games\\FalloutNV\\Saves")
+        );
+        assert_eq!(
+            manager.prefs,
+            base.join("Documents\\My Games\\FalloutNV\\FalloutPrefs.ini")
+        );
+        assert_eq!(manager.table, base.join("adapter.tsv"));
+        manager.make().unwrap();
+        assert!(manager.saves.is_dir() && manager.roaming.is_dir());
+        assert!(!real.exists(), "nothing made in the real local AppData");
+        // No local AppData from Windows: a stop, before anything is written.
+        let stopped = played_profile(&userdata, &options(true, Some("test")), || None);
+        assert_eq!(stopped.err().unwrap().code, STOP_LOCATION);
+        // The other profiles, as before (the real one never asked for).
+        for (mods, name) in [(false, "game"), (true, "mods")] {
+            let profile =
+                played_profile(&userdata, &options(mods, None), || unreachable!()).unwrap();
+            let base = userdata.join(name);
+            assert_eq!(profile.local, base.join("AppData\\Local"));
+            assert!(!profile.local_read_only);
+            assert_eq!(profile.documents, base.join("Documents"));
+            assert_eq!(profile.table, base.join("adapter.tsv"));
+            profile.make().unwrap();
+            assert!(profile.local.join("FalloutNV").is_dir());
+        }
+        assert_eq!(played_name(&options(true, Some("test"))), "manager");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The game is told the player's real local AppData in the manager profile (`SHGetFolderPathA`
+    /// 0x1c), so it reads the manager's `FalloutNV\plugins.txt` there; Documents and roaming stay
+    /// the profile's.
+    #[test]
+    fn the_manager_profiles_table_names_the_real_local_appdata() {
+        let userdata = Path::new("C:\\nv-rs\\userdata");
+        let profile = Profile::manager(userdata, PathBuf::from("D:\\Home\\P\\AppData\\Local"));
+        let bytes = |p: &Path| p.to_str().unwrap().as_bytes().to_vec();
+        let table = tables::with_folders(
+            b"SHGetFolderPathA\t5 0\t0\t00\nSHGetFolderPathA\t1a 0\t0\t00\nSHGetFolderPathA\t1c 0\t0\t00\n",
+            &bytes(&profile.documents),
+            &bytes(&profile.roaming),
+            &bytes(&profile.local),
+        )
+        .unwrap();
+        let hex = |t: &str| t.bytes().map(|b| format!("{b:02x}")).collect::<String>();
+        let text = String::from_utf8(table).unwrap();
+        assert!(text.contains(&format!(
+            "1c 0\t0\t{}\n",
+            hex("D:\\Home\\P\\AppData\\Local")
+        )));
+        assert!(text.contains(&format!(
+            "5 0\t0\t{}\n",
+            hex("C:\\nv-rs\\userdata\\manager\\Documents")
+        )));
+    }
+
+    /// Every file and folder under `dir`, sorted, with each file's bytes (empty for a folder).
+    fn tree(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut at = vec![dir.to_path_buf()];
+        while let Some(d) = at.pop() {
+            for entry in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    at.push(path.clone());
+                    out.push((path, Vec::new()));
+                } else {
+                    out.push((path.clone(), std::fs::read(&path).unwrap()));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// A start the mod manager's way makes its profile's files ready in the package (the
+    /// player's Fallout.ini copied once, with nv-rs's sections), and the game and mods profiles' as
+    /// before, and writes nothing in the player's Documents, the real local AppData (the manager's
+    /// plugin list there stays as it was) or the game's folder.
+    #[test]
+    fn a_start_the_mod_managers_way_writes_only_in_the_package() {
+        let files = Files::new("manager-writes", Some(b"[General]\r\nsTestName=Player\r\n"));
+        let local = files.dir.join("Local");
+        std::fs::create_dir_all(local.join("FalloutNV")).unwrap();
+        std::fs::write(
+            local.join("FalloutNV\\plugins.txt"),
+            b"FalloutNV.esm\r\nMod One.esp\r\n",
+        )
+        .unwrap();
+        let outside = || {
+            [
+                tree(&files.dir.join("Documents")),
+                tree(&local),
+                tree(&files.game),
+            ]
+        };
+        let before = outside();
+        let manager = Profile::manager(&files.package.userdata, local.clone());
+        let [game, mods] = files.profiles();
+        prepare_files(
+            &files.package,
+            &[&manager, &game, &mods],
+            Some(&files.real),
+            &files.game,
+            Some("Test Card"),
+        )
+        .unwrap();
+        assert_eq!(outside(), before, "nothing written outside the package");
+        for profile in [&manager, &game, &mods] {
+            let ini = text_of(&std::fs::read(profile.fallout_ini()).unwrap());
+            assert!(ini.contains("sTestName=Player"), "{ini}");
+            assert!(game_ini::has_sections(&ini));
+            assert!(profile.prefs.is_file());
+        }
+        assert!(manager
+            .fallout_ini()
+            .starts_with(files.package.userdata.join("manager")));
+        // Beside those three, only the package's own folder holds anything.
+        let mut top: Vec<String> = std::fs::read_dir(&files.dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        top.sort();
+        assert_eq!(top, ["Documents", "Local", "game", "nv-rs"]);
+    }
+
+    /// The log names where the plugin list is read from and each script extender plugin DLL that
+    /// can't load, once a start; the built-in ones are not named.
+    #[test]
+    fn the_nvse_plugins_that_cant_load_are_named_once() {
+        let dir = scratch("manager-nvse");
+        let plugins = dir.join("Data\\NVSE\\Plugins");
+        std::fs::create_dir_all(&plugins).unwrap();
+        for name in ["jip_nvse.dll", "kNVSE.dll", "ShowOff.dll", "ShowOff.ini"] {
+            std::fs::write(plugins.join(name), b"x").unwrap();
+        }
+        let lines = manager_lines(&dir.join("Data"), Path::new("C:\\Local"));
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(lines[0].contains("C:\\Local\\FalloutNV\\plugins.txt"));
+        assert!(lines[1].contains("plugin kNVSE.dll can't load"));
+        assert!(lines[2].contains("plugin ShowOff.dll can't load"));
+        assert!(!lines.iter().any(|l| l.contains("jip_nvse")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2070,7 +2394,7 @@ mod tests {
             let [game, mods] = self.profiles();
             prepare_files(
                 &self.package,
-                [&game, &mods],
+                &[&game, &mods],
                 Some(&self.real),
                 &self.game,
                 Some("Test Card"),
