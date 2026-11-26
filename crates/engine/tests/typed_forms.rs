@@ -8342,6 +8342,19 @@ fn pk_find_current_package() {
     .setup(|e, case| {
         package_world(e);
         let items = packages(e, case.word(0), case.word(1), case.word(2) != 0);
+        // List 8's first package: a window past midnight (22:00 for 6 hours) on the 30th, which the
+        // calendar's 1st does not take as the day before (its day before is day 0).
+        if case.word(0) == 8 {
+            if let Some(&first) = items.first() {
+                for (at, byte) in [(0, 0xff), (1, 0xff), (2, 30), (3, 22)] {
+                    e.mem.set_u8(first + PK_SCHEDULE + at, byte);
+                }
+                e.mem.set_u32(first + PK_SCHEDULE + 4, 6);
+                e.mem.set_u32(first + PK_FLAGS, 0);
+                e.mem.set_u8(first + PK_MAY_RUN, 1);
+                e.mem.set_u8(first + PK_HOLDS, 1);
+            }
+        }
         let list = new_list(e, &items);
         set_calendar(e, case.word(4));
         let reference = match case.word(3) {
