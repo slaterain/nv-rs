@@ -29,14 +29,20 @@
 //! - [`animation`]: `TESAnimation`'s functions (the component at +0xc4 of the actor base forms, in
 //!   the unit after `TESAIForm`'s): the constructor and destructor, the KF file names' list, its
 //!   chunk, its copy and compare.
+//! - [`debug_string`]: the debug-heap `std::string` members the linker placed in `TESObject`'s unit:
+//!   its constructors, destructor, `c_str`, the assigns, `erase`, `_Tidy` and the `strlen` wrapper.
+//! - [`object`]: every function of `TESObject`'s unit but `TESObject::IsMarker` (`0050f9e0`, which
+//!   JIP LN NVSE rewrites): `TESObject`'s and the bound objects' constructors and destructors, the
+//!   `OBND` box (its points, size, save and load), `Clone3D`, the model registration and the scaled
+//!   model name.
 //!
 //! Reached: each function stays registered at its exe address, so the translations' calls by
 //! address and the vtable slots that hold them (`TESForm`'s vtable `0101c794` and the form classes
 //! that keep its slots) reach the typed functions; between them the calls are typed calls. The
 //! translations that called one of them as a plain Rust function (in `tesform.rs`,
-//! `tesactorbasedata.rs`, `tesactorbase.rs`, `tesattributes.rs`, `run_004801e0.rs`, `tesaiform.rs`
-//! and `run_0047f940.rs` themselves) call it by address now, so the game reaches the typed function
-//! from there too.
+//! `tesactorbasedata.rs`, `tesactorbase.rs`, `tesattributes.rs`, `run_004801e0.rs`, `tesaiform.rs`,
+//! `run_0047f940.rs` and `tesobject.rs` themselves) call it by address now, so the game reaches the
+//! typed function from there too.
 //!
 //! Native: the one-line bodies the exe calls (the form type, its flag tests, the byte swaps, the
 //! files' and save buffers' fields, the components' accessors) are done in place, the leaves', the
@@ -50,10 +56,12 @@
 //! may replace); every virtual call is made through its slot, since the form classes override them.
 //! The seams inside the unit run where they do, with the words the translation gives them: the
 //! script extender's in the destructor (`00483669`), JohnnyGuitar NVSE's after `SetTemporary`'s
-//! removal (`0048449a`) and at `GetFormDetailedString`'s name (`00486903`), and JIP LN's G45 mask
-//! in the flags' load (`00484e03`, under its fix bit). A seam is a check inside the function, not a
+//! removal (`0048449a`) and at `GetFormDetailedString`'s name (`00486903`), JIP LN's G45 mask in the
+//! flags' load (`00484e03`, under its fix bit) and its clone of a model with lights of its own in
+//! `Clone3D` (`0050ef46`, while JIP LN is installed). A seam is a check inside the function, not a
 //! registration over it, so it costs the family nothing; no extender or fix row registers over any
-//! of this family's addresses (`GetFormByEditorID`, which JohnnyGuitar NVSE replaces, stays out),
+//! of this family's addresses (`GetFormByEditorID`, which JohnnyGuitar NVSE replaces, and
+//! `TESObject::IsMarker`, which JIP LN rewrites, stay out),
 //! so the family's calls stay direct in play.
 //! Plugins' load order and form ids are untouched: the ids, the files' order in a form's list and
 //! the compile index are computed exactly as the translation computes them.
@@ -79,6 +87,8 @@ pub mod actor_base_data;
 pub mod ai_form;
 pub mod animation;
 pub mod attributes;
+pub mod debug_string;
+pub mod object;
 pub mod tesform;
 
 /// This family's bit: what each `typed_call!` of it names. Id 45: past the families in main
@@ -360,7 +370,67 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0047_fbd0, animation::compare_component(u32, u32) -> bool),
         entry!(0x0047_fcb0, animation::has_name(u32, u32) -> bool),
         entry!(0x0047_fd20, animation::add_name(u32, u32)),
-
+        entry!(0x0044_a4c0, debug_string::construct_from_text(u32, u32) -> u32),
+        entry!(0x0044_a500, debug_string::copy_construct(u32, u32) -> u32),
+        entry!(0x0044_a540, debug_string::destruct(u32)),
+        entry!(0x0044_a560, debug_string::c_str(u32) -> u32),
+        entry!(0x0044_a580, debug_string::assign_range(u32, u32, u32, u32) -> u32),
+        entry!(0x0044_a640, debug_string::assign_text(u32, u32) -> u32),
+        entry!(0x0044_a670, debug_string::text_length(u32) -> u32),
+        entry!(0x0044_a690, debug_string::erase(u32, u32, u32) -> u32),
+        entry!(0x0044_a730, debug_string::tidy(u32, bool, u32)),
+        entry!(0x0044_a7b0, debug_string::construct_proxy(u32, u32) -> u32),
+        entry!(0x0044_a7d0, debug_string::construct_proxy_from(u32, u32) -> u32),
+        entry!(0x0044_a7f0, debug_string::assign_chars(u32, u32, u32) -> u32),
+        entry!(0x0050_e820, object::bound_object_construct(u32) -> u32),
+        entry!(0x0050_e8b0, object::copy_box_point(u32, u32) -> u32),
+        entry!(0x0050_e8f0, object::default_bound() -> u32),
+        entry!(0x0050_e960, object::set_point(u32, u32, u32, u32) -> u32),
+        entry!(0x0050_e990, object::bound_object_deleting_destructor(u32, u32) -> u32),
+        entry!(0x0050_e9c0, object::bound_data_construct(u32) -> u32),
+        entry!(0x0050_e9f0, object::bound_object_destruct(u32)),
+        entry!(0x0050_ea10, object::points_difference(u32, u32)),
+        entry!(0x0050_ea50, object::points_sum(u32, u32)),
+        entry!(0x0050_ea90, object::bound_extra_data_name() -> u32),
+        entry!(0x0050_eaa0, object::copy_bound(u32, u32) -> u32),
+        entry!(0x0050_ead0, object::bound_min_as_floats(u32, u32) -> u32),
+        entry!(0x0050_eb30, object::point_x(u32) -> f32),
+        entry!(0x0050_eb50, object::point_y(u32) -> f32),
+        entry!(0x0050_eb70, object::point_z(u32) -> f32),
+        entry!(0x0050_eb90, object::bound_max_as_floats(u32, u32) -> u32),
+        entry!(0x0050_ebf0, object::bound_size(u32) -> f32),
+        entry!(0x0050_ec30, object::point_difference(u32, u32, u32) -> u32),
+        entry!(0x0050_ec80, object::point_length(u32) -> f64),
+        entry!(0x0050_ece0, object::save_bound(u32)),
+        entry!(0x0050_ed30, object::swap_bound(u32)),
+        entry!(0x0050_edd0, object::load_bound(u32, u32)),
+        entry!(0x0050_ee20, object::clone_3d_unflagged(u32, u32) -> u32),
+        entry!(0x0050_ee50, object::bound_object_clone_3d(u32, u32, u8) -> u32),
+        entry!(0x0050_f5a0, object::clear_parent_list(u32)),
+        entry!(0x0050_f5c0, object::clone_controller_word() -> u32),
+        entry!(0x0050_f5d0, object::model_path_slot(u32) -> u32),
+        entry!(0x0050_f600, object::register_model(u32, u32) -> bool),
+        entry!(0x0050_f670, object::cast_and_call(u32, u32, u32, u8, u32, u32) -> bool),
+        entry!(0x0050_f6e0, object::file_finder() -> u32),
+        entry!(0x0050_f6f0, object::bound_anim_object_construct(u32) -> u32),
+        entry!(0x0050_f710, object::bound_anim_object_deleting_destructor(u32, u32) -> u32),
+        entry!(0x0050_f740, object::bound_anim_object_destruct(u32)),
+        entry!(0x0050_f760, object::register_model_again(u32, u32) -> bool),
+        entry!(0x0050_f780, object::forward_to_empty(u32, u32, u8)),
+        entry!(0x0050_f7a0, object::bound_tree_object_construct(u32) -> u32),
+        entry!(0x0050_f7c0, object::bound_tree_object_deleting_destructor(u32, u32) -> u32),
+        entry!(0x0050_f7f0, object::bound_tree_object_destruct(u32)),
+        entry!(0x0050_f810, object::type_25_result(u32, u32, u32) -> u32),
+        entry!(0x0050_f8c0, object::object_construct(u32) -> u32),
+        entry!(0x0050_f900, object::object_deleting_destructor(u32, u32) -> u32),
+        entry!(0x0050_f930, object::object_destruct(u32)),
+        entry!(0x0050_f9a0, object::set_previous(u32, u32)),
+        entry!(0x0050_f9c0, object::set_word_20(u32, u32)),
+        entry!(0x0050_fb90, object::is_named_type_20(u32) -> bool),
+        entry!(0x0050_fbe0, object::zero(u32, u32, u32) -> u32),
+        entry!(0x0050_fbf0, object::register_form_model(u32, u32)),
+        entry!(0x0050_fd90, object::model_path(u32, u32) -> u32),
+        entry!(0x0050_fdf0, object::scaled_model_file_name(u32, u32, u32)),
     ]
 }
 
@@ -379,7 +449,13 @@ mod tests {
                 row.addr
             );
         }
-        for seam in [0x0048_3669, 0x0048_449a, 0x0048_4e03, 0x0048_6903] {
+        for seam in [
+            0x0048_3669,
+            0x0048_449a,
+            0x0048_4e03,
+            0x0048_6903,
+            0x0050_ef46,
+        ] {
             assert!(engine_core::extend::all_sites().any(|row| row.addr == seam));
             assert!(!members.contains(&seam));
         }

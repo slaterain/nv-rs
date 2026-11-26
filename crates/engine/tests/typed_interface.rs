@@ -5406,6 +5406,7 @@ fn no_member_of_a_family_on_by_default_holds_a_seam() {
         (0x0048_449a, "forms"),
         (0x0048_4e03, "forms"),
         (0x0048_6903, "forms"),
+        (0x0050_ef46, "forms"),
         (0x0077_04ae, "hud"),
         (0x0077_0b0e, "hud"),
         (0x0077_14da, "hud"),
