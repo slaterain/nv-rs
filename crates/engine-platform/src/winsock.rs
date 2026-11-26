@@ -33,8 +33,15 @@ pub const SOCKET_ERROR: u32 = 0xffff_ffff;
 
 // Platform: replaces WSOCK32.dll WSAStartup (import, ordinal 115)
 /// `WSAStartup(version, data)`: `WSASYSNOTREADY`; `data` is not written and the last error is
-/// left alone (`WSAStartup` returns its error, it does not set one).
+/// left alone (`WSAStartup` returns its error, it does not set one). The log says once what asked
+/// for the network, so a report shows what turned the debugger on.
 pub fn wsa_startup(_e: &mut Engine, _version: u32, _data: Ptr) -> u32 {
+    static SAID: std::sync::Once = std::sync::Once::new();
+    SAID.call_once(|| {
+        println!(
+            "Havok's Visual Debugger is on (bHavokDebug=1 under [HAVOK] in Fallout.ini): nv-rs has no network for it, the game goes on without it"
+        )
+    });
     WSASYSNOTREADY
 }
 

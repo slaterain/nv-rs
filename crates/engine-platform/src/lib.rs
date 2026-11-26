@@ -1128,8 +1128,9 @@ mod tests {
         // `GlobalMemoryStatus(Ex)`, `MultiByteToWideChar` and `LCMapStringW`, and `DefWindowProcA`
         // (the game's `WM_MOUSEMOVE`, `window::post_mouse_move`), and `SetThreadIdealProcessor`
         // (Havok's worker threads, `engine-core`'s table).
+        // The twelve `WSOCK32.dll` ordinals of the Visual Debugger's server (`winsock`).
         // Off Windows also the two shader profile getters (`d3dx::profiles`).
-        assert_eq!(table.len(), if cfg!(windows) { 212 } else { 208 });
+        assert_eq!(table.len(), if cfg!(windows) { 224 } else { 220 });
     }
 
     /// The owned GOG executable's actual wrapper imports all resolve. No
