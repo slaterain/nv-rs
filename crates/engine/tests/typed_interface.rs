@@ -5537,9 +5537,8 @@ fn put_form_type(e: &mut Engine, variant: u32) {
 }
 
 /// An item list box Diff: `function` in [`put_item_list_box`]'s world.
-fn item_list_diff(function: (u32, AbiFn), args: &'static [Arg], max: usize) {
-    Diff::new(function)
-        .in_arena_and(args, CALLEES, &[], &ITEM_LIST_VARIANTS, put_item_list_box)
+fn item_list_diff(diff: Diff, args: &'static [Arg], max: usize) {
+    diff.in_arena_and(args, CALLEES, &[], &ITEM_LIST_VARIANTS, put_item_list_box)
         .max_cases(max)
         .run()
         .assert_same();
@@ -5548,10 +5547,10 @@ fn item_list_diff(function: (u32, AbiFn), args: &'static [Arg], max: usize) {
 #[test]
 fn item_list_box_remove_item_group_diff() {
     item_list_diff(
-        engine_core::entry!(
+        Diff::new(engine_core::entry!(
             0x0071_a200,
             interface::item_list_box::list_box_remove_item_group(Ptr, u32)
-        ),
+        )),
         &[Arg::Ptr, Arg::Byte],
         48,
     );
@@ -5560,10 +5559,10 @@ fn item_list_box_remove_item_group_diff() {
 #[test]
 fn item_list_box_add_item_diff() {
     item_list_diff(
-        engine_core::entry!(
+        Diff::new(engine_core::entry!(
             0x0071_a320,
             interface::item_list_box::list_box_add_item(Ptr, u32, Ptr, u32, Ptr) -> Ptr
-        ),
+        )),
         &[Arg::Ptr, Arg::Word, Arg::Ptr, Arg::ListNode, Arg::Ptr],
         64,
     );
@@ -5572,10 +5571,10 @@ fn item_list_box_add_item_diff() {
 #[test]
 fn item_list_box_remove_item_diff() {
     item_list_diff(
-        engine_core::entry!(
+        Diff::new(engine_core::entry!(
             0x0071_a5c0,
             interface::item_list_box::list_box_remove_item(Ptr, Ptr) -> bool
-        ),
+        )),
         &[Arg::Ptr, Arg::ListTile],
         56,
     );
@@ -5584,10 +5583,10 @@ fn item_list_box_remove_item_diff() {
 #[test]
 fn item_list_box_synchronize_diff() {
     item_list_diff(
-        engine_core::entry!(
+        Diff::new(engine_core::entry!(
             0x0071_a670,
             interface::item_list_box::list_box_synchronize(Ptr)
-        ),
+        )),
         &[Arg::Ptr],
         32,
     );
@@ -5596,10 +5595,10 @@ fn item_list_box_synchronize_diff() {
 #[test]
 fn item_list_box_update_highlight_box_pos_diff() {
     item_list_diff(
-        engine_core::entry!(
+        Diff::new(engine_core::entry!(
             0x0071_a740,
             interface::item_list_box::list_box_update_highlight_box_pos(Ptr)
-        ),
+        )),
         &[Arg::Ptr],
         32,
     );
@@ -5630,10 +5629,10 @@ fn item_list_box_fn_0071aa80_diff() {
 #[test]
 fn item_list_box_fn_0071aaa0_diff() {
     item_list_diff(
-        engine_core::entry!(
+        Diff::new(engine_core::entry!(
             0x0071_aaa0,
             interface::item_list_box::fn_0071aaa0(Ptr, u32, u32) -> bool
-        ),
+        )),
         &[Arg::Ptr, Arg::ListNode, Arg::ListNode],
         64,
     );
@@ -5642,10 +5641,10 @@ fn item_list_box_fn_0071aaa0_diff() {
 #[test]
 fn item_list_box_set_total_list_height_diff() {
     item_list_diff(
-        engine_core::entry!(
+        Diff::new(engine_core::entry!(
             0x0071_ad30,
             interface::item_list_box::list_box_set_total_list_height(Ptr)
-        ),
+        )),
         &[Arg::Ptr],
         32,
     );
@@ -5654,10 +5653,10 @@ fn item_list_box_set_total_list_height_diff() {
 #[test]
 fn item_list_box_num_unfiltered_diff() {
     item_list_diff(
-        engine_core::entry!(
+        Diff::new(engine_core::entry!(
             0x0071_ae60,
             interface::item_list_box::list_box_num_unfiltered(Ptr) -> i32
-        ),
+        )),
         &[Arg::Ptr],
         32,
     );
@@ -5746,41 +5745,40 @@ fn item_list_box_fn_00719cf0_diff() {
 }
 
 /// A filter's Diff: `function` in [`put_form_type`]'s world.
-fn form_type_diff(function: (u32, AbiFn)) {
-    Diff::new(function)
-        .in_arena_and(
-            &[Arg::Ptr],
-            CALLEES,
-            &[],
-            &FORM_TYPE_VARIANTS,
-            put_form_type,
-        )
-        .run()
-        .assert_same();
+fn form_type_diff(diff: Diff) {
+    diff.in_arena_and(
+        &[Arg::Ptr],
+        CALLEES,
+        &[],
+        &FORM_TYPE_VARIANTS,
+        put_form_type,
+    )
+    .run()
+    .assert_same();
 }
 
 #[test]
 fn item_list_box_fn_00719da0_diff() {
-    form_type_diff(engine_core::entry!(
+    form_type_diff(Diff::new(engine_core::entry!(
         0x0071_9da0,
         interface::item_list_box::fn_00719da0(u32) -> bool
-    ));
+    )));
 }
 
 #[test]
 fn item_list_box_fn_00719de0_diff() {
-    form_type_diff(engine_core::entry!(
+    form_type_diff(Diff::new(engine_core::entry!(
         0x0071_9de0,
         interface::item_list_box::fn_00719de0(u32) -> bool
-    ));
+    )));
 }
 
 #[test]
 fn item_list_box_fn_00719e30_diff() {
-    form_type_diff(engine_core::entry!(
+    form_type_diff(Diff::new(engine_core::entry!(
         0x0071_9e30,
         interface::item_list_box::fn_00719e30(u32) -> bool
-    ));
+    )));
 }
 
 #[test]
@@ -5819,10 +5817,10 @@ fn small_units_fn_00726bf0_diff() {
 #[test]
 fn small_units_fn_00726c40_diff() {
     item_list_diff(
-        engine_core::entry!(
+        Diff::new(engine_core::entry!(
             0x0072_6c40,
             interface::small_units::fn_00726c40(Ptr) -> u32
-        ),
+        )),
         &[Arg::Ptr],
         32,
     );
