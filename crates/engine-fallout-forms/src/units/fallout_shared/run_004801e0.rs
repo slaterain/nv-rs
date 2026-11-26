@@ -160,7 +160,7 @@ pub fn fn_004802f0(e: &mut Engine, this: Ptr) -> Ptr {
             MESSAGE_ICON_DESTRUCT
         ],
     );
-    fn_004803e0(e, Ptr::new(base + 0xc4));
+    e.call(0x0048_03e0, &args![base + 0xc4]);
     e.call(INITIALIZE_DATA_COMPONENT, &args![this]);
     this
 }
@@ -339,6 +339,7 @@ mod tests {
                         MESSAGE_ICON_DESTRUCT
                     ]
                 ),
+                (0x0048_03e0, vec![this + 0xc4]),
                 (MODEL_RDT_BASE_CONSTRUCT, vec![this + 0xc4]),
                 (INITIALIZE_DATA_COMPONENT, vec![this]),
             ]

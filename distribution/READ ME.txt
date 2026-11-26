@@ -26,9 +26,11 @@ installs a mod from its archive in the mods folder (or removes one), answering i
 the launcher's prompt, > Import saves (shown when Documents\My Games\FalloutNV\Saves has
 saves) copies them into nv-rs's own folder, each with its .nvse file, asking before it replaces a
 different save of the same name (yours in Documents are only read), > Settings
-has the window or borderless, resolution, anti-aliasing, game fixes, frame limit and more (and a
-Testing list of what is still being tried), saved at once for the next start; > Exit closes
-it. The window has no title bar: drag it by its background (anywhere but an entry) to move it;
+has the window or borderless, resolution, anti-aliasing, game fixes, frame limit and more, and
+opens two lists: New lighting and more (the new lighting still being tried) and Fixes one by one
+(each of nv-rs's fixes on or off; each follows Game fixes until you choose it there), saved at
+once for the next start; > Exit closes it. The window has no title bar: drag it by its
+background (anywhere but an entry) to move it;
 > Exit, Esc on the first screen or Alt+F4 closes it. The first time it types the game's terminal
 intro once. Its text types as fast as the game's
 terminals do, and, as there, the entries can be chosen once a screen's text is all in.
