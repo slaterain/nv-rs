@@ -11,7 +11,7 @@
 //! id, `AddCompileIndex` and `TESForm::GetFile` are typed calls; the casts, the log and the targets'
 //! own fix-ups are called by address.
 
-use super::{access, records, FAMILY, OPERATOR_DELETE};
+use super::{access, links, records, rooms, FAMILY, OPERATOR_DELETE};
 use super::{give_lock, head_of, kind_of, list_remove, next_of, take_lock, word_at, EXTRA_PAYLOAD};
 use crate::forms;
 use engine_core::{args, typed_call, Engine};
@@ -35,18 +35,13 @@ const DATA_HANDLER: u32 = 0x011c_3f2c;
 const DATA_HANDLER_GET_REPUTATION: u32 = 0x0046_1630;
 const MAP_MARKER_SET_REPUTATION: u32 = 0x0043_7730;
 const CHECK_ENABLE_PARENT_LOOP: u32 = 0x0056_aac0;
-const ENABLE_PARENT_ADD_CHILD: u32 = 0x0041_dcd0;
-const LINKED_REF_ADD_CHILD: u32 = 0x0041_e530;
 const DECAL_REFS_INIT_ITEM: u32 = 0x0043_3db0;
 const REFLECTOR_REFS_INIT_ITEM: u32 = 0x0043_3ed0;
 const LIT_WATER_REFS_INIT_ITEM: u32 = 0x0043_4050;
 const REFERENCE_GET_INTERIOR: u32 = 0x0057_5d10;
-const GET_PATROL_REF_DATA: u32 = 0x0041_fe90;
 const PATROL_REF_DATA_INIT_ITEM: u32 = 0x0067_c6c0;
 const GET_OCCLUSION_PLANE: u32 = 0x0042_2120;
-const PORTAL_ADD_REFERENCE: u32 = 0x0042_0ce0;
 const IMPACT_SWAP_INIT_ITEM: u32 = 0x0058_f210;
-const ADD_ACTIVATE_REF_CHILD: u32 = 0x0041_edd0;
 const LIST_REMOVE_AFTER: u32 = 0x0090_5330;
 const LIST_REMOVE_HEAD: u32 = 0x0063_f7b0;
 const STRING_LENGTH: u32 = 0x0040_48e0;
@@ -242,9 +237,11 @@ fn fix_up(e: &mut Engine, this: u32, reference: u32, file: u32, extra: u32, kind
                 note(e, MESSAGE_LINKED_REF_MISSING, &[id]);
                 drop_extra(e, this, extra);
             } else {
-                e.call(
-                    LINKED_REF_ADD_CHILD,
-                    &args![extra_list_of(linked), reference],
+                let list = extra_list_of(linked);
+                typed_call!(
+                    FAMILY,
+                    0x0041_e530,
+                    links::add_linked_ref_child(e, list, reference)
                 );
             }
         }
@@ -323,7 +320,7 @@ fn fix_up(e: &mut Engine, this: u32, reference: u32, file: u32, extra: u32, kind
         }
         // EXTRA_PATROL_REF_DATA
         0x6f => {
-            let patrol = e.call(GET_PATROL_REF_DATA, &args![this]).u32();
+            let patrol = typed_call!(FAMILY, 0x0041_fe90, rooms::patrol_ref_data(e, this));
             if patrol != 0 {
                 e.call(PATROL_REF_DATA_INIT_ITEM, &args![patrol, reference]);
             }
@@ -398,9 +395,11 @@ fn fix_up_enable_parent(e: &mut Engine, this: u32, reference: u32, file: u32, ex
         && e.call(CHECK_ENABLE_PARENT_LOOP, &args![as_reference])
             .bool()
     {
-        e.call(
-            ENABLE_PARENT_ADD_CHILD,
-            &args![extra_list_of(parent), as_reference],
+        let list = extra_list_of(parent);
+        typed_call!(
+            FAMILY,
+            0x0041_dcd0,
+            links::add_enable_child(e, list, as_reference)
         );
     } else {
         note(e, MESSAGE_ENABLE_PARENT_LOOP, &[]);
@@ -481,10 +480,8 @@ fn fix_up_portal_refs(e: &mut Engine, this: u32, reference: u32, file: u32, extr
     for index in 0..2u32 {
         let linked = word_at(e, word_at(e, extra, EXTRA_PAYLOAD), index * 4);
         if linked != 0 {
-            e.call(
-                PORTAL_ADD_REFERENCE,
-                &args![extra_list_of(linked), reference],
-            );
+            let list = extra_list_of(linked);
+            typed_call!(FAMILY, 0x0042_0ce0, rooms::add_portal(e, list, reference));
         }
     }
 }
@@ -535,9 +532,11 @@ fn fix_up_activate_ref(e: &mut Engine, this: u32, reference: u32, file: u32, ext
             }
             e.call(OPERATOR_DELETE, &args![data]);
         } else {
-            e.call(
-                ADD_ACTIVATE_REF_CHILD,
-                &args![extra_list_of(activator), reference],
+            let list = extra_list_of(activator);
+            typed_call!(
+                FAMILY,
+                0x0041_edd0,
+                links::add_activate_child(e, list, reference)
             );
             previous = node;
             node = word_at(e, node, 4);

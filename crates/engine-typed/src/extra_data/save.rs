@@ -6,7 +6,7 @@
 //! `011c54ba`, read in place; never set in the PC build).
 
 use super::{
-    access, give_lock, head_of, kind_of, next_of, read_word, records, take_lock, word_at,
+    access, give_lock, head_of, kind_of, links, next_of, read_word, records, take_lock, word_at,
     EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE, OPERATOR_NEW, SIMPLE_LIST_NEW,
 };
 use crate::crt::low_word;
@@ -32,7 +32,6 @@ const PACKAGE_EVENT_ACTION_SAVE: u32 = 0x0067_dc80;
 const DECAL_DATA_INIT: u32 = 0x0055_a400;
 const PLANE_HALF_EXTENTS: u32 = 0x007d_6bb0;
 const MATRIX_TO_AXIS_ANGLE: u32 = 0x00a5_8550;
-const GET_ACTIVATE_TEXT: u32 = 0x0041_ec80;
 const STRING_LENGTH: u32 = 0x0040_48e0;
 const STRING_DESTROY: u32 = 0x0040_37d0;
 
@@ -579,10 +578,18 @@ fn save_activate_ref(e: &mut Engine, list: u32, extra: u32) {
     if e.call(STRING_LENGTH, &args![text]).u32() != 0 {
         e.with_stack(8, |e, first| {
             e.with_stack(8, |e, second| {
-                let first = e.call(GET_ACTIVATE_TEXT, &args![list, first]).u32();
+                let first = typed_call!(
+                    FAMILY,
+                    0x0041_ec80,
+                    links::activate_text(e, list, first.addr())
+                );
                 let length = e.call(STRING_LENGTH, &args![first]).u32();
                 let size = length.wrapping_add(1);
-                let second = e.call(GET_ACTIVATE_TEXT, &args![list, second]).u32();
+                let second = typed_call!(
+                    FAMILY,
+                    0x0041_ec80,
+                    links::activate_text(e, list, second.addr())
+                );
                 let characters = read_word(e, second);
                 typed_call!(
                     forms::FAMILY,

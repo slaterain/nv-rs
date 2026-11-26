@@ -120,7 +120,7 @@ pub(super) fn float_or(e: &mut Engine, list: u32, kind: u8, default: u32) -> f32
 
 /// The address of the record at +0xc of the first extra data of `kind`, or 0.
 #[inline]
-fn record_or_null(e: &mut Engine, list: u32, kind: u8) -> u32 {
+pub(super) fn record_or_null(e: &mut Engine, list: u32, kind: u8) -> u32 {
     match first_of_kind(e, list, kind) {
         0 => 0,
         extra => extra.wrapping_add(EXTRA_PAYLOAD),

@@ -525,7 +525,7 @@ pub fn fn_0041db00(e: &mut Engine, this: Ptr<ExtraDataList>) -> bool {
     if extra.is_null() {
         false
     } else {
-        fn_0041db30(e, extra.cast())
+        e.call(0x0041_db30, &args![extra]).bool()
     }
 }
 
@@ -541,7 +541,7 @@ pub fn fn_0041db30(e: &mut Engine, this: Ptr<ExtraEnableStateParent>) -> bool {
 pub fn fn_0041db50(e: &mut Engine, this: Ptr<ExtraDataList>, value: bool) {
     let extra = find_extra(e, this, EXTRA_ENABLE_STATE_PARENT);
     if !extra.is_null() {
-        fn_0041db80(e, extra.cast(), value);
+        e.call(0x0041_db80, &args![extra, value]);
     }
 }
 
@@ -566,7 +566,7 @@ pub fn extra_data_list_should_pop_in_when_enabled_by_parent(
     if extra.is_null() {
         false
     } else {
-        fn_0041dc00(e, extra.cast())
+        e.call(0x0041_dc00, &args![extra]).bool()
     }
 }
 
@@ -584,7 +584,7 @@ pub fn fn_0041dc20(e: &mut Engine, this: Ptr<ExtraDataList>) -> bool {
     if extra.is_null() {
         false
     } else {
-        fn_0041dc50(e, extra.cast())
+        e.call(0x0041_dc50, &args![extra]).bool()
     }
 }
 
@@ -899,7 +899,7 @@ pub fn extra_data_list_set_open_close_activate_ref(
         let built = if block == 0 {
             0
         } else {
-            fn_0041e750(e, Ptr::new(block)).addr()
+            e.call(0x0041_e750, &args![block]).u32()
         };
         e.mem.set_u32(built + 0x0c, reference);
         add_extra(e, this, Ptr::new(built));
@@ -1592,7 +1592,7 @@ pub fn extra_data_list_add_primitive(e: &mut Engine, this: Ptr<ExtraDataList>, p
         return;
     }
     let built = new_built(e, 0x10, |e, block| {
-        fn_0041faf0(e, Ptr::new(block), primitive).addr()
+        e.call(0x0041_faf0, &args![block, primitive]).u32()
     });
     add_extra(e, this, Ptr::new(built));
 }
@@ -1624,7 +1624,7 @@ pub fn extra_primitive_scalar_deleting_destructor(
     this: Ptr<ExtraPrimitive>,
     flags: u32,
 ) -> Ptr<ExtraPrimitive> {
-    fn_0041fb50(e, this);
+    e.call(0x0041_fb50, &args![this]);
     finish_scalar_deleting_destructor(e, this.cast(), flags).cast()
 }
 
@@ -1661,7 +1661,7 @@ pub fn fn_0041fc10(e: &mut Engine, this: Ptr<ExtraDataList>, patrol_data: u32) {
         this,
         EXTRA_PATROL_REF_DATA_TYPE,
         patrol_data,
-        |e, block| fn_0041fcd0(e, Ptr::new(block)).addr(),
+        |e, block| e.call(0x0041_fcd0, &args![block]).u32(),
     );
 }
 
@@ -1709,7 +1709,7 @@ pub fn extra_patrol_ref_data_scalar_deleting_destructor(
     this: Ptr<ExtraPatrolRefData>,
     flags: u32,
 ) -> Ptr<ExtraPatrolRefData> {
-    fn_0041fdb0(e, this);
+    e.call(0x0041_fdb0, &args![this]);
     finish_scalar_deleting_destructor(e, this.cast(), flags).cast()
 }
 
@@ -1720,7 +1720,7 @@ pub fn extra_patrol_ref_data_scalar_deleting_destructor(
 /// (`0040ecb0`). The exception-unwinding frame is not translated.
 pub fn fn_0041fdb0(e: &mut Engine, this: Ptr<ExtraPatrolRefData>) {
     e.mem.set_u32(this.addr(), VTABLE_EXTRA_PATROL_REF_DATA);
-    fn_0041fe10(e, this);
+    e.call(0x0041_fe10, &args![this]);
     e.call(BS_EXTRA_DATA_DESTROY, &args![this]);
 }
 
@@ -1731,7 +1731,7 @@ pub fn fn_0041fdb0(e: &mut Engine, this: Ptr<ExtraPatrolRefData>) {
 pub fn fn_0041fe10(e: &mut Engine, this: Ptr<ExtraPatrolRefData>) {
     let patrol_data = e.get(this, ExtraPatrolRefData::pPatrolData);
     if !patrol_data.is_null() {
-        fn_0041fe60(e, patrol_data, 1);
+        e.call(0x0041_fe60, &args![patrol_data, 1u32]);
     }
     e.set(this, ExtraPatrolRefData::pPatrolData, Ptr::NULL);
 }
@@ -1764,7 +1764,7 @@ pub fn fn_0041fec0(e: &mut Engine, this: Ptr<ExtraDataList>, data: u32) {
         this,
         EXTRA_OCCLUSION_PLANE_REF_DATA_TYPE,
         data,
-        |e, block| fn_0041ff80(e, Ptr::new(block)).addr(),
+        |e, block| e.call(0x0041_ff80, &args![block]).u32(),
     );
 }
 
@@ -1814,7 +1814,7 @@ pub fn extra_occlusion_plane_ref_data_scalar_deleting_destructor(
     this: Ptr<ExtraOcclusionPlaneRefData>,
     flags: u32,
 ) -> Ptr<ExtraOcclusionPlaneRefData> {
-    fn_00420060(e, this);
+    e.call(0x0042_0060, &args![this]);
     finish_scalar_deleting_destructor(e, this.cast(), flags).cast()
 }
 
@@ -1826,7 +1826,7 @@ pub fn extra_occlusion_plane_ref_data_scalar_deleting_destructor(
 pub fn fn_00420060(e: &mut Engine, this: Ptr<ExtraOcclusionPlaneRefData>) {
     e.mem
         .set_u32(this.addr(), VTABLE_EXTRA_OCCLUSION_PLANE_REF_DATA);
-    fn_004200c0(e, this);
+    e.call(0x0042_00c0, &args![this]);
     e.call(BS_EXTRA_DATA_DESTROY, &args![this]);
 }
 
@@ -1856,7 +1856,7 @@ pub fn extra_data_list_get_occlusion_plane_linked_ref_data(
 /// (`00420100`), or 0 when the list has none. The index is not checked
 /// against the four words. No Xbox PDB name.
 pub fn fn_00420130(e: &mut Engine, this: Ptr<ExtraDataList>, index: i32) -> u32 {
-    let data = extra_data_list_get_occlusion_plane_linked_ref_data(e, this);
+    let data = e.call(0x0042_0100, &args![this]).u32();
     if data == 0 {
         0
     } else {
@@ -1872,11 +1872,11 @@ pub fn fn_00420130(e: &mut Engine, this: Ptr<ExtraDataList>, index: i32) -> u32 
 /// `reference` clears the word). The index is not checked against the four
 /// words. No Xbox PDB name. The exception-unwinding frame is not translated.
 pub fn fn_00420160(e: &mut Engine, this: Ptr<ExtraDataList>, reference: u32, index: i32) {
-    if extra_data_list_get_occlusion_plane_linked_ref_data(e, this) == 0 && reference != 0 {
+    if e.call(0x0042_0100, &args![this]).u32() == 0 && reference != 0 {
         let data = new_object(e, 0x10, OCCLUSION_PLANE_DATA_INIT);
-        fn_0041fec0(e, this, data);
+        e.call(0x0041_fec0, &args![this, data]);
     }
-    let data = extra_data_list_get_occlusion_plane_linked_ref_data(e, this);
+    let data = e.call(0x0042_0100, &args![this]).u32();
     if data != 0 {
         e.mem
             .set_u32(data.wrapping_add((index as u32).wrapping_mul(4)), reference);
@@ -1891,7 +1891,7 @@ pub fn fn_00420160(e: &mut Engine, this: Ptr<ExtraDataList>, reference: u32, ind
 /// not translated.
 pub fn fn_00420210(e: &mut Engine, this: Ptr<ExtraDataList>, data: u32) {
     replace_extra_holding_word(e, this, EXTRA_PORTAL_REF_DATA_TYPE, data, |e, block| {
-        fn_004202d0(e, Ptr::new(block)).addr()
+        e.call(0x0042_02d0, &args![block]).u32()
     });
 }
 
@@ -1951,11 +1951,14 @@ fn add_to_room_data_list(
     list_offset: u32,
     reference: u32,
 ) {
-    if extra_data_list_get_room_linked_ref_data(e, list) == 0 && reference != 0 {
+    if e.call(0x0042_07e0, &args![list]).u32() == 0 && reference != 0 {
         let data = new_object(e, 0x14, ROOM_LINKED_DATA_INIT);
-        fn_00420440(e, list, data);
+        e.call(0x0042_0440, &args![list, data]);
     }
-    let head = extra_data_list_get_room_linked_ref_data(e, list).wrapping_add(list_offset);
+    let head = e
+        .call(0x0042_07e0, &args![list])
+        .u32()
+        .wrapping_add(list_offset);
     e.with_stack(4, |e, slot| {
         e.mem.set_u32(slot.addr(), reference);
         if !e.call(LIST_CONTAINS, &args![head, slot]).bool() {
@@ -2006,7 +2009,7 @@ pub fn extra_portal_ref_data_scalar_deleting_destructor(
     this: Ptr<ExtraPortalRefData>,
     flags: u32,
 ) -> Ptr<ExtraPortalRefData> {
-    fn_004203b0(e, this);
+    e.call(0x0042_03b0, &args![this]);
     finish_scalar_deleting_destructor(e, this.cast(), flags).cast()
 }
 
@@ -2019,7 +2022,7 @@ pub fn extra_portal_ref_data_scalar_deleting_destructor(
 /// not translated.
 pub fn fn_004203b0(e: &mut Engine, this: Ptr<ExtraPortalRefData>) {
     e.mem.set_u32(this.addr(), VTABLE_EXTRA_PORTAL_REF_DATA);
-    fn_004200c0(e, this.cast());
+    e.call(0x0042_00c0, &args![this]);
     e.call(BS_EXTRA_DATA_DESTROY, &args![this]);
 }
 
@@ -2038,7 +2041,7 @@ pub fn fn_00420410(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
 /// not translated.
 pub fn fn_00420440(e: &mut Engine, this: Ptr<ExtraDataList>, room_data: u32) {
     replace_extra_holding_word(e, this, EXTRA_ROOM_REF_DATA_TYPE, room_data, |e, block| {
-        fn_00420500(e, Ptr::new(block)).addr()
+        e.call(0x0042_0500, &args![block]).u32()
     });
 }
 
@@ -2101,7 +2104,7 @@ pub fn extra_room_ref_data_scalar_deleting_destructor(
     this: Ptr<ExtraRoomRefData>,
     flags: u32,
 ) -> Ptr<ExtraRoomRefData> {
-    fn_00420630(e, this);
+    e.call(0x0042_0630, &args![this]);
     finish_scalar_deleting_destructor(e, this.cast(), flags).cast()
 }
 
@@ -2112,7 +2115,7 @@ pub fn extra_room_ref_data_scalar_deleting_destructor(
 /// exception-unwinding frame is not translated.
 pub fn fn_00420630(e: &mut Engine, this: Ptr<ExtraRoomRefData>) {
     e.mem.set_u32(this.addr(), VTABLE_EXTRA_ROOM_REF_DATA);
-    fn_00420690(e, this);
+    e.call(0x0042_0690, &args![this]);
     e.call(BS_EXTRA_DATA_DESTROY, &args![this]);
 }
 
@@ -2123,7 +2126,7 @@ pub fn fn_00420630(e: &mut Engine, this: Ptr<ExtraRoomRefData>) {
 pub fn fn_00420690(e: &mut Engine, this: Ptr<ExtraRoomRefData>) {
     let data = e.get(this, ExtraRoomRefData::pData);
     if !data.is_null() {
-        fn_004206e0(e, data.cast(), 1);
+        e.call(0x0042_06e0, &args![data, 1u32]);
     }
     e.set(this, ExtraRoomRefData::pData, Ptr::NULL);
 }
@@ -2135,7 +2138,7 @@ pub fn fn_00420690(e: &mut Engine, this: Ptr<ExtraRoomRefData>) {
 /// frees the object when bit 0 of `flags` is set. Returns `this`. No Xbox
 /// PDB name.
 pub fn fn_004206e0(e: &mut Engine, this: Ptr<RoomLinkedRefData>, flags: u32) -> Ptr {
-    fn_00420710(e, this);
+    e.call(0x0042_0710, &args![this]);
     finish_scalar_deleting_destructor(e, this.cast(), flags)
 }
 
@@ -2155,7 +2158,7 @@ pub fn fn_00420710(e: &mut Engine, this: Ptr<RoomLinkedRefData>) {
 /// library matcher names it `UMSSchedulerProxy::GetUnblockNotifications`,
 /// wrongly).
 pub fn fn_00420770(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
-    let data = extra_data_list_get_room_linked_ref_data(e, this);
+    let data = e.call(0x0042_07e0, &args![this]).u32();
     if data == 0 {
         0
     } else {
@@ -2167,7 +2170,7 @@ pub fn fn_00420770(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
 /// `GetRoomLinkedRefData` (`004207e0`) with the result masked by itself
 /// (`-(x != 0) & x`, which is `x`). No Xbox PDB name.
 pub fn fn_004207b0(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
-    extra_data_list_get_room_linked_ref_data(e, this)
+    e.call(0x0042_07e0, &args![this]).u32()
 }
 
 // Translated from 004207e0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2222,12 +2225,12 @@ pub fn extra_data_list_get_master_room(e: &mut Engine, this: Ptr<ExtraDataList>)
     if extra.is_null() {
         return 0;
     }
-    if extra_data_list_get_room_is_master(e, this) {
+    if e.call(0x0042_0810, &args![this]).bool() {
         return 0;
     }
     e.with_stack(0x10, |e, visited| {
         e.call(VISITED_SET_INIT, &args![visited, 0x25u32]);
-        let master = fn_00420950(e, this, visited);
+        let master = e.call(0x0042_0950, &args![this, visited]).u32();
         e.call(VISITED_SET_DESTROY, &args![visited]);
         master
     })
@@ -2256,8 +2259,8 @@ pub fn fn_00420950(e: &mut Engine, this: Ptr<ExtraDataList>, visited: Ptr) -> u3
         }
         let slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
         let room = e.mem.u32(slot);
-        let room_list = e.call(REFERENCE_EXTRA_LIST, &args![room]).ptr();
-        if extra_data_list_get_room_is_master(e, room_list) {
+        let room_list: Ptr<ExtraDataList> = e.call(REFERENCE_EXTRA_LIST, &args![room]).ptr();
+        if e.call(0x0042_0810, &args![room_list]).bool() {
             return room;
         }
         node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
@@ -2274,8 +2277,9 @@ pub fn fn_00420950(e: &mut Engine, this: Ptr<ExtraDataList>, visited: Ptr) -> u3
             if !e.call(VISITED_SET_FIND, &args![visited, room, seen]).bool() {
                 let seen_value = e.mem.u8(seen.addr()) as u32;
                 e.call(VISITED_SET_INSERT, &args![visited, room, seen_value]);
-                let room_list = e.call(REFERENCE_EXTRA_LIST, &args![room]).ptr();
-                let found = fn_00420950(e, room_list, visited);
+                let room_list: Ptr<ExtraDataList> =
+                    e.call(REFERENCE_EXTRA_LIST, &args![room]).ptr();
+                let found = e.call(0x0042_0950, &args![room_list, visited]).u32();
                 if found != 0 {
                     return found;
                 }
@@ -2299,35 +2303,35 @@ pub fn fn_00420950(e: &mut Engine, this: Ptr<ExtraDataList>, visited: Ptr) -> u3
 /// index only stores the word. No Xbox PDB name. The exception-unwinding
 /// frame is not translated.
 pub fn fn_00420a60(e: &mut Engine, this: Ptr<ExtraDataList>, index: i32, reference: u32) {
-    if fn_00420410(e, this) == 0 && reference != 0 {
+    if e.call(0x0042_0410, &args![this]).u32() == 0 && reference != 0 {
         let data = new_object(e, 8, PORTAL_LINKED_DATA_INIT);
-        fn_00420210(e, this, data);
+        e.call(0x0042_0210, &args![this, data]);
     }
-    let data = fn_00420410(e, this);
+    let data = e.call(0x0042_0410, &args![this]).u32();
     if data != 0 {
         e.mem
             .set_u32(data.wrapping_add((index as u32).wrapping_mul(4)), reference);
     }
-    let portal = fn_00420dd0(e, this);
+    let portal = e.call(0x0042_0dd0, &args![this]).u32();
     let master = if reference == 0 {
         0
     } else {
-        let list = e.call(REFERENCE_EXTRA_LIST, &args![reference]).ptr();
-        extra_data_list_get_master_room(e, list)
+        let list: Ptr<ExtraDataList> = e.call(REFERENCE_EXTRA_LIST, &args![reference]).ptr();
+        e.call(0x0042_08b0, &args![list]).u32()
     };
     let room_reference = if master == 0 { reference } else { master };
     let room = if room_reference == 0 {
         0
     } else {
-        let list = e.call(REFERENCE_EXTRA_LIST, &args![room_reference]).ptr();
-        extra_data_list_get_room(e, list)
+        let list: Ptr<ExtraDataList> = e.call(REFERENCE_EXTRA_LIST, &args![room_reference]).ptr();
+        e.call(0x0042_0ed0, &args![list]).u32()
     };
     if portal != 0 {
         if index == 0 {
             e.call(PORTAL_SET_FIRST_ROOM, &args![portal, room]);
         }
         if index == 1 {
-            fn_00420ba0(e, Ptr::new(portal), room);
+            e.call(0x0042_0ba0, &args![portal, room]);
         }
     }
 }
@@ -2345,7 +2349,7 @@ pub fn fn_00420ba0(e: &mut Engine, this: Ptr, room: u32) {
 /// has no type `0x77` extra data or it has no data. The index is not checked
 /// against the two words. No Xbox PDB name.
 pub fn fn_00420bc0(e: &mut Engine, this: Ptr<ExtraDataList>, index: i32) -> u32 {
-    let data = fn_00420410(e, this);
+    let data = e.call(0x0042_0410, &args![this]).u32();
     if data == 0 {
         0
     } else {
@@ -2374,7 +2378,7 @@ pub fn fn_00420ce0(e: &mut Engine, this: Ptr<ExtraDataList>, reference: u32) {
 /// reference data (`00905330`, given the address of the argument); nothing
 /// when the list has none. No Xbox PDB name.
 pub fn fn_00420da0(e: &mut Engine, this: Ptr<ExtraDataList>, reference: u32) {
-    let data = extra_data_list_get_room_linked_ref_data(e, this);
+    let data = e.call(0x0042_07e0, &args![this]).u32();
     if data != 0 {
         e.with_stack(4, |e, slot| {
             e.mem.set_u32(slot.addr(), reference);
@@ -2429,7 +2433,7 @@ pub fn fn_00420fd0(e: &mut Engine, this: Ptr<ExtraDataList>, collision_data: u32
         this,
         EXTRA_COLLISION_DATA_TYPE,
         collision_data,
-        |e, block| fn_00421090(e, Ptr::new(block)).addr(),
+        |e, block| e.call(0x0042_1090, &args![block]).u32(),
     );
 }
 
@@ -2479,7 +2483,7 @@ pub fn extra_collision_data_scalar_deleting_destructor(
     this: Ptr<ExtraCollisionData>,
     flags: u32,
 ) -> Ptr<ExtraCollisionData> {
-    fn_00421160(e, this);
+    e.call(0x0042_1160, &args![this]);
     finish_scalar_deleting_destructor(e, this.cast(), flags).cast()
 }
 
@@ -2513,7 +2517,7 @@ pub fn extra_data_list_set_actor_package_data(e: &mut Engine, this: Ptr<ExtraDat
         e.mem.set_u32(extra.addr() + 0x0c, data);
     } else {
         let built = new_built(e, 0x10, |e, block| {
-            fn_00421280(e, Ptr::new(block), data).addr()
+            e.call(0x0042_1280, &args![block, data]).u32()
         });
         add_extra(e, this, Ptr::new(built));
     }
@@ -4758,6 +4762,8 @@ mod tests {
             order,
             vec![
                 0x0041fdb0,
+                0x0041_fe10,
+                0x0041_fe60,
                 PATROL_DATA_DESTROY,
                 OPERATOR_DELETE,
                 BS_EXTRA_DATA_DESTROY
@@ -4908,7 +4914,12 @@ mod tests {
         let order: Vec<u32> = log.iter().map(|(callee, _)| *callee).collect();
         assert_eq!(
             order,
-            vec![0x00420060, OPERATOR_DELETE, BS_EXTRA_DATA_DESTROY]
+            vec![
+                0x00420060,
+                0x0042_00c0,
+                OPERATOR_DELETE,
+                BS_EXTRA_DATA_DESTROY
+            ]
         );
         assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![data]]);
         assert_eq!(e.get(extra, ExtraOcclusionPlaneRefData::pData).addr(), 0);
@@ -5156,7 +5167,12 @@ mod tests {
         let order: Vec<u32> = log.iter().map(|(callee, _)| *callee).collect();
         assert_eq!(
             order,
-            vec![0x004203b0, OPERATOR_DELETE, BS_EXTRA_DATA_DESTROY]
+            vec![
+                0x004203b0,
+                0x0042_00c0,
+                OPERATOR_DELETE,
+                BS_EXTRA_DATA_DESTROY
+            ]
         );
         assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![data]]);
         assert_eq!(e.get(extra, ExtraPortalRefData::pData).addr(), 0);
@@ -5280,6 +5296,9 @@ mod tests {
             order,
             vec![
                 0x00420630,
+                0x0042_0690,
+                0x0042_06e0,
+                0x0042_0710,
                 LIST_DESTROY,
                 LIST_DESTROY,
                 OPERATOR_DELETE,
