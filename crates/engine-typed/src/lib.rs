@@ -107,7 +107,8 @@ macro_rules! image {
 
 /// This crate's families, in the order [`units::funcs`] provides them: the one list the engine and
 /// its tests read (a family left out here is never registered; the engine's guard test
-/// `every_family_holds_each_crates_families` finds one provided but not listed).
+/// `every_declared_family_is_listed` finds a `pub static .. : Family` of the sources that is not
+/// listed).
 pub static FAMILIES: [&engine_core::typed::Family; 33] = [
     &crate::lockfree::LOCKFREE,
     &crate::culling::CULLING,

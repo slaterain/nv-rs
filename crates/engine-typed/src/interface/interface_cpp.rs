@@ -346,15 +346,13 @@ const DISPATCH_MESSAGE: u32 = 0x00fd_f294;
 const MESSAGE_SIZE: u32 = 0x1c;
 /// `StatsMenu::ToggleHealingMode`, `RepairMenu::ResetMenu`,
 /// `ItemModMenu::ResetMenu`, `MapMenu::UpdateMenu`,
-/// `InventoryMenu::UpdateInventoryMenu`, `InventoryMenu::SavePageState` and
-/// `StatsMenu::UpdateHealingOptions` (Xbox PDB; the last takes a menu).
+/// `InventoryMenu::UpdateInventoryMenu` and `InventoryMenu::SavePageState` (Xbox PDB).
 const STATS_TOGGLE_HEALING_MODE: u32 = 0x0070_4390;
 const REPAIR_RESET_MENU: u32 = 0x007b_6fb0;
 const ITEM_MOD_RESET_MENU: u32 = 0x0078_46a0;
 const MAP_MENU_UPDATE: u32 = 0x0079_aba0;
 const INVENTORY_UPDATE_MENU: u32 = 0x0078_2a90;
 const INVENTORY_SAVE_PAGE_STATE: u32 = 0x0077_ffd0;
-const STATS_UPDATE_HEALING_OPTIONS: u32 = 0x007d_f230;
 
 /// A tile's trait value (`Tile::GetFloat`, `00a011b0`, the dispatch family's), its float widened.
 fn tile_value(e: &mut Engine, tile: u32, id: i32) -> f64 {
@@ -2019,7 +2017,11 @@ pub fn fn_00704af0(e: &mut Engine) {
     } else if typed_call!(super::FAMILY, 0x0070_4df0, fn_00704df0(e)) != 0 {
         let stats = menu_by_class(e, MENU_STATS);
         let menu = e.call(TILE_GET_MENU, &args![stats]).u32();
-        e.call(STATS_UPDATE_HEALING_OPTIONS, &args![menu, 4u32]);
+        typed_call!(
+            super::FAMILY,
+            0x007d_f230,
+            super::stats_menu::stats_menu_update_healing_options(e, Ptr::new(menu), 4)
+        );
     } else if visible(e, 0x41d) {
         e.call(0x0073_0690, &args![1u32]);
     } else if visible(e, 0x435) {
@@ -2047,14 +2049,11 @@ const MENU_VATS: i32 = 0x420;
 const MENU_435: i32 = 0x435;
 const MENU_41D: i32 = 0x41d;
 /// `StatsMenu::Create` (Xbox PDB), `StatsMenu::UpdateAll` (on the menu),
-/// `StatsMenu::SetKnobPosition` (`cdecl`, one word),
-/// `StatsMenu::UpdateAllActorValues` and `StatsMenu::UpdateActorValue` (the
-/// last two on the menu, the second with the value).
+/// `StatsMenu::Create`, `StatsMenu::UpdateAll` (on the menu) and
+/// `StatsMenu::SetKnobPosition` (`cdecl`, one word).
 const STATS_MENU_CREATE: u32 = 0x007d_a2c0;
 const STATS_UPDATE_ALL: u32 = 0x007d_cc80;
 const STATS_SET_KNOB_POSITION: u32 = 0x007d_fc90;
-const STATS_UPDATE_ALL_ACTOR_VALUES: u32 = 0x007d_cfc0;
-const STATS_UPDATE_ACTOR_VALUE: u32 = 0x007d_d090;
 /// The actor value that updates the whole stats screen (`0x4d`).
 const ACTOR_VALUE_ALL: u32 = 0x4d;
 /// The global holding the container menu object (`011d93f8`) and
@@ -2237,9 +2236,17 @@ pub fn interface_update_actor_value(e: &mut Engine, actor_value: u32) {
         return;
     }
     if actor_value == ACTOR_VALUE_ALL {
-        e.call(STATS_UPDATE_ALL_ACTOR_VALUES, &args![menu]);
+        typed_call!(
+            super::FAMILY,
+            0x007d_cfc0,
+            super::stats_menu::stats_menu_update_all_actor_values(e, Ptr::new(menu))
+        );
     } else {
-        e.call(STATS_UPDATE_ACTOR_VALUE, &args![menu, actor_value]);
+        typed_call!(
+            super::FAMILY,
+            0x007d_d090,
+            super::stats_menu::stats_menu_update_actor_value(e, Ptr::new(menu), actor_value)
+        );
     }
 }
 

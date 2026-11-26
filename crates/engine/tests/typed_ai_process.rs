@@ -123,6 +123,9 @@ const IDS: &[u32] = &[
 enum Kind {
     /// Answers only.
     Plain,
+    /// A function the family types now: its answers are still drawn (so the rest of the world stays
+    /// as it was), but it runs as itself.
+    Typed,
     /// `thiscall(save_load, address, size)`: moves the position (+0x14) on by the size; `Extra`
     /// also by the world's extra.
     Write,
@@ -148,7 +151,7 @@ const DOUBLES: &[(u32, &[u32], Kind)] = &[
     (0x008d_9fa0, UNREAD, Kind::Plain), // the level copies
     (0x0091_4c60, UNREAD, Kind::Plain),
     (0x0093_7160, UNREAD, Kind::Plain), // the middle-low copy's modifier list copy
-    (0x0090_7510, UNREAD, Kind::Plain),
+    (0x0090_7510, UNREAD, Kind::Typed), // LowProcess's level copy
     (0x0086_75e0, UNREAD, Kind::Plain), // the cached values' copy
     (0x0067_59e0, &[0, 1, FORM_A], Kind::Plain), // TESPackage::ComputeInitialTarget
     (0x0085_79b0, UNREAD, Kind::Write), // the save/load game's byte writer
@@ -188,6 +191,9 @@ const DOUBLES: &[(u32, &[u32], Kind)] = &[
 /// store or compare): 0041fd00, 0049bb50, 00825c00, 004fd3c0, 008df040, 00408d60, 00862110,
 /// 0041a250, 0047c850 (false), 00674d40, 009611e0, 0096a820, 00857bd0 and 00469860.
 const IN_PLACE: &[u32] = &[
+    0x007d_f1f0, // the low level copy's hour, read and stored, and its date
+    0x0069_3d50,
+    0x0059_bb30,
     0x0041_fd00,
     0x0049_bb50,
     0x0082_5c00,
@@ -301,6 +307,9 @@ impl World {
                 e.mem.set_u32(block + 4 + 4 * i, answer);
             }
             let kind = *kind;
+            if matches!(kind, Kind::Typed) {
+                continue;
+            }
             e.register_double(*addr, move |e, a| {
                 let n = e.mem.u32(block);
                 e.mem.set_u32(block, n + 1);
@@ -312,7 +321,7 @@ impl World {
                 let answer = e.mem.u32(block + 4 + 4 * (n % 8));
                 let next = e.mem.u32(block + 4 + 4 * ((n + 1) % 8));
                 let (bytes, moves) = match kind {
-                    Kind::Plain => (0, 0),
+                    Kind::Plain | Kind::Typed => (0, 0),
                     Kind::Write => (0, a[2]),
                     Kind::Extra => (0, a[2].wrapping_add(e.mem.u32(EXTRA))),
                     Kind::Read => (a[2].min(4), 0),

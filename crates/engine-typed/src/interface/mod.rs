@@ -29,6 +29,11 @@
 //! - [`small_units`]: a destructor of an object with two string lists, the word-sized elements'
 //!   placement loop, a list box's item count, and an object with a string, a flags byte and a tile
 //!   value.
+//! - [`stats_menu`]: the stats menu's unit, its first part: the status data list's clean-ups, the
+//!   fade object, the idle, the pages, the actor values, perks, healing options and mode, the
+//!   SPECIAL and skill rows, the face image, the radiation meter, the sorts and availability
+//!   callbacks, the status data list's `Register` (with JIP LN's G107 seam) and two list boxes'
+//!   `AddItem`.
 //!
 //! **Floats.** The menus run on the main thread ([`Threads::Main`]), at the float precision the
 //! exe's main thread computes in once Direct3D set it: plain `f32` (the camera frustum's products;
@@ -49,6 +54,7 @@ pub mod item_list_box;
 pub mod menu_manager;
 pub mod menu_manager_p2;
 pub mod small_units;
+pub mod stats_menu;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(44);
@@ -73,6 +79,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
     all.extend(menu_manager_p2::funcs());
     all.extend(item_list_box::funcs());
     all.extend(small_units::funcs());
+    all.extend(stats_menu::funcs());
     all
 }
 

@@ -16,8 +16,9 @@
 //! is [`checkfor_new_package`] on the first only; 0x280 and 0x284 are `008d0450` and `008d0470` on
 //! the first only; 0x3a8 is [`damage_mod_actor_value_ov2`] on the first two; 0x1bc, 0x1c0, 0x1c8,
 //! 0x5a4 and 0x5a8 are `LowProcess`'s flag getters and setters (`008d8060`, `008d8080`, `008d7ee0`,
-//! `008d8000`, `008d8020`) on all three. A call through one of them is the typed call, or the flag
-//! test or store in place, when the slot holds that body, and a call through the slot otherwise.
+//! `008d8000`, `008d8020`) on all three; 0x288 is `LowProcess::AddToProcedureIndexRunning`
+//! (`009119b0`) on the first only. A call through one of them is the typed call, or the flag test
+//! or store in place, when the slot holds that body, and a call through the slot otherwise.
 //!
 //! The callees whose bodies are one load, store or test are done in place: the actor value's flag
 //! (`00406d70`), the buffers' change flags (`00428110`, `0042ce30`, `004280f0`), the calendar's hour
@@ -30,7 +31,7 @@ use super::base_process::{
     self, buffer_position, current_version, form_name, loading_record, low_half, record_words,
     runtime_cast, save_load_game, save_log_enabled, saving_record, use_save_game_blocks,
 };
-use super::FAMILY;
+use super::{low_process, FAMILY};
 use crate::native::{float_precision, to_float, Real};
 use crate::{ai_queries, crt, interface, slot_target};
 use engine_core::ptr::Ptr;
@@ -68,14 +69,12 @@ const LOW_GET_ACTOR_VALUE: u32 = 0x0090_72d0;
 const LOW_SAVE_GAME_BUFFER: u32 = 0x0091_0450;
 const LOW_DESTRUCTOR: u32 = 0x0090_6fe0;
 const LOW_CHECK_FOR_NEW_PACKAGE: u32 = 0x0090_a1a0;
-const LOW_UPDATE_BUFFER: u32 = 0x0090_c360;
 const LOW_GET_SAVE_SIZE: u32 = 0x0090_f8b0;
 const LOW_SAVE_GAME: u32 = 0x0090_fa70;
 const LOW_LOAD_GAME: u32 = 0x0090_fd80;
 const LOW_REVERT: u32 = 0x0091_0310;
 const LOW_LOAD_GAME_BUFFER: u32 = 0x0091_0630;
 const LOW_REVERT_BUFFER: u32 = 0x0091_0a60;
-const LOW_RESET_TARGET: u32 = 0x0090_a070;
 /// `ModifierList`'s functions on the modifier lists.
 const MODIFIER_GET: u32 = 0x0093_7730;
 const MODIFIER_ADJUST: u32 = 0x0093_7480;
@@ -325,7 +324,11 @@ pub fn checkfor_new_package(e: &mut Engine, this: Ptr, actor: u32, force: u8) ->
 /// loaded and stored (which quiets a signalling NaN).
 pub fn update_step(e: &mut Engine, this: Ptr, actor: u32, delta: f32) {
     let delta = x87_quiet_bits(delta.to_bits());
-    e.call(LOW_UPDATE_BUFFER, &args![this, actor, delta]);
+    typed_call!(
+        FAMILY,
+        0x0090_c360,
+        low_process::update_buffer(e, this, Ptr::new(actor), f32::from_bits(delta))
+    );
 }
 
 // Typed from 00907430
@@ -810,7 +813,7 @@ pub(super) fn set_procedure_index_running(e: &mut Engine, process: u32, index: u
 
 /// A process slot holding one of `LowProcess`'s flag tests (`body`, of `flag`): the test in place,
 /// or the call through the slot.
-fn process_flag(e: &mut Engine, process: u32, slot: u32, body: u32, flag: u8) -> bool {
+pub(super) fn process_flag(e: &mut Engine, process: u32, slot: u32, body: u32, flag: u8) -> bool {
     if slot_target(e, process, slot) == body {
         e.mem.u8(process.wrapping_add(PROCESS_FLAGS)) & flag != 0
     } else {
@@ -820,7 +823,14 @@ fn process_flag(e: &mut Engine, process: u32, slot: u32, body: u32, flag: u8) ->
 
 /// A process slot holding one of `LowProcess`'s flag setters (`body`, of `flag`): the store in
 /// place, or the call through the slot.
-fn set_process_flag(e: &mut Engine, process: u32, slot: u32, body: u32, flag: u8, on: u8) {
+pub(super) fn set_process_flag(
+    e: &mut Engine,
+    process: u32,
+    slot: u32,
+    body: u32,
+    flag: u8,
+    on: u8,
+) {
     if slot_target(e, process, slot) == body {
         let at = process.wrapping_add(PROCESS_FLAGS);
         let flags = e.mem.u8(at);
@@ -992,7 +1002,7 @@ fn update_travel(e: &mut Engine, process: u32, actor: u32, location: u32) {
         };
         e.vcall(actor, 0x2c4, &args![heading]);
     }
-    e.vcall(process, 0x288, &args![actor, 1u32]);
+    low_process::add_to_procedure_index_running_slot(e, process, actor, 1u32);
 }
 
 /// `Update`'s action 0x31: use the target (+0x40) when it is an actor (its slot 0x100), when the
@@ -1030,12 +1040,12 @@ fn update_follow(e: &mut Engine, process: u32, actor: u32, package: u32) {
     if object != 0 && object != e.mem.u32(PLAYER) {
         e.vcall(process, 0xc8, &args![actor, package, 1u32]);
     }
-    e.vcall(process, 0x288, &args![actor, 1u32]);
+    low_process::add_to_procedure_index_running_slot(e, process, actor, 1u32);
 }
 
 /// The process's slot 0x288 with (actor, 1): the procedure done.
 fn procedure_done(e: &mut Engine, process: u32, actor: u32) {
-    e.vcall(process, 0x288, &args![actor, 1u32]);
+    low_process::add_to_procedure_index_running_slot(e, process, actor, 1u32);
 }
 
 /// `Update`'s action 0xD: reach the target (+0x40).
@@ -1122,7 +1132,7 @@ fn update_action(
         1 => {
             let current = current_package(e, process);
             if package_kind(e, current) == 0x1a {
-                e.vcall(process, 0x288, &args![actor, 0xffff_ffffu32]);
+                low_process::add_to_procedure_index_running_slot(e, process, actor, 0xffff_ffffu32);
             }
         }
         2 => {
@@ -1157,7 +1167,7 @@ fn update_action(
         0x26 => one(e, 0x800),
         0x27 => one(e, 0x7e8),
         0x29 => {
-            e.vcall(process, 0x288, &args![actor, 2u32]);
+            low_process::add_to_procedure_index_running_slot(e, process, actor, 2u32);
         }
         0x2a => one(e, 0x7ec),
         0x2c => one(e, 0x7fc),
@@ -1177,14 +1187,14 @@ fn update_finish_package(e: &mut Engine, process: u32, actor: u32, package: &mut
         let current = current_package(e, process);
         e.call(0x005a_c750, &args![current, extra, 0x400u32]);
         let current = current_package(e, process);
-        e.vcall(process, 0x5a0, &args![actor, current]);
+        low_process::package_done_slot(e, process, actor, current);
         set_process_flag(e, process, 0x5a8, 0x008d_8020, 0x20, 1);
     }
     set_process_flag(e, process, 0x1c8, 0x008d_7ee0, 0x04, 0);
     if current_package(e, process) != 0 {
         let current = current_package(e, process);
         if package_kind(e, current) == 0 && !package_test_13c(e, process, actor) {
-            e.vcall(process, 0x288, &args![actor, 0xffff_ffffu32]);
+            low_process::add_to_procedure_index_running_slot(e, process, actor, 0xffff_ffffu32);
             return false;
         }
     }
@@ -1264,7 +1274,7 @@ pub fn update(e: &mut Engine, this: Ptr, actor: u32) {
         }
         && !package_flag(e, package, 0x1_0000);
     if runs {
-        e.call(LOW_RESET_TARGET, &args![this]);
+        typed_call!(FAMILY, 0x0090_a070, low_process::reset_target(e, this));
         let current = current_package(e, process);
         let location = package_location(e, current);
         let action = procedure_action(e, process);

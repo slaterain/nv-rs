@@ -122,7 +122,7 @@ const LOVE_TESTER_BUTTONS_VTABLE: u32 = 0x0107_0404;
 
 /// One of the six `ListBox<T>` instances.
 #[derive(Clone, Copy)]
-enum Of {
+pub(super) enum Of {
     ActorValue,
     PerkRankData,
     MiscStatId,
@@ -193,7 +193,7 @@ fn remove_all_of(e: &mut Engine, of: Of, this: Ptr) {
 }
 
 /// The instance's `Synchronize`.
-fn synchronize_of(e: &mut Engine, of: Of, this: Ptr) {
+pub(super) fn synchronize_of(e: &mut Engine, of: Of, this: Ptr) {
     match of {
         Of::ActorValue => typed_call!(
             super::FAMILY,
@@ -301,7 +301,7 @@ fn update_highlight_box_pos_of(e: &mut Engine, of: Of, this: Ptr) {
 }
 
 /// The instance's `SetTotalListHeight`.
-fn set_total_list_height_of(e: &mut Engine, of: Of, this: Ptr) {
+pub(super) fn set_total_list_height_of(e: &mut Engine, of: Of, this: Ptr) {
     match of {
         Of::ActorValue => typed_call!(
             super::FAMILY,

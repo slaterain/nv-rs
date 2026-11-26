@@ -1422,7 +1422,7 @@ pub fn fn_0071f700(e: &mut Engine, this: Ptr) {
     for offset in [0x74, 0x80, 0x7c, 0x78] {
         let effect = e.mem.u32(base + offset);
         if effect != 0 {
-            fn_0071f9c0(e, Ptr::new(effect), 1);
+            e.call(0x0071_f9c0, &args![effect, 1u32]);
         }
     }
     fn_0071f8c0(e);
