@@ -27,7 +27,9 @@
 //! the file's chunk reads, the RTTI cast, the model path getters, the reference's scale and model,
 //! `operator new` and `delete`, the logger, `sprintf_s`; every other virtual call goes through its
 //! slot. JIP LN's seam in `Clone3D` (`0050ef46`, its clone of a model with lights of its own) runs
-//! where it does, behind the same test.
+//! where it does, behind the same test. The model registration (`0050fbf0`) reads the model
+//! loader's pointer (`011c3b3c`) once, where the exe reads it again before each of its four uses:
+//! the loader is made once at start-up and never changes after, so the word is the same each time.
 //!
 //! Floats: the box's components become floats exactly (`FILD`); the box's size is the pathing
 //! family's root of the integer sum of squares (stored as a float), halved, as a float; the

@@ -6552,7 +6552,7 @@ fn ob_string_tidy() {
         .inputs(&[
             Input::Of(OB_PICK),
             Input::Of(&[0, 1, 0x100]),
-            Input::Of(&[0, 3, 15]),
+            Input::Of(&[0, 1, 2, 3, 15, 16]),
         ])
         .setup(|e, case| {
             ob_world(e);
@@ -7076,8 +7076,10 @@ fn ob_clone_3d() {
             // JIP LN: off; on, its seam answering 0; answering 1.
             Input::Of(&[0, 1, 2]),
             // The form type.
-            Input::Of(&[0x15, 0x2b, 0x1c, 0x23, 0x20]),
-            // The checks' answers, a bit each.
+            Input::Of(&[0x15, 0x2b, 0x1c, 0x23, 0x28, 0x29, 0x2a, 0x33, 0x51, 0x20]),
+            // The checks' answers, a bit each; the last three words make the emittance alone refuse,
+            // the 0x1c path's cast find its controllers with the last test answering 0, and the cast
+            // fail after the controllers are found.
             Input::Of(&[
                 0,
                 0xffff_ffff,
@@ -7085,6 +7087,9 @@ fn ob_clone_3d() {
                 0xaaaa_aaaa,
                 0x3c3c_3c3c,
                 0x0f0f_0f0f,
+                0x0000_0080,
+                0x0000_0604,
+                0x0000_0204,
             ]),
             // The scales.
             Input::Of(&[0, 1, 2, 3, 4]),
@@ -7095,7 +7100,7 @@ fn ob_clone_3d() {
             // The loader's add.
             Input::Flag,
         ])
-        .max_cases(1024)
+        .max_cases(2048)
         .setup(|e, case| {
             ob_world(e);
             let this = ob_object(e, VTABLE);
@@ -7600,8 +7605,8 @@ fn ob_register_form_model() {
             Input::Of(&[0, 1, 2, 3]),
             // The path: none, empty, a name.
             Input::Of(&[0, 1, 2]),
-            // The loader's find: nothing; a model with a reference count of 0; of 2.
-            Input::Of(&[0, 1, 2]),
+            // The loader's find: nothing; a model held 0, 1 or 2 times, or below 0.
+            Input::Of(&[0, 1, 2, 3, 4]),
         ])
         .setup(|e, case| {
             ob_world(e);
@@ -7632,7 +7637,7 @@ fn ob_register_form_model() {
                 0 => 0,
                 n => {
                     let m = ob_object(e, VTABLE);
-                    e.mem.set_u32(m + 8, 2 * (n - 1));
+                    e.mem.set_u32(m + 8, [0, 1, 2, 0x8000_0000][n as usize - 1]);
                     m
                 }
             };
