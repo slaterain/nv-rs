@@ -39,7 +39,15 @@ $tree = (& git -C $root rev-parse "$onMain^{tree}").Trim()
 $offMain = ("not on main" | & git -C $root commit-tree $tree).Trim()
 $game = Join-Path $Scratch 'FalloutNV.exe'
 [System.IO.File]::WriteAllBytes($game, (Bytes 7 20000))
-$name = 'nv-rs-preview-linux-x86_64-test'
+$testName = 'nv-rs-preview-linux-x86_64-test'
+$name = $testName
+# A release package's name, and the crash service's file it must hold: a made-up one (public key only).
+$releaseName = 'nv-rs-preview-linux-x86_64'
+$crashFile = Join-Path $Scratch 'crash-reports.txt'
+$crashText = "# made up for the test`nhttps://0123abcd@o1.ingest.example.org/42`n"
+[System.IO.File]::WriteAllText($crashFile, $crashText)
+# The launcher: a program too, compared with the game as nv-viewer is.
+$launcher = [byte[]](0x7f, 0x45, 0x4c, 0x46) + (Bytes 55 20000)
 # The stand-in for gh: `gh auth status` ends with FAKE_GH_AUTH; anything else prints FAKE_GH_JSON's file.
 $fakeGh = Join-Path $Scratch 'fake-gh.cmd'
 [System.IO.File]::WriteAllText($fakeGh, "@echo off`r`nif `"%1`"==`"auth`" exit /b %FAKE_GH_AUTH%`r`ntype `"%FAKE_GH_JSON%`"`r`nexit /b 0`r`n")
@@ -48,25 +56,34 @@ $fakeGh = Join-Path $Scratch 'fake-gh.cmd'
 function Defaults {
     $script:gh = $fakeGh
     $script:ghAuth = 0
-    $script:answer = @{ headBranch = 'main'; event = 'workflow_dispatch'; workflowName = 'Preview packages (Linux, macOS)'; conclusion = 'success' }
+    $script:answer = @{ headBranch = 'main'; event = 'workflow_dispatch'; workflowName = 'Preview packages (Linux, macOS)'; conclusion = 'success'; displayTitle = 'Preview packages test (test) of x' }
     $script:extra = @()
     $script:readme = "nv-rs`n=====`n`nWhat this build can do today`n----------------------------`nThe program goes on to start the game.`nA second line of it.`n`nNot this paragraph.`n"
+    $script:name = $testName
+    # The package's crash-reports.txt ($null: none).
+    $script:crash = $null
 }
 Defaults
 
-# A made-up package: CASE's folder with play.sh, app/nv-viewer (PROGRAM's bytes) and BUILD.txt, archived
-# (with $extra's entries too) with its .sha256; then check-unix-package.ps1 on it, the stand-in gh
-# answering $answer (headSha: the commit unless the case sets it). Returns the script's status.
+# A made-up package: CASE's folder with play.sh, nv-rs, app/nv-viewer (PROGRAM's bytes), BUILD.txt and
+# $crash's crash-reports.txt, named $name, archived (with $extra's entries too) with its .sha256; then
+# check-unix-package.ps1 on it, the stand-in gh answering $answer (headSha: the commit unless the case
+# sets it). Returns the script's status.
 function Package([string]$case, [byte[]]$program, [string]$commit, [string]$built, [string]$programSum, [bool]$badSum) {
+    $name = $script:name
     $dir = Join-Path $Scratch $case
     $package = Join-Path $dir $name
     New-Item -ItemType Directory -Force -Path (Join-Path $package 'app') | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $package 'play.sh'), "#!/bin/sh`n")
     if ($null -ne $script:readme) { [System.IO.File]::WriteAllText((Join-Path $package 'READ ME.txt'), $script:readme) }
+    if ($null -ne $script:crash) { [System.IO.File]::WriteAllText((Join-Path $package 'crash-reports.txt'), $script:crash) }
     $exe = Join-Path $package 'app\nv-viewer'
     [System.IO.File]::WriteAllBytes($exe, $program)
     if ($programSum -eq '') { $programSum = Sha $exe }
+    $nvrs = Join-Path $package 'nv-rs'
+    [System.IO.File]::WriteAllBytes($nvrs, $launcher)
     $build = @("nv-rs linux-x86_64 preview test", "Source commit: $commit", "app/nv-viewer SHA256: $programSum",
+        "nv-rs SHA256: $(Sha $nvrs)",
         "Platform: linux-x86_64 (x86_64-unknown-linux-gnu), Cargo profile release", $built,
         "Source: https://github.com/slaterain/nv-rs/tree/$commit")
     [System.IO.File]::WriteAllText((Join-Path $package 'BUILD.txt'), (($build -join "`n") + "`n"))
@@ -89,7 +106,7 @@ function Package([string]$case, [byte[]]$program, [string]$commit, [string]$buil
     New-Item -ItemType Directory -Force -Path $work | Out-Null
     $script:log = Join-Path $dir 'check.log'
     $ErrorActionPreference = 'Continue'
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $checkScript -Archive $archive -Game $game -Checker $Checker -WorkIn $work -Gh $script:gh *> $script:log
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $checkScript -Archive $archive -Game $game -Checker $Checker -WorkIn $work -Gh $script:gh -CrashReports $crashFile *> $script:log
     $status = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     $script:checked = Join-Path $dir "$name.CHECKED.txt"
@@ -110,7 +127,8 @@ Check "P CHECKED.txt names the run" ($text.Contains('Built by GitHub Actions, ru
 Check "P CHECKED.txt says GitHub confirmed it" ($text.Contains('GitHub confirms: run 4242'))
 Check "P CHECKED.txt names the commit" ($text.Contains("Source commit: $onMain"))
 Check "P CHECKED.txt has the program's line" ($text -match 'nv-viewer: 30004 bytes, shares 0 runs .* longest 0')
-Check "P CHECKED.txt has the 0 hits line" ($text -match '4 files, 0 needles: 0 hits')
+Check "P CHECKED.txt has the launcher's line" ($text -match 'nv-rs: 20004 bytes, shares 0 runs .* longest 0')
+Check "P CHECKED.txt has the 0 hits line" ($text -match '5 files, 0 needles: 0 hits')
 Check "P CHECKED.txt ends with the READ ME's paragraph" ($text.Contains("What this build can do today (from the package's READ ME):`nThe program goes on to start the game.`nA second line of it.") -and -not $text.Contains('Not this paragraph'))
 Check "P archive unchanged" ((Sha $archive) -eq $before)
 Check "P extraction removed" (@(Get-ChildItem -LiteralPath $work -Force).Count -eq 0)
@@ -151,6 +169,43 @@ $script:gh = Join-Path $Scratch 'no-such-gh.exe'
 Refused 'G6 no gh' (Package 'gh-missing' $elf $onMain $github '' $false) "(gh) is not installed"
 $script:ghAuth = 1
 Refused 'G7 gh not signed in' (Package 'gh-auth' $elf $onMain $github '' $false) "not signed in"
+# A release package (a name without -test) holds the crash service's file, as -CrashReports has it;
+# a test build none.
+$script:name = $releaseName
+$script:crash = $crashText
+$st = Package 'release' $elf $onMain $github '' $false
+Check "P2 a release package passes" ($st -eq 0)
+$text = if (Test-Path -LiteralPath $checked) { Get-Content -LiteralPath $checked -Raw } else { Get-Content -LiteralPath $log -Raw }
+Check "P2 CHECKED.txt has the 0 hits line" ($text -match '6 files, 0 needles: 0 hits')
+if ($st -ne 0) { Write-Host $text }
+$script:name = $releaseName
+Refused 'C1 a release package without crash-reports.txt' (Package 'release-no-crash' $elf $onMain $github '' $false) "has no crash-reports.txt"
+$script:name = $releaseName
+$script:crash = "https://other0123@o1.ingest.example.org/42`n"
+Refused 'C2 a release package with another crash service' (Package 'release-other-crash' $elf $onMain $github '' $false) "package-check found something"
+$script:crash = $crashText
+Refused 'C3 a test build with crash-reports.txt' (Package 'test-crash' $elf $onMain $github '' $false) "test build holds crash-reports.txt"
+# Another commit of main, packaged by a run of main's head (the workflow's input "commit"): GitHub's
+# run name, made from the inputs, must name it, and the run's own commit must be on main too.
+$parent = (& git -C $root rev-parse "$onMain^").Trim()
+$otherBuilt = "Built by GitHub Actions, run https://github.com/slaterain/nv-rs/actions/runs/4242, from refs/heads/main; the workflow at $onMain built the source commit below; the maintainers have never started it on this system."
+$script:answer.headSha = $onMain
+$script:answer.displayTitle = "Preview packages 2026-11-26.1 (test) of $parent"
+$st = Package 'other' $elf $parent $otherBuilt '' $false
+Check "D another commit of main passes" ($st -eq 0)
+$text = if (Test-Path -LiteralPath $checked) { Get-Content -LiteralPath $checked -Raw } else { Get-Content -LiteralPath $log -Raw }
+Check "D CHECKED.txt names the workflow's commit and the run name" ($text.Contains("the workflow at $onMain, also on main") -and $text.Contains("of $parent'"))
+Check "D CHECKED.txt names the packaged commit" ($text.Contains("Source commit: $parent"))
+if ($st -ne 0) { Write-Host $text }
+$script:answer.headSha = $onMain
+$script:answer.displayTitle = "Preview packages 2026-11-26.1 (test) of $onMain"
+Refused 'D2 a run name naming another commit' (Package 'other-title' $elf $parent $otherBuilt '' $false) "does not name it"
+$script:answer.headSha = $offMain
+$script:answer.displayTitle = "Preview packages 2026-11-26.1 (test) of $parent"
+Refused "D3 the run's own commit not on main" (Package 'other-off' $elf $parent $otherBuilt '' $false) "the run's own commit $offMain is not on origin's main"
+$script:answer.headSha = $onMain
+$script:answer.displayTitle = "Preview packages 2026-11-26.1 (release) of $parent"
+Refused 'D4 a run name of the other kind' (Package 'other-kind' $elf $parent $otherBuilt '' $false) "does not say (test)"
 # The archive's own list: a second name that differs only in case, and a link.
 $dupDir = Join-Path $Scratch 'dup-src'
 New-Item -ItemType Directory -Force -Path (Join-Path $dupDir $name) | Out-Null
@@ -176,9 +231,9 @@ Refused 'T3 a name with a trailing dot' (Package 'tar-dot' $elf $onMain $github 
 # The game's bytes in the program: package-check's run limit (4096) is passed.
 $copied = [byte[]](0x7f, 0x45, 0x4c, 0x46) + (Bytes 99 1000) + ([System.IO.File]::ReadAllBytes($game)[100..5299]) + (Bytes 98 1000)
 Refused 'L a long run of the game in the program' (Package 'run' $copied $onMain $github '' $false) "package-check found something"
-# No program at all (not an ELF file): package-check refuses to compare nothing.
+# No game program (app/nv-viewer not an ELF file): it is not compared, and that is refused.
 $text = [System.Text.Encoding]::ASCII.GetBytes("just text, no program`n")
-Refused 'N no program to compare' (Package 'none' $text $onMain $github '' $false) "package-check found something or could not check (status 2)"
+Refused 'N no program to compare' (Package 'none' $text $onMain $github '' $false) "names no app/nv-viewer"
 
 Write-Host "fails: $script:fails"
 if ($script:fails -eq 0) { exit 0 } else { exit 1 }
