@@ -4,7 +4,7 @@
 
 <h1 align="center">nv-rs</h1>
 
-[![Download](https://img.shields.io/badge/Download-nv--rs_1.0-brightgreen.svg)](https://github.com/slaterain/nv-rs/releases/tag/v1.0)
+[![Download](https://img.shields.io/github/v/release/slaterain/nv-rs?label=Download&color=brightgreen)](https://github.com/slaterain/nv-rs/releases/latest)
 [![Rust](https://img.shields.io/badge/Rust-2021_edition-orange.svg)](https://www.rust-lang.org/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows_|_Linux_|_macOS-purple.svg)](#play-it)
@@ -25,7 +25,7 @@ a modern 64-bit engine: high frame rates, fewer crashes, built-in modding and mo
 
 ## Play it
 
-**[Download nv-rs 1.0](https://github.com/slaterain/nv-rs/releases/tag/v1.0)**
+**[Download the latest release](https://github.com/slaterain/nv-rs/releases/latest)**
 for Windows, Linux or macOS (Apple silicon). You need Fallout: New Vegas, version 1.4.0.525.
 
 - **Windows:** extract the ZIP to a folder of its own (not Documents, AppData, Program Files or the
@@ -37,8 +37,11 @@ for Windows, Linux or macOS (Apple silicon). You need Fallout: New Vegas, versio
 The launcher finds your game and plays it, imports your saves, installs mods and has the settings.
 It never changes your game, your saves or your settings: everything it writes stays in its own
 folder. It asks once whether crash reports may be sent, and sends nothing unless you agree. Press
-F12 in the game to save a report of anything that looks wrong. The download page has the details
-and the known issues.
+F12 in the game to save a report of anything that looks wrong. The download page has the
+details.
+
+Using a mod manager? nv-rs plays Mod Organizer 2, Vortex and Amethyst setups; the release notes
+say how.
 
 Players have run earlier builds on Linux and macOS too. Please tell us how it runs on yours.
 
