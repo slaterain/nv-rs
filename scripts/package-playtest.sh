@@ -11,13 +11,23 @@
 #                        nv-rs-preview-<system>-test.tar.gz and BUILD.txt says the program was not
 #                        checked against the game where it was built, and that a published package
 #                        is checked first, its result in CHECKED.txt beside it (made on Windows by
-#                        scripts/check-unix-package.ps1). Without
-#                        it (a release package) the script refuses unless --game is given, HEAD is on
-#                        origin's main. Every package, a test build too, is refused unless the
+#                        scripts/check-unix-package.ps1). Without it (a release package) the
+#                        script refuses unless --game (or --game-check-later) is given and HEAD
+#                        is on origin's main. Every package, a test build too, is refused unless the
 #                        licence notices match Cargo.lock and every dependency's licence is in
 #                        distribution/licenses (scripts/package-licences.sh).
-#       [--profile release|play]   the Cargo profile (default release: the optimised build the
-#                        Windows package and its frame rates use; play only for quick tests)
+#       [--game-check-later]   a release package built where the game is not (GitHub's runners):
+#                        named and filled as a release package (crash-reports.txt in it), HEAD on
+#                        origin's main, and BUILD.txt says the check against the game was not made
+#                        where it was built: scripts/check-unix-package.ps1 makes it on Windows
+#                        before the package is published, and its CHECKED.txt is published beside
+#                        it. Not with --test-build or --game.
+#       [--profile release|play-opt|play]   the Cargo profile (default release: the optimised
+#                        build; play-opt the same settings under its own name, the build the
+#                        project plays and measures; play only for quick tests)
+#       [--source DIR]   the checkout to package (default: this script's own), so the script of
+#                        one commit can package another (the package workflow runs main's script
+#                        on the commit it is asked for)
 #       [--use-built]    use the programs built before with the same profile, under --target
 #       [--target DIR]   the Cargo target folder (default: target)
 #       [--out DIR]      where the package goes (default: dist)
@@ -39,16 +49,20 @@ fail() {
 version=''
 system=''
 test_build=0
+game_later=0
 profile=release
 use_built=0
 target=''
 out=''
 game=''
+source=''
 while [ $# -gt 0 ]; do
     case $1 in
     --version) version=${2-}; shift ;;
     --system) system=${2-}; shift ;;
     --test-build) test_build=1 ;;
+    --game-check-later) game_later=1 ;;
+    --source) source=${2-}; shift ;;
     --profile) profile=${2-}; shift ;;
     --use-built) use_built=1 ;;
     --target) target=${2-}; shift ;;
@@ -67,16 +81,28 @@ macos-arm64) triple=aarch64-apple-darwin ;;
 *) fail "--system must be linux-x86_64 or macos-arm64" ;;
 esac
 case $profile in
-release | play) ;;
-*) fail "--profile must be release or play" ;;
+release | play-opt | play) ;;
+*) fail "--profile must be release, play-opt or play" ;;
 esac
 [ -z "$game" ] || [ -f "$game" ] || fail "--game must be the game's FalloutNV.exe, and this file is not there: $game"
-# A release package is checked against the game, as the Windows package always is.
-if [ "$test_build" = 0 ] && [ -z "$game" ]; then
-    fail "a release package needs --game FILE (the game's FalloutNV.exe, only read): the check that no data of it is in the program, which the Windows package always makes. Without the game make a test build (--test-build); its program needs package-check --game before any release."
+if [ "$game_later" = 1 ] && [ "$test_build" = 1 ]; then
+    fail "--game-check-later makes a release package, and --test-build a test one: give one of them"
+fi
+if [ "$game_later" = 1 ] && [ -n "$game" ]; then
+    fail "--game-check-later is for a machine without the game: with --game the check is made here"
+fi
+# A release package is checked against the game, as the Windows package always is: here, or (with
+# --game-check-later) on Windows before it is published.
+if [ "$test_build" = 0 ] && [ -z "$game" ] && [ "$game_later" = 0 ]; then
+    fail "a release package needs --game FILE (the game's FalloutNV.exe, only read): the check that no data of it is in the program, which the Windows package always makes. Without the game make a test build (--test-build), or a release package checked on Windows before it is published (--game-check-later)."
 fi
 
-root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
+if [ -n "$source" ]; then
+    [ -d "$source" ] || fail "--source must be a checkout's folder, and this one is not there: $source"
+    root=$(CDPATH='' cd -- "$source" && pwd -P)
+else
+    root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
+fi
 cd -- "$root"
 [ -n "$target" ] || target=$root/target
 [ -n "$out" ] || out=$root/dist
@@ -216,9 +242,15 @@ launcher_sha=$(sha256 "$stage/nv-rs" | cut -d ' ' -f 1)
 source="Source: https://github.com/slaterain/nv-rs/tree/$commit"
 # Without the game (every GitHub build): said as it is, with what happens before publishing.
 [ -n "$game" ] || note "Checked against the game: not where it was built (no game there). A package the project publishes is checked first against the game's own FalloutNV.exe (package-check --game --max-run 4096: no data of the game's program in this program), and that check's date and result are published beside the archive (its name with .CHECKED.txt for .tar.gz)."
-# Who built it: GitHub's run (its address and branch) or the packager's own machine.
+[ "$game_later" = 0 ] || note "A release package: it is published only with that CHECKED.txt beside it."
+# Who built it: GitHub's run (its address and branch) or the packager's own machine. A run that
+# packaged another commit than its own (the workflow's input) says both.
 if [ "${GITHUB_ACTIONS:-}" = true ] && [ -n "${GITHUB_RUN_ID:-}" ]; then
-    built="Built by GitHub Actions, run ${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-slaterain/nv-rs}/actions/runs/$GITHUB_RUN_ID, from ${GITHUB_REF:-an unknown branch}; the maintainers have never started it on this system."
+    other=''
+    if [ -n "${GITHUB_SHA:-}" ] && [ "$GITHUB_SHA" != "$commit" ]; then
+        other=" the workflow at $GITHUB_SHA built the source commit below;"
+    fi
+    built="Built by GitHub Actions, run ${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-slaterain/nv-rs}/actions/runs/$GITHUB_RUN_ID, from ${GITHUB_REF:-an unknown branch};$other the maintainers have never started it on this system."
 else
     built="Built by scripts/package-playtest.sh on the packager's own machine ($(uname -sm)); the maintainers have never started it on this system."
 fi

@@ -108,11 +108,10 @@ const LOAD_BUFFER_READ: u32 = 0x0086_4980;
 /// `BGSLoadGameBuffer::LoadString` (Xbox PDB): reads a string into the given
 /// buffer.
 const LOAD_BUFFER_LOAD_STRING: u32 = 0x0086_49a0;
-/// The state getters written by `007066d0` (bytes, then floats; the stats page's, `007dfcd0`, is
-/// this family's) and the setters `LoadGame` hands them to.
+/// The state getters written by `007066d0` (bytes, then floats) and the setters `LoadGame` hands
+/// them to (the stats page's, `007dfcd0` and `007dfd00`, are this family's).
 const MAP_FLOAT_GET_A: u32 = 0x007a_17a0;
 const MAP_FLOAT_GET_B: u32 = 0x007a_17e0;
-const STATS_PAGE_SET: u32 = 0x007d_fd00;
 const MAP_FLOAT_SET_A: u32 = 0x007a_1820;
 const MAP_FLOAT_SET_B: u32 = 0x007a_1850;
 /// The manager's sub-object at `+0x4d4`: `007187a0` writes a string into a
@@ -722,7 +721,11 @@ pub fn interface_load_game(e: &mut Engine, stream: u32) {
         let saved = e.mem.u32(word);
         tile_set_int(e, root, TRAIT_SAVED_VALUE, saved);
         let byte = e.mem.u8(first_byte);
-        e.call(STATS_PAGE_SET, &args![u32::from(byte)]);
+        typed_call!(
+            super::FAMILY,
+            0x007d_fd00,
+            super::stats_menu::stats_menu_set_current_stats_page(e, byte)
+        );
         let byte = e.mem.u8(second_byte);
         typed_call!(super::FAMILY, 0x0070_6a20, fn_00706a20(e, byte));
         let byte = e.mem.u8(third_byte);
@@ -868,7 +871,11 @@ pub fn fn_00706ae0(e: &mut Engine) {
         interface_close_all_support_menus(e, 0)
     );
     e.call(0x007a_a480, &[]);
-    e.call(0x007d_da60, &[]);
+    typed_call!(
+        super::FAMILY,
+        0x007d_da60,
+        super::stats_menu::fn_007dda60(e)
+    );
     typed_call!(super::FAMILY, 0x0070_6ac0, fn_00706ac0(e));
     e.call(0x0079_8bf0, &[]);
     typed_call!(

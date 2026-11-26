@@ -11,15 +11,15 @@
 //! item slot (`006815c0`, the node itself) and next node (`00726070`, its word at +4), the list
 //! head's constructor (`0096a2d0`, both words zeroed), the base component's constructor
 //! (`00402d30`, whose vtable the class's own replaces at once) and a file's current chunk size
-//! (`00401660`, its word at +0x25c). This unit's functions call each other as typed calls, and the
-//! copy's call of `ClearDataComponent` through its vtable slot is this unit's typed call when the
-//! slot holds it. What stays a call by address: the RTTI cast, the list's removal and append, its
-//! destructor, the allocator, the string length, copy and case-blind compare, and the file's chunk
-//! type and data.
+//! (`00401660`, its word at +0x25c). This unit's functions call each other, and the `strlen`
+//! wrapper (`0044a670`, [`super::debug_string`]), as typed calls; the copy's call of
+//! `ClearDataComponent` through its vtable slot is this unit's typed call when the slot holds it.
+//! What stays a call by address: the RTTI cast, the list's removal and append, its destructor, the
+//! allocator, the string copy and case-blind compare, and the file's chunk type and data.
 //!
 //! No floats.
 
-use super::FAMILY;
+use super::{debug_string, FAMILY};
 use crate::slot_target;
 use engine_core::{args, typed_call, Engine};
 
@@ -39,9 +39,8 @@ const NAMES: u32 = 4;
 const LIST_DESTRUCT: u32 = 0x0046_ffb0;
 const LIST_POP_FRONT: u32 = 0x0063_f7b0;
 const LIST_APPEND: u32 = 0x0090_5820;
-/// The strings' length (cdecl), `strcpy_s` (cdecl: destination, size, source) and case-blind
-/// compare (cdecl: zero when equal).
-const STRING_LENGTH: u32 = 0x0044_a670;
+/// `strcpy_s` (cdecl: destination, size, source) and the case-blind compare (cdecl: zero when
+/// equal). The strings' length is the `strlen` wrapper `0044a670`, this family's.
 const STRING_COPY: u32 = 0x0040_6d30;
 const STRING_COMPARE_NO_CASE: u32 = 0x0040_4dc0;
 /// A file's current chunk type (`TESFile::GetTESChunk`), its size (+0x25c, `00401660`) and its
@@ -132,7 +131,7 @@ pub fn load_names(e: &mut Engine, this: u32, component: u32, file: u32) {
     let mut name = buffer;
     while e.mem.u8(name) != 0 {
         typed_call!(FAMILY, 0x0047_fd20, add_name(e, this, name));
-        let length = e.call(STRING_LENGTH, &args![name]).u32();
+        let length = typed_call!(FAMILY, 0x0044_a670, debug_string::text_length(e, name));
         name = name.wrapping_add(length).wrapping_add(1);
     }
     e.call(OPERATOR_DELETE, &args![buffer]);
@@ -217,7 +216,7 @@ pub fn add_name(e: &mut Engine, this: u32, name: u32) {
     if typed_call!(FAMILY, 0x0047_fcb0, has_name(e, this, name)) {
         return;
     }
-    let size = e.call(STRING_LENGTH, &args![name]).u32().wrapping_add(1);
+    let size = typed_call!(FAMILY, 0x0044_a670, debug_string::text_length(e, name)).wrapping_add(1);
     let copy = e.call(OPERATOR_NEW, &args![size]).u32();
     // The exe keeps the copy in a local and hands the list that local's address.
     e.with_stack(4, |e, slot| {

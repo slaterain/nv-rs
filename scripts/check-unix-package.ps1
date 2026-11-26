@@ -13,14 +13,18 @@ What it checks, each one a refusal (status 1, nothing written) when it fails:
    name under "<base>/", no "..", no two names equal when case is ignored.
 3. It holds one package folder, <base>, with play.sh, nv-rs, app/nv-viewer and BUILD.txt; the programs'
    SHA256s are the ones BUILD.txt names; and READ ME.txt, whose first paragraph under "What this build
-   can do today" (each system's own words) ends CHECKED.txt.
+   can do today" (each system's own words) ends CHECKED.txt. A release package (a name without
+   -test) holds crash-reports.txt, a test build none.
 4. BUILD.txt names a run of slaterain/nv-rs from refs/heads/main, and GitHub itself (gh, signed in)
-   says that run is the package workflow, started by hand, on main, at BUILD.txt's commit, and that
-   it succeeded; this checkout's origin is slaterain/nv-rs and the commit is on its main (git fetch,
-   then git merge-base --is-ancestor), so the published source link holds.
+   says that run is the package workflow, started by hand, on main, and that it succeeded, at
+   BUILD.txt's commit or, for a run that packaged another commit of main (its input "commit"), at
+   a commit of main with a run name ending "of <BUILD.txt's commit>" (the workflow's run-name
+   names its input); this checkout's origin is slaterain/nv-rs and the commit is on its main (git
+   fetch, then git merge-base --is-ancestor), so the published source link holds.
 5. package-check --game <FalloutNV.exe> --max-run 4096 on the extracted folder ends with status 0,
    read as many files as the archive lists, and names app/nv-viewer and nv-rs with their longest runs shared with
-   the game (no data of the game's program in it).
+   the game (no data of the game's program in it); for a release package also --crash-reports
+   (its crash-reports.txt is the repository's, a public key only).
 Then it writes <archive name without .tar.gz>.CHECKED.txt beside the archive: which run built it, from
 which commit, the check's date and result lines. That file is published beside the archive and its
 .sha256, and its text goes into the release notes.
@@ -36,7 +40,10 @@ param(
     # default the system's temporary folder.
     [string]$WorkIn = '',
     # GitHub's command line, signed in (gh auth login): asked what the run really was.
-    [string]$Gh = 'gh'
+    [string]$Gh = 'gh',
+    # The crash service's file a release package must hold (default: this checkout's
+    # distribution/crash-reports.txt).
+    [string]$CrashReports = ''
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -109,6 +116,16 @@ try {
     foreach ($file in @('play.sh', 'nv-rs', 'app\nv-viewer', 'BUILD.txt')) {
         if (-not (Test-Path -LiteralPath (Join-Path $package $file) -PathType Leaf)) { Refuse "the package has no $file" }
     }
+    # A release package sends crash reports when the player agrees (the crash service's file beside
+    # nv-rs); a test build sends none.
+    $release = -not $base.EndsWith('-test')
+    $hasCrashFile = Test-Path -LiteralPath (Join-Path $package 'crash-reports.txt') -PathType Leaf
+    if ($release -and -not $hasCrashFile) { Refuse "the release package has no crash-reports.txt" }
+    if (-not $release -and $hasCrashFile) { Refuse "the test build holds crash-reports.txt (a test build sends no crash reports)" }
+    if ($release) {
+        if ($CrashReports -eq '') { $CrashReports = Join-Path $root 'distribution\crash-reports.txt' }
+        if (-not (Test-Path -LiteralPath $CrashReports -PathType Leaf)) { Refuse "no crash service file at $CrashReports to compare the package's with" }
+    }
     $build = Get-Content -LiteralPath (Join-Path $package 'BUILD.txt')
     $title = $build[0]
     $commit = ''
@@ -156,7 +173,7 @@ try {
     $ErrorActionPreference = 'Continue'
     & $Gh auth status *> $null
     $signedIn = $LASTEXITCODE
-    $answer = (& $Gh run view $runId --repo slaterain/nv-rs --json headBranch,headSha,event,workflowName,conclusion 2>$null) -join "`n"
+    $answer = (& $Gh run view $runId --repo slaterain/nv-rs --json headBranch,headSha,event,workflowName,conclusion,displayTitle 2>$null) -join "`n"
     $answered = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     if ($signedIn -ne 0) { Refuse "gh is not signed in to GitHub (gh auth login): what the run was is asked of GitHub" }
@@ -165,7 +182,16 @@ try {
     if ($facts.workflowName -ne 'Preview packages (Linux, macOS)') { Refuse "run $runId is GitHub's '$($facts.workflowName)', not the package workflow" }
     if ($facts.event -ne 'workflow_dispatch') { Refuse "run $runId was started by '$($facts.event)', not by hand (workflow_dispatch)" }
     if ($facts.headBranch -ne 'main') { Refuse "GitHub says run $runId was on branch '$($facts.headBranch)', not main" }
-    if ($facts.headSha -ne $commit) { Refuse "GitHub says run $runId built $($facts.headSha), BUILD.txt says $commit" }
+    # The run's own commit is the package's, or (input "commit") a commit of main whose run name,
+    # which GitHub makes from the inputs, ends with the package's commit.
+    $runSha = "$($facts.headSha)"
+    $other = $runSha -ne $commit
+    if ($other) {
+        if ($runSha -notmatch '^[0-9a-f]{40}$') { Refuse "GitHub gave no commit for run $runId" }
+        if (-not "$($facts.displayTitle)".EndsWith(" of $commit")) { Refuse "GitHub says run $runId built $runSha, BUILD.txt says $commit, and the run's name ('$($facts.displayTitle)') does not name it" }
+        $kind = if ($release) { '(release)' } else { '(test)' }
+        if (-not "$($facts.displayTitle)".Contains(" $kind of ")) { Refuse "the run's name ('$($facts.displayTitle)') does not say $kind" }
+    }
     if ($facts.conclusion -ne 'success') { Refuse "GitHub says run $runId ended '$($facts.conclusion)', not success" }
     # (GitHub's digest of the artifact is of the zip it keeps, not of the archive inside it, so it
     # cannot be compared with the archive's SHA256: the .sha256 file came from the same run.)
@@ -173,6 +199,10 @@ try {
     if ($LASTEXITCODE -ne 0) { Refuse "could not ask origin for its main branch (git fetch)" }
     & git -C $root merge-base --is-ancestor $commit refs/remotes/origin/main
     if ($LASTEXITCODE -ne 0) { Refuse "the source commit $commit is not on origin's main" }
+    if ($other) {
+        & git -C $root merge-base --is-ancestor $runSha refs/remotes/origin/main
+        if ($LASTEXITCODE -ne 0) { Refuse "the run's own commit $runSha is not on origin's main" }
+    }
 
     # 5. The check the Windows package always makes, against the game's own program.
     if ($Checker -eq '') {
@@ -185,7 +215,9 @@ try {
     if (-not (Test-Path -LiteralPath $Checker -PathType Leaf)) { Refuse "no package-check at $Checker" }
     # (Its error output read as text: Windows PowerShell would stop on it as an error record.)
     $ErrorActionPreference = 'Continue'
-    $output = @(& $Checker $package --game $Game --max-run 4096 2>&1 | ForEach-Object { "$_" })
+    $checkArguments = @($package, '--game', $Game, '--max-run', '4096')
+    if ($release) { $checkArguments += @('--crash-reports', $CrashReports) }
+    $output = @(& $Checker @checkArguments 2>&1 | ForEach-Object { "$_" })
     $status = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     $output | ForEach-Object { Write-Host $_ }
@@ -218,7 +250,7 @@ $text = @(
     "",
     "Archive: $name, SHA256 $actual (published exactly as GitHub Actions built it)",
     "$run",
-    "GitHub confirms: run $runId is the package workflow (Preview packages (Linux, macOS)), started by hand on main at the commit below, and it succeeded.",
+    $(if ($other) { "GitHub confirms: run $runId is the package workflow (Preview packages (Linux, macOS)), started by hand on main (the workflow at $runSha, also on main), named '$($facts.displayTitle)' (it packaged the commit below), and it succeeded." } else { "GitHub confirms: run $runId is the package workflow (Preview packages (Linux, macOS)), started by hand on main at the commit below, and it succeeded." }),
     "Source commit: $commit (on the project's main branch: https://github.com/slaterain/nv-rs/tree/$commit)",
     "",
     "Checked on $date on the maintainer's Windows PC with package-check --game --max-run 4096 against",

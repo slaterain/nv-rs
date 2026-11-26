@@ -8,8 +8,8 @@
 //! lookup, `AddExtra`, `RemoveExtra` and `memset` as typed calls.
 
 use super::{
-    access, cell_data, first_of_kind, list_add, list_remove, new_object, packages, records,
-    setters, word_at, zero_bytes, EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE, OPERATOR_NEW,
+    access, cell_data, first_of_kind, links, list_add, list_remove, new_object, packages, records,
+    rooms, setters, word_at, zero_bytes, EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE, OPERATOR_NEW,
     SIMPLE_LIST_NEW,
 };
 use crate::crt::{low_byte, low_half, signed};
@@ -74,24 +74,10 @@ const PRIMITIVE_CREATE: u32 = 0x004a_4e90;
 /// The list's getters and setters of the other part files (by address until they are typed).
 const GET_AMMO: u32 = 0x0042_eb40;
 const SET_AMMO: u32 = 0x0042_eb60;
-const SET_ENABLE_STATE_FLAGS: u32 = 0x0041_dc70;
-const SET_ACTIVATE_TEXT_OVERRIDE: u32 = 0x0041_ece0;
-const ADD_DECAL_REF: u32 = 0x0041_f080;
 const SET_MULTIBOUND_DATA: u32 = 0x0042_1f30;
 const SET_NAVMESH_PORTAL: u32 = 0x0042_e2c0;
-const ADD_REFLECTOR_REF: u32 = 0x0041_f1a0;
-const ADD_REFLECTED_REF: u32 = 0x0041_f330;
-const ADD_LIT_WATER_REF: u32 = 0x0041_f940;
-const ADD_PRIMITIVE: u32 = 0x0041_fa60;
 const SET_OCCLUSION_PLANE: u32 = 0x0042_2150;
-const SET_PATROL_REF_DATA: u32 = 0x0041_fc10;
-const GET_PATROL_REF_DATA: u32 = 0x0041_fe90;
-const SET_OCCLUSION_PLANE_REF_DATA: u32 = 0x0041_fec0;
-const SET_PORTAL_REF_DATA: u32 = 0x0042_0210;
-const SET_ROOM_REF_DATA: u32 = 0x0042_0440;
-const SET_COLLISION_DATA: u32 = 0x0042_0fd0;
 const SET_IGNORED_BY_SANDBOX: u32 = 0x0042_f200;
-const SET_SPECIAL_RENDER_WORD: u32 = 0x0041_fd00;
 
 /// A chunk's four letters as the word the file holds.
 const fn tag(name: &[u8; 4]) -> u32 {
@@ -350,9 +336,26 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
                 cell_data::set_image_space(e, this, word)
             );
         }
-        T_XCWT => word_to(e, this, file, 0x0041_e160),
-        T_XRTM => word_to(e, this, file, 0x0041_e250),
-        T_XLKR => word_to(e, this, file, 0x0041_e440),
+        T_XCWT => {
+            let water = file_word(e, file);
+            typed_call!(FAMILY, 0x0041_e160, links::set_water_type(e, this, water));
+        }
+        T_XRTM => {
+            let marker = file_word(e, file);
+            typed_call!(
+                FAMILY,
+                0x0041_e250,
+                links::set_teleport_marker(e, this, marker)
+            );
+        }
+        T_XLKR => {
+            let reference = file_word(e, file);
+            typed_call!(
+                FAMILY,
+                0x0041_e440,
+                links::set_linked_ref(e, this, reference)
+            );
+        }
         T_XMRC => word_to(e, this, file, 0x0042_1430),
         T_XTRG => word_to(e, this, file, 0x0042_1b70),
         T_XEZN => word_to(e, this, file, 0x0042_1c60),
@@ -547,7 +550,7 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
                 packages::set_enable_state_parent(e, this, parent)
             );
             let flags = e.mem.u8(at + 4);
-            e.call(SET_ENABLE_STATE_FLAGS, &args![this, flags]);
+            typed_call!(FAMILY, 0x0041_dc70, links::set_parent_flags(e, this, flags));
         }),
         // EXTRA_ACTIVATE_REF's flags byte.
         T_XAPD => {
@@ -566,7 +569,7 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
             if signed(size) > 1 {
                 let text = e.call(OPERATOR_NEW, &args![size]).u32();
                 file_bytes(e, file, text, size);
-                e.call(SET_ACTIVATE_TEXT_OVERRIDE, &args![this, text]);
+                typed_call!(FAMILY, 0x0041_ece0, links::set_activate_text(e, this, text));
                 e.call(OPERATOR_DELETE, &args![text]);
             }
         }
@@ -593,7 +596,11 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
                 typed_call!(FAMILY, 0x0041_4030, records::swap_decal(e, at));
             }
             let reference = e.mem.u32(at);
-            e.call(ADD_DECAL_REF, &args![this, reference, at + 4, at + 0x10]);
+            typed_call!(
+                FAMILY,
+                0x0041_f080,
+                rooms::add_decal(e, this, reference, at + 4, at + 0x10)
+            );
         }),
         // EXTRA_MULTIBOUND_DATA
         T_XMBO => {
@@ -625,7 +632,11 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
         T_XLTW => {
             if !buffer_form_is_0x23(e, buffer) {
                 let reference = file_word(e, file);
-                e.call(ADD_LIT_WATER_REF, &args![this, reference, 1u32]);
+                typed_call!(
+                    FAMILY,
+                    0x0041_f940,
+                    rooms::set_lit_water_ref(e, this, reference, true)
+                );
             }
         }
         T_XPRM => load_primitive(e, this, file),
@@ -651,7 +662,11 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
             let patrol = new_object(e, 0x14, |e, block| {
                 e.call(PATROL_REF_DATA_INIT, &args![block, at]).u32()
             });
-            e.call(SET_PATROL_REF_DATA, &args![this, patrol]);
+            typed_call!(
+                FAMILY,
+                0x0041_fc10,
+                rooms::set_patrol_ref_data(e, this, patrol)
+            );
         }),
         // EXTRA_OCCLUSION_PLANE_REF_DATA: four form ids.
         T_XORD => {
@@ -666,7 +681,11 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
             if file_swaps(e, file) {
                 typed_call!(FAMILY, 0x0041_4370, records::swap_plane_refs(e, data));
             }
-            e.call(SET_OCCLUSION_PLANE_REF_DATA, &args![this, data]);
+            typed_call!(
+                FAMILY,
+                0x0041_fec0,
+                rooms::set_occlusion_plane_ref_data(e, this, data)
+            );
         }
         // EXTRA_PORTAL_REF_DATA: two form ids.
         T_XPOD => {
@@ -677,7 +696,11 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
             if file_swaps(e, file) {
                 e.call(SWAP_TWO_WORDS, &args![data]);
             }
-            e.call(SET_PORTAL_REF_DATA, &args![this, data]);
+            typed_call!(
+                FAMILY,
+                0x0042_0210,
+                rooms::set_portal_ref_data(e, this, data)
+            );
         }
         T_XRMR => load_rooms(e, this, file),
         // EXTRA_COLLISION_DATA: one word.
@@ -693,11 +716,15 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
             if file_swaps(e, file) {
                 e.call(SWAP_WORD_AT, &args![data]);
             }
-            e.call(SET_COLLISION_DATA, &args![this, data]);
+            typed_call!(
+                FAMILY,
+                0x0042_0fd0,
+                rooms::set_collision_data(e, this, data)
+            );
         }
         // EXTRA_PATROL_REF_DATA's PackageEventAction.
         T_XPPA => {
-            let patrol = e.call(GET_PATROL_REF_DATA, &args![this]).u32();
+            let patrol = typed_call!(FAMILY, 0x0041_fe90, rooms::patrol_ref_data(e, this));
             e.call(SKIP_CHUNK, &args![file]);
             e.call(
                 PACKAGE_EVENT_ACTION_LOAD,
@@ -711,7 +738,8 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
         T_XSRF => {
             let extra = special_render_of(e, this);
             let value = file_word(e, file);
-            e.call(SET_SPECIAL_RENDER_WORD, &args![extra, value]);
+            // `0041fd00` in place: the word stored at +0xc.
+            e.mem.set_u32(extra.wrapping_add(EXTRA_PAYLOAD), value);
         }
         T_XSRD => {
             let extra = special_render_of(e, this);
@@ -878,10 +906,18 @@ fn load_reflector(e: &mut Engine, this: u32, file: u32) {
         let reference = e.mem.u32(at);
         let flags = e.mem.u32(at + 4);
         if flags & 1 != 0 {
-            e.call(ADD_REFLECTOR_REF, &args![this, reference, 1u32]);
+            typed_call!(
+                FAMILY,
+                0x0041_f1a0,
+                rooms::set_reflector_flag_1(e, this, reference, true)
+            );
         }
         if flags & 2 != 0 {
-            e.call(ADD_REFLECTED_REF, &args![this, reference, 1u32]);
+            typed_call!(
+                FAMILY,
+                0x0041_f330,
+                rooms::set_reflector_flag_2(e, this, reference, true)
+            );
         }
     });
 }
@@ -899,7 +935,11 @@ fn load_primitive(e: &mut Engine, this: u32, file: u32) {
         let kind = e.mem.u32(at + 0x1c);
         let primitive = e.call(PRIMITIVE_CREATE, &args![kind, at, at + 0x0c]).u32();
         if primitive != 0 {
-            e.call(ADD_PRIMITIVE, &args![this, primitive]);
+            typed_call!(
+                FAMILY,
+                0x0041_fa60,
+                rooms::add_primitive(e, this, primitive)
+            );
         }
     });
 }
@@ -962,5 +1002,5 @@ fn load_rooms(e: &mut Engine, this: u32, file: u32) {
         let room = file_word(e, file);
         add_head(e, data.wrapping_add(8), room);
     }
-    e.call(SET_ROOM_REF_DATA, &args![this, data]);
+    typed_call!(FAMILY, 0x0042_0440, rooms::set_room_ref_data(e, this, data));
 }

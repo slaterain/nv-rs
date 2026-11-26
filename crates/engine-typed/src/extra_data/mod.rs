@@ -6,14 +6,17 @@
 //! the fix-up of a loaded list `InitItem` ([`init_item`]), the list's save writer ([`save`]), and
 //! from the unit's part 2 file the second run of setters, getters and removers ([`setters`]), the
 //! cell's extra data ([`cell_data`]) and the package extra data with the rest of that range
-//! ([`packages`]). The list's own operations (its constructors, `AddExtra`, `RemoveExtra`, the type
+//! ([`packages`]), and from its part 3 file the extra data linking references ([`links`]) and the
+//! reflections, primitives, occlusion planes, portals, rooms, collision, package and guard data
+//! ([`rooms`]). The list's own operations (its constructors, `AddExtra`, `RemoveExtra`, the type
 //! bitmap, the thread's cache) are the cell references family's (`cell_refs::extra_list`), the
 //! lookup `GetExtraData` (`00410220`) the dispatch family's. Every caller reaches these functions
 //! by address; the unit's translation that stays (`GetCanNotWear` `00418b10`) and the unit's other
-//! part files call the native functions by address too. Three functions of the part 2 range are
-//! other families': `ScriptLocals`' scalar deleting destructor `0041af70` (native in the script
+//! part files call the native functions by address too. Four functions of the part 2 and 3 ranges
+//! are other families': `ScriptLocals`' scalar deleting destructor `0041af70` (native in the script
 //! lines family, the one that holds xNVSE's wraps), a package's type `0041ca90` (the AI queries',
-//! read in place here) and `GetPackageExtraTarget` `0041cb70` (the dispatch family's).
+//! read in place here), `GetPackageExtraTarget` `0041cb70` and `GetActorPackageData` `004212b0`
+//! (the dispatch family's).
 //!
 //! **Native.** The exe's order of work. The lookup (`00410220`), the lock (`0040fbf0`, `0040fba0`),
 //! `AddExtra`, both `RemoveExtra`s, `ItemsInList` and the cache's clear are typed calls into their
@@ -25,10 +28,14 @@
 //! constructors, compares and empty destructor, the audio buoy marker's empty copy (`004534f0`),
 //! the small records' constructors, a form's id (`0084e3a0`), a package's type (`0041ca90`), a time
 //! stamp's byte (`0086a460`), the save/load singleton's test that always answers false
-//! (`0047c850`), an `NiPointer`'s compare with a pointer (`00822510`) and a getter's temporary
-//! `NiPointer` made from null (`00633c90`, released by `0045cec0`: 0). Each type, next or word is
-//! read once where the exe reads it again with nothing in between that could change it. A virtual
-//! call (an extra data's slot 0 delete, its slot 4 `Compare`, the type 0x92 copy's slot 0xc) stays
+//! (`0047c850`), an `NiPointer`'s compare with a pointer (`00822510`), a getter's temporary
+//! `NiPointer` made from null (`00633c90`, released by `0045cec0`: 0), and for part 3 a simple
+//! list's test for an item (`005f65d0`) and for emptiness (`008256d0`), a form's type
+//! (`00401170`), a reference's extra list (`005d43c0`), the store of a payload word (`0041fd00`), a
+//! portal's two rooms (`009707f0`, `00420ba0`), the enable state parent's flag leaves and the
+//! constructors of the file's own classes. Each type, next or word is read once where the exe
+//! reads it again with nothing in between that could change it. A virtual call (an extra data's
+//! slot 0 delete, its slot 4 `Compare`, the type 0x92 copy's slot 0xc, a primitive's slot 0) stays
 //! a call through the slot: each class has its own body. The constructors, destructors and setters
 //! of other units, `operator new` and `operator delete` are called by address.
 //!
@@ -53,9 +60,11 @@ pub mod access;
 pub mod cell_data;
 pub mod copy;
 pub mod init_item;
+pub mod links;
 pub mod load;
 pub mod packages;
 pub mod records;
+pub mod rooms;
 pub mod save;
 pub mod setters;
 
@@ -318,6 +327,130 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0041_d950, packages::set_land_normal(u32, u32)),
         entry!(0x0041_da10, packages::enable_state_parent(u32) -> u32),
         entry!(0x0041_da40, packages::set_enable_state_parent(u32, u32)),
+        entry!(0x0041_db00, links::parent_flag_0(u32) -> bool),
+        entry!(0x0041_db30, links::parent_flags_bit_0(u32) -> bool),
+        entry!(0x0041_db50, links::set_parent_flag_0(u32, bool)),
+        entry!(0x0041_db80, links::set_parent_flags_bit_0(u32, bool)),
+        entry!(0x0041_dbd0, links::should_pop_in_when_enabled_by_parent(u32) -> bool),
+        entry!(0x0041_dc00, links::parent_flags_bit_1(u32) -> bool),
+        entry!(0x0041_dc20, links::parent_flag_2(u32) -> bool),
+        entry!(0x0041_dc50, links::parent_flags_bit_2(u32) -> bool),
+        entry!(0x0041_dc70, links::set_parent_flags(u32, u8)),
+        entry!(0x0041_dca0, links::enable_children(u32) -> u32),
+        entry!(0x0041_dcd0, links::add_enable_child(u32, u32)),
+        entry!(0x0041_dda0, links::remove_enable_child(u32, u32)),
+        entry!(0x0041_de00, links::item_dropper(u32) -> u32),
+        entry!(0x0041_de40, links::add_dropped_item(u32, u32)),
+        entry!(0x0041_df00, links::first_dropped_of_type_28(u32) -> u32),
+        entry!(0x0041_df90, links::dropped_item_list(u32) -> u32),
+        entry!(0x0041_dfd0, links::remove_dropped_item_list(u32)),
+        entry!(0x0041_e000, links::add_to_dropped_items(u32, u32)),
+        entry!(0x0041_e0d0, links::remove_dropped_item(u32, u32)),
+        entry!(0x0041_e130, links::water_type(u32) -> u32),
+        entry!(0x0041_e160, links::set_water_type(u32, u32)),
+        entry!(0x0041_e220, links::teleport_marker(u32) -> u32),
+        entry!(0x0041_e250, links::set_teleport_marker(u32, u32)),
+        entry!(0x0041_e310, links::ash_pile_ref(u32) -> u32),
+        entry!(0x0041_e340, links::set_ash_pile_ref(u32, u32)),
+        entry!(0x0041_e410, links::linked_ref(u32) -> u32),
+        entry!(0x0041_e440, links::set_linked_ref(u32, u32)),
+        entry!(0x0041_e500, links::linked_ref_children(u32) -> u32),
+        entry!(0x0041_e530, links::add_linked_ref_child(u32, u32)),
+        entry!(0x0041_e600, links::remove_linked_ref_child(u32, u32)),
+        entry!(0x0041_e660, links::open_close_activate_ref(u32) -> u32),
+        entry!(0x0041_e690, links::set_open_close_activate_ref(u32, u32)),
+        entry!(0x0041_e750, links::open_close_activate_ref_new(u32) -> u32),
+        entry!(0x0041_e780, links::activate_parents(u32) -> u32),
+        entry!(0x0041_e7b0, links::activate_parent_entry(u32, u32) -> u32),
+        entry!(0x0041_e7f0, links::add_activate_parent(u32, u32)),
+        entry!(0x0041_e960, links::remove_activate_parent(u32, u32)),
+        entry!(0x0041_e9e0, links::activate_delay(u32, u32) -> f32),
+        entry!(0x0041_ea30, links::set_activate_delay(u32, u32, f32)),
+        entry!(0x0041_eb60, links::activate_flag(u32) -> bool),
+        entry!(0x0041_eba0, links::set_activate_flag(u32, bool)),
+        entry!(0x0041_ec80, links::activate_text(u32, u32) -> u32),
+        entry!(0x0041_ece0, links::set_activate_text(u32, u32)),
+        entry!(0x0041_eda0, links::activate_children(u32) -> u32),
+        entry!(0x0041_edd0, links::add_activate_child(u32, u32)),
+        entry!(0x0041_ef20, links::remove_activate_child(u32, u32)),
+        entry!(0x0041_eff0, links::set_activate_children_timer(u32, f32)),
+        entry!(0x0041_f020, links::activate_children_timer(u32) -> f32),
+        entry!(0x0041_f050, links::decal_refs(u32) -> u32),
+        entry!(0x0041_f080, rooms::add_decal(u32, u32, u32, u32)),
+        entry!(0x0041_f140, rooms::reflected_refs(u32) -> u32),
+        entry!(0x0041_f170, rooms::reflector_refs(u32) -> u32),
+        entry!(0x0041_f1a0, rooms::set_reflector_flag_1(u32, u32, bool)),
+        entry!(0x0041_f330, rooms::set_reflector_flag_2(u32, u32, bool)),
+        entry!(0x0041_f4c0, rooms::set_reflected_flag_1(u32, u32, bool)),
+        entry!(0x0041_f650, rooms::set_reflected_flag_2(u32, u32, bool)),
+        entry!(0x0041_f7e0, rooms::water_light_refs(u32) -> u32),
+        entry!(0x0041_f810, rooms::lit_water_refs(u32) -> u32),
+        entry!(0x0041_f840, rooms::set_water_light_ref(u32, u32, bool)),
+        entry!(0x0041_f940, rooms::set_lit_water_ref(u32, u32, bool)),
+        entry!(0x0041_fa60, rooms::add_primitive(u32, u32)),
+        entry!(0x0041_faf0, rooms::primitive_extra_new(u32, u32) -> u32),
+        entry!(0x0041_fb20, rooms::primitive_extra_delete(u32, u32) -> u32),
+        entry!(0x0041_fb50, rooms::primitive_extra_drop(u32)),
+        entry!(0x0041_fbe0, rooms::primitive(u32) -> u32),
+        entry!(0x0041_fc10, rooms::set_patrol_ref_data(u32, u32)),
+        entry!(0x0041_fcd0, rooms::patrol_extra_new(u32) -> u32),
+        entry!(0x0041_fd20, rooms::patrol_compare(u32, u32) -> bool),
+        entry!(0x0041_fd80, rooms::patrol_extra_delete(u32, u32) -> u32),
+        entry!(0x0041_fdb0, rooms::patrol_extra_drop(u32)),
+        entry!(0x0041_fe10, rooms::patrol_drop_data(u32)),
+        entry!(0x0041_fe60, rooms::patrol_data_delete(u32, u32) -> u32),
+        entry!(0x0041_fe90, rooms::patrol_ref_data(u32) -> u32),
+        entry!(0x0041_fec0, rooms::set_occlusion_plane_ref_data(u32, u32)),
+        entry!(0x0041_ff80, rooms::occlusion_extra_new(u32) -> u32),
+        entry!(0x0041_ffb0, rooms::occlusion_compare(u32, u32) -> bool),
+        entry!(0x0042_0030, rooms::occlusion_extra_delete(u32, u32) -> u32),
+        entry!(0x0042_0060, rooms::occlusion_extra_drop(u32)),
+        entry!(0x0042_00c0, rooms::free_data(u32)),
+        entry!(0x0042_0100, rooms::occlusion_plane_data(u32) -> u32),
+        entry!(0x0042_0130, rooms::occlusion_plane_word(u32, i32) -> u32),
+        entry!(0x0042_0160, rooms::set_occlusion_plane_word(u32, u32, i32)),
+        entry!(0x0042_0210, rooms::set_portal_ref_data(u32, u32)),
+        entry!(0x0042_02d0, rooms::portal_extra_new(u32) -> u32),
+        entry!(0x0042_0300, rooms::portal_compare(u32, u32) -> bool),
+        entry!(0x0042_0380, rooms::portal_extra_delete(u32, u32) -> u32),
+        entry!(0x0042_03b0, rooms::portal_extra_drop(u32)),
+        entry!(0x0042_0410, rooms::portal_ref_data(u32) -> u32),
+        entry!(0x0042_0440, rooms::set_room_ref_data(u32, u32)),
+        entry!(0x0042_0500, rooms::room_extra_new(u32) -> u32),
+        entry!(0x0042_0530, rooms::room_compare(u32, u32) -> bool),
+        entry!(0x0042_0600, rooms::room_extra_delete(u32, u32) -> u32),
+        entry!(0x0042_0630, rooms::room_extra_drop(u32)),
+        entry!(0x0042_0690, rooms::room_drop_data(u32)),
+        entry!(0x0042_06e0, rooms::room_data_delete(u32, u32) -> u32),
+        entry!(0x0042_0710, rooms::room_data_drop(u32)),
+        entry!(0x0042_0770, rooms::room_list(u32) -> u32),
+        entry!(0x0042_07b0, rooms::room_data_masked(u32) -> u32),
+        entry!(0x0042_07e0, rooms::room_ref_data(u32) -> u32),
+        entry!(0x0042_0810, rooms::room_is_master(u32) -> bool),
+        entry!(0x0042_0870, rooms::set_room_is_master(u32, bool)),
+        entry!(0x0042_08b0, rooms::master_room(u32) -> u32),
+        entry!(0x0042_0950, rooms::find_master_room(u32, u32) -> u32),
+        entry!(0x0042_0a60, rooms::set_portal_word(u32, i32, u32)),
+        entry!(0x0042_0ba0, rooms::portal_set_second_room(u32, u32)),
+        entry!(0x0042_0bc0, rooms::portal_word(u32, i32) -> u32),
+        entry!(0x0042_0c10, rooms::add_room(u32, u32)),
+        entry!(0x0042_0ce0, rooms::add_portal(u32, u32)),
+        entry!(0x0042_0da0, rooms::remove_portal(u32, u32)),
+        entry!(0x0042_0dd0, rooms::portal(u32) -> u32),
+        entry!(0x0042_0e00, rooms::set_portal(u32, u32)),
+        entry!(0x0042_0ed0, rooms::room(u32) -> u32),
+        entry!(0x0042_0f00, rooms::set_room(u32, u32)),
+        entry!(0x0042_0fd0, rooms::set_collision_data(u32, u32)),
+        entry!(0x0042_1090, rooms::collision_extra_new(u32) -> u32),
+        entry!(0x0042_10c0, rooms::collision_compare(u32, u32) -> bool),
+        entry!(0x0042_1130, rooms::collision_extra_delete(u32, u32) -> u32),
+        entry!(0x0042_1160, rooms::collision_extra_drop(u32)),
+        entry!(0x0042_11a0, rooms::collision_data(u32) -> u32),
+        entry!(0x0042_11d0, rooms::set_actor_package_data(u32, u32)),
+        entry!(0x0042_1280, rooms::package_extra_new(u32, u32) -> u32),
+        entry!(0x0042_12e0, rooms::remove_actor_package_data(u32)),
+        entry!(0x0042_1310, rooms::add_guard(u32, u32)),
+        entry!(0x0042_13c0, rooms::guard_two_words(u32, u32, u32)),
     ]
 }
 

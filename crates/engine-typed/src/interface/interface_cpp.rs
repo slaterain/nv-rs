@@ -344,10 +344,8 @@ const TRANSLATE_MESSAGE: u32 = 0x00fd_f298;
 const DISPATCH_MESSAGE: u32 = 0x00fd_f294;
 /// The window message the pump fills (`MSG`, 0x1c bytes).
 const MESSAGE_SIZE: u32 = 0x1c;
-/// `StatsMenu::ToggleHealingMode`, `RepairMenu::ResetMenu`,
-/// `ItemModMenu::ResetMenu`, `MapMenu::UpdateMenu`,
+/// `RepairMenu::ResetMenu`, `ItemModMenu::ResetMenu`, `MapMenu::UpdateMenu`,
 /// `InventoryMenu::UpdateInventoryMenu` and `InventoryMenu::SavePageState` (Xbox PDB).
-const STATS_TOGGLE_HEALING_MODE: u32 = 0x0070_4390;
 const REPAIR_RESET_MENU: u32 = 0x007b_6fb0;
 const ITEM_MOD_RESET_MENU: u32 = 0x0078_46a0;
 const MAP_MENU_UPDATE: u32 = 0x0079_aba0;
@@ -1755,7 +1753,11 @@ pub fn interface_set_map_menu_visible(e: &mut Engine, show: u8, check_state: u8)
     if show != 0 && !visible {
         if stats != 0 {
             menu_fade_out(e, stats);
-            e.call(STATS_TOGGLE_HEALING_MODE, &[]);
+            typed_call!(
+                super::FAMILY,
+                0x0070_4390,
+                super::stats_menu::stats_menu_toggle_healing_mode(e)
+            );
         }
         if repair != 0 {
             menu_fade_out(e, repair);
@@ -1819,7 +1821,11 @@ pub fn fn_007044c0(e: &mut Engine, show: u8, check_state: u8, refresh_pipboy: u8
         if !visible {
             if stats != 0 {
                 menu_fade_out(e, stats);
-                e.call(STATS_TOGGLE_HEALING_MODE, &[]);
+                typed_call!(
+                    super::FAMILY,
+                    0x0070_4390,
+                    super::stats_menu::stats_menu_toggle_healing_mode(e)
+                );
             }
             if map != 0 {
                 menu_fade_out(e, map);
@@ -1888,7 +1894,11 @@ pub fn fn_007046f0(e: &mut Engine, show: u8, check_state: u8, refresh_pipboy: u8
         if !visible {
             if stats != 0 {
                 menu_fade_out(e, stats);
-                e.call(STATS_TOGGLE_HEALING_MODE, &[]);
+                typed_call!(
+                    super::FAMILY,
+                    0x0070_4390,
+                    super::stats_menu::stats_menu_toggle_healing_mode(e)
+                );
             }
             if map != 0 {
                 menu_fade_out(e, map);
@@ -1952,7 +1962,11 @@ pub fn interface_set_inventory_menu_visible(
         if !visible {
             if stats != 0 {
                 menu_fade_out(e, stats);
-                e.call(STATS_TOGGLE_HEALING_MODE, &[]);
+                typed_call!(
+                    super::FAMILY,
+                    0x0070_4390,
+                    super::stats_menu::stats_menu_toggle_healing_mode(e)
+                );
             }
             if map != 0 {
                 menu_fade_out(e, map);
