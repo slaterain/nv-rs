@@ -231,9 +231,9 @@ Refused 'T3 a name with a trailing dot' (Package 'tar-dot' $elf $onMain $github 
 # The game's bytes in the program: package-check's run limit (4096) is passed.
 $copied = [byte[]](0x7f, 0x45, 0x4c, 0x46) + (Bytes 99 1000) + ([System.IO.File]::ReadAllBytes($game)[100..5299]) + (Bytes 98 1000)
 Refused 'L a long run of the game in the program' (Package 'run' $copied $onMain $github '' $false) "package-check found something"
-# No program at all (not an ELF file): package-check refuses to compare nothing.
+# No game program (app/nv-viewer not an ELF file): it is not compared, and that is refused.
 $text = [System.Text.Encoding]::ASCII.GetBytes("just text, no program`n")
-Refused 'N no program to compare' (Package 'none' $text $onMain $github '' $false) "package-check found something or could not check (status 2)"
+Refused 'N no program to compare' (Package 'none' $text $onMain $github '' $false) "names no app/nv-viewer"
 
 Write-Host "fails: $script:fails"
 if ($script:fails -eq 0) { exit 0 } else { exit 1 }
