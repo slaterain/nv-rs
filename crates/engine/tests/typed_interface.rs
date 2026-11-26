@@ -6184,8 +6184,9 @@ fn put_stats_menu(e: &mut Engine, variant: u32) {
 const STATUS_DATA_VARIANTS: [u32; 4] = [0, 1, 2, 3];
 
 /// A world for the status data list (object 3, its embedded list at `+4`: an entry of key 2, then a
-/// node, object 231, with an entry of key 0x36) and an effect item (object 40, its actor value
-/// `+0x10`, its setting object 233 of archetype 0). The archetype table's entry 0 has bit 2 but in
+/// node, object 231, with an entry of key 0x36) and an effect item's words on both pointer values
+/// (objects 40 and 3: its actor value `+0x10`, its setting `+0x14` object 233 of archetype 0, so the
+/// plain case, object 3 twice, runs every variant). The archetype table's entry 0 has bit 2 but in
 /// the variant 2 (the key is then -1). By variant: the effect's key 0x36 (found), 0x37 with the
 /// setting's flag 4 (negated, with a duration), 0x37 with flag 2 (no duration), 0x37 with neither
 /// and JIP LN's fixes on (the G107 seam asked, none answering).
@@ -6198,10 +6199,11 @@ fn put_status_data(e: &mut Engine, variant: u32) {
     e.mem.set_u32(object(231), object(232));
     e.mem.set_u32(object(231) + 4, 0);
     e.mem.set_u32(object(232) + 0x10, 0x36);
-    let effect = object(40);
-    e.mem
-        .set_u32(effect + 0x10, if variant == 0 { 0x36 } else { 0x37 });
-    e.mem.set_u32(effect + 0x14, object(233));
+    for effect in [object(40), list] {
+        e.mem
+            .set_u32(effect + 0x10, if variant == 0 { 0x36 } else { 0x37 });
+        e.mem.set_u32(effect + 0x14, object(233));
+    }
     e.mem.set_u32(object(233) + 0x98, 0);
     e.mem
         .set_u32(object(233) + 0x58, [0, 4, 2, 0][variant as usize]);
