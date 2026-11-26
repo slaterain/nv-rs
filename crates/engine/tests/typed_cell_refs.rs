@@ -6350,6 +6350,14 @@ fn xf_pool(e: &mut Engine, d: &mut Draw) -> Vec<u32> {
             e.mem.set_u32(block + offset, word);
         }
     }
+    // Each block is a reference too, whose extra list (+0x44, its head and type bitmap to +0x60)
+    // starts empty: InitItem's fix-ups add children, portals and parents to the lists of the
+    // references they resolve.
+    for &block in &pool {
+        for offset in (0x44..0x64).step_by(4) {
+            e.mem.set_u32(block + offset, 0);
+        }
+    }
     pool
 }
 
