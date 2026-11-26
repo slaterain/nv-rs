@@ -7,9 +7,9 @@
 //! by address as the exe calls them.
 
 use super::{
-    access, cell_refs, copy_words, delete_extra_data, first_of_kind, forget_cached_all, give_lock,
-    head_of, kind_of, list_remove, new_object, next_node, next_of, read_word, set_next_of,
-    take_lock, word_at, EXTRA_PAYLOAD, FAMILY, LIST_HEAD,
+    access, cell_data, cell_refs, copy_words, delete_extra_data, first_of_kind, forget_cached_all,
+    give_lock, head_of, kind_of, list_remove, new_object, next_node, next_of, packages, read_word,
+    set_next_of, setters, take_lock, word_at, EXTRA_PAYLOAD, FAMILY, LIST_HEAD,
 };
 use crate::crt;
 use engine_core::ptr::Ptr;
@@ -97,22 +97,67 @@ fn copy_word(e: &mut Engine, list: u32, kind: u8, extra: u32) -> bool {
             typed_call!(FAMILY, 0x0041_9dc0, access::set_item_dropper(e, list, word));
             return true;
         }
+        0x07 => {
+            typed_call!(
+                FAMILY,
+                0x0041_bd10,
+                cell_data::set_music_type(e, list, word)
+            );
+            return true;
+        }
+        0x08 => {
+            typed_call!(FAMILY, 0x0041_c190, cell_data::set_climate(e, list, word));
+            return true;
+        }
+        0x14 => {
+            typed_call!(
+                FAMILY,
+                0x0041_d5b0,
+                packages::set_rag_doll_data_from_copy(e, list, word)
+            );
+            return true;
+        }
+        0x1a => {
+            typed_call!(
+                FAMILY,
+                0x0041_cc90,
+                packages::set_trespass_package(e, list, word)
+            );
+            return true;
+        }
+        0x1c => {
+            typed_call!(
+                FAMILY,
+                0x0041_c7f0,
+                cell_data::set_reference_pointer(e, list, word)
+            );
+            return true;
+        }
+        0x59 => {
+            typed_call!(
+                FAMILY,
+                0x0041_c290,
+                cell_data::set_image_space(e, list, word)
+            );
+            return true;
+        }
+        0x81 => {
+            typed_call!(
+                FAMILY,
+                0x0041_c090,
+                cell_data::set_acoustic_space(e, list, word)
+            );
+            return true;
+        }
         0x03 => 0x0041_e160,
-        0x07 => 0x0041_bd10,
-        0x08 => 0x0041_c190,
-        0x14 => 0x0041_d5b0,
-        0x1a => 0x0041_cc90,
-        0x1c => 0x0041_c7f0,
         0x1e => 0x0042_1540,
         0x3b => 0x0041_e250,
         0x3c => 0x0042_1430,
         0x44 => 0x0042_1b70,
         0x51 => 0x0041_e440,
-        0x59 => 0x0041_c290,
         0x63 => 0x0042_1e40,
         0x67 => 0x0042_1d50,
         0x74 => 0x0042_1c60,
-        0x81 => 0x0041_c090,
         _ => unreachable!(),
     };
     e.call(setter, &args![list, word]);
@@ -143,8 +188,15 @@ fn copy_float(e: &mut Engine, list: u32, kind: u8, extra: u32) -> bool {
             return true;
         }
         0x5c => 0x0042_2220,
+        0x7a => {
+            typed_call!(
+                FAMILY,
+                0x0041_b580,
+                setters::set_health_perc(e, list, value)
+            );
+            return true;
+        }
         0x5d => 0x0042_2350,
-        0x7a => 0x0041_b580,
         _ => unreachable!(),
     };
     e.call(setter, &args![list, value]);
@@ -162,8 +214,18 @@ fn copy_byte(e: &mut Engine, list: u32, kind: u8, extra: u32) -> bool {
             typed_call!(FAMILY, 0x0041_9a20, access::set_uses(e, list, byte));
             return true;
         }
-        0x0e => 0x0041_b3d0,
-        0x31 => 0x0041_ac30,
+        0x0e => {
+            typed_call!(
+                FAMILY,
+                0x0041_b3d0,
+                setters::set_action_flags(e, list, u32::from(byte))
+            );
+            return true;
+        }
+        0x31 => {
+            typed_call!(FAMILY, 0x0041_ac30, setters::set_seed(e, list, byte));
+            return true;
+        }
         0x4a => 0x0042_dde0,
         _ => unreachable!(),
     };
@@ -174,7 +236,6 @@ fn copy_byte(e: &mut Engine, list: u32, kind: u8, extra: u32) -> bool {
 /// The setter of the word a handle at +0xc points at, by type.
 fn read_word_setter(kind: u8) -> Option<u32> {
     match kind {
-        0x02 => Some(0x0041_b7e0),
         0x61 => Some(0x0042_2050),
         0x71 => Some(0x0042_2150),
         0x79 => Some(0x0042_0f00),
@@ -226,7 +287,11 @@ fn set_new_object(e: &mut Engine, list: u32, kind: u8, object: u32) {
             e.call(0x0041_fc10, &args![list, object]);
         }
         _ => {
-            e.call(0x0041_c390, &args![list, object]);
+            typed_call!(
+                FAMILY,
+                0x0041_c390,
+                cell_data::set_impact_swap(e, list, object)
+            );
         }
     }
 }
@@ -271,6 +336,11 @@ fn add_extra_copy_from(e: &mut Engine, list: u32, extra: u32, caller: u32, calle
     {
         return;
     }
+    if kind == 0x02 {
+        let node = read_word(e, extra.wrapping_add(EXTRA_PAYLOAD));
+        typed_call!(FAMILY, 0x0041_b7e0, cell_data::set_cell_3d(e, list, node));
+        return;
+    }
     if let Some(setter) = read_word_setter(kind) {
         let word = read_word(e, extra.wrapping_add(EXTRA_PAYLOAD));
         e.call(setter, &args![list, word]);
@@ -278,7 +348,11 @@ fn add_extra_copy_from(e: &mut Engine, list: u32, extra: u32, caller: u32, calle
     }
     match kind {
         0x13 => {
-            e.call(0x0041_d950, &args![list, extra.wrapping_add(EXTRA_PAYLOAD)]);
+            typed_call!(
+                FAMILY,
+                0x0041_d950,
+                packages::set_land_normal(e, list, extra.wrapping_add(EXTRA_PAYLOAD))
+            );
             return;
         }
         0x68 => {
@@ -333,7 +407,11 @@ fn copy_by_arm(e: &mut Engine, list: u32, extra: u32, kind: u8) {
             let handle = read_word(e, extra.wrapping_add(0x10));
             // `result` is a local of the frame, as in the exe.
             e.with_stack(4, |e, result| {
-                e.call(0x0041_c490, &args![list, word, handle, result]);
+                typed_call!(
+                    FAMILY,
+                    0x0041_c490,
+                    cell_data::set_canopy_shadow_mask(e, list, word, handle, result.addr())
+                );
                 let created = e.mem.u32(result.addr());
                 let second = word_at(e, extra, 0x18);
                 e.mem.set_u32(created.wrapping_add(4), second);
@@ -351,7 +429,11 @@ fn copy_by_arm(e: &mut Engine, list: u32, extra: u32, kind: u8) {
             );
         }
         0x16 | 0x17 => {
-            e.call(0x0041_aa20, &args![list, 1u32, u32::from(kind == 0x17)]);
+            typed_call!(
+                FAMILY,
+                0x0041_aa20,
+                setters::set_worn(e, list, true, kind == 0x17)
+            );
         }
         0x18 => {
             let word = word_at(e, extra, 0x0c);
@@ -368,29 +450,45 @@ fn copy_by_arm(e: &mut Engine, list: u32, extra: u32, kind: u8) {
                 )
                 .u32();
             let last = f32::from_bits(word_at(e, extra, 0x1c));
-            e.call(
+            typed_call!(
+                FAMILY,
                 0x0041_ad00,
-                &args![
+                setters::set_package_start_location(
+                    e,
                     list,
                     first_cast,
                     second_cast,
                     extra.wrapping_add(0x10),
                     last
-                ],
+                )
             );
         }
         0x19 => {
             let words = [0x0cu32, 0x10, 0x14].map(|offset| word_at(e, extra, offset));
             let bytes = [0x18u32, 0x19, 0x1a].map(|offset| e.mem.u8(extra.wrapping_add(offset)));
-            e.call(
+            typed_call!(
+                FAMILY,
                 0x0041_c930,
-                &args![list, words[0], words[1], words[2], bytes[0], bytes[1], bytes[2]],
+                packages::set_package(
+                    e,
+                    list,
+                    words[0],
+                    words[1] as i32,
+                    words[2],
+                    bytes[0],
+                    bytes[1],
+                    bytes[2]
+                )
             );
         }
         0x1b => each_item(e, word_at(e, extra, 0x0c), false, |e, entry| {
             if entry != 0 {
                 let (word, flag) = (e.mem.u32(entry), e.mem.u8(entry.wrapping_add(4)));
-                e.call(0x0041_d700, &args![list, word, flag]);
+                typed_call!(
+                    FAMILY,
+                    0x0041_d700,
+                    packages::add_run_once_package(e, list, word, flag)
+                );
             }
         }),
         0x1d => each_item(e, word_at(e, extra, 0x0c), true, |e, follower| {
@@ -416,20 +514,36 @@ fn copy_by_arm(e: &mut Engine, list: u32, extra: u32, kind: u8) {
         0x2f | 0x37 => {
             let word = word_at(e, extra, 0x0c);
             let flag = e.mem.u8(extra.wrapping_add(0x10));
-            let (first, second) = if kind == 0x2f {
-                (0x0041_d280, 0x0041_d330)
+            if kind == 0x2f {
+                typed_call!(
+                    FAMILY,
+                    0x0041_d280,
+                    packages::set_leveled_item_index(e, list, word as i32)
+                );
+                typed_call!(
+                    FAMILY,
+                    0x0041_d330,
+                    packages::set_leveled_item_default(e, list, flag)
+                );
             } else {
-                (0x0041_da40, 0x0041_dc70)
-            };
-            e.call(first, &args![list, word]);
-            e.call(second, &args![list, flag]);
+                typed_call!(
+                    FAMILY,
+                    0x0041_da40,
+                    packages::set_enable_state_parent(e, list, word)
+                );
+                e.call(0x0041_dc70, &args![list, flag]);
+            }
         }
         0x24 => {
             let count = e.mem.u16(extra.wrapping_add(0x0c));
             typed_call!(FAMILY, 0x0041_9ad0, access::set_count(e, list, count));
         }
         0x3e => {
-            e.call(0x0041_ab70, &args![list, 1u32]);
+            typed_call!(
+                FAMILY,
+                0x0041_ab70,
+                setters::set_can_not_wear(e, list, true)
+            );
         }
         0x48 => {
             let value = e.mem.f32(extra.wrapping_add(0x0c));

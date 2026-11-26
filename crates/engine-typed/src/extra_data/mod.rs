@@ -3,12 +3,17 @@
 //! from the exe's extra data list unit: `AddExtraCopy` and the copies and compares of whole lists
 //! ([`copy`]), the getters and setters of single extra data ([`access`]), the small records the
 //! unit's loader and save writer build ([`records`]), the loader `ExtraDataList::Load` ([`load`]),
-//! the fix-up of a loaded list `InitItem` ([`init_item`]) and the list's save writer ([`save`]).
-//! The list's own operations (its constructors, `AddExtra`, `RemoveExtra`, the type bitmap, the
-//! thread's cache) are the cell references family's (`cell_refs::extra_list`), the lookup
-//! `GetExtraData` (`00410220`) the dispatch family's. Every caller reaches these functions by
-//! address; the unit's one translation that stays (`GetCanNotWear` `00418b10`) and the unit's other
-//! part files call the native functions by address too.
+//! the fix-up of a loaded list `InitItem` ([`init_item`]), the list's save writer ([`save`]), and
+//! from the unit's part 2 file the second run of setters, getters and removers ([`setters`]), the
+//! cell's extra data ([`cell_data`]) and the package extra data with the rest of that range
+//! ([`packages`]). The list's own operations (its constructors, `AddExtra`, `RemoveExtra`, the type
+//! bitmap, the thread's cache) are the cell references family's (`cell_refs::extra_list`), the
+//! lookup `GetExtraData` (`00410220`) the dispatch family's. Every caller reaches these functions
+//! by address; the unit's translation that stays (`GetCanNotWear` `00418b10`) and the unit's other
+//! part files call the native functions by address too. Three functions of the part 2 range are
+//! other families': `ScriptLocals`' scalar deleting destructor `0041af70` (native in the script
+//! lines family, the one that holds xNVSE's wraps), a package's type `0041ca90` (the AI queries',
+//! read in place here) and `GetPackageExtraTarget` `0041cb70` (the dispatch family's).
 //!
 //! **Native.** The exe's order of work. The lookup (`00410220`), the lock (`0040fbf0`, `0040fba0`),
 //! `AddExtra`, both `RemoveExtra`s, `ItemsInList` and the cache's clear are typed calls into their
@@ -18,20 +23,25 @@
 //! with JIP LN NVSE's null check as the leaf has it), a buffer's form (`007af430`), the type
 //! bitmap's test (`0040fe80`), `BSExtraData`'s constructor (`0040ec80`), the sound handle's
 //! constructors, compares and empty destructor, the audio buoy marker's empty copy (`004534f0`),
-//! and the small records' constructors. Each type, next or word is read once where the exe reads it
-//! again with nothing in between that could change it. A virtual call (an extra data's slot 0
-//! delete, its slot 4 `Compare`, the type 0x92 copy's slot 0xc) stays a call through the slot: each
-//! class has its own body. The constructors, destructors and setters of other units, `operator new`
-//! and `operator delete` are called by address.
+//! the small records' constructors, a form's id (`0084e3a0`), a package's type (`0041ca90`), a time
+//! stamp's byte (`0086a460`), the save/load singleton's test that always answers false
+//! (`0047c850`), an `NiPointer`'s compare with a pointer (`00822510`) and a getter's temporary
+//! `NiPointer` made from null (`00633c90`, released by `0045cec0`: 0). Each type, next or word is
+//! read once where the exe reads it again with nothing in between that could change it. A virtual
+//! call (an extra data's slot 0 delete, its slot 4 `Compare`, the type 0x92 copy's slot 0xc) stays
+//! a call through the slot: each class has its own body. The constructors, destructors and setters
+//! of other units, `operator new` and `operator delete` are called by address.
 //!
-//! **Extenders.** JIP LN NVSE has three sites here, each kept where the translation has it:
-//! `AddExtraCopy`'s arm for its keyed data's type 0x27 (`0x411978`, while JIP is installed), the
-//! hotkey copy of `CopyListForReference` (`0x412675`) and the owner test of
-//! `CompareListForContainer` (`0x41271E`), both with its fixes on. JIP wraps `GetCanNotWear`
-//! (`00418b10`), so that one stays translated and out of this family: a wrapped member would send
-//! the whole family by address. No other extender replaces or patches these functions; xNVSE, JIP
-//! and JohnnyGuitar call the getters, the setters and `AddExtraCopy` by address, which reaches them
-//! here.
+//! **Extenders.** JIP LN NVSE has seven sites here, each kept where the translation has it:
+//! `AddExtraCopy`'s arm for its keyed data's type 0x27 (`0x411978`) and that type's entries in the
+//! two default scans' tables (`0x41D0F6`, `0x41D212`, `0x41D25A`), while JIP is installed; the
+//! hotkey copy of `CopyListForReference` (`0x412675`), the owner test of `CompareListForContainer`
+//! (`0x41271E`) and the reference pointer setter's persistence test (`0x41C833`), with its fixes
+//! on. JIP wraps `GetCanNotWear` (`00418b10`), which stays translated, and xNVSE `0041af70` (the
+//! script lines family's): both stay out of this family and are called by address, as a wrapped
+//! member would send the whole family by address. No other extender replaces or patches these
+//! functions; xNVSE, JIP and JohnnyGuitar call the getters, the setters and `AddExtraCopy` by
+//! address, which reaches them here.
 //!
 //! **Which thread.** Every thread that touches a list (main, the loaders, the AI threads), under
 //! the extra data lock as the exe takes it: [`Threads::Both`]. The floats are moved, not computed
@@ -40,11 +50,14 @@
 //! stores, and the sine and cosine, the x87's `FSINCOS` as `engine_core::x87` has it.
 
 pub mod access;
+pub mod cell_data;
 pub mod copy;
 pub mod init_item;
 pub mod load;
+pub mod packages;
 pub mod records;
 pub mod save;
+pub mod setters;
 
 use crate::{cell_refs, crt, dispatch};
 use dispatch::layout::LightLock;
@@ -188,6 +201,123 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0041_a280, access::set_creature_movement_sound(u32, u32)),
         entry!(0x0041_a3e0, access::set_weapon_idle_sound(u32, u32)),
         entry!(0x0041_a540, access::set_weapon_attack_sound(u32, u32)),
+        entry!(0x0041_a6a0, setters::set_activate_loop_sound(u32, u32)),
+        entry!(0x0041_a800, setters::set_sound(u32, u32)),
+        entry!(0x0041_a960, setters::set_ghost(u32, bool)),
+        entry!(0x0041_aa20, setters::set_worn(u32, bool, bool)),
+        entry!(0x0041_ab70, setters::set_can_not_wear(u32, bool)),
+        entry!(0x0041_ac30, setters::set_seed(u32, u8)),
+        entry!(0x0041_ad00, setters::set_package_start_location(u32, u32, u32, u32, f32)),
+        entry!(0x0041_adf0, setters::remove_anim_ptr(u32)),
+        entry!(0x0041_ae10, setters::remove_anim_save(u32)),
+        entry!(0x0041_ae30, setters::remove_light(u32)),
+        entry!(0x0041_ae50, setters::remove_spell_effect_light(u32)),
+        entry!(0x0041_ae70, setters::remove_lock_ptr(u32)),
+        entry!(0x0041_ae90, setters::remove_teleport_ptr(u32)),
+        entry!(0x0041_aeb0, setters::remove_container_changes(u32)),
+        entry!(0x0041_aed0, setters::remove_ownership(u32)),
+        entry!(0x0041_aef0, setters::remove_health(u32)),
+        entry!(0x0041_af10, setters::remove_count(u32)),
+        entry!(0x0041_af30, setters::remove_poison(u32)),
+        entry!(0x0041_af50, setters::remove_script(u32)),
+        entry!(0x0041_afa0, setters::clear_script_locals(u32)),
+        entry!(0x0041_afd0, setters::remove_scale(u32)),
+        entry!(0x0041_aff0, setters::remove_ghost(u32)),
+        entry!(0x0041_b010, setters::remove_worn(u32, bool)),
+        entry!(0x0041_b040, setters::remove_can_not_wear(u32)),
+        entry!(0x0041_b060, setters::remove_package_start_location(u32)),
+        entry!(0x0041_b080, setters::starting_rotation(u32, u32, u32) -> u32),
+        entry!(0x0041_b0d0, setters::starting_location(u32, u32, u32) -> u32),
+        entry!(0x0041_b120, setters::set_starting_rotation(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x0041_b180, setters::set_starting_location(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x0041_b1e0, setters::set_starting_world_or_cell(u32, u32)),
+        entry!(0x0041_b2a0, setters::set_starting_world_or_cell_for_ref(u32, u32)),
+        entry!(0x0041_b320, setters::starting_world_or_cell(u32) -> u32),
+        entry!(0x0041_b350, setters::remove_starting_world_or_cell(u32)),
+        entry!(0x0041_b370, setters::action_flags(u32) -> u32),
+        entry!(0x0041_b3a0, setters::has_action_flag(u32, u32) -> bool),
+        entry!(0x0041_b3d0, setters::set_action_flags(u32, u32)),
+        entry!(0x0041_b440, setters::add_action_flags(u32, u32)),
+        entry!(0x0041_b470, setters::remove_action_flags(u32, u32)),
+        entry!(0x0041_b4b0, setters::set_action_ref(u32, u32)),
+        entry!(0x0041_b520, setters::action_ref(u32) -> u32),
+        entry!(0x0041_b550, setters::health_perc(u32) -> f32),
+        entry!(0x0041_b580, setters::set_health_perc(u32, f32)),
+        entry!(0x0041_b650, setters::health_perc_new(u32) -> u32),
+        entry!(0x0041_b680, setters::health_perc_delete(u32, u32) -> u32),
+        entry!(0x0041_b6b0, setters::object_health(u32) -> f32),
+        entry!(0x0041_b6e0, setters::set_object_health(u32, f32)),
+        entry!(0x0041_b790, setters::object_health_new(u32, f32) -> u32),
+        entry!(0x0041_b7c0, setters::remove_object_health(u32)),
+        entry!(0x0041_b7e0, cell_data::set_cell_3d(u32, u32)),
+        entry!(0x0041_b8d0, cell_data::set_havok_world(u32, u32)),
+        entry!(0x0041_b9a0, cell_data::havok_world(u32) -> u32),
+        entry!(0x0041_ba60, cell_data::set_cell_mopp(u32, u32)),
+        entry!(0x0041_bb10, cell_data::cell_mopp(u32) -> u32),
+        entry!(0x0041_bbd0, cell_data::set_region_list(u32, u32)),
+        entry!(0x0041_bce0, cell_data::region_list(u32) -> u32),
+        entry!(0x0041_bd10, cell_data::set_music_type(u32, u32)),
+        entry!(0x0041_bde0, cell_data::music_type(u32) -> u32),
+        entry!(0x0041_be10, cell_data::set_terminal_state(u32, u8)),
+        entry!(0x0041_bef0, cell_data::terminal_state_new(u32) -> u32),
+        entry!(0x0041_bf20, cell_data::terminal_state_empty(u32) -> bool),
+        entry!(0x0041_bf50, cell_data::terminal_state(u32) -> u8),
+        entry!(0x0041_bf80, cell_data::set_lock_override(u32, u8)),
+        entry!(0x0041_c060, cell_data::lock_override(u32) -> u8),
+        entry!(0x0041_c090, cell_data::set_acoustic_space(u32, u32)),
+        entry!(0x0041_c160, cell_data::acoustic_space(u32) -> u32),
+        entry!(0x0041_c190, cell_data::set_climate(u32, u32)),
+        entry!(0x0041_c260, cell_data::climate(u32) -> u32),
+        entry!(0x0041_c290, cell_data::set_image_space(u32, u32)),
+        entry!(0x0041_c360, cell_data::image_space(u32) -> u32),
+        entry!(0x0041_c390, cell_data::set_impact_swap(u32, u32)),
+        entry!(0x0041_c460, cell_data::impact_swap(u32) -> u32),
+        entry!(0x0041_c490, cell_data::set_canopy_shadow_mask(u32, u32, u32, u32)),
+        entry!(0x0041_c580, cell_data::canopy_shadow_mask(u32, u32, u32) -> u32),
+        entry!(0x0041_c5e0, cell_data::editor_id_new(u32, u32) -> u32),
+        entry!(0x0041_c660, cell_data::editor_id_delete(u32, u32) -> u32),
+        entry!(0x0041_c690, cell_data::editor_id_drop(u32)),
+        entry!(0x0041_c6f0, cell_data::set_editor_id(u32, u32)),
+        entry!(0x0041_c7c0, cell_data::editor_id_text(u32) -> u32),
+        entry!(0x0041_c7f0, cell_data::set_reference_pointer(u32, u32)),
+        entry!(0x0041_c8d0, cell_data::reference_pointer(u32) -> u32),
+        entry!(0x0041_c900, cell_data::remove_reference_pointer(u32)),
+        entry!(0x0041_c930, packages::set_package(u32, u32, i32, u32, u8, u8, u8)),
+        entry!(0x0041_cab0, packages::set_package_target(u32, u32)),
+        entry!(0x0041_cae0, packages::set_package_index(u32, i32)),
+        entry!(0x0041_cb10, packages::package(u32) -> u32),
+        entry!(0x0041_cb40, packages::package_index(u32) -> i32),
+        entry!(0x0041_cba0, packages::package_action_complete(u32) -> u8),
+        entry!(0x0041_cbd0, packages::set_package_action_complete(u32, u8)),
+        entry!(0x0041_cc00, packages::package_activated(u32) -> u8),
+        entry!(0x0041_cc30, packages::package_done_once(u32) -> u8),
+        entry!(0x0041_cc60, packages::remove_package(u32)),
+        entry!(0x0041_cc90, packages::set_trespass_package(u32, u32)),
+        entry!(0x0041_cd70, packages::trespass_package(u32) -> u32),
+        entry!(0x0041_cda0, packages::remove_trespass_package(u32)),
+        entry!(0x0041_ce10, packages::forget_trespass_package(u32, u32)),
+        entry!(0x0041_ce50, packages::add_to_player_crime_list(u32, u32)),
+        entry!(0x0041_cf00, packages::player_crime_list(u32) -> u32),
+        entry!(0x0041_cf30, packages::remove_player_crime_list(u32, u32)),
+        entry!(0x0041_d000, packages::remove_leveled_item(u32)),
+        entry!(0x0041_d030, packages::only_owner_defaults(u32) -> bool),
+        entry!(0x0041_d120, packages::is_default_for_container(u32, u8) -> bool),
+        entry!(0x0041_d280, packages::set_leveled_item_index(u32, i32)),
+        entry!(0x0041_d330, packages::set_leveled_item_default(u32, u8)),
+        entry!(0x0041_d360, packages::leveled_item_index(u32) -> i32),
+        entry!(0x0041_d390, packages::set_persistent_cell(u32, u32)),
+        entry!(0x0041_d460, packages::persistent_cell(u32) -> u32),
+        entry!(0x0041_d490, packages::set_rag_doll_data(u32, u32)),
+        entry!(0x0041_d5b0, packages::set_rag_doll_data_from_copy(u32, u32)),
+        entry!(0x0041_d6d0, packages::rag_doll_data(u32) -> u32),
+        entry!(0x0041_d700, packages::add_run_once_package(u32, u32, u8)),
+        entry!(0x0041_d7b0, packages::prune_run_once_packages(u32, i8)),
+        entry!(0x0041_d8a0, packages::package_time_stamp(u32) -> u32),
+        entry!(0x0041_d8c0, packages::is_in_run_once_packages(u32, u32) -> bool),
+        entry!(0x0041_d930, packages::remove_run_once_packages(u32)),
+        entry!(0x0041_d950, packages::set_land_normal(u32, u32)),
+        entry!(0x0041_da10, packages::enable_state_parent(u32) -> u32),
+        entry!(0x0041_da40, packages::set_enable_state_parent(u32, u32)),
     ]
 }
 

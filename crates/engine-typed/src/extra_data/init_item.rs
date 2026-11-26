@@ -7,18 +7,15 @@
 //! place: a form's id (`0084e3a0`) and type (`00401170`), a reference's extra list (`005d43c0`), a
 //! simple list's item, next and emptiness (`006815c0`, `00726070`, `008256d0`) and item store
 //! (`00726c60`), the map marker's flags and reputation (`00438ed0`, `00438ef0`, `0044de80`,
-//! `0044edb0`), the audio marker's controller (`0059bb30`, `007037c0`). The forms, the casts, the
-//! log and the targets' own fix-ups are called by address.
+//! `0044edb0`), the audio marker's controller (`0059bb30`, `007037c0`). The forms family's lookup by
+//! id, `AddCompileIndex` and `TESForm::GetFile` are typed calls; the casts, the log and the targets'
+//! own fix-ups are called by address.
 
 use super::{access, records, FAMILY, OPERATOR_DELETE};
 use super::{give_lock, head_of, kind_of, list_remove, next_of, take_lock, word_at, EXTRA_PAYLOAD};
+use crate::forms;
 use engine_core::{args, typed_call, Engine};
 
-/// `TESForm::GetFile(index)` (`-1`: the last file that changed the form).
-const TES_FORM_GET_FILE: u32 = 0x0048_4e60;
-/// `TESForm::AddCompileIndex(&id, file)` (cdecl) and the lookup by id.
-const ADD_COMPILE_INDEX: u32 = 0x0048_5d50;
-const LOOKUP_FORM: u32 = 0x0048_39c0;
 /// `__RTDynamicCast(form, 0, from, to, 0)` and the type descriptors.
 const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
 const RTTI_TES_FORM: u32 = 0x0118_3028;
@@ -134,10 +131,18 @@ fn note(e: &mut Engine, message: u32, words: &[u32]) {
 fn resolve(e: &mut Engine, file: u32, stored: u32, target: u32) -> (u32, u32) {
     let id = e.with_stack(4, |e, local| {
         e.mem.set_u32(local.addr(), stored);
-        e.call(ADD_COMPILE_INDEX, &args![local, file]);
+        typed_call!(
+            forms::FAMILY,
+            0x0048_5d50,
+            forms::tesform::add_compile_index(e, local.addr(), file)
+        );
         e.mem.u32(local.addr())
     });
-    let form = e.call(LOOKUP_FORM, &args![id]).u32();
+    let form = typed_call!(
+        forms::FAMILY,
+        0x0048_39c0,
+        forms::tesform::form_by_id(e, id)
+    );
     let form = if target == 0 {
         form
     } else {
@@ -163,9 +168,11 @@ fn drop_extra(e: &mut Engine, list: u32, extra: u32) {
 pub fn init_item(e: &mut Engine, this: u32, reference: u32) {
     take_lock(e, 0);
     let mut current = head_of(e, this);
-    let file = e
-        .call(TES_FORM_GET_FILE, &args![reference, 0xffff_ffffu32])
-        .u32();
+    let file = typed_call!(
+        forms::FAMILY,
+        0x0048_4e60,
+        forms::tesform::get_file(e, reference, -1)
+    );
     while current != 0 {
         let next = next_of(e, current);
         let kind = kind_of(e, current);
@@ -300,9 +307,11 @@ fn fix_up(e: &mut Engine, this: u32, reference: u32, file: u32, extra: u32, kind
             let slot = extra.wrapping_add(EXTRA_PAYLOAD + 0x0c);
             let stored = e.mem.u32(slot);
             if stored != 0 {
-                let radio_file = e
-                    .call(TES_FORM_GET_FILE, &args![reference, 0xffff_ffffu32])
-                    .u32();
+                let radio_file = typed_call!(
+                    forms::FAMILY,
+                    0x0048_4e60,
+                    forms::tesform::get_file(e, reference, -1)
+                );
                 let (id, position) = resolve(e, radio_file, stored, RTTI_TES_OBJECT_REFR);
                 e.mem.set_u32(slot, position);
                 if position == 0 {
@@ -334,9 +343,11 @@ fn fix_up(e: &mut Engine, this: u32, reference: u32, file: u32, extra: u32, kind
         0x90 => {
             let marker = word_at(e, extra, EXTRA_PAYLOAD);
             let stored = word_at(e, marker, 0x24);
-            let controller_file = e
-                .call(TES_FORM_GET_FILE, &args![reference, 0xffff_ffffu32])
-                .u32();
+            let controller_file = typed_call!(
+                forms::FAMILY,
+                0x0048_4e60,
+                forms::tesform::get_file(e, reference, -1)
+            );
             let (id, controller) =
                 resolve(e, controller_file, stored, RTTI_MEDIA_LOCATION_CONTROLLER);
             if controller != 0 {

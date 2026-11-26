@@ -4008,8 +4008,10 @@ use engine_typed::extra_data::{self, EXTRA_DATA};
 /// What the extra data family does in place where its translation calls: the one-instruction
 /// leaves (an extra data's type and next, the next's store, a node's item and next, a handle's word,
 /// a buffer's form), the type bitmap's test, `BSExtraData`'s constructor, a sound handle's empty
-/// destructor, the navmesh portal record's copy, the audio buoy marker's empty copy, and the
-/// family's own sound handle, mask, flag, colour and `sincos` bodies.
+/// destructor, the navmesh portal record's copy, the audio buoy marker's empty copy, the
+/// family's own sound handle, mask, flag, colour and `sincos` bodies, and the part 2 range's: a
+/// form's id, a package's type and time stamp, a stamp's byte, the save/load singleton's test, an
+/// `NiPointer`'s compare and a temporary one made from null with its release.
 const XD_IN_PLACE: &[u32] = &[
     0x0045_34f0,
     0x004f_1540,
@@ -4033,6 +4035,14 @@ const XD_IN_PLACE: &[u32] = &[
     0x0041_21b0,
     0x0041_69a0,
     0x0041_4430,
+    0x0084_e3a0,
+    0x0041_ca90,
+    0x0047_c850,
+    0x0082_2510,
+    0x0086_a460,
+    0x0063_3c90,
+    0x0045_cec0,
+    0x0041_d8a0,
 ];
 
 /// The families an extra data function reaches (the extra list's with its lock, type getter,
@@ -4105,13 +4115,6 @@ fn xd_compare(e: &mut Engine, a: &[u32]) -> Ret {
     ret((e.mem.u32(a[0] + 0xc) ^ e.mem.u32(a[1] + 0xc)) & 1)
 }
 
-/// The canopy shadow mask's setter: the structure it makes handed back through its last word.
-fn xd_canopy(e: &mut Engine, a: &[u32]) -> Ret {
-    let made = e.mem.alloc(0x10);
-    e.mem.set_u32(a[3], made);
-    ret(0)
-}
-
 /// The get-or-create of `AddExtraCopy`'s type 0x8b: a block.
 fn xd_get_or_create(e: &mut Engine, _: &[u32]) -> Ret {
     ret(e.mem.alloc(0x40))
@@ -4133,32 +4136,20 @@ const XD_NOTED: &[u32] = &[
     0x005b_5e40,
     0x00ec_43fb,
     0x0041_e160,
-    0x0041_bd10,
-    0x0041_c190,
-    0x0041_d5b0,
-    0x0041_cc90,
-    0x0041_c7f0,
     0x0042_1540,
     0x0041_e250,
     0x0042_1430,
     0x0042_1b70,
     0x0041_e440,
-    0x0041_c290,
     0x0042_1e40,
     0x0042_1d50,
     0x0042_1c60,
-    0x0041_c090,
     0x0042_2220,
     0x0042_2350,
-    0x0041_b580,
-    0x0041_b3d0,
-    0x0041_ac30,
     0x0042_dde0,
-    0x0041_b7e0,
     0x0042_2050,
     0x0042_2150,
     0x0042_0f00,
-    0x0041_d950,
     0x0043_a160,
     0x0043_a810,
     0x0043_8bb0,
@@ -4168,20 +4159,11 @@ const XD_NOTED: &[u32] = &[
     0x0041_fc10,
     0x0058_efd0,
     0x0058_f4c0,
-    0x0041_c390,
     0x0058_9450,
     0x0058_9770,
     0x0068_0890,
-    0x0041_aa20,
-    0x0041_ad00,
-    0x0041_c930,
-    0x0041_d700,
     0x0042_2480,
-    0x0041_d280,
-    0x0041_d330,
-    0x0041_da40,
     0x0041_dc70,
-    0x0041_ab70,
     0x0042_2750,
     0x0043_3b70,
     0x0043_42b0,
@@ -4223,7 +4205,6 @@ fn xd_stand_ins(e: &mut Engine) {
         e.register(addr, noted);
     }
     e.register(XD_COMPARE_FN, xd_compare);
-    e.register(0x0041_c490, xd_canopy);
     e.register(0x0042_f420, xd_get_or_create);
     macro_rules! constructors {
         ($($addr:expr => $kind:expr),* $(,)?) => { $( e.register($addr, built::<$kind>); )* };
@@ -4237,17 +4218,31 @@ fn xd_stand_ins(e: &mut Engine) {
         0x0043_5150 => 0x3f, 0x0043_5ec0 => 0x46, 0x0043_61e0 => 0x7d, 0x0043_6300 => 0x8a,
         0x0043_6420 => 0x83, 0x0043_6540 => 0x86, 0x0043_5fa0 => 0x4c, 0x0043_38b0 => 0x53,
         0x0043_3ca0 => 0x57,
+        0x0043_22c0 => 0x1f, 0x0043_22f0 => 0x16, 0x0043_2320 => 0x17, 0x0043_2350 => 0x3e,
+        0x0043_25b0 => 0x31, 0x0043_26c0 => 0x18, 0x0043_08c0 => 0x49, 0x0043_60c0 => 0x4f,
+        0x0043_6660 => 0x87, 0x0040_eda0 => 0x01, 0x0040_ec00 => 0x02, 0x0040_ef00 => 0x04,
+        0x0040_ef30 => 0x07, 0x0040_efd0 => 0x81, 0x0040_f070 => 0x08, 0x0040_f110 => 0x59,
+        0x0040_f1b0 => 0x8c, 0x0040_f440 => 0x0a, 0x0043_27e0 => 0x1c, 0x0043_2870 => 0x19,
+        0x0043_28d0 => 0x1a, 0x0043_2aa0 => 0x35, 0x0043_2be0 => 0x2f, 0x0043_2c20 => 0x0c,
+        0x0043_2cb0 => 0x14, 0x0043_3010 => 0x1b, 0x0043_3260 => 0x13, 0x0043_3300 => 0x37,
     }
+    xe_stand_ins(e);
 }
 
 /// The extra list's world (`extra_world`) for the family: page 0 mapped (a failed allocation's
 /// null extra data is read and added as the exe does), the read-only floats the getters and the
 /// scale setter read, the world vtable's `Compare` and slot 3, the type 0x92 copy's slot 3,
-/// `operator new` failing for some seeds, the thread's word at +0x294 in four forms, and JIP's
-/// three sites of the family with its head site.
+/// `operator new` failing for some seeds, the thread's word at +0x294 in four forms, JIP's patch
+/// word in three forms where it is on, and JIP's sites of the family with its head site.
 fn xd_world(e: &mut Engine, seed: u32) -> ExtraWorld {
+    use engine_core::extend::jip_patches::{FIXES, INSTALLED};
     use engine_core::extend::{Owner, SiteSlot};
     let w = extra_world(e, seed);
+    // JIP on: installed with its fixes, installed alone, or its fixes alone, so a seam gated by
+    // the other bit shows.
+    if w.jip % 3 != 0 {
+        e.set_jip_patches([u32::MAX, INSTALLED, FIXES][(seed / 4 % 3) as usize]);
+    }
     e.map(0, 0x1000);
     e.map(0x0101_2000, 0x3000);
     e.mem.set_u32(0x0101_2054, (-1.0f32).to_bits());
@@ -4262,6 +4257,8 @@ fn xd_world(e: &mut Engine, seed: u32) -> ExtraWorld {
     e.mem.set_u32(0, vt);
     // The game loader's global `RemoveNonPersistentCellData` reads (its flag test ignores it).
     e.map(0x011d_d000, 0x1000);
+    // The save/load singleton's global, which the reference pointer setter's translation reads.
+    e.map(0x011d_e000, 0x1000);
     let mut d = Draw(seed.wrapping_mul(0x2545_f491) ^ 0x0041_8200);
     e.mem.set_u32(XD_NEW_FAILS, u32::from(d.next(6) == 0));
     let tls = e.tls();
@@ -4274,6 +4271,7 @@ fn xd_world(e: &mut Engine, seed: u32) -> ExtraWorld {
         e.on_site(SiteSlot::new(Owner::Jip, 0x0041_1978), jip_copy_site);
         e.on_site(SiteSlot::new(Owner::Jip, 0x0041_2675), jip_hotkey_site);
         e.on_site(SiteSlot::new(Owner::Jip, 0x0041_271e), jip_owner_site);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0041_c833), jip_persists_site);
     }
     w
 }
@@ -4323,6 +4321,13 @@ fn jip_hotkey_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
 fn jip_owner_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     xd_site_note(e, 0x0041_271e, a);
     Some(1)
+}
+
+/// JIP's persistence test of the reference pointer setter (`0x41C833`): noted, the reference's
+/// bit 2.
+fn jip_persists_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    xd_site_note(e, 0x0041_c833, a);
+    Some(a[0] >> 2 & 1)
 }
 
 /// Where `place_kind` put the extra data: nowhere, at the head, at the tail, or only its bit set.
@@ -5950,6 +5955,65 @@ fn the_extra_data_worlds_reach_every_branch() {
     }
 }
 
+/// The part 2 range's setups reach their thin branches (run as the translations, every miss listed
+/// at once): the terminal state's delete on 0 and the action's delete on 1 as `xd_setter` builds
+/// their worlds, and a run-once search whose answer the stop at an empty item decides, as
+/// `xe_run_once` builds it.
+#[test]
+fn the_part_2_worlds_reach_every_branch() {
+    let mut reached = std::collections::BTreeSet::<String>::new();
+    for &seed in EXTRA_SEEDS {
+        for (setter, kind, value) in [(0x0041_be10u32, 0x50u32, 0u32), (0x0041_b3d0, 0x0e, 1)] {
+            let mut e = Engine::new_untyped_for_test();
+            let w = xd_world(&mut e, seed);
+            place_kind(&mut e, &w, seed, kind);
+            let extra = e.call(0x0041_0220, &args![w.list, kind]).u32();
+            if extra == 0 {
+                continue;
+            }
+            let deletes = e.mem.u32(extra + EXTRA_DELETES);
+            e.call(setter, &args![w.list, value]);
+            let deleted = e.mem.u32(extra + EXTRA_DELETES) != deletes;
+            reached.insert(format!("type {kind:#x} deleted {deleted}"));
+        }
+        for second in 0..5 {
+            let mut e = Engine::new_untyped_for_test();
+            let words = xe_run_once_world(&mut e, seed, second, false);
+            let found = e.call(0x0041_d8c0, &args![words[0], words[1]]).bool();
+            // The answer of a walk that passes over empty items.
+            let extra = e.call(0x0041_0220, &args![words[0], 0x1bu32]).u32();
+            let mut node = if extra == 0 {
+                0
+            } else {
+                e.mem.u32(extra + 0xc)
+            };
+            let mut anywhere = false;
+            while node != 0 {
+                let entry = e.mem.u32(node);
+                anywhere |= entry != 0 && e.mem.u32(entry) == words[1];
+                node = e.mem.u32(node + 4);
+            }
+            reached.insert(format!(
+                "run-once found {found}, past an empty item {anywhere}"
+            ));
+        }
+    }
+    let wanted = [
+        "type 0x50 deleted true",
+        "type 0x50 deleted false",
+        "type 0xe deleted true",
+        "type 0xe deleted false",
+        "run-once found true, past an empty item true",
+        "run-once found false, past an empty item false",
+        "run-once found false, past an empty item true",
+    ];
+    let missed: Vec<&str> = wanted
+        .into_iter()
+        .filter(|name| !reached.contains(*name))
+        .collect();
+    assert!(missed.is_empty(), "no seed reaches {missed:?}: {reached:?}");
+}
+
 // ---- The extra data family's loader, InitItem and save writer ----------------------------------
 
 /// What the loader, `InitItem` and the save writer do in place beside the family's own: the file's
@@ -5978,11 +6042,27 @@ trait XfCase {
     fn xf_case(self) -> Diff;
 }
 
+/// The forms family's functions the three call as typed calls (the lookup by id, `AddCompileIndex`,
+/// `TESForm::GetFile` and the six chunk adders): their stand-ins here, so by address, their direct
+/// calls in the forms tests.
+const XF_FORMS: &[u32] = &[
+    0x0048_39c0,
+    0x0048_5d50,
+    0x0048_4e60,
+    0x0048_56d0,
+    0x0048_56f0,
+    0x0048_5710,
+    0x0048_58f0,
+    0x0048_5910,
+    0x0048_5990,
+];
+
 impl XfCase for Diff {
     fn xf_case(self) -> Diff {
         self.extra_data_case()
             .family(&engine_typed::pathing::PATHING)
             .ignore_calls(XF_IN_PLACE)
+            .goes_by_address(XF_FORMS)
     }
 }
 
@@ -6149,11 +6229,6 @@ const XF_NOTED: &[u32] = &[
     0x0067_dd20,
     0x0043_0a90,
     0x004a_4e90,
-    0x0041_b3d0,
-    0x0041_bd10,
-    0x0041_c090,
-    0x0041_c190,
-    0x0041_c290,
     0x0041_e160,
     0x0041_e250,
     0x0041_e440,
@@ -6163,15 +6238,9 @@ const XF_NOTED: &[u32] = &[
     0x0042_1d50,
     0x0042_1e40,
     0x0042_1540,
-    0x0041_b580,
     0x0042_2220,
     0x0042_2350,
     0x0042_eb60,
-    0x0041_ac30,
-    0x0041_bbd0,
-    0x0041_ad00,
-    0x0041_d950,
-    0x0041_da40,
     0x0041_dc70,
     0x0041_ece0,
     0x0041_f080,
@@ -6405,7 +6474,7 @@ const XF_LOAD_SEEDS: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 const XF_LOAD_KINDS: [u32; 9] = [0x2a, 0x14, 0x53, 0x92, 0x2b, 0x2c, 0x90, 0x91, 0x68];
 
 /// The loader's world: the list with some of [`XF_LOAD_KINDS`], the file (its chunk size 4, 1, 8,
-/// 0x13 or 0x10, the swap flag set for some seeds), the save buffer (its form none, of type 0x23 or
+/// 0x13 or 0x10 in turn over the seeds, the swap flag set for some seeds), the save buffer (its form none, of type 0x23 or
 /// another). Answers the list, the file and the buffer.
 fn xf_load_world(e: &mut Engine, seed: u32, chunk: u32) -> Vec<u32> {
     let (w, pool) = xf_world(e, seed);
@@ -6427,8 +6496,10 @@ fn xf_load_world(e: &mut Engine, seed: u32, chunk: u32) -> Vec<u32> {
         e.mem.set_u8(w.list + 8 + (kind >> 3), flags);
     }
     let file = e.mem.alloc(0x300);
-    e.mem
-        .set_u32(file + 0x25c, [4, 1, 8, 0x13, 0x10][d.next(5) as usize]);
+    // Each chunk meets each size across the seeds (the draw is kept, so the rest is as it was).
+    d.next(5);
+    let size = [4, 1, 8, 0x13, 0x10][(seed.wrapping_add(chunk) % 5) as usize];
+    e.mem.set_u32(file + 0x25c, size);
     e.mem.set_u8(file + 0x299, u8::from(d.next(3) == 0));
     let buffer = e.mem.alloc(0x40);
     let form = [0, pool[0], pool[1]][d.next(3) as usize];
@@ -6563,12 +6634,31 @@ fn the_list_load_worlds_reach_every_branch() {
             let mut e = Engine::new_untyped_for_test();
             let words = xf_load_world(&mut e, seed, chunk);
             facts.insert(format!("swaps {}", e.mem.u8(words[1] + 0x299)));
-            facts.insert(format!("size {}", e.mem.u32(words[1] + 0x25c)));
+            let size = e.mem.u32(words[1] + 0x25c);
+            facts.insert(format!("size {size}"));
+            if chunk == xf_tag(b"XAPD") || chunk == xf_tag(b"XSED") {
+                facts.insert(format!(
+                    "{} size {size}",
+                    String::from_utf8_lossy(&chunk.to_le_bytes())
+                ));
+            }
             e.call(0x0041_44a0, &args![words[0], words[1], words[2]]);
             lines.extend(xf_lines(&e));
         }
     }
-    let messages: [u32; 25] = [
+    let messages: [u32; 37] = [
+        0x0101_4d60,
+        0x0101_4eb8,
+        0x0101_4cf0,
+        0x0101_4f50,
+        0x0101_4830,
+        0x0101_4f08,
+        0x0101_47d8,
+        0x0101_4e60,
+        0x0101_4620,
+        0x0101_4788,
+        0x0101_4e00,
+        0x0101_4984,
         0x0101_4db0,
         0x0101_4fa8,
         0x0101_4be0,
@@ -6623,10 +6713,1643 @@ fn the_list_load_worlds_reach_every_branch() {
         "size 4",
         "size 1",
         "size 19",
+        "XAPD size 4",
+        "XAPD size 1",
+        "XSED size 4",
+        "XSED size 1",
     ] {
         if !facts.contains(fact) {
             missing.push(fact.to_string());
         }
     }
     assert!(missing.is_empty(), "no world reaches {missing:?}");
+}
+
+/// The loader's room count is the chunk word's low 16 bits (`& 0xffff`), a count with bit 15 set
+/// too, in the translation and the native code alike: a plain run of each, since a Diff's call log
+/// over 0x8001 rooms would take too long.
+#[test]
+fn xf_room_count_takes_the_low_sixteen_bits() {
+    const ADDS: u32 = CONTROL + 0x480;
+    for native in [false, true] {
+        let mut e = Engine::new_untyped_for_test();
+        let words = xf_load_world(&mut e, 0, xf_tag(b"XRMR"));
+        // The first word read: 0x8001 rooms and the byte 1; every room's word 0.
+        e.mem.set_u32(XF_DRAWS, 0);
+        e.register(0x0047_27f0, |e, a| {
+            let first = e.mem.u32(XF_DRAWS) == 0;
+            e.mem.set_u32(XF_DRAWS, 1);
+            e.mem.set_u32(a[1], if first { 0x0001_8001 } else { 0 });
+            ret(1)
+        });
+        e.register(0x005a_e3d0, |e, _| {
+            let n = e.mem.u32(ADDS);
+            e.mem.set_u32(ADDS, n + 1);
+            Ret::default()
+        });
+        if native {
+            extra_data::load::load_chunk(&mut e, words[0], words[1], words[2]);
+        } else {
+            e.call(0x0041_44a0, &args![words[0], words[1], words[2]]);
+        }
+        assert_eq!(e.mem.u32(ADDS), 0x8001, "native {native}");
+    }
+}
+
+// ---- The extra data family's part 2 range (`0041a6a0` to `0041da40`) ----------------------------
+
+/// Where the part 2 range's stand-ins read what the setup chose: the package tests' flags (bit 0
+/// created, bit 1 never runs) and the cell a reference's `TESChildCell` answers.
+const XE_PACKAGE_FLAGS: u32 = CONTROL + 0x340;
+const XE_CELL: u32 = CONTROL + 0x344;
+/// An object's slots (a region list's delete, a package's slot 0x10, a reference's name) and a
+/// reference's `TESChildCell` slot 0.
+const XE_SLOT_FN: u32 = 0x00ff_c300;
+const XE_CELL_FN: u32 = 0x00ff_c304;
+
+/// What the part 2 range calls by address in other units: each a stand-in that counts (the
+/// `NiPointer` assignment, the editor id's string, the base destructor's body, the reference's
+/// persistence, the packages', ragdolls' and run-once packages' callees, the list adds and frees).
+const XE_NOTED: &[u32] = &[
+    0x0066_b0d0,
+    0x0040_37b0,
+    0x0040_37d0,
+    0x0040_37f0,
+    0x0043_2f30,
+    0x0056_53d0,
+    0x0067_4d70,
+    0x004d_9800,
+    0x004d_9670,
+    0x004d_9330,
+    0x0043_31c0,
+    0x005a_e3d0,
+    0x009e_ba00,
+    0x0047_02f0,
+    XE_SLOT_FN,
+];
+
+/// `TESObjectCELL::GetWorldSpace`: none for a cell with bit 4 set, else another word.
+fn xe_world_space(_: &mut Engine, a: &[u32]) -> Ret {
+    ret(if a[0] & 0x10 != 0 { 0 } else { a[0] ^ 0x100 })
+}
+
+/// `BSSimpleList::Remove(&item)`: the first node holding the item unlinked (the head's next moved
+/// into the head), so a walk that starts again ends.
+fn xe_list_remove(e: &mut Engine, a: &[u32]) -> Ret {
+    noted(e, a);
+    let want = e.mem.u32(a[1]);
+    let (mut node, mut previous) = (a[0], 0);
+    while node != 0 {
+        if e.mem.u32(node) == want {
+            let next = e.mem.u32(node + 4);
+            if previous != 0 {
+                e.mem.set_u32(previous + 4, next);
+            } else if next != 0 {
+                e.mem.set_u32(node, e.mem.u32(next));
+                e.mem.set_u32(node + 4, e.mem.u32(next + 4));
+            } else {
+                e.mem.set_u32(node, 0);
+            }
+            break;
+        }
+        previous = node;
+        node = e.mem.u32(node + 4);
+    }
+    ret(0)
+}
+
+/// The part 2 range's stand-ins (`xd_stand_ins` holds them): the counted callees, the world
+/// space, the list remove, the package's two flags and the reference's cell from the setup's words.
+fn xe_stand_ins(e: &mut Engine) {
+    for &addr in XE_NOTED {
+        e.register(addr, noted);
+    }
+    e.register(0x0054_ddd0, xe_world_space);
+    e.register(0x0090_5330, xe_list_remove);
+    e.register(0x0067_4d40, |e, _| ret(e.mem.u32(XE_PACKAGE_FLAGS) & 1));
+    e.register(
+        0x0067_4e40,
+        |e, _| ret(e.mem.u32(XE_PACKAGE_FLAGS) >> 1 & 1),
+    );
+    e.register(XE_CELL_FN, |e, _| ret(e.mem.u32(XE_CELL)));
+}
+
+/// The extra data of `kind` the lookup can answer in the world besides the placed one: the entry the
+/// thread's cache holds for the type (the world's decoy in some seeds), or 0.
+fn xe_cached(e: &mut Engine, kind: u32) -> u32 {
+    let tls = e.tls();
+    e.mem.u32(tls + 0x10 + 4 * kind)
+}
+
+/// The payload word `held` stored in the placed extra data and in the one the cache holds for `kind`.
+fn xe_hold(e: &mut Engine, placed: u32, kind: u32, held: u32) {
+    let cached = xe_cached(e, kind);
+    for x in [placed, cached] {
+        if x != 0 {
+            e.mem.set_u32(x + 0xc, held);
+        }
+    }
+}
+
+/// An object whose every vtable slot is [`XE_SLOT_FN`].
+fn xe_object(e: &mut Engine) -> u32 {
+    let vtable = e.mem.alloc(0x200);
+    for slot in (0..0x200).step_by(4) {
+        e.mem.set_u32(vtable + slot, XE_SLOT_FN);
+    }
+    let object = xd_block(e, 0x40, 0x3c);
+    e.mem.set_u32(object, vtable);
+    object
+}
+
+/// Bytes a byte setter is given: none, one, the top bit, all ones.
+const XE_BYTES: &[u32] = &[0, 1, 0x80, 0xff];
+/// The flag setters' flag.
+const XE_FLAGS: &[u32] = &[0, 1];
+/// The action flags' masks: none, the low bit, a byte's bits, a bit past the byte.
+const XE_MASKS: &[u32] = &[0, 1, 0xfe, 0x100];
+/// An action's flags: 1 (the default), 0, others, a word whose low byte is 1.
+const XE_ACTIONS: &[u32] = &[1, 0, 2, 0xff, 0x101];
+
+/// [`XeShapes::xe_run_once`]'s world: the run-once packages (type 0x1b) of up to five entries,
+/// the third empty in some seeds (five with the third empty in a third of them); the second word a
+/// flag, or the `second`th package of the list (the first one none of it, the fourth and fifth past
+/// the empty item when there is one).
+fn xe_run_once_world(e: &mut Engine, seed: u32, second: u32, flags: bool) -> Vec<u32> {
+    let w = xd_world(e, seed);
+    let x = place_kind(e, &w, seed, 0x1b);
+    let mut d = Draw(seed.wrapping_mul(0x0041_d7b0) ^ 0x7e57);
+    let mut packages = vec![0x4321];
+    {
+        let head = e.mem.alloc(8);
+        let mut node = head;
+        // A third of the seeds hold five entries, the third empty, so a search for a later package
+        // meets the stop.
+        let full = seed % 3 == 2;
+        let n = d.next(5);
+        for i in 0..if full { 5 } else { n } {
+            let entry = if i == 2 && (full || d.next(3) == 0) {
+                0
+            } else {
+                let entry = e.mem.alloc(8);
+                let package = if d.next(4) == 0 {
+                    0
+                } else {
+                    let package = xd_block(e, 0x40, i);
+                    let day = [0u8, 0x10, 0x14, 0x15, 0xf0][d.next(5) as usize];
+                    e.mem.set_u8(package + 0x38 + 3, day);
+                    e.mem
+                        .set_u32(package + 0x38 + 4, [0, 1, 5, u32::MAX][d.next(4) as usize]);
+                    packages.push(package);
+                    package
+                };
+                e.mem.set_u32(entry, package);
+                e.mem.set_u8(entry + 4, [0u8, 1, 0xff][d.next(3) as usize]);
+                entry
+            };
+            if i > 0 {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+            e.mem.set_u32(node, entry);
+        }
+        xe_hold(e, x, 0x1b, head);
+    }
+    let second = if flags {
+        [0, 1, 0xff][second as usize % 3]
+    } else {
+        packages[second as usize % packages.len()]
+    };
+    vec![w.list, second]
+}
+
+/// The part 2 range's test shapes.
+trait XeShapes {
+    fn xe_pair(self, kinds: &'static [u32], first: &'static [u32], second: &'static [u32]) -> Diff;
+    fn xe_owned(self, kind: u32, equal_too: bool) -> Diff;
+    fn xe_start(self, setter: bool) -> Diff;
+    fn xe_start_location(self) -> Diff;
+    fn xe_for_ref(self) -> Diff;
+    fn xe_canopy_set(self) -> Diff;
+    fn xe_canopy_get(self) -> Diff;
+    fn xe_package(self) -> Diff;
+    fn xe_crimes(self) -> Diff;
+    fn xe_scan(self, worn: &'static [u32]) -> Diff;
+    fn xe_run_once(self, flags: bool) -> Diff;
+    fn xe_with_block(self, kind: u32) -> Diff;
+    fn xe_block_and(self, own: u32, values: &'static [u32]) -> Diff;
+    fn xe_terminal_bytes(self) -> Diff;
+}
+
+impl XeShapes for Diff {
+    /// (list, a, b) with an extra data of each of `kinds` placed or not.
+    fn xe_pair(self, kinds: &'static [u32], first: &'static [u32], second: &'static [u32]) -> Diff {
+        self.extra_data_case()
+            .max_cases(EXTRA_SEEDS.len() * first.len() * second.len())
+            .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(first), Input::Of(second)])
+            .setup(move |e, case| {
+                let w = xd_world(e, case.word(0));
+                for &kind in kinds {
+                    place_kind(e, &w, case.word(0), kind);
+                }
+                vec![w.list, case.word(1), case.word(2)]
+            })
+    }
+
+    /// (list, value) for a setter that deletes the object the extra data holds: a placed one holds
+    /// none, an object with a vtable, or (with `equal_too`) the value itself.
+    fn xe_owned(self, kind: u32, equal_too: bool) -> Diff {
+        self.extra_data_case()
+            .max_cases(EXTRA_SEEDS.len() * XD_VALUES.len())
+            .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(XD_VALUES)])
+            .setup(move |e, case| {
+                let w = xd_world(e, case.word(0));
+                let x = place_kind(e, &w, case.word(0), kind);
+                let held = match case.word(0) % 3 {
+                    0 => 0,
+                    2 if equal_too => case.word(1),
+                    _ => xe_object(e),
+                };
+                xe_hold(e, x, kind, held);
+                vec![w.list, case.word(1)]
+            })
+    }
+
+    /// The starting position's rotation or location: (list, out, position) to read, with the three
+    /// words to store for a setter.
+    fn xe_start(self, setter: bool) -> Diff {
+        let picks: &'static [u32] = if setter { &[0, 1, 2] } else { &[0] };
+        self.extra_data_case()
+            .max_cases(EXTRA_SEEDS.len() * picks.len())
+            .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(picks)])
+            .setup(move |e, case| {
+                let w = xd_world(e, case.word(0));
+                place_kind(e, &w, case.word(0), 0x0f);
+                let out = junk(e, 0x10);
+                let position = xd_block(e, 0x10, 0x0f);
+                let mut words = vec![w.list, out, position];
+                if setter {
+                    let k = case.word(1) as usize;
+                    words.extend([XD_WORDS[k], XD_WORDS[k + 1], XD_WORDS[k + 3]]);
+                }
+                words
+            })
+    }
+
+    /// `SetPackageStartLocation`: (list, location form or none, cell or none, a position, a float).
+    fn xe_start_location(self) -> Diff {
+        self.extra_data_case()
+            .max_cases(EXTRA_SEEDS.len() * 4 * XD_FLOATS.len())
+            .inputs(&[
+                Input::Of(EXTRA_SEEDS),
+                Input::Of(&[0, 1, 2, 3]),
+                Input::Of(XD_FLOATS),
+            ])
+            .setup(|e, case| {
+                let w = xd_world(e, case.word(0));
+                place_kind(e, &w, case.word(0), 0x18);
+                let pick = case.word(1);
+                let form = if pick & 1 != 0 { 0x1234 } else { 0 };
+                let cell = if pick & 2 != 0 { 0x5678 } else { 0 };
+                let position = xd_block(e, 0x10, 0x18);
+                vec![w.list, form, cell, position, case.word(2)]
+            })
+    }
+
+    /// `SetStartingWorldOrCellForRef`: a reference whose `TESChildCell` answers no cell, a cell with
+    /// a world space or one without, with an extra data of type 0x49 placed or not.
+    fn xe_for_ref(self) -> Diff {
+        self.extra_data_case()
+            .max_cases(EXTRA_SEEDS.len() * 3)
+            .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(&[0, 0x2000, 0x2010])])
+            .setup(|e, case| {
+                let w = xd_world(e, case.word(0));
+                place_kind(e, &w, case.word(0), 0x49);
+                e.mem.set_u32(XE_CELL, case.word(1));
+                let reference = xe_object(e);
+                let child_vtable = e.mem.alloc(0x10);
+                e.mem.set_u32(child_vtable, XE_CELL_FN);
+                e.mem.set_u32(reference + 0x18, child_vtable);
+                vec![w.list, reference]
+            })
+    }
+
+    /// `SetCanopyShadowMask`: (list, a state, a mask, where the rectangle goes).
+    fn xe_canopy_set(self) -> Diff {
+        self.extra_data_case()
+            .max_cases(EXTRA_SEEDS.len() * 6)
+            .inputs(&[
+                Input::Of(EXTRA_SEEDS),
+                Input::Of(&[0, 1, 0x8000_0000]),
+                Input::Of(&[0, 0x1234]),
+            ])
+            .setup(|e, case| {
+                let w = xd_world(e, case.word(0));
+                place_kind(e, &w, case.word(0), 0x0a);
+                let rect_out = junk(e, 4);
+                vec![w.list, case.word(1), case.word(2), rect_out]
+            })
+    }
+
+    /// The canopy shadow mask's reader: (list, where the mask goes, where the rectangle goes).
+    fn xe_canopy_get(self) -> Diff {
+        self.extra_data_case()
+            .inputs(&[Input::Of(EXTRA_SEEDS)])
+            .setup(|e, case| {
+                let w = xd_world(e, case.word(0));
+                place_kind(e, &w, case.word(0), 0x0a);
+                vec![w.list, junk(e, 4), junk(e, 4)]
+            })
+    }
+
+    /// `SetPackageExtra`: no package, or one created or not, never to run or not, of type 1, 0x17,
+    /// 0x18 or another; the index, target and flags drawn.
+    fn xe_package(self) -> Diff {
+        self.extra_data_case()
+            .max_cases(EXTRA_SEEDS.len() * 6)
+            .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(&[0, 1, 2, 3, 4, 5])])
+            .setup(|e, case| {
+                let seed = case.word(0);
+                let w = xd_world(e, seed);
+                place_kind(e, &w, seed, 0x19);
+                let mut d = Draw(seed.wrapping_mul(0x0041_c930) ^ case.word(1));
+                let package = if case.word(1) == 0 {
+                    0
+                } else {
+                    let package = xd_block(e, 0x40, 0x19);
+                    let kind = [1u8, 0x17, 0x18, 0x42, 0x81][d.next(5) as usize];
+                    e.mem.set_u8(package + 0x20, kind);
+                    package
+                };
+                e.mem.set_u32(XE_PACKAGE_FLAGS, d.next(4));
+                let index = [0, u32::MAX, 7][d.next(3) as usize];
+                let target = XD_VALUES[d.next(5) as usize];
+                let flags = [0, 1, 0xff].map(|_| [0, 1, 0x80][d.next(3) as usize]);
+                vec![w.list, package, index, target, flags[0], flags[1], flags[2]]
+            })
+    }
+
+    /// `RemovePlayerCrimeListExtra`: (list, word) with a crime list of none, or 1 to 3 nodes whose
+    /// items are crimes or an empty one.
+    fn xe_crimes(self) -> Diff {
+        self.extra_data_case()
+            .max_cases(EXTRA_SEEDS.len() * 2)
+            .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(&[0, 0x77])])
+            .setup(|e, case| {
+                let seed = case.word(0);
+                let w = xd_world(e, seed);
+                let x = place_kind(e, &w, seed, 0x35);
+                {
+                    let mut d = Draw(seed ^ 0x0041_cf30);
+                    let n = d.next(4);
+                    let mut next = 0;
+                    for i in 0..n {
+                        let node = e.mem.alloc(8);
+                        let crime = if i == 1 && d.next(2) == 0 {
+                            0
+                        } else {
+                            xd_block(e, 0x20, i)
+                        };
+                        e.mem.set_u32(node, crime);
+                        e.mem.set_u32(node + 4, next);
+                        next = node;
+                    }
+                    xe_hold(e, x, 0x35, next);
+                }
+                vec![w.list, case.word(1)]
+            })
+    }
+
+    /// The two default scans: a list of 0 to 5 extra data of the types they allow, an owner, worn,
+    /// JIP's keyed data and one they do not; JIP's three sites with their handlers in the seeds
+    /// with the head site's.
+    fn xe_scan(self, worn: &'static [u32]) -> Diff {
+        self.extra_data_case()
+            .max_cases(EXTRA_SEEDS.len() * worn.len())
+            .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(worn)])
+            .setup(|e, case| {
+                use engine_core::extend::{Owner, SiteSlot};
+                let seed = case.word(0);
+                let w = xd_world(e, seed);
+                if w.jip >= 2 {
+                    e.on_site(SiteSlot::new(Owner::Jip, 0x0041_d0f6), jip_owned_site);
+                    e.on_site(SiteSlot::new(Owner::Jip, 0x0041_d212), jip_worn_site);
+                    e.on_site(SiteSlot::new(Owner::Jip, 0x0041_d25a), jip_not_worn_site);
+                }
+                const KINDS: [u32; 13] = [
+                    0x0d, 0x1c, 0x20, 0x24, 0x27, 0x2f, 0x30, 0x4a, 0x21, 0x16, 0x21, 0x27, 0x05,
+                ];
+                let mut d = Draw(seed.wrapping_mul(0x0041_d030) ^ 0x5ca7);
+                let list = e.mem.alloc(0x20);
+                e.mem.set_u32(list, 0x0101_43e8);
+                let vt = e.mem.u32(XD_VT);
+                let mut next = 0;
+                for _ in 0..d.next(6) {
+                    // The last one first: a type the scans end at in only a few seeds.
+                    let kind = KINDS[d.next(if seed % 4 == 3 { 13 } else { 12 }) as usize];
+                    let x = extra_data(e, vt, kind, 0);
+                    e.mem.set_u32(x + 8, next);
+                    next = x;
+                }
+                e.mem.set_u32(list + 4, next);
+                vec![list, case.word(1)]
+            })
+    }
+
+    /// The run-once packages: (list, flag or package) with the type 0x1b extra data holding a list
+    /// of 0 to 4 entries (a package or none, a flag byte; the package's time stamp's day and hours
+    /// drawn about the bound) or an empty item; the second word a flag, or a package of the list or
+    /// another.
+    fn xe_run_once(self, flags: bool) -> Diff {
+        self.extra_data_case()
+            .max_cases(EXTRA_SEEDS.len() * 5)
+            .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(&[0, 1, 2, 3, 4])])
+            .setup(move |e, case| xe_run_once_world(e, case.word(0), case.word(1), flags))
+    }
+
+    /// (list, the address of three words) with an extra data of `kind` placed or not.
+    fn xe_with_block(self, kind: u32) -> Diff {
+        self.extra_data_case()
+            .inputs(&[Input::Of(EXTRA_SEEDS)])
+            .setup(move |e, case| {
+                let w = xd_world(e, case.word(0));
+                place_kind(e, &w, case.word(0), kind);
+                vec![w.list, xd_block(e, 0x10, kind)]
+            })
+    }
+
+    /// A constructor's block of junk and a word.
+    fn xe_block_and(self, own: u32, values: &'static [u32]) -> Diff {
+        self.extra_data_case_but(own)
+            .inputs(&[Input::Of(values)])
+            .setup(|e, case| {
+                xd_stand_ins(e);
+                vec![junk(e, 0x20), case.word(0)]
+            })
+    }
+
+    /// A terminal state with each pair of its two bytes.
+    fn xe_terminal_bytes(self) -> Diff {
+        self.extra_data_case()
+            .max_cases(16)
+            .inputs(&[Input::Of(XE_BYTES), Input::Of(XE_BYTES)])
+            .setup(|e, case| {
+                xd_stand_ins(e);
+                let x = junk(e, 0x10);
+                e.mem.set_u8(x + 0xc, case.word(0) as u8);
+                e.mem.set_u8(x + 0xd, case.word(1) as u8);
+                vec![x]
+            })
+    }
+}
+
+/// JIP's handlers at the scans' three sites: noted, the type ends the scan.
+fn jip_owned_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    xd_site_note(e, 0x0041_d0f6, a);
+    Some(1)
+}
+
+fn jip_worn_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    xd_site_note(e, 0x0041_d212, a);
+    Some(1)
+}
+
+fn jip_not_worn_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    xd_site_note(e, 0x0041_d25a, a);
+    Some(1)
+}
+
+#[test]
+fn xe_set_activate_loop_sound() {
+    Diff::new(entry!(
+        0x0041_a6a0,
+        extra_data::setters::set_activate_loop_sound(u32, u32)
+    ))
+    .xd_sound_setter(0x87)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_set_sound() {
+    Diff::new(entry!(
+        0x0041_a800,
+        extra_data::setters::set_sound(u32, u32)
+    ))
+    .xd_sound_setter(0x4f)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_set_ghost() {
+    Diff::new(entry!(
+        0x0041_a960,
+        extra_data::setters::set_ghost(u32, bool)
+    ))
+    .xd_setter(0x1f, XE_FLAGS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_set_worn() {
+    Diff::new(entry!(
+        0x0041_aa20,
+        extra_data::setters::set_worn(u32, bool, bool)
+    ))
+    .xe_pair(&[0x16, 0x17], XE_FLAGS, XE_FLAGS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_set_can_not_wear() {
+    Diff::new(entry!(
+        0x0041_ab70,
+        extra_data::setters::set_can_not_wear(u32, bool)
+    ))
+    .xd_setter(0x3e, XE_FLAGS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_set_seed() {
+    Diff::new(entry!(0x0041_ac30, extra_data::setters::set_seed(u32, u8)))
+        .xd_setter(0x31, XE_BYTES)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_package_start_location() {
+    Diff::new(entry!(
+        0x0041_ad00,
+        extra_data::setters::set_package_start_location(u32, u32, u32, u32, f32)
+    ))
+    .xe_start_location()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_remove_anim_ptr() {
+    Diff::new(entry!(
+        0x0041_adf0,
+        extra_data::setters::remove_anim_ptr(u32)
+    ))
+    .xd_getter(0x10)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_remove_anim_save() {
+    Diff::new(entry!(
+        0x0041_ae10,
+        extra_data::setters::remove_anim_save(u32)
+    ))
+    .xd_getter(0x2d)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_remove_light() {
+    Diff::new(entry!(0x0041_ae30, extra_data::setters::remove_light(u32)))
+        .xd_getter(0x29)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_remove_spell_effect_light() {
+    Diff::new(entry!(
+        0x0041_ae50,
+        extra_data::setters::remove_spell_effect_light(u32)
+    ))
+    .xd_getter(0x40)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_remove_lock_ptr() {
+    Diff::new(entry!(
+        0x0041_ae70,
+        extra_data::setters::remove_lock_ptr(u32)
+    ))
+    .xd_getter(0x2a)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_remove_teleport_ptr() {
+    Diff::new(entry!(
+        0x0041_ae90,
+        extra_data::setters::remove_teleport_ptr(u32)
+    ))
+    .xd_getter(0x2b)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_remove_container_changes() {
+    Diff::new(entry!(
+        0x0041_aeb0,
+        extra_data::setters::remove_container_changes(u32)
+    ))
+    .xd_getter(0x15)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_remove_ownership() {
+    Diff::new(entry!(
+        0x0041_aed0,
+        extra_data::setters::remove_ownership(u32)
+    ))
+    .xd_getter(0x21)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_remove_health() {
+    Diff::new(entry!(0x0041_aef0, extra_data::setters::remove_health(u32)))
+        .xd_getter(0x25)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_remove_count() {
+    Diff::new(entry!(0x0041_af10, extra_data::setters::remove_count(u32)))
+        .xd_getter(0x24)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_remove_poison() {
+    Diff::new(entry!(0x0041_af30, extra_data::setters::remove_poison(u32)))
+        .xd_getter(0x3f)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_remove_script() {
+    Diff::new(entry!(0x0041_af50, extra_data::setters::remove_script(u32)))
+        .xd_getter(0x0d)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_clear_script_locals() {
+    Diff::new(entry!(
+        0x0041_afa0,
+        extra_data::setters::clear_script_locals(u32)
+    ))
+    .xd_getter(0x0d)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_remove_scale() {
+    Diff::new(entry!(0x0041_afd0, extra_data::setters::remove_scale(u32)))
+        .xd_getter(0x30)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_remove_ghost() {
+    Diff::new(entry!(0x0041_aff0, extra_data::setters::remove_ghost(u32)))
+        .xd_getter(0x1f)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_remove_worn() {
+    Diff::new(entry!(
+        0x0041_b010,
+        extra_data::setters::remove_worn(u32, bool)
+    ))
+    .xe_pair(&[0x16, 0x17], XE_FLAGS, &[0])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_remove_can_not_wear() {
+    Diff::new(entry!(
+        0x0041_b040,
+        extra_data::setters::remove_can_not_wear(u32)
+    ))
+    .xd_getter(0x3e)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_remove_package_start_location() {
+    Diff::new(entry!(
+        0x0041_b060,
+        extra_data::setters::remove_package_start_location(u32)
+    ))
+    .xd_getter(0x18)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_starting_rotation() {
+    Diff::new(entry!(0x0041_b080, extra_data::setters::starting_rotation(u32, u32, u32) -> u32))
+        .xe_start(false)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_starting_location() {
+    Diff::new(entry!(0x0041_b0d0, extra_data::setters::starting_location(u32, u32, u32) -> u32))
+        .xe_start(false)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_starting_rotation() {
+    Diff::new(entry!(
+        0x0041_b120,
+        extra_data::setters::set_starting_rotation(u32, u32, u32, u32, u32, u32) -> u32
+    ))
+    .xe_start(true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_set_starting_location() {
+    Diff::new(entry!(
+        0x0041_b180,
+        extra_data::setters::set_starting_location(u32, u32, u32, u32, u32, u32) -> u32
+    ))
+    .xe_start(true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_set_starting_world_or_cell() {
+    Diff::new(entry!(
+        0x0041_b1e0,
+        extra_data::setters::set_starting_world_or_cell(u32, u32)
+    ))
+    .xd_setter(0x49, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_set_starting_world_or_cell_for_ref() {
+    Diff::new(entry!(
+        0x0041_b2a0,
+        extra_data::setters::set_starting_world_or_cell_for_ref(u32, u32)
+    ))
+    .xe_for_ref()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_starting_world_or_cell() {
+    Diff::new(entry!(0x0041_b320, extra_data::setters::starting_world_or_cell(u32) -> u32))
+        .xd_getter(0x49)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_remove_starting_world_or_cell() {
+    Diff::new(entry!(
+        0x0041_b350,
+        extra_data::setters::remove_starting_world_or_cell(u32)
+    ))
+    .xd_getter(0x49)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_action_flags() {
+    Diff::new(entry!(0x0041_b370, extra_data::setters::action_flags(u32) -> u32))
+        .xd_getter(0x0e)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_has_action_flag() {
+    Diff::new(entry!(0x0041_b3a0, extra_data::setters::has_action_flag(u32, u32) -> bool))
+        .xd_setter(0x0e, XE_MASKS)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_action_flags() {
+    Diff::new(entry!(
+        0x0041_b3d0,
+        extra_data::setters::set_action_flags(u32, u32)
+    ))
+    .xd_setter(0x0e, XE_ACTIONS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_add_action_flags() {
+    Diff::new(entry!(
+        0x0041_b440,
+        extra_data::setters::add_action_flags(u32, u32)
+    ))
+    .xd_setter(0x0e, XE_MASKS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_remove_action_flags() {
+    Diff::new(entry!(
+        0x0041_b470,
+        extra_data::setters::remove_action_flags(u32, u32)
+    ))
+    .xd_setter(0x0e, XE_MASKS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_set_action_ref() {
+    Diff::new(entry!(
+        0x0041_b4b0,
+        extra_data::setters::set_action_ref(u32, u32)
+    ))
+    .xd_setter(0x0e, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_action_ref() {
+    Diff::new(entry!(0x0041_b520, extra_data::setters::action_ref(u32) -> u32))
+        .xd_getter(0x0e)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_health_perc() {
+    Diff::new(entry!(0x0041_b550, extra_data::setters::health_perc(u32) -> f32))
+        .xd_getter(0x7a)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_health_perc() {
+    Diff::new(entry!(
+        0x0041_b580,
+        extra_data::setters::set_health_perc(u32, f32)
+    ))
+    .xd_setter(0x7a, XD_FLOATS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_health_perc_new() {
+    Diff::new(entry!(0x0041_b650, extra_data::setters::health_perc_new(u32) -> u32))
+        .xd_on_block(0x20, 0x0041_b650)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_health_perc_delete() {
+    Diff::new(entry!(0x0041_b680, extra_data::setters::health_perc_delete(u32, u32) -> u32))
+        .xd_data_delete()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_object_health() {
+    Diff::new(entry!(0x0041_b6b0, extra_data::setters::object_health(u32) -> f32))
+        .xd_getter(0x56)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_object_health() {
+    Diff::new(entry!(
+        0x0041_b6e0,
+        extra_data::setters::set_object_health(u32, f32)
+    ))
+    .xd_setter(0x56, XD_FLOATS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_object_health_new() {
+    Diff::new(entry!(0x0041_b790, extra_data::setters::object_health_new(u32, f32) -> u32))
+        .xe_block_and(0x0041_b790, XD_FLOATS)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_remove_object_health() {
+    Diff::new(entry!(
+        0x0041_b7c0,
+        extra_data::setters::remove_object_health(u32)
+    ))
+    .xd_getter(0x56)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_set_cell_3d() {
+    Diff::new(entry!(
+        0x0041_b7e0,
+        extra_data::cell_data::set_cell_3d(u32, u32)
+    ))
+    .xd_setter(0x02, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_set_havok_world() {
+    Diff::new(entry!(
+        0x0041_b8d0,
+        extra_data::cell_data::set_havok_world(u32, u32)
+    ))
+    .xd_setter(0x01, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_havok_world() {
+    Diff::new(entry!(0x0041_b9a0, extra_data::cell_data::havok_world(u32) -> u32))
+        .xd_getter(0x01)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_cell_mopp() {
+    Diff::new(entry!(
+        0x0041_ba60,
+        extra_data::cell_data::set_cell_mopp(u32, u32)
+    ))
+    .xd_setter(0x01, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_cell_mopp() {
+    Diff::new(entry!(0x0041_bb10, extra_data::cell_data::cell_mopp(u32) -> u32))
+        .xd_getter(0x01)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_region_list() {
+    Diff::new(entry!(
+        0x0041_bbd0,
+        extra_data::cell_data::set_region_list(u32, u32)
+    ))
+    .xe_owned(0x04, true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_region_list() {
+    Diff::new(entry!(0x0041_bce0, extra_data::cell_data::region_list(u32) -> u32))
+        .xd_getter(0x04)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_music_type() {
+    Diff::new(entry!(
+        0x0041_bd10,
+        extra_data::cell_data::set_music_type(u32, u32)
+    ))
+    .xd_setter(0x07, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_music_type() {
+    Diff::new(entry!(0x0041_bde0, extra_data::cell_data::music_type(u32) -> u32))
+        .xd_getter(0x07)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_terminal_state() {
+    Diff::new(entry!(
+        0x0041_be10,
+        extra_data::cell_data::set_terminal_state(u32, u8)
+    ))
+    .xd_setter(0x50, XE_BYTES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_terminal_state_new() {
+    Diff::new(entry!(0x0041_bef0, extra_data::cell_data::terminal_state_new(u32) -> u32))
+        .xd_on_block(0x20, 0x0041_bef0)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_terminal_state_empty() {
+    Diff::new(entry!(0x0041_bf20, extra_data::cell_data::terminal_state_empty(u32) -> bool))
+        .xe_terminal_bytes()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_terminal_state() {
+    Diff::new(entry!(0x0041_bf50, extra_data::cell_data::terminal_state(u32) -> u8))
+        .xd_getter(0x50)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_lock_override() {
+    Diff::new(entry!(
+        0x0041_bf80,
+        extra_data::cell_data::set_lock_override(u32, u8)
+    ))
+    .xd_setter(0x50, XE_BYTES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_lock_override() {
+    Diff::new(entry!(0x0041_c060, extra_data::cell_data::lock_override(u32) -> u8))
+        .xd_getter(0x50)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_acoustic_space() {
+    Diff::new(entry!(
+        0x0041_c090,
+        extra_data::cell_data::set_acoustic_space(u32, u32)
+    ))
+    .xd_setter(0x81, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_acoustic_space() {
+    Diff::new(entry!(0x0041_c160, extra_data::cell_data::acoustic_space(u32) -> u32))
+        .xd_getter(0x81)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_climate() {
+    Diff::new(entry!(
+        0x0041_c190,
+        extra_data::cell_data::set_climate(u32, u32)
+    ))
+    .xd_setter(0x08, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_climate() {
+    Diff::new(entry!(0x0041_c260, extra_data::cell_data::climate(u32) -> u32))
+        .xd_getter(0x08)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_image_space() {
+    Diff::new(entry!(
+        0x0041_c290,
+        extra_data::cell_data::set_image_space(u32, u32)
+    ))
+    .xd_setter(0x59, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_image_space() {
+    Diff::new(entry!(0x0041_c360, extra_data::cell_data::image_space(u32) -> u32))
+        .xd_getter(0x59)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_impact_swap() {
+    Diff::new(entry!(
+        0x0041_c390,
+        extra_data::cell_data::set_impact_swap(u32, u32)
+    ))
+    .xd_setter(0x8c, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_impact_swap() {
+    Diff::new(entry!(0x0041_c460, extra_data::cell_data::impact_swap(u32) -> u32))
+        .xd_getter(0x8c)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_canopy_shadow_mask() {
+    Diff::new(entry!(
+        0x0041_c490,
+        extra_data::cell_data::set_canopy_shadow_mask(u32, u32, u32, u32)
+    ))
+    .xe_canopy_set()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_canopy_shadow_mask() {
+    Diff::new(entry!(0x0041_c580, extra_data::cell_data::canopy_shadow_mask(u32, u32, u32) -> u32))
+        .xe_canopy_get()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_editor_id_new() {
+    Diff::new(entry!(0x0041_c5e0, extra_data::cell_data::editor_id_new(u32, u32) -> u32))
+        .xe_block_and(0x0041_c5e0, XD_VALUES)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_editor_id_delete() {
+    Diff::new(entry!(0x0041_c660, extra_data::cell_data::editor_id_delete(u32, u32) -> u32))
+        .xd_data_delete()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_editor_id_drop() {
+    Diff::new(entry!(
+        0x0041_c690,
+        extra_data::cell_data::editor_id_drop(u32)
+    ))
+    .xd_on_block(0x20, 0x0041_c690)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_set_editor_id() {
+    Diff::new(entry!(
+        0x0041_c6f0,
+        extra_data::cell_data::set_editor_id(u32, u32)
+    ))
+    .xd_setter(0x06, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_editor_id_text() {
+    Diff::new(entry!(0x0041_c7c0, extra_data::cell_data::editor_id_text(u32) -> u32))
+        .xd_getter(0x06)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_reference_pointer() {
+    Diff::new(entry!(
+        0x0041_c7f0,
+        extra_data::cell_data::set_reference_pointer(u32, u32)
+    ))
+    .xd_setter(0x1c, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_reference_pointer() {
+    Diff::new(entry!(0x0041_c8d0, extra_data::cell_data::reference_pointer(u32) -> u32))
+        .xd_getter(0x1c)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_remove_reference_pointer() {
+    Diff::new(entry!(
+        0x0041_c900,
+        extra_data::cell_data::remove_reference_pointer(u32)
+    ))
+    .xd_getter(0x1c)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_set_package() {
+    Diff::new(entry!(
+        0x0041_c930,
+        extra_data::packages::set_package(u32, u32, i32, u32, u8, u8, u8)
+    ))
+    .xe_package()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_set_package_target() {
+    Diff::new(entry!(
+        0x0041_cab0,
+        extra_data::packages::set_package_target(u32, u32)
+    ))
+    .xd_setter(0x19, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_set_package_index() {
+    Diff::new(entry!(
+        0x0041_cae0,
+        extra_data::packages::set_package_index(u32, i32)
+    ))
+    .xd_setter(0x19, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_package() {
+    Diff::new(entry!(0x0041_cb10, extra_data::packages::package(u32) -> u32))
+        .xd_getter(0x19)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_package_index() {
+    Diff::new(entry!(0x0041_cb40, extra_data::packages::package_index(u32) -> i32))
+        .xd_getter(0x19)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_package_action_complete() {
+    Diff::new(entry!(0x0041_cba0, extra_data::packages::package_action_complete(u32) -> u8))
+        .xd_getter(0x19)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_package_action_complete() {
+    Diff::new(entry!(
+        0x0041_cbd0,
+        extra_data::packages::set_package_action_complete(u32, u8)
+    ))
+    .xd_setter(0x19, XE_BYTES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_package_activated() {
+    Diff::new(entry!(0x0041_cc00, extra_data::packages::package_activated(u32) -> u8))
+        .xd_getter(0x19)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_package_done_once() {
+    Diff::new(entry!(0x0041_cc30, extra_data::packages::package_done_once(u32) -> u8))
+        .xd_getter(0x19)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_remove_package() {
+    Diff::new(entry!(
+        0x0041_cc60,
+        extra_data::packages::remove_package(u32)
+    ))
+    .xd_getter(0x19)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_set_trespass_package() {
+    Diff::new(entry!(
+        0x0041_cc90,
+        extra_data::packages::set_trespass_package(u32, u32)
+    ))
+    .xe_owned(0x1a, false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_trespass_package() {
+    Diff::new(entry!(0x0041_cd70, extra_data::packages::trespass_package(u32) -> u32))
+        .xd_getter(0x1a)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_remove_trespass_package() {
+    Diff::new(entry!(
+        0x0041_cda0,
+        extra_data::packages::remove_trespass_package(u32)
+    ))
+    .xd_getter(0x1a)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_forget_trespass_package() {
+    Diff::new(entry!(
+        0x0041_ce10,
+        extra_data::packages::forget_trespass_package(u32, u32)
+    ))
+    .xd_setter(0x1a, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_add_to_player_crime_list() {
+    Diff::new(entry!(
+        0x0041_ce50,
+        extra_data::packages::add_to_player_crime_list(u32, u32)
+    ))
+    .xd_setter(0x35, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_player_crime_list() {
+    Diff::new(entry!(0x0041_cf00, extra_data::packages::player_crime_list(u32) -> u32))
+        .xd_getter(0x35)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_remove_player_crime_list() {
+    Diff::new(entry!(
+        0x0041_cf30,
+        extra_data::packages::remove_player_crime_list(u32, u32)
+    ))
+    .xe_crimes()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_remove_leveled_item() {
+    Diff::new(entry!(
+        0x0041_d000,
+        extra_data::packages::remove_leveled_item(u32)
+    ))
+    .xd_getter(0x2f)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_only_owner_defaults() {
+    Diff::new(entry!(0x0041_d030, extra_data::packages::only_owner_defaults(u32) -> bool))
+        .xe_scan(&[0])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_is_default_for_container() {
+    Diff::new(entry!(0x0041_d120, extra_data::packages::is_default_for_container(u32, u8) -> bool))
+        .xe_scan(&[0, 1, 2])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_leveled_item_index() {
+    Diff::new(entry!(
+        0x0041_d280,
+        extra_data::packages::set_leveled_item_index(u32, i32)
+    ))
+    .xd_setter(0x2f, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_set_leveled_item_default() {
+    Diff::new(entry!(
+        0x0041_d330,
+        extra_data::packages::set_leveled_item_default(u32, u8)
+    ))
+    .xd_setter(0x2f, XE_BYTES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_leveled_item_index() {
+    Diff::new(entry!(0x0041_d360, extra_data::packages::leveled_item_index(u32) -> i32))
+        .xd_getter(0x2f)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_persistent_cell() {
+    Diff::new(entry!(
+        0x0041_d390,
+        extra_data::packages::set_persistent_cell(u32, u32)
+    ))
+    .xd_setter(0x0c, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_persistent_cell() {
+    Diff::new(entry!(0x0041_d460, extra_data::packages::persistent_cell(u32) -> u32))
+        .xd_getter(0x0c)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_rag_doll_data() {
+    Diff::new(entry!(
+        0x0041_d490,
+        extra_data::packages::set_rag_doll_data(u32, u32)
+    ))
+    .xd_setter(0x14, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_set_rag_doll_data_from_copy() {
+    Diff::new(entry!(
+        0x0041_d5b0,
+        extra_data::packages::set_rag_doll_data_from_copy(u32, u32)
+    ))
+    .xd_setter(0x14, XD_VALUES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_rag_doll_data() {
+    Diff::new(entry!(0x0041_d6d0, extra_data::packages::rag_doll_data(u32) -> u32))
+        .xd_getter(0x14)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_add_run_once_package() {
+    Diff::new(entry!(
+        0x0041_d700,
+        extra_data::packages::add_run_once_package(u32, u32, u8)
+    ))
+    .xe_pair(&[0x1b], XD_VALUES, XE_BYTES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_prune_run_once_packages() {
+    Diff::new(entry!(
+        0x0041_d7b0,
+        extra_data::packages::prune_run_once_packages(u32, i8)
+    ))
+    .xe_run_once(true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_package_time_stamp() {
+    Diff::new(entry!(0x0041_d8a0, extra_data::packages::package_time_stamp(u32) -> u32))
+        .xd_on_pattern(0x40, 0x0041_d8a0)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_is_in_run_once_packages() {
+    Diff::new(entry!(0x0041_d8c0, extra_data::packages::is_in_run_once_packages(u32, u32) -> bool))
+        .xe_run_once(false)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_remove_run_once_packages() {
+    Diff::new(entry!(
+        0x0041_d930,
+        extra_data::packages::remove_run_once_packages(u32)
+    ))
+    .xd_getter(0x1b)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_set_land_normal() {
+    Diff::new(entry!(
+        0x0041_d950,
+        extra_data::packages::set_land_normal(u32, u32)
+    ))
+    .xe_with_block(0x13)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xe_enable_state_parent() {
+    Diff::new(entry!(0x0041_da10, extra_data::packages::enable_state_parent(u32) -> u32))
+        .xd_getter(0x37)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xe_set_enable_state_parent() {
+    Diff::new(entry!(
+        0x0041_da40,
+        extra_data::packages::set_enable_state_parent(u32, u32)
+    ))
+    .xd_setter(0x37, XD_VALUES)
+    .run()
+    .assert_same();
 }
