@@ -299,36 +299,6 @@ impl Host {
         // in a launcher's play run, Fallout.ini's `[nv-rs Display] bShowFrameRate`; off by default).
         // F11 in the game shows or hides it either way.
         engine_platform::d3d9real::want_frame_rate(choice.show_frame_rate);
-        // The new lighting (`fixes::Choice::ambient_occlusion`: `NV_AO`; else, in a launcher's play
-        // run, Fallout.ini's `[nv-rs Display] bAmbientOcclusion`; off by default), at its strength
-        // (`fAmbientOcclusionStrength`, `NV_AO_STRENGTH`). Off: nothing is installed, read or
-        // recorded.
-        // One reader for both: with the sun shadows on, the sun is the sun light the lit shaders
-        // take (the ambient occlusion's contact shadows follow it too); off, the sun disc's place,
-        // as before.
-        let reader: fn(&engine_platform::Engine) -> Option<engine_platform::d3d9real::SceneView> =
-            if choice.sun_shadows {
-                scene_light::read_lit
-            } else {
-                scene_light::read
-            };
-        if choice.ambient_occlusion {
-            engine_platform::d3d9real::want_scene_light(reader, choice.ambient_occlusion_strength);
-            eprintln!(
-                "nv-rs: new lighting on (ambient occlusion at strength {}; Vulkan only)",
-                choice.ambient_occlusion_strength
-            );
-        }
-        // The sun shadows (`fixes::Choice::sun_shadows`: `NV_SUN_SHADOWS`; else, in a launcher's play
-        // run, Fallout.ini's `[nv-rs Display] bSunShadows`; off by default). Off: nothing is
-        // installed, read or recorded.
-        if choice.sun_shadows {
-            // Characters cast too (`bSunShadowsCharacters` / `NV_SUN_SHADOWS_CHARACTERS`, on by
-            // default), in place of the game's own actor shadows: set before the device is made.
-            d3d9_wgpu::sun_shadow::enable_characters(choice.sun_shadow_characters);
-            engine_platform::d3d9real::want_sun_shadows(reader);
-            eprintln!("nv-rs: sun shadows on (Vulkan only; in the game's lighting, or the engineers' overlay with NV_SUN_SHADOWS=debug); characters cast: {} (bSunShadowsCharacters)", choice.sun_shadow_characters);
-        }
         // Who draws (`fixes::Choice::renderer`: in a launcher's play run, Fallout.ini's
         // `[nv-rs Display] sRenderer`, Vulkan by default); `NV_D3D9`, when it names a backend,
         // decides instead. A test or script without `NV_D3D9` makes no choice: nothing draws.
@@ -342,21 +312,8 @@ impl Host {
         // From here the run's renderer is chosen: the display part of the machine table may be
         // made ([`display_table_text`] refuses before).
         RENDERER_CHOSEN.store(true, std::sync::atomic::Ordering::Relaxed);
-        // The sun light from the sky's discs (`fixes::Choice::light_from_sky`: with the sun shadows
-        // on, `bSunLightFromSky` / `NV_SUN_LIGHT_FROM_SKY`, on by default): the game's sun light is
-        // turned to come from the sun disc by day and the moon by night, so the lit sides, the game's
-        // actor shadows and the sun shadows agree with the sky. Only where the sun shadows draw
-        // (Vulkan, `NV_D3D9` naming wgpu or the play default): with the real Direct3D 9 drawing, the
-        // new lighting is off and the game's light stays the exe's ([`light_from_sky_wanted`]); and
-        // each frame only while wgpu still draws (`wgpu_draws`: false once the real Direct3D 9 took
-        // over at the device's making, when no sun shadows are drawn).
-        if light_from_sky_wanted(choice, engine_platform::d3d9real::backends()) {
-            engine::sky_sun::want_light_from_sky(
-                &mut engine,
-                engine_platform::d3d9real::wgpu_draws,
-            );
-            eprintln!("nv-rs: the sun light comes from the sun and moon discs (bSunLightFromSky)");
-        }
+        // The new lighting ([`want_new_lighting`]): set now the renderer is chosen.
+        want_new_lighting(&mut engine, choice, engine_platform::d3d9real::backends());
         // `NV_SOUND=out`: the game's sound on the player's default device, from when the game
         // makes its DirectSound device on; `NV_SOUND_RECORD=FILE.wav` also records what goes
         // to the device, with a log of what started when (`FILE.log`). Off by default.
@@ -1086,14 +1043,86 @@ fn sound_choice(sound: Option<&str>, record: bool, hidden: bool) -> SoundChoice 
     }
 }
 
-/// Whether the sun light from the sky's discs is installed (`sun::LightFromSky`): the choice says so
-/// (`fixes::Choice::light_from_sky`: the sun shadows on and `bSunLightFromSky` on) and wgpu alone is
-/// asked to draw (`backends`, `engine_platform::d3d9real::backends`). Anything else: the exe's light.
+/// The new lighting, once the renderer is chosen (`backends`, `engine_platform::d3d9real::backends`):
+/// the ambient occlusion (`fixes::Choice::ambient_occlusion`: `NV_AO`; else, in a launcher's play
+/// run, Fallout.ini's `[nv-rs Display] bAmbientOcclusion`; off by default) at its strength
+/// (`fAmbientOcclusionStrength`, `NV_AO_STRENGTH`), and the sun shadows
+/// (`fixes::Choice::sun_shadows`: `NV_SUN_SHADOWS`; else `bSunShadows`; off by default), characters
+/// casting too (`bSunShadowsCharacters`, on by default, in place of the game's own actor shadows).
+///
+/// Where wgpu alone draws (Vulkan, `NV_D3D9` naming wgpu or the play default) the player can switch
+/// them while playing (Shift+F11, `engine_platform::d3d9real::want_lighting_switch`): the choice is
+/// the start, and both are installed whatever it is; a frame with both off records nothing for
+/// them, so it is what it was. The sun light from the sky's discs (`bSunLightFromSky`, on by
+/// default; [`light_from_sky_wanted`]) turns the game's sun light to come from the sun disc by day
+/// and the moon by night while the sun shadows draw (`sun_shadows_drawn`, asked each frame: the
+/// shadows on and wgpu still drawing, false once the real Direct3D 9 took over at the device's
+/// making), so the lit sides, the game's actor shadows and the sun shadows agree with the sky.
+///
+/// Anywhere else (the real Direct3D 9, which draws neither, or no backend: a test or script) they
+/// are as the choice says from the start, and installed only when on: off, nothing is installed,
+/// read or recorded, and the game's light is the exe's.
+fn want_new_lighting(
+    engine: &mut Engine,
+    choice: &fixes::Choice,
+    backends: Option<engine_platform::d3d9real::Backends>,
+) {
+    use engine_platform::d3d9real as real;
+    // Set before the device is made.
+    d3d9_wgpu::sun_shadow::enable_characters(choice.sun_shadow_characters);
+    if backends == Some(real::Backends::Wgpu) {
+        let start = d3d9_wgpu::scene_light::Parts {
+            ambient_occlusion: choice.ambient_occlusion,
+            sun_shadows: choice.sun_shadows,
+        };
+        real::want_lighting_switch(
+            scene_light::read_now,
+            start,
+            choice.ambient_occlusion_strength,
+        );
+        eprintln!(
+            "nv-rs: new lighting: ambient occlusion {} (strength {}), sun shadows {} (characters cast: {}); Shift+F11 switches them in the game",
+            if start.ambient_occlusion { "on" } else { "off" },
+            choice.ambient_occlusion_strength,
+            if start.sun_shadows { "on" } else { "off" },
+            choice.sun_shadow_characters,
+        );
+        if light_from_sky_wanted(choice, backends) {
+            engine::sky_sun::want_light_from_sky(engine, real::sun_shadows_drawn);
+            eprintln!("nv-rs: the sun light comes from the sun and moon discs while the sun shadows are on (bSunLightFromSky)");
+        }
+        return;
+    }
+    // One reader for both: with the sun shadows on, the sun is the sun light the lit shaders take;
+    // off, the sun disc's place, as before.
+    let reader: fn(&engine_platform::Engine) -> Option<real::SceneView> = if choice.sun_shadows {
+        scene_light::read_lit
+    } else {
+        scene_light::read
+    };
+    if choice.ambient_occlusion {
+        real::want_scene_light(reader, choice.ambient_occlusion_strength);
+        eprintln!(
+            "nv-rs: new lighting on (ambient occlusion at strength {}; Vulkan only)",
+            choice.ambient_occlusion_strength
+        );
+    }
+    if choice.sun_shadows {
+        real::want_sun_shadows(reader);
+        eprintln!("nv-rs: sun shadows on (Vulkan only; in the game's lighting, or the engineers' overlay with NV_SUN_SHADOWS=debug); characters cast: {} (bSunShadowsCharacters)", choice.sun_shadow_characters);
+    }
+}
+
+/// Whether the sun light from the sky's discs is installed (`sun::LightFromSky`): `bSunLightFromSky`
+/// is on (`fixes::Choice::sun_light_from_sky`) and wgpu alone is asked to draw (`backends`,
+/// `engine_platform::d3d9real::backends`), where the sun shadows can be on (from the start or by the
+/// player's switch); the light then turns only while they draw ([`want_new_lighting`]). Anything
+/// else: the exe's light.
 fn light_from_sky_wanted(
     choice: &fixes::Choice,
     backends: Option<engine_platform::d3d9real::Backends>,
 ) -> bool {
-    choice.light_from_sky() && backends == Some(engine_platform::d3d9real::Backends::Wgpu)
+    choice.sun_light_from_sky && backends == Some(engine_platform::d3d9real::Backends::Wgpu)
 }
 
 /// Windows' pointer speed for the game's registry read, into `slot` (the kernel's
@@ -1201,16 +1230,17 @@ mod tests {
         assert_eq!(slot, Some(PointerSpeed::Missing(2)));
     }
 
-    /// The light from the sky is installed only with the sun shadows on, the key on and wgpu alone
-    /// drawing: with the default choice, the sun shadows off (key on), the key off, the real
-    /// Direct3D 9, both, or no backend, nothing is installed and the game's light is the exe's.
+    /// The light from the sky is installed only with the key on and wgpu alone drawing, whether
+    /// the sun shadows start on or not (the player can switch them on; the light turns only while
+    /// they draw): with the key off, the real Direct3D 9, both, or no backend, nothing is installed
+    /// and the game's light is the exe's.
     #[test]
-    fn the_light_from_the_sky_is_installed_only_with_the_sun_shadows_on_wgpu() {
+    fn the_light_from_the_sky_is_installed_only_on_wgpu() {
         use engine_platform::d3d9real::Backends;
         let wgpu = Some(Backends::Wgpu);
         let mut choice = super::fixes::Choice::vanilla();
         assert!(choice.sun_light_from_sky && !choice.sun_shadows);
-        assert!(!super::light_from_sky_wanted(&choice, wgpu));
+        assert!(super::light_from_sky_wanted(&choice, wgpu), "switchable");
         choice.sun_shadows = true;
         assert!(super::light_from_sky_wanted(&choice, wgpu));
         for other in [Some(Backends::Real), Some(Backends::RealAndWgpu), None] {

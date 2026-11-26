@@ -1,7 +1,7 @@
 //! The extra data list's save writer (`00412970`; its Xbox name is not in the map): under the extra
 //! data lock, each extra data of a type that is saved adds the chunk or chunks `ExtraDataList::Load`
-//! ([`super::load`]) reads back, through the form writer's adders (`TESForm::AddChunk...`, by
-//! address). Forms go as their form ids (`0084e3a0`, in place); records the game keeps in memory are
+//! ([`super::load`]) reads back, through the form writer's adders (`TESForm::AddChunk...`, the forms
+//! family's, as typed calls). Forms go as their form ids (`0084e3a0`, in place); records the game keeps in memory are
 //! copied to a local record, byte-swapped around the add when the target is big-endian (the flag at
 //! `011c54ba`, read in place; never set in the PC build).
 
@@ -10,17 +10,10 @@ use super::{
     EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE, OPERATOR_NEW, SIMPLE_LIST_NEW,
 };
 use crate::crt::low_word;
-use crate::{cell_refs, crt, pathing};
+use crate::{cell_refs, crt, forms, pathing};
 use engine_core::x87::x87_quiet_bits;
 use engine_core::{args, typed_call, Engine, Ptr};
 
-/// The form writer's adders: one word, one byte, nothing, `size` bytes, `count` words, raw bytes.
-const ADD_CHUNK_WORD: u32 = 0x0048_5910;
-const ADD_CHUNK_BYTE: u32 = 0x0048_58f0;
-const ADD_CHUNK_EMPTY: u32 = 0x0048_56d0;
-const ADD_CHUNK_DATA: u32 = 0x0048_5990;
-const ADD_CHUNK_ARRAY: u32 = 0x0048_5710;
-const ADD_CHUNK_ARRAY_RAW: u32 = 0x0048_56f0;
 /// The save writer's "target is big-endian" byte (`00401500`'s `MOV AL,[0x011c54ba]`).
 const BIG_ENDIAN: u32 = 0x011c_54ba;
 /// The byte swaps of other units: a word, the word at +4, two words.
@@ -68,17 +61,29 @@ fn list_empty(e: &Engine, list: u32) -> bool {
 
 /// One word for `tag`.
 fn put_word(e: &mut Engine, tag: u32, value: u32) {
-    e.call(ADD_CHUNK_WORD, &args![tag, value]);
+    typed_call!(
+        forms::FAMILY,
+        0x0048_5910,
+        forms::tesform::add_chunk_word(e, tag, value)
+    );
 }
 
 /// One byte for `tag`.
 fn put_byte(e: &mut Engine, tag: u32, value: u8) {
-    e.call(ADD_CHUNK_BYTE, &args![tag, value]);
+    typed_call!(
+        forms::FAMILY,
+        0x0048_58f0,
+        forms::tesform::add_chunk_byte(e, tag, u32::from(value))
+    );
 }
 
 /// `tag` with no data.
 fn put_empty(e: &mut Engine, tag: u32) {
-    e.call(ADD_CHUNK_EMPTY, &args![tag]);
+    typed_call!(
+        forms::FAMILY,
+        0x0048_56d0,
+        forms::tesform::add_chunk(e, tag)
+    );
 }
 
 /// The form id of `form` for `tag`.
@@ -99,7 +104,11 @@ fn put_swapped(e: &mut Engine, tag: u32, data: u32, size: u32, swap: fn(&mut Eng
     if big_endian(e) {
         swap(e, data);
     }
-    e.call(ADD_CHUNK_DATA, &args![tag, data, size]);
+    typed_call!(
+        forms::FAMILY,
+        0x0048_5990,
+        forms::tesform::add_chunk_data(e, tag, data, size)
+    );
     if big_endian(e) {
         swap(e, data);
     }
@@ -190,7 +199,11 @@ fn save_one(e: &mut Engine, list: u32, extra: u32, kind: u8) {
         0x13 => e.with_stack(12, |e, record| {
             let at = record.addr();
             copy_bytes(e, extra.wrapping_add(EXTRA_PAYLOAD), at, 12);
-            e.call(ADD_CHUNK_ARRAY, &args![tag(b"XLOD"), at, 3u32]);
+            typed_call!(
+                forms::FAMILY,
+                0x0048_5710,
+                forms::tesform::add_chunk_array_words(e, tag(b"XLOD"), at, 3u32)
+            );
         }),
         0x14 => {
             e.call(RAGDOLL_DATA_SAVE, &args![value]);
@@ -333,7 +346,11 @@ fn save_one(e: &mut Engine, list: u32, extra: u32, kind: u8) {
             if big_endian(e) {
                 swap_word(e, value);
             }
-            e.call(ADD_CHUNK_DATA, &args![tag(b"XTRI"), value, 4u32]);
+            typed_call!(
+                forms::FAMILY,
+                0x0048_5990,
+                forms::tesform::add_chunk_data(e, tag(b"XTRI"), value, 4u32)
+            );
             if big_endian(e) {
                 swap_word(e, value);
             }
@@ -427,7 +444,11 @@ fn save_regions(e: &mut Engine, regions: u32) {
         index += 1;
         node = word_at(e, node, 4);
     }
-    e.call(ADD_CHUNK_ARRAY, &args![tag(b"XCLR"), buffer, count]);
+    typed_call!(
+        forms::FAMILY,
+        0x0048_5710,
+        forms::tesform::add_chunk_array_words(e, tag(b"XCLR"), buffer, count)
+    );
     e.call(OPERATOR_DELETE, &args![buffer]);
 }
 
@@ -563,7 +584,11 @@ fn save_activate_ref(e: &mut Engine, list: u32, extra: u32) {
                 let size = length.wrapping_add(1);
                 let second = e.call(GET_ACTIVATE_TEXT, &args![list, second]).u32();
                 let characters = read_word(e, second);
-                e.call(ADD_CHUNK_ARRAY_RAW, &args![tag(b"XATO"), characters, size]);
+                typed_call!(
+                    forms::FAMILY,
+                    0x0048_56f0,
+                    forms::tesform::add_chunk_array(e, tag(b"XATO"), characters, size)
+                );
                 e.call(STRING_DESTROY, &args![second]);
                 e.call(STRING_DESTROY, &args![first]);
             });

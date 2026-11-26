@@ -21,13 +21,22 @@
 //!   attribute bytes' record data, initialisation, copy, compare, getter and setter, their save
 //!   game functions, and `TESBipedModelForm`'s constructor and destructor with `TESModelRDT`'s
 //!   constructor.
+//! - [`ai_form`]: every function of `TESAIForm`'s unit (the component at +0x90 of `TESNPC` and
+//!   `TESCreature`) and its save buffer functions in the unit after it: the constructor and
+//!   destructor, the AI data's getters and setters, the record data, the copy and compare, the
+//!   package list's calls (`InitItem`, `GetCurrentPackage`, `GetMissedPackages`), the services an
+//!   actor sells and buys, the save game functions.
+//! - [`animation`]: `TESAnimation`'s functions (the component at +0xc4 of the actor base forms, in
+//!   the unit after `TESAIForm`'s): the constructor and destructor, the KF file names' list, its
+//!   chunk, its copy and compare.
 //!
 //! Reached: each function stays registered at its exe address, so the translations' calls by
 //! address and the vtable slots that hold them (`TESForm`'s vtable `0101c794` and the form classes
 //! that keep its slots) reach the typed functions; between them the calls are typed calls. The
 //! translations that called one of them as a plain Rust function (in `tesform.rs`,
-//! `tesactorbasedata.rs`, `tesactorbase.rs`, `tesattributes.rs` and `run_004801e0.rs` themselves)
-//! call it by address now, so the game reaches the typed function from there too.
+//! `tesactorbasedata.rs`, `tesactorbase.rs`, `tesattributes.rs`, `run_004801e0.rs`, `tesaiform.rs`
+//! and `run_0047f940.rs` themselves) call it by address now, so the game reaches the typed function
+//! from there too.
 //!
 //! Native: the one-line bodies the exe calls (the form type, its flag tests, the byte swaps, the
 //! files' and save buffers' fields, the components' accessors) are done in place, the leaves', the
@@ -58,13 +67,17 @@
 //! `x87::fistp_chop` where the exe's `FISTP` runs under the truncating control word it sets (the
 //! loaded quality, the armour's base rating, the statistics' fields). The components' weight and
 //! quality are only moved (a getter's `ST0` stored as the `f32` the exe stores, a quality byte
-//! widened exactly); each module comment says how its own floats are done.
+//! widened exactly), and so are the AI form's copied settings and package query floats (through
+//! the exe's `FLD`/`FSTP`, which quiets a signalling NaN); each module comment says how its own
+//! floats are done.
 
 use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 
 pub mod actor_base;
 pub mod actor_base_data;
+pub mod ai_form;
+pub mod animation;
 pub mod attributes;
 pub mod tesform;
 
@@ -302,6 +315,51 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005f_20a0, actor_base::reset_3d(u32, u8)),
         entry!(0x005f_2150, actor_base::construct_reset_3d_iterator(u32) -> u32),
         entry!(0x005f_2170, actor_base::reset_3d_operate(u32, u32)),
+        entry!(0x0047_ede0, ai_form::clear_data_component(u32)),
+        entry!(0x0047_ee00, ai_form::set_aggression(u32, u8, u8)),
+        entry!(0x0047_eed0, ai_form::set_confidence(u32, u8, u8)),
+        entry!(0x0047_ef00, ai_form::set_energy(u32, u8, u8)),
+        entry!(0x0047_ef50, ai_form::set_responsibility(u32, u8, u8)),
+        entry!(0x0047_f060, ai_form::is_skill(i32) -> bool),
+        entry!(0x0047_ee30, ai_form::assistance(u32) -> u8),
+        entry!(0x0047_ef30, ai_form::responsibility(u32) -> u8),
+        entry!(0x0047_f790, ai_form::mark_changed(u32, u32)),
+        entry!(0x0047_ee50, ai_form::set_assistance(u32, u8)),
+        entry!(0x0047_ee70, ai_form::set_aggro_radius_flag(u32, u8)),
+        entry!(0x0047_ee90, ai_form::set_aggro_radius(u32, u32)),
+        entry!(0x0047_ef80, ai_form::set_mood(u32, u8)),
+        entry!(0x0047_efb0, ai_form::set_service_flags(u32, u32, u8)),
+        entry!(0x0047_f000, ai_form::training_skill(u32) -> u32),
+        entry!(0x0047_f020, ai_form::set_training_skill(u32, u32)),
+        entry!(0x0047_f090, ai_form::set_training_level(u32, u8)),
+        entry!(0x0047_ed10, ai_form::initialize_data_component(u32)),
+        entry!(0x0047_ec40, ai_form::construct(u32) -> u32),
+        entry!(0x0047_ecb0, ai_form::destruct(u32)),
+        entry!(0x0047_f0b0, ai_form::load_data(u32, u32)),
+        entry!(0x0047_f1e0, ai_form::copy_ai_data(u32, u32)),
+        entry!(0x0047_f2d0, ai_form::copy_packages(u32, u32)),
+        entry!(0x0047_f190, ai_form::copy_component(u32, u32)),
+        entry!(0x0047_f500, ai_form::add_package(u32, u32)),
+        entry!(0x0047_f4c0, ai_form::init_item(u32, u32)),
+        entry!(0x0047_f520, ai_form::current_package(u32) -> u32),
+        entry!(0x0047_f590, ai_form::missed_packages(u32, u32, f32, f32)),
+        entry!(0x0047_eeb0, ai_form::copied_setting(u8) -> f32),
+        entry!(0x0047_efe0, ai_form::has_service(u32, u32) -> bool),
+        entry!(0x0047_f300, ai_form::compare_component(u32, u32) -> bool),
+        entry!(0x0047_f600, ai_form::sells_buys_item(u32, u32) -> bool),
+        entry!(0x0047_f7e0, ai_form::save_size(u32, u32) -> u16),
+        entry!(0x0047_f840, ai_form::save_game(u32, u32)),
+        entry!(0x0047_f8c0, ai_form::load_game(u32, u32, u32)),
+        entry!(0x0047_f940, ai_form::save_to_buffer(u32, u32)),
+        entry!(0x0047_f980, ai_form::load_from_buffer(u32, u32)),
+        entry!(0x0047_f9c0, animation::construct(u32) -> u32),
+        entry!(0x0047_f9f0, animation::destruct(u32)),
+        entry!(0x0047_fa50, animation::clear_data_component(u32)),
+        entry!(0x0047_faa0, animation::load_names(u32, u32, u32)),
+        entry!(0x0047_fb50, animation::copy_component(u32, u32)),
+        entry!(0x0047_fbd0, animation::compare_component(u32, u32) -> bool),
+        entry!(0x0047_fcb0, animation::has_name(u32, u32) -> bool),
+        entry!(0x0047_fd20, animation::add_name(u32, u32)),
 
     ]
 }

@@ -9,9 +9,11 @@
 //! third person, measure/newlight/zclears-views.txt).
 //!
 //! The new lighting (`d3d9_wgpu::scene_light`, off by default) is the one user:
-//! `engine_platform::d3d9real::want_scene_light` installs [`install`]'s function, which records the
-//! frame's camera for the backend. Not installed (the lighting off): [`world_drawn`] is one load
-//! and a branch, and nothing is read or recorded.
+//! `engine_platform::d3d9real::want_lighting_switch` installs [`install`]'s function on every
+//! Vulkan run, whatever the start (the player can switch the lighting while playing), and
+//! `want_scene_light` with the ambient occlusion on elsewhere; it records the frame's camera for
+//! the backend only while the frame has the ambient occlusion on. Not installed (elsewhere, the
+//! lighting off): [`world_drawn`] is one load and a branch, and nothing is read or recorded.
 
 use crate::Engine;
 use std::sync::OnceLock;

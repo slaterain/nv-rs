@@ -152,7 +152,7 @@ pub fn fn_0047f9c0(e: &mut Engine, this: Ptr<TESAnimation>) -> Ptr<TESAnimation>
 /// component is not destroyed here.
 pub fn fn_0047f9f0(e: &mut Engine, this: Ptr<TESAnimation>) {
     e.mem.set_u32(this.addr(), ANIMATION_VTABLE);
-    fn_0047fa50(e, this);
+    e.call(0x0047_fa50, &args![this]);
     let list = this.at(TESAnimation::kfFilenames);
     e.call(LIST_DESTRUCT, &args![list]);
 }
@@ -188,7 +188,7 @@ pub fn fn_0047faa0(e: &mut Engine, this: Ptr<TESAnimation>, component: Ptr, file
     e.call(TES_FILE_GET_CHUNK_DATA, &args![file, buffer, 0]);
     let mut name = buffer;
     while e.mem.i8(name) != 0 {
-        fn_0047fd20(e, this, Ptr::new(name));
+        e.call(0x0047_fd20, &args![this, name]);
         let length = e.call(STRING_LENGTH, &args![name]).u32();
         name = name.wrapping_add(length).wrapping_add(1);
     }
@@ -215,7 +215,7 @@ pub fn fn_0047fb50(e: &mut Engine, this: Ptr<TESAnimation>, source: Ptr) {
         let slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
         let name = e.mem.u32(slot);
         if name != 0 {
-            fn_0047fd20(e, this, Ptr::new(name));
+            e.call(0x0047_fd20, &args![this, name]);
         }
         node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
     }
@@ -284,7 +284,7 @@ pub fn fn_0047fcb0(e: &mut Engine, this: Ptr<TESAnimation>, name: Ptr) -> bool {
 /// Adds a KF file name to the list unless it is already there: makes a copy
 /// of the string and appends it.
 pub fn fn_0047fd20(e: &mut Engine, this: Ptr<TESAnimation>, name: Ptr) {
-    if fn_0047fcb0(e, this, name) {
+    if e.call(0x0047_fcb0, &args![this, name]).bool() {
         return;
     }
     let size = e.call(STRING_LENGTH, &args![name]).u32() + 1;

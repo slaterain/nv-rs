@@ -80,29 +80,33 @@ pub const KEY: usize = 0x7a;
 const KEY_MESSAGES: [u32; 4] = [0x100, 0x101, 0x104, 0x105];
 
 /// A key message of the game's window (`message`, `wparam`, `lparam` as the window procedure
-/// gets them): true when it is the counter's key, which then goes no further (the game never
-/// sees it go down or up). Its first press toggles the counter; the repeats Windows sends while
-/// it is held (bit 30 of `lparam`, the key was already down) and its release change nothing.
-/// While no wgpu device draws the game's window ([`window_device`]: the real Direct3D 9
-/// fallback has no counter) F11 is not taken: false, and it reaches the game.
-pub fn window_key(message: u32, wparam: usize, lparam: isize) -> bool {
+/// gets them; `shift`: a Shift key is held): true when it is the counter's key, which then goes no
+/// further (the game never sees it go down or up). Its first press toggles the counter, or with
+/// Shift switches the new lighting ([`key`]); the repeats Windows sends while it is held (bit 30 of
+/// `lparam`, the key was already down) and its release change nothing. While no wgpu device draws
+/// the game's window ([`window_device`]: the real Direct3D 9 fallback has no counter) F11 is not
+/// taken: false, and it reaches the game.
+pub fn window_key(message: u32, wparam: usize, lparam: isize, shift: bool) -> bool {
     if wparam != KEY || !KEY_MESSAGES.contains(&message) {
         return false;
     }
     let down = message == 0x100 || message == 0x104;
-    key(down, lparam & (1 << 30) != 0)
+    key(down, lparam & (1 << 30) != 0, shift)
 }
 
 /// The counter's key (F11) went down (`repeat`: again while held) or up, from any window layer
 /// (the Win32 window's messages through [`window_key`], another layer's key events by its own
-/// key codes): true when it is taken, and so goes no further. Its first press toggles the
-/// counter; repeats and the release change nothing. While no wgpu device draws the game's window
-/// ([`window_device`]) it is not taken: false, and it reaches the game.
-pub fn key(down: bool, repeat: bool) -> bool {
+/// key codes), `shift` while a Shift key is held: true when it is taken, and so goes no further.
+/// Its first press toggles the counter; with Shift, while the new lighting can be switched
+/// (`crate::scene_light::switch_key`), it switches the new lighting instead (F11 is the port's
+/// key either way, so Shift+F11 takes nothing more from the game or from mods). Repeats and the
+/// release change nothing. While no wgpu device draws the game's window ([`window_device`]) it is
+/// not taken: false, and it reaches the game.
+pub fn key(down: bool, repeat: bool, shift: bool) -> bool {
     if WINDOW_DEVICES.load(Ordering::Relaxed) == 0 {
         return false;
     }
-    if down && !repeat {
+    if down && !repeat && !(shift && crate::scene_light::switch_key().is_some()) {
         SHOWN.fetch_xor(true, Ordering::Relaxed);
     }
     true
@@ -317,7 +321,7 @@ fn layout(
 
 /// The glyphs' height for a window `height` pixels high: about a 45th of it, from 14 to 48
 /// pixels, whatever the game's own interface size.
-fn glyph_height(height: u32) -> u32 {
+pub(crate) fn glyph_height(height: u32) -> u32 {
     (height / 45).clamp(14, 48)
 }
 
@@ -364,11 +368,94 @@ pub(crate) struct Overlay {
     count: u32,
     /// Times drawn (tests).
     pub(crate) drawn: u64,
+    /// The notes, made ahead ([`Overlay::prepare_notes`]).
+    notes: Option<Notes>,
+}
+
+/// How long a note shows after it is given ([`Overlay::draw_note`]: the new lighting's switch).
+pub const NOTE_TIME: Duration = Duration::from_secs(3);
+
+/// Whether a note given to show until `until` shows at `now`.
+pub(crate) fn note_shows(until: std::time::Instant, now: std::time::Instant) -> bool {
+    now < until
+}
+
+/// The notes' drawing, made ahead for one glyph height (on a thread of the device's, with the
+/// overlay: no frame makes a texture or a bind group for a note): each text's image size and the
+/// bind group on its image, its quads' buffer and the plate and text quads it was last written for
+/// (the text, the window's size, whether the counter showed above it).
+struct Notes {
+    glyph: u32,
+    texts: Vec<(&'static str, (u32, u32), wgpu::BindGroup)>,
+    quads: wgpu::Buffer,
+    written: Option<(&'static str, (u32, u32), bool)>,
+}
+
+/// A note's two quads in a `width` by `height` window: its dark plate and its text (`text`: the
+/// text image's width and height in pixels), right-aligned with the counter's plate in the
+/// top-right corner, glyphs `glyph` pixels high: in the counter's place, or under it while the
+/// counter shows (`below`).
+fn note_layout(
+    text: (u32, u32),
+    (width, height): (u32, u32),
+    glyph: u32,
+    below: bool,
+) -> [[f32; QUAD_FLOATS]; 2] {
+    let (fw, fh) = (width.max(1) as f32, height.max(1) as f32);
+    let ch = glyph as f32;
+    let (tw, th) = (text.0 as f32, text.1 as f32);
+    let pad = (ch / 3.0).round();
+    let margin = (ch / 2.0).round();
+    // The counter's plate is two lines high with its padding; the note sits a padding under it.
+    let top = if below {
+        margin + 2.0 * ch + 3.0 * pad
+    } else {
+        margin
+    };
+    let clip = |[x, y, w, h]: [f32; 4]| {
+        [
+            x / fw * 2.0 - 1.0,
+            1.0 - (y + h) / fh * 2.0,
+            w / fw * 2.0,
+            h / fh * 2.0,
+        ]
+    };
+    let quad = |rect: [f32; 4], uv: [f32; 4], colour: [f32; 4]| {
+        let mut q = [0.0; QUAD_FLOATS];
+        q[..4].copy_from_slice(&clip(rect));
+        q[4..8].copy_from_slice(&uv);
+        q[8..].copy_from_slice(&colour);
+        q
+    };
+    [
+        quad(
+            [
+                fw - margin - tw - 2.0 * pad,
+                top,
+                tw + 2.0 * pad,
+                th + 2.0 * pad,
+            ],
+            [-1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.6],
+        ),
+        quad(
+            [fw - margin - pad - tw, top + pad, tw, th],
+            [0.0, 0.0, 1.0, 1.0],
+            [1.0, 1.0, 0.9, 1.0],
+        ),
+    ]
 }
 
 impl Overlay {
-    pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Overlay {
+    /// The counter's drawing for the window format `format` (with the driver's `cache`, where
+    /// there is one).
+    pub(crate) fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        cache: Option<&wgpu::PipelineCache>,
+    ) -> Overlay {
         use wgpu::ShaderStages as S;
+        crate::made_here::pipeline();
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("frame rate"),
             entries: &[
@@ -435,7 +522,7 @@ impl Overlay {
                 })],
             }),
             multiview_mask: None,
-            cache: None,
+            cache,
         });
         let quads = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame rate"),
@@ -454,7 +541,125 @@ impl Overlay {
             made_for: None,
             count: 0,
             drawn: 0,
+            notes: None,
         }
+    }
+
+    /// Makes the notes `texts` ahead for a window whose glyphs are `glyph` pixels high
+    /// ([`glyph_height`]): each text drawn into an image (`crate::loading::text_image`, the
+    /// counter's font), its texture and bind group, and their quads' buffer. On a thread of the
+    /// device's, with the overlay ([`Overlay::new`]); a text no image can be made of is left out.
+    pub(crate) fn prepare_notes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        glyph: u32,
+        texts: &[&'static str],
+    ) {
+        let quads = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("note"),
+            size: (2 * QUAD_BYTES) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let texts = texts
+            .iter()
+            .filter_map(|&text| {
+                let (w, h, px) = crate::loading::text_image(text, glyph, ("Consolas", 700))?;
+                crate::made_here::texture();
+                let view = crate::loading::texture(device, queue, (w, h, &px));
+                let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("note"),
+                    layout: &self.layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: quads.as_entire_binding(),
+                        },
+                    ],
+                });
+                Some((text, (w, h), group))
+            })
+            .collect();
+        self.notes = Some(Notes {
+            glyph,
+            texts,
+            quads,
+            written: None,
+        });
+    }
+
+    /// The glyph height the notes were made for (none: not made).
+    pub(crate) fn notes_glyph(&self) -> Option<u32> {
+        self.notes.as_ref().map(|n| n.glyph)
+    }
+
+    /// Takes `other`'s notes (made ahead with another overlay of the same format).
+    pub(crate) fn take_notes(&mut self, other: Overlay) {
+        self.notes = other.notes;
+    }
+
+    /// Draws the note `text` into `target`, a `width` by `height` window frame that already holds
+    /// the game's frame (and the counter, when it shows: `below`, the note goes under it), after
+    /// everything recorded into `encoder` so far, from the notes made ahead
+    /// ([`Overlay::prepare_notes`]); its quads written again only when the text, the window's size
+    /// or the counter's showing changed. False when the notes were not made for this window's
+    /// glyph height (nothing drawn: the device has them made).
+    pub(crate) fn draw_note(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        size: (u32, u32),
+        text: &'static str,
+        below: bool,
+    ) -> bool {
+        let glyph = glyph_height(size.1);
+        let Some(notes) = self.notes.as_mut().filter(|n| n.glyph == glyph) else {
+            return false;
+        };
+        let Some((_, image, group)) = notes.texts.iter().find(|(t, _, _)| *t == text) else {
+            return true;
+        };
+        if notes.written != Some((text, size, below)) {
+            notes.written = Some((text, size, below));
+            let mut bytes = [0u8; 2 * QUAD_BYTES];
+            let rects = note_layout(*image, size, glyph, below);
+            for (b, v) in bytes.chunks_exact_mut(4).zip(rects.iter().flatten()) {
+                b.copy_from_slice(&v.to_le_bytes());
+            }
+            d3d9_stream::hitch::timed(d3d9_stream::hitch::Call::WriteBuffer, || {
+                queue.write_buffer(&notes.quads, 0, &bytes)
+            });
+        }
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("note"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, group, &[]);
+        pass.draw(0..4, 0..2);
+        true
     }
 
     /// The glyph strip at `height` pixels: its cell and bind group, made when the height changed;
@@ -699,42 +904,96 @@ mod tests {
     /// every F11 message is taken (the game never sees it); other keys pass and change nothing.
     #[test]
     fn f11_toggles_once_per_press_and_never_reaches_the_game() {
+        let _switch = crate::scene_light::SWITCH_TESTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         show(false);
         let (down, up, sys_down) = (0x100, 0x101, 0x104);
         let repeat = 1 << 30;
         // No wgpu device on the game's window (the real Direct3D 9 draws): F11 is the game's.
         set_window_device(false);
-        assert!(!window_key(down, KEY, 0x0057_0001));
-        assert!(!window_key(up, KEY, 0x0057_0001 | repeat | (1 << 31)));
+        assert!(!window_key(down, KEY, 0x0057_0001, false));
+        assert!(!window_key(
+            up,
+            KEY,
+            0x0057_0001 | repeat | (1 << 31),
+            false
+        ));
         assert!(!shown(), "no counter to show");
         set_window_device(true);
-        assert!(window_key(down, KEY, 0x0057_0001));
+        assert!(window_key(down, KEY, 0x0057_0001, false));
         assert!(shown());
         for _ in 0..20 {
-            assert!(window_key(down, KEY, 0x0057_0001 | repeat));
+            assert!(window_key(down, KEY, 0x0057_0001 | repeat, false));
         }
         assert!(shown(), "held: no flutter");
-        assert!(window_key(up, KEY, 0x0057_0001 | repeat | (1 << 31)));
+        assert!(window_key(up, KEY, 0x0057_0001 | repeat | (1 << 31), false));
         assert!(shown(), "the release changes nothing");
-        assert!(window_key(sys_down, KEY, 0x0057_0001));
+        assert!(window_key(sys_down, KEY, 0x0057_0001, false));
         assert!(!shown(), "pressed again (with Alt too): off");
         // F12 (the report), F10, Escape and a character pass, and change nothing.
         for vk in [0x7b, 0x79, 0x1b, 0x41] {
-            assert!(!window_key(down, vk, 0x0001_0001));
+            assert!(!window_key(down, vk, 0x0001_0001, false));
+            assert!(!window_key(down, vk, 0x0001_0001, true), "with Shift too");
         }
         // Not a key message.
-        assert!(!window_key(0x102, KEY, 0));
+        assert!(!window_key(0x102, KEY, 0, false));
         assert!(!shown());
         // Another window layer's F11 (by its own key codes): the same rules.
-        assert!(key(true, false));
+        assert!(key(true, false, false));
         assert!(shown());
-        assert!(key(true, true) && key(false, true));
+        assert!(key(true, true, false) && key(false, true, false));
         assert!(shown(), "held and let go: still on");
-        assert!(key(true, false));
+        assert!(key(true, false, false));
+        assert!(!shown());
+        // Shift+F11 while the new lighting cannot be switched (the real Direct3D 9, a test run):
+        // the counter's, as F11.
+        crate::scene_light::forbid_switch();
+        assert!(key(true, false, true));
+        assert!(shown());
+        assert!(key(true, false, true));
         assert!(!shown());
         set_window_device(false);
-        assert!(!key(true, false));
+        assert!(!key(true, false, false));
         assert!(!shown(), "no wgpu device: the game's key");
+    }
+
+    /// Shift+F11 switches the new lighting while it can be switched (its first press only), the
+    /// counter untouched; plain F11 is still the counter's; with no wgpu device on the game's
+    /// window both are the game's and nothing changes.
+    #[test]
+    fn shift_f11_switches_the_new_lighting() {
+        use crate::scene_light::{allow_switch, forbid_switch, wanted, Parts};
+        let _switch = crate::scene_light::SWITCH_TESTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (down, up) = (0x100, 0x101);
+        let repeat = 1 << 30;
+        show(false);
+        set_window_device(true);
+        allow_switch(Parts::default());
+        assert!(window_key(down, KEY, 0x0057_0001, true));
+        assert_eq!(wanted(), Parts::ALL, "from the original's look: all of it");
+        assert!(!shown(), "the counter is not touched");
+        for _ in 0..5 {
+            assert!(window_key(down, KEY, 0x0057_0001 | repeat, true));
+        }
+        assert!(window_key(up, KEY, 0x0057_0001 | repeat | (1 << 31), true));
+        assert_eq!(wanted(), Parts::ALL, "held and let go: one switch");
+        // Through another window layer's keys: the next part.
+        assert!(key(true, false, true));
+        assert_eq!(wanted(), Parts::ALL.next());
+        // Plain F11 is the counter's.
+        assert!(key(true, false, false));
+        assert!(shown());
+        assert_eq!(wanted(), Parts::ALL.next());
+        assert!(key(true, false, false));
+        assert!(!shown());
+        // No wgpu device: the game's key, nothing switched.
+        set_window_device(false);
+        assert!(!key(true, false, true));
+        assert_eq!(wanted(), Parts::ALL.next());
+        forbid_switch();
     }
 
     /// The quads: a plate in the top-right corner, then each character right-aligned on its line,
@@ -772,5 +1031,46 @@ mod tests {
         assert_eq!(glyph_height(1080), 24);
         assert_eq!(glyph_height(480), 14);
         assert_eq!(glyph_height(2160), 48);
+    }
+
+    /// A note shows until its time is up, and not from then on.
+    #[test]
+    fn a_note_shows_until_its_time_is_up() {
+        let now = std::time::Instant::now();
+        let until = now + NOTE_TIME;
+        assert!(note_shows(until, now));
+        assert!(note_shows(until, until - Duration::from_millis(1)));
+        assert!(!note_shows(until, until));
+        assert!(!note_shows(until, until + Duration::from_secs(1)));
+    }
+
+    /// The note's plate and text sit in the top-right corner, right-aligned with the counter's
+    /// plate: in its place while the counter is hidden, a padding under it while it shows; the
+    /// text inside the plate at its own size, the plate dark and taking no texture.
+    #[test]
+    fn the_note_sits_under_the_counter() {
+        let px = |q: &[f32; QUAD_FLOATS]| {
+            (
+                ((q[0] + 1.0) / 2.0 * 1920.0).round(),
+                ((1.0 - q[1] - q[3]) / 2.0 * 1080.0).round(),
+                (q[2] / 2.0 * 1920.0).round(),
+                (q[3] / 2.0 * 1080.0).round(),
+            )
+        };
+        // Glyphs 24 high at 1080 lines: a padding of 8, a margin of 12 (the counter's).
+        let alone = note_layout((300, 24), (1920, 1080), 24, false);
+        assert_eq!(
+            px(&alone[0]),
+            (1920.0 - 12.0 - 300.0 - 16.0, 12.0, 316.0, 40.0)
+        );
+        assert_eq!(px(&alone[1]), (1920.0 - 20.0 - 300.0, 20.0, 300.0, 24.0));
+        assert!(alone[0][4] < 0.0, "the plate takes no texture");
+        assert_eq!(alone[1][4..8], [0.0, 0.0, 1.0, 1.0], "the whole text image");
+        // Under the counter's plate (12 down, 64 high: two lines and their padding), a padding
+        // between them.
+        let below = note_layout((300, 24), (1920, 1080), 24, true);
+        assert_eq!(px(&below[0]).1, 12.0 + 64.0 + 8.0);
+        assert_eq!(px(&below[0]).0, px(&alone[0]).0);
+        assert_eq!(px(&below[1]).1, px(&below[0]).1 + 8.0);
     }
 }

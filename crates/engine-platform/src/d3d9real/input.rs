@@ -1,7 +1,8 @@
 //! The keyboard and mouse of a window layer other than Win32's (`winit_window.rs`: Linux, macOS)
 //! into the DirectInput state the host merges into the game's devices ([`super::Input`]), as the
 //! Win32 window's messages put them there (`win32.rs`: `window_input`, `raw_mouse`, `dik`): the
-//! same DirectInput key codes, F11 the frame-rate counter's while wgpu draws the window, F12's first
+//! same DirectInput key codes, F11 the frame-rate counter's while wgpu draws the window (Shift+F11 the
+//! new lighting's switch), F12's first
 //! press the report, the buttons in DirectInput's order, the wheel 120 a notch, the motion in whole
 //! counts. Every system compiles this file, so its tables and counts are tested everywhere.
 
@@ -177,23 +178,34 @@ pub(super) fn key(code: u8, down: bool, repeat: bool, alt: bool) {
 
 /// [`key`] into `i`, F11 asked of `counter` (`d3d9_wgpu::frame_rate::key`): true when the report
 /// is to be made. F11 goes to the frame-rate counter when `counter` takes it (while wgpu draws the
-/// window: its first press toggles, repeats and the release change nothing) and the game never
-/// sees it then; F12's first press without Alt asks for the report, as the Win32 window asks only
-/// on `WM_KEYDOWN` (with Alt held Windows sends `WM_SYSKEYDOWN`), and the key still reaches the
-/// game; every other key is held or let go.
+/// window: its first press toggles, with Shift held ([`shift_held`]) switches the new lighting,
+/// repeats and the release change nothing) and the game never sees it then; F12's first press
+/// without Alt asks for the report, as the Win32 window asks only on `WM_KEYDOWN` (with Alt held
+/// Windows sends `WM_SYSKEYDOWN`), and the key still reaches the game; every other key is held or
+/// let go.
 pub(super) fn key_into(
     i: &mut Input,
     code: u8,
     down: bool,
     repeat: bool,
     alt: bool,
-    counter: impl FnOnce(bool, bool) -> bool,
+    counter: impl FnOnce(bool, bool, bool) -> bool,
 ) -> bool {
-    if code == DIK_F11 && counter(down, repeat) {
+    if code == DIK_F11 && counter(down, repeat, shift_held(i)) {
         return false;
     }
     i.keys[usize::from(code)] = down;
     down && !repeat && !alt && code == DIK_F12
+}
+
+/// `DIK_LSHIFT`, `DIK_RSHIFT`.
+const DIK_SHIFTS: [u8; 2] = [0x2a, 0x36];
+
+/// Whether a Shift key is held in `i` (the window's own key state, as the game's keyboard gets
+/// it): Shift+F11 is the new lighting's switch (`d3d9_wgpu::frame_rate::key`). Both window layers
+/// ask this (`win32.rs`'s `window_input` too), so the same keys do the same on every system.
+pub(super) fn shift_held(i: &Input) -> bool {
+    DIK_SHIFTS.iter().any(|&k| i.keys[usize::from(k)])
 }
 
 /// A mouse button by DirectInput's order (left 0, right 1, middle 2, X1 3, X2 4) went down or up.
@@ -1189,25 +1201,45 @@ mod tests {
     }
 
     /// Keys by the Win32 window's rules: F11 the counter's when it takes it (then the game never
-    /// sees it), the game's otherwise; F12's first press without Alt makes the report, its repeats
+    /// sees it; told whether a Shift key is held, Shift+F11 being the new lighting's switch), the
+    /// game's otherwise; F12's first press without Alt makes the report, its repeats
     /// and Alt+F12 do not, and the game sees F12 either way; other keys held and let go.
     #[test]
     fn keys_follow_the_win32_windows_rules() {
         let mut i = Input::default();
-        let taken = |_: bool, _: bool| true;
-        let not_taken = |_: bool, _: bool| false;
+        let taken = |_: bool, _: bool, _: bool| true;
+        let not_taken = |_: bool, _: bool, _: bool| false;
         assert!(!key_into(&mut i, DIK_F11, true, false, false, taken));
         assert!(!i.keys[0x57], "the counter's F11 never reaches the game");
         let mut asked = None;
-        key_into(&mut i, DIK_F11, true, true, false, |d, r| {
-            asked = Some((d, r));
+        key_into(&mut i, DIK_F11, true, true, false, |d, r, s| {
+            asked = Some((d, r, s));
             true
         });
         assert_eq!(
             asked,
-            Some((true, true)),
-            "the counter is told down and repeat"
+            Some((true, true, false)),
+            "the counter is told down and repeat, no Shift"
         );
+        // A Shift key held in the window's keys: the counter is told (Shift+F11 is the new
+        // lighting's switch), and the game sees Shift as any key.
+        for shift in [0x2a, 0x36] {
+            key_into(&mut i, shift, true, false, false, taken);
+            assert!(i.keys[usize::from(shift)]);
+            let mut told = None;
+            key_into(&mut i, DIK_F11, true, false, false, |_, _, s| {
+                told = Some(s);
+                true
+            });
+            assert_eq!(told, Some(true), "{shift:#x}");
+            key_into(&mut i, shift, false, false, false, taken);
+        }
+        let mut told = None;
+        key_into(&mut i, DIK_F11, true, false, false, |_, _, s| {
+            told = Some(s);
+            true
+        });
+        assert_eq!(told, Some(false), "Shift let go");
         assert!(!key_into(&mut i, DIK_F11, true, false, false, not_taken));
         assert!(i.keys[0x57], "no wgpu device: F11 is the game's");
         assert!(key_into(&mut i, DIK_F12, true, false, false, taken));
