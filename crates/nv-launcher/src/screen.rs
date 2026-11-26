@@ -275,10 +275,13 @@ fn layout(look: &Look, screen: &Screen) -> Layout {
     }
 }
 
+/// A box on the screen: x, y, width, height.
+pub type Area = (i32, i32, u32, u32);
+
 /// The header's three lines and where each goes (x, y, width, height): centred from y 60, a line
 /// apart. `FinishIntro` measures 17 a character, the game font's advance (the font's own width
 /// gives the same); the plain font's by its own cell.
-fn header_lines<'a>(look: &'a Look, screen: &'a Screen) -> [(&'a str, (i32, i32, u32, u32)); 3] {
+fn header_lines<'a>(look: &'a Look, screen: &'a Screen) -> [(&'a str, Area); 3] {
     let lh = look.font.line_height();
     let line = |i: i32, s: &'a str| {
         let w = look.font.width(s);
@@ -297,7 +300,7 @@ fn header_lines<'a>(look: &'a Look, screen: &'a Screen) -> [(&'a str, (i32, i32,
 /// The header's lines' boxes (x, y, width, height) as [`draw`] puts them (the tests' fit of the
 /// window's buttons).
 #[cfg(test)]
-pub fn header_boxes(look: &Look, screen: &Screen) -> [(i32, i32, u32, u32); 3] {
+pub fn header_boxes(look: &Look, screen: &Screen) -> [Area; 3] {
     header_lines(look, screen).map(|(_, b)| b)
 }
 
@@ -321,7 +324,7 @@ impl Button {
 
 /// The buttons' boxes (x, y, width, height): squares a line high plus 10 (at most 45), 5 apart,
 /// 10 from the screen's top and right edges, so above the header (its first line starts at 60).
-pub fn buttons(look: &Look) -> [(Button, (i32, i32, u32, u32)); 2] {
+pub fn buttons(look: &Look) -> [(Button, Area); 2] {
     let side = (look.font.line_height() + 10).min(45);
     let exit = WIDTH as i32 - 10 - side as i32;
     [
@@ -651,7 +654,7 @@ mod tests {
             let i = ((y as u32 * c.width + x as u32) * 4) as usize;
             [c.pixels[i], c.pixels[i + 1], c.pixels[i + 2]]
         };
-        let lit = |c: &Canvas, (x, y, w, h): (i32, i32, u32, u32)| {
+        let lit = |c: &Canvas, (x, y, w, h): Area| {
             (y..y + h as i32)
                 .flat_map(|yy| (x..x + w as i32).map(move |xx| (xx, yy)))
                 .filter(|&(xx, yy)| at(c, xx, yy) != [0, 0, 0])

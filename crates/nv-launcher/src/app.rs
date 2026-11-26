@@ -3906,8 +3906,7 @@ mod tests {
     /// screen shows below them: its text, its list and its prompt.
     #[test]
     fn the_window_buttons_fit_every_screen_of_the_plain_look() {
-        type Box4 = (i32, i32, u32, u32);
-        let apart = |a: Box4, b: Box4| {
+        let apart = |a: screen::Area, b: screen::Area| {
             a.0 + a.2 as i32 <= b.0
                 || b.0 + b.2 as i32 <= a.0
                 || a.1 + a.3 as i32 <= b.1
