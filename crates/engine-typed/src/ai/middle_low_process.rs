@@ -30,7 +30,7 @@ use super::base_process::{
     self, buffer_position, current_version, form_name, loading_record, low_half, record_words,
     runtime_cast, save_load_game, save_log_enabled, saving_record, use_save_game_blocks,
 };
-use super::FAMILY;
+use super::{low_process, FAMILY};
 use crate::native::{float_precision, to_float, Real};
 use crate::{ai_queries, crt, interface, slot_target};
 use engine_core::ptr::Ptr;
@@ -68,14 +68,12 @@ const LOW_GET_ACTOR_VALUE: u32 = 0x0090_72d0;
 const LOW_SAVE_GAME_BUFFER: u32 = 0x0091_0450;
 const LOW_DESTRUCTOR: u32 = 0x0090_6fe0;
 const LOW_CHECK_FOR_NEW_PACKAGE: u32 = 0x0090_a1a0;
-const LOW_UPDATE_BUFFER: u32 = 0x0090_c360;
 const LOW_GET_SAVE_SIZE: u32 = 0x0090_f8b0;
 const LOW_SAVE_GAME: u32 = 0x0090_fa70;
 const LOW_LOAD_GAME: u32 = 0x0090_fd80;
 const LOW_REVERT: u32 = 0x0091_0310;
 const LOW_LOAD_GAME_BUFFER: u32 = 0x0091_0630;
 const LOW_REVERT_BUFFER: u32 = 0x0091_0a60;
-const LOW_RESET_TARGET: u32 = 0x0090_a070;
 /// `ModifierList`'s functions on the modifier lists.
 const MODIFIER_GET: u32 = 0x0093_7730;
 const MODIFIER_ADJUST: u32 = 0x0093_7480;
@@ -325,7 +323,11 @@ pub fn checkfor_new_package(e: &mut Engine, this: Ptr, actor: u32, force: u8) ->
 /// loaded and stored (which quiets a signalling NaN).
 pub fn update_step(e: &mut Engine, this: Ptr, actor: u32, delta: f32) {
     let delta = x87_quiet_bits(delta.to_bits());
-    e.call(LOW_UPDATE_BUFFER, &args![this, actor, delta]);
+    typed_call!(
+        FAMILY,
+        0x0090_c360,
+        low_process::update_buffer(e, this, Ptr::new(actor), f32::from_bits(delta))
+    );
 }
 
 // Typed from 00907430
@@ -810,7 +812,7 @@ pub(super) fn set_procedure_index_running(e: &mut Engine, process: u32, index: u
 
 /// A process slot holding one of `LowProcess`'s flag tests (`body`, of `flag`): the test in place,
 /// or the call through the slot.
-fn process_flag(e: &mut Engine, process: u32, slot: u32, body: u32, flag: u8) -> bool {
+pub(super) fn process_flag(e: &mut Engine, process: u32, slot: u32, body: u32, flag: u8) -> bool {
     if slot_target(e, process, slot) == body {
         e.mem.u8(process.wrapping_add(PROCESS_FLAGS)) & flag != 0
     } else {
@@ -820,7 +822,14 @@ fn process_flag(e: &mut Engine, process: u32, slot: u32, body: u32, flag: u8) ->
 
 /// A process slot holding one of `LowProcess`'s flag setters (`body`, of `flag`): the store in
 /// place, or the call through the slot.
-fn set_process_flag(e: &mut Engine, process: u32, slot: u32, body: u32, flag: u8, on: u8) {
+pub(super) fn set_process_flag(
+    e: &mut Engine,
+    process: u32,
+    slot: u32,
+    body: u32,
+    flag: u8,
+    on: u8,
+) {
     if slot_target(e, process, slot) == body {
         let at = process.wrapping_add(PROCESS_FLAGS);
         let flags = e.mem.u8(at);
@@ -1177,7 +1186,7 @@ fn update_finish_package(e: &mut Engine, process: u32, actor: u32, package: &mut
         let current = current_package(e, process);
         e.call(0x005a_c750, &args![current, extra, 0x400u32]);
         let current = current_package(e, process);
-        e.vcall(process, 0x5a0, &args![actor, current]);
+        low_process::package_done_slot(e, process, actor, current);
         set_process_flag(e, process, 0x5a8, 0x008d_8020, 0x20, 1);
     }
     set_process_flag(e, process, 0x1c8, 0x008d_7ee0, 0x04, 0);
@@ -1264,7 +1273,7 @@ pub fn update(e: &mut Engine, this: Ptr, actor: u32) {
         }
         && !package_flag(e, package, 0x1_0000);
     if runs {
-        e.call(LOW_RESET_TARGET, &args![this]);
+        typed_call!(FAMILY, 0x0090_a070, low_process::reset_target(e, this));
         let current = current_package(e, process);
         let location = package_location(e, current);
         let action = procedure_action(e, process);

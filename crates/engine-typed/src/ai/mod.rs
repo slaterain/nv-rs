@@ -11,10 +11,11 @@
 //!   class keeps in its vtable (the stubs that answer false, 0, -1 or 0.0 and those that do
 //!   nothing), the embedded current package's getters and setters, the destructor, `Copy`, the
 //!   save and load of the process block and the breath timer.
-//! - [`low_process`]: `LowProcess` (its Xbox PDB source unit), part 1: the process lock map, the
-//!   processed date's parts, the flags and timers, the target and location setters, the damage
-//!   modifier, the package tests and starts, the door lock and unlock callbacks and the small
-//!   procedure steps.
+//! - [`low_process`]: `LowProcess` (its Xbox PDB source unit), parts 1 and 2: the process lock map,
+//!   the processed date's parts, the flags and timers, the target and location setters and
+//!   `ResetTarget`, the damage modifier, the package tests, starts, schedule and done step, the
+//!   greeting, the procedure index steps, the patrol, the clear of the current data, the level
+//!   copy, the time update, the door lock and unlock callbacks and the small procedure steps.
 //! - [`middle_low_process`]: `MiddleLowProcess` (its Xbox PDB source unit): the temporary and
 //!   damage modifiers on top of `LowProcess`'s actor values, the hourly package check, the combat
 //!   rounds, `Update` (the package's procedure actions), the destructors, the copy and the save,
@@ -147,9 +148,11 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0090_74f0, low_process::damage_modifier(Ptr, u8) -> f64),
         entry!(0x0090_7460, low_process::damage_mod_actor_value(Ptr, u32, u32, f32)),
         entry!(0x0090_7620, low_process::mod_essential_down_timer(Ptr)),
+        entry!(0x0090_7510, low_process::copy_level(Ptr, Ptr)),
         entry!(0x0090_76a0, low_process::processed_day(Ptr) -> u32),
         entry!(0x0090_76c0, low_process::processed_month(Ptr) -> u32),
         entry!(0x0090_76e0, low_process::processed_year(Ptr) -> u32),
+        entry!(0x0090_7700, low_process::set_current_package_from_schedule(Ptr, Ptr) -> bool),
         entry!(
             0x0090_7840,
             low_process::check_and_start_combat_controller_for_package(Ptr, Ptr, Ptr, u8) -> bool
@@ -171,8 +174,10 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0090_8e90, low_process::process_use_item_at(Ptr, Ptr) -> bool),
         entry!(0x0090_8f40, low_process::process_avoid_area(Ptr, u32)),
         entry!(0x0090_9d00, low_process::process_flee_non_combat(Ptr, Ptr)),
+        entry!(0x0090_a070, low_process::reset_target(Ptr)),
         entry!(0x0090_a130, low_process::current_package_location(Ptr, u32, u32) -> u32),
         entry!(0x0090_ac20, low_process::set_flag_40(Ptr, u8)),
+        entry!(0x0090_c360, low_process::update_buffer(Ptr, Ptr, f32)),
         entry!(0x0090_cfa0, low_process::is_wandering(Ptr) -> bool),
         entry!(0x0090_d480, low_process::lock_door(Ptr, Ptr) -> bool),
         entry!(0x0090_d570, low_process::unlock_door(Ptr, Ptr) -> bool),
@@ -182,19 +187,27 @@ fn funcs() -> Vec<(u32, AbiFn)> {
                 Ptr, u32, u32, u32, u32, u32, u8, u32, u8, u32, u8, u32, u8, u32
             ) -> bool
         ),
+        entry!(0x0090_e600, low_process::objects_to_acquire_construct(Ptr) -> Ptr),
+        entry!(0x0091_0b30, low_process::clear_current_data_for_process(Ptr, u32)),
+        entry!(0x0091_19b0, low_process::add_to_procedure_index_running(Ptr, Ptr, u32)),
         entry!(0x0091_1ae0, low_process::float_zero(Ptr, u32, u32) -> f32),
         entry!(0x0091_1e80, low_process::set_target(Ptr, Ptr)),
         entry!(0x0091_1ed0, low_process::process_summon_creature_defend(Ptr, u32)),
         entry!(0x0091_2150, low_process::process_movement_blocked(Ptr, u32)),
+        entry!(0x0091_21e0, low_process::process_patrol(Ptr, Ptr)),
         entry!(0x0091_22e0, low_process::process_patrol_init(Ptr, Ptr, Ptr) -> bool),
+        entry!(0x0091_2340, low_process::process_patrol_start_travel_to_next_ref(Ptr, Ptr, Ptr)),
         entry!(
             0x0091_2960,
             low_process::process_patrol_start_at_ref_behavior(Ptr, u32, Ptr)
         ),
+        entry!(0x0091_2990, low_process::process_patrol_at_ref(Ptr, Ptr, Ptr, f32) -> f32),
         entry!(0x0091_3460, low_process::is_package_done(Ptr, u32) -> bool),
         entry!(0x0091_34c0, low_process::mod_tracked_damage(Ptr, u32, f32)),
         entry!(0x0091_3510, low_process::start_new_package(Ptr, Ptr, Ptr)),
         entry!(0x0091_35a0, low_process::change_package(Ptr, Ptr, Ptr)),
+        entry!(0x0091_3630, low_process::package_done(Ptr, Ptr, Ptr)),
+        entry!(0x0091_36b0, low_process::process_greet(Ptr, Ptr, Ptr, u32, u32, u32, u8)),
         entry!(0x0091_37b0, low_process::lock_map_construct(Ptr, u32) -> Ptr),
         entry!(
             0x0091_37e0,
