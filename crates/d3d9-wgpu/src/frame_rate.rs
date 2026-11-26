@@ -321,7 +321,7 @@ fn layout(
 
 /// The glyphs' height for a window `height` pixels high: about a 45th of it, from 14 to 48
 /// pixels, whatever the game's own interface size.
-fn glyph_height(height: u32) -> u32 {
+pub(crate) fn glyph_height(height: u32) -> u32 {
     (height / 45).clamp(14, 48)
 }
 
@@ -368,18 +368,27 @@ pub(crate) struct Overlay {
     count: u32,
     /// Times drawn (tests).
     pub(crate) drawn: u64,
-    /// The note last drawn ([`Overlay::draw_note`]).
-    note: Option<Note>,
+    /// The notes, made ahead ([`Overlay::prepare_notes`]).
+    notes: Option<Notes>,
 }
 
 /// How long a note shows after it is given ([`Overlay::draw_note`]: the new lighting's switch).
 pub const NOTE_TIME: Duration = Duration::from_secs(3);
 
-/// A note's drawing: what it was made for (its text, the glyphs' height, the window's size,
-/// whether the counter showed above it) and the bind group on its text and its plate and text quads.
-struct Note {
-    made_for: (&'static str, u32, (u32, u32), bool),
-    group: wgpu::BindGroup,
+/// Whether a note given to show until `until` shows at `now`.
+pub(crate) fn note_shows(until: std::time::Instant, now: std::time::Instant) -> bool {
+    now < until
+}
+
+/// The notes' drawing, made ahead for one glyph height (on a thread of the device's, with the
+/// overlay: no frame makes a texture or a bind group for a note): each text's image size and the
+/// bind group on its image, its quads' buffer and the plate and text quads it was last written for
+/// (the text, the window's size, whether the counter showed above it).
+struct Notes {
+    glyph: u32,
+    texts: Vec<(&'static str, (u32, u32), wgpu::BindGroup)>,
+    quads: wgpu::Buffer,
+    written: Option<(&'static str, (u32, u32), bool)>,
 }
 
 /// A note's two quads in a `width` by `height` window: its dark plate and its text (`text`: the
@@ -438,8 +447,15 @@ fn note_layout(
 }
 
 impl Overlay {
-    pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Overlay {
+    /// The counter's drawing for the window format `format` (with the driver's `cache`, where
+    /// there is one).
+    pub(crate) fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        cache: Option<&wgpu::PipelineCache>,
+    ) -> Overlay {
         use wgpu::ShaderStages as S;
+        crate::made_here::pipeline();
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("frame rate"),
             entries: &[
@@ -506,7 +522,7 @@ impl Overlay {
                 })],
             }),
             multiview_mask: None,
-            cache: None,
+            cache,
         });
         let quads = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame rate"),
@@ -525,70 +541,105 @@ impl Overlay {
             made_for: None,
             count: 0,
             drawn: 0,
-            note: None,
+            notes: None,
         }
+    }
+
+    /// Makes the notes `texts` ahead for a window whose glyphs are `glyph` pixels high
+    /// ([`glyph_height`]): each text drawn into an image (`crate::loading::text_image`, the
+    /// counter's font), its texture and bind group, and their quads' buffer. On a thread of the
+    /// device's, with the overlay ([`Overlay::new`]); a text no image can be made of is left out.
+    pub(crate) fn prepare_notes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        glyph: u32,
+        texts: &[&'static str],
+    ) {
+        let quads = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("note"),
+            size: (2 * QUAD_BYTES) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let texts = texts
+            .iter()
+            .filter_map(|&text| {
+                let (w, h, px) = crate::loading::text_image(text, glyph, ("Consolas", 700))?;
+                crate::made_here::texture();
+                let view = crate::loading::texture(device, queue, (w, h, &px));
+                let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("note"),
+                    layout: &self.layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: quads.as_entire_binding(),
+                        },
+                    ],
+                });
+                Some((text, (w, h), group))
+            })
+            .collect();
+        self.notes = Some(Notes {
+            glyph,
+            texts,
+            quads,
+            written: None,
+        });
+    }
+
+    /// The glyph height the notes were made for (none: not made).
+    pub(crate) fn notes_glyph(&self) -> Option<u32> {
+        self.notes.as_ref().map(|n| n.glyph)
+    }
+
+    /// Takes `other`'s notes (made ahead with another overlay of the same format).
+    pub(crate) fn take_notes(&mut self, other: Overlay) {
+        self.notes = other.notes;
     }
 
     /// Draws the note `text` into `target`, a `width` by `height` window frame that already holds
     /// the game's frame (and the counter, when it shows: `below`, the note goes under it), after
-    /// everything recorded into `encoder` so far. Its text is drawn into an image once
-    /// (`crate::loading::text_image`, the counter's font) and again only when the text, the
-    /// window's size or the counter's showing changed; nothing when no image can be made.
-    #[allow(clippy::too_many_arguments)]
+    /// everything recorded into `encoder` so far, from the notes made ahead
+    /// ([`Overlay::prepare_notes`]); its quads written again only when the text, the window's size
+    /// or the counter's showing changed. False when the notes were not made for this window's
+    /// glyph height (nothing drawn: the device has them made).
     pub(crate) fn draw_note(
         &mut self,
-        device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         size: (u32, u32),
         text: &'static str,
         below: bool,
-    ) {
+    ) -> bool {
         let glyph = glyph_height(size.1);
-        let made_for = (text, glyph, size, below);
-        if self.note.as_ref().map(|n| n.made_for) != Some(made_for) {
-            self.note = None;
-            let Some((w, h, px)) = crate::loading::text_image(text, glyph, ("Consolas", 700))
-            else {
-                return;
-            };
-            let view = crate::loading::texture(device, queue, (w, h, &px));
-            let quads = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("note"),
-                size: (2 * QUAD_BYTES) as u64,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
+        let Some(notes) = self.notes.as_mut().filter(|n| n.glyph == glyph) else {
+            return false;
+        };
+        let Some((_, image, group)) = notes.texts.iter().find(|(t, _, _)| *t == text) else {
+            return true;
+        };
+        if notes.written != Some((text, size, below)) {
+            notes.written = Some((text, size, below));
             let mut bytes = [0u8; 2 * QUAD_BYTES];
-            let rects = note_layout((w, h), size, glyph, below);
+            let rects = note_layout(*image, size, glyph, below);
             for (b, v) in bytes.chunks_exact_mut(4).zip(rects.iter().flatten()) {
                 b.copy_from_slice(&v.to_le_bytes());
             }
             d3d9_stream::hitch::timed(d3d9_stream::hitch::Call::WriteBuffer, || {
-                queue.write_buffer(&quads, 0, &bytes)
+                queue.write_buffer(&notes.quads, 0, &bytes)
             });
-            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("note"),
-                layout: &self.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: quads.as_entire_binding(),
-                    },
-                ],
-            });
-            self.note = Some(Note { made_for, group });
         }
-        let Some(note) = &self.note else { return };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("note"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -606,8 +657,9 @@ impl Overlay {
             multiview_mask: None,
         });
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &note.group, &[]);
+        pass.set_bind_group(0, group, &[]);
         pass.draw(0..4, 0..2);
+        true
     }
 
     /// The glyph strip at `height` pixels: its cell and bind group, made when the height changed;
@@ -979,6 +1031,17 @@ mod tests {
         assert_eq!(glyph_height(1080), 24);
         assert_eq!(glyph_height(480), 14);
         assert_eq!(glyph_height(2160), 48);
+    }
+
+    /// A note shows until its time is up, and not from then on.
+    #[test]
+    fn a_note_shows_until_its_time_is_up() {
+        let now = std::time::Instant::now();
+        let until = now + NOTE_TIME;
+        assert!(note_shows(until, now));
+        assert!(note_shows(until, until - Duration::from_millis(1)));
+        assert!(!note_shows(until, until));
+        assert!(!note_shows(until, until + Duration::from_secs(1)));
     }
 
     /// The note's plate and text sit in the top-right corner, right-aligned with the counter's

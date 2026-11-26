@@ -1154,12 +1154,20 @@ impl d3d9_stream::Backend for WgpuWithReport {
                 self.back_buffer = back_buffers.to_words().first().copied().unwrap_or(0);
             }
             Cmd::Present { .. } => {
+                // The parts this frame was drawn with: a switch the player made at this Present
+                // reaches the device right after it.
+                let lighting = self.wgpu.device().map(|d| d.lighting_parts());
                 let (wgpu, back) = (&mut self.wgpu, self.back_buffer);
-                shot::report_with(|| {
-                    wgpu.device()
-                        .and_then(|d| d.read_surface_pixels(back))
-                        .ok_or_else(|| "the back buffer could not be read from wgpu".to_string())
-                });
+                shot::report_with(
+                    || {
+                        wgpu.device()
+                            .and_then(|d| d.read_surface_pixels(back))
+                            .ok_or_else(|| {
+                                "the back buffer could not be read from wgpu".to_string()
+                            })
+                    },
+                    lighting,
+                );
             }
             _ => {}
         }
@@ -2906,6 +2914,15 @@ pub fn present_count(e: &mut Engine) -> Option<u32> {
     real(e).stream.as_ref().map(|s| s.presents())
 }
 
+/// Tests (the integration binaries'): the game's device `device` recorded straight into `backend`
+/// (no render thread, no window), as if the game had made it on wgpu.
+#[doc(hidden)]
+pub fn record_into_for_test(e: &mut Engine, device: u32, backend: Box<dyn d3d9_stream::Backend>) {
+    let r = real(e);
+    r.stream = Some(Stream::direct(backend));
+    r.devices.push((device, None));
+}
+
 pub(super) mod shot {
     // Off Windows only the tests read most of this: the capture reads the real Direct3D 9.
     #![cfg_attr(not(windows), allow(dead_code))]
@@ -3253,12 +3270,31 @@ pub(super) mod shot {
     /// words; a beep says it is done. The game's state and the model are not touched.
     #[cfg(windows)]
     pub(crate) fn report_at_present(d: &IDirect3DDevice9) {
-        report_with(|| capture(d));
+        report_with(|| capture(d), None);
+    }
+
+    /// The report's place (`place.txt`): the host's text, then the brightness the game's window
+    /// showed (the picture is the back buffer, which never has it, `d3d9_wgpu::ramp`) and the new
+    /// lighting the picture was drawn with (`lighting`: the device's parts at this `Present`; none
+    /// where the real Direct3D 9 draws), which the player may have switched since the run's start.
+    pub(super) fn place_text(
+        place: &str,
+        lighting: Option<d3d9_wgpu::scene_light::Parts>,
+    ) -> String {
+        format!(
+            "{place}{}{}",
+            d3d9_wgpu::ramp::place_line(),
+            d3d9_wgpu::scene_light::place_line(lighting)
+        )
     }
 
     /// [`report_at_present`] for any backend: `picture` gives the frame's pixels (rows top
-    /// first, B, G, R, X), called only when a report was asked for.
-    pub(crate) fn report_with(picture: impl FnOnce() -> Result<(u32, u32, Vec<u8>), String>) {
+    /// first, B, G, R, X), called only when a report was asked for; `lighting` the new lighting's
+    /// parts the frame was drawn with ([`place_text`]).
+    pub(crate) fn report_with(
+        picture: impl FnOnce() -> Result<(u32, u32, Vec<u8>), String>,
+        lighting: Option<d3d9_wgpu::scene_light::Parts>,
+    ) {
         if !REPORT_ASKED.load(std::sync::atomic::Ordering::Relaxed) {
             return;
         }
@@ -3267,9 +3303,7 @@ pub(super) mod shot {
         let Ok(place) = PLACE.take() else {
             return;
         };
-        // And the brightness the game's window showed: the picture below is the back buffer,
-        // which never has it (`d3d9_wgpu::ramp`).
-        let place = format!("{place}{}", d3d9_wgpu::ramp::place_line());
+        let place = place_text(&place, lighting);
         REPORT_ASKED.store(false, std::sync::atomic::Ordering::Relaxed);
         let Some(folder) = report_dir().and_then(|dir| new_report_folder(dir)) else {
             eprintln!("F12: the report's folder could not be made");
@@ -4339,6 +4373,27 @@ mod tests {
         present(&mut e, DEVICE, 0, 0, 0, 0, 0);
         let names: Vec<&str> = take().iter().map(|(n, _, _)| *n).collect();
         assert_eq!(names, ["Present"]);
+    }
+
+    /// An F12 report's `place.txt` says which new lighting its picture was drawn with (the
+    /// device's parts at its `Present`), after the host's text and the brightness line; with the
+    /// real Direct3D 9, none.
+    #[test]
+    fn the_report_names_the_new_lighting_of_its_picture() {
+        let sun = d3d9_wgpu::scene_light::Parts {
+            ambient_occlusion: false,
+            sun_shadows: true,
+        };
+        let text = shot::place_text("cell: Goodsprings\n", Some(sun));
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3, "{text}");
+        assert_eq!(lines[0], "cell: Goodsprings");
+        assert!(lines[1].starts_with("brightness in the window"), "{text}");
+        assert!(
+            lines[2].contains("sun shadows on, ambient occlusion off"),
+            "{text}"
+        );
+        assert!(shot::place_text("", None).ends_with("none (Direct3D 9 draws)\n"));
     }
 
     /// The sun light from the sky asks each frame whether the sun shadows draw: only while wgpu

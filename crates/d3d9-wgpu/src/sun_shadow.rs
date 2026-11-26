@@ -76,8 +76,10 @@
 //! **Off.** Nothing is recorded, read or made; the depth surfaces and pipelines are made as before
 //! ([`enabled`] is read when the device is made), so the frame is what it was (GPU-tested). On wgpu
 //! the player can switch them on and off while playing (`crate::scene_light::allow_switch`,
-//! Shift+F11): between two frames the device makes them as a fresh start has them, or lets their
-//! maps go, keeping their pipelines for the next time (GPU-tested against fresh starts).
+//! Shift+F11): the first time they are switched on their maps ([`map_bytes`]) are made on a thread
+//! of the device's and the shadows start at the present after they are there, as a fresh start
+//! has them; switched off, they draw nothing and the device keeps the maps and pipelines for the
+//! rest of the run, so switching them on again makes nothing (GPU-tested against fresh starts).
 //!
 //! **Limits.** Characters (skinned) cast no shadow of ours yet (the game's own character shadows
 //! stay); leaves, fronds and distant trees are not shadowed yet; objects the game has not drawn
@@ -2911,33 +2913,84 @@ type MapList<'a> = Vec<(&'a Draw, World, [u32; 2])>;
 /// The register ring's alignment (wgpu's dynamic uniform offsets).
 const ALIGN: usize = 256;
 
-/// What a device keeps of its [`Gpu`] while the player has the sun shadows switched off
-/// (`crate::scene_light::Parts`, `crate::device`): what is made once a run, the casters' depth-only
-/// pipelines, the coverage and debug pipelines and the lookup's layout the lighting variants are
-/// made with; not the maps, which are let go.
-pub(crate) struct Kept {
-    light_layout: wgpu::BindGroupLayout,
-    pipelines: Vec<Option<wgpu::RenderPipeline>>,
-    thin_pipe: Option<wgpu::RenderPipeline>,
-    #[allow(clippy::type_complexity)]
-    apply: Vec<(
-        (bool, wgpu::TextureFormat, u32),
-        wgpu::BindGroupLayout,
-        wgpu::RenderPipeline,
-    )>,
+/// The pipeline that draws the thin casters' quads into a coverage layer, added up (with the
+/// driver's `cache` where there is one): made at a device's start on a thread of its own
+/// ([`Gpu::give_thin_pipeline`]).
+pub(crate) fn thin_pipeline(
+    device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
+) -> wgpu::RenderPipeline {
+    crate::made_here::pipeline();
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("sun shadow thin casters"),
+        source: wgpu::ShaderSource::Wgsl(THIN_DRAW.into()),
+    });
+    let add = wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    };
+    // Coverage: the most of what is drawn over a texel, not the sum. Added (review of #693),
+    // the wires of a telegraph line, a few units apart but within one of the coverage map's
+    // texels (2 to 8 units in the far cascades) and its tent filter, merged into one band as
+    // dark as their sum: heavy dark lines at Goodsprings (thin/crop-th3-on-9835.png against
+    // crop-th-on-9835.png, 2026-11-17), where the real wires cast separate faint lines.
+    let most = wgpu::BlendComponent {
+        operation: wgpu::BlendOperation::Max,
+        ..add
+    };
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("sun shadow thin casters"),
+        layout: None,
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: Some("vs"),
+            compilation_options: Default::default(),
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: 20,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x3],
+            })],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: Default::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some("fs"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: THIN_FORMAT,
+                blend: Some(wgpu::BlendState {
+                    color: add,
+                    alpha: most,
+                }),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache,
+    })
 }
 
-impl Kept {
-    /// The casters' pipelines kept (tests: the same after every switch once each was made).
-    pub(crate) fn pipelines(&self) -> usize {
-        self.pipelines.len()
-    }
+/// The bytes of the maps a [`Gpu`] holds: the lookups' maps (a layer a cascade, and the characters'
+/// layers with `characters`), the still casters' maps, the thin casters' coverage maps and the two
+/// far maps (256 MB with the characters, 192 MB without).
+pub const fn map_bytes(characters: bool) -> u64 {
+    let map = SIZE as u64 * SIZE as u64 * 4;
+    let live = (CASCADES + if characters { CHAR_LAYERS } else { 0 }) as u64 * map;
+    let statics = CASCADES as u64 * map;
+    let thin = CASCADES as u64 * THIN_SIZE as u64 * THIN_SIZE as u64 * 8;
+    let far = 2 * FAR_SIZE as u64 * FAR_SIZE as u64 * 4;
+    live + statics + thin + far
 }
 
 impl Gpu {
-    /// The maps and what draws them; with what was `kept` from the run's earlier sun shadows (the
-    /// pipelines, [`Kept`]: none are made again), else all new.
-    pub(crate) fn new(device: &wgpu::Device, characters: bool, kept: Option<Kept>) -> Gpu {
+    /// The maps ([`map_bytes`]) and what draws them. Made once a run: switched off by the player, a
+    /// device keeps them (`crate::device`), and switching them on again restarts them
+    /// ([`Gpu::restart`]): nothing is made again.
+    pub(crate) fn new(device: &wgpu::Device, characters: bool) -> Gpu {
+        crate::made_here::texture();
         // One texture of a layer a cascade (one binding, one sample instruction a tap), for the
         // maps the lookups read and for the still casters' maps.
         let texture = |label, count: usize| {
@@ -3038,17 +3091,7 @@ impl Gpu {
                 .create_view(&Default::default())
         };
         let far_views = [far_view(), far_view()];
-        let Kept {
-            light_layout,
-            pipelines,
-            thin_pipe,
-            apply,
-        } = kept.unwrap_or_else(|| Kept {
-            light_layout: light_layout(device),
-            pipelines: Vec::new(),
-            thin_pipe: None,
-            apply: Vec::new(),
-        });
+        let light_layout = light_layout(device);
         let light_ring = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sun shadow lookup"),
             size: LIGHT_SLOT * LIGHT_SLOTS,
@@ -3101,6 +3144,90 @@ impl Gpu {
             light_group(&far_views[0], &far_views[1]),
             light_group(&far_views[1], &far_views[0]),
         ];
+        // The state of what is drawn is [`Gpu::restart`]'s: a fresh start's and a restart's are
+        // one.
+        Gpu {
+            maps,
+            live,
+            statics,
+            static_views,
+            array,
+            drawn: [None; CASCADES],
+            live_moving: [false; CASCADES],
+            thin_views,
+            thin_array,
+            thin_in: [false; CASCADES],
+            thin_moving: [false; CASCADES],
+            thin_pipe: None,
+            linear,
+            thin_quads: None,
+            compare,
+            light_layout,
+            light_ring,
+            light_groups,
+            uniforms: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("sun shadow step"),
+                size: LOOKUP_SIZE,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            apply: Vec::new(),
+            ring: None,
+            pipelines: Vec::new(),
+            far_views,
+            far_front: 0,
+            far_back: None,
+            far_old: None,
+            far_fade: 0,
+            far_drawn: None,
+            far_draws: 0,
+            chars_in: 0,
+            char_layers: characters,
+            chars_allow: 0.0,
+        }
+        .restart()
+    }
+
+    /// The same maps and what draws them as a fresh start has them ([`Gpu::new`]; the player
+    /// switched the sun shadows on again): nothing drawn and nothing on its way, the far maps and
+    /// the characters' layers left out; the textures, buffers, groups and pipelines kept. What the
+    /// maps still hold from before is never read: the lookups take a map only once it is drawn
+    /// again (`drawn`, `far_drawn`, `thin_in`, `chars_in`).
+    pub(crate) fn restart(self) -> Gpu {
+        let Gpu {
+            maps,
+            live,
+            statics,
+            static_views,
+            array,
+            drawn: _,
+            live_moving: _,
+            thin_views,
+            thin_array,
+            thin_in: _,
+            thin_moving: _,
+            thin_pipe,
+            linear,
+            thin_quads,
+            compare,
+            uniforms,
+            apply,
+            ring,
+            pipelines,
+            light_layout,
+            light_ring,
+            light_groups,
+            far_views,
+            far_front: _,
+            far_back: _,
+            far_drawn: _,
+            far_old: _,
+            far_fade: _,
+            far_draws: _,
+            chars_in: _,
+            char_layers,
+            chars_allow: _,
+        } = self;
         Gpu {
             maps,
             live,
@@ -3115,31 +3242,40 @@ impl Gpu {
             thin_moving: [false; CASCADES],
             thin_pipe,
             linear,
-            thin_quads: None,
+            thin_quads,
             compare,
+            uniforms,
+            apply,
+            ring,
+            pipelines,
             light_layout,
             light_ring,
             light_groups,
-            uniforms: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("sun shadow step"),
-                size: LOOKUP_SIZE,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
-            apply,
-            ring: None,
-            pipelines,
             far_views,
             far_front: 0,
             far_back: None,
+            far_drawn: None,
             far_old: None,
             far_fade: FAR_FADE_FRAMES,
-            far_drawn: None,
             far_draws: 0,
             chars_in: 0,
-            char_layers: characters,
+            char_layers,
             chars_allow: SKIN_RECEIVER_BIAS as f32,
         }
+    }
+
+    /// The thin casters' pipeline, made on a thread of the device's at its start
+    /// ([`thin_pipeline`]): used from now on (none is made here unless the cables are drawn before
+    /// it came, which a frame of play never is).
+    pub(crate) fn give_thin_pipeline(&mut self, made: wgpu::RenderPipeline) {
+        if self.thin_pipe.is_none() {
+            self.thin_pipe = Some(made);
+        }
+    }
+
+    /// Tests: whether the thin casters' pipeline is there.
+    pub(crate) fn has_thin_pipeline(&self) -> bool {
+        self.thin_pipe.is_some()
     }
 
     /// A depth-only pipeline drawing with the vertex module `module` (a converted game vertex
@@ -3197,6 +3333,7 @@ impl Gpu {
             wgpu::PrimitiveTopology::TriangleStrip | wgpu::PrimitiveTopology::LineStrip
         );
         // The hitch log's counts (`d3d9_stream::hitch`): a caster pipeline made and its time, on whichever thread.
+        crate::made_here::pipeline();
         let started = std::time::Instant::now();
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -3662,9 +3799,12 @@ impl Gpu {
                     mapped_at_creation: false,
                 }));
             }
-            let pipe = self
-                .thin_pipe
-                .get_or_insert_with(|| Self::make_thin_pipeline(device));
+            // Made on a thread of its own at the device's start (long there in play); here only
+            // when that thread has not answered by now, or there is none.
+            if self.thin_pipe.is_none() {
+                self.thin_pipe = Some(thin_pipeline(device, None));
+            }
+            let pipe = self.thin_pipe.as_ref().expect("made above");
             let quad_buffer = self.thin_quads.as_ref().expect("made above");
             for (k, (view, range)) in self.thin_views.iter().zip(&thin_ranges).enumerate() {
                 if range.is_empty() {
@@ -3706,60 +3846,6 @@ impl Gpu {
         (writes, drawn)
     }
 
-    /// The pipeline that draws the thin casters' quads into a coverage layer, added up.
-    fn make_thin_pipeline(device: &wgpu::Device) -> wgpu::RenderPipeline {
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("sun shadow thin casters"),
-            source: wgpu::ShaderSource::Wgsl(THIN_DRAW.into()),
-        });
-        let add = wgpu::BlendComponent {
-            src_factor: wgpu::BlendFactor::One,
-            dst_factor: wgpu::BlendFactor::One,
-            operation: wgpu::BlendOperation::Add,
-        };
-        // Coverage: the most of what is drawn over a texel, not the sum. Added (review of #693),
-        // the wires of a telegraph line, a few units apart but within one of the coverage map's
-        // texels (2 to 8 units in the far cascades) and its tent filter, merged into one band as
-        // dark as their sum: heavy dark lines at Goodsprings (thin/crop-th3-on-9835.png against
-        // crop-th-on-9835.png, 2026-11-17), where the real wires cast separate faint lines.
-        let most = wgpu::BlendComponent {
-            operation: wgpu::BlendOperation::Max,
-            ..add
-        };
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("sun shadow thin casters"),
-            layout: None,
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: 20,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x3],
-                })],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: THIN_FORMAT,
-                    blend: Some(wgpu::BlendState {
-                        color: add,
-                        alpha: most,
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        })
-    }
-
     /// The lighting variants' bind group 3, with the front far map.
     pub(crate) fn light_group(&self) -> &wgpu::BindGroup {
         &self.light_groups[self.far_front]
@@ -3783,15 +3869,9 @@ impl Gpu {
         self.far_old = None;
     }
 
-    /// What is kept while the sun shadows are switched off ([`Kept`]); the maps and the rest go
-    /// with `self`.
-    pub(crate) fn into_kept(self) -> Kept {
-        Kept {
-            light_layout: self.light_layout,
-            pipelines: self.pipelines,
-            thin_pipe: self.thin_pipe,
-            apply: self.apply,
-        }
+    /// The casters' pipelines (tests: the same after every switch once each was made).
+    pub(crate) fn pipelines_made(&self) -> usize {
+        self.pipelines.len()
     }
 
     /// The step's uniform buffer.

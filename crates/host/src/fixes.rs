@@ -804,9 +804,11 @@ pub struct Choice {
 }
 
 impl Choice {
-    /// Whether the sun light is turned to come from the sky's discs: only with the sun shadows on
-    /// and [`Choice::sun_light_from_sky`] (on by default). With the sun shadows off the game's light
-    /// is the exe's, whatever the key says.
+    /// Whether a game starts with the sun light from the sky's discs: the sun shadows on from the
+    /// start and [`Choice::sun_light_from_sky`] (on by default). It does not decide the install
+    /// (tests read it): on wgpu the light is installed with the key on whatever the start
+    /// (`crate::light_from_sky_wanted`) and turns only while the sun shadows draw, as the player
+    /// switches them; anywhere else the game's light is the exe's.
     pub fn light_from_sky(&self) -> bool {
         self.sun_shadows && self.sun_light_from_sky
     }
