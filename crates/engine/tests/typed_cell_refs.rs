@@ -6872,8 +6872,9 @@ const XE_MASKS: &[u32] = &[0, 1, 0xfe, 0x100];
 const XE_ACTIONS: &[u32] = &[1, 0, 2, 0xff, 0x101];
 
 /// [`XeShapes::xe_run_once`]'s world: the run-once packages (type 0x1b) of up to five entries,
-/// one of them (the third) empty in some seeds; the second word a flag, or the `second`th package of
-/// the list (the first one none of it, the fourth past the empty item when there is one).
+/// the third empty in some seeds (five with the third empty in a third of them); the second word a
+/// flag, or the `second`th package of the list (the first one none of it, the fourth and fifth past
+/// the empty item when there is one).
 fn xe_run_once_world(e: &mut Engine, seed: u32, second: u32, flags: bool) -> Vec<u32> {
     let w = xd_world(e, seed);
     let x = place_kind(e, &w, seed, 0x1b);
@@ -6882,8 +6883,12 @@ fn xe_run_once_world(e: &mut Engine, seed: u32, second: u32, flags: bool) -> Vec
     {
         let head = e.mem.alloc(8);
         let mut node = head;
-        for i in 0..d.next(5) {
-            let entry = if i == 2 && d.next(3) == 0 {
+        // A third of the seeds hold five entries, the third empty, so a search for a later package
+        // meets the stop.
+        let full = seed % 3 == 2;
+        let n = d.next(5);
+        for i in 0..if full { 5 } else { n } {
+            let entry = if i == 2 && (full || d.next(3) == 0) {
                 0
             } else {
                 let entry = e.mem.alloc(8);
