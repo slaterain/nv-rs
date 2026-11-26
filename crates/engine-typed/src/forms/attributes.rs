@@ -16,15 +16,17 @@
 //! bytes the sum's, as the exe leaves them), a save buffer's change flags (`00428110`, the word at
 //! +0x17, and `004280f0`, its bits), the base component's constructor (`00402d30`, whose vtable
 //! the class's own replaces at once) and `TESModelRDT`'s constructor inside the biped model form's.
-//! `memcpy` is the C runtime family's typed call. What stays a call by address: the RTTI casts,
-//! the vtable slot that marks a form changed, the save buffers' reads and writes, the vector
+//! `memcpy` is the C runtime family's typed call; the vtable slot that marks a form changed is this
+//! family's typed call when it holds one of its `AddChange`s (`TESActorBase`'s `005f1630`, which
+//! NPCs and creatures keep, or `TESForm`'s `00484b60`), and any other target is called through it.
+//! What stays a call by address: the RTTI casts, the save buffers' reads and writes, the vector
 //! constructor and destructor iterators and the members' own constructors and destructors. The
 //! three save functions whose change mask the compiler folded to 0 do nothing, as in the exe.
 //!
 //! No floats.
 
-use super::FAMILY;
-use crate::crt;
+use super::{actor_base, tesform, FAMILY};
+use crate::{crt, slot_target};
 use engine_core::{args, typed_call, Engine, Ptr};
 
 /// `__RTDynamicCast` (cdecl: object, vftable delta, source type, target type, is-reference).
@@ -157,8 +159,25 @@ pub fn set_attribute_value(e: &mut Engine, this: u32, code: u32, value: u8, mark
             &args![this, 0u32, TYPE_TES_ATTRIBUTES, TYPE_TES_FORM, 0u32],
         )
         .u32();
-    if form != 0 {
-        e.vcall(form, SLOT_MARK_CHANGED, &args![CHANGE_ATTRIBUTES]);
+    if form == 0 {
+        return;
+    }
+    // The slot holds `TESActorBase::AddChange` for an NPC or a creature and `TESForm::AddChange`
+    // for a form that keeps it: both this family's.
+    match slot_target(e, form, SLOT_MARK_CHANGED) {
+        0x005f_1630 => typed_call!(
+            FAMILY,
+            0x005f_1630,
+            actor_base::add_change(e, form, CHANGE_ATTRIBUTES)
+        ),
+        0x0048_4b60 => typed_call!(
+            FAMILY,
+            0x0048_4b60,
+            tesform::add_change(e, form, CHANGE_ATTRIBUTES)
+        ),
+        _ => {
+            e.vcall(form, SLOT_MARK_CHANGED, &args![CHANGE_ATTRIBUTES]);
+        }
     }
 }
 

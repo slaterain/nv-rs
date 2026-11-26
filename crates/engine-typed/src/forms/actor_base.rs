@@ -22,7 +22,9 @@
 //! (`00408d60`), the change flags' word (`008c71b0`) and the iterator's base constructor
 //! (`005d8b10`). `TESForm`'s, `TESActorBaseData`'s and `TESAttributes`' functions are this
 //! family's typed calls, `memset` and `_ftol2` the C runtime family's; a word the exe reads again
-//! with nothing between that could change it is read once. Every virtual call goes through its
+//! with nothing between that could change it is read once, and so is the save/load game
+//! (`011de45c`), which the exe reads again after calls by address but which is set once at start-up
+//! and stays the same through a save or a load. Every virtual call goes through its
 //! slot, and the rest (the RTTI casts, the AI form's and spell list's functions, the save/load
 //! game's change tests, the combat formulas, the logger) are calls by address.
 //!

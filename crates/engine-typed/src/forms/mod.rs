@@ -25,7 +25,8 @@
 //! Reached: each function stays registered at its exe address, so the translations' calls by
 //! address and the vtable slots that hold them (`TESForm`'s vtable `0101c794` and the form classes
 //! that keep its slots) reach the typed functions; between them the calls are typed calls. The
-//! translations that called one of them as a plain Rust function (all in `tesform.rs` itself)
+//! translations that called one of them as a plain Rust function (in `tesform.rs`,
+//! `tesactorbasedata.rs`, `tesactorbase.rs`, `tesattributes.rs` and `run_004801e0.rs` themselves)
 //! call it by address now, so the game reaches the typed function from there too.
 //!
 //! Native: the one-line bodies the exe calls (the form type, its flag tests, the byte swaps, the
@@ -49,10 +50,15 @@
 //! the compile index are computed exactly as the translation computes them.
 //!
 //! Stage 1: the objects stay in guest memory where the game made them. The loading threads read and
-//! write forms too, so the row is [`Threads::Both`]. No float maths: the components' weight and
+//! write forms too, so the row is [`Threads::Both`], and the float maths is the exe's x87 maths under
+//! the running thread's control word, as the translation does it: the calculated level's
+//! multiply and divide and an item's desirability's add (`x87_mul`, `x87_div`, `x87_add`), each
+//! result stored as the `f32` the exe stores; the karma loaded from an integer exactly and read
+//! back through the C runtime's typed `_ftol2`. A float becomes an integer through
+//! `x87::fistp_chop` where the exe's `FISTP` runs under the truncating control word it sets (the
+//! loaded quality, the armour's base rating, the statistics' fields). The components' weight and
 //! quality are only moved (a getter's `ST0` stored as the `f32` the exe stores, a quality byte
-//! widened exactly), and the loaded quality becomes its byte through `x87::fistp_chop`, as the
-//! exe's `FISTP` does under the truncating control word it sets there.
+//! widened exactly); each module comment says how its own floats are done.
 
 use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};

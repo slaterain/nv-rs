@@ -3874,7 +3874,15 @@ fn ab_world(e: &mut Engine) {
     e.register(FLOAT_CALLEES[2], float_answer::<2>);
     e.register(FLOAT_CALLEES[3], float_answer::<3>);
     e.register(FLOAT_CALLEES[4], float_answer::<4>);
-    for (i, v) in [7.25f64, 3.5, 11.0, 300.75, 0.125].into_iter().enumerate() {
+    // The armour's base rating truncates to 65836, whose low word (300) is what the rating takes; its
+    // extra rating is a hair above half a float's step at 11 (2^-21 + 2^-56), so 11 plus it rounds
+    // up in a 24-bit add and to even (11) in a 53-bit add and the float store: the threads'
+    // precisions give different results.
+    let extra = f64::from_bits(0x3ea0_0000_0002_0000);
+    for (i, v) in [7.25f64, 3.5, 11.0, 65836.75, extra]
+        .into_iter()
+        .enumerate()
+    {
         e.mem.set_f64(FLOAT_ANSWERS + 8 * i as u32, v);
     }
     // LoadString: two characters and a zero into the buffer it is given.
@@ -3956,6 +3964,8 @@ const BASE_FLAGS: &[u32] = &[
     0x40,
     0x0004_0010,
     0x0080_0000,
+    // The bits 2, 0x20000 and 0x400000, none a tested mask's own: a widened mask shows.
+    0x0042_0002,
     0xffff_ffff,
 ];
 
@@ -4391,7 +4401,8 @@ fn ab_get_actor_value() {
                 0x39,
                 0xffff_ffff,
             ]),
-            Input::Of(&[0x4148_0000, 0xc0e0_0000]),
+            // The karma: 12.75 and -7.5 truncate (to 12 and -7) where rounding would not; 12.5.
+            Input::Of(&[0x414c_0000, 0xc0f0_0000, 0x4148_0000]),
         ])
         .setup(|e, case| {
             ab_world(e);
@@ -4563,16 +4574,23 @@ fn ab_save_game() {
 
 #[test]
 fn ab_save_game_block_too_big() {
-    // A spell list save that moves the position past 0xffff bytes: the block's warning.
+    // A spell list save that leaves the position 0xffff or 0x10000 bytes past the block's size
+    // placeholder (4 bytes into the stream, after the tag): no warning, then the block's warning.
     Diff::new(entry!(0x005f_18c0, actor_base::save_game(u32, u32)))
         .ab()
-        .inputs(&[Input::Of(&[1]), Input::Flag, Input::Of(&[0]), Input::Flag])
+        .inputs(&[
+            Input::Of(&[1]),
+            Input::Flag,
+            Input::Of(&[0]),
+            Input::Flag,
+            Input::Of(&[0xffff, 0x1_0000]),
+        ])
         .setup(|e, case| {
             let a = ab_save_setup(e, case, false);
-            e.register(0x0048_da20, |e, _| {
+            let past = case.word(4);
+            e.register_double(0x0048_da20, move |e, _| {
                 let save_load = e.mem.u32(SAVE_LOAD_GAME);
-                let at = e.mem.u32(save_load + SL_POSITION);
-                e.mem.set_u32(save_load + SL_POSITION, at + 0x1_0000);
+                e.mem.set_u32(save_load + SL_POSITION, STREAM + 4 + past);
                 ret(0)
             });
             e.map(STREAM + 0x1_0000, 0x1000);
@@ -4799,11 +4817,25 @@ fn attributes_set_attribute_value() {
         Input::Of(&[0, 0x99]),
         Input::Of(&[0, 1, 0x80]),
         Input::Flag,
+        // The form's slot 0x48: a stand-in, `TESActorBase::AddChange` or `TESForm::AddChange`.
+        Input::Of(&[0, 1, 2]),
+        // A loaded or a created form.
+        Input::Of(&[0x0100_0060, 0xff00_0010]),
     ])
     .setup(|e, case| {
         ab_world(e);
         let this = attributes_component(e, 8);
-        let form = form(e, 0x2a, 0, 0x0100_0060);
+        let form = actor_base_form(e, 0x2a, 0, case.word(5), 0, false);
+        if case.word(4) != 0 {
+            let vtable = e.mem.alloc(0x50);
+            let add_change = if case.word(4) == 1 {
+                0x005f_1630
+            } else {
+                0x0048_4b60
+            };
+            e.mem.set_u32(vtable + 0x48, add_change);
+            e.mem.set_u32(form, vtable);
+        }
         set_cast(e, TYPE_TES_FORM, if case.word(3) != 0 { form } else { 0 });
         vec![this, case.word(0), case.word(1), case.word(2)]
     })
