@@ -251,20 +251,20 @@ pub fn bound_object_construct(e: &mut Engine, this: u32) -> u32 {
     typed_call!(
         FAMILY,
         0x0050_e8b0,
-        copy_point(e, at(this, BOUND_MIN), default)
+        copy_box_point(e, at(this, BOUND_MIN), default)
     );
     let default = typed_call!(FAMILY, 0x0050_e8f0, default_bound(e));
     typed_call!(
         FAMILY,
         0x0050_e8b0,
-        copy_point(e, at(this, BOUND_MAX), default)
+        copy_box_point(e, at(this, BOUND_MAX), default)
     );
     this
 }
 
 // Typed from 0050e8b0
 /// A point's copy: each component read and stored, x, y, then z. Answers `this`.
-pub fn copy_point(e: &mut Engine, this: u32, source: u32) -> u32 {
+pub fn copy_box_point(e: &mut Engine, this: u32, source: u32) -> u32 {
     for offset in [0u32, 2, 4] {
         let value = e.mem.u16(at(source, offset));
         e.mem.set_u16(at(this, offset), value);
@@ -358,8 +358,8 @@ pub fn points_sum(e: &mut Engine, this: u32, result: u32) {
 }
 
 // Typed from 0050ea90
-/// The global word at `012031e4`.
-pub fn word_012031e4(e: &mut Engine) -> u32 {
+/// `BSBound`'s extra data name (the `NiFixedString` the global at `012031e4` holds).
+pub fn bound_extra_data_name(e: &mut Engine) -> u32 {
     e.mem.u32(0x0120_31e4)
 }
 
@@ -560,7 +560,7 @@ fn shares_model(e: &mut Engine, this: u32, reference: u32, source: u32, flag: &m
                         dispatch::scene::cast_if(e, CLONE_ADDRESS_ARGUMENT, key)
                     );
                     if found != 0 {
-                        let table = typed_call!(FAMILY, 0x0050_f5c0, word_011c6218(e));
+                        let table = typed_call!(FAMILY, 0x0050_f5c0, clone_controller_word(e));
                         if e.call(0x0047_a520, &args![found, table]).u32() != 0 {
                             shareable = false;
                         }
@@ -770,8 +770,8 @@ pub fn clear_parent_list(e: &mut Engine, this: u32) {
 }
 
 // Typed from 0050f5c0
-/// The global word at `011c6218`.
-pub fn word_011c6218(e: &mut Engine) -> u32 {
+/// The global word at `011c6218`, which `Clone3D` hands the found controller's test (`0047a520`).
+pub fn clone_controller_word(e: &mut Engine) -> u32 {
     e.mem.u32(0x011c_6218)
 }
 
@@ -829,8 +829,8 @@ pub fn cast_and_call(
 }
 
 // Typed from 0050f6e0
-/// The global word at `011f81dc`.
-pub fn word_011f81dc(e: &mut Engine) -> u32 {
+/// The file finder (the global at `011f81dc`).
+pub fn file_finder(e: &mut Engine) -> u32 {
     e.mem.u32(0x011f_81dc)
 }
 

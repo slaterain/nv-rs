@@ -6646,7 +6646,7 @@ fn ob_bound_object_construct() {
 
 #[test]
 fn ob_copy_point() {
-    Diff::new(entry!(0x0050_e8b0, object::copy_point(u32, u32) -> u32))
+    Diff::new(entry!(0x0050_e8b0, object::copy_box_point(u32, u32) -> u32))
         .ob()
         .inputs(&[Input::Of(OB_SEEDS), Input::Of(&[0, 1, 2])])
         .setup(|e, case| {
@@ -6782,7 +6782,7 @@ fn ob_points_sum() {
 
 #[test]
 fn ob_word_012031e4() {
-    Diff::new(entry!(0x0050_ea90, object::word_012031e4() -> u32))
+    Diff::new(entry!(0x0050_ea90, object::bound_extra_data_name() -> u32))
         .ob()
         .inputs(&[Input::Of(WORDS)])
         .setup(|e, case| {
@@ -7214,7 +7214,7 @@ fn ob_clear_parent_list() {
 
 #[test]
 fn ob_word_011c6218() {
-    Diff::new(entry!(0x0050_f5c0, object::word_011c6218() -> u32))
+    Diff::new(entry!(0x0050_f5c0, object::clone_controller_word() -> u32))
         .ob()
         .inputs(&[Input::Of(WORDS)])
         .setup(|e, case| {
@@ -7292,7 +7292,7 @@ fn ob_cast_and_call() {
 
 #[test]
 fn ob_word_011f81dc() {
-    Diff::new(entry!(0x0050_f6e0, object::word_011f81dc() -> u32))
+    Diff::new(entry!(0x0050_f6e0, object::file_finder() -> u32))
         .ob()
         .inputs(&[Input::Of(WORDS)])
         .setup(|e, case| {
