@@ -18,12 +18,16 @@
 //! constructor, destructor and `__AddChunkData` and this unit's own functions are this family's
 //! typed calls; the point maths (`NiPoint3`'s difference and sum, the square root) the pathing
 //! family's; `memcpy` the C runtime family's; the word getters and the point constructor the
-//! leaves'. `Clone3D`'s own slot (0x14c) is a typed call when it holds `Clone3D` itself, and is
-//! called through otherwise. What stays a call by address: the model loader and its models, the
-//! scene graph's clone and fix-ups, the file's chunk reads, the RTTI cast, the model path getters,
-//! the reference's scale and model, `operator new` and `delete`, the logger, `sprintf_s`; every
-//! other virtual call goes through its slot. JIP LN's seam in `Clone3D` (`0050ef46`, its clone of a
-//! model with lights of its own) runs where it does, behind the same test.
+//! leaves'; a node's child, an object's controllers and `NiDynamicCast` (`0043b4a0`, `0043b230`,
+//! `00653270`) dispatch's, the node's child count test (`0045bc00`) the multibound family's, a
+//! model's reference count (`0092c870`) the cell references', the node's update (`00a59c60`) the
+//! scene family's and a result's word at +0x40 (`008d6f30`) the AI queries'. `Clone3D`'s own slot
+//! (0x14c) is a typed call when it holds `Clone3D` itself, and is called through otherwise. What
+//! stays a call by address: the model loader and its models, the scene graph's clone and fix-ups,
+//! the file's chunk reads, the RTTI cast, the model path getters, the reference's scale and model,
+//! `operator new` and `delete`, the logger, `sprintf_s`; every other virtual call goes through its
+//! slot. JIP LN's seam in `Clone3D` (`0050ef46`, its clone of a model with lights of its own) runs
+//! where it does, behind the same test.
 //!
 //! Floats: the box's components become floats exactly (`FILD`); the box's size is the pathing
 //! family's root of the integer sum of squares (stored as a float), halved, as a float; the
@@ -35,7 +39,7 @@
 
 use super::{tesform, FAMILY};
 use crate::culling::layout::NiPoint3;
-use crate::{crt, pathing, slot_target};
+use crate::{ai_queries, cell_refs, crt, dispatch, multibound, pathing, scene, slot_target};
 use engine_core::extend::jip_patches;
 use engine_core::typed::leaf;
 use engine_core::x87::{fistp, x87_mul, x87_quiet_bits, x87_store32};
@@ -171,6 +175,27 @@ fn copy_three_words(e: &mut Engine, from: u32, to: u32) {
     }
 }
 
+/// A node's first child (`NiNode::GetAt(0)`, `0043b4a0`), the dispatch family's.
+fn first_child(e: &mut Engine, node: u32) -> u32 {
+    typed_call!(
+        dispatch::FAMILY,
+        0x0043_b4a0,
+        dispatch::scene::child(e, Ptr::new(node), 0)
+    )
+    .addr()
+}
+
+/// An object's controller list head (`NiObjectNET::GetControllers`, `0043b230`), the dispatch
+/// family's.
+fn controllers(e: &mut Engine, object: u32) -> u32 {
+    typed_call!(
+        dispatch::FAMILY,
+        0x0043_b230,
+        dispatch::scene::first_controller(e, Ptr::new(object))
+    )
+    .addr()
+}
+
 /// `this` is one of the two forms for which the reference is dropped.
 fn drops_reference(e: &Engine, this: u32) -> bool {
     this == e.mem.u32(SPECIAL_FORM_A) || this == e.mem.u32(SPECIAL_FORM_B)
@@ -223,9 +248,17 @@ pub fn bound_object_construct(e: &mut Engine, this: u32) -> u32 {
     typed_call!(FAMILY, 0x0050_f8c0, object_construct(e, this));
     e.mem.set_u32(this, BOUND_OBJECT_VTABLE);
     let default = typed_call!(FAMILY, 0x0050_e8f0, default_bound(e));
-    typed_call!(FAMILY, 0x0050_e8b0, copy_point(e, at(this, BOUND_MIN), default));
+    typed_call!(
+        FAMILY,
+        0x0050_e8b0,
+        copy_point(e, at(this, BOUND_MIN), default)
+    );
     let default = typed_call!(FAMILY, 0x0050_e8f0, default_bound(e));
-    typed_call!(FAMILY, 0x0050_e8b0, copy_point(e, at(this, BOUND_MAX), default));
+    typed_call!(
+        FAMILY,
+        0x0050_e8b0,
+        copy_point(e, at(this, BOUND_MAX), default)
+    );
     this
 }
 
@@ -289,7 +322,10 @@ pub fn bound_object_destruct(e: &mut Engine, this: u32) {
 /// The two points at +0xc and +0x18 combined by `NiPoint3`'s operator (`subtract` or `add`) into a
 /// temporary, whose three words are copied to `result`.
 fn combine_points(e: &mut Engine, this: u32, result: u32, sum: bool) {
-    let (first, second) = (Ptr::<NiPoint3>::new(at(this, 0xc)), Ptr::new(at(this, 0x18)));
+    let (first, second) = (
+        Ptr::<NiPoint3>::new(at(this, 0xc)),
+        Ptr::new(at(this, 0x18)),
+    );
     e.with_stack(12, |e, temporary| {
         let out = Ptr::<NiPoint3>::new(temporary.addr());
         let combined = if sum {
@@ -398,7 +434,12 @@ pub fn bound_size(e: &mut Engine, this: u32) -> f32 {
         let difference = typed_call!(
             FAMILY,
             0x0050_ec30,
-            point_difference(e, at(this, BOUND_MIN), difference.addr(), at(this, BOUND_MAX))
+            point_difference(
+                e,
+                at(this, BOUND_MIN),
+                difference.addr(),
+                at(this, BOUND_MAX)
+            )
         );
         typed_call!(FAMILY, 0x0050_ec80, point_length(e, difference))
     });
@@ -502,14 +543,22 @@ fn shares_model(e: &mut Engine, this: u32, reference: u32, source: u32, flag: &m
         0x1c => {
             shareable = true;
             let node = e.vcall(source, 0xc, &[]).u32();
-            if node != 0 && e.call(0x0045_bc00, &args![node, 0u32]).u32() != 0 {
-                let first = e.call(0x0043_b4a0, &args![node, 0u32]).u32();
-                if e.call(0x0043_b230, &args![first]).u32() != 0 {
-                    let second = e.call(0x0043_b4a0, &args![node, 0u32]).u32();
-                    let key = e.call(0x0043_b230, &args![second]).u32();
-                    let found = e
-                        .call(0x0065_3270, &args![CLONE_ADDRESS_ARGUMENT, key])
-                        .u32();
+            if node != 0
+                && typed_call!(
+                    multibound::FAMILY,
+                    0x0045_bc00,
+                    multibound::getters::node_child(e, Ptr::new(node), 0)
+                ) != 0
+            {
+                let first = first_child(e, node);
+                if controllers(e, first) != 0 {
+                    let second = first_child(e, node);
+                    let key = controllers(e, second);
+                    let found = typed_call!(
+                        dispatch::FAMILY,
+                        0x0065_3270,
+                        dispatch::scene::cast_if(e, CLONE_ADDRESS_ARGUMENT, key)
+                    );
                     if found != 0 {
                         let table = typed_call!(FAMILY, 0x0050_f5c0, word_011c6218(e));
                         if e.call(0x0047_a520, &args![found, table]).u32() != 0 {
@@ -577,7 +626,11 @@ fn clone_scaled(
         };
         e.call(HOLDER_SET, &args![model, created]);
         let current = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, model));
-        e.call(0x0092_c870, &args![current]);
+        typed_call!(
+            cell_refs::FAMILY,
+            0x0092_c870,
+            cell_refs::queue::add_ref(e, current)
+        );
         let current = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, model));
         let loader = e.mem.u32(MODEL_LOADER);
         if e.call(LOADER_ADD, &args![loader, name, current]).bool() {
@@ -597,9 +650,9 @@ fn clone_scaled(
         e.mem.free(second_process);
     } else {
         let current = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, model));
-        if e.call(0x0043_b230, &args![current]).u32() != 0 {
+        if controllers(e, current) != 0 {
             let current = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, model));
-            let found = e.call(0x0043_b230, &args![current]).u32();
+            let found = controllers(e, current);
             let found_scale = model_scale(e, found);
             if found_scale == reference_scale(e, reference) {
                 let result = clone_through_slot(e, this, reference, flag);
@@ -741,7 +794,11 @@ pub fn register_model(e: &mut Engine, this: u32, _unused: u32) -> bool {
     e.call(0x00a5_a040, &args![node]);
     e.with_stack(12, |e, origin| {
         e.call(0x0043_d410, &args![origin, 0.0f32, 0u32, 0u32]);
-        e.call(0x00a5_9c60, &args![node, origin]);
+        typed_call!(
+            scene::FAMILY,
+            0x00a5_9c60,
+            scene::walk::update(e, Ptr::new(node), origin.addr())
+        );
     });
     true
 }
@@ -850,14 +907,16 @@ pub fn type_25_result(e: &mut Engine, this: u32, argument: u32, _unused: u32) ->
     let mut result = 0;
     if e.call(0x0066_4840, &args![1u32]).u32() != 0 {
         let manager = e.call(0x0066_4840, &args![1u32]).u32();
-        result = e
-            .call(0x0066_4f50, &args![manager, argument, this])
-            .u32();
+        result = e.call(0x0066_4f50, &args![manager, argument, this]).u32();
     }
     e.vcall(this, SLOT_TAKE_RESULT, &args![result]);
     if result != 0 && e.vcall(result, 0x100, &[]).u32() != 0 && argument != 0 {
         let answer = e.vcall(result, 0x100, &[]).u32();
-        let value = e.call(0x008d_6f30, &args![answer]).u32();
+        let value = typed_call!(
+            ai_queries::FAMILY,
+            0x008d_6f30,
+            ai_queries::queries::word_at_40(e, answer)
+        );
         e.call(0x0056_9350, &args![argument, value]);
     }
     result

@@ -172,10 +172,7 @@ pub fn erase(e: &mut Engine, this: u32, position: u32, count: u32) -> u32 {
         let source = start.wrapping_add(position).wrapping_add(count);
         let room = reserve(e, this).wrapping_sub(position);
         let destination = start.wrapping_add(position);
-        e.call(
-            MOVE_CHARS,
-            &args![this, destination, room, source, tail],
-        );
+        e.call(MOVE_CHARS, &args![this, destination, room, source, tail]);
         let new_length = length(e, this).wrapping_sub(count);
         set_length(e, this, new_length);
     }

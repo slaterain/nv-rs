@@ -431,9 +431,7 @@ pub fn std_string_assign_chars(
     if e.call(STRING_INSIDE, &args![this, text]).bool() {
         let data = e.call(STRING_DATA, &args![this]).u32();
         let offset = text.addr().wrapping_sub(data);
-        return e
-            .call(0x0044_a580, &args![this, this, offset, count])
-            .ptr();
+        return e.call(0x0044_a580, &args![this, this, offset, count]).ptr();
     }
     if e.call(STRING_GROW, &args![this, count, 0u32]).bool() {
         let reserve = e.get(this, DebugString::reserve);
@@ -1378,7 +1376,7 @@ pub fn tes_object_get_scaled_model_file_name(e: &mut Engine, this: Ptr, referenc
     let scale = e.call(0x0056_7400, &args![reference]).f64();
     let percent = e.global::<f64>(ONE_HUNDRED);
     // FMUL under the thread's precision, FSTP to a float, then FLD/FSTP again to push it.
-    let product = x87_quiet_bits(x87::x87_store32(x87::x87_mul(scale, percent)));
+    let product = x87_quiet_bits(crate::x87::x87_store32(crate::x87::x87_mul(scale, percent)));
     let rounded = e.call(0x0040_6d90, &args![product]).u32();
     e.call(
         0x0040_6d00,
@@ -1713,8 +1711,8 @@ mod tests {
         assert_eq!(e.global::<u32>(SCRATCH), this);
         let log = calls(&mut e);
         assert_eq!(
-            addresses(&log)[..2].to_vec(),
-            vec![ALLOCATOR_CONSTRUCT, ALLOCATOR_PROXY_CONSTRUCT]
+            addresses(&log)[..3].to_vec(),
+            vec![ALLOCATOR_CONSTRUCT, 0x0044_a7b0, ALLOCATOR_PROXY_CONSTRUCT]
         );
     }
 
@@ -1727,7 +1725,8 @@ mod tests {
         assert_eq!(e.call(0x0044a500, &[this, right]).u32(), this);
         assert_eq!(string_text(&e, this), b"hello");
         let log = calls(&mut e);
-        assert_eq!(log[0], (ALLOCATOR_PROXY_CONSTRUCT, vec![this, right]));
+        assert_eq!(log[0], (0x0044_a7d0, vec![this, right]));
+        assert_eq!(log[1], (ALLOCATOR_PROXY_CONSTRUCT, vec![this, right]));
         assert!(log.contains(&(STRING_GROW, vec![this, 5, 0])));
     }
 
@@ -1737,7 +1736,13 @@ mod tests {
         let inline = new_string(&mut e, b"ab");
         start_log(&mut e);
         e.call(0x0044a540, &[inline]);
-        assert_eq!(calls(&mut e), vec![(STRING_SET_LENGTH, vec![inline, 0])]);
+        assert_eq!(
+            calls(&mut e),
+            vec![
+                (0x0044_a730, vec![inline, 1, 0]),
+                (STRING_SET_LENGTH, vec![inline, 0])
+            ]
+        );
         assert_eq!(e.mem.u32(inline + 0x14), 0);
 
         let heap_string = e.mem.alloc(0x1c);
@@ -1748,7 +1753,7 @@ mod tests {
         start_log(&mut e);
         e.call(0x0044a540, &[heap_string]);
         let log = calls(&mut e);
-        assert_eq!(log[0], (STRING_FREE, vec![heap_string, heap, 0x21]));
+        assert_eq!(log[1], (STRING_FREE, vec![heap_string, heap, 0x21]));
         assert_eq!(e.mem.u32(heap_string + 0x18), 0xf);
     }
 
@@ -1801,7 +1806,9 @@ mod tests {
         start_log(&mut e);
         assert_eq!(e.call(0x0044a640, &[this, text]).u32(), this);
         assert_eq!(string_text(&e, this), b"xyz");
-        assert_eq!(calls(&mut e)[0], (STRLEN, vec![text]));
+        let log = calls(&mut e);
+        assert_eq!(log[0], (0x0044_a670, vec![text]));
+        assert_eq!(log[1], (STRLEN, vec![text]));
     }
 
     #[test]
@@ -1951,7 +1958,9 @@ mod tests {
         assert_eq!(point(&e, object + 0x2a), (0, 0, 0));
         assert_eq!(e.global::<u32>(DEFAULT_BOUND_GUARD) & 1, 1);
         let log = calls(&mut e);
-        assert_eq!(log[0], (TES_FORM_CONSTRUCT, vec![object]));
+        assert_eq!(log[0], (0x0050_f8c0, vec![object]));
+        assert_eq!(log[1], (TES_FORM_CONSTRUCT, vec![object]));
+        assert!(log.contains(&(0x0050_e9c0, vec![object + 0x24])));
         assert!(log.contains(&(ALLOCATOR_CONSTRUCT, vec![object + 0x24])));
 
         // With the default already built, both points take its value.
@@ -2014,6 +2023,8 @@ mod tests {
         assert_eq!(
             log,
             vec![
+                (0x0050_e9f0, vec![object]),
+                (0x0050_f930, vec![object]),
                 (LIST_REMOVE, vec![list, object]),
                 (TES_FORM_DESTRUCT, vec![object]),
             ]
@@ -2046,7 +2057,13 @@ mod tests {
         start_log(&mut e);
         e.call(0x0050e9f0, &[object]);
         assert_eq!(e.mem.u32(object), TES_OBJECT_VTABLE);
-        assert_eq!(calls(&mut e), vec![(TES_FORM_DESTRUCT, vec![object])]);
+        assert_eq!(
+            calls(&mut e),
+            vec![
+                (0x0050_f930, vec![object]),
+                (TES_FORM_DESTRUCT, vec![object])
+            ]
+        );
     }
 
     #[test]
@@ -2141,7 +2158,11 @@ mod tests {
         );
         let log = calls(&mut e);
         assert_eq!(
-            log[0].1[1..].to_vec(),
+            addresses(&log)[..3].to_vec(),
+            vec![0x0050_eb70, 0x0050_eb50, 0x0050_eb30]
+        );
+        assert_eq!(
+            log[3].1[1..].to_vec(),
             vec![(-3.0f32).to_bits(), 4.0f32.to_bits(), 5.0f32.to_bits()]
         );
         assert_eq!(e.call(0x0050eb90, &[object, result]).u32(), result);
@@ -2179,7 +2200,15 @@ mod tests {
         let expected = (f64::from(504.0f32.sqrt()) * 0.5) as f32;
         assert_eq!(size, expected);
         // 6, 12 and 18 squared: 36 + 144 + 324.
-        assert_eq!(calls(&mut e), vec![(SQUARE_ROOT, vec![504.0f32.to_bits()])]);
+        let log = calls(&mut e);
+        assert_eq!(
+            addresses(&log),
+            vec![0x0050_ec30, 0x0050_e960, 0x0050_ec80, SQUARE_ROOT]
+        );
+        assert_eq!(log[0].1[0], object + 0x24);
+        assert_eq!(log[0].1[2], object + 0x2a);
+        assert_eq!(log[1].1[1..].to_vec(), vec![6, 12, 18]);
+        assert_eq!(log[3], (SQUARE_ROOT, vec![504.0f32.to_bits()]));
     }
 
     #[test]
@@ -2235,11 +2264,13 @@ mod tests {
         assert_eq!(e.global::<u32>(SCRATCH), 0x3412);
         assert_eq!(e.mem.u16(object + 0x24), 0x1234);
         let log = calls(&mut e);
-        assert_eq!(log.len(), 1 + 6 + 1 + 1 + 6);
+        assert_eq!(log.len(), 1 + 1 + 6 + 1 + 1 + 1 + 6);
+        assert_eq!(log[1], (0x0050_ed30, vec![object + 0x24]));
         assert_eq!(
-            log[7],
+            log[8],
             (ADD_CHUNK_DATA, vec![OBND_CHUNK, object + 0x24, 12])
         );
+        assert_eq!(log[10], (0x0050_ed30, vec![object + 0x24]));
 
         e.set_global(SCRATCH_COUNT, 0u32);
         start_log(&mut e);
@@ -2296,7 +2327,8 @@ mod tests {
         e.call(0x0050edd0, &[object, file]);
         let log = calls(&mut e);
         assert_eq!(log[1], (FILE_READ_CHUNK, vec![file, object + 0x24, 12]));
-        assert_eq!(log.len(), 3 + 6);
+        assert_eq!(log[3], (0x0050_ed30, vec![object + 0x24]));
+        assert_eq!(log.len(), 3 + 1 + 6);
     }
 
     #[test]
@@ -2436,6 +2468,7 @@ mod tests {
                 0x0043_fa80,
                 0x0044_0460,
                 0x0096_11e0,
+                0x0050_f5a0,
             ]
         );
         assert_eq!(log[4].1[1], 1.0f32.to_bits());
@@ -2844,7 +2877,14 @@ mod tests {
             start_log(&mut e);
             e.call(body, &[object]);
             assert_eq!(e.mem.u32(object), TES_OBJECT_VTABLE);
-            assert_eq!(calls(&mut e), vec![(TES_FORM_DESTRUCT, vec![object])]);
+            assert_eq!(
+                calls(&mut e),
+                vec![
+                    (0x0050_e9f0, vec![object]),
+                    (0x0050_f930, vec![object]),
+                    (TES_FORM_DESTRUCT, vec![object])
+                ]
+            );
 
             start_log(&mut e);
             assert_eq!(e.call(deleting, &[object, 1]).u32(), object);
@@ -2947,7 +2987,7 @@ mod tests {
         assert_eq!(e.call(0x0050f900, &[object, 1]).u32(), object);
         assert_eq!(
             addresses(&calls(&mut e)),
-            vec![TES_FORM_DESTRUCT, OPERATOR_DELETE]
+            vec![0x0050_f930, TES_FORM_DESTRUCT, OPERATOR_DELETE]
         );
     }
 
@@ -3106,7 +3146,7 @@ mod tests {
         e.call(0x0050fbf0, &[form, 0x4000]);
         assert_eq!(
             addresses(&calls(&mut e)),
-            vec![0x0057_15d0, FORM_TYPE, 0x0060_3bb0]
+            vec![0x0050_fd90, 0x0057_15d0, FORM_TYPE, 0x0060_3bb0]
         );
         e.set_global(SPECIAL_FORM_A, form);
         start_log(&mut e);
@@ -3153,6 +3193,7 @@ mod tests {
         assert_eq!(
             calls(&mut e),
             vec![
+                (0x0050_fd90, vec![0x1000, 0x2000]),
                 (0x0057_15d0, vec![0x2000]),
                 (0x0056_7400, vec![0x2000]),
                 (0x0040_6d90, vec![150.0f32.to_bits()]),
@@ -3175,8 +3216,37 @@ mod tests {
         start_log(&mut e);
         e.call(0x0050fdf0, &[0x1000, 0x2000, 0x3000]);
         let log = calls(&mut e);
-        let pushed = log[2].1[0];
+        let pushed = log[3].1[0];
         assert!(f32::from_bits(pushed).is_nan());
         assert_ne!(pushed & 0x0040_0000, 0);
+    }
+
+    /// `FMUL` rounds at the running thread's precision (`0050fe10`): on the main thread (24 bits) a
+    /// product just above the midpoint of two floats rounds up, where a double rounded to a float
+    /// lands on the midpoint and rounds to even. The scale here times 100 is 130.5 plus a little:
+    /// 130.5 plus one float step on the main thread (131 once rounded), 130.5 on the others (130).
+    #[test]
+    fn scaled_model_file_name_multiplies_at_the_threads_precision() {
+        for (word, pushed) in [(0x007fu16, 0x4302_8001u32), (0x027f, 0x4302_8000)] {
+            let mut e = engine();
+            e.set_global(ONE_HUNDRED, 100.0f64);
+            e.register(0x0057_15d0, |_, _| ret(0x11));
+            e.register(0x0056_7400, |_, _| {
+                float_ret(f64::from_bits(0x3ff4_e147_c28f_5c29))
+            });
+            e.register(0x0040_6d90, |_, _| ret(0));
+            e.register(0x0040_6d00, |_, _| ret(0));
+            start_log(&mut e);
+            let saved = crate::x87::control_word();
+            crate::x87::set_control_word(word);
+            e.call(0x0050fdf0, &[0x1000, 0x2000, 0x3000]);
+            crate::x87::set_control_word(saved);
+            let log = calls(&mut e);
+            assert_eq!(
+                log[3],
+                (0x0040_6d90, vec![pushed]),
+                "control word {word:#06x}"
+            );
+        }
     }
 }
