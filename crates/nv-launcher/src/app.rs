@@ -3531,8 +3531,8 @@ mod tests {
         assert!(fixes.contains(&"JIP LN NVSE built in: On".to_string()));
         assert!(fixes.contains(&"UI Organizer built in: On".to_string()));
         let more = settings_entries(settings::List::More, &shown, true, Consent::Ask);
-        assert_eq!(more[0], "Corner shading (experimental): Off");
-        assert!(more.contains(&"Corner shading strength: 0.7".to_string()));
+        assert_eq!(more[0], "Ambient occlusion: Off");
+        assert!(more.contains(&"Ambient occlusion strength: 0.7".to_string()));
         assert!(more.contains(&"Sun shadows (experimental): Off".to_string()));
         // Back from a list Settings opened lands on its entry; anything else at the top.
         for list in SUBLISTS {

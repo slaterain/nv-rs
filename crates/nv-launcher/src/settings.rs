@@ -158,18 +158,21 @@ impl List {
         self.notes_on(cfg!(windows))
     }
 
-    /// [`List::notes`] as on Windows (`windows`) or not: the new lighting is drawn by the game's
-    /// own renderer only, so on Windows the list says Direct3D 9 does not draw it (elsewhere there
-    /// is no other renderer).
+    /// [`List::notes`] as on Windows (`windows`) or not: the new lighting is still being tried
+    /// (ambient occlusion's labels have no room for [`EXPERIMENTAL_MARK`]), and it is drawn by the
+    /// game's own renderer only, so on Windows the list says Direct3D 9 does not draw it
+    /// (elsewhere there is no other renderer).
     pub fn notes_on(self, windows: bool) -> Vec<String> {
         let preset = Row::GameFixes.label();
         match self {
             List::Main => Vec::new(),
-            List::More if windows => vec![format!(
-                "With the {} renderer the new lighting is not drawn.",
-                without_note(DIRECT3D_9)
-            )],
-            List::More => Vec::new(),
+            List::More => {
+                let mut notes = vec!["The new lighting is still being tried.".to_string()];
+                if windows {
+                    notes.push(format!("{} does not draw it.", without_note(DIRECT3D_9)));
+                }
+                notes
+            }
             List::Fixes => vec![format!("Each follows {preset} until chosen here.")],
         }
     }
@@ -180,8 +183,8 @@ impl List {
 /// [`EXPERIMENTAL`] mark), the text ([`ABOUT_MAX`]). No key names, values or engine words; a
 /// row with none here gets [`plain_of`] its note.
 const PLAIN: [(&str, &str, &str); 43] = [
-    ("bAmbientOcclusion", "Corner shading", "Ambient occlusion: a soft shade in corners, creases and where things meet the ground. Costs a little speed."),
-    ("fAmbientOcclusionStrength", "Corner shading strength", "How strong the corner shade is, from 0.1 (faint) to 1.0 (all of it)."),
+    ("bAmbientOcclusion", "Ambient occlusion", "A soft shade in corners, creases and where things meet the ground. Costs a little speed."),
+    ("fAmbientOcclusionStrength", "Ambient occlusion strength", "How strong the ambient occlusion's shade is, from 0.1 (faint) to 1.0 (all of it)."),
     ("bSunShadows", "Sun shadows", "Objects cast shadows on the ground and on each other from the sun, and faintly from the moon at night, out to about 140 m. Costs about 1 ms a frame."),
     ("bSunLightFromSky", "Shadows follow the sun and moon", "Shadows point away from the sun by day and the moon by night. Off: the original's sun light, low from the north."),
     ("bSunShadowsCharacters", "Characters' sun shadows", "You (in third person), people, creatures and bodies cast sun and moon shadows that move with them, in place of the game's own."),
@@ -228,9 +231,11 @@ const PLAIN: [(&str, &str, &str); 43] = [
 /// The mark of a row still being tried, in its label.
 pub const EXPERIMENTAL_MARK: &str = " (experimental)";
 
-/// Rows still being tried outside the fix rows: the new lighting's two switches (the fix rows' are
-/// the table's off in every preset, [`is_experimental`]).
-const EXPERIMENTAL: [&str; 2] = ["bAmbientOcclusion", "bSunShadows"];
+/// Rows still being tried outside the fix rows, marked in their labels: the sun shadows (the fix
+/// rows' are the table's off in every preset, [`is_experimental`]). Ambient occlusion is being
+/// tried too, but its name and the mark do not fit a row ([`LABEL_MAX`]): the list's note says it
+/// ([`List::notes_on`]).
+const EXPERIMENTAL: [&str; 1] = ["bSunShadows"];
 
 /// Whether a table row is still being tried: one of [`EXPERIMENTAL`], or a fix row off in every
 /// preset (the table's 0: the host's `OFF_IN_EVERY_PRESET`, which a host test holds to it).
@@ -1435,7 +1440,7 @@ mod tests {
         let strength = row("fAmbientOcclusionStrength");
         assert_eq!(
             strength.idle_in(&fixes).as_deref(),
-            Some("Does nothing while Corner shading is Off.")
+            Some("Does nothing while Ambient occlusion is Off.")
         );
         let ao = row("bAmbientOcclusion").apply(&fixes, "On");
         assert_eq!(strength.idle_in(&ao), None);
@@ -1577,10 +1582,24 @@ mod tests {
         assert!(is_jargon("x=1") && !is_jargon("bodies") && !is_jargon("JIP's"));
         assert_eq!(row("bUncap").label(), "Uncapped frame rate");
         assert_eq!(row("bJIPInstalled").label(), "JIP LN NVSE built in");
+        // Ambient occlusion by the name players know; with the mark it would not fit its row, so
+        // the list's note says the new lighting is still being tried.
+        assert_eq!(row("bAmbientOcclusion").label(), "Ambient occlusion");
+        assert!(format!("Ambient occlusion{EXPERIMENTAL_MARK}").len() > LABEL_MAX);
         assert_eq!(
-            row("bAmbientOcclusion").label(),
-            "Corner shading (experimental)"
+            row("fAmbientOcclusionStrength").label(),
+            "Ambient occlusion strength"
         );
+        assert_eq!(row("bSunShadows").label(), "Sun shadows (experimental)");
+        for windows in [true, false] {
+            let notes = List::More.notes_on(windows);
+            assert_eq!(notes[0], "The new lighting is still being tried.");
+            assert_eq!(notes.len(), if windows { 2 } else { 1 });
+            assert!(notes
+                .iter()
+                .all(|n| !n.contains("Vulkan") && !n.contains("Metal")));
+        }
+        assert_eq!(List::More.notes_on(true)[1], "Direct3D 9 does not draw it.");
         assert_eq!(
             row("bHavokRefCounts").label(),
             "No physics wait (experimental)"
