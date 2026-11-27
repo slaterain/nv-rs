@@ -467,7 +467,11 @@ impl Backend for WgpuBackend {
             Cmd::QueryIssue { query, flags } => d.query_issue(query, flags),
             // Kept draw records: carried out by `d3d9_stream::Kept` in front of the backend, which
             // the platform puts there whenever the game side may send them.
-            Cmd::RecordNext { .. } | Cmd::DrawItem { .. } | Cmd::ForgetRecords { .. } => {
+            Cmd::RecordNext { .. }
+            | Cmd::DrawItem { .. }
+            | Cmd::ForgetRecords { .. }
+            | Cmd::KeepStates { .. }
+            | Cmd::DrawPatched { .. } => {
                 d.not_provided("kept draw records without d3d9_stream::Kept (skipped)");
             }
             Cmd::SetClipPlane { index, plane, .. } => d.set_clip_plane(index, plane),

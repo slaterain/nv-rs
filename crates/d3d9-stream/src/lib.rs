@@ -22,7 +22,8 @@
 //!   [`Slot`] while main goes on; the backend sees the serial order. [`StateDigest`], a backend
 //!   for checks, hashes each draw's device state.
 //! - [`Tee`]: two backends fed the same commands, the primary answering.
-//! - [`Kept`]: kept draw records, a draw's own commands carried out again by number ([`Cmd::DrawItem`]).
+//! - [`Kept`]: kept draw records, a draw's own commands carried out again by number ([`Cmd::DrawItem`]),
+//!   or with its kept states and patches and no command of its set-up ([`Cmd::DrawPatched`]).
 //! - [`wire`]: commands as bytes: a file of them (recorded once, replayed into any backend), and
 //!   the hashes that check the hand-over (`NV_D3D9_STREAM_CHECK=1`).
 //!

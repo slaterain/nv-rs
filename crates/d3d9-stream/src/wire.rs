@@ -24,10 +24,15 @@ pub const LIST_HASH: u64 = hash_const(LIST.as_bytes());
 /// has now, so it is read as ever (the recordings made before them).
 pub const OLDER_LIST_HASH: u64 = 0x2220_7750_95dd_ca44;
 
-/// Whether a file written with the command list of hash `file` is read: this build's, or
-/// [`OLDER_LIST_HASH`].
+/// The [`LIST_HASH`] of the list with the kept draw records' first three commands, before the patched
+/// items' (`KeepStates`, `DrawPatched`) were added at its end: such a file (a stage-1 run's) is read
+/// as ever too.
+pub const ITEMS_LIST_HASH: u64 = 0xb4a5_77bb_8c31_dff2;
+
+/// Whether a file written with the command list of hash `file` is read: this build's,
+/// [`ITEMS_LIST_HASH`] or [`OLDER_LIST_HASH`].
 fn reads_list(file: u64) -> bool {
-    file == LIST_HASH || file == OLDER_LIST_HASH
+    file == LIST_HASH || file == ITEMS_LIST_HASH || file == OLDER_LIST_HASH
 }
 
 /// [`hash`] at compile time.
