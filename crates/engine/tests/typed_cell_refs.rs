@@ -6544,8 +6544,9 @@ fn xf_list_world(e: &mut Engine, seed: u32) -> Vec<u32> {
 const XF_PLANE_FILL: u32 = 0x7171_7171;
 
 /// [`xf_list_world`], and the occlusion plane (type 0x71, a block of [`XF_PLANE_FILL`]) it put at the
-/// head of a list that holds the plane references (type 0x76), in three of four seeds (0 if none):
-/// `InitItem` links that plane's planes, and the other seeds keep "no occlusion plane".
+/// head of a list that holds the plane references (type 0x76) in three of four seeds, and of seeds 7
+/// and 39, each after plane references of its own (0 if none): `InitItem` links that plane's planes,
+/// and the other seeds keep "no occlusion plane".
 fn xf_list_world_and_plane(e: &mut Engine, seed: u32) -> (Vec<u32>, u32) {
     let (w, pool) = xf_world(e, seed);
     let mut d = Draw(seed.wrapping_mul(0x6c07_8965) ^ 0x0041_6be0);
@@ -6601,20 +6602,24 @@ fn xf_list_world_and_plane(e: &mut Engine, seed: u32) -> (Vec<u32>, u32) {
         node = e.mem.u32(node + 8);
     }
     let mut plane = 0;
-    if holds_refs && seed % 4 != 1 {
+    if (holds_refs && seed % 4 != 1) || seed % 32 == 7 {
         plane = e.mem.alloc(0x110);
         for offset in (0..0x110).step_by(4) {
             e.mem.set_u32(plane + offset, XF_PLANE_FILL);
         }
-        let x = e.mem.alloc(0x40);
-        let head = e.mem.u32(w.list + 4);
+        // Plane references of their own (a cleared table) first in the walk, then the plane.
         let vt = e.mem.u32(XD_VT);
-        for (k, word) in [vt, 0x71, head, plane].into_iter().enumerate() {
-            e.mem.set_u32(x + 4 * k as u32, word);
+        let table = e.mem.alloc(0x10);
+        for (kind, payload) in [(0x76u32, table), (0x71, plane)] {
+            let x = e.mem.alloc(0x40);
+            let head = e.mem.u32(w.list + 4);
+            for (k, word) in [vt, kind, head, payload].into_iter().enumerate() {
+                e.mem.set_u32(x + 4 * k as u32, word);
+            }
+            e.mem.set_u32(w.list + 4, x);
+            let flags = e.mem.u8(w.list + 8 + (kind >> 3)) | (1 << (kind & 7));
+            e.mem.set_u8(w.list + 8 + (kind >> 3), flags);
         }
-        e.mem.set_u32(w.list + 4, x);
-        let flags = e.mem.u8(w.list + 8 + (0x71 >> 3)) | (1 << (0x71 & 7));
-        e.mem.set_u8(w.list + 8 + (0x71 >> 3), flags);
     }
     (vec![w.list, reference], plane)
 }
@@ -11800,4 +11805,942 @@ fn xq_copy_byte_d_to_c() {
     .xd_on_pattern(0x20, 0x0042_dd70)
     .run()
     .assert_same();
+}
+
+// ---- The extra data family's save and load functions (`00422c40` to `0042dae0`) --------------
+
+/// Where the save and load world keeps its state: the objects' vtable, which format's types a
+/// 1-byte read gives, the count of those reads, and the reach test's list of the stand-ins that ran
+/// (a count, then their addresses).
+const XS_VT: u32 = CONTROL + 0x5e0;
+const XS_FORMAT: u32 = CONTROL + 0x5e4;
+const XS_BYTE_READS: u32 = CONTROL + 0x5e8;
+const XS_HITS_N: u32 = CONTROL + 0x600;
+const XS_HITS: u32 = CONTROL + 0x604;
+const XS_HITS_MAX: u32 = 0x3f;
+/// Every slot of the world's objects but the first four (the references, forms, packages and
+/// creatures the arms call through), and the buffer's slots 0 to 0xc (its words at +0x40 to +0x4c).
+const XS_SLOT_FN: u32 = 0x00ff_c400;
+const XS_BUFFER_FNS: [u32; 4] = [0x00ff_c410, 0x00ff_c414, 0x00ff_c418, 0x00ff_c41c];
+/// The save-load object's global, the save kind table, the sequence names, the object manager,
+/// the player, the debug switch, the word `0042ce00` answers.
+const XS_SAVE_LOAD: u32 = 0x011d_e45c;
+const XS_KIND_TABLE: u32 = 0x0118_3d30;
+const XS_SEQUENCES: u32 = 0x0119_77d8;
+const XS_MANAGER: u32 = 0x011d_df38;
+const XS_PLAYER: u32 = 0x011d_ea3c;
+const XS_DEBUG: u32 = 0x011d_e4ec;
+const XS_GIVEN: u32 = 0x011c_6444;
+/// Save versions: before the lock's fields, the sequence index's two, before the lock's extra id
+/// ends, the first with blocks, before and from the scale's end, the first without blocks.
+const XS_VERSIONS: [u32; 7] = [0x14, 0x16, 0x19, 0x1f, 0x42, 0x43, 0x5a];
+/// Buffer versions: before the player's removal ends, before the lock's words, before the forms of
+/// type 0x8b, after.
+const XS_BUFFER_VERSIONS: [u32; 4] = [0x0d, 0x0e, 0x10, 0x12];
+/// Save kind masks and words: none, single bits, the created-only bit, the leveled creature's mask,
+/// the timer's bit, all but the created-only bit (twice).
+const XS_MASKS: [u32; 8] = [
+    0,
+    1,
+    2,
+    0x4000_0001,
+    0x0800_0020,
+    0x0402_0000,
+    0xbfff_ffff,
+    0xbfff_ffff,
+];
+/// A buffer's save kind: all (three times), single bits, the leveled creature's mask, the timer's.
+const XS_KINDS_SAVED: [u32; 7] = [u32::MAX, u32::MAX, u32::MAX, 1, 2, 0x0800_0020, 0x0402_0000];
+/// A buffer's counted value: two to eight.
+const XS_LOAD_COUNTS: [u32; 4] = [2, 3, 5, 8];
+/// What a 4-byte read gives: the block tag, 0, a small index, the sequence names' last and one past,
+/// a signalling NaN, 1.0.
+const XS_READ_WORDS: [u32; 7] = [0x424c_4f4b, 0, 3, 0xf4, 0xf5, 0x7fa0_0001, 0x3f80_0000];
+/// What a 2-byte read or a counted value gives: one to three, none, many.
+const XS_COUNTS: [u32; 5] = [1, 2, 3, 0, 0x30];
+/// An id a load reads: none, a created one (its page mapped), or a block of the pool (the lookup,
+/// `xf_lookup`, finds a form for some): the old format's arms hand ids on as references.
+fn xs_id(e: &mut Engine) -> u32 {
+    match xf_draw(e, XF_POOL + 2) {
+        0 => 0,
+        1 => 0xff00_0001,
+        pick => e.mem.u32(XF_POOL_AT + 4 * (pick - 2)),
+    }
+}
+/// The types the old format's functions know, and two they do not (0x05, 0x93).
+const XS_OLD_KINDS: &[u32] = &[
+    0x0c, 0x18, 0x19, 0x1b, 0x1d, 0x1f, 0x2a, 0x2b, 0x30, 0x39, 0x3a, 0x41, 0x46, 0x4d, 0x4e, 0x2e,
+    0x21, 0x05, 0x93,
+];
+/// The types the buffered format's arms know, and one they do not (0x05).
+const XS_BUFFER_KINDS: &[u32] = &[
+    0x16, 0x3e, 0x90, 0x91, 0x1f, 0x24, 0x45, 0x5f, 0x25, 0x30, 0x23, 0x56, 0x5c, 0x5d, 0x1e, 0x27,
+    0x28, 0x4a, 0x26, 0x8d, 0x4e, 0x21, 0x22, 0x1c, 0x49, 0x6c, 0x74, 0x55, 0x3c, 0x39, 0x46, 0x89,
+    0x0d, 0x5b, 0x19, 0x18, 0x1b, 0x5e, 0x1d, 0x73, 0x75, 0x35, 0x70, 0x2c, 0x7c, 0x6e, 0x1a, 0x2a,
+    0x2f, 0x32, 0x33, 0x3f, 0x4d, 0x2b, 0x60, 0x2e, 0x54, 0x50, 0x8b, 0x8f, 0x92, 0x05, 0x2e, 0x5f,
+    0x5e, 0x35, 0x2c, 0x0d,
+];
+/// The types the buffered fix-up and the marked-only arms look at, put in the list in turn.
+const XS_TURN_KINDS: &[u32] = &[
+    0x1c, 0x0d, 0x6c, 0x32, 0x33, 0x39, 0x55, 0x2b, 0x19, 0x1d, 0x70, 0x3c, 0x1a, 0x46, 0x5f, 0x89,
+    0x35, 0x2c, 0x54, 0x2e, 0x5e, 0x75,
+];
+const XS_SEEDS: &[u32] = &[
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+    50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
+];
+
+/// The stand-in at `A` ran (the reach test reads the list).
+fn xs_mark(e: &mut Engine, at: u32) {
+    let n = e.mem.u32(XS_HITS_N);
+    if (0..n).any(|i| e.mem.u32(XS_HITS + 4 * i) == at) || n >= XS_HITS_MAX {
+        return;
+    }
+    e.mem.set_u32(XS_HITS + 4 * n, at);
+    e.mem.set_u32(XS_HITS_N, n + 1);
+}
+
+/// The stand-ins that ran.
+fn xs_hits(e: &Engine) -> Vec<u32> {
+    (0..e.mem.u32(XS_HITS_N))
+        .map(|i| e.mem.u32(XS_HITS + 4 * i))
+        .collect()
+}
+
+/// A callee of another unit: marked, counted, its first word answered.
+fn xs_hit<const A: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+    xs_mark(e, A);
+    noted(e, a)
+}
+
+/// A callee answering 0 or 1.
+fn xs_coin<const A: u32>(e: &mut Engine, _: &[u32]) -> Ret {
+    xs_mark(e, A);
+    ret(xf_draw(e, 2))
+}
+
+/// A callee answering none or a block of the pool.
+fn xs_pick<const A: u32>(e: &mut Engine, _: &[u32]) -> Ret {
+    xs_mark(e, A);
+    let pick = xf_draw(e, XF_POOL + 1);
+    ret(if pick == 0 {
+        0
+    } else {
+        e.mem.u32(XF_POOL_AT + 4 * (pick - 1))
+    })
+}
+
+/// A callee answering 0 or all ones (a package's procedure type).
+fn xs_none_or_all<const A: u32>(e: &mut Engine, _: &[u32]) -> Ret {
+    xs_mark(e, A);
+    ret([0, u32::MAX][xf_draw(e, 2) as usize])
+}
+
+/// A constructor: the world's object vtable at +0 (when the block is there), the block answered.
+fn xs_built<const A: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+    xs_mark(e, A);
+    if a[0] != 0 {
+        for offset in (0..0x20).step_by(4) {
+            e.mem.set_u32(a[0] + offset, 0);
+        }
+        let vt = e.mem.u32(XS_VT);
+        e.mem.set_u32(a[0], vt);
+    }
+    ret(a[0])
+}
+
+/// A constructor of an extra data of type `K` ([`built`]), marked.
+fn xs_extra<const A: u32, const K: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+    xs_mark(e, A);
+    for offset in (0xc..0x20).step_by(4) {
+        e.mem.set_u32(a[0] + offset, 0);
+    }
+    built::<K>(e, a)
+}
+
+/// The last finished sequence's constructor (`004351d0`, type 0x41): the name copied (16 bytes) to a
+/// block of its own, as the string it keeps, so no later read follows a local that is gone.
+fn xs_sequence_new(e: &mut Engine, a: &[u32]) -> Ret {
+    xs_mark(e, 0x0043_51d0);
+    let copy = e.mem.alloc(0x20);
+    for i in 0..0x10 {
+        let byte = e.mem.u8(a[1] + i);
+        e.mem.set_u8(copy + i, byte);
+    }
+    built::<0x41>(e, &[a[0], copy])
+}
+
+/// A maker of an object: a new block of 0x80 bytes with the world's object vtable.
+fn xs_object<const A: u32>(e: &mut Engine, _: &[u32]) -> Ret {
+    xs_mark(e, A);
+    let block = e.mem.alloc(0x80);
+    let vt = e.mem.u32(XS_VT);
+    e.mem.set_u32(block, vt);
+    ret(block)
+}
+
+/// A store of the second word at the first (`NiPointer`'s assignment of a handle).
+fn xs_store<const A: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+    xs_mark(e, A);
+    e.mem.set_u32(a[0], a[1]);
+    Ret::default()
+}
+
+/// The world's objects' slots: 0, 1 or the object.
+fn xs_slot(e: &mut Engine, a: &[u32]) -> Ret {
+    ret([0, 1, a[0]][xf_draw(e, 3) as usize])
+}
+
+/// `size` bytes at `at` copied to a stream whose position is the word at `position` (when they fit
+/// before the word after it), the position moved on.
+fn xs_stream_write(e: &mut Engine, position: u32, at: u32, size: u32) {
+    let p = e.mem.u32(position);
+    if p.wrapping_add(size) <= e.mem.u32(position + 4) {
+        for i in 0..size {
+            let byte = e.mem.u8(at + i);
+            e.mem.set_u8(p + i, byte);
+        }
+    }
+    e.mem.set_u32(position, p.wrapping_add(size));
+}
+
+/// `size` bytes read to `at`: a type of the world's format for a byte (in turn), a count for two
+/// bytes, a drawn word for four, drawn words for more.
+fn xs_stream_read(e: &mut Engine, at: u32, size: u32) {
+    match size {
+        1 => {
+            let k = e.mem.u32(XS_BYTE_READS);
+            e.mem.set_u32(XS_BYTE_READS, k + 1);
+            let kinds = if e.mem.u32(XS_FORMAT) == 0 {
+                XS_OLD_KINDS
+            } else {
+                XS_BUFFER_KINDS
+            };
+            let seed = e.mem.u32(XF_SEED);
+            let kind = kinds[((seed * 5 + k) % kinds.len() as u32) as usize];
+            e.mem.set_u8(at, kind as u8);
+        }
+        2 => {
+            let count = XS_COUNTS[xf_draw(e, 5) as usize];
+            e.mem.set_u16(at, count as u16);
+        }
+        _ => {
+            for i in (0..size).step_by(4) {
+                let word = XS_READ_WORDS[xf_draw(e, 7) as usize];
+                for (k, byte) in word.to_le_bytes().into_iter().enumerate() {
+                    if i + (k as u32) < size {
+                        e.mem.set_u8(at + i + k as u32, byte);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// `TESSaveLoadGame`'s write (`thiscall(save, at, size)`): into the save's stream.
+fn xs_write(e: &mut Engine, a: &[u32]) -> Ret {
+    xs_mark(e, 0x0085_79b0);
+    xs_stream_write(e, a[0] + 0x14, a[1], a[2]);
+    Ret::default()
+}
+
+/// Its read: [`xs_stream_read`], the position moved on.
+fn xs_read(e: &mut Engine, a: &[u32]) -> Ret {
+    xs_mark(e, 0x0085_79e0);
+    xs_stream_read(e, a[1], a[2]);
+    let p = e.mem.u32(a[0] + 0x14);
+    e.mem.set_u32(a[0] + 0x14, p.wrapping_add(a[2]));
+    Ret::default()
+}
+
+/// Its numeric id's save: the id written to the stream.
+fn xs_write_id(e: &mut Engine, a: &[u32]) -> Ret {
+    xs_mark(e, 0x0085_7a10);
+    xs_stream_write(e, a[0] + 0x14, a[1], 4);
+    Ret::default()
+}
+
+/// Its numeric id's load: a drawn id into the local.
+fn xs_read_id(e: &mut Engine, a: &[u32]) -> Ret {
+    xs_mark(e, 0x0085_7aa0);
+    let id = xs_id(e);
+    e.mem.set_u32(a[1], id);
+    let p = e.mem.u32(a[0] + 0x14);
+    e.mem.set_u32(a[0] + 0x14, p.wrapping_add(4));
+    Ret::default()
+}
+
+/// The save buffer's bytes: into the buffer's stream (+0x50).
+fn xs_buffer_save(e: &mut Engine, a: &[u32]) -> Ret {
+    xs_mark(e, 0x0086_5e50);
+    xs_stream_write(e, a[0] + 0x50, a[1], a[2]);
+    Ret::default()
+}
+
+/// The load buffer's bytes: [`xs_stream_read`].
+fn xs_buffer_load(e: &mut Engine, a: &[u32]) -> Ret {
+    xs_mark(e, 0x0086_4980);
+    xs_stream_read(e, a[1], a[2]);
+    Ret::default()
+}
+
+/// `LoadFormID`: a drawn id.
+fn xs_load_id(e: &mut Engine, _: &[u32]) -> Ret {
+    xs_mark(e, 0x0086_48a0);
+    ret(xs_id(e))
+}
+
+/// `LoadFormID_ov2`: a drawn id stored at the second word.
+fn xs_load_id_at(e: &mut Engine, a: &[u32]) -> Ret {
+    xs_mark(e, 0x0086_48e0);
+    let id = xs_id(e);
+    e.mem.set_u32(a[1], id);
+    Ret::default()
+}
+
+/// A counted value's count.
+fn xs_load_count(e: &mut Engine, _: &[u32]) -> Ret {
+    xs_mark(e, 0x0086_4a60);
+    ret(XS_LOAD_COUNTS[xf_draw(e, 4) as usize])
+}
+
+/// A string loaded into the local: two letters.
+fn xs_load_string(e: &mut Engine, a: &[u32]) -> Ret {
+    xs_mark(e, 0x0086_49a0);
+    e.mem.set_u32(a[1], 0x0000_6261);
+    Ret::default()
+}
+
+/// An array resized (`thiscall(array, n, 1)`): a new element block of `n` words, the count `n`.
+fn xs_resize<const A: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+    xs_mark(e, A);
+    let n = a[1];
+    let block = e.mem.alloc(4 * n.max(1));
+    e.mem.set_u32(a[0] + 4, block);
+    e.mem.set_u32(a[0] + 8, n);
+    Ret::default()
+}
+
+/// An array's element removed: the later ones moved down, the count lowered.
+fn xs_remove_at(e: &mut Engine, a: &[u32]) -> Ret {
+    xs_mark(e, 0x009a_4320);
+    let (base, n) = (e.mem.u32(a[0] + 4), e.mem.u32(a[0] + 8));
+    for i in a[1]..n.saturating_sub(1) {
+        let word = e.mem.u32(base + 4 * (i + 1));
+        e.mem.set_u32(base + 4 * i, word);
+    }
+    e.mem.set_u32(a[0] + 8, n.saturating_sub(1));
+    Ret::default()
+}
+
+/// A simple list's node after `previous` removed (`thiscall(previous, node)`): unlinked.
+fn xs_remove_after(e: &mut Engine, a: &[u32]) -> Ret {
+    xs_mark(e, 0x0090_5330);
+    let next = e.mem.u32(a[1] + 4);
+    e.mem.set_u32(a[0] + 4, next);
+    Ret::default()
+}
+
+/// A simple list's head node removed: the next node's words moved into it, or both cleared.
+fn xs_remove_head(e: &mut Engine, a: &[u32]) -> Ret {
+    xs_mark(e, 0x0063_f7b0);
+    let next = e.mem.u32(a[0] + 4);
+    let (item, after) = if next == 0 {
+        (0, 0)
+    } else {
+        (e.mem.u32(next), e.mem.u32(next + 4))
+    };
+    e.mem.set_u32(a[0], item);
+    e.mem.set_u32(a[0] + 4, after);
+    Ret::default()
+}
+
+/// The forms and save families' functions the save and load functions call as typed calls, which
+/// stand in here (so by address).
+const XS_TYPED_STAND_INS: &[u32] = &[
+    0x0048_39c0,
+    0x0044_a670,
+    0x004f_d3e0,
+    0x0086_5db0,
+    0x0086_5df0,
+    0x0047_cdb0,
+    0x0047_d130,
+    0x0047_e340,
+];
+
+/// What the save and load functions do in place where their translations call (on top of the
+/// family's): the save-load object's position, version, blocks and record, the debug switch's
+/// byte, a created form's id, an array's element, a reference's parent cell, a world location's
+/// constructor, a node's item store, and the buffer accessors of the family.
+const XS_IN_PLACE: &[u32] = &[
+    0x0045_cd60,
+    0x0082_5c00,
+    0x008d_f040,
+    0x0086_2110,
+    0x004f_d3c0,
+    0x0040_8d60,
+    0x0046_9860,
+    0x006a_7ad0,
+    0x008d_6f30,
+    0x006d_5320,
+    0x0072_6c60,
+    0x0042_8110,
+    0x0042_80f0,
+    0x0042_8130,
+    0x0042_ce30,
+    0x0042_ce50,
+    0x0042_ce90,
+    0x0042_4940,
+];
+
+/// The save and load world's stand-ins.
+fn xs_stand_ins(e: &mut Engine) {
+    e.register(XS_SLOT_FN, xs_slot);
+    e.register(XS_BUFFER_FNS[0], answer_of::<0x40>);
+    e.register(XS_BUFFER_FNS[1], answer_of::<0x44>);
+    e.register(XS_BUFFER_FNS[2], answer_of::<0x48>);
+    e.register(XS_BUFFER_FNS[3], answer_of::<0x4c>);
+    e.register(0x0085_79b0, xs_write);
+    e.register(0x0085_79e0, xs_read);
+    e.register(0x0085_7a10, xs_write_id);
+    e.register(0x0085_7aa0, xs_read_id);
+    e.register(0x0086_5e50, xs_buffer_save);
+    e.register(0x0086_4980, xs_buffer_load);
+    e.register(0x0086_48a0, xs_load_id);
+    e.register(0x0086_48e0, xs_load_id_at);
+    e.register(0x0086_4a60, xs_load_count);
+    e.register(0x0086_49a0, xs_load_string);
+    e.register(0x0042_f5f0, xs_resize::<0x0042_f5f0>);
+    e.register(0x006f_2290, xs_resize::<0x006f_2290>);
+    e.register(0x009a_4320, xs_remove_at);
+    e.register(0x0090_5330, xs_remove_after);
+    e.register(0x0063_f7b0, xs_remove_head);
+    e.register(0x0042_f780, xs_store::<0x0042_f780>);
+    macro_rules! with {
+        ($f:ident: $($a:expr),* $(,)?) => { $( e.register($a, $f::<$a>); )* };
+    }
+    with!(xs_hit:
+        0x0043_a8f0, 0x0043_a930, 0x0043_a9a0, 0x0083_f280, 0x0083_f3e0, 0x0083_f680, 0x0042_5ff0,
+        0x0042_dee0, 0x0054_ddd0, 0x0054_ca90, 0x0054_8230, 0x005f_36f0, 0x0056_7490, 0x0086_5e70,
+        0x0086_5f20, 0x0086_5ff0, 0x0086_5f60, 0x0086_5db0, 0x0086_5df0, 0x0086_cf00, 0x0084_5cc0,
+        0x005a_e3d0, 0x009a_5f90, 0x009a_5ff0, 0x0043_5e40, 0x005a_9db0, 0x005a_9f20, 0x005a_8b80,
+        0x005a_8bc0, 0x005a_bf60, 0x005a_a090, 0x0047_5920, 0x0047_59a0, 0x0040_a1e0, 0x0082_54c0,
+        0x0040_a250, 0x0082_5550, 0x0080_6a10, 0x0080_6a90, 0x0080_6b00, 0x0080_6b50, 0x0083_fb10,
+        0x0083_fbe0, 0x0043_aa40, 0x0043_aaa0, 0x0083_5fe0, 0x0040_37d0, 0x0043_8260, 0x0043_8280,
+        0x0047_7ce0, 0x0042_e680, 0x0084_aa30, 0x008b_6820, 0x008b_6ae0, 0x008a_dc50, 0x0057_5690,
+        0x004d_1440, 0x004d_1610, 0x004d_1960, 0x0067_77b0, 0x009e_b9c0, 0x0093_6a20, 0x0047_e340,
+    );
+    with!(xs_coin: 0x0042_5fd0, 0x0056_53d0, 0x0043_0660, 0x0047_cdb0);
+    with!(xs_pick: 0x0085_a240, 0x0047_7bc0, 0x0097_24e0, 0x0066_e330, 0x004b_f220, 0x0042_e250);
+    with!(xs_object: 0x008c_6ca0, 0x0067_0b90, 0x0047_d130);
+    with!(xs_built: 0x0043_a160, 0x0083_da50, 0x0043_7c10, 0x0060_1170, 0x005f_7230);
+    macro_rules! extras {
+        ($($a:expr => $k:expr),* $(,)?) => { $( e.register($a, xs_extra::<$a, $k>); )* };
+    }
+    extras! {
+        0x0043_2650 => 0x18, 0x0043_2810 => 0x19, 0x0043_3010 => 0x1b, 0x0043_0dd0 => 0x1d,
+        0x0043_5040 => 0x1e, 0x0043_11f0 => 0x2e, 0x0082_5a10 => 0x32, 0x0082_5ea0 => 0x33,
+        0x0043_29d0 => 0x35, 0x0043_5920 => 0x39, 0x0043_4fc0 => 0x3c, 0x0043_5c40 => 0x45,
+        0x0043_08c0 => 0x49, 0x0043_24a0 => 0x4d, 0x0043_6ac0 => 0x55, 0x0043_6cb0 => 0x5e,
+        0x0043_7440 => 0x73, 0x0043_2e60 => 0x74, 0x0043_7690 => 0x75, 0x0043_0f30 => 0x7c,
+        0x0043_36c0 => 0x89, 0x0043_7c40 => 0x8b, 0x0043_0200 => 0x5f,
+    }
+    e.register(0x0043_51d0, xs_sequence_new);
+    // A package's procedure type: none or all ones (the same address as the topic's check).
+    e.register(0x0096_11e0, xs_none_or_all::<0x0096_11e0>);
+}
+
+/// The save and load world: [`xf_world`]'s pool (each block an object with the world's vtable at +0),
+/// the save-load object (its stream, version, record being loaded and record being saved drawn),
+/// the save kind table's masks, the sequence names, the debug switch, the object manager and the
+/// player, a buffer (its version, reference, flag or reference, owner, save kind, flag word and
+/// flags drawn; its own stream), and a list of 3 to 5 extra data of the format's types (their fields from the
+/// pool; the arrays of types 0x45, 0x7c and 0x5f with small counts), each type at the head in turn. Answers (list, the buffer's first object word, the buffer).
+fn xs_world(e: &mut Engine, seed: u32, buffered: bool) -> [u32; 3] {
+    let (w, pool) = xf_world(e, seed);
+    let mut d = Draw(seed.wrapping_mul(0x5851_f42d) ^ 0x0042_8150);
+    e.mem.set_u32(XS_FORMAT, u32::from(buffered));
+    let kinds = if buffered {
+        XS_BUFFER_KINDS
+    } else {
+        XS_OLD_KINDS
+    };
+    // The objects' vtable: the world's first four slots where they are set, else the stand-in.
+    let vt = e.mem.alloc(0x400);
+    let world_vt = e.mem.u32(XD_VT);
+    for offset in (0..0x400).step_by(4) {
+        let world = if offset < 0x10 {
+            e.mem.u32(world_vt + offset)
+        } else {
+            0
+        };
+        let slot = if world != 0 { world } else { XS_SLOT_FN };
+        e.mem.set_u32(vt + offset, slot);
+    }
+    e.mem.set_u32(XS_VT, vt);
+    e.mem.set_u32(0, vt);
+    // Each pool block an object; no small ids (page 0 holds no objects).
+    for &block in &pool {
+        for offset in (4..0x100).step_by(4) {
+            if XF_SMALL.contains(&e.mem.u32(block + offset)) {
+                e.mem.set_u32(block + offset, 0);
+            }
+        }
+        e.mem.set_u32(block, vt);
+    }
+    xs_stand_ins(e);
+    let pick = |d: &mut Draw| -> u32 {
+        let i = d.next(pool.len() as u32 + 1) as usize;
+        if i == 0 {
+            0
+        } else {
+            pool[i - 1]
+        }
+    };
+    // The save-load object and its stream.
+    let save = e.mem.alloc(0x100);
+    let stream = e.mem.alloc(0x1000);
+    e.mem.set_u32(save + 0x14, stream);
+    e.mem.set_u32(save + 0x18, stream + 0x1000);
+    e.mem
+        .set_u8(save + 0x80, XS_VERSIONS[d.next(7) as usize] as u8);
+    let record = pick(&mut d);
+    e.mem.set_u32(save + 0x84, record);
+    let record = pick(&mut d);
+    e.mem.set_u32(save + 0x88, record);
+    e.mem.set_u32(XS_SAVE_LOAD, save);
+    e.mem.set_u8(XS_DEBUG, u8::from(d.next(3) == 0));
+    // The tables.
+    e.map(0x0118_3000, 0x2000);
+    // Words read as pointers: the stand-ins' page (the objects' slots), and the vtables of the
+    // classes the family's constructors build (each slot the extra data's delete).
+    e.map(0x00ff_c000, 0x1000);
+    e.map(0xff00_0000, 0x1000);
+    // The words a read gives, where a walk follows one as a pointer: zeros.
+    for page in [0x3f80_0000, 0x424c_4000, 0x7fa0_0000] {
+        e.map(page, 0x1000);
+    }
+    // The thread cache's decoy's payload (`xd_world`) is an object too.
+    e.mem.set_u32(0xeec0, vt);
+    e.map(0x0101_5000, 0x1000);
+    for offset in (0..0x1000).step_by(4) {
+        e.mem.set_u32(0x0101_5000 + offset, EXTRA_VT_FN);
+    }
+    for kind in 0..0x93 {
+        let mask = XS_MASKS[d.next(8) as usize];
+        e.mem.set_u32(XS_KIND_TABLE + 4 * kind, mask);
+    }
+    e.map(0x0119_7000, 0x3000);
+    for index in 0..0xf5 {
+        let name = pick(&mut d);
+        e.mem.set_u32(XS_SEQUENCES + 0x24 * index, name);
+    }
+    e.map(0x011c_6000, 0x1000);
+    e.mem.set_u32(XS_GIVEN, [0, 1, 0x40][d.next(3) as usize]);
+    let manager = e.mem.alloc(0x300);
+    e.mem.set_u32(manager + 0x244, d.next(4));
+    e.mem.set_u32(XS_MANAGER, manager);
+    let player = pick(&mut d);
+    e.mem.set_u32(XS_PLAYER, player);
+    // The buffer.
+    let buffer = e.mem.alloc(0x80);
+    let buffer_vt = e.mem.alloc(0x10);
+    for (i, &slot) in XS_BUFFER_FNS.iter().enumerate() {
+        e.mem.set_u32(buffer_vt + 4 * i as u32, slot);
+    }
+    e.mem.set_u32(buffer, buffer_vt);
+    e.mem
+        .set_u32(buffer + 0x17, XS_KINDS_SAVED[d.next(7) as usize]);
+    e.mem.set_u32(
+        buffer + 0x28,
+        [0, 8, 0xffff_fff7, u32::MAX][d.next(4) as usize],
+    );
+    e.mem.set_u32(buffer + 0x2c, XS_MASKS[d.next(8) as usize]);
+    e.mem
+        .set_u32(buffer + 0x40, XS_BUFFER_VERSIONS[d.next(4) as usize]);
+    for offset in [0x44, 0x48, 0x4c] {
+        let object = pick(&mut d);
+        e.mem.set_u32(buffer + offset, object);
+    }
+    let buffer_stream = e.mem.alloc(0x1000);
+    e.mem.set_u32(buffer + 0x50, buffer_stream);
+    e.mem.set_u32(buffer + 0x54, buffer_stream + 0x1000);
+    // The list.
+    let n = 1 + d.next(3);
+    xf_chain(e, &w, &pool, &mut d, kinds, n);
+    let count = kinds.len() as u32;
+    for j in 0..4 {
+        let kind = kinds[((seed * 4 + j) % count) as usize];
+        xf_chain(e, &w, &pool, &mut d, &[kind], 1);
+    }
+    if buffered {
+        let turns = XS_TURN_KINDS.len() as u32;
+        for j in 0..4 {
+            let kind = XS_TURN_KINDS[((seed * 4 + j) % turns) as usize];
+            xf_chain(e, &w, &pool, &mut d, &[kind], 1);
+        }
+    }
+    let mut x = e.mem.u32(w.list + 4);
+    while x != 0 {
+        for offset in (0xc..0x40).step_by(4) {
+            if XF_SMALL.contains(&e.mem.u32(x + offset)) {
+                e.mem.set_u32(x + offset, 0);
+            }
+        }
+        match e.mem.u32(x + 4) {
+            // A list of three nodes, each holding none, a record whose first word is 0, or a record
+            // whose first word is a block of the pool (as an id, the lookup finds some).
+            0x1b | 0x1d | 0x35 | 0x5e | 0x73 => {
+                let mut next = 0;
+                for _ in 0..3 {
+                    let item = match d.next(3) {
+                        0 => 0,
+                        which => {
+                            let record = e.mem.alloc(0x30);
+                            let first = if which == 1 { 0 } else { pick(&mut d) };
+                            e.mem.set_u32(record, first);
+                            record
+                        }
+                    };
+                    let node = e.mem.alloc(8);
+                    e.mem.set_u32(node, item);
+                    e.mem.set_u32(node + 4, next);
+                    next = node;
+                }
+                e.mem.set_u32(x + 0xc, next);
+            }
+            0x45 | 0x7c => {
+                let elements = e.mem.alloc(0x10);
+                e.mem.set_u32(x + 0x10, elements);
+                e.mem.set_u32(x + 0x14, d.next(3));
+            }
+            0x5f => {
+                let records = e.mem.alloc(0x10);
+                let n = d.next(3);
+                for i in 0..n {
+                    let entry = e.mem.alloc(0x20);
+                    for offset in (0..0x20).step_by(4) {
+                        let word = xf_field(&mut d, &pool);
+                        e.mem.set_u32(entry + offset, word);
+                    }
+                    let forms = e.mem.alloc(0x10);
+                    e.mem.set_u32(entry + 8, forms);
+                    e.mem.set_u32(entry + 0xc, d.next(3));
+                    e.mem.set_u32(records + 4 * i, entry);
+                }
+                e.mem.set_u32(x + 0x24, records);
+                e.mem.set_u32(x + 0x28, n);
+            }
+            _ => {}
+        }
+        x = e.mem.u32(x + 8);
+    }
+    // A created reference (its id from 0xff000000) in a quarter of the seeds.
+    if seed % 4 == 3 {
+        for offset in [0x44, 0x48] {
+            let object = e.mem.u32(buffer + offset);
+            if object != 0 {
+                e.mem.set_u32(object + 0xc, 0xff00_0001);
+            }
+        }
+    }
+    let first = e.mem.u32(buffer + 0x44);
+    [w.list, first, buffer]
+}
+
+/// The save and load functions' families and stand-ins.
+trait XsCase {
+    fn xs_case(self) -> Diff;
+}
+
+impl XsCase for Diff {
+    fn xs_case(self) -> Diff {
+        self.xf_case()
+            .ignore_calls(XS_IN_PLACE)
+            .goes_by_address(XS_TYPED_STAND_INS)
+    }
+}
+
+/// (list, change flags, reference) over the old format's world.
+fn xs_old_case(diff: Diff) -> Diff {
+    diff.xs_case()
+        .max_cases(XS_SEEDS.len() * 3)
+        .inputs(&[Input::Of(XS_SEEDS), Input::Of(&[0, 0x1002_1000, u32::MAX])])
+        .setup(|e, case| {
+            let [list, reference, _] = xs_world(e, case.word(0), false);
+            vec![list, case.word(1), reference]
+        })
+}
+
+#[test]
+fn xs_save_size() {
+    xs_old_case(Diff::new(entry!(
+        0x0042_2c40,
+        extra_data::save_game::save_size(u32, u32, u32) -> u16
+    )))
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xs_save_game() {
+    xs_old_case(Diff::new(entry!(
+        0x0042_35e0,
+        extra_data::save_game::save_game(u32, u32, u32)
+    )))
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xs_load_game() {
+    Diff::new(entry!(
+        0x0042_4960,
+        extra_data::save_game::load_game(u32, u32, u32, u32)
+    ))
+    .xs_case()
+    .max_cases(XS_SEEDS.len() * 3)
+    .inputs(&[Input::Of(XS_SEEDS), Input::Of(&[0, 0x1002_1010, u32::MAX])])
+    .setup(|e, case| {
+        let [list, reference, _] = xs_world(e, case.word(0), false);
+        vec![list, case.word(1), 0x5a5a_5a5a, reference]
+    })
+    .run()
+    .assert_same();
+}
+
+/// (list, buffer) over the buffered format's world.
+fn xs_buffer_case(diff: Diff) -> Diff {
+    diff.xs_case()
+        .inputs(&[Input::Of(XS_SEEDS)])
+        .setup(|e, case| {
+            let [list, _, buffer] = xs_world(e, case.word(0), true);
+            vec![list, buffer]
+        })
+}
+
+#[test]
+fn xs_save_game_buffered() {
+    xs_buffer_case(Diff::new(entry!(
+        0x0042_6a30,
+        extra_data::buffered::save_game_buffered(u32, u32)
+    )))
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xs_load_game_buffered() {
+    xs_buffer_case(Diff::new(entry!(
+        0x0042_8150,
+        extra_data::buffered::load_game_buffered(u32, u32)
+    )))
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xs_fix_up_loaded() {
+    Diff::new(entry!(
+        0x0042_ceb0,
+        extra_data::buffered::fix_up_loaded(u32, u32, u32)
+    ))
+    .xs_case()
+    .max_cases(XS_SEEDS.len() * 2)
+    .inputs(&[Input::Of(XS_SEEDS), Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        let [list, first, buffer] = xs_world(e, case.word(0), true);
+        let form = if case.word(1) == 0 {
+            0
+        } else {
+            first.max(0x40)
+        };
+        vec![list, buffer, form]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xs_finish_load_game() {
+    xs_buffer_case(Diff::new(entry!(
+        0x0042_d9e0,
+        extra_data::buffered::finish_load_game(u32, u32)
+    )))
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xs_clean_up_loaded() {
+    xs_buffer_case(Diff::new(entry!(
+        0x0042_dae0,
+        extra_data::buffered::clean_up_loaded(u32, u32)
+    )))
+    .run()
+    .assert_same();
+}
+
+/// The save and load functions, run as their translations over the worlds, reach what they branch
+/// on: the callees of every arm with one (each stand-in that ran), the JIP-less type 0x27 arms, the
+/// warnings for an unknown type, the old format's tag, over- and under-read messages.
+#[test]
+fn the_save_and_load_worlds_reach_every_branch() {
+    let mut hits = std::collections::BTreeSet::<u32>::new();
+    let mut lines = std::collections::BTreeSet::<u32>::new();
+    let mut missing: Vec<String> = Vec::new();
+    // Each run as its translation: a stop is a world the Diffs could not use, listed too.
+    let mut run = |seed: u32, function: u32, flags: u32| {
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut e = Engine::new_untyped_for_test();
+            let buffered = function >= 0x0042_6a30;
+            let [list, first, buffer] = xs_world(&mut e, seed, buffered);
+            match function {
+                0x0042_4960 => e.call(function, &args![list, flags, 0u32, first]),
+                0x0042_2c40 | 0x0042_35e0 => e.call(function, &args![list, flags, first]),
+                0x0042_ceb0 => e.call(function, &args![list, buffer, first.max(0x40)]),
+                _ => e.call(function, &args![list, buffer]),
+            };
+            (xs_hits(&e), xf_lines(&e))
+        }));
+        match ran {
+            Ok((h, l)) => {
+                hits.extend(h);
+                lines.extend(l);
+            }
+            Err(_) => missing.push(format!("stop: {function:08x} seed {seed} flags {flags:x}")),
+        }
+    };
+    for &seed in XS_SEEDS {
+        for function in [0x0042_2c40u32, 0x0042_35e0, 0x0042_4960] {
+            for flags in [0u32, 0x1002_1010] {
+                run(seed, function, flags);
+            }
+        }
+        for function in [
+            0x0042_6a30u32,
+            0x0042_8150,
+            0x0042_ceb0,
+            0x0042_d9e0,
+            0x0042_dae0,
+        ] {
+            run(seed, function, 0);
+        }
+    }
+    missing.extend(
+        [
+            0x0043_a8f0u32,
+            0x0043_a930,
+            0x0043_a9a0,
+            0x0083_f280,
+            0x0083_f3e0,
+            0x0083_f680,
+            0x0042_5ff0,
+            0x0042_dee0,
+            0x0054_ddd0,
+            0x0054_ca90,
+            0x0054_8230,
+            0x005f_36f0,
+            0x0056_7490,
+            0x0085_a240,
+            0x0042_5fd0,
+            0x0056_53d0,
+            0x0085_79e0,
+            0x0085_79b0,
+            0x0085_7a10,
+            0x0085_7aa0,
+            0x0086_5e70,
+            0x0086_5f20,
+            0x0086_5ff0,
+            0x0086_5f60,
+            0x0086_5db0,
+            0x0086_5df0,
+            0x0086_cf00,
+            0x0084_5cc0,
+            0x005a_e3d0,
+            0x009a_5f90,
+            0x009a_5ff0,
+            0x0043_5e40,
+            0x005a_9db0,
+            0x005a_9f20,
+            0x005a_8b80,
+            0x005a_8bc0,
+            0x005a_bf60,
+            0x005a_a090,
+            0x0047_5920,
+            0x0047_59a0,
+            0x0040_a1e0,
+            0x0082_54c0,
+            0x0040_a250,
+            0x0082_5550,
+            0x0080_6a10,
+            0x0080_6a90,
+            0x0080_6b00,
+            0x0080_6b50,
+            0x0083_fb10,
+            0x0083_fbe0,
+            0x0043_aa40,
+            0x0043_aaa0,
+            0x0083_5fe0,
+            0x0043_8260,
+            0x0043_8280,
+            0x0047_7bc0,
+            0x0047_7ce0,
+            0x0097_24e0,
+            0x008c_6ca0,
+            0x0042_e680,
+            0x0067_0b90,
+            0x0084_aa30,
+            0x0066_e330,
+            0x0042_f780,
+            0x0043_7c10,
+            0x0043_0200,
+            0x0043_0660,
+            0x008b_6820,
+            0x008b_6ae0,
+            0x008a_dc50,
+            0x0057_5690,
+            0x0060_1170,
+            0x005f_7230,
+            0x004b_f220,
+            0x004d_1440,
+            0x0067_77b0,
+            0x009e_b9c0,
+            0x0093_6a20,
+            0x0042_e250,
+            0x0047_cdb0,
+            0x0047_d130,
+            0x0047_e340,
+            0x0042_f5f0,
+            0x006f_2290,
+            0x009a_4320,
+            0x0090_5330,
+            0x0063_f7b0,
+            0x0096_11e0,
+            0x0086_4980,
+            0x0086_48a0,
+            0x0086_48e0,
+            0x0086_4a60,
+            0x0086_49a0,
+            0x0086_5e50,
+        ]
+        .iter()
+        .filter(|at| !hits.contains(at))
+        .map(|at| format!("callee {at:08x}")),
+    );
+    // Each message with its short form (no record): the bad tag, an unknown type, an over-read and an
+    // under-read of the block, a package start location with no location.
+    for (message, short) in [
+        (0x0101_5718u32, 0x0101_56a8u32),
+        (0x0101_5610, 0x0101_5610),
+        (0x0101_5588, 0x0101_54a0),
+        (0x0101_5500, 0x0101_5440),
+        (0x0101_53f0, 0x0101_53f0),
+    ] {
+        if !lines.contains(&message) && !lines.contains(&short) {
+            missing.push(format!("message {message:08x}"));
+        }
+    }
+    assert!(missing.is_empty(), "no world reaches {missing:?}");
 }

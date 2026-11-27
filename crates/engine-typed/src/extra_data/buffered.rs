@@ -1,15 +1,16 @@
 //! The extra data list in the buffered save format (`BGSSaveGameBuffer`, `BGSLoadGameBuffer`):
-//! `ExtraDataList::SaveGame_ov2` (`00426a30`) and `LoadGame_ov2` (`00428150`), the fix-up of a loaded
-//! list (`0042ceb0`), `FinishLoadGame` (`0042d9e0`) and the clean-up after a load (`0042dae0`). The
-//! buffer's own accessors of this family are done in place: its save kind (`00428110`, the
-//! unaligned word at +0x17, tested by `004280f0` and set by `00428130`), its flags (`0042ce30`,
-//! +0x2c) and the flag bit 3 of its word at +0x28 (`0042ce90`, `0042ce50`); so are the leaves a map
-//! marker's byte (`00424940`), a form's id (`0084e3a0`), a list node's item and next, an array's
-//! count (+8) and element (`006a7ad0`), a handle's word (`00559450`), an object's word at +0x14
-//! (`00825c00`), a reference's extra list (`005d43c0`), a list node's item store (`00726c60`), the
-//! store of a payload word (`0041fd00`) and a created form's id (`00469860`). The buffer's reads and
-//! writes, the other units' savers, loaders and constructors are called by address; the list's own
-//! setters, getters and constructors are typed calls.
+//! `ExtraDataList::SaveGame_ov2` (`00426a30`) and `LoadGame_ov2` (`00428150`), the fix-up of a
+//! loaded list (`0042ceb0`), `FinishLoadGame` (`0042d9e0`) and the clean-up after a load
+//! (`0042dae0`). The buffer's own accessors of this family are done in place: its save kind
+//! (`00428110`, the unaligned word at +0x17, tested by `004280f0` and set by `00428130`), its flags
+//! (`0042ce30`, +0x2c) and the flag bit 3 of its word at +0x28 (`0042ce90`, `0042ce50`); so are the
+//! leaves a map marker's byte (`00424940`), a form's id (`0084e3a0`), a list node's item and next,
+//! an item's word at +0x28 (`0045cd60`), an array's count (+8) and element (`006a7ad0`), a handle's
+//! word (`00559450`), an object's word at +0x14 (`00825c00`), a reference's extra list
+//! (`005d43c0`), a list node's item store (`00726c60`), the buffer's word at +0x24 (`007037c0`),
+//! the store of a payload word (`0041fd00`) and a created form's id (`00469860`). The buffer's
+//! reads and writes, the other units' savers, loaders and constructors are called by address; the
+//! list's own setters, getters and constructors are typed calls.
 //!
 //! **Extenders.** JIP LN NVSE puts its own arm for type 0x27 into both jump tables (`0x427F30` in
 //! the save, `0x42C328` in the load) while JIP is installed: each runs as an `e.site` where the
@@ -21,7 +22,7 @@ use super::{
     OPERATOR_DELETE, OPERATOR_NEW,
 };
 use crate::crt::low_byte;
-use crate::{cell_refs, dispatch, forms, save};
+use crate::{cell_refs, forms, save};
 use engine_core::extend::jip_patches;
 use engine_core::x87::x87_quiet_bits;
 use engine_core::{args, typed_call, Engine, Ptr};
@@ -141,8 +142,7 @@ const SAY_TO_CALL_BACK: u32 = 0x0093_6a20;
 const MODEL_SWAP: u32 = 0x0042_e250;
 
 /// The load's constructors of the types it builds when the list has none: `(type, size,
-/// constructor)`. The ones of this family and the cell references' are typed calls
-/// ([`construct`]).
+/// constructor)`. The ones of this family and the cell references' are typed calls ([`construct`]).
 const CONSTRUCTIONS: &[(u8, u32, u32)] = &[
     (0x0d, 0x14, 0x0042_c760),
     (0x18, 0x20, 0x0043_2650),
@@ -385,10 +385,11 @@ fn add_head(e: &mut Engine, list: u32, item: u32) {
 }
 
 // Typed from 00426a30
-/// `ExtraDataList::SaveGame_ov2` (Xbox PDB): the list saved into the save buffer `buffer` as a counted
-/// value of each extra data that the buffer's save kind lets through (the table at `01183d30`; a
-/// type whose mask has bit 0x40000000 only when the buffer's reference, its slot 4, is a created
-/// form; type 0x89 only when the buffer's slot 8 answers non-zero): its type byte and payload.
+/// `ExtraDataList::SaveGame_ov2` (Xbox PDB): the list saved into the save buffer `buffer` as a
+/// counted value of each extra data that the buffer's save kind lets through (the table at
+/// `01183d30`; a type whose mask has bit 0x40000000 only when the buffer's reference, its slot 4,
+/// is a created form; type 0x89 only when the buffer's slot 8 answers non-zero): its type byte and
+/// payload.
 pub fn save_game_buffered(e: &mut Engine, this: u32, buffer: u32) {
     let start = e.call(START_SIZED_VALUE, &args![buffer]).u32();
     let reference = e.vcall(buffer, 4, &args![]).u32();
@@ -763,7 +764,7 @@ fn save_payload(e: &mut Engine, buffer: u32, extra: u32, kind: u8, flag: u32) {
 }
 
 /// The constructor of `kind` run on `block`: a typed call for this family's and the cell
-/// references', else by address.
+/// references' (the open/close activate reference's in place, `0041e750`), else by address.
 fn construct(e: &mut Engine, kind: u8, block: u32) -> u32 {
     match kind {
         0x0d => typed_call!(FAMILY, 0x0042_c760, classes::script_extra_new(e, block)),
@@ -819,11 +820,8 @@ fn construct(e: &mut Engine, kind: u8, block: u32) -> u32 {
             0x0042_ca90,
             classes::actor_cause_extra_new(e, block)
         ),
-        0x6c => typed_call!(
-            FAMILY,
-            0x0041_e750,
-            links::open_close_activate_ref_new(e, block)
-        ),
+        // `0041e750` in place, as the family does it everywhere.
+        0x6c => links::open_close_init(e, block),
         0x6e => typed_call!(FAMILY, 0x0042_cba0, classes::ammo_extra_new(e, block)),
         0x70 => typed_call!(
             FAMILY,
@@ -1279,7 +1277,8 @@ fn load_payload(
 
 /// [`load_payload`]'s script (type 0x0d): the script, its locals made when the extra data has none,
 /// loaded (into a temporary when there are none), with the buffer's form packer value set around it
-/// for a buffer without a reference (`007037c0`, the dispatch family's).
+/// for a buffer without a reference (its word at +0x24: `007037c0`, in place, as the family does
+/// it).
 fn load_script(e: &mut Engine, this: u32, buffer: u32, reference: u32, marks: &[u8; 0x93]) {
     let extra = marked_or_new(e, this, marks, 0x0d);
     let id = load_id(e, buffer);
@@ -1295,11 +1294,7 @@ fn load_script(e: &mut Engine, this: u32, buffer: u32, reference: u32, marks: &[
     }
     if reference == 0 {
         let value = typed_call!(FAMILY, 0x0042_ce00, classes::given_word(e));
-        typed_call!(
-            dispatch::FAMILY,
-            0x0070_37c0,
-            dispatch::refs::set_date(e, Ptr::new(buffer), value)
-        );
+        e.mem.set_u32(buffer.wrapping_add(0x24), value);
     }
     let locals = word_at(e, extra, 0x10);
     if locals == 0 {
@@ -1312,11 +1307,7 @@ fn load_script(e: &mut Engine, this: u32, buffer: u32, reference: u32, marks: &[
         e.call(SCRIPT_LOCALS_LOAD, &args![locals, buffer]);
     }
     if reference == 0 {
-        typed_call!(
-            dispatch::FAMILY,
-            0x0070_37c0,
-            dispatch::refs::set_date(e, Ptr::new(buffer), 0)
-        );
+        e.mem.set_u32(buffer.wrapping_add(0x24), 0);
     }
 }
 
@@ -1501,8 +1492,8 @@ fn load_limbs(e: &mut Engine, this: u32, buffer: u32, owner: u32, marks: &[u8; 0
 /// when the object manager's flag (`0042ce10`) is clear. A template change the buffer's save kind
 /// does not allow (0x08000020) drops the owner's container changes and refreshes it. With an owner,
 /// both forms and a base form that takes a template, the creature is made for the pair and set as
-/// the owner's base; else the old forms come back, or the extra data goes. A creature that does
-/// not exist yet is built (0x20c bytes for an actor kind, slot 0x218, else 0x160) and loaded (slot
+/// the owner's base; else the old forms come back, or the extra data goes. A creature that does not
+/// exist yet is built (0x20c bytes for an actor kind, slot 0x218, else 0x160) and loaded (slot
 /// 0x5c) with the buffer's save kind, flags and flag bit set for it and put back after.
 fn load_leveled_creature(e: &mut Engine, this: u32, buffer: u32, owner: u32, marks: &[u8; 0x93]) {
     let extra = marked_or_new(e, this, marks, 0x2e);
@@ -1637,12 +1628,12 @@ fn allowed_extra(e: &mut Engine, list: u32, buffer: u32, kind: u8) -> u32 {
 // Typed from 0042ceb0
 /// The fix-up of a list after [`load_game_buffered`] read it, `form` the form it belongs to: for
 /// each type below that the buffer's save kind lets through and the list has, the form ids become
-/// their forms (null for none): the reference pointer; the script, removed unless it is the
-/// owner's base form's (+0xf4) or, without an owner, `form`'s as a scriptable form; then with a
-/// reference the open/close activate reference (removed when gone), the magic caster, the magic
-/// target (and its active effects), the item dropper (removed when gone, else this reference added
-/// to its dropped items) and the talking actor; with no owner the teleport data finishes loading;
-/// with an owner the package (removed with none, its procedure type computed when it has none), the
+/// their forms (null for none): the reference pointer; the script, removed unless it is the owner's
+/// base form's (+0xf4) or, without an owner, `form`'s as a scriptable form; then with a reference
+/// the open/close activate reference (removed when gone), the magic caster, the magic target (and
+/// its active effects), the item dropper (removed when gone, else this reference added to its
+/// dropped items) and the talking actor; with no owner the teleport data finishes loading; with an
+/// owner the package (removed with none, its procedure type computed when it has none), the
 /// followers (those that are no actor removed; the player removed for a buffer older than 0x0e),
 /// the package data, the merchant container, the trespass package, the head track target, the
 /// dismembered limbs' form, the ash pile and the crime pairs.
@@ -1828,8 +1819,8 @@ fn fix_followers(e: &mut Engine, extra: u32) {
 // Typed from 0042d9e0
 /// `ExtraDataList::FinishLoadGame` (Xbox PDB): with the buffer's reference (slot 8), the say-to
 /// topic info (type 0x75) the save kind lets through sets its byte at +0x18 when the reference's
-/// slot 0xfc answers false, else calls the reference's say-to call back (`00936a20`) with its word at
-/// +0xc and whether both of the extra data's words are set; then the magic target's (type 0x33)
+/// slot 0xfc answers false, else calls the reference's say-to call back (`00936a20`) with its word
+/// at +0xc and whether both of the extra data's words are set; then the magic target's (type 0x33)
 /// active effects finish loading.
 pub fn finish_load_game(e: &mut Engine, this: u32, buffer: u32) {
     let reference = e.vcall(buffer, 8, &args![]).u32();
@@ -1852,13 +1843,13 @@ pub fn finish_load_game(e: &mut Engine, this: u32, buffer: u32) {
 }
 
 // Typed from 0042dae0
-/// The clean-up of a list once the buffer is loaded: with the buffer's reference (slot 8; its owner,
-/// slot 0xc, asked and not used), a model swap tells the reference (slot 0x1cc), an object health
-/// resets its self damage, an item dropper's dropped items lose it, the map marker's byte at +0xd
-/// is copied to +0xc (`0042dd70`), the activate children timer is reset when the buffer's flags have
-/// 0x4000000, and the script locals finish loading. Then every type whose mask has a bit of the
-/// buffer's flags is removed, but for the types 0x0d, 0x2c, 0x2e, 0x49, 0x54, 0x5f, 0x90 and 0x91,
-/// and those whose mask has 0x40000000 when the reference is not a created form.
+/// The clean-up of a list once the buffer is loaded: with the buffer's reference (slot 8; its
+/// owner, slot 0xc, asked and not used), a model swap tells the reference (slot 0x1cc), an object
+/// health resets its self damage, an item dropper's dropped items lose it, the map marker's byte at
+/// +0xd is copied to +0xc (`0042dd70`), the activate children timer is reset when the buffer's
+/// flags have 0x4000000, and the script locals finish loading. Then every type whose mask has a bit
+/// of the buffer's flags is removed, but for the types 0x0d, 0x2c, 0x2e, 0x49, 0x54, 0x5f, 0x90 and
+/// 0x91, and those whose mask has 0x40000000 when the reference is not a created form.
 pub fn clean_up_loaded(e: &mut Engine, this: u32, buffer: u32) {
     let reference = e.vcall(buffer, 8, &args![]).u32();
     if reference != 0 {
