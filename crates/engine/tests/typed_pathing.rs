@@ -651,6 +651,7 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x006a_0660, &[0x0069_85f0, 0x006a_06f0]),
     (0x006a_79c0, &[0x006a_6eb0]),
     (0x006a_7b10, &[0x006a_8380]),
+    (0x006a_9200, &[0x006a_8380]),
     (0x006b_40f0, &[0x006a_eb70]),
     (0x006b_77e0, &[0x006b_7850, 0x006b_78b0]),
     (0x006b_9b10, &[0x0040_19d0]),
@@ -4365,4 +4366,61 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+#[test]
+fn flee_search_new() {
+    Diff::new(entry!(0x006a_9200, search::flee_search_new(Ptr) -> Ptr))
+        .common()
+        .plain(0x006a_9200)
+        .inputs(&[Input::Flag])
+        .setup(|e, _| {
+            stand_ins(e);
+            let s = e.mem.alloc(0x2090);
+            for i in 0..0x824 {
+                e.mem.set_u32(s + 4 * i, 0x6b6b_6b6b);
+            }
+            vec![s]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn flee_dtor() {
+    Diff::new(entry!(0x006a_92c0, search::flee_dtor(Ptr)))
+        .common()
+        .plain(0x006a_92c0)
+        .inputs(&[Input::Flag])
+        .setup(|e, _| {
+            stand_ins(e);
+            // The `AStarSearch` destructor the body calls runs as a logged stand-in.
+            e.register(0x006a_7bc0, |_, a| ret(a[0]));
+            let s = e.mem.alloc(0x10);
+            e.mem.set_u32(s, 0x6b6b_6b6b);
+            vec![s]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn flee_deleting_dtor() {
+    Diff::new(entry!(
+        0x006a_9290,
+        search::flee_deleting_dtor(Ptr, u32) -> Ptr
+    ))
+    .common()
+    .plain(0x006a_9290)
+    .inputs(&[Input::Of(&[0, 1, 2, 3])])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x006a_7bc0, |_, a| ret(a[0]));
+        e.register(0x0040_1030, |_, _| ret(0));
+        let s = e.mem.alloc(0x10);
+        e.mem.set_u32(s, 0x6b6b_6b6b);
+        vec![s, case.word(0)]
+    })
+    .run()
+    .assert_same();
 }

@@ -45,7 +45,7 @@ pub fn fn_006a9200(e: &mut Engine, this: Ptr) -> Ptr {
 /// flags; `RET 4`): the destructor `006a92c0`, then the block is freed
 /// (`00401030`) when bit 0 of `flags` is set. Returns `this`.
 pub fn fn_006a9290(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_006a92c0(e, this);
+    e.call(0x006a_92c0, &args![this]);
     if flags & 1 != 0 {
         e.call(FREE_BLOCK, &args![this]);
     }
