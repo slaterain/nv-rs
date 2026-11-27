@@ -393,6 +393,8 @@ pub enum Arg {
     /// The stats menu's gamepad keys: the limb picks and page steps (1 to 4), the map and inventory
     /// (0xd, 0xe), 9, 0xb, 0xc and one no case takes.
     Key,
+    /// The stats menu's page steps: back (4) and on (3).
+    PageKey,
 }
 
 const PTRS: [u32; 3] = [ARENA + 3 * OBJECT, ARENA + 40 * OBJECT, 0];
@@ -430,6 +432,7 @@ const STATS_IDS: [u32; 9] = [0x1c, 0x1d, 0x1e, 0x35, 0x37, 0x39, 0x1b, 0x36, 0];
 const CLICK_IDS: [u32; 10] = [6, 2, 0x1d, 9, 5, 0x31, 0x3b, 0x3c, 0xffff_ffff, 7];
 const STATS_TILES: [u32; 3] = [0, ARENA + 116 * OBJECT, ARENA + 107 * OBJECT];
 const KEYS: [u32; 10] = [1, 0xd, 4, 3, 0xb, 2, 9, 0xc, 0xe, 0x20];
+const PAGE_KEYS: [u32; 2] = [4, 3];
 const ACTOR_VALUES: [u32; 11] = [0x10, 0xc, 0x18, 0x36, 0x14, 0x17, 0x19, 0x1e, 0x1f, 5, 0x20];
 const TILE_IDS: [u32; 13] = [
     0xffff_ffff,
@@ -467,6 +470,7 @@ fn values(arg: Arg) -> &'static [u32] {
         Arg::ClickId => &CLICK_IDS,
         Arg::StatsTile => &STATS_TILES,
         Arg::Key => &KEYS,
+        Arg::PageKey => &PAGE_KEYS,
         Arg::Group => &GROUPS,
         Arg::Effect => &EFFECTS,
     }

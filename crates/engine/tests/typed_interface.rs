@@ -7498,6 +7498,51 @@ fn stats_menu_do_gamepad_diff() {
     .assert_same();
 }
 
+/// `DoGamepad`'s page steps, each from the first page, a middle one and the last: the stats menu
+/// on top of the enter stack, every case.
+#[test]
+fn stats_menu_do_gamepad_page_steps_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_b680,
+        interface::stats_menu::stats_menu_do_gamepad(Ptr, u32, f32) -> bool
+    ))
+    .in_arena_without_and(
+        &[Arg::Object, Arg::PageKey, Arg::F32],
+        CALLEES,
+        &[0x0071_f9f0, 0x0071_f570, 0x0070_27b0, 0x0070_2680],
+        &[0x00ec_782f],
+        &[0, 2, 4],
+        put_stats_page,
+    )
+    .max_cases(120)
+    .max_calls(2000)
+    .run()
+    .assert_same();
+}
+
+/// [`put_stats_third`]'s variant 3 (the Pip-Boy up, no limb mode) with the stats menu (0x3eb) on
+/// top of a ready manager's enter stack and every tile's page (`Tile::GetValueFloat` of `0x1004`)
+/// `page`, every other float 1.0.
+fn put_stats_page(e: &mut Engine, page: u32) {
+    put_stats_third(e, 3);
+    let manager = e.mem.u32(0x011d_8a80);
+    if manager != 0 {
+        let mut top = 0;
+        while top < 9 && e.mem.u32(manager + 0x118 + 4 * top) != 0 {
+            top += 1;
+        }
+        e.mem.set_u32(manager + 0x114 + 4 * top, 0x3eb);
+    }
+    e.register_double(0x00a0_11b0, move |_, words| Ret {
+        st0: if words[1] == 0x1004 {
+            f64::from(page)
+        } else {
+            1.0
+        },
+        ..Ret::default()
+    });
+}
+
 #[test]
 fn stats_menu_do_enter_diff() {
     Diff::new(engine_core::entry!(
