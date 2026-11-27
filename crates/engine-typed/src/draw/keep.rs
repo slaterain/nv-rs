@@ -27,9 +27,9 @@
 //! the record (the counters name the first difference). The backend draws the old form; one recording of the run
 //! replayed as its items instead (`d3d9_stream::kept::Form`) gives the pictures and per-draw digests to compare.
 //!
-//! Check mode is not the pure old path: a draw with a record first replays it (its writes and setter calls stay in
-//! the game state) and then runs its set-up. When the record is stale, a write the set-up does not repeat stays, so
-//! from then on the check run's game state can differ from an off run's; the op compare counts each such record.
+//! Check mode is not the pure old path: a draw with a record first replays it (its writes are put back as they were
+//! before the set-up runs, but what its setter calls and kept calls wrote stays in the state caches and the shader
+//! statics) and then runs its set-up, which makes the same calls again.
 //! The direct proof that `1` draws as off does is a stepped `1` recording against a stepped off recording of the
 //! same route (`record_compare --digests`, which expands items through `d3d9_stream::Kept`).
 //!
@@ -51,6 +51,8 @@ use engine_core::real_threads::{self as rt, DeviceCall};
 use engine_core::Engine;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 
@@ -205,6 +207,28 @@ pub enum Leaf {
     /// The pixel entry 19 (`super::super::shader::geometry::pixel_entry_19`): the frame's clip plane, the eye and the
     /// near and far distances.
     Entry19,
+    /// The object-to-cube matrix (`super::super::shader::geometry::obj_to_cube`, `011fecc8`): the camera added to
+    /// the transform's translation, or the renderer's matrix of the frame (the live runs' first difference: a
+    /// record kept vertex register 10 of an older camera).
+    ObjToCube {
+        this: u32,
+        block: u32,
+        pass_type: u32,
+        flag: u32,
+        transform: u32,
+    },
+    /// The shadow projection (`super::super::shader::geometry::shadow_proj`, `011fd968`): with its flag, the camera.
+    ShadowProj {
+        this: u32,
+        block: u32,
+        flag: u32,
+        transform: u32,
+    },
+    /// The vertex entry 17 (`super::super::shader::geometry::vertex_entry_17`): the bound's centre less the camera.
+    Entry17 { this: u32, object: u32 },
+    /// The simple shadow clip planes (`super::super::shader::geometry::simple_shadow_clip_planes`, types 0x231 to
+    /// 0x234): the light's cache of the frame, or the renderer's view and the camera.
+    ClipPlanes { this: u32, pass_type: u32 },
 }
 
 /// What a set-up did, in its order.
@@ -231,7 +255,10 @@ struct Record {
     /// The inputs the set-up read through the accessors, with their bytes at the time (reads of what the set-up
     /// itself had written left out).
     inputs: Vec<(u32, Vec<u8>, u32)>,
-    ops: Vec<Op>,
+    /// What the set-up did, shared with a replay running it (no copy, no borrow held while it runs).
+    ops: Rc<[Op]>,
+    /// Its writes, kept calls and device calls, counted (the counters' line: a replay's work).
+    counts: [u32; 3],
     /// False when the set-up reached the device outside the calls the recorder saw (a call by the vtable from
     /// translated code, a buffer's lock): the record would leave that out, so it is never replayed.
     replayable: bool,
@@ -272,7 +299,7 @@ struct Stats {
     checked: u64,
     mismatched: u64,
     /// By (input address, the exe function that read it): how often it broke a record, and how often it was the only
-    /// input that changed (the records it alone kept from replaying); since the last line ([`report`]).
+    /// input that changed (the records it alone kept from replaying); since the last line ([`report_now`]).
     broke_at: HashMap<(u32, u32), (u64, u64)>,
     first_mismatch: Option<String>,
     /// Builds made, and those audited ([`Mode::Audit`]) with their uncovered reads by word.
@@ -301,13 +328,20 @@ struct Stats {
     build_ns: u64,
     replay_ns: u64,
     rest_ns: u64,
+    /// Of the replays' time, the look-up and compares before the record's ops ran; the writes, kept calls and device
+    /// calls the replays ran.
+    look_ns: u64,
+    replay_ops: [u64; 3],
+    /// Replayable draws drawn plainly to time the plain set-up ([`SAMPLE_EVERY`]), and their time.
+    sampled: u64,
+    sample_ns: u64,
 }
 
 const REPORT_EVERY: u64 = 1_000_000;
 
 #[derive(Default)]
 struct Keep {
-    records: HashMap<Key, Record>,
+    records: HashMap<Key, Record, BuildHasherDefault<KeyHasher>>,
     stats: Stats,
     /// The setter calls of the record being built, and how deep in setters it is.
     leaves: Option<Vec<Leaf>>,
@@ -430,6 +464,29 @@ fn statics(e: &Engine, key: Key) -> Vec<u8> {
     out
 }
 
+/// Whether `kept` is what [`statics`] makes now, compared where the bytes lie (each range read into the stack, no
+/// copy kept): a replay's test of the record's own bytes.
+fn statics_same(e: &Engine, key: Key, kept: &[u8]) -> bool {
+    // Each range is at most 0xc8 bytes ([`statics_ranges`]).
+    let mut buf = [0u8; 0x100];
+    let mut from = 0usize;
+    for (at, len) in statics_ranges(e, key) {
+        let len = len as usize;
+        let (Some(want), Some(now)) = (kept.get(from..from + len), buf.get_mut(..len)) else {
+            return false;
+        };
+        from += len;
+        if at == 0 || e.mem.try_read(at, now).is_err() {
+            if want.iter().any(|&b| b != 0xa5) {
+                return false;
+            }
+        } else if now != want {
+            return false;
+        }
+    }
+    from == kept.len()
+}
+
 /// The texture arrays of the shader property (`+0xac`, six arrays of `+0xa8`'s count of texture pointers) a record
 /// covers up to this many pointers each.
 const MOST_TEXTURES: u32 = 16;
@@ -508,52 +565,56 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
         return;
     }
     follow_epoch();
-    // A key that kept breaking rests: drawn plainly, its record (still compared when the rest ends) left alone.
-    let resting = KEEP.with(|k| {
+    let start = Instant::now();
+    // One look-up says what this draw is: a rest, a replay of the record's ops, or a build (and why).
+    let plan = KEEP.with(|k| {
         let mut k = k.borrow_mut();
         let k = &mut *k;
         k.stats.seen += 1;
-        match k.records.get_mut(&key) {
-            Some(r) if r.rest > 0 => {
-                r.rest -= 1;
-                k.stats.rested += 1;
-                true
+        let seen = k.stats.seen;
+        let Some(r) = k.records.get_mut(&key) else {
+            return Plan::Build(Break::New, None);
+        };
+        // A key that kept breaking rests: drawn plainly, its record (still compared when the rest ends) left alone.
+        if r.rest > 0 {
+            r.rest -= 1;
+            k.stats.rested += 1;
+            return Plan::Rest;
+        }
+        if !r.replayable {
+            return Plan::Build(Break::Unkeepable, r.item);
+        }
+        if let Some(why) = verdict(e, key, r) {
+            return Plan::Build(why, r.item);
+        }
+        r.last_used = seen;
+        r.streak = 0;
+        // One replayable draw in [`SAMPLE_EVERY`] runs plainly instead (`On` only): the plain set-up's cost of the
+        // same draws, for the counters' line.
+        if mode == Mode::On && seen % SAMPLE_EVERY == 0 {
+            k.stats.sampled += 1;
+            return Plan::Sample;
+        }
+        // A check run's replay is counted with its build.
+        if mode == Mode::On {
+            k.stats.replayed += 1;
+            for (all, n) in k.stats.replay_ops.iter_mut().zip(r.counts) {
+                *all += u64::from(n);
             }
-            _ => false,
         }
+        Plan::Replay(Rc::clone(&r.ops), r.item)
     });
-    if resting {
-        let start = Instant::now();
-        body(e);
-        count(|s| s.rest_ns += nanos(start));
-        report();
-        return;
-    }
-    let start = Instant::now();
-    let snapshot = statics(e, key);
-    // What breaks a kept record, if anything: None reuses it.
-    let verdict = KEEP.with(|k| {
-        let k = k.borrow();
-        match k.records.get(&key) {
-            None => Some(Break::New),
-            Some(r) if !r.replayable => Some(Break::Unkeepable),
-            Some(r) if r.statics != snapshot => Some(Break::Statics),
-            Some(r) => r
-                .inputs
-                .iter()
-                .find(|(at, bytes, _)| !same_bytes(e, *at, bytes))
-                .map(|(at, _, reader)| {
-                    let others = r
-                        .inputs
-                        .iter()
-                        .any(|(a, b, _)| a != at && !same_bytes(e, *a, b));
-                    Break::Input(*at, *reader, !others)
-                }),
+    match plan {
+        Plan::Rest => {
+            body(e);
+            count(|s| s.rest_ns += nanos(start));
         }
-    });
-    let item = KEEP.with(|k| k.borrow().records.get(&key).and_then(|r| r.item));
-    match verdict {
-        None if mode == Mode::On => {
+        Plan::Sample => {
+            body(e);
+            count(|s| s.sample_ns += nanos(start));
+        }
+        Plan::Replay(ops, item) if mode == Mode::On => {
+            let looked = nanos(start);
             // The record's replay; its own commands one item when the backend has them.
             match item {
                 Some((id, hash)) => {
@@ -562,37 +623,39 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
                         hash,
                         check: false,
                     };
-                    let done = with_held(e, ask, |e| replay(e, key));
+                    let done = with_held(e, ask, |e| replay(e, &ops));
                     count(|s| match done {
                         Done::Drawn => s.items += 1,
                         Done::Other => s.items_other += 1,
                         _ => s.items_plain += 1,
                     });
                 }
-                None => replay(e, key),
+                None => replay(e, &ops),
             }
-            KEEP.with(|k| {
-                let mut k = k.borrow_mut();
-                let k = &mut *k;
-                if let Some(r) = k.records.get_mut(&key) {
-                    r.last_used = k.stats.seen;
-                    r.streak = 0;
-                }
-                k.stats.replayed += 1;
-                k.stats.replay_ns += nanos(start);
+            count(|s| {
+                s.replay_ns += nanos(start);
+                s.look_ns += looked;
             });
         }
-        None => {
+        Plan::Replay(ops, item) => {
             // Check: the item this draw would have been, made from the record's replay as `On` makes it; then the
             // set-up runs as always (its commands the old form beside the item) and what it did is compared with
             // the record.
+            let snapshot = statics(e, key);
             let beside = item.is_some_and(|(id, hash)| {
                 let ask = Ask::Item {
                     id,
                     hash,
                     check: true,
                 };
-                let done = with_held(e, ask, |e| replay(e, key));
+                // The replay's writes undone before the set-up runs, so the set-up finds the game's memory as an off
+                // run leaves it: a replay that cleared the owed restore (`011ad8ec`) made the set-up skip the restore,
+                // a difference of check mode alone.
+                let undo = bytes_under_writes(e, &ops);
+                let done = with_held(e, ask, |e| replay(e, &ops));
+                for (at, bytes) in undo.iter().rev() {
+                    e.mem.write(*at, bytes);
+                }
                 count(|s| match done {
                     Done::Drawn => s.check_items += 1,
                     _ => s.check_items_dropped += 1,
@@ -604,23 +667,22 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
                 let mut k = k.borrow_mut();
                 let k = &mut *k;
                 k.stats.checked += 1;
-                if let Some(old) = k.records.get(&key) {
-                    if let Some(diff) = first_difference(&old.ops, &built.ops) {
-                        k.stats.mismatched += 1;
-                        *k.stats
-                            .differed_at
-                            .entry(difference_kind(&old.ops, &built.ops))
-                            .or_default() += 1;
-                        if k.stats.first_mismatch.is_none() {
-                            k.stats.first_mismatch = Some(format!("{key:08x?}: {diff}"));
-                        }
+                if let Some(diff) = first_difference(&ops, &built.ops) {
+                    k.stats.mismatched += 1;
+                    *k.stats
+                        .differed_at
+                        .entry(difference_kind(&ops, &built.ops))
+                        .or_default() += 1;
+                    if k.stats.first_mismatch.is_none() {
+                        k.stats.first_mismatch = Some(format!("{key:08x?}: {diff}"));
                     }
                 }
+                let seen = k.stats.seen;
                 k.records.insert(
                     key,
                     Record {
                         statics: snapshot,
-                        last_used: k.stats.seen,
+                        last_used: seen,
                         item: sent,
                         ..built
                     },
@@ -628,8 +690,9 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
                 k.stats.build_ns += nanos(start);
             });
         }
-        Some(why) => {
-            let (built, sent) = build_sent(e, key, &mut body, item, false);
+        Plan::Build(why, old) => {
+            let snapshot = statics(e, key);
+            let (built, sent) = build_sent(e, key, &mut body, old, false);
             KEEP.with(|k| {
                 let mut k = k.borrow_mut();
                 let k = &mut *k;
@@ -651,11 +714,12 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
                         n.1 += u64::from(alone);
                     }
                 }
+                let seen = k.stats.seen;
                 k.records.insert(
                     key,
                     Record {
                         statics: snapshot,
-                        last_used: k.stats.seen,
+                        last_used: seen,
                         item: sent,
                         streak,
                         rest,
@@ -666,9 +730,51 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
             });
         }
     }
-    evict();
-    send_forgotten(e);
-    report();
+    after_draw(e);
+}
+
+/// What one draw of a key is ([`draw`]'s one look-up).
+enum Plan {
+    /// The key rests: drawn plainly.
+    Rest,
+    /// A replayable draw drawn plainly to time the plain set-up ([`SAMPLE_EVERY`]).
+    Sample,
+    /// The record's ops and backend record.
+    Replay(Rc<[Op]>, Option<(u32, u64)>),
+    /// Built again: why, and the backend record there was.
+    Build(Break, Option<(u32, u64)>),
+}
+
+/// One replayable draw in this many is drawn plainly in `On` to time the plain set-up ([`Plan::Sample`]).
+pub const SAMPLE_EVERY: u64 = 64;
+
+/// What breaks the record `r` of `key` now, if anything: None reuses it. Its own bytes compared where they lie (no
+/// copy made), then its inputs.
+fn verdict(e: &Engine, key: Key, r: &Record) -> Option<Break> {
+    if !statics_same(e, key, &r.statics) {
+        return Some(Break::Statics);
+    }
+    let (at, _, reader) = r.inputs.iter().find(|(at, bytes, _)| !same_bytes(e, *at, bytes))?;
+    let others = r
+        .inputs
+        .iter()
+        .any(|(a, b, _)| a != at && !same_bytes(e, *a, b));
+    Some(Break::Input(*at, *reader, !others))
+}
+
+/// After each kept draw: records dropped when there are too many, the backend records no record holds sent to be
+/// dropped (in batches of [`FORGET_BATCH`]), and the counters' line every [`REPORT_EVERY`] draws.
+fn after_draw(e: &mut Engine) {
+    let ids = KEEP.with(|k| {
+        let mut k = k.borrow_mut();
+        let k = &mut *k;
+        evict_from(k, MAX_RECORDS, STALE_AFTER);
+        report_now(k);
+        (k.forgotten.len() >= FORGET_BATCH).then(|| std::mem::take(&mut k.forgotten))
+    });
+    if let Some(ids) = ids {
+        draw_items::forget(e, &ids);
+    }
 }
 
 /// `body` with the draw's own commands held for `ask` (`engine_core::draw_items`): what came of it. The holding
@@ -687,7 +793,7 @@ fn with_held(e: &mut Engine, ask: Ask, body: impl FnOnce(&mut Engine)) -> Done {
 /// [`build`] with its draw's own commands sent as a backend record (a new number; the record's `old` one dropped
 /// with it): the record, and its backend record when its commands could be sent as one. `beside`: a check run's
 /// item of the old record was sent just before, so these are its old form. An old backend record not dropped with
-/// the new one's sending is dropped later ([`send_forgotten`]).
+/// the new one's sending is dropped later ([`after_draw`]).
 fn build_sent(
     e: &mut Engine,
     key: Key,
@@ -740,26 +846,11 @@ fn follow_epoch() {
     });
 }
 
-/// The backend records no record holds any more, sent to be dropped (in batches of [`FORGET_BATCH`]).
-fn send_forgotten(e: &mut Engine) {
-    let ids = KEEP.with(|k| {
-        let mut k = k.borrow_mut();
-        (k.forgotten.len() >= FORGET_BATCH).then(|| std::mem::take(&mut k.forgotten))
-    });
-    if let Some(ids) = ids {
-        draw_items::forget(e, &ids);
-    }
-}
-
 const FORGET_BATCH: usize = 256;
 
-/// Above [`MAX_RECORDS`] records, the ones not used in the last [`STALE_AFTER`] draws are dropped (geometry freed, a cell
-/// unloaded, a game loaded: their keys are dead or about to be reused), their backend records with them.
-fn evict() {
-    KEEP.with(|k| evict_from(&mut k.borrow_mut(), MAX_RECORDS, STALE_AFTER));
-}
-
-/// [`evict`] with its limits: above `most` records, those unused in the last `stale` draws go; if still above
+/// Above `most` records ([`MAX_RECORDS`]: [`after_draw`]), those unused in the last `stale` draws ([`STALE_AFTER`]) are
+/// dropped (geometry freed, a cell unloaded, a game loaded: their keys are dead or about to be reused), their backend
+/// records with them; if still above
 /// (many cells passed through quickly, everything recent), the least recently used go down to three quarters of
 /// `most`, so the next frames rebuild only those, not every visible draw at once (review of #1108).
 fn evict_from(k: &mut Keep, most: usize, stale: u64) {
@@ -1005,11 +1096,20 @@ fn assemble(
         }
         ops.push(Op::Write(at, bytes));
     }
+    let mut counts = [0u32; 3];
+    for op in &ops {
+        counts[match op {
+            Op::Write(..) => 0,
+            Op::Leaf(_) => 1,
+            Op::Device(_) => 2,
+        }] += 1;
+    }
     (
         Record {
             statics: Vec::new(),
             inputs,
-            ops,
+            ops: ops.into(),
+            counts,
             replayable: true,
             last_used: 0,
             item: None,
@@ -1020,37 +1120,53 @@ fn assemble(
     )
 }
 
-/// Replays the record of `key`: its writes, setter calls and device calls, in order.
-fn replay(e: &mut Engine, key: Key) {
-    // Taken out while replaying (nothing it calls looks at the records) and put back: no copy.
-    let ops = KEEP.with(|k| {
-        k.borrow_mut()
-            .records
-            .get_mut(&key)
-            .map(|r| std::mem::take(&mut r.ops))
-    });
-    // Put back also when a stop or a C++ exception unwinds through the replay: a record left without its ops
-    // would replay as nothing.
-    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        for op in ops.iter().flatten() {
-            match op {
-                Op::Write(at, bytes) => e.mem.write(*at, bytes),
-                Op::Leaf(leaf) => replay_leaf(e, *leaf),
-                Op::Device(call) => {
-                    rt::device_replay(e, call);
-                }
+/// The bytes now under each write of `ops`, in their order (check mode puts them back after the replay that makes
+/// the item).
+fn bytes_under_writes(e: &Engine, ops: &[Op]) -> Vec<(u32, Vec<u8>)> {
+    ops.iter()
+        .filter_map(|op| match op {
+            Op::Write(at, bytes) => {
+                let mut now = vec![0u8; bytes.len()];
+                e.mem.try_read(*at, &mut now).ok().map(|()| (*at, now))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Replays a record's ops: its writes, setter calls and device calls, in order. The ops are the record's own
+/// (shared), so a record built again meanwhile (a kept call cannot do that, but nothing here relies on it) leaves
+/// this replay as it began.
+fn replay(e: &mut Engine, ops: &[Op]) {
+    for op in ops {
+        match op {
+            Op::Write(at, bytes) => e.mem.write(*at, bytes),
+            Op::Leaf(leaf) => replay_leaf(e, *leaf),
+            Op::Device(call) => {
+                rt::device_replay(e, call);
             }
         }
-    }));
-    if let Some(ops) = ops {
-        KEEP.with(|k| {
-            if let Some(r) = k.borrow_mut().records.get_mut(&key) {
-                r.ops = ops;
-            }
-        });
     }
-    if let Err(stop) = ran {
-        std::panic::resume_unwind(stop);
+}
+
+/// The hasher of the records' keys (five words: geometry, pass type, shader, property state, order): each word
+/// multiplied in, a fraction of SipHash's cost (a look-up per world draw).
+#[derive(Default, Clone, Copy)]
+struct KeyHasher(u64);
+
+impl Hasher for KeyHasher {
+    fn finish(&self) -> u64 {
+        self.0 ^ (self.0 >> 29)
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u32(u32::from(b));
+        }
+    }
+    fn write_u32(&mut self, n: u32) {
+        self.0 = (self.0 ^ u64::from(n))
+            .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            .rotate_left(26);
     }
 }
 
@@ -1241,6 +1357,39 @@ fn replay_leaf(e: &mut Engine, leaf: Leaf) {
             0x00b7_9730,
             crate::shader::geometry::pixel_entry_19(e)
         ),
+        // Called directly, as the per-geometry set-up calls them.
+        Leaf::ObjToCube {
+            this,
+            block,
+            pass_type,
+            flag,
+            transform,
+        } => crate::shader::geometry::obj_to_cube(
+            e,
+            Ptr::new(this),
+            Ptr::new(block),
+            pass_type,
+            flag,
+            transform,
+        ),
+        Leaf::ShadowProj {
+            this,
+            block,
+            flag,
+            transform,
+        } => crate::shader::geometry::shadow_proj(
+            e,
+            Ptr::new(this),
+            Ptr::new(block),
+            flag,
+            Ptr::new(transform),
+        ),
+        Leaf::Entry17 { this, object } => {
+            crate::shader::geometry::vertex_entry_17(e, Ptr::new(this), Ptr::new(object));
+        }
+        Leaf::ClipPlanes { this, pass_type } => {
+            crate::shader::geometry::simple_shadow_clip_planes(e, Ptr::new(this), pass_type);
+        }
     }
 }
 
@@ -1260,7 +1409,20 @@ fn first_difference(old: &[Op], new: &[Op]) -> Option<String> {
 fn difference_kind(old: &[Op], new: &[Op]) -> String {
     let kind = |op: &Op| match op {
         Op::Write(at, _) => format!("write {at:08x}"),
+        // A constant upload by its first register.
+        Op::Device(call) if matches!(call.slot, 0x178 | 0x1b4) => format!(
+            "device slot {:#x} register {:#x}",
+            call.slot,
+            call.args.first().copied().unwrap_or(0)
+        ),
         Op::Device(call) => format!("device slot {:#x}", call.slot),
+        Op::Leaf(Leaf::RenderState { state, .. }) => format!("call RenderState {state:#x}"),
+        Op::Leaf(Leaf::StageState { stage, state, .. }) => {
+            format!("call StageState {stage} {state:#x}")
+        }
+        Op::Leaf(Leaf::SamplerState { stage, state, .. }) => {
+            format!("call SamplerState {stage} {state:#x}")
+        }
         Op::Leaf(leaf) => format!(
             "call {}",
             format!("{leaf:?}")
@@ -1284,15 +1446,12 @@ fn difference_kind(old: &[Op], new: &[Op]) -> String {
 
 /// The counters, every [`REPORT_EVERY`] draws seen. The inputs that broke records are counted per line: the table
 /// starts empty again after each, so it stays small however long the run (review of #1108).
-fn report() {
-    KEEP.with(|k| {
-        let mut k = k.borrow_mut();
-        if k.stats.seen % REPORT_EVERY != 0 {
-            return;
-        }
-        eprintln!("{}", summary(&k.stats, k.records.len()));
-        k.stats.broke_at.clear();
-    });
+fn report_now(k: &mut Keep) {
+    if k.stats.seen % REPORT_EVERY != 0 {
+        return;
+    }
+    eprintln!("{}", summary(&k.stats, k.records.len()));
+    k.stats.broke_at.clear();
 }
 
 fn summary(s: &Stats, records: usize) -> String {
@@ -1306,11 +1465,14 @@ fn summary(s: &Stats, records: usize) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ");
+    // Words every audited build read are the exe's constants and the like (they never change): the words only
+    // some builds read come first, the likelier culprits.
     let mut uncovered: Vec<_> = s.uncovered.iter().collect();
-    uncovered.sort_by_key(|(at, n)| (std::cmp::Reverse(**n), **at));
+    uncovered.sort_by_key(|(at, n)| (**n >= s.audited, std::cmp::Reverse(**n), **at));
     let audit = if s.audited == 0 {
         String::new()
     } else {
+        let every = uncovered.iter().filter(|(_, n)| **n >= s.audited).count();
         let words = uncovered
             .iter()
             .take(16)
@@ -1318,7 +1480,7 @@ fn summary(s: &Stats, records: usize) -> String {
             .collect::<Vec<_>>()
             .join(", ");
         format!(
-            "; {} builds audited, reads none of their records covers (by word, builds): [{words}]",
+            "; {} builds audited, reads none of their records covers (by word, builds; {every} words read by every one last): [{words}]",
             s.audited
         )
     };
@@ -1326,14 +1488,15 @@ fn summary(s: &Stats, records: usize) -> String {
     differed.sort_by_key(|(at, n)| (std::cmp::Reverse(**n), (*at).clone()));
     let differed = differed
         .iter()
-        .take(6)
+        .take(10)
         .map(|(at, n)| format!("{at}: {n}"))
         .collect::<Vec<_>>()
         .join(", ");
     let built = s.built_new + s.built_statics + s.built_inputs + s.built_unkeepable;
     let each = |ns: u64, n: u64| ns as f64 / 1000.0 / n.max(1) as f64;
+    let per = |n: u64| n as f64 / s.replayed.max(1) as f64;
     format!(
-        "NV_DRAW_ITEMS: {} draws: {} replayed, {} built (new {}, own bytes changed {}, inputs changed {}, device reached outside the record {}), {} plain while resting ({} rests); {} checked, {} differed{}; {records} records; inputs that broke records most since the last line: [{top}]; differed first at: [{differed}]{audit}; items: {} drawn, {} plain, {} not the record's; backend records: {} sent, {} plain; check items: {} beside their old form, {} dropped; records dropped for a new device: {}; microseconds each: build {:.2}, replay {:.2}, plain {:.2}",
+        "NV_DRAW_ITEMS: {} draws: {} replayed, {} built (new {}, own bytes changed {}, inputs changed {}, device reached outside the record {}), {} plain while resting ({} rests); {} checked, {} differed{}; {records} records; inputs that broke records most since the last line: [{top}]; differed first at: [{differed}]{audit}; items: {} drawn, {} plain, {} not the record's; backend records: {} sent, {} plain; check items: {} beside their old form, {} dropped; records dropped for a new device: {}; microseconds each: build {:.2}, replay {:.2} (look-up and compares {:.2}; {:.1} writes, {:.1} kept calls, {:.1} device calls a replay), plain {:.2} ({} replayable draws drawn plainly), plain while resting {:.2}",
         s.seen,
         s.replayed,
         built,
@@ -1356,6 +1519,12 @@ fn summary(s: &Stats, records: usize) -> String {
         s.epochs,
         each(s.build_ns, built + s.checked),
         each(s.replay_ns, s.replayed),
+        each(s.look_ns, s.replayed),
+        per(s.replay_ops[0]),
+        per(s.replay_ops[1]),
+        per(s.replay_ops[2]),
+        each(s.sample_ns, s.sampled),
+        s.sampled,
         each(s.rest_ns, s.rested),
     )
 }
@@ -1428,7 +1597,7 @@ mod tests {
         ];
         let (r, _) = assemble(log, std::slice::from_ref(&call), &[leaf], &reads);
         assert_eq!(
-            r.ops,
+            *r.ops,
             [
                 Op::Write(0x5000, vec![1, 2, 3, 4]),
                 Op::Device(call),
@@ -1867,10 +2036,10 @@ mod tests {
         DROPPED.with(|d| d.borrow_mut().clear());
         let batch = n32(FORGET_BATCH);
         KEEP.with(|k| k.borrow_mut().forgotten = (1..batch).collect());
-        send_forgotten(&mut e);
+        after_draw(&mut e);
         assert!(DROPPED.with(|d| d.borrow().is_empty()));
         KEEP.with(|k| k.borrow_mut().forgotten.push(batch));
-        send_forgotten(&mut e);
+        after_draw(&mut e);
         assert_eq!(
             DROPPED.with(|d| std::mem::take(&mut *d.borrow_mut())),
             (1..=batch).collect::<Vec<_>>()
@@ -1885,7 +2054,8 @@ mod tests {
         let record = |last_used: u64, id: u32| Record {
             statics: Vec::new(),
             inputs: Vec::new(),
-            ops: Vec::new(),
+            ops: Rc::from([]),
+            counts: [0; 3],
             replayable: true,
             last_used,
             item: Some((id, 0)),
@@ -1921,7 +2091,8 @@ mod tests {
             let r = Record {
                 statics: Vec::new(),
                 inputs: Vec::new(),
-                ops: Vec::new(),
+                ops: Rc::from([]),
+                counts: [0; 3],
                 replayable: true,
                 last_used: 990 + u64::from(i),
                 item: Some((100 + i, 0)),
@@ -1975,16 +2146,27 @@ mod tests {
         assert_eq!(runs.get(), 1);
         let ops = KEEP.with(|k| k.borrow().records[&KEY].ops.clone());
         assert_eq!(
-            ops,
+            *ops,
             [Op::Leaf(leaf), Op::Write(block + 4, vec![3, 0, 0, 0])],
             "the setter call kept: its depth started again"
         );
-        // A replay that stops half way (a write to unmapped memory) keeps the record's ops for the next one.
-        let broken = vec![Op::Write(block + 8, vec![1]), Op::Write(0x0000_5000, vec![2])];
-        KEEP.with(|k| k.borrow_mut().records.get_mut(&KEY).unwrap().ops = broken.clone());
-        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| replay(&mut e, KEY)));
+        let _ = asks();
+        // A replay that stops half way (a write to unmapped memory) leaves the record's ops for the next one (the
+        // replay runs the record's own shared ops), and its holding ends.
+        let broken: Rc<[Op]> = Rc::from([
+            Op::Write(block + 8, vec![1]),
+            Op::Write(0x0000_5000, vec![2]),
+        ]);
+        KEEP.with(|k| k.borrow_mut().records.get_mut(&KEY).unwrap().ops = Rc::clone(&broken));
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            world(|| draw(&mut e, KEY, |_| ()));
+        }));
         assert!(stopped.is_err());
         assert_eq!(KEEP.with(|k| k.borrow().records[&KEY].ops.clone()), broken);
+        assert!(
+            matches!(asks()[..], [Ask::Item { check: false, .. }]),
+            "one held item, ended"
+        );
         set_mode_for_tests(None);
         reset_for_tests();
     }
@@ -2078,5 +2260,168 @@ mod tests {
         assert!(first_difference(&a, &a[..1])
             .unwrap()
             .contains("2 ops kept, 1 made"));
+    }
+
+    /// A replay's test of the record's own bytes where they lie agrees with the copy a build makes: the same bytes
+    /// are the same, any changed byte (in the geometry, a texture array, the render data) is not, an unreadable range
+    /// is its fill, and a range of another length (a texture count changed) is not the same.
+    #[test]
+    fn the_own_bytes_compared_in_place_are_the_copys() {
+        let mut e = Engine::new();
+        let geometry = e.mem.alloc(0x100);
+        let state = e.mem.alloc(0x20);
+        let [first, property, shader, data, render, arrays] =
+            [0x40, 0x100, 0x80, 0x40, 0x60, 0x180].map(|n| e.mem.alloc(n));
+        for (i, at) in [geometry, first, property, shader, data, render].into_iter().enumerate() {
+            for w in 0..8u32 {
+                e.mem.set_u32(at + 4 * w, 0x100 * i as u32 + w);
+            }
+        }
+        e.mem.set_u32(state, first);
+        e.mem.set_u32(state + 0xc, property);
+        // The alpha property (+0x10) and the texture effect (+0xdc) unmapped: their ranges are the fill.
+        e.mem.set_u32(state + 0x10, 0x0000_7000);
+        e.mem.set_u32(geometry + 0xb8, data);
+        e.mem.set_u32(data + 0x34, render);
+        e.mem.set_u16(property + 0xa8, 3);
+        for i in 0..6 {
+            e.mem.set_u32(property + 0xac + 4 * i, arrays + 0x40 * i);
+        }
+        let key = (geometry, 0x60, shader, state, 0);
+        let kept = statics(&e, key);
+        assert!(statics_same(&e, key, &kept));
+        assert!(!statics_same(&e, key, &kept[1..]), "another length");
+        for at in [geometry + 4, arrays + 0x44, render + 0x4c, shader + 0x7c] {
+            let was = e.mem.u8(at);
+            e.mem.set_u8(at, was ^ 1);
+            assert!(!statics_same(&e, key, &kept), "{at:x} changed");
+            assert_ne!(statics(&e, key), kept);
+            e.mem.set_u8(at, was);
+            assert!(statics_same(&e, key, &kept));
+        }
+        // A texture count changed: every array's range has another length.
+        e.mem.set_u16(property + 0xa8, 4);
+        assert!(!statics_same(&e, key, &kept));
+        assert!(statics_same(&e, key, &statics(&e, key)));
+    }
+
+    /// The set-ups that read the camera where no input notes it (the object-to-cube matrix, the shadow projection,
+    /// the vertex entry 17 and the simple shadow clip planes) are kept as calls, made again on replay with the
+    /// frame's camera: the live runs' first difference was the object-to-cube matrix of an older camera (vertex
+    /// register 10).
+    #[test]
+    fn the_camera_set_ups_are_kept_as_calls() {
+        use engine_core::ptr::Ptr;
+        let mut e = Engine::new();
+        // The shader statics' page: the 22 vertex constant entries' pointers, each at an entry switched off (each
+        // set-up's own work returns early).
+        e.mem.map(0x011f_0000, 0x1_0000);
+        let entry = e.mem.alloc(0x10);
+        for i in 0..22 {
+            e.mem.set_u32(crate::shader::geometry::VERTEX_ENTRIES + 4 * i, entry);
+        }
+        let block = e.mem.alloc(0x40);
+        reset_for_tests();
+        set_mode_for_tests(Some(Mode::On));
+        let runs = Cell::new(0u32);
+        let body = |e: &mut Engine| {
+            runs.set(runs.get() + 1);
+            let _ = capture::word(e, block, 0);
+            let (this, b) = (Ptr::new(0x0100), Ptr::new(block));
+            crate::shader::geometry::obj_to_cube(e, this, b, 0x60, 0, block + 0x10);
+            crate::shader::geometry::shadow_proj(e, this, b, 1, Ptr::new(block + 0x10));
+            crate::shader::geometry::vertex_entry_17(e, this, b);
+            // Not one of the clip planes' types: no call to keep.
+            crate::shader::geometry::simple_shadow_clip_planes(e, this, 0x60);
+        };
+        world(|| draw(&mut e, KEY, body));
+        let ops = KEEP.with(|k| k.borrow().records[&KEY].ops.clone());
+        assert_eq!(
+            *ops,
+            [
+                Op::Leaf(Leaf::ObjToCube {
+                    this: 0x100,
+                    block,
+                    pass_type: 0x60,
+                    flag: 0,
+                    transform: block + 0x10,
+                }),
+                Op::Leaf(Leaf::ShadowProj {
+                    this: 0x100,
+                    block,
+                    flag: 1,
+                    transform: block + 0x10,
+                }),
+                Op::Leaf(Leaf::Entry17 {
+                    this: 0x100,
+                    object: block,
+                }),
+            ]
+        );
+        world(|| draw(&mut e, KEY, body));
+        assert_eq!(runs.get(), 1, "replayed: {}", summary_now());
+        let s = summary_now();
+        assert!(s.contains("0.0 writes, 3.0 kept calls, 0.0 device calls a replay"), "{s}");
+        set_mode_for_tests(None);
+        reset_for_tests();
+    }
+
+    /// In `On`, one replayable draw in [`SAMPLE_EVERY`] is drawn plainly (its set-up runs, its record stays), and the
+    /// line gives the plain set-up's time beside the replay's.
+    #[test]
+    fn one_replayable_draw_in_so_many_is_drawn_plainly_for_the_line() {
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x10);
+        reset_for_tests();
+        set_mode_for_tests(Some(Mode::On));
+        let runs = Cell::new(0u32);
+        let body = |e: &mut Engine| {
+            runs.set(runs.get() + 1);
+            let _ = capture::word(e, block, 0);
+            e.mem.set_u32(block + 4, 1);
+        };
+        for _ in 0..SAMPLE_EVERY {
+            world(|| draw(&mut e, KEY, body));
+        }
+        assert_eq!(runs.get(), 2, "built once, drawn plainly once: {}", summary_now());
+        let s = summary_now();
+        assert!(s.contains(&format!("{} replayed", SAMPLE_EVERY - 2)), "{s}");
+        assert!(s.contains("(1 replayable draws drawn plainly)"), "{s}");
+        world(|| draw(&mut e, KEY, body));
+        assert_eq!(runs.get(), 2, "the record stayed");
+        set_mode_for_tests(None);
+        reset_for_tests();
+    }
+
+    /// Check mode puts the replay's writes back before the set-up runs: a set-up that reads what the record wrote (as
+    /// `render_standard` reads the owed restore it clears) finds what an off run finds, so it is not counted as
+    /// differing.
+    #[test]
+    fn check_mode_undoes_the_replays_writes_before_the_set_up() {
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x10);
+        let owed = block + 8;
+        reset_for_tests();
+        draw_items::install(&TEST_HOOKS);
+        let _ = asks();
+        set_mode_for_tests(Some(Mode::On));
+        let body = |e: &mut Engine| {
+            let _ = capture::word(e, block, 0);
+            // The restore owed: done and cleared (an own read of what the draw's last one left).
+            if e.mem.u32(owed) != 0 {
+                e.mem.set_u32(block + 4, 7);
+                e.mem.set_u32(owed, 0);
+            }
+        };
+        e.mem.set_u32(owed, 1);
+        world(|| draw(&mut e, KEY, body));
+        e.mem.set_u32(owed, 1);
+        set_mode_for_tests(Some(Mode::Check));
+        world(|| draw(&mut e, KEY, body));
+        let s = summary_now();
+        assert!(s.contains("1 checked, 0 differed"), "{s}");
+        assert_eq!((e.mem.u32(owed), e.mem.u32(block + 4)), (0, 7));
+        set_mode_for_tests(None);
+        reset_for_tests();
     }
 }

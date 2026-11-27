@@ -497,6 +497,7 @@ pub fn render_pass(
             let holder = e.global::<u32>(RENDER_HOLDER);
             e.vcall(geometry.addr(), slot::OWN_RENDER, &args![holder]);
         } else {
+            let _after = AfterBegin::now(begun);
             typed_call!(
                 FAMILY,
                 0x00b9_8e80,
@@ -519,6 +520,31 @@ pub fn render_pass(
                 e.call(TAIL_KIND_11, &args![shader, pass_type]);
             }
         }
+    }
+}
+
+thread_local! {
+    /// How the plain draw [`render_standard`] makes now came ([`AfterBegin`]): 0 not from [`render_pass`], 1 the
+    /// first draw after its pass's begin (`00b99390`), 2 a later one.
+    static AFTER_BEGIN: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+/// [`AFTER_BEGIN`] for one plain draw of [`render_pass`], put back as it was when dropped (also when a stop unwinds).
+/// The shader's constant entries switched on differ between the first draw after a begin and the later ones (the
+/// tail of the kinds 1 to 5 switches some off after the first: `tail_kinds_1_to_5`), so a kept record
+/// (`crate::draw::keep`) is keyed by it: a first draw's record uploads constants a later draw's set-up does not, and
+/// the other way round (the check run's first difference: the fog parameters, vertex register 14).
+struct AfterBegin(u8);
+
+impl AfterBegin {
+    fn now(begun: bool) -> AfterBegin {
+        AfterBegin(AFTER_BEGIN.with(|a| a.replace(if begun { 1 } else { 2 })))
+    }
+}
+
+impl Drop for AfterBegin {
+    fn drop(&mut self) {
+        AFTER_BEGIN.with(|a| a.set(self.0));
     }
 }
 
@@ -584,13 +610,16 @@ pub fn render_standard(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second
             holder,
         );
     };
+    let after_begin = AFTER_BEGIN.with(std::cell::Cell::get);
     if crate::draw::keep::mode() != crate::draw::keep::Mode::Off
+        && after_begin != 0
         && keepable(e, pass_type, geometry.addr(), shader)
     {
         let order = keep_order(
             (first, second, third),
             e.get(pass, RenderPass::ucSortFlag),
             e.global::<u8>(RESTORE_OWED),
+            after_begin,
         );
         crate::draw::keep::draw(e, (geometry.addr(), pass_type, shader, state, order), rest);
     } else {
@@ -598,15 +627,22 @@ pub fn render_standard(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second
     }
 }
 
-/// The draw's order-dependent choices, part of its key (`crate::draw::keep`): the flags, the pass's sort flag and
-/// whether a restore is owed (`RESTORE_OWED`): a record is only replayed where the set-up would take the same
-/// branches.
-fn keep_order((first, second, third): (bool, bool, bool), sort: u8, restore_owed: u8) -> u32 {
+/// The draw's order-dependent choices, part of its key (`crate::draw::keep`): the flags, the pass's sort flag,
+/// whether a restore is owed (`RESTORE_OWED`) and whether it is the first draw after its pass's begin
+/// ([`AFTER_BEGIN`]: 1 first, 2 later): a record is only replayed where the set-up would take the same branches
+/// and find the same constant entries switched on.
+fn keep_order(
+    (first, second, third): (bool, bool, bool),
+    sort: u8,
+    restore_owed: u8,
+    after_begin: u8,
+) -> u32 {
     u32::from(first)
         | u32::from(second) << 1
         | u32::from(third) << 2
         | u32::from(sort) << 3
         | u32::from(restore_owed) << 11
+        | u32::from(after_begin) << 19
 }
 
 /// Whether a plain geometry's draw may be kept (`crate::draw::keep`): a pass type without a set-up of its own
@@ -1853,17 +1889,20 @@ mod keep_tests {
         }
     }
 
-    /// Every order-dependent choice gives another key.
+
+    /// Every order-dependent choice gives another key, the first draw after a begin too.
     #[test]
     fn each_order_choice_is_its_own_part_of_the_key() {
-        let base = keep_order((false, false, false), 0, 0);
+        let base = keep_order((false, false, false), 0, 0, 2);
         let all = [
-            keep_order((true, false, false), 0, 0),
-            keep_order((false, true, false), 0, 0),
-            keep_order((false, false, true), 0, 0),
-            keep_order((false, false, false), 1, 0),
-            keep_order((false, false, false), 0xff, 0),
-            keep_order((false, false, false), 0, 1),
+            keep_order((true, false, false), 0, 0, 2),
+            keep_order((false, true, false), 0, 0, 2),
+            keep_order((false, false, true), 0, 0, 2),
+            keep_order((false, false, false), 1, 0, 2),
+            keep_order((false, false, false), 0xff, 0, 2),
+            keep_order((false, false, false), 0, 1, 2),
+            keep_order((false, false, false), 0, 0xff, 2),
+            keep_order((false, false, false), 0, 0, 1),
         ];
         let mut seen = vec![base];
         seen.extend(all);
@@ -1872,8 +1911,32 @@ mod keep_tests {
         seen.dedup();
         assert_eq!(seen.len(), n, "{all:x?}");
         assert_eq!(
-            keep_order((true, true, true), 0xff, 1),
-            7 | 0xff << 3 | 1 << 11
+            keep_order((true, true, true), 0xff, 1, 1),
+            7 | 0xff << 3 | 1 << 11 | 1 << 19
         );
+    }
+
+    /// How a plain draw came: set for one draw of `render_pass` (1 after a begin, 2 a later one), put back after it,
+    /// also when a stop unwinds through the draw; 0 outside, where nothing is kept.
+    #[test]
+    fn the_first_draw_after_a_begin_is_told_apart_for_one_draw() {
+        let now = || AFTER_BEGIN.with(std::cell::Cell::get);
+        assert_eq!(now(), 0);
+        {
+            let _first = AfterBegin::now(true);
+            assert_eq!(now(), 1);
+            {
+                let _later = AfterBegin::now(false);
+                assert_eq!(now(), 2);
+            }
+            assert_eq!(now(), 1, "the outer draw's again");
+        }
+        assert_eq!(now(), 0);
+        let stopped = std::panic::catch_unwind(|| {
+            let _first = AfterBegin::now(true);
+            panic!("a C++ exception");
+        });
+        assert!(stopped.is_err());
+        assert_eq!(now(), 0, "put back by the unwind");
     }
 }

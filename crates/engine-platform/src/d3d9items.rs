@@ -50,6 +50,31 @@ thread_local! {
     static HELD: RefCell<Option<Held>> = const { RefCell::new(None) };
     /// True between `begin` and `end` (the sink's one test).
     pub(super) static HOLDING: Cell<bool> = const { Cell::new(false) };
+    /// The last draw's buffers, emptied, for the next one (no allocation per draw).
+    static SPARE: RefCell<Option<(Commands, Vec<u8>)>> = const { RefCell::new(None) };
+    /// The device the items go to, as of a records' epoch ([`device_now`]).
+    static DEVICE: Cell<(u64, u32)> = const { Cell::new((u64::MAX, 0)) };
+}
+
+/// The device items and records are sent for: the platform's first device, looked up (under the device lock) once
+/// per records' epoch, which every device made or reset bumps ([`bump_epoch`]), so a draw's `begin` takes no lock.
+fn device_now(e: &mut Engine) -> u32 {
+    let now = epoch();
+    let (of, device) = DEVICE.with(Cell::get);
+    if of == now {
+        return device;
+    }
+    let _device = engine_core::real_threads::device_guard(e);
+    let device = super::d3d9real::first_device(e).unwrap_or(0);
+    DEVICE.with(|d| d.set((now, device)));
+    device
+}
+
+/// A finished draw's buffers kept for the next ([`SPARE`]).
+fn spare(mut held: Held) {
+    held.cmds.clear();
+    held.registers.clear();
+    SPARE.with(|s| *s.borrow_mut() = Some((held.cmds, held.registers)));
 }
 
 /// The backend's records' epoch: bumped at every device made or reset ([`bump_epoch`]).
@@ -65,35 +90,41 @@ fn epoch() -> u64 {
 }
 
 fn begin(e: &mut Engine, ask: Ask) {
-    let _device = engine_core::real_threads::device_guard(e);
-    let device = super::d3d9real::first_device(e).unwrap_or(0);
+    let device = device_now(e);
+    let (cmds, registers) = SPARE
+        .with(|s| s.borrow_mut().take())
+        .unwrap_or_default();
     HELD.with(|h| {
         *h.borrow_mut() = Some(Held {
             ask,
             device,
-            cmds: Commands::default(),
-            registers: Vec::new(),
+            cmds,
+            registers,
             done: None,
         });
     });
     HOLDING.with(|h| h.set(device != 0));
 }
 
+/// The device lock is taken only to send what is still held (a draw that never came); a draw that came was sent
+/// by the sink, under its lock.
 fn end(e: &mut Engine) -> Done {
-    let _device = engine_core::real_threads::device_guard(e);
     HOLDING.with(|h| h.set(false));
     let Some(mut held) = HELD.with(|h| h.borrow_mut().take()) else {
         return Done::Plain;
     };
     if let Some(done) = held.done {
+        spare(held);
         return done;
     }
     // No draw came: the run held goes out as it came (a check item's is dropped).
     if !held.cmds.is_empty() && !held.check_item() {
+        let _device = engine_core::real_threads::device_guard(e);
         if let Some(mut s) = super::d3d9real::sink_of(e) {
             flush(&mut s, &mut held);
         }
     }
+    spare(held);
     Done::Plain
 }
 
@@ -208,7 +239,9 @@ pub(super) fn submit(s: &mut Sink<'_>, cmd: Cmd<Data<'_>>) -> Reply {
         }
         held.cmds.keep(cmd);
         if let Cmd::SetConstants { data, .. } = cmd {
-            held.registers.extend_from_slice(&data.bytes());
+            let at = held.registers.len();
+            held.registers.resize(at + data.len() as usize, 0);
+            data.copy_to(0, &mut held.registers[at..]);
         }
         if matches!(
             cmd,
@@ -585,5 +618,34 @@ mod tests {
         assert!(repeats_kept(true, Mode::Off));
         assert!(!repeats_kept(false, Mode::Off));
         assert!(!repeats_kept(false, Mode::On));
+    }
+
+    /// The device items go to is looked up once per records' epoch, so a draw's `begin` takes no device lock; a device
+    /// made moves the epoch on, so the next `begin` looks again (a stale number of the old epoch is not taken). A
+    /// finished draw's buffers are kept for the next.
+    #[test]
+    fn a_begin_looks_up_the_device_once_per_epoch() {
+        use engine_core::draw_items as items;
+        let (mut e, _log) = device_with_stream();
+        let record = Ask::Record {
+            id: 9,
+            forget: 0,
+            check: false,
+        };
+        items::begin(&mut e, record);
+        let device = HELD.with(|h| h.borrow().as_ref().map(|h| h.device));
+        assert!(matches!(device, Some(d) if d != 0));
+        own(&mut e, stream_source(), 0);
+        own(&mut e, draw(), 0);
+        assert!(matches!(items::end(&mut e), Done::Recorded(_)));
+        assert_eq!(DEVICE.with(Cell::get).1, device.unwrap(), "kept for the epoch");
+        let room = SPARE.with(|s| s.borrow().as_ref().map(|(c, _)| c.is_empty()));
+        assert_eq!(room, Some(true), "the buffers kept, emptied");
+        // A device made (the epoch moved on): looked up again.
+        DEVICE.with(|d| d.set((epoch(), 0x1234)));
+        bump_epoch();
+        items::begin(&mut e, record);
+        assert_eq!(HELD.with(|h| h.borrow().as_ref().map(|h| h.device)), device);
+        items::end(&mut e);
     }
 }
