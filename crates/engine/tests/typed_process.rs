@@ -11,6 +11,7 @@
 use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
+use engine_typed::ai::AI;
 use engine_typed::process::{self, array, forget, levels};
 use engine_typed::{dispatch, multibound};
 
@@ -890,6 +891,14 @@ fn forget_world(e: &mut Engine, pattern: u32, answers: u32, which: u32) -> (u32,
     if pattern & 32 != 0 {
         let vt = e.mem.u32(lead);
         e.mem.set_u32(vt + 0x2c8, 0x0088_15a0);
+        // Its process's slot 0x47c the process classes' own (`0090cc10`, the AI family's), holding
+        // the target as its generic location: the clean-up's acquire list clear takes its typed branch.
+        let process = e.mem.u32(lead + 0x68);
+        if process != 0 {
+            let vt = e.mem.u32(process);
+            e.mem.set_u32(vt + 0x47c, 0x0090_cc10);
+            e.mem.set_u32(process + 0x44, target);
+        }
     }
     // The lead's extra data: followers (a list of the follower and a non-actor), head track, package
     // data (an object whose slots log), package target.
@@ -979,9 +988,16 @@ fn forget_inputs() -> Vec<Input> {
     ]
 }
 
-/// The calls the clean-up does in place: an object's extra data list (`005d43c0`, +0x44) and its
-/// word at +0x70 (`004fd380`).
-const FORGET_IN_PLACE: &[u32] = &[0x005d_43c0, 0x004f_d380];
+/// The calls the clean-up does in place: an object's extra data list (`005d43c0`, +0x44), its word
+/// at +0x70 (`004fd380`) and the list nodes' leaves (the temp list's, and those of the acquire
+/// lists `0090cc10` walks).
+const FORGET_IN_PLACE: &[u32] = &[
+    0x005d_43c0,
+    0x004f_d380,
+    0x0068_15c0,
+    0x0072_6070,
+    0x0082_56d0,
+];
 
 #[test]
 fn process_null_out_target_ref() {
@@ -992,6 +1008,8 @@ fn process_null_out_target_ref() {
         forget::null_out_target_ref(Ptr<_>, u32, u8)
     ))
     .common()
+    // The acquire list clear of a process whose slot 0x47c holds it (pattern bit 32).
+    .family(&AI)
     // The extra data cache's memset wrapper, a C runtime family member: translated on both sides.
     .goes_by_address(&[0x0040_3d30])
     .ignore_calls(FORGET_IN_PLACE)
@@ -1012,6 +1030,7 @@ fn process_reference_destructed() {
         forget::reference_destructed(Ptr<_>, u32)
     ))
     .common()
+    .family(&AI)
     .goes_by_address(&[0x0040_3d30])
     .ignore_calls(FORGET_IN_PLACE)
     // The actors close to the player, which the translation calls as a Rust function.

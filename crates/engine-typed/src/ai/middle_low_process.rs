@@ -17,8 +17,9 @@
 //! the first only; 0x3a8 is [`damage_mod_actor_value_ov2`] on the first two; 0x1bc, 0x1c0, 0x1c8,
 //! 0x5a4 and 0x5a8 are `LowProcess`'s flag getters and setters (`008d8060`, `008d8080`, `008d7ee0`,
 //! `008d8000`, `008d8020`) on all three; 0x288 is `LowProcess::AddToProcedureIndexRunning`
-//! (`009119b0`) on the first only. A call through one of them is the typed call, or the flag test
-//! or store in place, when the slot holds that body, and a call through the slot otherwise.
+//! (`009119b0`) and 0x29c `LowProcess::ProcessPursue` (`0090dc60`) on the first only. A call
+//! through one of them is the typed call, or the flag test or store in place, when the slot holds
+//! that body, and a call through the slot otherwise.
 //!
 //! The callees whose bodies are one load, store or test are done in place: the actor value's flag
 //! (`00406d70`), the buffers' change flags (`00428110`, `0042ce30`, `004280f0`), the calendar's hour
@@ -63,18 +64,9 @@ const DAMAGE_KIND_FLAG: u32 = 0x200;
 /// The change flag of the temporary modifiers.
 const MODIFIERS_CHANGED: u32 = 0x0010_0000;
 
-/// `LowProcess`'s functions the overrides call first (by address: not typed yet).
-const LOW_GET_ACTOR_FLOAT_VALUE: u32 = 0x0090_7380;
-const LOW_GET_ACTOR_VALUE: u32 = 0x0090_72d0;
-const LOW_SAVE_GAME_BUFFER: u32 = 0x0091_0450;
-const LOW_DESTRUCTOR: u32 = 0x0090_6fe0;
+/// `LowProcess::CheckforNewPackage`, which the hourly check calls first (by address: not typed
+/// yet).
 const LOW_CHECK_FOR_NEW_PACKAGE: u32 = 0x0090_a1a0;
-const LOW_GET_SAVE_SIZE: u32 = 0x0090_f8b0;
-const LOW_SAVE_GAME: u32 = 0x0090_fa70;
-const LOW_LOAD_GAME: u32 = 0x0090_fd80;
-const LOW_REVERT: u32 = 0x0091_0310;
-const LOW_LOAD_GAME_BUFFER: u32 = 0x0091_0630;
-const LOW_REVERT_BUFFER: u32 = 0x0091_0a60;
 /// `ModifierList`'s functions on the modifier lists.
 const MODIFIER_GET: u32 = 0x0093_7730;
 const MODIFIER_ADJUST: u32 = 0x0093_7480;
@@ -139,7 +131,7 @@ fn temporary_modifiers(this: Ptr) -> u32 {
 }
 
 /// `_ftol2_sse` (the CRT family's): the value truncated, its low word.
-fn truncate(e: &mut Engine, value: f64) -> u32 {
+pub(super) fn truncate(e: &mut Engine, value: f64) -> u32 {
     let whole = typed_call!(crt::FAMILY, 0x00ec_62c0, crt::math::ftol2_sse(e, value));
     crt::low_word(whole)
 }
@@ -189,9 +181,11 @@ pub(super) fn loaded(bits: u32) -> f64 {
 /// the value has no temporary modifiers. Returns ST0.
 pub fn get_actor_float_value(e: &mut Engine, this: Ptr, actor: u32, code: u32, extra: u32) -> f64 {
     let skips = value_has_flag(e, code, NO_TEMPORARY_MODIFIERS);
-    let base = e
-        .call(LOW_GET_ACTOR_FLOAT_VALUE, &args![this, actor, code, extra])
-        .st0;
+    let base = typed_call!(
+        FAMILY,
+        0x0090_7380,
+        low_process::get_actor_float_value(e, this, actor, code, Ptr::new(extra))
+    );
     if skips {
         return base;
     }
@@ -207,9 +201,11 @@ pub fn get_actor_float_value(e: &mut Engine, this: Ptr, actor: u32, code: u32, e
 /// modifier truncated (`_ftol2`) unless the value has no temporary modifiers.
 pub fn get_actor_value(e: &mut Engine, this: Ptr, actor: u32, code: u32, extra: u32) -> i32 {
     let skips = value_has_flag(e, code, NO_TEMPORARY_MODIFIERS);
-    let base = e
-        .call(LOW_GET_ACTOR_VALUE, &args![this, actor, code, extra])
-        .i32();
+    let base = typed_call!(
+        FAMILY,
+        0x0090_72d0,
+        low_process::get_actor_value(e, this, actor, code, Ptr::new(extra))
+    );
     if skips {
         return base;
     }
@@ -251,7 +247,11 @@ pub fn get_temporary_modifier(e: &mut Engine, this: Ptr, code: u8) -> f64 {
 /// package hour (4 bytes), then the temporary modifiers when the buffer's change flags (its word at
 /// +0x17) have theirs.
 pub fn save_game_buffer(e: &mut Engine, this: Ptr, buffer: Ptr) {
-    e.call(LOW_SAVE_GAME_BUFFER, &args![this, buffer]);
+    typed_call!(
+        FAMILY,
+        0x0091_0450,
+        low_process::save_game_buffer(e, this, buffer)
+    );
     let hour = this.addr().wrapping_add(LAST_PACKAGE_HOUR);
     e.call(BUFFER_WRITE, &args![buffer, hour, 4u32, 0u32]);
     if e.mem.u32(buffer.addr().wrapping_add(0x17)) & MODIFIERS_CHANGED != 0 {
@@ -281,7 +281,7 @@ pub fn copy(e: &mut Engine, this: Ptr, other: Ptr) {
 pub fn destructor(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), MIDDLE_LOW_PROCESS_VTABLE);
     e.call(MODIFIER_DESTRUCTOR, &args![temporary_modifiers(this)]);
-    e.call(LOW_DESTRUCTOR, &args![this]);
+    typed_call!(FAMILY, 0x0090_6fe0, low_process::destructor(e, this));
 }
 
 // Typed from 0092c9d0
@@ -501,15 +501,16 @@ pub fn process_combat_one_hour(e: &mut Engine, this: Ptr, actor: u32, _unused: u
     false
 }
 
-/// The part's size report (`Error`, line `line`): with the record being saved, its id, its form's
-/// name and its word at +5 (`form_format`), else the size alone (`format`).
-fn report_part(e: &mut Engine, part: u32, form_format: u32, format: u32, line: u32) {
+/// The part's size report (`Error`, line `line` of `source`): with the record being saved, its id,
+/// its form's name and its word at +5 (the first of `formats`), else the size alone (the second).
+pub(super) fn report_part(e: &mut Engine, part: u32, formats: (u32, u32), line: u32, source: u32) {
+    let (form_format, format) = formats;
     let record = saving_record(e);
     if record != 0 {
         let words = record_words(e, record, false);
-        typed_call!(leaf::FAMILY, 0x0040_fbe0, leaf::nothing(e); words form_format, part, words.form_id, words.name, words.flags, line, SOURCE_FILE);
+        typed_call!(leaf::FAMILY, 0x0040_fbe0, leaf::nothing(e); words form_format, part, words.form_id, words.name, words.flags, line, source);
     } else {
-        typed_call!(leaf::FAMILY, 0x0040_fbe0, leaf::nothing(e); words format, part, line, SOURCE_FILE);
+        typed_call!(leaf::FAMILY, 0x0040_fbe0, leaf::nothing(e); words format, part, line, source);
     }
 }
 
@@ -518,7 +519,11 @@ fn report_part(e: &mut Engine, part: u32, form_format: u32, format: u32, line: u
 /// blocks, 4 for the last package hour, the temporary modifiers' size with their change flag: a
 /// 16-bit size. With the save log setting on, this part's size is reported (line 0x263).
 pub fn get_save_size(e: &mut Engine, this: Ptr, flags: u32, form: u32) -> u16 {
-    let base = e.call(LOW_GET_SAVE_SIZE, &args![this, flags, form]).u16();
+    let base = typed_call!(
+        FAMILY,
+        0x0090_f8b0,
+        low_process::get_save_size(e, this, flags, form)
+    );
     let mut size = base;
     if use_save_game_blocks(e) {
         size = size.wrapping_add(6);
@@ -535,9 +540,12 @@ pub fn get_save_size(e: &mut Engine, this: Ptr, flags: u32, form: u32) -> u16 {
         report_part(
             e,
             part,
-            base_process::SAVE_SIZE_FORM_FORMAT,
-            base_process::SAVE_SIZE_FORMAT,
+            (
+                base_process::SAVE_SIZE_FORM_FORMAT,
+                base_process::SAVE_SIZE_FORMAT,
+            ),
             GET_SAVE_SIZE_LINE,
+            SOURCE_FILE,
         );
     }
     size
@@ -550,7 +558,11 @@ pub fn get_save_size(e: &mut Engine, this: Ptr, flags: u32, form: u32) -> u16 {
 /// (line 0x27a). With blocks, the block's length (the position now less the placeholder's) stored
 /// as 16 bits at the placeholder, after a warning when it is past 0xffff.
 pub fn save_game(e: &mut Engine, this: Ptr, flags: u32, form: u32) {
-    e.call(LOW_SAVE_GAME, &args![this, flags, form]);
+    typed_call!(
+        FAMILY,
+        0x0090_fa70,
+        low_process::save_game(e, this, flags, form)
+    );
     e.with_stack(8, |e, locals| {
         let length_at = locals.addr();
         let tag_at = locals.addr().wrapping_add(4);
@@ -579,9 +591,12 @@ pub fn save_game(e: &mut Engine, this: Ptr, flags: u32, form: u32) {
             report_part(
                 e,
                 written,
-                base_process::SAVE_GAME_FORM_FORMAT,
-                base_process::SAVE_GAME_FORMAT,
+                (
+                    base_process::SAVE_GAME_FORM_FORMAT,
+                    base_process::SAVE_GAME_FORMAT,
+                ),
                 SAVE_GAME_LINE,
+                SOURCE_FILE,
             );
         }
         if use_save_game_blocks(e) {
@@ -609,7 +624,11 @@ pub fn save_game(e: &mut Engine, this: Ptr, flags: u32, form: u32) {
 /// hour; the temporary modifiers with their change flag. With blocks, a position past the block's
 /// end or short of it is warned of (line 0x290), with the record being loaded or the version.
 pub fn load_game(e: &mut Engine, this: Ptr, flags: u32, argument_0: u32, argument_1: u32) {
-    e.call(LOW_LOAD_GAME, &args![this, flags, argument_0, argument_1]);
+    typed_call!(
+        FAMILY,
+        0x0090_fd80,
+        low_process::load_game(e, this, flags, argument_0, argument_1)
+    );
     e.with_stack(8, |e, locals| {
         let length_at = locals.addr();
         let tag_at = locals.addr().wrapping_add(4);
@@ -619,7 +638,7 @@ pub fn load_game(e: &mut Engine, this: Ptr, flags: u32, argument_0: u32, argumen
             let save_load = save_load_game(e);
             e.call(base_process::READ_BYTES, &args![save_load, tag_at, 4u32]);
             if e.mem.u32(tag_at) != base_process::BLOCK_TAG {
-                bad_header(e);
+                bad_header(e, SOURCE_FILE, LOAD_HEADER_LINE);
             }
             block_start = buffer_position(e);
             let save_load = save_load_game(e);
@@ -631,65 +650,71 @@ pub fn load_game(e: &mut Engine, this: Ptr, flags: u32, argument_0: u32, argumen
         if flags & MODIFIERS_CHANGED != 0 {
             e.call(MODIFIER_LOAD_GAME, &args![temporary_modifiers(this)]);
         }
-        if !use_save_game_blocks(e) {
-            return;
-        }
-        let end = buffer_position(e);
-        let record = loading_record(e);
-        let expected = u32::from(e.mem.u16(length_at)).wrapping_add(block_start);
-        if record != 0 {
-            let id = e.mem.u32(record);
-            let form = e.call(base_process::FORM_FOR_ID, &args![id]).u32();
-            let (format, bytes) = if end > expected {
-                (
-                    base_process::OVERRUN_FORM_FORMAT,
-                    end.wrapping_sub(expected),
-                )
-            } else if end < expected {
-                (
-                    base_process::UNDERRUN_FORM_FORMAT,
-                    expected.wrapping_sub(end),
-                )
-            } else {
-                return;
-            };
-            let record_flags = e.mem.u32(record.wrapping_add(5));
-            let version = u32::from(e.mem.u8(record.wrapping_add(9)));
-            let name = form_name(e, form);
-            let form_id = e.mem.u32(record);
-            e.call(
-                base_process::SAVELOAD_WARNING,
-                &args![
-                    format,
-                    bytes,
-                    SOURCE_FILE,
-                    LOAD_END_LINE,
-                    form_id,
-                    name,
-                    version,
-                    record_flags
-                ],
-            );
-        } else {
-            let (format, bytes) = if end > expected {
-                (base_process::OVERRUN_FORMAT, end.wrapping_sub(expected))
-            } else if end < expected {
-                (base_process::UNDERRUN_FORMAT, expected.wrapping_sub(end))
-            } else {
-                return;
-            };
-            let version = u32::from(current_version(e));
-            e.call(
-                base_process::SAVELOAD_WARNING,
-                &args![format, bytes, SOURCE_FILE, LOAD_END_LINE, version],
-            );
+        if use_save_game_blocks(e) {
+            let expected = u32::from(e.mem.u16(length_at)).wrapping_add(block_start);
+            check_block_end(e, expected, SOURCE_FILE, LOAD_END_LINE);
         }
     });
 }
 
-/// `LoadGame`'s tag check: the warning at line 0x287, with the record being loaded or with the
-/// current version.
-fn bad_header(e: &mut Engine) {
+/// `LoadGame`'s block end check (line `line` of `source`): a position past the block's end
+/// (`expected`) or short of it is warned of, with the record being loaded (the form for its id
+/// asked first, its words and name only for a warning) or with the current version.
+pub(super) fn check_block_end(e: &mut Engine, expected: u32, source: u32, line: u32) {
+    let end = buffer_position(e);
+    let record = loading_record(e);
+    if record != 0 {
+        let id = e.mem.u32(record);
+        let form = e.call(base_process::FORM_FOR_ID, &args![id]).u32();
+        let (format, bytes) = if end > expected {
+            (
+                base_process::OVERRUN_FORM_FORMAT,
+                end.wrapping_sub(expected),
+            )
+        } else if end < expected {
+            (
+                base_process::UNDERRUN_FORM_FORMAT,
+                expected.wrapping_sub(end),
+            )
+        } else {
+            return;
+        };
+        let record_flags = e.mem.u32(record.wrapping_add(5));
+        let version = u32::from(e.mem.u8(record.wrapping_add(9)));
+        let name = form_name(e, form);
+        let form_id = e.mem.u32(record);
+        e.call(
+            base_process::SAVELOAD_WARNING,
+            &args![
+                format,
+                bytes,
+                source,
+                line,
+                form_id,
+                name,
+                version,
+                record_flags
+            ],
+        );
+    } else {
+        let (format, bytes) = if end > expected {
+            (base_process::OVERRUN_FORMAT, end.wrapping_sub(expected))
+        } else if end < expected {
+            (base_process::UNDERRUN_FORMAT, expected.wrapping_sub(end))
+        } else {
+            return;
+        };
+        let version = u32::from(current_version(e));
+        e.call(
+            base_process::SAVELOAD_WARNING,
+            &args![format, bytes, source, line, version],
+        );
+    }
+}
+
+/// `LoadGame`'s tag check: the warning at line `line` of `source`, with the record being loaded or
+/// with the current version.
+pub(super) fn bad_header(e: &mut Engine, source: u32, line: u32) {
     let record = loading_record(e);
     if record != 0 {
         let words = record_words(e, record, true);
@@ -697,8 +722,8 @@ fn bad_header(e: &mut Engine) {
             base_process::SAVELOAD_WARNING,
             &args![
                 base_process::BAD_HEADER_FORM_FORMAT,
-                SOURCE_FILE,
-                LOAD_HEADER_LINE,
+                source,
+                line,
                 words.form_id,
                 words.name,
                 words.version,
@@ -709,12 +734,7 @@ fn bad_header(e: &mut Engine) {
         let version = u32::from(current_version(e));
         e.call(
             base_process::SAVELOAD_WARNING,
-            &args![
-                base_process::BAD_HEADER_FORMAT,
-                SOURCE_FILE,
-                LOAD_HEADER_LINE,
-                version
-            ],
+            &args![base_process::BAD_HEADER_FORMAT, source, line, version],
         );
     }
 }
@@ -723,7 +743,11 @@ fn bad_header(e: &mut Engine) {
 /// `MiddleLowProcess::Revert` (Xbox PDB): `LowProcess::Revert`, then with the change flag the
 /// temporary modifiers' revert (`00937b30`).
 pub fn revert(e: &mut Engine, this: Ptr, flags: u32, argument: u32) {
-    e.call(LOW_REVERT, &args![this, flags, argument]);
+    typed_call!(
+        FAMILY,
+        0x0091_0310,
+        low_process::revert(e, this, flags, argument)
+    );
     if flags & MODIFIERS_CHANGED != 0 {
         e.call(MODIFIER_REVERT, &args![temporary_modifiers(this)]);
     }
@@ -734,7 +758,11 @@ pub fn revert(e: &mut Engine, this: Ptr, flags: u32, argument: u32) {
 /// package hour (4 bytes), then the temporary modifiers (`ModifierList::LoadGame_ov2`) when the
 /// buffer's change flags (its word at +0x17) have theirs.
 pub fn load_game_buffer(e: &mut Engine, this: Ptr, buffer: u32) {
-    e.call(LOW_LOAD_GAME_BUFFER, &args![this, buffer]);
+    typed_call!(
+        FAMILY,
+        0x0091_0630,
+        low_process::load_game_buffer(e, this, buffer)
+    );
     let hour = this.addr().wrapping_add(LAST_PACKAGE_HOUR);
     e.call(BUFFER_READ, &args![buffer, hour, 4u32]);
     if e.mem.u32(buffer.wrapping_add(0x17)) & MODIFIERS_CHANGED != 0 {
@@ -750,7 +778,11 @@ pub fn load_game_buffer(e: &mut Engine, this: Ptr, buffer: u32) {
 /// on the temporary modifiers when the buffer's revert flags (its word at +0x2c) have their change
 /// flag.
 pub fn revert_buffer(e: &mut Engine, this: Ptr, buffer: u32) {
-    e.call(LOW_REVERT_BUFFER, &args![this, buffer]);
+    typed_call!(
+        FAMILY,
+        0x0091_0a60,
+        low_process::revert_buffer(e, this, buffer)
+    );
     if e.mem.u32(buffer.wrapping_add(0x2c)) & MODIFIERS_CHANGED != 0 {
         e.call(
             MODIFIER_REVERT_BUFFER,
@@ -1115,6 +1147,20 @@ fn update_reach_object(e: &mut Engine, process: u32, actor: u32, package: u32) {
     }
 }
 
+/// The process's slot 0x29c with the actor, 0, 1 and 0x101 (`LowProcess::ProcessPursue` on the low
+/// and middle-low processes): that typed call when the slot holds it.
+fn pursue_slot(e: &mut Engine, process: u32, actor: u32) {
+    if slot_target(e, process, 0x29c) == 0x0090_dc60 {
+        typed_call!(
+            FAMILY,
+            0x0090_dc60,
+            low_process::process_pursue(e, Ptr::new(process), actor, 0, 1, 0x101)
+        );
+    } else {
+        e.vcall(process, 0x29c, &args![actor, 0u32, 1u32, 0x101u32]);
+    }
+}
+
 /// `Update`'s switch on the procedure action (the jump tables at `0092e3c8` and `0092e34c`).
 fn update_action(
     e: &mut Engine,
@@ -1154,9 +1200,7 @@ fn update_action(
         0xe => {
             e.vcall(process, 0x7c8, &args![actor, 0u32]);
         }
-        0xf => {
-            e.vcall(process, 0x29c, &args![actor, 0u32, 1u32, 0x101u32]);
-        }
+        0xf => pursue_slot(e, process, actor),
         0x11 => update_follow(e, process, actor, package),
         0x1a => one(e, 0x808),
         0x1b => one(e, 0x7cc),

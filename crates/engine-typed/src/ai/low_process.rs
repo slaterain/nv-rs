@@ -37,14 +37,19 @@
 //! reads (`0055b980` in [`set_location_for_package`]) is left out.
 
 use super::actor_package::procedure_count;
+use super::base_process::{
+    buffer_position, current_version, low_half, save_load_game, save_log_enabled,
+    use_save_game_blocks,
+};
 use super::middle_low_process::{
-    calendar_hour, current_package, loaded, package_kind, procedure, procedure_index_running,
-    process_flag, set_procedure_index_running, set_process_flag, value_has_flag,
+    bad_header, calendar_hour, check_block_end, current_package, loaded, package_kind, procedure,
+    procedure_index_running, process_flag, report_part, set_procedure_index_running,
+    set_process_flag, truncate, value_has_flag,
 };
 use super::{actor_package, base_process, FAMILY};
 use crate::native::to_float;
 use crate::{
-    ai_queries, cell_refs, crt, dispatch, draw_f, extra_data, forms, pathing, slot_target,
+    ai_queries, cell_refs, crt, dispatch, draw_f, extra_data, forms, pathing, save, slot_target,
 };
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
@@ -1745,8 +1750,6 @@ const REFERENCE_MOVE_TO_NEW_SPACE: u32 = 0x0057_3800;
 const ACTOR_SET_PATHFINDING_GOAL_TO_REFERENCE: u32 = 0x008b_36f0;
 const PACKAGE_LOCATION_WORLD_SPACE: u32 = 0x0067_5a50;
 const PACKAGE_LOCATION_CELL: u32 = 0x0067_5c20;
-const EXTRA_SET_ACTOR_PACKAGE_DATA: u32 = 0x0042_11d0;
-const EXTRA_REMOVE_ACTOR_PACKAGE_DATA: u32 = 0x0042_12e0;
 const SET_INSTANCE_DATA: u32 = 0x006e_cd40;
 
 /// The acquire record at `field` (`pAcquireObject` or `pSavedAcquireObject`) deleted and cleared
@@ -1956,7 +1959,8 @@ fn process_level(e: &Engine, reference: u32) -> i32 {
 // Typed from 0090dc60
 /// `LowProcess::ProcessPursue` (Xbox PDB; the third and fourth words unread): without a target
 /// the package's (slot 0x8c); still none, the procedure moves on by one (slot 0x288). A target
-/// whose process is low (level below 1) while the actor is not alarmed (`008a61b0`) moves it on by
+/// whose process level is below 1 (a high process, or none: -1) while the actor is not alarmed
+/// (`008a61b0`) moves it on by
 /// two and is taken off the flee targets (`008a6730`). Farther than the pursue distance
 /// (`GetDistanceFromReference`), the follow runs (slot 0x298 with the actor, 0, `word` and 1);
 /// otherwise the procedure moves on by one unless the actor's slot 0x304 holds and the current
@@ -2452,7 +2456,11 @@ pub fn save_package_to_extra_data(e: &mut Engine, this: Ptr, actor: Ptr) {
             running_actor_package(e, other);
         }
     }
-    e.call(EXTRA_SET_ACTOR_PACKAGE_DATA, &args![extra, data]);
+    typed_call!(
+        extra_data::FAMILY,
+        0x0042_11d0,
+        extra_data::rooms::set_actor_package_data(e, extra, data)
+    );
     typed_call!(
         FAMILY,
         0x008c_6060,
@@ -2556,7 +2564,11 @@ pub fn load_package_from_extra_data(e: &mut Engine, this: Ptr, actor: Ptr) {
     );
     if data != 0 {
         e.call(SET_INSTANCE_DATA, &args![process.wrapping_add(4), data]);
-        e.call(EXTRA_REMOVE_ACTOR_PACKAGE_DATA, &args![extra]);
+        typed_call!(
+            extra_data::FAMILY,
+            0x0042_12e0,
+            extra_data::rooms::remove_actor_package_data(e, extra)
+        );
     }
 }
 
@@ -2583,5 +2595,672 @@ fn clear_current_package_slot(e: &mut Engine, process: u32) {
         );
     } else {
         e.vcall(process, 0x234, &[]);
+    }
+}
+
+// ---- Part 4: the actor values, the destructors and the save, load and revert of the process's
+// block (the save/load game's and a buffer's) ----
+
+/// `LowProcess`'s vtable, which the destructor stores.
+const LOW_PROCESS_VTABLE: u32 = 0x0108_86e4;
+/// `pTargetFormList` (a `BGSListForm`), `sFormListNumb` (16 bits), `pPatrolLocation` and
+/// `bSkippedTimeStampForPathing` (a byte).
+const TARGET_FORM_LIST: u32 = 0x4c;
+const FORM_LIST_NUMBER: u32 = 0x50;
+const PATROL_LOCATION: u32 = 0x54;
+const SKIPPED_TIME_STAMP: u32 = 0xb0;
+/// An actor's own modifiers (its `ModifierList` at +0xd0).
+const ACTOR_MODIFIERS: u32 = 0xd0;
+/// The change flag of the damage modifiers, and of the old block a load before version 0x33 skips.
+const MODIFIERS_CHANGED: u32 = 0x0020_0000;
+const OLD_EXTRA_BLOCK: u32 = 0x0080_0000;
+/// `BSSimpleList`'s destructor (its clear, `00470470`).
+const LIST_DESTRUCTOR: u32 = 0x0046_ffb0;
+/// `ModifierList`'s destructor, save size, save and load, save and load of a buffer, and revert.
+const MODIFIER_LIST_DESTRUCTOR: u32 = 0x0093_7030;
+const MODIFIER_LIST_SAVE_SIZE: u32 = 0x0093_7ab0;
+const MODIFIER_LIST_SAVE_GAME: u32 = 0x0093_78d0;
+const MODIFIER_LIST_LOAD_GAME: u32 = 0x0093_79c0;
+const MODIFIER_LIST_SAVE_GAME_BUFFER: u32 = 0x0093_7b50;
+const MODIFIER_LIST_LOAD_GAME_BUFFER: u32 = 0x0093_7c60;
+const MODIFIER_LIST_REVERT: u32 = 0x0093_7b30;
+/// The save/load game's numeric id writer and reader (`SaveNumericID`, `LoadNumericID`).
+const SAVE_NUMERIC_ID: u32 = 0x0085_7a10;
+const LOAD_NUMERIC_ID: u32 = 0x0085_7aa0;
+/// The save buffer's bytes (with a last 0), its variable-size count's start and its count; the
+/// load buffer's bytes, form id, form id into a word and variable-size count.
+const BUFFER_SAVE_DATA: u32 = 0x0086_5e50;
+const BUFFER_START_COUNT: u32 = 0x0086_5f20;
+const BUFFER_SAVE_COUNT: u32 = 0x0086_5ff0;
+const BUFFER_LOAD_DATA: u32 = 0x0086_4980;
+const BUFFER_LOAD_FORM_ID: u32 = 0x0086_48a0;
+const BUFFER_LOAD_FORM_ID_INTO: u32 = 0x0086_48e0;
+const BUFFER_LOAD_COUNT: u32 = 0x0086_4a60;
+/// `CombatTimer`'s save and load of a buffer.
+const COMBAT_TIMER_SAVE: u32 = 0x009a_5eb0;
+const COMBAT_TIMER_LOAD: u32 = 0x009a_5f20;
+/// `BSSimpleList::AddItem` (from a word).
+const LIST_ADD_ITEM: u32 = 0x005a_e3d0;
+/// The float remainder (`fmodf`'s wrapper, `cdecl`, two floats; ST0) and the old date's divisors
+/// (100.0 and 10000.0, floats).
+const FLOAT_REMAINDER: u32 = 0x004b_1500;
+const HUNDRED: u32 = 0x0101_6410;
+const TEN_THOUSAND: u32 = 0x0102_2958;
+/// The RTTI type descriptor of `BGSListForm`.
+const TYPE_LIST_FORM: u32 = 0x0118_63d4;
+/// The save messages' source file (the unit's path) and lines: `GetSaveSize`, `SaveGame`, and
+/// `LoadGame`'s header and end.
+const SOURCE_FILE: u32 = 0x0108_8f50;
+const SAVE_SIZE_LINE: u32 = 0xeda;
+const SAVE_GAME_LINE: u32 = 0xf20;
+const LOAD_HEADER_LINE: u32 = 0xf2d;
+const LOAD_END_LINE: u32 = 0xf77;
+
+/// The actor value `code` with its modifiers: the actor's own (`ModifierList::GetModifier` on its
+/// +0xd0, stored as a float; 0.0 without an actor) added to `value` (the owner's slot, asked after
+/// it), then the process's damage modifier (+0x94) added to that sum; each `FADD` at the running
+/// thread's precision ([`engine_core::x87`]).
+fn modified_value(
+    e: &mut Engine,
+    process: u32,
+    code: u32,
+    actor: u32,
+    value: impl FnOnce(&mut Engine) -> f64,
+) -> f64 {
+    let own = if actor == 0 {
+        0
+    } else {
+        let modifiers = actor.wrapping_add(ACTOR_MODIFIERS);
+        x87_store32(e.call(GET_MODIFIER, &args![modifiers, code & 0xff]).st0)
+    };
+    let sum = x87_add(value(e), x87_m32(own));
+    let modifiers = process.wrapping_add(DAMAGE_MODIFIERS);
+    let damage = e.call(GET_MODIFIER, &args![modifiers, code & 0xff]).st0;
+    x87_add(damage, sum)
+}
+
+// Typed from 009072d0
+/// `LowProcess::GetActorValue` (Xbox PDB; the first word unread): for an actor value with no
+/// modifiers (its info's flag 0x100, `00406d70`) the actor's own value (its `ActorValueOwner` at
+/// +0xa4, slot 0); otherwise that value (`FILD`) with the actor's modifier and the damage modifier
+/// added ([`modified_value`]), truncated (`_ftol2`).
+pub fn get_actor_value(e: &mut Engine, this: Ptr, _unused: u32, code: u32, actor: Ptr) -> i32 {
+    let owner = actor.addr().wrapping_add(ACTOR_VALUE_OWNER);
+    if value_has_flag(e, code, NO_MODIFIERS) {
+        return e.vcall(owner, 0, &args![code]).i32();
+    }
+    let total = modified_value(e, this.addr(), code, actor.addr(), |e| {
+        f64::from(e.vcall(owner, 0, &args![code]).i32())
+    });
+    i32::from_ne_bytes(truncate(e, total).to_ne_bytes())
+}
+
+// Typed from 00907380
+/// `LowProcess::GetActorFloatValue` (Xbox PDB; the first word unread): for an actor value with no
+/// modifiers the owner's slot 4 (its ST0 as it is); otherwise that value with the actor's modifier
+/// and the damage modifier added ([`modified_value`]), stored as a float and loaded again.
+pub fn get_actor_float_value(
+    e: &mut Engine,
+    this: Ptr,
+    _unused: u32,
+    code: u32,
+    actor: Ptr,
+) -> f64 {
+    let owner = actor.addr().wrapping_add(ACTOR_VALUE_OWNER);
+    if value_has_flag(e, code, NO_MODIFIERS) {
+        return e.vcall(owner, 4, &args![code]).st0;
+    }
+    let total = modified_value(e, this.addr(), code, actor.addr(), |e| {
+        e.vcall(owner, 4, &args![code]).st0
+    });
+    f64::from(f32::from_bits(x87_store32(total)))
+}
+
+// Typed from 00906fe0
+/// `LowProcess`'s destructor (no map name; its scalar deleting destructor and `MiddleLowProcess`'s
+/// run it): its vtable stored, the current package cleared (`BaseProcess::ClearCurrentPackage`),
+/// the acquire data released ([`release_acquire_data`]), the damage modifiers destroyed
+/// (`00937030`), `TempLocList`, `TempObjectList`, `GenericLocationsList` and `ObjectList` destroyed
+/// (`0046ffb0`, in that order), then `BaseProcess`'s destructor.
+pub fn destructor(e: &mut Engine, this: Ptr) {
+    let process = this.addr();
+    e.mem.set_u32(process, LOW_PROCESS_VTABLE);
+    typed_call!(
+        FAMILY,
+        0x008d_03a0,
+        base_process::clear_current_package(e, this)
+    );
+    typed_call!(FAMILY, 0x0090_70a0, release_acquire_data(e, this));
+    e.call(
+        MODIFIER_LIST_DESTRUCTOR,
+        &args![process.wrapping_add(DAMAGE_MODIFIERS)],
+    );
+    for list in [
+        TEMP_LOCATIONS_LIST,
+        TEMP_OBJECT_LIST,
+        GENERIC_LOCATIONS_LIST,
+        OBJECT_LIST,
+    ] {
+        e.call(LIST_DESTRUCTOR, &args![process.wrapping_add(list)]);
+    }
+    typed_call!(FAMILY, 0x008d_0640, base_process::destructor(e, this));
+}
+
+// Typed from 00906fb0
+/// `LowProcess::_scalar_deleting_destructor_` (Xbox PDB): [`destructor`], then `this` freed when
+/// bit 0 of `flags` is set. Answers `this`.
+pub fn scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    typed_call!(FAMILY, 0x0090_6fe0, destructor(e, this));
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
+// Typed from 0090f8b0
+/// `LowProcess::GetSaveSize` (engine map; a 16-bit size): `BaseProcess::GetSaveSize`, 6 more with
+/// save game blocks, the flags byte's value, 4 each from versions 0x4b, 0x4f and 0x56, 8, the
+/// damage modifiers' size with their change flag, 4 from version 0x74. With the save log setting
+/// on, this part's size is reported (line 0xeda). The version, read three times in a row by the
+/// exe, is read once for those three tests.
+pub fn get_save_size(e: &mut Engine, this: Ptr, flags: u32, form: u32) -> u16 {
+    let process = this.addr();
+    let base = typed_call!(
+        FAMILY,
+        0x008d_0900,
+        base_process::save_size(e, this, flags, form)
+    );
+    let mut size = base;
+    if use_save_game_blocks(e) {
+        size = size.wrapping_add(6);
+    }
+    size = size.wrapping_add(u16::from(e.mem.u8(process.wrapping_add(PROCESS_FLAGS))));
+    let version = current_version(e);
+    for least in [0x4b, 0x4f, 0x56] {
+        if version >= least {
+            size = size.wrapping_add(4);
+        }
+    }
+    size = size.wrapping_add(8);
+    if flags & MODIFIERS_CHANGED != 0 {
+        let modifiers = process.wrapping_add(DAMAGE_MODIFIERS);
+        size = size.wrapping_add(e.call(MODIFIER_LIST_SAVE_SIZE, &args![modifiers]).u16());
+    }
+    if current_version(e) >= 0x74 {
+        size = size.wrapping_add(4);
+    }
+    if save_log_enabled(e) {
+        let part = u32::from(size).wrapping_sub(u32::from(base));
+        report_part(
+            e,
+            part,
+            (
+                base_process::SAVE_SIZE_FORM_FORMAT,
+                base_process::SAVE_SIZE_FORMAT,
+            ),
+            SAVE_SIZE_LINE,
+            SOURCE_FILE,
+        );
+    }
+    size
+}
+
+/// `size` bytes from `from` to the save/load game (`008579b0`).
+fn write_bytes(e: &mut Engine, from: u32, size: u32) {
+    let save_load = save_load_game(e);
+    e.call(base_process::WRITE_BYTES, &args![save_load, from, size]);
+}
+
+/// `size` bytes from the save/load game into `to` (`008579e0`).
+fn read_bytes(e: &mut Engine, to: u32, size: u32) {
+    let save_load = save_load_game(e);
+    e.call(base_process::READ_BYTES, &args![save_load, to, size]);
+}
+
+/// A form's numeric id (its word at +0xc, `0084e3a0`; 0 for none) saved from a stack word
+/// (`SaveNumericID`, 4 bytes).
+fn save_numeric_id(e: &mut Engine, form: u32) {
+    let id = if form == 0 {
+        0
+    } else {
+        typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, form))
+    };
+    e.with_stack(4, |e, word| {
+        e.mem.set_u32(word.addr(), id);
+        let save_load = save_load_game(e);
+        e.call(SAVE_NUMERIC_ID, &args![save_load, word, 4u32]);
+    });
+}
+
+/// A numeric id loaded into the word at `at` (`LoadNumericID`, 4 bytes), read back.
+fn load_numeric_id(e: &mut Engine, at: u32) -> u32 {
+    let save_load = save_load_game(e);
+    e.call(LOAD_NUMERIC_ID, &args![save_load, at, 4u32]);
+    e.mem.u32(at)
+}
+
+/// The form for an id (`004839c0`) cast from `TESForm` to `to`.
+fn form_for_id_as(e: &mut Engine, id: u32, to: u32) -> u32 {
+    let form = typed_call!(
+        forms::FAMILY,
+        0x0048_39c0,
+        forms::tesform::form_by_id(e, id)
+    );
+    base_process::runtime_cast(e, form, TYPE_FORM, to)
+}
+
+// Typed from 0090fa70
+/// `LowProcess::SaveGame` (engine map): `BaseProcess::SaveGame`; with save game blocks the block tag
+/// and a 16-bit zero length placeholder; the flags byte; from version 0x4b `fEssentialDownTimer`;
+/// from 0x4f `pItemBeingUsed`'s numeric id; from 0x56 `iNumberItemsActivate`; the target's id (0
+/// while there is an acquire object) and `pGenericLocation`'s; the damage modifiers with their
+/// change flag; from 0x74 `fDeathTime`; `fTrackedDamage`. With the save log setting on, the bytes
+/// written since the start are reported (line 0xf20). With blocks, the block's length stored as 16
+/// bits at the placeholder, after a warning when it is past 0xffff. The start the exe reads a
+/// second time with the setting on is read once (nothing moves it between).
+pub fn save_game(e: &mut Engine, this: Ptr, flags: u32, form: u32) {
+    let process = this.addr();
+    typed_call!(
+        FAMILY,
+        0x008d_0a10,
+        base_process::save_game(e, this, flags, form)
+    );
+    e.with_stack(8, |e, locals| {
+        let length_at = locals.addr();
+        let tag_at = locals.addr().wrapping_add(4);
+        e.mem.set_u16(length_at, 0);
+        let mut placeholder = 0u32;
+        let start = buffer_position(e);
+        if use_save_game_blocks(e) {
+            e.mem.set_u32(tag_at, base_process::BLOCK_TAG);
+            write_bytes(e, tag_at, 4);
+            placeholder = buffer_position(e);
+            write_bytes(e, length_at, 2);
+        }
+        write_bytes(e, process.wrapping_add(PROCESS_FLAGS), 1);
+        if current_version(e) >= 0x4b {
+            write_bytes(e, process.wrapping_add(ESSENTIAL_DOWN_TIMER), 4);
+        }
+        if current_version(e) >= 0x4f {
+            let item = e.mem.u32(process.wrapping_add(ITEM_BEING_USED));
+            save_numeric_id(e, item);
+        }
+        if current_version(e) >= 0x56 {
+            write_bytes(e, process.wrapping_add(NUMBER_ITEMS_ACTIVATE), 4);
+        }
+        let target = e.mem.u32(process.wrapping_add(TARGET));
+        let acquiring = e.mem.u32(process.wrapping_add(ACQUIRE_OBJECT)) != 0;
+        save_numeric_id(e, if acquiring { 0 } else { target });
+        let location = e.mem.u32(process.wrapping_add(GENERIC_LOCATION));
+        save_numeric_id(e, location);
+        if flags & MODIFIERS_CHANGED != 0 {
+            let modifiers = process.wrapping_add(DAMAGE_MODIFIERS);
+            e.call(MODIFIER_LIST_SAVE_GAME, &args![modifiers]);
+        }
+        if current_version(e) >= 0x74 {
+            write_bytes(e, process.wrapping_add(DEATH_TIME), 4);
+        }
+        write_bytes(e, process.wrapping_add(TRACKED_DAMAGE), 4);
+        if save_log_enabled(e) {
+            let written = buffer_position(e).wrapping_sub(start);
+            report_part(
+                e,
+                written,
+                (
+                    base_process::SAVE_GAME_FORM_FORMAT,
+                    base_process::SAVE_GAME_FORMAT,
+                ),
+                SAVE_GAME_LINE,
+                SOURCE_FILE,
+            );
+        }
+        if use_save_game_blocks(e) {
+            let end = buffer_position(e);
+            if end > placeholder.wrapping_add(0xffff) {
+                e.call(
+                    base_process::SAVELOAD_WARNING,
+                    &args![
+                        base_process::BLOCK_TOO_LARGE_FORMAT,
+                        SOURCE_FILE,
+                        SAVE_GAME_LINE
+                    ],
+                );
+            }
+            e.mem
+                .set_u16(placeholder, low_half(end.wrapping_sub(placeholder)));
+        }
+    });
+}
+
+/// A float remainder (`004b1500` with the float at `at`, both loaded and stored as floats, which
+/// quiets a signalling NaN), truncated (`_ftol2`).
+fn remainder_whole(e: &mut Engine, value: u32, at: u32) -> i32 {
+    let divisor = x87_quiet_bits(e.mem.u32(at));
+    let remainder = e
+        .call(FLOAT_REMAINDER, &args![x87_quiet_bits(value), divisor])
+        .st0;
+    i32::from_ne_bytes(truncate(e, remainder).to_ne_bytes())
+}
+
+/// `LoadGame`'s old date (before version 0x36): a float `yyyymmdd` read from the save/load game
+/// into a stack word; the day its remainder of 100, the month its remainder of 10000 over 100, the
+/// year it truncated over 10000 (each truncated by `_ftol2`, the divisions signed), stored as the
+/// process's date (`iDateLastProcessed`: the month at bit 9, the year at bit 13).
+fn load_old_date(e: &mut Engine, process: u32) {
+    e.with_stack(4, |e, word| {
+        read_bytes(e, word.addr(), 4);
+        let value = e.mem.u32(word.addr());
+        let day = remainder_whole(e, value, HUNDRED);
+        let month = remainder_whole(e, value, TEN_THOUSAND).wrapping_div(100);
+        let whole = i32::from_ne_bytes(truncate(e, x87_load32(value)).to_ne_bytes());
+        let year = whole.wrapping_div(10000);
+        let date = (month << 9) | day | (year << 13);
+        e.mem
+            .set_i32(process.wrapping_add(DATE_LAST_PROCESSED), date);
+    });
+}
+
+// Typed from 0090fd80
+/// `LowProcess::LoadGame` (engine map): `BaseProcess::LoadGame`; with save game blocks the block tag
+/// (a warning at line 0xf2d when it is not `KOLB`), the block's start and its 16-bit length; before
+/// version 0x36 the old date ([`load_old_date`]); the flags byte; from 0x4b `fEssentialDownTimer`;
+/// from 0x4f `pItemBeingUsed` (the form for its numeric id, cast to `TESBoundObject`); from 0x56
+/// `iNumberItemsActivate`; the target's id through slot 0x12c and `pGenericLocation`'s id stored
+/// (the loads' resolve, `InitLoadGame`, makes them forms); the damage modifiers with their change
+/// flag; before 0x33 with the old block's flag a 16-bit count whose 8 bytes each are skipped (the
+/// position stepped in place, `00857bd0`); from 0x74 `fDeathTime`; `fTrackedDamage`. With blocks, a
+/// position past the block's end or short of it is warned of (line 0xf77).
+pub fn load_game(e: &mut Engine, this: Ptr, flags: u32, argument_0: u32, argument_1: u32) {
+    let process = this.addr();
+    typed_call!(
+        FAMILY,
+        0x008d_0bc0,
+        base_process::load_game(e, this, flags, argument_0, argument_1)
+    );
+    e.with_stack(0x10, |e, locals| {
+        let length_at = locals.addr();
+        let tag_at = locals.addr().wrapping_add(4);
+        let word_at = locals.addr().wrapping_add(8);
+        e.mem.set_u16(length_at, 0);
+        let mut block_start = 0u32;
+        if use_save_game_blocks(e) {
+            read_bytes(e, tag_at, 4);
+            if e.mem.u32(tag_at) != base_process::BLOCK_TAG {
+                bad_header(e, SOURCE_FILE, LOAD_HEADER_LINE);
+            }
+            block_start = buffer_position(e);
+            read_bytes(e, length_at, 2);
+        }
+        if current_version(e) < 0x36 {
+            load_old_date(e, process);
+        }
+        read_bytes(e, process.wrapping_add(PROCESS_FLAGS), 1);
+        if current_version(e) >= 0x4b {
+            read_bytes(e, process.wrapping_add(ESSENTIAL_DOWN_TIMER), 4);
+        }
+        if current_version(e) >= 0x4f {
+            let id = load_numeric_id(e, word_at);
+            let item = form_for_id_as(e, id, TYPE_BOUND_OBJECT);
+            e.mem.set_u32(process.wrapping_add(ITEM_BEING_USED), item);
+        }
+        if current_version(e) >= 0x56 {
+            read_bytes(e, process.wrapping_add(NUMBER_ITEMS_ACTIVATE), 4);
+        }
+        let target = load_numeric_id(e, word_at);
+        set_target_slot(e, process, target);
+        let location = load_numeric_id(e, word_at);
+        e.mem
+            .set_u32(process.wrapping_add(GENERIC_LOCATION), location);
+        if flags & MODIFIERS_CHANGED != 0 {
+            let modifiers = process.wrapping_add(DAMAGE_MODIFIERS);
+            e.call(MODIFIER_LIST_LOAD_GAME, &args![modifiers]);
+        }
+        if current_version(e) < 0x33 && flags & OLD_EXTRA_BLOCK != 0 {
+            read_bytes(e, word_at, 2);
+            let count = u32::from(e.mem.u16(word_at));
+            if count != 0 {
+                let position = save_load_game(e).wrapping_add(0x14);
+                let moved = e.mem.u32(position).wrapping_add(count << 3);
+                e.mem.set_u32(position, moved);
+            }
+        }
+        if current_version(e) >= 0x74 {
+            read_bytes(e, process.wrapping_add(DEATH_TIME), 4);
+        }
+        read_bytes(e, process.wrapping_add(TRACKED_DAMAGE), 4);
+        if use_save_game_blocks(e) {
+            let expected = u32::from(e.mem.u16(length_at)).wrapping_add(block_start);
+            check_block_end(e, expected, SOURCE_FILE, LOAD_END_LINE);
+        }
+    });
+}
+
+// Typed from 00910310
+/// `LowProcess::Revert` (engine map): `BaseProcess::Revert`; when the save/load game is not loading
+/// a save (`0055f5b0`: its word at +0x48 is 0), `iNumberItemsActivate` cleared, every record of
+/// `ObjectList` taken off and deleted, `GenericLocationsList` cleared (`00470470`), the acquire and
+/// saved acquire records cleared (not deleted), the target cleared (slot 0x12c), `pGenericLocation`
+/// cleared, `fEssentialDownTimer`, `fDeathTime` and `fTrackedDamage` 0.0, `pItemBeingUsed` and the
+/// flags byte 0; the damage modifiers reverted (`00937b30`) with their change flag. The exe's second
+/// ask of `0055f5b0` (when the form's flag 0x20 is clear) is a read whose answer it drops: left out.
+pub fn revert(e: &mut Engine, this: Ptr, flags: u32, form: u32) {
+    let process = this.addr();
+    typed_call!(
+        FAMILY,
+        0x008d_0f10,
+        base_process::revert(e, this, flags, form)
+    );
+    if e.mem.u32(save_load_game(e).wrapping_add(0x48)) == 0 {
+        e.mem
+            .set_u32(process.wrapping_add(NUMBER_ITEMS_ACTIVATE), 0);
+        delete_list_records(e, process.wrapping_add(OBJECT_LIST));
+        e.call(
+            LIST_CLEAR,
+            &args![process.wrapping_add(GENERIC_LOCATIONS_LIST)],
+        );
+        e.mem.set_u32(process.wrapping_add(ACQUIRE_OBJECT), 0);
+        e.mem.set_u32(process.wrapping_add(SAVED_ACQUIRE_OBJECT), 0);
+        set_target_slot(e, process, 0);
+        e.mem.set_u32(process.wrapping_add(GENERIC_LOCATION), 0);
+        e.mem.set_u32(process.wrapping_add(ESSENTIAL_DOWN_TIMER), 0);
+        e.mem.set_u32(process.wrapping_add(ITEM_BEING_USED), 0);
+        e.mem.set_u32(process.wrapping_add(DEATH_TIME), 0);
+        e.mem.set_u8(process.wrapping_add(PROCESS_FLAGS), 0);
+        e.mem.set_u32(process.wrapping_add(TRACKED_DAMAGE), 0);
+    }
+    if flags & MODIFIERS_CHANGED != 0 {
+        let modifiers = process.wrapping_add(DAMAGE_MODIFIERS);
+        e.call(MODIFIER_LIST_REVERT, &args![modifiers]);
+    }
+}
+
+/// The save buffer's `size` bytes from `from` (`00865e50`, its last word 0).
+fn save_data(e: &mut Engine, buffer: u32, from: u32, size: u32) {
+    e.call(BUFFER_SAVE_DATA, &args![buffer, from, size, 0u32]);
+}
+
+/// A form's id saved to the buffer (`BGSSaveGameBuffer::SaveFormID_ov2`, the save family's).
+fn save_form_id(e: &mut Engine, buffer: u32, form: u32) {
+    typed_call!(
+        save::FAMILY,
+        0x0086_5df0,
+        save::refs::save_form_id(e, Ptr::new(buffer), Ptr::new(form), 0)
+    );
+}
+
+// Typed from 00910450
+/// `LowProcess::SaveGame` of a buffer (Xbox PDB `SaveGame_ov2`): `BaseProcess`'s, then the flags
+/// byte (1 byte), `fEssentialDownTimer` (4), `pItemBeingUsed` (its id), `iNumberItemsActivate`,
+/// `fDeathTime`, `fTrackedDamage` (4 each), `bSkippedTimeStampForPathing` (1), `sFormListNumb` (2),
+/// the combat delay timer (`CombatTimer`'s save), the target's id (0 while there is an acquire
+/// object), the ids of `pGenericLocation`, `pGenericSecondLocation`, `pTargetFormList` and
+/// `pPatrolLocation`, the ids of `GenericLocationsList`'s non-null locations with their count (a
+/// variable-size count, started before them), and the damage modifiers when the buffer's change
+/// flags (its word at +0x17) have theirs.
+pub fn save_game_buffer(e: &mut Engine, this: Ptr, buffer: Ptr) {
+    let process = this.addr();
+    let buffer = buffer.addr();
+    typed_call!(
+        FAMILY,
+        0x008d_0f30,
+        base_process::save_game_buffer(e, this, buffer)
+    );
+    save_data(e, buffer, process.wrapping_add(PROCESS_FLAGS), 1);
+    save_data(e, buffer, process.wrapping_add(ESSENTIAL_DOWN_TIMER), 4);
+    let item = e.mem.u32(process.wrapping_add(ITEM_BEING_USED));
+    save_form_id(e, buffer, item);
+    for (field, size) in [
+        (NUMBER_ITEMS_ACTIVATE, 4),
+        (DEATH_TIME, 4),
+        (TRACKED_DAMAGE, 4),
+        (SKIPPED_TIME_STAMP, 1),
+        (FORM_LIST_NUMBER, 2),
+    ] {
+        save_data(e, buffer, process.wrapping_add(field), size);
+    }
+    e.call(
+        COMBAT_TIMER_SAVE,
+        &args![process.wrapping_add(COMBAT_DELAY_TIMER), buffer],
+    );
+    let target = if e.mem.u32(process.wrapping_add(ACQUIRE_OBJECT)) == 0 {
+        e.mem.u32(process.wrapping_add(TARGET))
+    } else {
+        0
+    };
+    save_form_id(e, buffer, target);
+    for field in [
+        GENERIC_LOCATION,
+        GENERIC_SECOND_LOCATION,
+        TARGET_FORM_LIST,
+        PATROL_LOCATION,
+    ] {
+        let form = e.mem.u32(process.wrapping_add(field));
+        save_form_id(e, buffer, form);
+    }
+    let mark = e.call(BUFFER_START_COUNT, &args![buffer]).u32();
+    let mut count = 0u32;
+    let mut node = process.wrapping_add(GENERIC_LOCATIONS_LIST);
+    while node != 0 {
+        let location = e.mem.u32(node);
+        if location != 0 {
+            save_form_id(e, buffer, location);
+            count = count.wrapping_add(1);
+        }
+        node = e.mem.u32(node.wrapping_add(4));
+    }
+    e.call(BUFFER_SAVE_COUNT, &args![buffer, count, mark]);
+    if e.mem.u32(buffer.wrapping_add(0x17)) & MODIFIERS_CHANGED != 0 {
+        let modifiers = process.wrapping_add(DAMAGE_MODIFIERS);
+        e.call(MODIFIER_LIST_SAVE_GAME_BUFFER, &args![modifiers, buffer]);
+    }
+}
+
+/// The load buffer's `size` bytes into `to` (`00864980`).
+fn load_data(e: &mut Engine, buffer: u32, to: u32, size: u32) {
+    e.call(BUFFER_LOAD_DATA, &args![buffer, to, size]);
+}
+
+/// A form id read from the buffer (`008648a0`), its form (`004839c0`) cast from `TESForm` to `to`.
+fn load_form_as(e: &mut Engine, buffer: u32, to: u32) -> u32 {
+    let id = e.call(BUFFER_LOAD_FORM_ID, &args![buffer]).u32();
+    form_for_id_as(e, id, to)
+}
+
+// Typed from 00910630
+/// `LowProcess::LoadGame` of a buffer (Xbox PDB `LoadGame_ov2`): `BaseProcess`'s; for a buffer
+/// version (its slot 0) below 6 two words read into the stack and dropped; then what
+/// [`save_game_buffer`] saves, in its order: the flags byte, `fEssentialDownTimer`,
+/// `pItemBeingUsed` (cast to `TESBoundObject`), the three words and the two small ones, the combat
+/// delay timer (`CombatTimer`'s load), the target, `pGenericLocation` and `pGenericSecondLocation`
+/// as form ids into the fields (`008648e0`), `pTargetFormList` (cast to `BGSListForm`),
+/// `pPatrolLocation`; then the count of locations, each read into a stack word (0 first) and added
+/// to `GenericLocationsList` (`005ae3d0`); the damage modifiers when the buffer's change flags have
+/// theirs.
+pub fn load_game_buffer(e: &mut Engine, this: Ptr, buffer: u32) {
+    let process = this.addr();
+    typed_call!(
+        FAMILY,
+        0x008d_0f90,
+        base_process::load_game_buffer(e, this, buffer)
+    );
+    e.with_stack(0x10, |e, locals| {
+        if e.vcall(buffer, 0, &[]).u8() < 6 {
+            load_data(e, buffer, locals.addr(), 4);
+            load_data(e, buffer, locals.addr().wrapping_add(4), 4);
+        }
+        load_data(e, buffer, process.wrapping_add(PROCESS_FLAGS), 1);
+        load_data(e, buffer, process.wrapping_add(ESSENTIAL_DOWN_TIMER), 4);
+        let item = load_form_as(e, buffer, TYPE_BOUND_OBJECT);
+        e.mem.set_u32(process.wrapping_add(ITEM_BEING_USED), item);
+        for (field, size) in [
+            (NUMBER_ITEMS_ACTIVATE, 4),
+            (DEATH_TIME, 4),
+            (TRACKED_DAMAGE, 4),
+            (SKIPPED_TIME_STAMP, 1),
+            (FORM_LIST_NUMBER, 2),
+        ] {
+            load_data(e, buffer, process.wrapping_add(field), size);
+        }
+        e.call(
+            COMBAT_TIMER_LOAD,
+            &args![process.wrapping_add(COMBAT_DELAY_TIMER), buffer],
+        );
+        for field in [TARGET, GENERIC_LOCATION, GENERIC_SECOND_LOCATION] {
+            e.call(
+                BUFFER_LOAD_FORM_ID_INTO,
+                &args![buffer, process.wrapping_add(field)],
+            );
+        }
+        let list = load_form_as(e, buffer, TYPE_LIST_FORM);
+        e.mem.set_u32(process.wrapping_add(TARGET_FORM_LIST), list);
+        e.call(
+            BUFFER_LOAD_FORM_ID_INTO,
+            &args![buffer, process.wrapping_add(PATROL_LOCATION)],
+        );
+        let count = e.call(BUFFER_LOAD_COUNT, &args![buffer]).u32();
+        let location = locals.addr().wrapping_add(8);
+        for _ in 0..count {
+            e.mem.set_u32(location, 0);
+            e.call(BUFFER_LOAD_FORM_ID_INTO, &args![buffer, location]);
+            e.call(
+                LIST_ADD_ITEM,
+                &args![process.wrapping_add(GENERIC_LOCATIONS_LIST), location],
+            );
+        }
+        if e.mem.u32(buffer.wrapping_add(0x17)) & MODIFIERS_CHANGED != 0 {
+            let modifiers = process.wrapping_add(DAMAGE_MODIFIERS);
+            e.call(MODIFIER_LIST_LOAD_GAME_BUFFER, &args![modifiers, buffer]);
+        }
+    });
+}
+
+// Typed from 00910a60
+/// `LowProcess::Revert` of a buffer (engine map `Revert_ov2`): `BaseProcess`'s, the acquire data
+/// released ([`release_acquire_data`]), `iNumberItemsActivate` cleared, the target cleared (slot
+/// 0x12c), `fEssentialDownTimer` 0.0, `pItemBeingUsed` 0, the combat delay timer's float at +4 0.0
+/// (`00910b10`, in place), `fDeathTime` 0.0, the flags byte 0, `fTrackedDamage` 0.0; the damage
+/// modifiers reverted (`00937b30`) when the buffer's revert flags (its word at +0x2c) have their
+/// change flag.
+pub fn revert_buffer(e: &mut Engine, this: Ptr, buffer: u32) {
+    let process = this.addr();
+    typed_call!(
+        FAMILY,
+        0x008d_1070,
+        base_process::revert_buffer(e, this, buffer)
+    );
+    typed_call!(FAMILY, 0x0090_70a0, release_acquire_data(e, this));
+    e.mem
+        .set_u32(process.wrapping_add(NUMBER_ITEMS_ACTIVATE), 0);
+    set_target_slot(e, process, 0);
+    e.mem.set_u32(process.wrapping_add(ESSENTIAL_DOWN_TIMER), 0);
+    e.mem.set_u32(process.wrapping_add(ITEM_BEING_USED), 0);
+    e.mem
+        .set_u32(process.wrapping_add(COMBAT_DELAY_TIMER + 4), 0);
+    e.mem.set_u32(process.wrapping_add(DEATH_TIME), 0);
+    e.mem.set_u8(process.wrapping_add(PROCESS_FLAGS), 0);
+    e.mem.set_u32(process.wrapping_add(TRACKED_DAMAGE), 0);
+    if e.mem.u32(buffer.wrapping_add(0x2c)) & MODIFIERS_CHANGED != 0 {
+        let modifiers = process.wrapping_add(DAMAGE_MODIFIERS);
+        e.call(MODIFIER_LIST_REVERT, &args![modifiers]);
     }
 }

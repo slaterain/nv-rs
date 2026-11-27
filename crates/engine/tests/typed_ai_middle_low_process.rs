@@ -163,28 +163,28 @@ enum Kind {
 
 /// The callees that stand in, with the words each may answer and what else it does.
 const DOUBLES: &[(u32, &[u32], Kind)] = &[
-    (0x0090_7380, FLOATS, Kind::Plain), // LowProcess::GetActorFloatValue
-    (0x0090_72d0, &[0, 7, 0xffff_fff0, 0x7fff_ffff], Kind::Plain), // LowProcess::GetActorValue
+    (0x0090_7380, FLOATS, Kind::Typed), // LowProcess::GetActorFloatValue
+    (0x0090_72d0, &[0, 7, 0xffff_fff0, 0x7fff_ffff], Kind::Typed), // LowProcess::GetActorValue
     (0x0093_7730, FLOATS, Kind::Plain), // ModifierList::GetModifier
     (0x0093_7480, UNREAD, Kind::Plain), // ModifierList::AdjustModifier
     (0x0093_7b50, UNREAD, Kind::Plain), // ModifierList::SaveGame_ov2
     (0x0093_7160, UNREAD, Kind::Plain), // the modifier list's copy
     (0x0093_7030, UNREAD, Kind::Plain), // its destructor
-    (0x0091_0450, UNREAD, Kind::Plain), // LowProcess::SaveGame_ov2
+    (0x0091_0450, UNREAD, Kind::Typed), // LowProcess::SaveGame_ov2
     (0x0086_5e50, UNREAD, Kind::Plain), // the save buffer's writer
-    (0x0090_6fe0, UNREAD, Kind::Plain), // LowProcess's destructor
+    (0x0090_6fe0, UNREAD, Kind::Typed), // LowProcess's destructor
     (0x0090_a1a0, BOOLS, Kind::Plain),  // LowProcess::CheckforNewPackage
     (0x0090_c360, UNREAD, Kind::Typed), // LowProcess::Update_ov2
     (0x0040_1030, UNREAD, Kind::Plain), // the free
     (0x0066_eea0, FLOATS, Kind::Plain), // ActorValue::CheckClampDamageModifier
     (0x00ec_43fb, &[0, TARGET, ACTOR, TARGET], Kind::Plain), // __RTDynamicCast
     (0x0088_1680, UNREAD, Kind::Plain), // Actor::EndInterruptPackage
-    (0x0090_f8b0, &[0, 6, 0xfff0, 0xffff], Kind::Plain), // LowProcess::GetSaveSize
-    (0x0090_fa70, UNREAD, Kind::Plain), // LowProcess::SaveGame
-    (0x0090_fd80, UNREAD, Kind::Plain), // LowProcess::LoadGame
-    (0x0091_0310, UNREAD, Kind::Plain), // LowProcess::Revert
-    (0x0091_0630, UNREAD, Kind::Plain), // LowProcess::LoadGame_ov2
-    (0x0091_0a60, UNREAD, Kind::Plain), // LowProcess::Revert_ov2
+    (0x0090_f8b0, &[0, 6, 0xfff0, 0xffff], Kind::Typed), // LowProcess::GetSaveSize
+    (0x0090_fa70, UNREAD, Kind::Typed), // LowProcess::SaveGame
+    (0x0090_fd80, UNREAD, Kind::Typed), // LowProcess::LoadGame
+    (0x0091_0310, UNREAD, Kind::Typed), // LowProcess::Revert
+    (0x0091_0630, UNREAD, Kind::Typed), // LowProcess::LoadGame_ov2
+    (0x0091_0a60, UNREAD, Kind::Typed), // LowProcess::Revert_ov2
     (0x0093_7ab0, &[0, 3, 0xfffe], Kind::Plain), // ModifierList::GetSaveSize
     (0x0093_78d0, UNREAD, Kind::Moves), // ModifierList::SaveGame
     (0x0093_79c0, UNREAD, Kind::Moves), // ModifierList::LoadGame
@@ -223,6 +223,16 @@ const DOUBLES: &[(u32, &[u32], Kind)] = &[
     (0x0070_3180, &[0, ACTOR, ACTOR], Kind::Plain), // Interface::GetTargetREFR
     (0x0070_3c00, UNREAD, Kind::Plain), // the console print
 ];
+
+/// The callees `LowProcess::ProcessPursue` (slot 0x29c's body, `0090dc60`, which the second stream
+/// may give a process) calls by address, with the words each may answer (drawn from the second
+/// stream).
+const DOUBLES_2: &[(u32, &[u32])] = &[
+    (0x008a_61b0, BOOLS),  // Actor::IsAlarmed
+    (0x008a_6730, UNREAD), // Actor::RemoveFleeTarget
+];
+/// The actor's slot the pursue asks (a stand-in on every object, from the second stream).
+const SLOTS_2: &[u32] = &[0x304];
 
 /// The callees the translations call and the typed code does in place (one load, store or test
 /// each), or leaves out (a pure call whose answer the exe never reads).
@@ -328,22 +338,23 @@ fn block(k: usize) -> u32 {
     CONTROL + 0x40 * k as u32
 }
 
-/// The index of the double at `addr`.
+/// The index of the double at `addr`: the first list's, then the second's.
 fn double(addr: u32) -> usize {
-    DOUBLES
-        .iter()
-        .position(|(a, _, _)| *a == addr)
-        .expect("a double")
+    match DOUBLES.iter().position(|(a, _, _)| *a == addr) {
+        Some(k) => k,
+        None => {
+            let k = DOUBLES_2
+                .iter()
+                .position(|(a, _)| *a == addr)
+                .expect("a double");
+            DOUBLES.len() + k
+        }
+    }
 }
 
 /// How many times the double at `addr` was called.
 fn calls(e: &Engine, addr: u32) -> u32 {
     e.mem.u32(block(double(addr)))
-}
-
-/// The first word of the last call of the double at `addr`.
-fn last_word(e: &Engine, addr: u32) -> u32 {
-    e.mem.u32(block(double(addr)) + 0x24)
 }
 
 fn slot_calls(e: &Engine, slot: u32) -> u32 {
@@ -354,6 +365,8 @@ fn slot_calls(e: &Engine, slot: u32) -> u32 {
 struct World {
     objects: [u32; COUNT],
     rng: u64,
+    /// The second stream.
+    rng2: u64,
 }
 
 impl World {
@@ -361,6 +374,7 @@ impl World {
         let mut w = World {
             objects: [0; COUNT],
             rng: (u64::from(seed) ^ 0x9e37_79b9_7f4a_7c15).wrapping_mul(0xbf58_476d_1ce4_e5b9) | 1,
+            rng2: (u64::from(seed) ^ 0x2545_f491_4f6c_dd1d).wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1,
         };
         e.map(0, 0x1000);
         // A package target's reference that is a float word or 0xffff (`ResetTarget` reads its flags):
@@ -487,7 +501,65 @@ impl World {
         }
         w.seed_fields(e);
         w.seed_globals(e);
+        w.seed_part_2(e);
         w
+    }
+
+    /// The second stream (drawn after the first, so the first part's world stays as it was): the
+    /// pursue's doubles, the actors' slot 0x304, and the pursue (`0090dc60`) in the process classes'
+    /// slot 0x29c of some processes, so `Update`'s pursue takes its typed branch.
+    fn seed_part_2(&mut self, e: &mut Engine) {
+        for (k, (addr, answers)) in DOUBLES_2.iter().enumerate() {
+            let block = block(DOUBLES.len() + k);
+            for i in 0..8 {
+                let answer = self.pick2(answers);
+                e.mem.set_u32(block + 4 + 4 * i, answer);
+            }
+            e.register_double(*addr, move |e, a| {
+                let n = e.mem.u32(block);
+                e.mem.set_u32(block, n + 1);
+                e.mem.set_u32(block + 0x24, a.first().copied().unwrap_or(0));
+                e.mem.set_u32(block + 0x28, a.get(1).copied().unwrap_or(0));
+                ret(e.mem.u32(block + 4 + 4 * (n % 8)))
+            });
+        }
+        for &slot in SLOTS_2 {
+            e.register_double(VT_FN + slot, move |e, a| {
+                let n = e.mem.u32(SLOT_COUNTS + slot);
+                e.mem.set_u32(SLOT_COUNTS + slot, n + 1);
+                let vt = e.mem.u32(a[0]);
+                ret(e.mem.u32(vt + ANSWERS + slot))
+            });
+        }
+        for i in 0..=COUNT {
+            if (WITH_VTABLE..COUNT).contains(&i) {
+                continue;
+            }
+            let o = if i < COUNT { self.objects[i] } else { 0 };
+            let vt = e.mem.u32(o);
+            for &slot in SLOTS_2 {
+                e.mem.set_u32(vt + slot, VT_FN + slot);
+                let answer = self.pick2(BOOLS);
+                e.mem.set_u32(vt + ANSWERS + slot, answer);
+            }
+        }
+        for o in [self.objects[0], self.objects[6]] {
+            if self.next2() % 3 == 0 {
+                let vt = e.mem.u32(o);
+                e.mem.set_u32(vt + 0x29c, 0x0090_dc60);
+            }
+        }
+    }
+
+    fn next2(&mut self) -> u64 {
+        self.rng2 ^= self.rng2 << 13;
+        self.rng2 ^= self.rng2 >> 7;
+        self.rng2 ^= self.rng2 << 17;
+        self.rng2
+    }
+
+    fn pick2(&mut self, from: &[u32]) -> u32 {
+        from[(self.next2() % from.len() as u64) as usize]
     }
 
     /// The fields that choose the branches.
@@ -765,23 +837,8 @@ impl InWorld for Diff {
 
 #[test]
 fn actor_values() {
-    Diff::new(entry!(
-        0x0092_ce00,
-        middle_low_process::get_actor_float_value(Ptr, u32, u32, u32) -> f64
-    ))
-    .in_world(&MOST, |w| w.modifier_call(false))
-    // The sum of two NaNs: SSE keeps the first one's payload, x87's FADD the larger one's. Only
-    // here: every other Diff compares NaN-looking words exactly.
-    .allow_nan_payloads()
-    .run()
-    .assert_same();
-    Diff::new(entry!(
-        0x0092_cd90,
-        middle_low_process::get_actor_value(Ptr, u32, u32, u32) -> i32
-    ))
-    .in_world(&MOST, |w| w.modifier_call(false))
-    .run()
-    .assert_same();
+    // `GetActorFloatValue` and `GetActorValue` are in `typed_ai_process.rs`, whose world stands in
+    // for what `LowProcess`'s (which they call first) calls.
     Diff::new(entry!(
         0x0092_cf10,
         middle_low_process::get_temporary_modifier(Ptr, u8) -> f64
@@ -835,17 +892,7 @@ fn life_and_steps() {
         })
         .run()
         .assert_same();
-    Diff::new(entry!(0x0092_ca00, middle_low_process::destructor(Ptr)))
-        .in_world(&FEW, |w| w.process_and(0))
-        .run()
-        .assert_same();
-    Diff::new(entry!(
-        0x0092_c9d0,
-        middle_low_process::scalar_deleting_destructor(Ptr, u32) -> Ptr
-    ))
-    .in_world(&MANY, |w| w.process_and(1))
-    .run()
-    .assert_same();
+    // The destructors are in `typed_ai_process.rs` (`LowProcess`'s destructor runs under them).
     Diff::new(entry!(
         0x0092_e400,
         middle_low_process::update_step(Ptr, u32, f32)
@@ -894,79 +941,8 @@ fn combat() {
     .assert_same();
 }
 
-#[test]
-fn save_and_load() {
-    Diff::new(entry!(
-        0x0092_e420,
-        middle_low_process::get_save_size(Ptr, u32, u32) -> u16
-    ))
-    .in_world(&MANY, |w| {
-        let flags = w.pick(&[0, 0x0010_0000, 0xffff_ffff]);
-        vec![w.process(), flags, w.word()]
-    })
-    .run()
-    .assert_same();
-    Diff::new(entry!(
-        0x0092_e560,
-        middle_low_process::save_game(Ptr, u32, u32)
-    ))
-    .in_world(&MOST, |w| {
-        let flags = w.pick(&[0, 0x0010_0000, 0xffff_ffff]);
-        vec![w.process(), flags, w.word()]
-    })
-    .run()
-    .assert_same();
-    Diff::new(entry!(
-        0x0092_e730,
-        middle_low_process::load_game(Ptr, u32, u32, u32)
-    ))
-    // Every seed: the block's clean end needs a run of reader answers that few seeds give.
-    .in_world(&ALL, |w| {
-        let flags = w.pick(&[0, 0x0010_0000, 0xffff_ffff]);
-        vec![w.process(), flags, w.word(), w.word()]
-    })
-    .run()
-    .assert_same();
-    Diff::new(entry!(
-        0x0092_e9f0,
-        middle_low_process::revert(Ptr, u32, u32)
-    ))
-    .in_world(&MANY, |w| {
-        let flags = w.pick(&[0, 0x0010_0000, 0xffff_ffff]);
-        vec![w.process(), flags, w.word()]
-    })
-    .run()
-    .assert_same();
-}
-
-#[test]
-fn save_and_load_of_a_buffer() {
-    let with_buffer = |w: &mut World| {
-        let buffer = w.objects[8];
-        vec![w.process(), buffer]
-    };
-    Diff::new(entry!(
-        0x0092_ea30,
-        middle_low_process::save_game_buffer(Ptr, Ptr)
-    ))
-    .in_world(&MANY, with_buffer)
-    .run()
-    .assert_same();
-    Diff::new(entry!(
-        0x0092_eaa0,
-        middle_low_process::load_game_buffer(Ptr, u32)
-    ))
-    .in_world(&MANY, with_buffer)
-    .run()
-    .assert_same();
-    Diff::new(entry!(
-        0x0092_eb00,
-        middle_low_process::revert_buffer(Ptr, u32)
-    ))
-    .in_world(&MANY, with_buffer)
-    .run()
-    .assert_same();
-}
+// The save, load and revert of the middle-low part are in `typed_ai_process.rs`, whose world stands in
+// for what `LowProcess`'s and `BaseProcess`'s (which they call first) call.
 
 /// `Update`'s words: the process and an actor (or none, or a form that is not one).
 fn update_words(w: &mut World) -> Vec<u32> {
@@ -1035,20 +1011,7 @@ fn reaches(
 /// the world that loses one shows here, not as a weaker comparison).
 #[test]
 fn the_seeds_reach_every_branch() {
-    const WARNING: u32 = 0x005b_5e40;
     const ADJUST: u32 = 0x0093_7480;
-    reaches(
-        0x0092_ce00,
-        &MOST,
-        |w| w.modifier_call(false),
-        &["no modifiers", "with the modifier"],
-        |e, _, _| {
-            vec![
-                calls(e, 0x0090_7380) > 0 && calls(e, 0x0093_7730) == 0,
-                calls(e, 0x0093_7730) > 0,
-            ]
-        },
-    );
     reaches(
         0x0092_cf30,
         &MOST,
@@ -1105,46 +1068,6 @@ fn the_seeds_reach_every_branch() {
         },
         &["rounds", "target's process"],
         |e, _, _| vec![slot_calls(e, 0x438) > 1, slot_calls(e, 0x28) > 0],
-    );
-    reaches(
-        0x0092_e560,
-        &MOST,
-        |w| vec![w.process(), 0x0010_0000, 0],
-        &["blocks", "too large", "exactly 0xffff", "reported"],
-        |e, _, before| {
-            vec![
-                calls(e, 0x0085_79b0) > 2,
-                calls(e, WARNING) > 0 && last_word(e, WARNING) == 0x0101_5318,
-                calls(e, 0x0085_79b0) > 2
-                    && calls(e, WARNING) == 0
-                    && e.mem.u16(before[0x30] + 4) == 0xffff,
-                calls(e, 0x0048_39c0) > 0,
-            ]
-        },
-    );
-    reaches(
-        0x0092_e730,
-        &ALL,
-        |w| vec![w.process(), 0x0010_0000, 0, 0],
-        &[
-            "bad header",
-            "overrun, a record",
-            "underrun, a record",
-            "overrun, the version",
-            "underrun, the version",
-            "the block's end",
-        ],
-        |e, _, _| {
-            let warned = |format| calls(e, WARNING) > 0 && last_word(e, WARNING) == format;
-            vec![
-                warned(0x0101_5718) || warned(0x0101_56a8),
-                warned(0x0101_5588),
-                warned(0x0101_5500),
-                warned(0x0101_54a0),
-                warned(0x0101_5440),
-                calls(e, 0x0085_79e0) > 2 && calls(e, WARNING) == 0,
-            ]
-        },
     );
     reaches(
         0x0092_d050,

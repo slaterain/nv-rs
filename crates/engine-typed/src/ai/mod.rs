@@ -11,13 +11,14 @@
 //!   class keeps in its vtable (the stubs that answer false, 0, -1 or 0.0 and those that do
 //!   nothing), the embedded current package's getters and setters, the destructor, `Copy`, the
 //!   save and load of the process block and the breath timer.
-//! - [`low_process`]: `LowProcess` (its Xbox PDB source unit), parts 1 to 3: the process lock map,
+//! - [`low_process`]: `LowProcess` (its Xbox PDB source unit), parts 1 to 4: the process lock map,
 //!   the processed date's parts, the flags and timers, the target and location setters and
 //!   `ResetTarget`, the damage modifier, the package tests, starts, schedule and done step, the
 //!   greeting, the procedure index steps, the patrol, the clear of the current data, the level
 //!   copy, the time update, the door lock and unlock callbacks, the small procedure steps, the
 //!   acquire lists' release and clears, the time delta, the flee, pursue, remove-worn and sandbox
-//!   procedures, the current destination, the loads' resolves and the package's extra data.
+//!   procedures, the current destination, the loads' resolves and the package's extra data; the
+//!   actor values, the destructors and the save, load and revert of the process block.
 //! - [`middle_low_process`]: `MiddleLowProcess` (its Xbox PDB source unit): the temporary and
 //!   damage modifiers on top of `LowProcess`'s actor values, the hourly package check, the combat
 //!   rounds, `Update` (the package's procedure actions), the destructors, the copy and the save,
@@ -238,6 +239,17 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0091_0820, low_process::init_load_game_buffer(Ptr, u32)),
         entry!(0x0091_30f0, low_process::save_package_to_extra_data(Ptr, Ptr)),
         entry!(0x0091_3250, low_process::load_package_from_extra_data(Ptr, Ptr)),
+        entry!(0x0090_72d0, low_process::get_actor_value(Ptr, u32, u32, Ptr) -> i32),
+        entry!(0x0090_7380, low_process::get_actor_float_value(Ptr, u32, u32, Ptr) -> f64),
+        entry!(0x0090_6fe0, low_process::destructor(Ptr)),
+        entry!(0x0090_6fb0, low_process::scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x0090_f8b0, low_process::get_save_size(Ptr, u32, u32) -> u16),
+        entry!(0x0090_fa70, low_process::save_game(Ptr, u32, u32)),
+        entry!(0x0090_fd80, low_process::load_game(Ptr, u32, u32, u32)),
+        entry!(0x0091_0310, low_process::revert(Ptr, u32, u32)),
+        entry!(0x0091_0450, low_process::save_game_buffer(Ptr, Ptr)),
+        entry!(0x0091_0630, low_process::load_game_buffer(Ptr, u32)),
+        entry!(0x0091_0a60, low_process::revert_buffer(Ptr, u32)),
         entry!(0x0092_c9d0, middle_low_process::scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x0092_ca00, middle_low_process::destructor(Ptr)),
         entry!(0x0092_ca70, middle_low_process::copy(Ptr, Ptr)),
