@@ -229,7 +229,7 @@ struct Step {
 /// The tests of `0067ec40` a package of `this` passes before it is added to
 /// `out`, in the exe's order (each stops at the first failure).
 fn package_qualifies(e: &mut Engine, item: u32, step: &Step) -> bool {
-    if !fn_0067efd0(e, Ptr::new(item)) {
+    if !e.call(0x0067_efd0, &args![item]).bool() {
         return false;
     }
     if !e

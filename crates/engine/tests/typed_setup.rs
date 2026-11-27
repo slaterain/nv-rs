@@ -385,6 +385,15 @@ impl Common for Diff {
             .family(&leaf::LEAVES)
             .ignore_calls(READ_IN_PLACE)
             .goes_by_address(&[0x00ba_0110, 0x00a5_9c60])
+            // The scene node family's members the set-up calls typed: its passes, the counted list's
+            // `RemoveAll`, the list move and the shadow scene set.
+            .goes_by_address(&[
+                0x00b5_b1f0,
+                0x00b5_b880,
+                0x00e7_4d40,
+                0x00b5_a8d0,
+                0x00b5_af30,
+            ])
             .max_calls(MAX_CALLS)
     }
 }

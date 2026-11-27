@@ -5,13 +5,16 @@
 //!
 //! The lists stay in guest memory; their items (`NiTListItem`: next, previous, element) are read
 //! and linked in place, as the exe does. What stays by address: the renderer's shadow-map release,
-//! the lights' own updates, the list's add, move and empty, the allocation and the interlocked words.
+//! the lights' own updates, the list's add and move, the allocation and the interlocked words. The
+//! list's empty (`00e74d40`), its move after an item (`00b5a8d0`) and the light's shadow scene set
+//! (`00b5af30`) are the scene node family's, called typed.
 //!
 //! **Floats** (main thread only): the sort's fade share `elapsed / time` and `1 - share` are each one
 //! operation stored to a float, so plain `f32` gives the exe's float under the main thread's word.
 
+use crate::scene_node;
 use engine_core::ptr::Ptr;
-use engine_core::{args, Engine};
+use engine_core::{args, typed_call, Engine};
 
 /// The node's members: `lShadowLightList` (+0xc0, head at +0xc0, tail at +0xc4), its iterator
 /// (+0xcc), the active and fading-in fences (+0xd0, +0xd4) and their fence objects (+0xd8, +0xdc).
@@ -40,9 +43,8 @@ const RENDERER_RELEASE_MAP: u32 = 0x00b6_d4c0;
 const LIGHT_AFTER_DROP: u32 = 0x00b9_e770;
 const LIGHT_RESTART: u32 = 0x00b9_bb10;
 const LIGHT_AS_CASTER: u32 = 0x00b9_dcb0;
-/// The list's `RemoveAll` (`00e74d40`), add at the head (`00c1b4a0`), move before (`00b702e0`) and
-/// add at the tail (`00a5a310`).
-const LIST_REMOVE_ALL: u32 = 0x00e7_4d40;
+/// The list's add at the head (`00c1b4a0`), move before (`00b702e0`) and add at the tail
+/// (`00a5a310`).
 const LIST_ADD_HEAD: u32 = 0x00c1_b4a0;
 const LIST_MOVE_BEFORE: u32 = 0x00b7_02e0;
 const LIST_ADD_TAIL: u32 = 0x00a5_a310;
@@ -167,7 +169,11 @@ pub fn drop_shadow_maps(e: &mut Engine, this: Ptr) {
             drop_map(e, light);
         }
     }
-    e.call(LIST_REMOVE_ALL, &args![list]);
+    typed_call!(
+        scene_node::FAMILY,
+        0x00e7_4d40,
+        scene_node::lists::remove_all(e, Ptr::new(list))
+    );
     e.mem.set_u32(this.addr().wrapping_add(ACTIVE_FENCE), 0);
     e.mem.set_u32(this.addr().wrapping_add(FADING_FENCE), 0);
 }
@@ -198,18 +204,11 @@ pub fn shadow_light_of(e: &mut Engine, this: Ptr, object: u32) -> u32 {
     } else {
         0
     };
-    // `00b5af30`: the `NiPointer` assignment of the object to `spShadowScene`.
-    let slot = light.wrapping_add(LIGHT_SHADOW_SCENE);
-    let old = e.mem.u32(slot);
-    if old != object {
-        if old != 0 {
-            release(e, old);
-        }
-        e.mem.set_u32(slot, object);
-        if object != 0 {
-            engine_core::sync_direct::interlocked_increment(e, object.wrapping_add(4));
-        }
-    }
+    typed_call!(
+        scene_node::FAMILY,
+        0x00b5_af30,
+        scene_node::lists::set_shadow_scene(e, Ptr::new(light), object)
+    );
     e.call(LIGHT_AS_CASTER, &args![light, 1u32]);
     e.with_stack(4, |e, temporary| {
         e.mem.set_u32(temporary.addr(), light);
@@ -272,40 +271,13 @@ fn move_before(e: &mut Engine, list: u32, item: u32, before: u32) {
     e.mem.set_u32(before.wrapping_add(4), item);
 }
 
-/// `00b5a8d0`, which the sort calls: `item` moved to just after `after` (nothing when they are the
-/// same item).
+/// `00b5a8d0`, which the sort calls: `item` moved to just after `after` (the scene node family's).
 fn move_after(e: &mut Engine, list: u32, item: u32, after: u32) {
-    if item == after {
-        return;
-    }
-    if e.mem.u32(head_at(list)) == item {
-        let next = next_of(e, item);
-        e.mem.set_u32(head_at(list), next);
-    }
-    if e.mem.u32(tail_at(list)) == item {
-        let previous = previous_of(e, item);
-        e.mem.set_u32(tail_at(list), previous);
-    }
-    if e.mem.u32(tail_at(list)) == after {
-        e.mem.set_u32(tail_at(list), item);
-    }
-    let next = next_of(e, item);
-    if next != 0 {
-        let previous = previous_of(e, item);
-        e.mem.set_u32(next.wrapping_add(4), previous);
-    }
-    let previous = previous_of(e, item);
-    if previous != 0 {
-        let next = next_of(e, item);
-        e.mem.set_u32(previous, next);
-    }
-    let following = next_of(e, after);
-    e.mem.set_u32(item, following);
-    e.mem.set_u32(item.wrapping_add(4), after);
-    if following != 0 {
-        e.mem.set_u32(following.wrapping_add(4), item);
-    }
-    e.mem.set_u32(after, item);
+    typed_call!(
+        scene_node::FAMILY,
+        0x00b5_a8d0,
+        scene_node::lists::move_after(e, Ptr::new(list), item, after)
+    );
 }
 
 // Typed from 00b5cde0

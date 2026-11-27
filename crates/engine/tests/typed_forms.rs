@@ -2,8 +2,10 @@
 //! against its translation: `TESForm`'s own functions (`tesform`) and `TESActorBaseData`'s
 //! (`actor_base_data`, whose world adds the settings, the save/load game and the template walk),
 //! `TESActorBase`'s and `TESAttributes`' (`actor_base`, `attributes`, whose world adds actor bases
-//! with their components), and `TESAIForm`'s and `TESAnimation`'s (`ai_form`, `animation`, whose
-//! world adds the package list's answers, the copied settings and a chunk of KF file names).
+//! with their components), `TESAIForm`'s and `TESAnimation`'s (`ai_form`, `animation`, whose
+//! world adds the package list's answers, the copied settings and a chunk of KF file names), and
+//! `TESObject`'s unit (`object`, `debug_string`, whose world adds the unit's globals, strings, bound
+//! objects and the model loader's and scene graph's answers).
 //!
 //! One world serves the whole unit: the unit's globals (the registries, the record writer's buffer,
 //! the save games, the data handler, the form-type table and the group tag, the big-endian byte);
@@ -20,8 +22,10 @@ use engine_core::prelude::*;
 use engine_core::typed::diff::{Diff, Input};
 use engine_typed::crt::CRT;
 use engine_typed::forms::{
-    actor_base, actor_base_data, ai_form, animation, attributes, tesform, FORMS,
+    actor_base, actor_base_data, ai_form, animation, attributes, conditions, debug_string, object,
+    package_data, package_list, schedule, tesform, FORMS,
 };
+use engine_typed::pathing::PATHING;
 
 /// The stand-in slots: `VT_FN + slot`, each answering the word at `SLOT_ANSWERS + slot`.
 const VT_FN: u32 = 0x00ff_4000;
@@ -4939,17 +4943,10 @@ fn attributes_destruct_biped_model_form() {
 // ---- TESAIForm (`ai_form`) and TESAnimation (`animation`) ----
 
 /// The words the AI form's and the animation's callees by address answer, one each from
-/// [`AI_ANSWERS`]: the package list's operations, the equip type and a file's chunk type.
+/// [`AI_ANSWERS`]: the equip type and a file's chunk type. (The package list's operations are
+/// this family's: their own code runs, over the package world.)
 const AI_ANSWERS: u32 = 0x0300_7000;
-const AI_ANSWERED: [u32; 10] = [
-    0x0067_e400, // the package list's clear
-    0x0067_e3a0, // its destructor
-    0x0067_e440, // its copy
-    0x0067_e420, // its append
-    0x0067_e560, // its InitItem
-    0x0067_e780, // its current package
-    0x0067_ec40, // its missed packages
-    0x0067_e4a0, // whether two lists differ
+const AI_ANSWERED: [u32; 2] = [
     0x0047_9430, // the equip type
     0x0047_26b0, // a file's chunk type
 ];
@@ -5026,23 +5023,11 @@ macro_rules! ai_answered {
     };
 }
 
-/// The world plus what the AI form and the animation reach: their callees' answers, the slot
-/// stand-in, a chunk read of the case's bytes and the save/load game.
+/// The package world plus what the AI form and the animation reach: their callees' answers, the
+/// slot stand-in, a chunk read of the case's bytes and the save/load game.
 fn ai_world(e: &mut Engine) {
-    world(e);
-    ai_answered!(
-        e,
-        0x0067_e400,
-        0x0067_e3a0,
-        0x0067_e440,
-        0x0067_e420,
-        0x0067_e560,
-        0x0067_e780,
-        0x0067_ec40,
-        0x0067_e4a0,
-        0x0047_9430,
-        0x0047_26b0,
-    );
+    package_world(e);
+    ai_answered!(e, 0x0047_9430, 0x0047_26b0);
     e.register(VT_FN + 4, slot_answer::<4>);
     e.register(0x0047_2890, |e, a| {
         let size = e.mem.u32(AI_CHUNK_SIZE);
@@ -5054,7 +5039,7 @@ fn ai_world(e: &mut Engine) {
 }
 
 /// An actor base form (the test vtable) and its `TESAIForm` at +0x90, returned: the class's vtable,
-/// then the AI data's bytes made from `seed`, the package list's head two words of its own.
+/// then the AI data's bytes made from `seed`, and a package list of none, one or two packages.
 fn ai_form(e: &mut Engine, seed: u32) -> u32 {
     let owner = e.mem.alloc(0xc0);
     e.mem.set_u32(owner, VTABLE);
@@ -5064,6 +5049,8 @@ fn ai_form(e: &mut Engine, seed: u32) -> u32 {
         e.mem
             .set_u8(ai + i, seed.wrapping_mul(0x3b).wrapping_add(i * 0x11) as u8);
     }
+    let items = packages(e, seed, seed % 3, false);
+    set_list(e, ai + 0x18, &items);
     ai
 }
 
@@ -5114,7 +5101,13 @@ const NAME_LISTS: [&[Option<&str>]; 5] = [
 
 /// The AI form's and the animation's cases: the forms family's, with their own in-place bodies.
 fn ai_cases(d: Diff) -> Diff {
-    d.forms().ignore_calls(AI_IN_PLACE)
+    pk_locals(
+        d.forms()
+            .ignore_calls(AI_IN_PLACE)
+            .ignore_calls(PK_IN_PLACE)
+            .ignore_calls(PK_OWN_IN_PLACE)
+            .goes_by_address(PK_BY_ADDRESS),
+    )
 }
 
 /// The AI form's and the animation's shared cases, as steps of the `Diff` chain.
@@ -5235,7 +5228,9 @@ fn ai_reference(e: &mut Engine, pick: u32) -> u32 {
     if pick == 0 {
         return 0;
     }
-    let reference = e.mem.alloc(0x40);
+    let reference = e.mem.alloc(0x80);
+    let process = process(e, 0, 0, reference);
+    e.mem.set_u32(reference + REF_PROCESS, process);
     if pick == 2 {
         let base = ai_form(e, 7) - 0x90;
         e.mem.set_u32(reference + 0x20, base);
@@ -5608,7 +5603,12 @@ fn ai_init_item() {
         .setup(|e, case| {
             ai_world(e);
             e.mem.set_u8(AI_INIT_ITEM_SETTING + 4, case.word(0) as u8);
-            vec![ai_form(e, 3), case.word(1)]
+            let owner = if case.word(1) != 0 {
+                form(e, 0x2a, 0, 0x0100_0abc)
+            } else {
+                0
+            };
+            vec![ai_form(e, 4), owner]
         })
         .run()
         .assert_same();
@@ -5620,7 +5620,7 @@ fn ai_current_package() {
         .ai_reference()
         .setup(|e, case| {
             ai_world(e);
-            set_ai_answer(e, 0x0067_e780, case.word(1));
+            set_calendar(e, case.word(1));
             vec![ai_reference(e, case.word(0))]
         })
         .run()
@@ -5644,7 +5644,11 @@ fn ai_missed_packages() {
         ai_world(e);
         vec![
             ai_reference(e, case.word(0)),
-            case.word(1),
+            if case.word(1) != 0 {
+                new_list(e, &[])
+            } else {
+                0
+            },
             case.word(2),
             case.word(3),
         ]
@@ -5700,6 +5704,13 @@ fn ai_compare_component() {
             ai_world(e);
             let this = ai_form(e, 0x31);
             let other = ai_form(e, 0x31);
+            // The package lists: the same nodes, or each its own.
+            if case.word(1) == 0 {
+                for at in [0x18, 0x1c] {
+                    let word = e.mem.u32(this + at);
+                    e.mem.set_u32(other + at, word);
+                }
+            }
             // 0: not a TESAIForm; 1: the same data; then one byte of the data different.
             if let Some(offset) = case.word(0).checked_sub(2) {
                 let at = other + AI_COMPARED[offset as usize];
@@ -5711,7 +5722,6 @@ fn ai_compare_component() {
                 TYPE_TES_AI_FORM,
                 if case.word(0) == 0 { 0 } else { other },
             );
-            set_ai_answer(e, 0x0067_e4a0, case.word(1));
             vec![this, other]
         })
         .run()
@@ -5940,6 +5950,3041 @@ fn animation_add_name() {
             let this = animation(e, NAME_LISTS[case.word(0) as usize]);
             vec![this, c_string(e, b"jump.kf")]
         })
+        .run()
+        .assert_same();
+}
+
+/// `copied_setting` (`0047eeb0`) quiets a signalling NaN, as its `FLD` does. Its Diff can't see
+/// that: the harness widens every float result to an `f64`, which quiets it on its own. So the bits
+/// the typed function answers are read here.
+#[test]
+fn ai_copied_setting_quiets_a_signalling_nan() {
+    let mut e = Engine::new_untyped_for_test();
+    e.map(0x011c_5000, 0x1000);
+    e.mem.set_u32(0x011c_52a8 + 8, 0x7f80_0001);
+    e.mem.set_u32(0x011c_52a8 + 4, 0x7fc1_2345);
+    assert_eq!(ai_form::copied_setting(&mut e, 2).to_bits(), 0x7fc0_0001);
+    assert_eq!(ai_form::copied_setting(&mut e, 1).to_bits(), 0x7fc1_2345);
+}
+
+/// The slot shortcut of `mark_changed` goes direct: with the slot holding `TESActorBase::AddChange`
+/// for a created form or `TESForm::AddChange`, whose bodies make no typed call of their own, each
+/// run's one direct call is the shortcut's (a vtable call reaches the same typed function by
+/// address, not directly).
+#[test]
+fn ai_mark_changed_goes_direct() {
+    let report = Diff::new(entry!(0x0047_f790, ai_form::mark_changed(u32, u32)))
+        .ai()
+        .ignore_calls(AB_IN_PLACE)
+        .ignore_calls(ABD_IN_PLACE)
+        .inputs(&[Input::Of(&[4, 5]), Input::Of(&[8, 0xffff_ffff])])
+        .setup(|e, case| {
+            ai_world(e);
+            answered!(e, 0x0084_a620);
+            set_answer(e, 0x0084_a620, 1);
+            let bgs = e.mem.alloc(0x40);
+            e.mem.set_u32(BGS_SAVE_LOAD_GAME, bgs);
+            let ai = ai_form(e, 1);
+            let owner = ai - 0x90;
+            let vtable = e.mem.alloc(0x50);
+            let (body, id) = if case.word(0) == 4 {
+                (0x005f_1630, 0xff00_0042)
+            } else {
+                (0x0048_4b60, 0x0100_0042)
+            };
+            e.mem.set_u32(vtable + 0x48, body);
+            e.mem.set_u32(owner, vtable);
+            e.mem.set_u32(owner + 0xc, id);
+            vec![ai, case.word(1)]
+        })
+        .run();
+    report.assert_same();
+    assert_direct_each_run(&report);
+}
+
+/// The slot shortcut of the animation's copy goes direct: slot 4 holding `ClearDataComponent` and
+/// a source with no names, so the shortcut is each run's one direct call.
+#[test]
+fn animation_copy_component_goes_direct() {
+    let report = Diff::new(entry!(0x0047_fb50, animation::copy_component(u32, u32)))
+        .names()
+        .inputs(&[Input::Of(&[1, 2])])
+        .setup(|e, case| {
+            ai_world(e);
+            let this = animation(e, NAME_LISTS[case.word(0) as usize]);
+            let other = animation(e, NAME_LISTS[0]);
+            e.mem.set_u32(ANIM_VTABLE + 4, 0x0047_fa50);
+            set_cast(e, TYPE_TES_ANIMATION, other);
+            vec![this, other]
+        })
+        .run();
+    report.assert_same();
+    assert_direct_each_run(&report);
+}
+
+/// Each direct run made exactly one direct call (the shortcut under test), and there were direct
+/// runs (with debug assertions: the harness runs the direct branch only then).
+fn assert_direct_each_run(report: &engine_core::typed::diff::Report) {
+    if cfg!(debug_assertions) {
+        assert!(report.direct_runs > 0, "no direct runs");
+        assert_eq!(
+            report.direct_calls, report.direct_runs,
+            "the shortcut did not go direct on every run"
+        );
+    }
+}
+
+// ---- TESObject's unit: the debug-heap string (`debug_string`) and the object classes (`object`) ----
+
+/// The unit's answer words (one per callee in [`OB_ANSWERED`]); what the JIP LN seam answers and
+/// was given; the word the model loader's find puts in the model holder; the object a throw throws;
+/// a vtable whose slot 0x14c holds `Clone3D` itself.
+const OB_ANSWERS: u32 = 0x0320_0000;
+const OB_SEAM: u32 = 0x0320_1f00;
+const OB_SEAM_SEEN: u32 = 0x0320_1f04;
+const OB_FIND: u32 = 0x0320_1f10;
+const OB_THROWN: u32 = 0x0320_1f20;
+const OB_CLONE_VTABLE: u32 = 0x0320_1800;
+/// Where a test object keeps the scale (an `f64`) the scale getters answer for it.
+const OB_SCALE_AT: u32 = 0x40;
+
+/// The callees answered by a word of their own.
+const OB_ANSWERED: [u32; 47] = [
+    0x0064_df10, // the string's deallocate
+    0x0047_26b0, // the file's current chunk type
+    0x0051_0130, // the parent list's removal
+    0x0048_95b0, // the form's model path
+    0x0048_0e60, // the biped model's
+    0x0057_15d0, // the reference's
+    0x0045_a5e0, // the model loader's register
+    0x0040_c110, // the model holder's destructor
+    0x0040_6d00, // sprintf_s
+    0x00a5_a040, // the node's preparation
+    0x00a5_9c60, // and update (the scene family's: by address here)
+    0x0066_4840, // the object manager
+    0x0066_4f50, // its build
+    0x008d_6f30, // the result's word (the AI queries': by address here)
+    0x0056_9350, // the reference's call with it
+    0x0060_3bb0, // the type 0x2a form's call
+    0x0044_4ed0, // the reference's 3D test
+    0x0050_d4a0, // the form's test
+    0x0069_3ef0, // the reference's call
+    0x004b_5bf0, // the deep copy test
+    0x0045_bc00, // the node's child count test (multibound's: by address here)
+    0x0043_b4a0, // the node's child (dispatch's: by address here)
+    0x0043_b230, // an object's controllers (dispatch's: by address here)
+    0x0065_3270, // NiDynamicCast (dispatch's: by address here)
+    0x0047_a520, // the controller's test
+    0x0062_c3c0, // the shared model's test
+    0x0044_8a80, // the property name
+    0x00a5_bdd0, // the extra data
+    0x0044_8a40, // its test
+    0x0048_b310, // the texture swap test
+    0x0056_9410, // the emittance test
+    0x0055_d520, // the reference's name
+    0x004a_d050, // the clone process's constructor
+    0x004a_d270, // and destructor
+    0x0045_7ba0, // the helper's deep copy
+    0x00aa_13e0, // the node's allocation
+    0x00a5_ecb0, // its constructor
+    0x00a5_d2c0, // the scene graph's clone
+    0x0044_0490, // the clone's scale
+    0x0043_abf0, // the model's constructor
+    0x0092_c870, // its reference count (the cell references': by address here)
+    0x0044_7010, // the model loader's add
+    0x0044_31f0, // the model's release
+    0x0045_0f90, // the clone's fix-ups
+    0x0043_fa80,
+    0x0044_0460,
+    0x0096_11e0,
+];
+
+/// The bodies the unit's typed code does in place (see `object`'s and `debug_string`'s module
+/// comments): left out of the translation's calls, with no double, as [`IN_PLACE`].
+const OB_IN_PLACE: &[u32] = &[
+    0x0040_1170, // the form type
+    0x0040_1500, // the byte order
+    0x0040_7a90, // the half swap
+    0x0040_1680, // the file's swapped byte
+    0x0068_15c0, // the empty constructor
+    0x0065_de30, // the proxy's empty constructor
+    0x008d_0600, // the empty forward target
+    0x0040_6d90, // the float-to-int helper
+    0x0044_a970, // _Myptr
+    0x0082_5c00, // the string's length
+    0x0044_ab90, // _Inside
+    0x0044_a880, // _Eos
+];
+/// The family's own members the unit's callers do in place: only in the callers' tests.
+const OB_OWN_IN_PLACE: &[u32] = &[0x0044_a7b0, 0x0044_a7d0, 0x0050_e9c0];
+/// The other families' functions the unit calls typed that doubles stand at here: their own tests
+/// run them.
+const OB_BY_ADDRESS: &[u32] = &[
+    0x0043_b230,
+    0x0043_b4a0,
+    0x0065_3270,
+    0x0045_bc00,
+    0x0092_c870,
+    0x00a5_9c60,
+    0x008d_6f30,
+];
+
+fn ob_answer_at(addr: u32) -> u32 {
+    let index = OB_ANSWERED
+        .iter()
+        .position(|a| *a == addr)
+        .expect("an answered callee");
+    OB_ANSWERS + 4 * index as u32
+}
+
+fn ob_answer<const A: u32>(e: &mut Engine, _: &[u32]) -> Ret {
+    ret(e.mem.u32(ob_answer_at(A)))
+}
+
+fn set_ob_answer(e: &mut Engine, addr: u32, value: u32) {
+    e.mem.set_u32(ob_answer_at(addr), value);
+}
+
+/// A scale getter's answer: the `f64` its object keeps at [`OB_SCALE_AT`].
+fn ob_scale(e: &mut Engine, a: &[u32]) -> Ret {
+    Ret {
+        eax: 0,
+        edx: 0,
+        st0: e.mem.f64(a[0] + OB_SCALE_AT),
+    }
+}
+
+macro_rules! ob_answered {
+    ($e:expr, $($addr:expr),* $(,)?) => {
+        $( $e.register($addr, ob_answer::<{ $addr }>); )*
+    };
+}
+
+/// The JIP LN seam's handler: notes the three words and answers [`OB_SEAM`].
+fn ob_seam(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let seen = a[0] ^ a[1].rotate_left(8) ^ a[2].rotate_left(16);
+    e.mem.set_u32(OB_SEAM_SEEN, seen);
+    Some(e.mem.u32(OB_SEAM))
+}
+
+/// The world of the unit's cases: the shared one, the unit's globals and read-only doubles, the
+/// slots it calls, and its callees' doubles. `_Grow`, `copy_s` and `move_s` do their work on the
+/// test's strings; `_Xran` throws; the model holder keeps its word.
+fn ob_world(e: &mut Engine) {
+    world(e);
+    for page in [
+        0x0101_1000,
+        0x0101_2000,
+        0x0101_7000,
+        0x011c_6000,
+        0x011c_9000,
+        0x011c_a000,
+        0x011f_8000,
+        0x0120_3000,
+    ] {
+        e.map(page, 0x1000);
+    }
+    e.map(OB_ANSWERS, 0x2000);
+    e.mem.set_u32(0x0101_73f0, u32::MAX);
+    e.mem.set_f64(0x0101_1588, 0.5);
+    e.mem.set_f64(0x0101_2060, 0.0);
+    e.mem.set_f64(0x0101_2070, 1.0);
+    e.mem.set_f64(0x0101_7a40, 100.0);
+    for slot in [0xc, 0x14c, 0x174, 0x17c, 0x180, 0x3d0] {
+        e.mem.set_u32(VTABLE + slot, VT_FN + slot);
+    }
+    e.register(VT_FN + 0xc, slot_answer::<0xc>);
+    e.register(VT_FN + 0x14c, slot_answer::<0x14c>);
+    e.register(VT_FN + 0x174, slot_answer::<0x174>);
+    e.register(VT_FN + 0x17c, slot_answer::<0x17c>);
+    e.register(VT_FN + 0x180, slot_answer::<0x180>);
+    e.register(VT_FN + 0x3d0, slot_answer::<0x3d0>);
+    for slot in (0..0x400).step_by(4) {
+        let word = e.mem.u32(VTABLE + slot);
+        e.mem.set_u32(OB_CLONE_VTABLE + slot, word);
+    }
+    e.mem.set_u32(OB_CLONE_VTABLE + 0x14c, 0x0050_ee50);
+    ob_answered!(
+        e,
+        0x0064_df10,
+        0x0047_26b0,
+        0x0051_0130,
+        0x0048_95b0,
+        0x0048_0e60,
+        0x0057_15d0,
+        0x0045_a5e0,
+        0x0040_c110,
+        0x0040_6d00,
+        0x00a5_a040,
+        0x00a5_9c60,
+        0x0066_4840,
+        0x0066_4f50,
+        0x008d_6f30,
+        0x0056_9350,
+        0x0060_3bb0,
+        0x0044_4ed0,
+        0x0050_d4a0,
+        0x0069_3ef0,
+        0x004b_5bf0,
+        0x0045_bc00,
+        0x0043_b4a0,
+        0x0043_b230,
+        0x0065_3270,
+        0x0047_a520,
+        0x0062_c3c0,
+        0x0044_8a80,
+        0x00a5_bdd0,
+        0x0044_8a40,
+        0x0048_b310,
+        0x0056_9410,
+        0x0055_d520,
+        0x004a_d050,
+        0x004a_d270,
+        0x0045_7ba0,
+        0x00aa_13e0,
+        0x00a5_ecb0,
+        0x00a5_d2c0,
+        0x0044_0490,
+        0x0043_abf0,
+        0x0092_c870,
+        0x0044_7010,
+        0x0044_31f0,
+        0x0045_0f90,
+        0x0043_fa80,
+        0x0044_0460,
+        0x0096_11e0,
+    );
+    e.register(0x0056_7400, ob_scale);
+    e.register(0x009c_dae0, ob_scale);
+    // `_Grow(count, trim)`: a heap buffer of its own when the reserve is too small, the characters
+    // copied over; whether `count` is not 0.
+    e.register(0x0044_a8d0, |e, a| {
+        let (s, count) = (a[0], a[1]);
+        let reserve = e.mem.u32(s + 0x18);
+        if count > reserve {
+            let new = count | 0xf;
+            let block = e.mem.alloc(new + 1);
+            let size = e.mem.u32(s + 0x14).min(new);
+            let old = if reserve >= 0x10 {
+                e.mem.u32(s + 4)
+            } else {
+                s + 4
+            };
+            copy_bytes(e, block, old, size);
+            e.mem.set_u32(s + 4, block);
+            e.mem.set_u32(s + 0x18, new);
+        }
+        ret(u32::from(count > 0))
+    });
+    // `copy_s(dest, room, src, count)` and `move_s(string, dest, room, src, count)`.
+    e.register(0x0044_ccd0, |e, a| {
+        copy_bytes(e, a[0], a[2], a[3].min(a[1]));
+        ret(a[0])
+    });
+    e.register(0x0044_d580, |e, a| {
+        let n = a[4].min(a[2]);
+        let bytes: Vec<u8> = (0..n).map(|i| e.mem.u8(a[3] + i)).collect();
+        for (i, b) in bytes.into_iter().enumerate() {
+            e.mem.set_u8(a[1] + i as u32, b);
+        }
+        ret(a[1])
+    });
+    e.register(0x00ec_30e8, |e, _| {
+        engine_core::cxx_exception::throw(e, OB_THROWN, 0x0117_327c)
+    });
+    // The model holder: its constructor and set keep the word; the loader's find puts
+    // [`OB_FIND`] in it and answers whether that is not 0.
+    e.register(0x0063_3c90, |e, a| {
+        e.mem.set_u32(a[0], a[1]);
+        ret(a[0])
+    });
+    e.register(0x0044_aed0, |e, a| {
+        e.mem.set_u32(a[0], a[1]);
+        ret(a[0])
+    });
+    e.register(0x0044_72a0, |e, a| {
+        let found = e.mem.u32(OB_FIND);
+        if found != 0 {
+            e.mem.set_u32(a[2], found);
+        }
+        ret(u32::from(found != 0))
+    });
+}
+
+/// A test object with a vtable, its scale 1.0.
+fn ob_object(e: &mut Engine, vtable: u32) -> u32 {
+    let o = e.mem.alloc(0x50);
+    e.mem.set_u32(o, vtable);
+    e.mem.set_f64(o + OB_SCALE_AT, 1.0);
+    o
+}
+
+/// `size` bytes as the stack leaves them before a constructor runs.
+fn ob_garbage(e: &mut Engine, size: u32) -> u32 {
+    let o = e.mem.alloc(size);
+    for i in 0..size {
+        e.mem.set_u8(o + i, 0xcd);
+    }
+    o
+}
+
+/// The strings the cases pick: empty, short, the longest the buffer holds, and one on the heap.
+const OB_TEXTS: [&[u8]; 4] = [
+    b"",
+    b"abc",
+    b"fifteen bytes!!",
+    b"a text of thirty-one characters",
+];
+
+/// A debug-heap string holding `text`: in its buffer up to 15 characters, else on the heap.
+fn ob_string(e: &mut Engine, text: &[u8]) -> u32 {
+    let s = e.mem.alloc(0x1c);
+    e.mem.set_u32(s, 0x5151_5151);
+    let n = text.len() as u32;
+    let (reserve, chars) = if n < 0x10 {
+        (0xf, s + 4)
+    } else {
+        let reserve = n | 0xf;
+        let block = e.mem.alloc(reserve + 1);
+        e.mem.set_u32(s + 4, block);
+        (reserve, block)
+    };
+    for (i, b) in text.iter().enumerate() {
+        e.mem.set_u8(chars + i as u32, *b);
+    }
+    e.mem.set_u8(chars + n, 0);
+    e.mem.set_u32(s + 0x14, n);
+    e.mem.set_u32(s + 0x18, reserve);
+    s
+}
+
+/// The characters of a test string.
+fn ob_chars(e: &Engine, s: u32) -> u32 {
+    if e.mem.u32(s + 0x18) >= 0x10 {
+        e.mem.u32(s + 4)
+    } else {
+        s + 4
+    }
+}
+
+/// A form to destroy: the shared world's dying form, without the shared world again.
+fn ob_dying(e: &mut Engine, flags: u32, count: u32, save_games: bool) -> u32 {
+    let f = form(e, 0x20, flags, 0x0100_0abc);
+    registries(e, true, 2, true, save_games, f);
+    e.mem.set_u32(FORM_COUNT, count);
+    f
+}
+
+/// A form to construct over: `TESForm`'s constructor with its table packed and no handler.
+fn ob_fresh(e: &mut Engine) -> u32 {
+    e.mem.set_u8(0x011c_54b8, 1);
+    ob_garbage(e, 0x40)
+}
+
+/// The unit's cases: the forms family's, the pathing family (its point maths), the unit's in-place
+/// bodies, and the other families' typed callees that doubles stand at.
+fn ob_cases(d: Diff) -> Diff {
+    d.forms()
+        .family(&PATHING)
+        .ignore_calls(OB_IN_PLACE)
+        .goes_by_address(OB_BY_ADDRESS)
+}
+
+trait ObCases {
+    fn ob(self) -> Diff;
+    fn ob_caller(self) -> Diff;
+    fn ob_root(self) -> Diff;
+}
+
+impl ObCases for Diff {
+    fn ob(self) -> Diff {
+        ob_cases(self)
+    }
+    fn ob_caller(self) -> Diff {
+        ob_cases(self).ignore_calls(OB_OWN_IN_PLACE)
+    }
+    /// The square root's chain: the translation of `004019b0` calls `004019d0` plainly, and the
+    /// pathing family's root does the C runtime's `sqrt` (`00ec6054`) in place.
+    fn ob_root(self) -> Diff {
+        ob_cases(self)
+            .translation_calls_plainly(&[0x0040_19d0])
+            .ignore_calls(&[0x00ec_6054])
+    }
+}
+
+const OB_PICK: &[u32] = &[0, 1, 2, 3];
+
+#[test]
+fn ob_string_construct_from_text() {
+    Diff::new(entry!(0x0044_a4c0, debug_string::construct_from_text(u32, u32) -> u32))
+        .ob_caller()
+        .inputs(&[Input::Of(OB_PICK)])
+        .setup(|e, case| {
+            ob_world(e);
+            let this = ob_garbage(e, 0x1c);
+            vec![this, c_string(e, OB_TEXTS[case.word(0) as usize])]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_string_copy_construct() {
+    Diff::new(entry!(0x0044_a500, debug_string::copy_construct(u32, u32) -> u32))
+        .ob_caller()
+        .inputs(&[Input::Of(OB_PICK)])
+        .setup(|e, case| {
+            ob_world(e);
+            let this = ob_garbage(e, 0x1c);
+            vec![this, ob_string(e, OB_TEXTS[case.word(0) as usize])]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_string_destruct() {
+    Diff::new(entry!(0x0044_a540, debug_string::destruct(u32)))
+        .ob()
+        .inputs(&[Input::Of(OB_PICK)])
+        .setup(|e, case| {
+            ob_world(e);
+            vec![ob_string(e, OB_TEXTS[case.word(0) as usize])]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_string_c_str() {
+    Diff::new(entry!(0x0044_a560, debug_string::c_str(u32) -> u32))
+        .ob()
+        .inputs(&[Input::Of(OB_PICK)])
+        .setup(|e, case| {
+            ob_world(e);
+            vec![ob_string(e, OB_TEXTS[case.word(0) as usize])]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The length of the right string a case picks: itself (0) or `OB_TEXTS[n - 1]`.
+fn ob_right_length(this: u32, right: u32) -> u32 {
+    let pick = if right == 0 { this } else { right - 1 };
+    OB_TEXTS[pick as usize].len() as u32
+}
+
+#[test]
+fn ob_string_assign_range() {
+    Diff::new(entry!(0x0044_a580, debug_string::assign_range(u32, u32, u32, u32) -> u32))
+        .ob()
+        .inputs(&[
+            Input::Of(OB_PICK),
+            // The right string: this one, or another.
+            Input::Of(&[0, 1, 2, 3, 4]),
+            Input::Of(&[0, 2, 3, 15, 31, 40]),
+            Input::Of(&[0, 1, 3, 0xffff_ffff]),
+        ])
+        .expect_stops(|case| case.word(2) > ob_right_length(case.word(0), case.word(1)))
+        .setup(|e, case| {
+            ob_world(e);
+            let this = ob_string(e, OB_TEXTS[case.word(0) as usize]);
+            let right = match case.word(1) {
+                0 => this,
+                n => ob_string(e, OB_TEXTS[n as usize - 1]),
+            };
+            vec![this, right, case.word(2), case.word(3)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_string_assign_text() {
+    Diff::new(entry!(0x0044_a640, debug_string::assign_text(u32, u32) -> u32))
+        .ob()
+        .inputs(&[Input::Of(OB_PICK), Input::Of(&[0, 1, 2, 3, 4, 5])])
+        .setup(|e, case| {
+            ob_world(e);
+            let this = ob_string(e, OB_TEXTS[case.word(0) as usize]);
+            let text = match case.word(1) {
+                // Text inside the string itself: its start and one past it.
+                4 => ob_chars(e, this),
+                5 => ob_chars(e, this) + 1,
+                n => c_string(e, OB_TEXTS[n as usize]),
+            };
+            vec![this, text]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_string_text_length() {
+    Diff::new(entry!(0x0044_a670, debug_string::text_length(u32) -> u32))
+        .ob()
+        .inputs(&[Input::Of(OB_PICK)])
+        .setup(|e, case| {
+            ob_world(e);
+            vec![c_string(e, OB_TEXTS[case.word(0) as usize])]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_string_erase() {
+    Diff::new(entry!(0x0044_a690, debug_string::erase(u32, u32, u32) -> u32))
+        .ob()
+        .inputs(&[
+            Input::Of(OB_PICK),
+            Input::Of(&[0, 1, 3, 14, 31, 32]),
+            Input::Of(&[0, 1, 2, 20, 0xffff_ffff]),
+        ])
+        .expect_stops(|case| case.word(1) > OB_TEXTS[case.word(0) as usize].len() as u32)
+        .setup(|e, case| {
+            ob_world(e);
+            let this = ob_string(e, OB_TEXTS[case.word(0) as usize]);
+            vec![this, case.word(1), case.word(2)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_string_tidy() {
+    Diff::new(entry!(0x0044_a730, debug_string::tidy(u32, bool, u32)))
+        .ob()
+        .inputs(&[
+            Input::Of(OB_PICK),
+            Input::Of(&[0, 1, 0x100]),
+            Input::Of(&[0, 1, 2, 3, 15, 16]),
+        ])
+        .setup(|e, case| {
+            ob_world(e);
+            let this = ob_string(e, OB_TEXTS[case.word(0) as usize]);
+            vec![this, case.word(1), case.word(2)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_string_construct_proxy() {
+    Diff::new(entry!(0x0044_a7b0, debug_string::construct_proxy(u32, u32) -> u32))
+        .ob()
+        .inputs(&[Input::Of(WORDS)])
+        .setup(|e, case| {
+            ob_world(e);
+            vec![ob_garbage(e, 0x1c), case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_string_construct_proxy_from() {
+    Diff::new(entry!(0x0044_a7d0, debug_string::construct_proxy_from(u32, u32) -> u32))
+        .ob()
+        .inputs(&[Input::Of(WORDS)])
+        .setup(|e, case| {
+            ob_world(e);
+            vec![ob_garbage(e, 0x1c), case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_string_assign_chars() {
+    Diff::new(entry!(0x0044_a7f0, debug_string::assign_chars(u32, u32, u32) -> u32))
+        .ob()
+        .inputs(&[
+            Input::Of(OB_PICK),
+            Input::Of(&[0, 1, 2, 3]),
+            Input::Of(&[0, 1, 2, 5, 20]),
+        ])
+        .setup(|e, case| {
+            ob_world(e);
+            let this = ob_string(e, OB_TEXTS[case.word(0) as usize]);
+            let text = match case.word(1) {
+                0 => c_string(e, b"outside"),
+                1 => 0,
+                2 => ob_chars(e, this),
+                _ => ob_chars(e, this) + 1,
+            };
+            // A null text with characters to copy is a crash in the exe too.
+            let count = if text == 0 { 0 } else { case.word(2) };
+            vec![this, text, count]
+        })
+        .run()
+        .assert_same();
+}
+
+/// A bound object of the test vtable: its box's points from `seed`.
+fn ob_bound(e: &mut Engine, seed: u32) -> u32 {
+    let o = ob_object(e, VTABLE);
+    for i in 0..6u32 {
+        let value = seed.wrapping_mul(0x9e37_79b9).rotate_left(i * 5) as u16;
+        e.mem.set_u16(o + 0x24 + 2 * i, value);
+    }
+    o
+}
+
+const OB_SEEDS: &[u32] = &[0, 1, 2, 0x7fff, 0xdead_beef];
+
+#[test]
+fn ob_bound_object_construct() {
+    Diff::new(entry!(0x0050_e820, object::bound_object_construct(u32) -> u32))
+        .ob_caller()
+        .inputs(&[Input::Of(&[0, 1, 2, 3])])
+        .setup(|e, case| {
+            ob_world(e);
+            // The default point's guard: not yet made, made (with a point of its own), other bits.
+            e.mem.set_u32(0x011c_912c, case.word(0));
+            e.mem.set_u32(0x011c_9124, 0x1234_5678);
+            e.mem.set_u16(0x011c_9128, 0x9abc);
+            vec![ob_fresh(e)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_copy_point() {
+    Diff::new(entry!(0x0050_e8b0, object::copy_box_point(u32, u32) -> u32))
+        .ob()
+        .inputs(&[Input::Of(OB_SEEDS), Input::Of(&[0, 1, 2])])
+        .setup(|e, case| {
+            ob_world(e);
+            let o = ob_bound(e, case.word(0));
+            // Apart, overlapping one way, and the other.
+            match case.word(1) {
+                0 => vec![o + 0x24, o + 0x2a],
+                1 => vec![o + 0x26, o + 0x24],
+                _ => vec![o + 0x24, o + 0x26],
+            }
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_default_bound() {
+    Diff::new(entry!(0x0050_e8f0, object::default_bound() -> u32))
+        .ob()
+        .inputs(&[Input::Of(&[0, 1, 2, 0xffff_fffe, 0xffff_ffff])])
+        .setup(|e, case| {
+            ob_world(e);
+            e.mem.set_u32(0x011c_912c, case.word(0));
+            e.mem.set_u32(0x011c_9124, 0x1111_2222);
+            vec![]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_set_point() {
+    Diff::new(entry!(0x0050_e960, object::set_point(u32, u32, u32, u32) -> u32))
+        .ob()
+        .inputs(&[Input::Word, Input::Of(&[0, 0x8000, 0x1_7fff]), Input::Word])
+        .setup(|e, case| {
+            ob_world(e);
+            let o = ob_garbage(e, 8);
+            vec![o, case.word(0), case.word(1), case.word(2)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_bound_object_deleting_destructor() {
+    Diff::new(entry!(0x0050_e990, object::bound_object_deleting_destructor(u32, u32) -> u32))
+        .ob()
+        .inputs(&[Input::Of(TEMPORARY), Input::Flag, Input::Flag])
+        .setup(|e, case| {
+            ob_world(e);
+            let f = ob_dying(e, case.word(0), 1, true);
+            if case.word(2) != 0 {
+                let list = e.mem.alloc(0x10);
+                e.mem.set_u32(f + 0x18, list);
+            }
+            vec![f, case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_bound_data_construct() {
+    Diff::new(entry!(0x0050_e9c0, object::bound_data_construct(u32) -> u32))
+        .ob()
+        .inputs(&[Input::Of(OB_SEEDS)])
+        .setup(|e, case| {
+            ob_world(e);
+            vec![ob_bound(e, case.word(0)) + 0x24]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_bound_object_destruct() {
+    Diff::new(entry!(0x0050_e9f0, object::bound_object_destruct(u32)))
+        .ob()
+        .inputs(&[Input::Of(TEMPORARY), Input::Of(&[1, 2]), Input::Flag])
+        .setup(|e, case| {
+            ob_world(e);
+            let f = ob_dying(e, case.word(0), case.word(1), true);
+            if case.word(2) != 0 {
+                let list = e.mem.alloc(0x10);
+                e.mem.set_u32(f + 0x18, list);
+            }
+            vec![f]
+        })
+        .run()
+        .assert_same();
+}
+
+/// An object with two `NiPoint3`s at +0xc and +0x18 (ordinary floats from `seed`).
+fn ob_points(e: &mut Engine, seed: u32) -> u32 {
+    let o = e.mem.alloc(0x30);
+    let floats = [1.5f32, -2.25, 0.1, 3.0e30, -0.0, 7.0, 1.0e-40, -5.5];
+    for i in 0..6u32 {
+        let pick = (seed.wrapping_add(i * 3) % floats.len() as u32) as usize;
+        e.mem.set_u32(o + 0xc + 4 * i, floats[pick].to_bits());
+    }
+    o
+}
+
+#[test]
+fn ob_points_difference() {
+    Diff::new(entry!(0x0050_ea10, object::points_difference(u32, u32)))
+        .ob()
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7])])
+        .setup(|e, case| {
+            ob_world(e);
+            let o = ob_points(e, case.word(0));
+            vec![o, e.mem.alloc(0xc)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_points_sum() {
+    Diff::new(entry!(0x0050_ea50, object::points_sum(u32, u32)))
+        .ob()
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7])])
+        .setup(|e, case| {
+            ob_world(e);
+            let o = ob_points(e, case.word(0));
+            vec![o, e.mem.alloc(0xc)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_word_012031e4() {
+    Diff::new(entry!(0x0050_ea90, object::bound_extra_data_name() -> u32))
+        .ob()
+        .inputs(&[Input::Of(WORDS)])
+        .setup(|e, case| {
+            ob_world(e);
+            e.mem.set_u32(0x0120_31e4, case.word(0));
+            vec![]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_copy_bound() {
+    Diff::new(entry!(0x0050_eaa0, object::copy_bound(u32, u32) -> u32))
+        .ob()
+        .inputs(&[Input::Of(OB_SEEDS)])
+        .setup(|e, case| {
+            ob_world(e);
+            let this = ob_bound(e, 3);
+            vec![this, ob_bound(e, case.word(0))]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_bound_min_as_floats() {
+    Diff::new(entry!(0x0050_ead0, object::bound_min_as_floats(u32, u32) -> u32))
+        .ob()
+        .inputs(&[Input::Of(OB_SEEDS)])
+        .setup(|e, case| {
+            ob_world(e);
+            let this = ob_bound(e, case.word(0));
+            vec![this, e.mem.alloc(0xc)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_point_x() {
+    Diff::new(entry!(0x0050_eb30, object::point_x(u32) -> f32))
+        .ob()
+        .inputs(&[Input::Of(OB_SEEDS)])
+        .setup(|e, case| {
+            ob_world(e);
+            vec![ob_bound(e, case.word(0)) + 0x24]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_point_y() {
+    Diff::new(entry!(0x0050_eb50, object::point_y(u32) -> f32))
+        .ob()
+        .inputs(&[Input::Of(OB_SEEDS)])
+        .setup(|e, case| {
+            ob_world(e);
+            vec![ob_bound(e, case.word(0)) + 0x24]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_point_z() {
+    Diff::new(entry!(0x0050_eb70, object::point_z(u32) -> f32))
+        .ob()
+        .inputs(&[Input::Of(OB_SEEDS)])
+        .setup(|e, case| {
+            ob_world(e);
+            vec![ob_bound(e, case.word(0)) + 0x2a]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_bound_max_as_floats() {
+    Diff::new(entry!(0x0050_eb90, object::bound_max_as_floats(u32, u32) -> u32))
+        .ob()
+        .inputs(&[Input::Of(OB_SEEDS)])
+        .setup(|e, case| {
+            ob_world(e);
+            let this = ob_bound(e, case.word(0));
+            vec![this, e.mem.alloc(0xc)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// A box from a case's three words: each the minimum's and maximum's component pair, as halves.
+fn ob_box(e: &mut Engine, words: [u32; 3]) -> u32 {
+    let o = ob_object(e, VTABLE);
+    for (i, w) in words.iter().enumerate() {
+        e.mem.set_u16(o + 0x24 + 2 * i as u32, *w as u16);
+        e.mem.set_u16(o + 0x2a + 2 * i as u32, (*w >> 16) as u16);
+    }
+    o
+}
+
+/// Component pairs: equal, small, opposite extremes (a 16-bit overflow), mixed signs, a large one.
+const OB_PAIRS: &[u32] = &[
+    0,
+    0x0003_0007,
+    0x8000_7fff,
+    0x7fff_8000,
+    0xfff0_0010,
+    0x1234_edcb,
+    0x0000_6000,
+];
+/// Points whose sum of squares stays in the signed 32-bit range: past it the square root takes the
+/// C runtime's domain error, whose `errno` the pathing family's root leaves out (its module says
+/// so). The components are the pairs' low halves.
+const OB_COMPONENTS: &[u32] = &[0, 0x0003_0007, 0xfff0_0010, 0x1234_edcb, 0x0000_6000];
+
+#[test]
+fn ob_bound_size() {
+    Diff::new(entry!(0x0050_ebf0, object::bound_size(u32) -> f32))
+        .ob_root()
+        .inputs(&[
+            Input::Of(OB_PAIRS),
+            Input::Of(OB_PAIRS),
+            Input::Of(OB_PAIRS),
+        ])
+        .setup(|e, case| {
+            ob_world(e);
+            vec![ob_box(e, [case.word(0), case.word(1), case.word(2)])]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_point_difference() {
+    Diff::new(entry!(0x0050_ec30, object::point_difference(u32, u32, u32) -> u32))
+        .ob()
+        .inputs(&[Input::Of(OB_PAIRS), Input::Of(OB_PAIRS), Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            ob_world(e);
+            let o = ob_box(e, [case.word(0), case.word(1), 0x8000_7fff]);
+            // The result apart from the points, or over the minimum.
+            let result = if case.word(2) == 0 {
+                ob_garbage(e, 8)
+            } else {
+                o + 0x24
+            };
+            vec![o + 0x24, result, o + 0x2a]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_point_length() {
+    Diff::new(entry!(0x0050_ec80, object::point_length(u32) -> f64))
+        .ob_root()
+        .inputs(&[
+            Input::Of(OB_COMPONENTS),
+            Input::Of(OB_COMPONENTS),
+            Input::Of(OB_COMPONENTS),
+        ])
+        .setup(|e, case| {
+            ob_world(e);
+            vec![ob_box(e, [case.word(0), case.word(1), case.word(2)]) + 0x24]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_save_bound() {
+    Diff::new(entry!(0x0050_ece0, object::save_bound(u32)))
+        .ob()
+        .inputs(&[Input::Of(&[0, 1, 0x80]), Input::Of(OB_SEEDS)])
+        .setup(|e, case| {
+            ob_world(e);
+            record_buffer(e);
+            e.mem.set_u8(BIG_ENDIAN, case.word(0) as u8);
+            vec![ob_bound(e, case.word(1))]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_swap_bound() {
+    Diff::new(entry!(0x0050_ed30, object::swap_bound(u32)))
+        .ob()
+        .inputs(&[Input::Of(OB_SEEDS)])
+        .setup(|e, case| {
+            ob_world(e);
+            vec![ob_bound(e, case.word(0)) + 0x24]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_load_bound() {
+    Diff::new(entry!(0x0050_edd0, object::load_bound(u32, u32)))
+        .ob()
+        .inputs(&[
+            Input::Flag,
+            Input::Of(&[0x444e_424f, 0x444e_4250, 0]),
+            Input::Of(&[0, 1, 0x80]),
+        ])
+        .setup(|e, case| {
+            ob_world(e);
+            set_ob_answer(e, 0x0047_26b0, case.word(1));
+            let file = if case.word(0) != 0 {
+                let f = file(e, true);
+                e.mem.set_u8(f + FILE_SWAPPED_AT, case.word(2) as u8);
+                f
+            } else {
+                0
+            };
+            vec![ob_bound(e, 5), file]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_clone_3d_unflagged() {
+    Diff::new(entry!(0x0050_ee20, object::clone_3d_unflagged(u32, u32) -> u32))
+        .ob()
+        .inputs(&[Input::Flag, Input::Flag, Input::Of(&[0, 0x1234])])
+        .setup(|e, case| {
+            ob_world(e);
+            // The slot: a stand-in (its answer the case's), or `Clone3D` with no model.
+            let vtable = if case.word(0) != 0 {
+                OB_CLONE_VTABLE
+            } else {
+                VTABLE
+            };
+            e.mem.set_u32(SLOT_ANSWERS + 0x14c, case.word(2));
+            e.mem.set_u32(SLOT_ANSWERS + 0x174, 0);
+            let reference = if case.word(1) != 0 {
+                ob_object(e, VTABLE)
+            } else {
+                0
+            };
+            vec![ob_object(e, vtable), reference]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The slot shortcut of `0050ee20` goes direct: with `Clone3D` in the slot and no model it makes
+/// no typed call of its own, so the shortcut is each run's one direct call.
+#[test]
+fn ob_clone_3d_unflagged_goes_direct() {
+    let report = Diff::new(entry!(0x0050_ee20, object::clone_3d_unflagged(u32, u32) -> u32))
+        .ob()
+        .inputs(&[Input::Flag])
+        .setup(|e, case| {
+            ob_world(e);
+            e.mem.set_u32(SLOT_ANSWERS + 0x174, 0);
+            let reference = if case.word(0) != 0 {
+                ob_object(e, VTABLE)
+            } else {
+                0
+            };
+            vec![ob_object(e, OB_CLONE_VTABLE), reference]
+        })
+        .run();
+    report.assert_same();
+    assert_direct_each_run(&report);
+}
+
+/// The scales a `Clone3D` case picks: the reference's and the model's.
+const OB_SCALES: [(f64, f64); 5] = [(1.0, 1.0), (2.0, 1.0), (0.0, 1.0), (2.0, 2.0), (1.5, 3.0)];
+
+#[test]
+fn ob_clone_3d() {
+    Diff::new(entry!(0x0050_ee50, object::bound_object_clone_3d(u32, u32, u8) -> u32))
+        .ob()
+        .inputs(&[
+            // The form is one of the two special forms.
+            Input::Flag,
+            // A reference.
+            Input::Flag,
+            // The reference's 3D test fails; passes with an owner of type 0x1e; of type 0x20.
+            Input::Of(&[0, 1, 2]),
+            // No model; a model held once (its word at +4 is 1); one held twice.
+            Input::Of(&[0, 1, 2]),
+            // The deep copy flag.
+            Input::Flag,
+            // JIP LN: off; on, its seam answering 0; answering 1.
+            Input::Of(&[0, 1, 2]),
+            // The form type.
+            Input::Of(&[0x15, 0x2b, 0x1c, 0x23, 0x28, 0x29, 0x2a, 0x33, 0x51, 0x20]),
+            // The checks' answers, a bit each; the last three words make the emittance alone refuse,
+            // the 0x1c path's cast find its controllers with the last test answering 0, and the cast
+            // fail after the controllers are found.
+            Input::Of(&[
+                0,
+                0xffff_ffff,
+                0x5555_5555,
+                0xaaaa_aaaa,
+                0x3c3c_3c3c,
+                0x0f0f_0f0f,
+                0x0000_0080,
+                0x0000_0604,
+                0x0000_0204,
+            ]),
+            // The scales.
+            Input::Of(&[0, 1, 2, 3, 4]),
+            // The helper's copy: one whose node is there, one without, none.
+            Input::Of(&[0, 1, 2]),
+            // The model loader: no model; one of the reference's scale; of another.
+            Input::Of(&[0, 1, 2]),
+            // The loader's add.
+            Input::Flag,
+        ])
+        .max_cases(2048)
+        .setup(|e, case| {
+            ob_world(e);
+            let this = ob_object(e, VTABLE);
+            e.mem.set_u8(this + 4, case.word(6) as u8);
+            if case.word(0) != 0 {
+                e.mem.set_u32(0x011c_a250, this);
+            }
+            let (reference_scale, model_scale) = OB_SCALES[case.word(8) as usize];
+            let reference = if case.word(1) != 0 {
+                let r = ob_object(e, VTABLE);
+                e.mem.set_f64(r + OB_SCALE_AT, reference_scale);
+                let owner = ob_object(e, VTABLE);
+                e.mem
+                    .set_u8(owner + 4, if case.word(2) == 2 { 0x20 } else { 0x1e });
+                e.mem.set_u32(r + 0x20, owner);
+                r
+            } else {
+                0
+            };
+            set_ob_answer(e, 0x0044_4ed0, u32::from(case.word(2) != 0));
+            let source = match case.word(3) {
+                0 => 0,
+                held => {
+                    let m = ob_object(e, VTABLE);
+                    e.mem.set_u32(m + 4, held);
+                    e.mem.set_f64(m + OB_SCALE_AT, model_scale);
+                    m
+                }
+            };
+            e.mem.set_u32(SLOT_ANSWERS + 0x174, source);
+            if case.word(5) != 0 {
+                e.set_jip_patches(engine_core::extend::jip_patches::INSTALLED);
+                e.mem.set_u32(OB_SEAM, case.word(5) - 1);
+                e.on_site_for_test(0x0050_ef46, ob_seam);
+            }
+            let bits = case.word(7);
+            let bit = |i: u32| (bits >> i) & 1;
+            for (i, callee) in [
+                0x0050_d4a0,
+                0x004b_5bf0,
+                0x0045_bc00,
+                0x0047_a520,
+                0x0062_c3c0,
+                0x0044_8a40,
+                0x0048_b310,
+                0x0056_9410,
+                0x0096_11e0,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                set_ob_answer(e, callee, bit(i as u32));
+            }
+            let child = ob_object(e, VTABLE);
+            set_ob_answer(e, 0x0043_b4a0, child);
+            // The controllers (and, for the loader's model, the model found): an object of the
+            // case's scale, or none.
+            let found = ob_object(e, VTABLE);
+            e.mem.set_f64(
+                found + OB_SCALE_AT,
+                if case.word(10) == 1 {
+                    reference_scale
+                } else {
+                    7.0
+                },
+            );
+            set_ob_answer(e, 0x0043_b230, if bit(9) != 0 { found } else { 0 });
+            set_ob_answer(e, 0x0065_3270, bit(10) * child);
+            set_ob_answer(e, 0x00a5_bdd0, bit(11) * child);
+            set_ob_answer(e, 0x0044_8a80, 0x0101_4444);
+            // The helper's copy and the nodes.
+            let node = ob_object(e, VTABLE);
+            e.mem
+                .set_u32(SLOT_ANSWERS + 0xc, if case.word(9) == 1 { 0 } else { node });
+            let copy = if case.word(9) == 2 {
+                0
+            } else {
+                ob_object(e, VTABLE)
+            };
+            set_ob_answer(e, 0x0045_7ba0, copy);
+            let block = e.mem.alloc(0xac);
+            set_ob_answer(e, 0x00aa_13e0, block);
+            let built = ob_object(e, VTABLE);
+            set_ob_answer(e, 0x00a5_ecb0, built);
+            let clone = ob_object(e, VTABLE);
+            set_ob_answer(e, 0x00a5_d2c0, clone);
+            e.mem.set_u32(SLOT_ANSWERS + 0x14c, 0x0bad_c10e);
+            // The model loader's find and add, the model's constructor and the names.
+            let held = ob_object(e, VTABLE);
+            e.mem
+                .set_u32(OB_FIND, if case.word(10) != 0 { held } else { 0 });
+            set_ob_answer(e, 0x0044_7010, case.word(11));
+            let created = ob_object(e, VTABLE);
+            set_ob_answer(e, 0x0043_abf0, created);
+            set_ob_answer(e, 0x0055_d520, 0x0101_5555);
+            let path = c_string(e, b"meshes\\box.nif");
+            set_ob_answer(e, 0x0048_95b0, path);
+            vec![this, reference, case.word(4)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_clear_parent_list() {
+    Diff::new(entry!(0x0050_f5a0, object::clear_parent_list(u32)))
+        .ob()
+        .inputs(&[Input::Of(OB_SEEDS)])
+        .setup(|e, case| {
+            ob_world(e);
+            vec![ob_bound(e, case.word(0))]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_word_011c6218() {
+    Diff::new(entry!(0x0050_f5c0, object::clone_controller_word() -> u32))
+        .ob()
+        .inputs(&[Input::Of(WORDS)])
+        .setup(|e, case| {
+            ob_world(e);
+            e.mem.set_u32(0x011c_6218, case.word(0));
+            vec![]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_model_path_slot() {
+    Diff::new(entry!(0x0050_f5d0, object::model_path_slot(u32) -> u32))
+        .ob()
+        .inputs(&[Input::Of(WORDS), Input::Of(&[0, 0x0101_2345])])
+        .setup(|e, case| {
+            ob_world(e);
+            e.mem.set_u32(SLOT_ANSWERS + 0x17c, case.word(0));
+            set_ob_answer(e, 0x0048_95b0, case.word(1));
+            vec![ob_object(e, VTABLE)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_register_model() {
+    Diff::new(entry!(0x0050_f600, object::register_model(u32, u32) -> bool))
+        .ob()
+        .inputs(&[Input::Of(WORDS), Input::Of(&[0, 0x0101_2345])])
+        .setup(|e, case| {
+            ob_world(e);
+            let node = ob_object(e, VTABLE);
+            e.mem.set_u32(SLOT_ANSWERS + 0x174, node);
+            set_ob_answer(e, 0x0048_95b0, case.word(1));
+            e.mem.set_u32(0x011c_3b3c, 0x0123_4567);
+            vec![ob_object(e, VTABLE), case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_cast_and_call() {
+    Diff::new(entry!(0x0050_f670, object::cast_and_call(u32, u32, u32, u8, u32, u32) -> bool))
+        .ob()
+        .inputs(&[
+            Input::Flag,
+            Input::Flag,
+            Input::Of(&[0, 1, 0x1ff]),
+            Input::Of(&[0, 0xffff_ffff]),
+        ])
+        .setup(|e, case| {
+            ob_world(e);
+            let object = ob_object(e, VTABLE);
+            set_cast(e, 0x0118_46d4, if case.word(0) != 0 { object } else { 0 });
+            let target = if case.word(1) != 0 {
+                ob_object(e, VTABLE)
+            } else {
+                0
+            };
+            vec![
+                0x0bad_0001,
+                target,
+                object,
+                case.word(2),
+                0x0bad_0002,
+                case.word(3),
+            ]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_word_011f81dc() {
+    Diff::new(entry!(0x0050_f6e0, object::file_finder() -> u32))
+        .ob()
+        .inputs(&[Input::Of(WORDS)])
+        .setup(|e, case| {
+            ob_world(e);
+            e.mem.set_u32(0x011f_81dc, case.word(0));
+            vec![]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_bound_anim_object_construct() {
+    Diff::new(entry!(0x0050_f6f0, object::bound_anim_object_construct(u32) -> u32))
+        .ob_caller()
+        .inputs(&[Input::Flag])
+        .setup(|e, case| {
+            ob_world(e);
+            e.mem.set_u32(0x011c_912c, case.word(0));
+            vec![ob_fresh(e)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_bound_anim_object_deleting_destructor() {
+    Diff::new(entry!(
+        0x0050_f710,
+        object::bound_anim_object_deleting_destructor(u32, u32) -> u32
+    ))
+    .ob()
+    .inputs(&[Input::Of(TEMPORARY), Input::Flag, Input::Flag])
+    .setup(|e, case| {
+        ob_world(e);
+        let f = ob_dying(e, case.word(0), 1, true);
+        if case.word(2) != 0 {
+            let list = e.mem.alloc(0x10);
+            e.mem.set_u32(f + 0x18, list);
+        }
+        vec![f, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ob_bound_anim_object_destruct() {
+    Diff::new(entry!(0x0050_f740, object::bound_anim_object_destruct(u32)))
+        .ob()
+        .inputs(&[Input::Of(TEMPORARY), Input::Of(&[1, 2])])
+        .setup(|e, case| {
+            vec![{
+                ob_world(e);
+                ob_dying(e, case.word(0), case.word(1), false)
+            }]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_register_model_again() {
+    Diff::new(entry!(0x0050_f760, object::register_model_again(u32, u32) -> bool))
+        .ob()
+        .inputs(&[Input::Of(WORDS)])
+        .setup(|e, case| {
+            ob_world(e);
+            let node = ob_object(e, VTABLE);
+            e.mem.set_u32(SLOT_ANSWERS + 0x174, node);
+            set_ob_answer(e, 0x0048_95b0, 0x0101_2345);
+            vec![ob_object(e, VTABLE), case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_forward_to_empty() {
+    Diff::new(entry!(0x0050_f780, object::forward_to_empty(u32, u32, u8)))
+        .ob()
+        .inputs(&[Input::Of(WORDS), Input::Of(&[0, 1, 0x1ff])])
+        .setup(|e, case| {
+            ob_world(e);
+            vec![ob_object(e, VTABLE), case.word(0), case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_bound_tree_object_construct() {
+    Diff::new(entry!(0x0050_f7a0, object::bound_tree_object_construct(u32) -> u32))
+        .ob_caller()
+        .inputs(&[Input::Flag])
+        .setup(|e, case| {
+            ob_world(e);
+            e.mem.set_u32(0x011c_912c, case.word(0));
+            vec![ob_fresh(e)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_bound_tree_object_deleting_destructor() {
+    Diff::new(entry!(
+        0x0050_f7c0,
+        object::bound_tree_object_deleting_destructor(u32, u32) -> u32
+    ))
+    .ob()
+    .inputs(&[Input::Of(TEMPORARY), Input::Flag, Input::Flag])
+    .setup(|e, case| {
+        ob_world(e);
+        let f = ob_dying(e, case.word(0), 2, true);
+        if case.word(2) != 0 {
+            let list = e.mem.alloc(0x10);
+            e.mem.set_u32(f + 0x18, list);
+        }
+        vec![f, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ob_bound_tree_object_destruct() {
+    Diff::new(entry!(0x0050_f7f0, object::bound_tree_object_destruct(u32)))
+        .ob()
+        .inputs(&[Input::Of(TEMPORARY), Input::Of(&[1, 2])])
+        .setup(|e, case| {
+            vec![{
+                ob_world(e);
+                ob_dying(e, case.word(0), case.word(1), true)
+            }]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_type_25_result() {
+    Diff::new(entry!(0x0050_f810, object::type_25_result(u32, u32, u32) -> u32))
+        .ob()
+        .inputs(&[
+            Input::Of(&[0x25, 0x24, 0x125]),
+            Input::Flag,
+            Input::Flag,
+            Input::Of(&[0, 0x77]),
+            Input::Flag,
+        ])
+        .setup(|e, case| {
+            ob_world(e);
+            let this = ob_object(e, VTABLE);
+            e.mem.set_u8(this + 4, case.word(0) as u8);
+            set_ob_answer(e, 0x0066_4840, case.word(1) * 0x0123_0000);
+            let result = if case.word(2) != 0 {
+                ob_object(e, VTABLE)
+            } else {
+                0
+            };
+            set_ob_answer(e, 0x0066_4f50, result);
+            e.mem.set_u32(SLOT_ANSWERS + 0x100, case.word(3));
+            set_ob_answer(e, 0x008d_6f30, 0x0456_0000);
+            let argument = if case.word(4) != 0 {
+                ob_object(e, VTABLE)
+            } else {
+                0
+            };
+            vec![this, argument, 0x0bad_0003]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_object_construct() {
+    Diff::new(entry!(0x0050_f8c0, object::object_construct(u32) -> u32))
+        .ob()
+        .inputs(&[Input::Of(&[0, 5])])
+        .setup(|e, case| {
+            ob_world(e);
+            e.mem.set_u32(FORM_COUNT, case.word(0));
+            vec![ob_fresh(e)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_object_deleting_destructor() {
+    Diff::new(entry!(0x0050_f900, object::object_deleting_destructor(u32, u32) -> u32))
+        .ob()
+        .inputs(&[Input::Of(TEMPORARY), Input::Flag, Input::Flag])
+        .setup(|e, case| {
+            ob_world(e);
+            let f = ob_dying(e, case.word(0), 1, false);
+            if case.word(2) != 0 {
+                let list = e.mem.alloc(0x10);
+                e.mem.set_u32(f + 0x18, list);
+            }
+            vec![f, case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_object_destruct() {
+    Diff::new(entry!(0x0050_f930, object::object_destruct(u32)))
+        .ob()
+        .inputs(&[
+            Input::Of(TEMPORARY),
+            Input::Of(&[1, 2]),
+            Input::Flag,
+            Input::Flag,
+        ])
+        .setup(|e, case| {
+            ob_world(e);
+            let f = ob_dying(e, case.word(0), case.word(1), case.word(3) != 0);
+            if case.word(2) != 0 {
+                let list = e.mem.alloc(0x10);
+                e.mem.set_u32(f + 0x18, list);
+            }
+            vec![f]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_set_previous() {
+    Diff::new(entry!(0x0050_f9a0, object::set_previous(u32, u32)))
+        .ob()
+        .inputs(&[Input::Of(WORDS)])
+        .setup(|e, case| {
+            ob_world(e);
+            vec![ob_bound(e, 1), case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_set_word_20() {
+    Diff::new(entry!(0x0050_f9c0, object::set_word_20(u32, u32)))
+        .ob()
+        .inputs(&[Input::Of(WORDS)])
+        .setup(|e, case| {
+            ob_world(e);
+            vec![ob_bound(e, 2), case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_is_named_type_20() {
+    Diff::new(entry!(0x0050_fb90, object::is_named_type_20(u32) -> bool))
+        .ob()
+        .inputs(&[
+            Input::Flag,
+            Input::Of(&[0x20, 0x21, 0x120]),
+            Input::Of(&[0, 1, 2, 3]),
+        ])
+        .setup(|e, case| {
+            ob_world(e);
+            if case.word(0) == 0 {
+                return vec![0];
+            }
+            let this = ob_object(e, VTABLE);
+            e.mem.set_u8(this + 4, case.word(1) as u8);
+            if let Some(global) =
+                [0x011c_a238u32, 0x011c_a234, 0x011c_a23c].get(case.word(2) as usize)
+            {
+                e.mem.set_u32(*global, this);
+            }
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_zero() {
+    Diff::new(entry!(0x0050_fbe0, object::zero(u32, u32, u32) -> u32))
+        .ob()
+        .inputs(&[Input::Of(WORDS), Input::Of(WORDS), Input::Of(WORDS)])
+        .setup(|e, case| {
+            ob_world(e);
+            case.words()
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_register_form_model() {
+    Diff::new(entry!(0x0050_fbf0, object::register_form_model(u32, u32)))
+        .ob()
+        .inputs(&[
+            // The form: one of the special forms; of type 0x2a; another.
+            Input::Of(&[0, 1, 2]),
+            // A reference (its scale 1.0, 2.0 or a NaN).
+            Input::Of(&[0, 1, 2, 3]),
+            // The path: none, empty, a name.
+            Input::Of(&[0, 1, 2]),
+            // The loader's find: nothing; a model held 0, 1 or 2 times, or below 0.
+            Input::Of(&[0, 1, 2, 3, 4]),
+        ])
+        .setup(|e, case| {
+            ob_world(e);
+            let this = ob_object(e, VTABLE);
+            e.mem
+                .set_u8(this + 4, if case.word(0) == 1 { 0x2a } else { 0x15 });
+            if case.word(0) == 0 {
+                e.mem.set_u32(0x011c_a220, this);
+            }
+            let reference = match case.word(1) {
+                0 => 0,
+                n => {
+                    let r = ob_object(e, VTABLE);
+                    let scale = [1.0, 2.0, f64::NAN][n as usize - 1];
+                    e.mem.set_f64(r + OB_SCALE_AT, scale);
+                    r
+                }
+            };
+            let path = match case.word(2) {
+                0 => 0,
+                1 => c_string(e, b""),
+                _ => c_string(e, b"meshes\\box.nif"),
+            };
+            set_ob_answer(e, 0x0057_15d0, path);
+            set_ob_answer(e, 0x0048_0e60, path);
+            set_ob_answer(e, 0x0048_95b0, path);
+            let found = match case.word(3) {
+                0 => 0,
+                n => {
+                    let m = ob_object(e, VTABLE);
+                    e.mem.set_u32(m + 8, [0, 1, 2, 0x8000_0000][n as usize - 1]);
+                    m
+                }
+            };
+            e.mem.set_u32(OB_FIND, found);
+            e.mem.set_u32(0x011c_3b3c, 0x0123_4567);
+            e.mem.set_u32(0x011c_90a8, 7);
+            e.mem.set_u32(0x011c_90ac, 9);
+            vec![this, reference]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_model_path() {
+    Diff::new(entry!(0x0050_fd90, object::model_path(u32, u32) -> u32))
+        .ob()
+        .inputs(&[
+            Input::Flag,
+            Input::Of(&[0, 0x0101_0001]),
+            Input::Of(&[0, 0x0101_0002]),
+            Input::Of(&[0, 0x0101_0003]),
+        ])
+        .setup(|e, case| {
+            ob_world(e);
+            set_ob_answer(e, 0x0057_15d0, case.word(1));
+            set_ob_answer(e, 0x0048_0e60, case.word(2));
+            set_ob_answer(e, 0x0048_95b0, case.word(3));
+            let reference = if case.word(0) != 0 {
+                ob_object(e, VTABLE)
+            } else {
+                0
+            };
+            vec![ob_object(e, VTABLE), reference]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_scaled_model_file_name() {
+    Diff::new(entry!(
+        0x0050_fdf0,
+        object::scaled_model_file_name(u32, u32, u32)
+    ))
+    .ob()
+    .inputs(&[Input::F64])
+    .float_sweep(64)
+    .setup(|e, case| {
+        ob_world(e);
+        set_ob_answer(e, 0x0057_15d0, 0x0101_0001);
+        let reference = ob_object(e, VTABLE);
+        e.mem.set_f64(reference + OB_SCALE_AT, case.f64(0));
+        vec![ob_object(e, VTABLE), reference, e.mem.alloc(0x108)]
+    })
+    .run()
+    .assert_same();
+}
+
+// ---- The package list (`package_list`), the schedule (`schedule`), the package data
+// (`package_data`) and the condition lists (`conditions`) ----
+
+/// The package world's calendar and answers: the calendar's month, day, day of the week and hour
+/// (`f32` bits), the days in a month, the interface's target and a package target's reference.
+const PK_STATE: u32 = 0x0300_7300;
+const PK_MONTH: u32 = PK_STATE;
+const PK_DAY: u32 = PK_STATE + 4;
+const PK_DAY_OF_WEEK: u32 = PK_STATE + 8;
+const PK_HOUR: u32 = PK_STATE + 0xc;
+const PK_DAYS: u32 = PK_STATE + 0x10;
+const PK_TARGET: u32 = PK_STATE + 0x14;
+const PK_TARGET_REFERENCE: u32 = PK_STATE + 0x18;
+/// The forms the form map's lookup finds, by an id's low three bits (0: none found).
+const PK_FORMS: u32 = PK_STATE + 0x40;
+/// The packages' and the processes' vtables; each slot's stand-in sits at `PK_FN + slot`.
+const PK_VTABLE: u32 = 0x0300_7400;
+const PROCESS_VTABLE: u32 = 0x0300_7a00;
+const PK_FN: u32 = 0x00ff_8000;
+const TYPE_TES_PACKAGE: u32 = 0x0118_46a0;
+const TYPE_ACTOR: u32 = 0x0118_46d4;
+const PACKAGE_FORM_TYPE: u8 = 0x49;
+/// A package's fields (the exe's), then the answers the test keeps in it: whether it may run for a
+/// reference (its slot 0x138), its conditions' answer, the per-actor test's, the flag test's bits
+/// (bit n answering the test with n), its type and the run-once-a-day list's answer.
+const PK_PROCEDURE: u32 = 0x18;
+const PK_FLAGS: u32 = 0x1c;
+const PK_TARGET_AT: u32 = 0x30;
+const PK_SCHEDULE: u32 = 0x38;
+const PK_MAY_RUN: u32 = 0x60;
+const PK_HOLDS: u32 = 0x61;
+const PK_ACTOR_TEST: u32 = 0x62;
+const PK_FLAG_TESTS: u32 = 0x63;
+const PK_TYPE: u32 = 0x64;
+const PK_RUN_ONCE: u32 = 0x68;
+/// A reference's process (the exe's), then the test's current package and procedure value.
+const REF_PROCESS: u32 = 0x68;
+const REF_CURRENT: u32 = 0x70;
+const REF_VALUE: u32 = 0x74;
+
+/// The one-line bodies of other classes the package functions do in place (see their module
+/// comments): left out of the translations' calls, with no double, as [`IN_PLACE`] (which has the
+/// big-endian byte, the word and half swaps, the empty list's constructor and the word store at +4).
+const PK_IN_PLACE: &[u32] = &[
+    0x0068_15c0, // a node's item slot
+    0x0072_6070, // its next node
+    0x0082_56d0, // a list's empty test
+    0x0072_6c60, // a node's item store
+    0x005a_e380, // a list's item count
+    0x0041_d8a0, // a package's schedule
+    0x0087_eaa0, // its conditions
+    0x0067_1d10, // its target
+    0x0096_11e0, // its procedure type
+    0x0067_4e40, // its never-to-run flag
+    0x0067_0f90, // its once-a-day flag
+    0x0067_8ca0, // a schedule's month
+    0x0086_a460, // and hour
+    0x0054_07b0, // the month's setter
+    0x005d_43c0, // a reference's extra data
+    0x008d_8520, // its process
+    0x0060_ce80, // the duration's swap
+    0x0067_f030, // the loaded object's constructor
+    0x0055_9450, // an event action's idle
+    0x0053_7e90, // its setter
+    0x0044_ddc0, // its topic
+    0x0040_3550, // its setter
+    0x0084_e3a0, // its word at +0xc
+    0x0041_fd00, // its setter
+];
+/// The family's own one-line bodies its callers do in place: listed only in the callers' tests.
+const PK_OWN_IN_PLACE: &[u32] = &[
+    0x0067_8cc0, // the schedule's day of the week
+    0x0067_8ce0, // its date
+    0x0067_fdb0, // the day of the week's setter
+    0x0067_fdd0, // the date's
+    0x0067_fdf0, // the hour's
+    0x0067_ad20, // TESPackageData's constructor
+    0x0067_ad70, // its destructor
+    0x0067_c490, // the patrol data's destructor
+];
+/// The typed calls into families these tests don't name, doubles on both sides: a reference's
+/// current package and a package's type (`ai_queries`), the run-once-a-day test (`extra_data`), the
+/// calendar's day (`ai`) and the interface's target (`interface`).
+const PK_BY_ADDRESS: &[u32] = &[
+    0x0093_44a0,
+    0x0041_ca90,
+    0x0041_d8c0,
+    0x0086_7d60,
+    0x0070_3180,
+];
+
+/// The world plus what the package functions reach: the form map, the packages' and processes'
+/// slots, an owner's name slot, and the doubles of their callees by address.
+fn package_world(e: &mut Engine) {
+    world(e);
+    // The pages of the exe's constants the package functions read: the hour step (1.0), the last
+    // hour (23.0), the dialogue data's distance (100.0) and the package types' names.
+    for page in [0x0101_2000, 0x0101_6000, 0x0103_5000, 0x0119_b000] {
+        e.map(page, 0x1000);
+    }
+    e.mem.set_f64(0x0101_2070, 1.0);
+    e.mem.set_f64(0x0103_5838, 23.0);
+    e.mem.set_u32(0x0101_6410, 0x42c8_0000);
+    for kind in 0..3 {
+        e.mem.set_u32(0x0119_bcb0 + 4 * kind, 0x0101_0b00 + kind);
+    }
+    let map = form(e, 0x7f, 0, 0);
+    e.mem.set_u32(FORM_MAP, map);
+    for slot in [0x10, 0x130, 0x138] {
+        e.mem.set_u32(PK_VTABLE + slot, PK_FN + slot);
+    }
+    for slot in [0x30, 0x34, 0x38, 0x128, 0x59c, 0x5a8] {
+        e.mem.set_u32(PROCESS_VTABLE + slot, PK_FN + slot);
+    }
+    e.register(PK_FN + 0x10, |_, _| ret(0));
+    e.register(PK_FN + 0x130, |_, a| ret(a[0] + 0x50));
+    e.register(PK_FN + 0x138, |e, a| {
+        ret(u32::from(e.mem.u8(a[0] + PK_MAY_RUN)))
+    });
+    e.register(PK_FN + 0x30, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+    e.register(PK_FN + 0x34, |e, a| ret(e.mem.u32(a[0] + 0x14)));
+    e.register(PK_FN + 0x38, |e, a| ret(e.mem.u32(a[0] + 0x18)));
+    e.register(PK_FN + 0x128, |e, a| ret(e.mem.u32(a[0] + 0x1c)));
+    e.register(PK_FN + 0x59c, |_, _| ret(0));
+    e.register(PK_FN + 0x5a8, |_, _| ret(0));
+    // The owner's name: a text of its own into the string handed.
+    e.mem.set_u32(VTABLE + 0x90, VT_FN + 0x90);
+    e.register(VT_FN + 0x90, |e, a| {
+        e.mem.set_u32(a[1], 0x0101_0090);
+        ret(0)
+    });
+    e.register(0x0067_8d40, |e, a| {
+        ret(u32::from(e.mem.u8(a[0] + PK_FLAG_TESTS) >> (a[1] & 7) & 1))
+    });
+    e.register(0x0086_7d20, |e, _| ret(e.mem.u32(PK_MONTH)));
+    e.register(0x0086_7d60, |e, _| ret(e.mem.u32(PK_DAY)));
+    e.register(0x0086_7ef0, |e, _| ret(e.mem.u32(PK_DAY_OF_WEEK)));
+    e.register(0x0086_7da0, |e, _| {
+        let bits = e.mem.u32(PK_HOUR);
+        Ret {
+            eax: bits,
+            edx: 0,
+            st0: f64::from(f32::from_bits(bits)),
+        }
+    });
+    e.register(0x0093_44a0, |e, a| ret(e.mem.u32(a[0] + REF_CURRENT)));
+    e.register(0x0041_ca90, |e, a| ret(e.mem.u32(a[0] + PK_TYPE)));
+    e.register(0x0041_d8c0, |e, a| {
+        ret(u32::from(e.mem.u8(a[1] + PK_RUN_ONCE)))
+    });
+    e.register(0x0068_0020, |e, _| ret(e.mem.u32(PK_TARGET_REFERENCE)));
+    e.register(0x0068_0c30, |e, a| {
+        ret(u32::from(e.mem.u8(a[0] - 0x40 + PK_HOLDS)))
+    });
+    e.register(0x0070_3180, |e, _| ret(e.mem.u32(PK_TARGET)));
+    e.register(0x0046_4f30, |_, a| ret(a[0]));
+    e.register(0x0055_d520, |_, a| ret(a[0].wrapping_add(0x78)));
+    e.register(0x0056_9b80, |e, a| {
+        ret(if a[0] == 0 {
+            0
+        } else {
+            e.mem.u32(a[0] + REF_VALUE)
+        })
+    });
+    e.register(0x0067_7760, |e, a| {
+        ret(u32::from(e.mem.u8(a[0] + PK_ACTOR_TEST)))
+    });
+    // The output list's test: whether a node holds the package the word points at.
+    e.register(0x005f_65d0, |e, a| {
+        let item = e.mem.u32(a[1]);
+        let mut node = a[0];
+        while node != 0 {
+            if e.mem.u32(node) == item {
+                return ret(1);
+            }
+            node = e.mem.u32(node + 4);
+        }
+        ret(0)
+    });
+    e.register(0x004b_10d0, |e, _| ret(e.mem.u32(PK_DAYS)));
+    // The procedure type's calculation stores the value it is given.
+    e.register(0x0067_77b0, |e, a| {
+        e.mem.set_u32(a[0] + PK_PROCEDURE, a[1]);
+        ret(0)
+    });
+    for addr in [
+        0x005a_c750,
+        0x0042_2690,
+        0x00ec_623a,
+        0x0070_3c00,
+        0x0067_fbe0,
+        0x005a_a420,
+        0x007b_3fa0,
+    ] {
+        e.register(addr, |_, _| ret(0));
+    }
+    e.register(0x0040_37b0, |e, a| {
+        e.mem.set_u32(a[0], 0);
+        e.mem.set_u32(a[0] + 4, 0);
+        ret(a[0])
+    });
+    e.register(0x0040_37f0, |e, a| {
+        e.mem.set_u32(a[0], a[1]);
+        ret(0)
+    });
+    e.register(0x005a_a0f0, |_, a| ret(a[0]));
+    e.register(MAP_LOOKUP, |e, a| {
+        let form = e.mem.u32(PK_FORMS + 4 * (a[1] & 7));
+        if form != 0 {
+            e.mem.set_u32(a[2], form);
+        }
+        ret(u32::from(form != 0))
+    });
+    // The cast to `TESPackage` finds a form of the package type; the others answer as `CASTS` says.
+    e.register(RT_DYNAMIC_CAST, |e, a| {
+        if a[3] == TYPE_TES_PACKAGE {
+            ret(if a[0] != 0 && e.mem.u8(a[0] + 4) == PACKAGE_FORM_TYPE {
+                a[0]
+            } else {
+                0
+            })
+        } else {
+            ret(e.mem.u32(CASTS + (a[3] & 0xfff)))
+        }
+    });
+}
+
+/// A list whose head is at `head` holding `items`, a node each (none: both words zero).
+fn set_list(e: &mut Engine, head: u32, items: &[u32]) {
+    e.mem.set_u32(head, 0);
+    e.mem.set_u32(head + 4, 0);
+    let mut node = head;
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+            let next = e.mem.alloc(8);
+            e.mem.set_u32(node + 4, next);
+            node = next;
+        }
+        e.mem.set_u32(node, *item);
+    }
+}
+
+fn new_list(e: &mut Engine, items: &[u32]) -> u32 {
+    let head = e.mem.alloc(8);
+    set_list(e, head, items);
+    head
+}
+
+/// A word mixed from `seed` and `k`: the builders' picks.
+fn mix(seed: u32, k: u32) -> u32 {
+    let x = seed.wrapping_mul(0x9e37_79b9) ^ k.wrapping_mul(0x85eb_ca6b);
+    (x ^ (x >> 15)).wrapping_mul(0x2c1b_3c6d) >> 7
+}
+
+fn pick<T: Copy>(seed: u32, k: u32, from: &[T]) -> T {
+    from[(mix(seed, k) % from.len() as u32) as usize]
+}
+
+/// A schedule's eight bytes from `seed`: the month, the day of the week, the date and the hour, each
+/// "any" or a value, and a duration.
+fn set_schedule(e: &mut Engine, schedule: u32, seed: u32) {
+    e.mem.set_u8(schedule, pick(seed, 1, &[0xff, 0, 4, 11]));
+    e.mem.set_u8(schedule + 1, pick(seed, 2, &[0xff, 0, 3, 6]));
+    e.mem
+        .set_u8(schedule + 2, pick(seed, 3, &[0, 1, 14, 15, 30, 0xff]));
+    e.mem.set_u8(schedule + 3, pick(seed, 4, &[0xff, 0, 7, 22]));
+    e.mem.set_u32(schedule + 4, pick(seed, 5, &[0, 2, 6, 30]));
+}
+
+fn new_schedule(e: &mut Engine, seed: u32) -> u32 {
+    let s = e.mem.alloc(8);
+    set_schedule(e, s, seed);
+    s
+}
+
+/// A package from `seed`: the test's vtable and the package form type, its procedure type (unset
+/// or set), flags, schedule and target, and the answers its callees give.
+fn package(e: &mut Engine, seed: u32) -> u32 {
+    let p = e.mem.alloc(0x80);
+    e.mem.set_u32(p, PK_VTABLE);
+    e.mem.set_u8(p + 4, PACKAGE_FORM_TYPE);
+    e.mem
+        .set_u32(p + PK_PROCEDURE, pick(seed, 6, &[0xffff_ffff, 3]));
+    let flags = pick(seed, 7, &[0, 4, 0x400, 0x8000, 0x404, 0x8004, 0xffff_ffff]);
+    e.mem.set_u32(p + PK_FLAGS, flags);
+    set_schedule(e, p + PK_SCHEDULE, seed);
+    e.mem
+        .set_u32(p + PK_TARGET_AT, pick(seed, 8, &[0, 0x0101_0300]));
+    for (k, at) in [
+        (9, PK_MAY_RUN),
+        (10, PK_HOLDS),
+        (11, PK_ACTOR_TEST),
+        (12, PK_RUN_ONCE),
+    ] {
+        e.mem.set_u8(p + at, pick(seed, k, &[0u8, 1, 1]));
+    }
+    e.mem
+        .set_u8(p + PK_FLAG_TESTS, pick(seed, 13, &[0u8, 1, 2, 3]));
+    e.mem.set_u32(p + PK_TYPE, pick(seed, 14, &[0u32, 1, 2]));
+    p
+}
+
+/// A package that may run at any time: any month, day and hour, its conditions holding.
+fn package_any_time(e: &mut Engine, seed: u32) -> u32 {
+    let p = package(e, seed);
+    e.mem.set_u32(p + PK_FLAGS, 4);
+    for (at, byte) in [(0, 0xff), (1, 0xff), (2, 0), (3, 0xff)] {
+        e.mem.set_u8(p + PK_SCHEDULE + at, byte);
+    }
+    e.mem.set_u8(p + PK_MAY_RUN, 1);
+    e.mem.set_u8(p + PK_HOLDS, 1);
+    e.mem.set_u8(p + PK_ACTOR_TEST, 1);
+    p
+}
+
+/// `count` packages from `seed` (every third one may run at any time), a null item in the middle
+/// when `null` is set.
+fn packages(e: &mut Engine, seed: u32, count: u32, null: bool) -> Vec<u32> {
+    let mut items: Vec<u32> = (0..count)
+        .map(|i| {
+            let s = seed.wrapping_mul(7).wrapping_add(i);
+            if s % 3 == 2 {
+                package_any_time(e, s)
+            } else {
+                package(e, s)
+            }
+        })
+        .collect();
+    if null && count > 1 {
+        items.insert(1, 0);
+    }
+    items
+}
+
+/// A process answering `day`, `month` and a year, acting on `object`.
+fn process(e: &mut Engine, day: u32, month: u32, object: u32) -> u32 {
+    let p = e.mem.alloc(0x40);
+    e.mem.set_u32(p, PROCESS_VTABLE);
+    e.mem.set_u32(p + 0x10, day);
+    e.mem.set_u32(p + 0x14, month);
+    e.mem.set_u32(p + 0x18, 2281);
+    e.mem.set_u32(p + 0x1c, object);
+    p
+}
+
+/// A reference for the package queries: its process (acting on the reference itself), its current
+/// package and the value its procedure type takes.
+fn pk_reference(e: &mut Engine, current: u32, day: u32, month: u32) -> u32 {
+    let r = e.mem.alloc(0x80);
+    let process = process(e, day, month, r);
+    e.mem.set_u32(r + REF_PROCESS, process);
+    e.mem.set_u32(r + REF_CURRENT, current);
+    e.mem.set_u32(r + REF_VALUE, 0x55);
+    r
+}
+
+/// The calendars a case picks: the month, day, day of the week and hour (`f32` bits).
+const PK_CALENDARS: [(u32, u32, u32, u32); 4] = [
+    (4, 15, 3, 0x4100_0000),
+    (0, 1, 0, 0x41b8_0000),
+    (11, 30, 6, 0),
+    (4, 14, 2, 0x40e0_0000),
+];
+
+fn set_calendar(e: &mut Engine, pick: u32) {
+    let (month, day, day_of_week, hour) = PK_CALENDARS[pick as usize % PK_CALENDARS.len()];
+    e.mem.set_u32(PK_MONTH, month);
+    e.mem.set_u32(PK_DAY, day);
+    e.mem.set_u32(PK_DAY_OF_WEEK, day_of_week);
+    e.mem.set_u32(PK_HOUR, hour);
+    e.mem.set_u32(PK_DAYS, 30);
+}
+
+/// A block of `size` bytes of its own (each byte from `seed`).
+fn pk_block(e: &mut Engine, size: u32, seed: u32) -> u32 {
+    let b = e.mem.alloc(size);
+    for i in 0..size {
+        e.mem.set_u8(b + i, (mix(seed, i) & 0xff) as u8);
+    }
+    b
+}
+
+/// The stack words the package functions hand their callees: the list's append and removal, the
+/// compile index, the string, the owner's name slot, the output list's test, the line and its print,
+/// and the load buffer's read.
+fn pk_locals(d: Diff) -> Diff {
+    d.local_at(0x0090_5820, 1, 4)
+        .local_at(0x0090_5330, 1, 4)
+        .local_at(0x0048_5d50, 0, 4)
+        .local_at(0x0040_37b0, 0, 8)
+        .local_at(0x0040_37f0, 0, 8)
+        .local_at(0x0040_37d0, 0, 8)
+        .local_at(VT_FN + 0x90, 1, 8)
+        .local_at(0x005f_65d0, 1, 4)
+        .local_at(0x00ec_623a, 0, 0x134)
+        .local_at(0x0070_3c00, 0, 0x134)
+        .local_at(0x0086_4980, 1, 4)
+}
+
+/// The package functions' cases: the forms family's, with their own in-place bodies, the typed
+/// calls that go by address and the stack words they hand on.
+fn pk_cases(d: Diff) -> Diff {
+    pk_locals(
+        d.forms()
+            .ignore_calls(PK_IN_PLACE)
+            .goes_by_address(PK_BY_ADDRESS),
+    )
+}
+
+/// The package functions' shared cases, as steps of the `Diff` chain.
+trait PkCases {
+    fn pk(self) -> Diff;
+    fn pk_caller(self) -> Diff;
+    fn pk_list(self) -> Diff;
+    fn pk_object(self, size: u32) -> Diff;
+    fn pk_deleting(self) -> Diff;
+    fn pk_load(self) -> Diff;
+    fn pk_schedule(self) -> Diff;
+    fn pk_schedule_pair(self) -> Diff;
+    fn pk_schedule_setter(self) -> Diff;
+    fn pk_conditions(self) -> Diff;
+}
+
+impl PkCases for Diff {
+    fn pk(self) -> Diff {
+        pk_cases(self)
+    }
+    fn pk_caller(self) -> Diff {
+        pk_cases(self).ignore_calls(PK_OWN_IN_PLACE)
+    }
+    fn pk_list(self) -> Diff {
+        pk_list_cases(self)
+    }
+    fn pk_object(self, size: u32) -> Diff {
+        pk_object_cases(self, size)
+    }
+    fn pk_deleting(self) -> Diff {
+        pk_deleting_cases(self)
+    }
+    fn pk_load(self) -> Diff {
+        pk_load_cases(self)
+    }
+    fn pk_schedule(self) -> Diff {
+        pk_schedule_cases(self)
+    }
+    fn pk_schedule_pair(self) -> Diff {
+        pk_schedule_pair_cases(self)
+    }
+    fn pk_schedule_setter(self) -> Diff {
+        pk_schedule_setter_cases(self)
+    }
+    fn pk_conditions(self) -> Diff {
+        pk_conditions_cases(self)
+    }
+}
+
+/// The item lists the list tests pick from (words standing for packages, 0 a null item).
+const PK_LISTS: [&[u32]; 6] = [
+    &[],
+    &[0x0101_0a01],
+    &[0x0101_0a01, 0x0101_0a02],
+    &[0x0101_0a01, 0x0101_0a03, 0x0101_0a02],
+    &[0x0101_0a01, 0, 0x0101_0a02],
+    &[0, 0x0101_0a02],
+];
+
+/// A list from [`PK_LISTS`].
+fn pk_list_cases(d: Diff) -> Diff {
+    d.pk()
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5])])
+        .setup(|e, case| {
+            package_world(e);
+            vec![new_list(e, PK_LISTS[case.word(0) as usize])]
+        })
+}
+
+#[test]
+fn pk_list_destruct() {
+    Diff::new(entry!(0x0067_e3a0, package_list::destruct(u32)))
+        .pk_list()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_list_free() {
+    Diff::new(entry!(0x0067_e400, package_list::free(u32)))
+        .pk_list()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_list_add_tail() {
+    Diff::new(entry!(0x0067_e420, package_list::add_tail(u32, u32)))
+        .pk()
+        .inputs(&[Input::Of(&[0, 1, 2, 4]), Input::Of(WORDS)])
+        .setup(|e, case| {
+            package_world(e);
+            vec![new_list(e, PK_LISTS[case.word(0) as usize]), case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_list_copy() {
+    Diff::new(entry!(0x0067_e440, package_list::copy(u32, u32)))
+        .pk()
+        .inputs(&[Input::Of(&[0, 1, 3]), Input::Of(&[0, 1, 2, 3, 4, 5])])
+        .setup(|e, case| {
+            package_world(e);
+            let this = new_list(e, PK_LISTS[case.word(0) as usize]);
+            let other = new_list(e, PK_LISTS[case.word(1) as usize]);
+            vec![this, other]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_lists_differ() {
+    Diff::new(entry!(0x0067_e4a0, package_list::lists_differ(u32, u32) -> bool))
+        .pk()
+        .inputs(&[
+            Input::Of(&[0, 1, 2, 3, 4, 5]),
+            Input::Of(&[0, 1, 2, 3, 4, 5]),
+        ])
+        .setup(|e, case| {
+            package_world(e);
+            let this = new_list(e, PK_LISTS[case.word(0) as usize]);
+            let other = new_list(e, PK_LISTS[case.word(1) as usize]);
+            vec![this, other]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The form ids `InitItem`'s cases pick from: the lookup finds a package for low bits 1, another
+/// form for 2 and nothing for 3.
+const PK_IDS: [&[u32]; 6] = [
+    &[],
+    &[0x0100_0001],
+    &[0x0100_0002],
+    &[0x0100_0001, 0x0100_0003, 0x0100_0009],
+    &[0x0100_0003, 0x0100_0001],
+    &[0x0100_0002, 0x0100_0003, 0x0100_000a],
+];
+
+#[test]
+fn pk_list_init_item() {
+    Diff::new(entry!(0x0067_e560, package_list::init_item(u32, u32)))
+        // Not `.pk()`: its stack words compare by their place in frames shaped alike (the id's, the
+        // name's and the removal's), since the typed loop makes no call between one node's name and
+        // the next node's id that would tell a new local at the same address from the old one.
+        .forms()
+        .ignore_calls(PK_IN_PLACE)
+        .goes_by_address(PK_BY_ADDRESS)
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5]), Input::Of(&[0, 1, 2])])
+        .setup(|e, case| {
+            package_world(e);
+            let p = package(e, 1);
+            e.mem.set_u32(PK_FORMS + 4, p);
+            let other = form(e, 0x2a, 0, 0x0100_0002);
+            e.mem.set_u32(PK_FORMS + 8, other);
+            // The owner: none, a form without a file, a form from a file.
+            let owner = match case.word(1) {
+                0 => 0,
+                n => {
+                    let f = form(e, 0x2a, 0, 0x0100_0abc);
+                    if n == 2 {
+                        let source = file(e, true);
+                        // Index 5, but 1 for the list whose missing package has a node before
+                        // it: the removal looks for the id with the index, which the node
+                        // doesn't hold, so the exe would walk that node for ever.
+                        let index = if case.word(0) == 3 { 1 } else { 5 };
+                        e.mem.set_u8(source + FILE_COMPILE_INDEX_AT, index);
+                        set_files(e, f, &[source]);
+                    }
+                    f
+                }
+            };
+            vec![new_list(e, PK_IDS[case.word(0) as usize]), owner]
+        })
+        .run()
+        .assert_same();
+}
+
+/// Hours as `f32` bits: 0.0, 2.0, 5.0, 5.9, 21.5, 23.5, -1.0, a quiet NaN.
+const PK_HOURS: &[u32] = &[
+    0,
+    0x4000_0000,
+    0x40a0_0000,
+    0x40bc_cccd,
+    0x41ac_0000,
+    0x41bc_0000,
+    0xbf80_0000,
+    0x7fc0_0000,
+];
+
+#[test]
+fn pk_in_schedule_window() {
+    Diff::new(entry!(
+        0x0067_e700,
+        package_list::in_schedule_window(i32, i32, f32) -> bool
+    ))
+    .pk()
+    .inputs(&[
+        Input::Of(&[0, 5, 20, 23, 0xffff_ffff]),
+        Input::Of(&[0, 1, 3, 8, 30]),
+        Input::Of(PK_HOURS),
+    ])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_find_current_package() {
+    Diff::new(entry!(
+        0x0067_e780,
+        package_list::find_current_package(u32, u32) -> u32
+    ))
+    .pk_caller()
+    .inputs(&[
+        // The list: its seed and size (0: empty), a null item in it.
+        Input::Of(&[1, 2, 3, 4, 5, 6, 7, 8]),
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Flag,
+        // The reference: none; its current package none, the list's first, another of type 1.
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&[0, 1, 2, 3]),
+        // The interface's target is the reference; the process's object is an actor.
+        Input::Flag,
+        Input::Flag,
+    ])
+    .max_cases(1024)
+    .setup(|e, case| {
+        package_world(e);
+        let items = packages(e, case.word(0), case.word(1), case.word(2) != 0);
+        // List 8's first package: a window past midnight (22:00 for 6 hours) on the 30th, which the
+        // calendar's 1st does not take as the day before (its day before is day 0).
+        if case.word(0) == 8 {
+            if let Some(&first) = items.first() {
+                for (at, byte) in [(0, 0xff), (1, 0xff), (2, 30), (3, 22)] {
+                    e.mem.set_u8(first + PK_SCHEDULE + at, byte);
+                }
+                e.mem.set_u32(first + PK_SCHEDULE + 4, 6);
+                e.mem.set_u32(first + PK_FLAGS, 0);
+                e.mem.set_u8(first + PK_MAY_RUN, 1);
+                e.mem.set_u8(first + PK_HOLDS, 1);
+            }
+        }
+        let list = new_list(e, &items);
+        set_calendar(e, case.word(4));
+        let reference = match case.word(3) {
+            0 => 0,
+            1 => pk_reference(e, 0, 3, 4),
+            2 => pk_reference(e, items.first().copied().unwrap_or(0), 3, 4),
+            _ => {
+                let other = package(e, 99);
+                e.mem.set_u32(other + PK_TYPE, 1);
+                pk_reference(e, other, 3, 4)
+            }
+        };
+        e.mem.set_u32(
+            PK_TARGET,
+            if case.word(5) != 0 {
+                reference
+            } else {
+                0x0101_0bad
+            },
+        );
+        set_cast(e, TYPE_ACTOR, if case.word(6) != 0 { reference } else { 0 });
+        e.mem.set_u32(PK_TARGET_REFERENCE, 0x0101_0c00);
+        vec![list, reference]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The missed packages' walks: the actor's process's day and month, and the calendar's month, day
+/// and hour: no day; today, ending at 8:00; from the day before; across the year's end to 2:00.
+const PK_WALKS: [(u32, u32, u32, u32, u32); 4] = [
+    (0, 4, 4, 15, 0x4100_0000),
+    (15, 4, 4, 15, 0x4100_0000),
+    (14, 4, 4, 15, 0x4100_0000),
+    (30, 11, 0, 1, 0x4000_0000),
+];
+
+#[test]
+fn pk_missed_packages() {
+    Diff::new(entry!(
+        0x0067_ec40,
+        package_list::missed_packages(u32, u32, u32, u32, f32)
+    ))
+    .pk_caller()
+    .inputs(&[
+        // The list's seed and size (0: empty).
+        Input::Of(&[1, 2, 3, 4, 5]),
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&[0, 1, 2, 3]),
+        // The output list: empty, or holding the list's first package.
+        Input::Flag,
+        // The actor's current package: none or the list's second.
+        Input::Flag,
+        // The hour: 5.0, 22.0, 7.5, 0.0 (a start past 23:00 today would walk a whole year).
+        Input::Of(&[0x40a0_0000, 0x41b0_0000, 0x40f0_0000, 0]),
+    ])
+    .max_cases(768)
+    .setup(|e, case| {
+        package_world(e);
+        let items = packages(e, case.word(0), case.word(1), false);
+        // List 5's first package: missable at 7:00 on any day, so the walks from 5:00 and 0:00 reach
+        // its hour exactly (an equal hour has not passed it yet).
+        if case.word(0) == 5 {
+            if let Some(&first) = items.first() {
+                for (at, byte) in [(0, 0xff), (1, 0xff), (2, 0), (3, 7)] {
+                    e.mem.set_u8(first + PK_SCHEDULE + at, byte);
+                }
+                e.mem.set_u32(first + PK_FLAGS, 4);
+                e.mem.set_u8(first + PK_ACTOR_TEST, 1);
+            }
+        }
+        let list = new_list(e, &items);
+        let (day, month, calendar_month, calendar_day, hour) = PK_WALKS[case.word(2) as usize];
+        e.mem.set_u32(PK_MONTH, calendar_month);
+        e.mem.set_u32(PK_DAY, calendar_day);
+        e.mem.set_u32(PK_DAY_OF_WEEK, 4);
+        e.mem.set_u32(PK_HOUR, hour);
+        e.mem.set_u32(PK_DAYS, 30);
+        let current = if case.word(4) != 0 {
+            items.get(1).copied().unwrap_or(0)
+        } else {
+            0
+        };
+        let actor = pk_reference(e, current, day, month);
+        let first = items.first().copied().unwrap_or(0);
+        let seeded = [first];
+        let out = new_list(e, if case.word(3) != 0 { &seeded[..] } else { &[] });
+        vec![list, actor, out, 0x3f80_0000, case.word(5)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_is_missable() {
+    Diff::new(entry!(0x0067_efd0, package_list::is_missable(u32) -> bool))
+        .pk()
+        .inputs(&[Input::Of(&[0, 4, 0xffff_fffb, 0xffff_ffff])])
+        .setup(|e, case| {
+            package_world(e);
+            let p = package(e, 3);
+            e.mem.set_u32(p + PK_FLAGS, case.word(0));
+            vec![p]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The schedule seeds the schedule tests pick from.
+const PK_SEEDS: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
+#[test]
+fn pk_schedule_compare() {
+    Diff::new(entry!(0x0067_8a80, schedule::compare(u32, u32) -> i32))
+        .pk_caller()
+        .inputs(&[Input::Of(PK_SEEDS), Input::Of(PK_SEEDS)])
+        .setup(|e, case| {
+            package_world(e);
+            let p = package(e, case.word(0));
+            vec![p, new_schedule(e, case.word(1))]
+        })
+        .run()
+        .assert_same();
+}
+
+/// A schedule's getter: schedules from the seeds.
+fn pk_schedule_cases(d: Diff) -> Diff {
+    d.pk().inputs(&[Input::Of(PK_SEEDS)]).setup(|e, case| {
+        package_world(e);
+        vec![new_schedule(e, case.word(0))]
+    })
+}
+
+#[test]
+fn pk_schedule_day_of_week() {
+    Diff::new(entry!(
+        0x0067_8cc0,
+        schedule::day_of_week(u32) -> i8
+    ))
+    .pk_schedule()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_schedule_date() {
+    Diff::new(entry!(0x0067_8ce0, schedule::date(u32) -> u8))
+        .pk_schedule()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_schedule_construct() {
+    Diff::new(entry!(0x0067_fcb0, schedule::construct(u32) -> u32))
+        .pk()
+        .inputs(&[Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            package_world(e);
+            vec![pk_block(e, 0xc, case.word(0))]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_schedule_swap_three_words() {
+    Diff::new(entry!(0x0067_ff10, schedule::swap_three_words(u32)))
+        .pk()
+        .inputs(&[Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            package_world(e);
+            vec![pk_block(e, 0x14, case.word(0))]
+        })
+        .run()
+        .assert_same();
+}
+
+/// Two schedules (the second none for the last seed), from the seeds.
+fn pk_schedule_pair_cases(d: Diff) -> Diff {
+    d.pk_caller()
+        .inputs(&[Input::Of(PK_SEEDS), Input::Of(&[0, 1, 5, 6, 0xff])])
+        .setup(|e, case| {
+            package_world(e);
+            let this = new_schedule(e, case.word(0));
+            let other = if case.word(1) == 0xff {
+                0
+            } else {
+                new_schedule(e, case.word(1))
+            };
+            vec![this, other]
+        })
+}
+
+#[test]
+fn pk_schedule_assign() {
+    Diff::new(entry!(0x0067_fcf0, schedule::assign(u32, u32) -> u32))
+        .pk()
+        .inputs(&[Input::Of(&[0, 1, 5]), Input::Of(&[2, 6])])
+        .setup(|e, case| {
+            package_world(e);
+            vec![new_schedule(e, case.word(0)), new_schedule(e, case.word(1))]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_schedule_set_from() {
+    Diff::new(entry!(0x0067_fd40, schedule::set_from(u32, u32)))
+        .pk_schedule_pair()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_schedule_differs() {
+    Diff::new(entry!(
+        0x0067_fe10,
+        schedule::differs(u32, u32) -> bool
+    ))
+    .pk_schedule_pair()
+    .run()
+    .assert_same();
+}
+
+/// A schedule's byte setter: a schedule and a word whose low byte it stores.
+fn pk_schedule_setter_cases(d: Diff) -> Diff {
+    d.pk()
+        .inputs(&[
+            Input::Of(&[0, 3]),
+            Input::Of(&[0, 0x7f, 0x80, 0xff, 0x1_23]),
+        ])
+        .setup(|e, case| {
+            package_world(e);
+            vec![new_schedule(e, case.word(0)), case.word(1)]
+        })
+}
+
+#[test]
+fn pk_schedule_set_day_of_week() {
+    Diff::new(entry!(0x0067_fdb0, schedule::set_day_of_week(u32, u8)))
+        .pk_schedule_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_schedule_set_date() {
+    Diff::new(entry!(0x0067_fdd0, schedule::set_date(u32, u8)))
+        .pk_schedule_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_schedule_set_hour() {
+    Diff::new(entry!(0x0067_fdf0, schedule::set_hour(u32, u8)))
+        .pk_schedule_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_schedule_save() {
+    Diff::new(entry!(0x0067_fec0, schedule::save(u32)))
+        .pk()
+        .inputs(&[Input::Flag, Input::Of(&[0, 3, 7])])
+        .setup(|e, case| {
+            package_world(e);
+            record_buffer(e);
+            e.mem.set_u8(BIG_ENDIAN, case.word(0) as u8);
+            vec![new_schedule(e, case.word(1))]
+        })
+        .run()
+        .assert_same();
+}
+
+/// A package data object of `size` bytes of its own: its constructor's or destructor's cases.
+fn pk_object_cases(d: Diff, size: u32) -> Diff {
+    d.pk().inputs(&[Input::Of(&[0, 1])]).setup(move |e, case| {
+        package_world(e);
+        vec![pk_block(e, size, case.word(0))]
+    })
+}
+
+/// A deleting destructor's cases: an object and its flags.
+fn pk_deleting_cases(d: Diff) -> Diff {
+    d.pk_caller()
+        .inputs(&[Input::Of(&[0, 1, 2, 3])])
+        .setup(|e, case| {
+            package_world(e);
+            vec![pk_block(e, 0x10, 5), case.word(0)]
+        })
+}
+
+#[test]
+fn pk_data_construct() {
+    Diff::new(entry!(0x0067_ad20, package_data::construct(u32) -> u32))
+        .pk_object(8)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_data_scalar_deleting_destructor() {
+    Diff::new(entry!(
+        0x0067_ad40,
+        package_data::scalar_deleting_destructor(u32, u32) -> u32
+    ))
+    .pk_deleting()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_data_destruct() {
+    Diff::new(entry!(0x0067_ad70, package_data::destruct(u32)))
+        .pk_object(8)
+        .run()
+        .assert_same();
+}
+
+/// A save game load's cases: the byte read (0: no object; 1 and 0x101: one; 0x100: none, its low
+/// byte clear) and whether the allocation fails.
+fn pk_load_cases(d: Diff) -> Diff {
+    d.pk()
+        .inputs(&[Input::Of(&[0, 1, 0x100, 0x101]), Input::Flag])
+        .setup(|e, case| {
+            package_world(e);
+            e.mem.set_u32(READ_WORD, case.word(0));
+            e.mem.set_u32(NEW_FAILS, case.word(1));
+            vec![pk_block(e, 0x10, 2), 0x0101_0e00]
+        })
+}
+
+#[test]
+fn pk_dialogue_load_game() {
+    Diff::new(entry!(
+        0x0067_b050,
+        package_data::dialogue_load_game(u32, u32)
+    ))
+    .pk_load()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_dialogue_swap_endian() {
+    Diff::new(entry!(0x0067_b100, package_data::dialogue_swap_endian(u32)))
+        .pk_object(0x20)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_dialogue_construct() {
+    Diff::new(entry!(0x0067_b170, package_data::dialogue_construct(u32) -> u32))
+        .pk_object(0x24)
+        .ignore_calls(&[0x0067_ad20])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_eat_construct() {
+    Diff::new(entry!(0x0067_b950, package_data::eat_construct(u32) -> u32))
+        .pk_object(0xc)
+        .ignore_calls(&[0x0067_ad20])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_escort_construct() {
+    Diff::new(entry!(0x0067_bbf0, package_data::escort_construct(u32) -> u32))
+        .pk_object(0x10)
+        .ignore_calls(&[0x0067_ad20])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_follow_construct() {
+    Diff::new(entry!(0x0067_bfd0, package_data::follow_construct(u32) -> u32))
+        .pk_object(0x10)
+        .ignore_calls(&[0x0067_ad20])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_patrol_load_game() {
+    Diff::new(entry!(
+        0x0067_c330,
+        package_data::patrol_load_game(u32, u32)
+    ))
+    .pk_load()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_patrol_construct() {
+    Diff::new(entry!(0x0067_c3f0, package_data::patrol_construct(u32) -> u32))
+        .pk_object(0xc)
+        .ignore_calls(&[0x0067_ad20])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_patrol_scalar_deleting_destructor() {
+    Diff::new(entry!(
+        0x0067_c420,
+        package_data::patrol_scalar_deleting_destructor(u32, u32) -> u32
+    ))
+    .pk_deleting()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_patrol_construct_from() {
+    Diff::new(entry!(
+        0x0067_c450,
+        package_data::patrol_construct_from(u32, u32) -> u32
+    ))
+    .pk_caller()
+    .inputs(&[Input::Of(&[0, 1, 0x0201, 0x7766_0201, 0xffff_ffff])])
+    .setup(|e, case| {
+        package_world(e);
+        vec![pk_block(e, 0xc, 4), case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_patrol_destruct() {
+    Diff::new(entry!(0x0067_c490, package_data::patrol_destruct(u32)))
+        .pk()
+        .ignore_calls(&[0x0067_ad70])
+        .inputs(&[Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            package_world(e);
+            vec![pk_block(e, 0xc, case.word(0))]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_use_item_construct() {
+    Diff::new(entry!(0x0067_c770, package_data::use_item_construct(u32) -> u32))
+        .pk_object(0xc)
+        .ignore_calls(&[0x0067_ad20])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_use_weapon_swap_endian() {
+    Diff::new(entry!(
+        0x0067_ca10,
+        package_data::use_weapon_swap_endian(u32)
+    ))
+    .pk_object(0x18)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_clear_word_4() {
+    Diff::new(entry!(0x0067_da20, package_data::clear_word_4(u32, u32)))
+        .pk()
+        .inputs(&[Input::Of(&[0, 1]), Input::Of(&[0, 0x1234])])
+        .setup(|e, case| {
+            package_world(e);
+            vec![pk_block(e, 0x10, case.word(0)), case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_event_action_construct() {
+    Diff::new(entry!(
+        0x0067_da40,
+        package_data::event_action_construct(u32) -> u32
+    ))
+    .pk_object(0x10)
+    .run()
+    .assert_same();
+}
+
+/// An event action: an idle, a script of the test's (or none), a topic and a word.
+fn event_action(e: &mut Engine, seed: u32, script: bool) -> u32 {
+    let a = pk_block(e, 0x10, seed);
+    let s = if script {
+        let s = e.mem.alloc(0x54);
+        e.mem.set_u32(s, PK_VTABLE);
+        s
+    } else {
+        0
+    };
+    e.mem.set_u32(a + 4, s);
+    a
+}
+
+#[test]
+fn pk_event_action_clear() {
+    Diff::new(entry!(0x0067_da80, package_data::event_action_clear(u32)))
+        .pk()
+        .inputs(&[Input::Flag])
+        .setup(|e, case| {
+            package_world(e);
+            vec![event_action(e, 1, case.word(0) != 0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_event_action_copy() {
+    Diff::new(entry!(
+        0x0067_dad0,
+        package_data::event_action_copy(u32, u32)
+    ))
+    .pk()
+    .inputs(&[Input::Flag, Input::Flag, Input::Flag])
+    .setup(|e, case| {
+        package_world(e);
+        registries(e, true, 0, true, true, 0);
+        e.mem.set_u32(NEW_FAILS, case.word(2));
+        let this = event_action(e, 1, case.word(0) != 0);
+        let other = event_action(e, 2, case.word(1) != 0);
+        vec![this, other]
+    })
+    // A script to copy into an action without one, when the allocation fails: the exe marks the
+    // null script temporary (a read of its flags at 8) and stops there.
+    .expect_stops(|case| case.word(0) == 0 && case.word(1) != 0 && case.word(2) != 0)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_location_swap_endian() {
+    Diff::new(entry!(0x0067_eff0, package_data::location_swap_endian(u32)))
+        .pk_object(0xc)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_conditions_construct() {
+    Diff::new(entry!(0x0068_0890, conditions::construct(u32) -> u32))
+        .pk_object(8)
+        .run()
+        .assert_same();
+}
+
+/// A condition list from [`PK_LISTS`] (the items standing for condition items), or none (6).
+fn pk_conditions_cases(d: Diff) -> Diff {
+    d.pk()
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5, 6])])
+        .setup(|e, case| {
+            package_world(e);
+            let pick = case.word(0) as usize;
+            vec![if pick == 6 {
+                0
+            } else {
+                new_list(e, PK_LISTS[pick])
+            }]
+        })
+}
+
+#[test]
+fn pk_conditions_destruct() {
+    Diff::new(entry!(0x0068_08b0, conditions::destruct(u32)))
+        .pk()
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5])])
+        .setup(|e, case| {
+            package_world(e);
+            vec![new_list(e, PK_LISTS[case.word(0) as usize])]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pk_conditions_clear() {
+    Diff::new(entry!(0x0068_0fe0, conditions::clear(u32)))
+        .pk_conditions()
+        .run()
+        .assert_same();
+}
+
+/// Values as `f32` bits: 0.0, -0.0, 1.0, -1.0, 2.5, infinity, a quiet NaN, a signalling one.
+const PK_VALUES: &[u32] = &[
+    0,
+    0x8000_0000,
+    0x3f80_0000,
+    0xbf80_0000,
+    0x4020_0000,
+    0x7f80_0000,
+    0x7fc0_0000,
+    0x7f80_0001,
+];
+
+#[test]
+fn pk_conditions_compare_values() {
+    Diff::new(entry!(
+        0x0068_1050,
+        conditions::compare_values(u32, f32, f32) -> bool
+    ))
+    .pk()
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3, 4, 5, 6, 0xffff_ffff]),
+        Input::Of(PK_VALUES),
+        Input::Of(PK_VALUES),
+    ])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pk_conditions_swap_function_data() {
+    Diff::new(entry!(0x0068_1110, conditions::swap_function_data(u32)))
+        .pk_object(0xc)
         .run()
         .assert_same();
 }

@@ -13,7 +13,8 @@
 //! rotation, velocities, deactivation state) is compared after every 20 steps, and a collision
 //! listener on the world records each `contactPointAdded` (the callback the game's collision
 //! listener, `FOCollisionListener`, hangs its sounds and damage on) with the bodies and the thread
-//! it ran on.
+//! it ran on. A world also turns Havok's Visual Debugger on and off, as `bHavokDebug=1` does, over
+//! the platform's Winsock answers of a PC without a network.
 //!
 //! Needs the player's installation (nothing from it is stored or committed):
 //!
@@ -239,8 +240,18 @@ fn box_body(e: &mut Engine, half: [f32; 3], at: [f32; 3], mass: f32, layer: u32)
     body
 }
 
-/// A world as the game makes a cell's (`00552dc0`), of simulation type `simulation`.
+/// A world as the game makes a cell's (`00552dc0`), of simulation type `simulation`: its
+/// `hkpWorld`.
 fn world(e: &mut Engine, simulation: u8) -> u32 {
+    let bhk = bhk_world(e, simulation);
+    let world = e.vcall(bhk, SLOT_HK_WORLD, &[]).u32();
+    assert_ne!(world, 0, "no hkpWorld");
+    assert_eq!(e.mem.u32(world + 0xf0), u32::from(simulation));
+    world
+}
+
+/// [`world`]'s `bhkWorld`.
+fn bhk_world(e: &mut Engine, simulation: u8) -> u32 {
     e.call(BHK_WORLD_INIT_SYSTEM, &[]);
     // The game builds it in a 0x110-byte slot of its frame; the world's `Init` reads `cinfo + 0xF0`.
     let cinfo = e.mem.alloc(0x110);
@@ -262,10 +273,7 @@ fn world(e: &mut Engine, simulation: u8) -> u32 {
     e.mem.set_u8(cinfo + 0xd1, simulation);
     let bhk = e.call(NEW, &[0xa0]).u32();
     e.call(BHK_WORLD, &[bhk, cinfo]);
-    let world = e.vcall(bhk, SLOT_HK_WORLD, &[]).u32();
-    assert_ne!(world, 0, "no hkpWorld");
-    assert_eq!(e.mem.u32(world + 0xf0), u32::from(simulation));
-    world
+    bhk
 }
 
 /// A world of simulation type `simulation` with `workers` worker threads: a fixed ground slab and
@@ -277,6 +285,36 @@ struct Scene {
 }
 
 fn scene(simulation: u8, workers: u32, n: u32, layers: u32) -> Scene {
+    let mut e = havok_engine();
+    let world = world(&mut e, simulation);
+    let system = e.mem.u32(MT_SYSTEM);
+    assert_ne!(system, 0, "no multithreaded system");
+    e.mem.set_u32(system + 4, workers);
+    add_listener(&mut e, world);
+    // Layer 1 (static) for the ground, 4 (clutter) for the boxes.
+    let ground = box_body(&mut e, [400.0, 400.0, 5.0], [0.0, 0.0, -5.0], 0.0, 1);
+    e.call(ADD_ENTITY, &[world, ground, 1]);
+    let mut bodies = vec![ground];
+    for z in 0..layers {
+        for y in 0..n {
+            for x in 0..n {
+                let at = [
+                    (x as f32 - n as f32 / 2.0) * 22.0 + z as f32 * 1.5,
+                    (y as f32 - n as f32 / 2.0) * 22.0 - z as f32 * 1.1,
+                    12.0 + z as f32 * 21.0,
+                ];
+                let body = box_body(&mut e, [10.0, 10.0, 10.0], at, 10.0, 4);
+                e.call(ADD_ENTITY, &[world, body, 1]);
+                bodies.push(body);
+            }
+        }
+    }
+    Scene { e, world, bodies }
+}
+
+/// An engine over the player's exe with the C runtime started and the static initializers run, as
+/// the host has it before the game's `WinMain`: Havok's systems are ready for a world.
+fn havok_engine() -> Engine {
     let exe = engine::exe::installed_exe(&data());
     engine::exe::verify(&exe).unwrap_or_else(|e| panic!("{e}"));
     let mut e = Engine::with_exe(&exe).expect("checked installation");
@@ -307,30 +345,7 @@ fn scene(simulation: u8, workers: u32, n: u32, layers: u32) -> Scene {
         e.call(SET_UPDATE_MODE, &[setting]);
         assert_eq!(e.mem.u8(UPDATE_MODE), simulation_type, "iSimType {setting}");
     }
-    let world = world(&mut e, simulation);
-    let system = e.mem.u32(MT_SYSTEM);
-    assert_ne!(system, 0, "no multithreaded system");
-    e.mem.set_u32(system + 4, workers);
-    add_listener(&mut e, world);
-    // Layer 1 (static) for the ground, 4 (clutter) for the boxes.
-    let ground = box_body(&mut e, [400.0, 400.0, 5.0], [0.0, 0.0, -5.0], 0.0, 1);
-    e.call(ADD_ENTITY, &[world, ground, 1]);
-    let mut bodies = vec![ground];
-    for z in 0..layers {
-        for y in 0..n {
-            for x in 0..n {
-                let at = [
-                    (x as f32 - n as f32 / 2.0) * 22.0 + z as f32 * 1.5,
-                    (y as f32 - n as f32 / 2.0) * 22.0 - z as f32 * 1.1,
-                    12.0 + z as f32 * 21.0,
-                ];
-                let body = box_body(&mut e, [10.0, 10.0, 10.0], at, 10.0, 4);
-                e.call(ADD_ENTITY, &[world, body, 1]);
-                bodies.push(body);
-            }
-        }
-    }
-    Scene { e, world, bodies }
+    e
 }
 
 /// Steps the world once by [`SECONDS`], continuous or multithreaded by its type, the way
@@ -589,4 +604,53 @@ fn the_multithreaded_step_leaves_the_bodies_within_a_centimetre_of_the_continuou
             (round + 1) * 20
         );
     }
+}
+
+/// `bhkWorld::SetVisualDebugger` (`(world, enable)`; the debugger kept at `+0x10`), the per-frame
+/// `bhkWorld::UpdateDebugger` (`00c68de0`, the debugger's step), the debugger's server (`+8`, an
+/// `hkBsdSocket` whose Winsock handle is at `+0x20`) and the byte `hkBsdNetworkInit` sets.
+const SET_VISUAL_DEBUGGER: u32 = 0x00c6_a640;
+const WORLD_DEBUGGER: u32 = 0x10;
+const UPDATE_DEBUGGER: u32 = 0x00c6_8de0;
+const DEBUGGER_SERVER: u32 = 8;
+const SOCKET_HANDLE: u32 = 0x20;
+const NETWORK_STARTED: u32 = 0x0126_9acc;
+
+/// A player's `bHavokDebug=1` (`[HAVOK]` in `Fallout.ini`) turns the Visual Debugger on when a
+/// cell's world is made (`00552dc0`) or attached (`00552970`): its server starts Winsock, which
+/// nv-rs answers as a PC without a network (`engine_platform::winsock`). The debugger is made,
+/// serves nobody, steps each frame and is released, and the run goes on.
+#[test]
+#[ignore = "needs the player's FalloutNV.exe (set NV_DATA)"]
+fn the_visual_debugger_starts_without_a_network_and_the_run_goes_on() {
+    let _one = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut e = havok_engine();
+    let bhk = bhk_world(&mut e, CONTINUOUS);
+    let world = e.vcall(bhk, SLOT_HK_WORLD, &[]).u32();
+    e.call(SET_VISUAL_DEBUGGER, &[bhk, 1]);
+    let debugger = e.mem.u32(bhk + WORLD_DEBUGGER);
+    assert_ne!(debugger, 0, "no Visual Debugger");
+    assert_eq!(e.mem.u8(NETWORK_STARTED), 1, "hkBsdNetworkInit did not run");
+    let server = e.mem.u32(debugger + DEBUGGER_SERVER);
+    assert_ne!(server, 0, "no server object");
+    assert_eq!(
+        e.mem.u32(server + SOCKET_HANDLE),
+        0xffff_ffff,
+        "the server has no socket without a network"
+    );
+    // A second call keeps the one debugger.
+    e.call(SET_VISUAL_DEBUGGER, &[bhk, 1]);
+    assert_eq!(e.mem.u32(bhk + WORLD_DEBUGGER), debugger);
+    for _ in 0..3 {
+        step(&mut e, world);
+        e.call(UPDATE_DEBUGGER, &[bhk]);
+    }
+    e.call(SET_VISUAL_DEBUGGER, &[bhk, 0]);
+    assert_eq!(
+        e.mem.u32(bhk + WORLD_DEBUGGER),
+        0,
+        "the debugger was not released"
+    );
 }

@@ -108,12 +108,10 @@ const LOAD_BUFFER_READ: u32 = 0x0086_4980;
 /// `BGSLoadGameBuffer::LoadString` (Xbox PDB): reads a string into the given
 /// buffer.
 const LOAD_BUFFER_LOAD_STRING: u32 = 0x0086_49a0;
-/// The state getters written by `007066d0` (bytes, then floats) and the
-/// setters `LoadGame` hands them to.
-const STATS_PAGE_GET: u32 = 0x007d_fcd0;
+/// The state getters written by `007066d0` (bytes, then floats) and the setters `LoadGame` hands
+/// them to (the stats page's, `007dfcd0` and `007dfd00`, are this family's).
 const MAP_FLOAT_GET_A: u32 = 0x007a_17a0;
 const MAP_FLOAT_GET_B: u32 = 0x007a_17e0;
-const STATS_PAGE_SET: u32 = 0x007d_fd00;
 const MAP_FLOAT_SET_A: u32 = 0x007a_1820;
 const MAP_FLOAT_SET_B: u32 = 0x007a_1850;
 /// The manager's sub-object at `+0x4d4`: `007187a0` writes a string into a
@@ -617,7 +615,11 @@ pub fn fn_007066d0(e: &mut Engine, stream: u32) {
         let value = tile_float(e, root, TRAIT_SAVED_VALUE);
         let truncated = float_to_int(e, value);
         e.mem.set_i32(trait_value, truncated);
-        let byte = e.call(STATS_PAGE_GET, &[]).u8();
+        let byte = typed_call!(
+            super::FAMILY,
+            0x007d_fcd0,
+            super::stats_menu::fn_007dfcd0(e)
+        );
         e.mem.set_u8(first_byte, byte);
         // `007824b0`: the inventory's byte (the object at `011d9ea4`, its `+0x84`; 0 for none).
         let inventory = e.mem.u32(TRAIT_OBJECT);
@@ -719,7 +721,11 @@ pub fn interface_load_game(e: &mut Engine, stream: u32) {
         let saved = e.mem.u32(word);
         tile_set_int(e, root, TRAIT_SAVED_VALUE, saved);
         let byte = e.mem.u8(first_byte);
-        e.call(STATS_PAGE_SET, &args![u32::from(byte)]);
+        typed_call!(
+            super::FAMILY,
+            0x007d_fd00,
+            super::stats_menu::stats_menu_set_current_stats_page(e, byte)
+        );
         let byte = e.mem.u8(second_byte);
         typed_call!(super::FAMILY, 0x0070_6a20, fn_00706a20(e, byte));
         let byte = e.mem.u8(third_byte);
@@ -799,9 +805,21 @@ pub fn fn_00706a40(e: &mut Engine, value: u32) {
 /// `007df4e0`, `007df5d0`, `0079f640`, `00706ac0`, `007a1490` and
 /// `007e5890`.
 pub fn interface_finish_load_game(e: &mut Engine) {
-    e.call(0x007d_d710, &[]);
-    e.call(0x007d_f4e0, &[]);
-    e.call(0x007d_f5d0, &[]);
+    typed_call!(
+        super::FAMILY,
+        0x007d_d710,
+        super::stats_menu::stats_menu_update_perks(e)
+    );
+    typed_call!(
+        super::FAMILY,
+        0x007d_f4e0,
+        super::stats_menu::stats_menu_update_player_name(e)
+    );
+    typed_call!(
+        super::FAMILY,
+        0x007d_f5d0,
+        super::stats_menu::stats_menu_update_player_title(e)
+    );
     e.call(0x0079_f640, &[]);
     typed_call!(super::FAMILY, 0x0070_6ac0, fn_00706ac0(e));
     e.call(0x007a_1490, &[]);
@@ -853,7 +871,11 @@ pub fn fn_00706ae0(e: &mut Engine) {
         interface_close_all_support_menus(e, 0)
     );
     e.call(0x007a_a480, &[]);
-    e.call(0x007d_da60, &[]);
+    typed_call!(
+        super::FAMILY,
+        0x007d_da60,
+        super::stats_menu::fn_007dda60(e)
+    );
     typed_call!(super::FAMILY, 0x0070_6ac0, fn_00706ac0(e));
     e.call(0x0079_8bf0, &[]);
     typed_call!(

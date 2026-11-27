@@ -4667,6 +4667,91 @@ mod fixtures {
     }
 }
 
+/// The families the crates declare (a `pub static NAME: Family = Family {` at the start of a line)
+/// that no crate provides: none of its `FAMILIES` lists (`static FAMILIES` up to its `];`) names
+/// `NAME` and no `provide(&...NAME)` call does. A family module left out of its crate's list is
+/// never registered, and no other check sees it. `(file, line, name)` of each.
+fn unprovided_families(files: &[(String, String)]) -> Vec<(String, usize, String)> {
+    let names_in = |line: &str, name: &str| {
+        line.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .any(|word| word == name)
+    };
+    let mut listed = Vec::new();
+    for (_, text) in files {
+        let mut in_list = false;
+        for line in text.lines() {
+            let code = line.find("//").map_or(line, |at| &line[..at]);
+            if code.contains("static FAMILIES") {
+                in_list = true;
+            }
+            if in_list || code.contains("provide(&") {
+                listed.push(code.to_string());
+            }
+            if in_list && code.contains("];") {
+                in_list = false;
+            }
+        }
+    }
+    let mut found = Vec::new();
+    for (rel, text) in files {
+        for (i, line) in text.lines().enumerate() {
+            let Some(rest) = line.strip_prefix("pub static ") else {
+                continue;
+            };
+            let Some(name) = rest.strip_suffix(": Family = Family {") else {
+                continue;
+            };
+            if !listed.iter().any(|l| names_in(l, name)) {
+                found.push((rel.clone(), i + 1, name.to_string()));
+            }
+        }
+    }
+    found
+}
+
+/// Every family a crate declares is in its crate's `FAMILIES` list or provided (see
+/// [`unprovided_families`]).
+#[test]
+fn every_declared_family_is_provided() {
+    let root = repo_root();
+    let mut files = Vec::new();
+    for file in list_files(&root).files {
+        if file.rel.starts_with("crates/") && file.rel.ends_with(".rs") {
+            let text = fs::read(&file.path).map(|b| String::from_utf8_lossy(&b).into_owned());
+            files.push((file.rel, text.unwrap_or_default()));
+        }
+    }
+    let declared = files
+        .iter()
+        .flat_map(|(_, text)| text.lines())
+        .filter(|l| l.starts_with("pub static ") && l.ends_with(": Family = Family {"))
+        .count();
+    assert!(declared > 30, "only {declared} families declared");
+    let found = unprovided_families(&files);
+    assert!(
+        found.is_empty(),
+        "families declared but in no crate's FAMILIES list or provide call: {found:?}"
+    );
+}
+
+#[test]
+fn unprovided_families_sees_a_family_left_out() {
+    let lib = "pub static FAMILIES: [&Family; 1] = [\n    &crate::a::A,\n];\n".to_string();
+    let a = "pub static A: Family = Family {\n    name: \"a\",\n};\n".to_string();
+    let b = "pub static B: Family = Family {\n    name: \"b\",\n};\n".to_string();
+    let c = "pub static C: Family = Family {\n};\nfn f() { provide(&crate::c::C); }\n".to_string();
+    let files = vec![
+        ("crates/x/src/lib.rs".to_string(), lib),
+        ("crates/x/src/a.rs".to_string(), a),
+        ("crates/x/src/b.rs".to_string(), b),
+        ("crates/y/src/c.rs".to_string(), c),
+    ];
+    assert_eq!(
+        unprovided_families(&files),
+        vec![("crates/x/src/b.rs".to_string(), 1, "B".to_string())]
+    );
+}
+
 /// Each typed function is registered and has its differential test.
 #[test]
 fn typed_functions_are_registered_and_have_a_differential_test() {

@@ -878,3 +878,77 @@ mod this_system {
         assert_eq!(refusal, None);
     }
 }
+
+/// play.sh's `--mod-manager` (`NV_RS_PROFILE=manager`): the game's Documents and roaming AppData
+/// are the manager profile's in nv-rs's own folder, and its local AppData is the mod manager's
+/// (`NV_RS_MANAGER_APPDATA`: Amethyst's, in the game's Proton prefix), so the game reads the
+/// manager's `FalloutNV/plugins.txt`. The variable is read in that profile only: the other
+/// profiles' folders are as before with it set, and a relative one is not taken.
+#[test]
+fn the_manager_profile_reads_the_mod_managers_local_appdata_only() {
+    let own = std::path::Path::new("/home/me/.local/share/nv-rs");
+    let prefix = "/home/me/.local/share/Steam/steamapps/compatdata/22380/pfx/drive_c/users/steamuser/AppData/Local";
+    let answers = |pairs: Vec<(&'static str, String)>| {
+        let env = move |name: &str| {
+            pairs
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| v.clone())
+        };
+        folder_lines_with(own, &env)
+            .unwrap()
+            .lines()
+            .map(|l| {
+                let hex = l.split('\t').nth(3).unwrap();
+                let bytes: Vec<u8> = (0..hex.len() / 2)
+                    .map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap())
+                    .collect();
+                String::from_utf8(bytes).unwrap()
+            })
+            .collect::<Vec<String>>()
+    };
+    assert_eq!(MANAGER_APPDATA_VARIABLE, "NV_RS_MANAGER_APPDATA");
+    assert_eq!(profile_from(Some("manager")), "manager");
+    assert_eq!(profile_from(Some("Manager")), "game");
+    let manager = answers(vec![
+        ("NV_RS_PROFILE", "manager".into()),
+        ("NV_RS_MANAGER_APPDATA", prefix.into()),
+    ]);
+    assert_eq!(
+        manager,
+        [
+            r"Z:\home\me\.local\share\nv-rs\manager\Documents".to_string(),
+            r"Z:\home\me\.local\share\nv-rs\manager\AppData\Roaming".to_string(),
+            format!("Z:{}", prefix.replace('/', "\\")),
+        ]
+    );
+    // The folders made in nv-rs's own folder stay its own (the host makes them; nothing is made in
+    // the prefix).
+    let env = |name: &str| (name == "NV_RS_PROFILE").then(|| "manager".to_string());
+    assert_eq!(
+        game_folders_with(own, &env)[2],
+        own.join("manager").join("AppData").join("Local")
+    );
+    // Without the variable, or with a relative one: the profile's own local AppData.
+    for value in [None, Some("AppData/Local")] {
+        let mut pairs = vec![("NV_RS_PROFILE", "manager".to_string())];
+        pairs.extend(value.map(|v| ("NV_RS_MANAGER_APPDATA", v.to_string())));
+        assert_eq!(
+            answers(pairs)[2],
+            r"Z:\home\me\.local\share\nv-rs\manager\AppData\Local"
+        );
+    }
+    // The other profiles are as before, the variable set or not.
+    for profile in ["game", "mods"] {
+        let with = answers(vec![
+            ("NV_RS_PROFILE", profile.into()),
+            ("NV_RS_MANAGER_APPDATA", prefix.into()),
+        ]);
+        let without = answers(vec![("NV_RS_PROFILE", profile.into())]);
+        assert_eq!(with, without);
+        assert_eq!(
+            with[2],
+            format!(r"Z:\home\me\.local\share\nv-rs\{profile}\AppData\Local")
+        );
+    }
+}

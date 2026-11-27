@@ -6041,6 +6041,55 @@ mod tests {
         assert_eq!(*calls.borrow(), vec![(0x88, vec![this.addr()])]);
     }
 
+    /// A player's crash on the first frame (release 1.0, Tale of Two Wastelands): xNVSE's lambda
+    /// compile makes the lambda's script with its parent's counts in the header (unused variables
+    /// at +0x18, references at +0x1C: 5 here) and names it `<script>LambdaAtLine<n>`. `Init` sets
+    /// that name through slot +0x134, JohnnyGuitar's setter (`set_form_editor_id`). A name another
+    /// form has is a conflict, and the conflict's log line names each form's file from its list at
+    /// +0x10. The release read the list at +0x18, took the reference count for a list node and
+    /// read address 5.
+    #[test]
+    fn init_names_a_lambda_whose_name_another_form_has() {
+        use engine_core::editor_ids;
+        let mut e = tail_engine();
+        e.register(SCRIPT_IS_NAMED_CHECK, |_, _| ret(0));
+        e.register(LIST_COUNT, |e, a| ret(list_items(e, a[0]).len() as u32));
+        editor_ids::store(&mut e).set_on(true);
+        let setter = fake_code(&mut e, |e, a| {
+            ret(u32::from(editor_ids::set_form_editor_id(e, a[0], a[1])))
+        });
+        let name = "gr_ttwLambdaAtLine3";
+        // The form that has the name: a script of a loaded file (the file's name at +0x20).
+        let file = e.mem.alloc(0x130);
+        e.mem.set_cstr(file + 0x20, b"TaleOfTwoWastelands.esm");
+        let owner = e.new_object::<Script>();
+        e.mem.set_u32(owner.addr() + 0xc, 0x0b00_0801);
+        e.mem.set_u32(owner.addr() + 0x10, file);
+        let text = c_string(&mut e, name);
+        assert!(editor_ids::set_form_editor_id(&mut e, owner.addr(), text));
+        // The lambda: a run-time form id, the parent's counts, the compiled output's name.
+        let (lambda, calls) = recording_script(&mut e, &[0x88, 0xc4, 0xc8]);
+        let table = e.mem.u32(lambda.addr());
+        e.mem.set_u32(table + 0x134, setter);
+        e.mem.set_u32(lambda.addr() + 0xc, 0xff00_0802);
+        e.mem.set_u32(lambda.addr() + 0x18, 2);
+        e.mem.set_u32(lambda.addr() + 0x1c, 5);
+        let buffer = compile_buffer(&mut e, name, &[0x1d, 0, 0, 0], 5);
+        e.call(0x005a_af20, &args![lambda, buffer]);
+        assert_eq!(
+            editor_ids::conflict_lines(&mut e),
+            [format!(
+                "FF000802 (\"\") steals EDID \"{name}\" from 0B000801 (\"TaleOfTwoWastelands.esm\")"
+            )]
+        );
+        assert_eq!(
+            editor_ids::store(&mut e).name(lambda.addr()).as_deref(),
+            Some(name.as_bytes())
+        );
+        assert_eq!(e.get(script_header(lambda), ScriptHeader::dataSize), 4);
+        assert_eq!(calls.borrow().last(), Some(&(0xc8, vec![lambda.addr(), 1])));
+    }
+
     /// A script with a header copy and the given text for the comparison.
     fn comparison_engine() -> Engine {
         let mut e = tail_engine();

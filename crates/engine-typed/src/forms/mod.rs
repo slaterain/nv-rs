@@ -29,14 +29,31 @@
 //! - [`animation`]: `TESAnimation`'s functions (the component at +0xc4 of the actor base forms, in
 //!   the unit after `TESAIForm`'s): the constructor and destructor, the KF file names' list, its
 //!   chunk, its copy and compare.
+//! - [`debug_string`]: the debug-heap `std::string` members the linker placed in `TESObject`'s unit:
+//!   its constructors, destructor, `c_str`, the assigns, `erase`, `_Tidy` and the `strlen` wrapper.
+//! - [`object`]: every function of `TESObject`'s unit but `TESObject::IsMarker` (`0050f9e0`, which
+//!   JIP LN NVSE rewrites): `TESObject`'s and the bound objects' constructors and destructors, the
+//!   `OBND` box (its points, size, save and load), `Clone3D`, the model registration and the scaled
+//!   model name.
+//! - [`package_list`]: the package list's functions (`PackageList`'s unit and the units beside it):
+//!   the destructor, clear, append, copy and compare, `InitItem`, the schedule window,
+//!   `FindCurrentPackage` and the missed packages' walk and sort, and the missable flag's test.
+//! - [`schedule`]: a package's schedule (`PSDT`): its order, getters and setters, constructor,
+//!   assignment and compare, its chunk, and the three-word swap of its unit.
+//! - [`package_data`]: the package data classes' constructors, destructors and save game loads
+//!   (`TESPackageData` and its dialogue, eat, escort, follow, patrol and use item data), their
+//!   chunk swaps, and the package event action's constructor, clear and copy.
+//! - [`conditions`]: a condition list's constructor, destructor and clear, a condition's compare of
+//!   two values and its function data's swap.
 //!
 //! Reached: each function stays registered at its exe address, so the translations' calls by
 //! address and the vtable slots that hold them (`TESForm`'s vtable `0101c794` and the form classes
 //! that keep its slots) reach the typed functions; between them the calls are typed calls. The
 //! translations that called one of them as a plain Rust function (in `tesform.rs`,
-//! `tesactorbasedata.rs`, `tesactorbase.rs`, `tesattributes.rs`, `run_004801e0.rs`, `tesaiform.rs`
-//! and `run_0047f940.rs` themselves) call it by address now, so the game reaches the typed function
-//! from there too.
+//! `tesactorbasedata.rs`, `tesactorbase.rs`, `tesattributes.rs`, `run_004801e0.rs`, `tesaiform.rs`,
+//! `run_0047f940.rs`, `tesobject.rs`, `packagelist.rs`, `run_0067ad20.rs`, `run_0067c330.rs`,
+//! `run_0067ec40.rs` and `run_0067fcb0.rs` themselves) call it by address now, so the game reaches
+//! the typed function from there too.
 //!
 //! Native: the one-line bodies the exe calls (the form type, its flag tests, the byte swaps, the
 //! files' and save buffers' fields, the components' accessors) are done in place, the leaves', the
@@ -50,10 +67,12 @@
 //! may replace); every virtual call is made through its slot, since the form classes override them.
 //! The seams inside the unit run where they do, with the words the translation gives them: the
 //! script extender's in the destructor (`00483669`), JohnnyGuitar NVSE's after `SetTemporary`'s
-//! removal (`0048449a`) and at `GetFormDetailedString`'s name (`00486903`), and JIP LN's G45 mask
-//! in the flags' load (`00484e03`, under its fix bit). A seam is a check inside the function, not a
+//! removal (`0048449a`) and at `GetFormDetailedString`'s name (`00486903`), JIP LN's G45 mask in the
+//! flags' load (`00484e03`, under its fix bit) and its clone of a model with lights of its own in
+//! `Clone3D` (`0050ef46`, while JIP LN is installed). A seam is a check inside the function, not a
 //! registration over it, so it costs the family nothing; no extender or fix row registers over any
-//! of this family's addresses (`GetFormByEditorID`, which JohnnyGuitar NVSE replaces, stays out),
+//! of this family's addresses (`GetFormByEditorID`, which JohnnyGuitar NVSE replaces, and
+//! `TESObject::IsMarker`, which JIP LN rewrites, stay out),
 //! so the family's calls stay direct in play.
 //! Plugins' load order and form ids are untouched: the ids, the files' order in a form's list and
 //! the compile index are computed exactly as the translation computes them.
@@ -61,8 +80,9 @@
 //! Stage 1: the objects stay in guest memory where the game made them. The loading threads read and
 //! write forms too, so the row is [`Threads::Both`], and the float maths is the exe's x87 maths under
 //! the running thread's control word, as the translation does it: the calculated level's
-//! multiply and divide and an item's desirability's add (`x87_mul`, `x87_div`, `x87_add`), each
-//! result stored as the `f32` the exe stores; the karma loaded from an integer exactly and read
+//! multiply and divide, an item's desirability's add and the missed packages' hour step (`x87_mul`,
+//! `x87_div`, `x87_add`), each result stored as the `f32` the exe stores; the karma loaded from an
+//! integer exactly and read
 //! back through the C runtime's typed `_ftol2`. A float becomes an integer through
 //! `x87::fistp_chop` where the exe's `FISTP` runs under the truncating control word it sets (the
 //! loaded quality, the armour's base rating, the statistics' fields). The components' weight and
@@ -79,6 +99,12 @@ pub mod actor_base_data;
 pub mod ai_form;
 pub mod animation;
 pub mod attributes;
+pub mod conditions;
+pub mod debug_string;
+pub mod object;
+pub mod package_data;
+pub mod package_list;
+pub mod schedule;
 pub mod tesform;
 
 /// This family's bit: what each `typed_call!` of it names. Id 45: past the families in main
@@ -360,7 +386,115 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0047_fbd0, animation::compare_component(u32, u32) -> bool),
         entry!(0x0047_fcb0, animation::has_name(u32, u32) -> bool),
         entry!(0x0047_fd20, animation::add_name(u32, u32)),
-
+        entry!(0x0044_a4c0, debug_string::construct_from_text(u32, u32) -> u32),
+        entry!(0x0044_a500, debug_string::copy_construct(u32, u32) -> u32),
+        entry!(0x0044_a540, debug_string::destruct(u32)),
+        entry!(0x0044_a560, debug_string::c_str(u32) -> u32),
+        entry!(0x0044_a580, debug_string::assign_range(u32, u32, u32, u32) -> u32),
+        entry!(0x0044_a640, debug_string::assign_text(u32, u32) -> u32),
+        entry!(0x0044_a670, debug_string::text_length(u32) -> u32),
+        entry!(0x0044_a690, debug_string::erase(u32, u32, u32) -> u32),
+        entry!(0x0044_a730, debug_string::tidy(u32, bool, u32)),
+        entry!(0x0044_a7b0, debug_string::construct_proxy(u32, u32) -> u32),
+        entry!(0x0044_a7d0, debug_string::construct_proxy_from(u32, u32) -> u32),
+        entry!(0x0044_a7f0, debug_string::assign_chars(u32, u32, u32) -> u32),
+        entry!(0x0050_e820, object::bound_object_construct(u32) -> u32),
+        entry!(0x0050_e8b0, object::copy_box_point(u32, u32) -> u32),
+        entry!(0x0050_e8f0, object::default_bound() -> u32),
+        entry!(0x0050_e960, object::set_point(u32, u32, u32, u32) -> u32),
+        entry!(0x0050_e990, object::bound_object_deleting_destructor(u32, u32) -> u32),
+        entry!(0x0050_e9c0, object::bound_data_construct(u32) -> u32),
+        entry!(0x0050_e9f0, object::bound_object_destruct(u32)),
+        entry!(0x0050_ea10, object::points_difference(u32, u32)),
+        entry!(0x0050_ea50, object::points_sum(u32, u32)),
+        entry!(0x0050_ea90, object::bound_extra_data_name() -> u32),
+        entry!(0x0050_eaa0, object::copy_bound(u32, u32) -> u32),
+        entry!(0x0050_ead0, object::bound_min_as_floats(u32, u32) -> u32),
+        entry!(0x0050_eb30, object::point_x(u32) -> f32),
+        entry!(0x0050_eb50, object::point_y(u32) -> f32),
+        entry!(0x0050_eb70, object::point_z(u32) -> f32),
+        entry!(0x0050_eb90, object::bound_max_as_floats(u32, u32) -> u32),
+        entry!(0x0050_ebf0, object::bound_size(u32) -> f32),
+        entry!(0x0050_ec30, object::point_difference(u32, u32, u32) -> u32),
+        entry!(0x0050_ec80, object::point_length(u32) -> f64),
+        entry!(0x0050_ece0, object::save_bound(u32)),
+        entry!(0x0050_ed30, object::swap_bound(u32)),
+        entry!(0x0050_edd0, object::load_bound(u32, u32)),
+        entry!(0x0050_ee20, object::clone_3d_unflagged(u32, u32) -> u32),
+        entry!(0x0050_ee50, object::bound_object_clone_3d(u32, u32, u8) -> u32),
+        entry!(0x0050_f5a0, object::clear_parent_list(u32)),
+        entry!(0x0050_f5c0, object::clone_controller_word() -> u32),
+        entry!(0x0050_f5d0, object::model_path_slot(u32) -> u32),
+        entry!(0x0050_f600, object::register_model(u32, u32) -> bool),
+        entry!(0x0050_f670, object::cast_and_call(u32, u32, u32, u8, u32, u32) -> bool),
+        entry!(0x0050_f6e0, object::file_finder() -> u32),
+        entry!(0x0050_f6f0, object::bound_anim_object_construct(u32) -> u32),
+        entry!(0x0050_f710, object::bound_anim_object_deleting_destructor(u32, u32) -> u32),
+        entry!(0x0050_f740, object::bound_anim_object_destruct(u32)),
+        entry!(0x0050_f760, object::register_model_again(u32, u32) -> bool),
+        entry!(0x0050_f780, object::forward_to_empty(u32, u32, u8)),
+        entry!(0x0050_f7a0, object::bound_tree_object_construct(u32) -> u32),
+        entry!(0x0050_f7c0, object::bound_tree_object_deleting_destructor(u32, u32) -> u32),
+        entry!(0x0050_f7f0, object::bound_tree_object_destruct(u32)),
+        entry!(0x0050_f810, object::type_25_result(u32, u32, u32) -> u32),
+        entry!(0x0050_f8c0, object::object_construct(u32) -> u32),
+        entry!(0x0050_f900, object::object_deleting_destructor(u32, u32) -> u32),
+        entry!(0x0050_f930, object::object_destruct(u32)),
+        entry!(0x0050_f9a0, object::set_previous(u32, u32)),
+        entry!(0x0050_f9c0, object::set_word_20(u32, u32)),
+        entry!(0x0050_fb90, object::is_named_type_20(u32) -> bool),
+        entry!(0x0050_fbe0, object::zero(u32, u32, u32) -> u32),
+        entry!(0x0050_fbf0, object::register_form_model(u32, u32)),
+        entry!(0x0050_fd90, object::model_path(u32, u32) -> u32),
+        entry!(0x0050_fdf0, object::scaled_model_file_name(u32, u32, u32)),
+        entry!(0x0067_e3a0, package_list::destruct(u32)),
+        entry!(0x0067_e400, package_list::free(u32)),
+        entry!(0x0067_e420, package_list::add_tail(u32, u32)),
+        entry!(0x0067_e440, package_list::copy(u32, u32)),
+        entry!(0x0067_e4a0, package_list::lists_differ(u32, u32) -> bool),
+        entry!(0x0067_e560, package_list::init_item(u32, u32)),
+        entry!(0x0067_e700, package_list::in_schedule_window(i32, i32, f32) -> bool),
+        entry!(0x0067_e780, package_list::find_current_package(u32, u32) -> u32),
+        entry!(0x0067_ec40, package_list::missed_packages(u32, u32, u32, u32, f32)),
+        entry!(0x0067_efd0, package_list::is_missable(u32) -> bool),
+        entry!(0x0067_8a80, schedule::compare(u32, u32) -> i32),
+        entry!(0x0067_8cc0, schedule::day_of_week(u32) -> i8),
+        entry!(0x0067_8ce0, schedule::date(u32) -> u8),
+        entry!(0x0067_fcb0, schedule::construct(u32) -> u32),
+        entry!(0x0067_fcf0, schedule::assign(u32, u32) -> u32),
+        entry!(0x0067_fd40, schedule::set_from(u32, u32)),
+        entry!(0x0067_fdb0, schedule::set_day_of_week(u32, u8)),
+        entry!(0x0067_fdd0, schedule::set_date(u32, u8)),
+        entry!(0x0067_fdf0, schedule::set_hour(u32, u8)),
+        entry!(0x0067_fe10, schedule::differs(u32, u32) -> bool),
+        entry!(0x0067_fec0, schedule::save(u32)),
+        entry!(0x0067_ff10, schedule::swap_three_words(u32)),
+        entry!(0x0067_ad20, package_data::construct(u32) -> u32),
+        entry!(0x0067_ad40, package_data::scalar_deleting_destructor(u32, u32) -> u32),
+        entry!(0x0067_ad70, package_data::destruct(u32)),
+        entry!(0x0067_b050, package_data::dialogue_load_game(u32, u32)),
+        entry!(0x0067_b100, package_data::dialogue_swap_endian(u32)),
+        entry!(0x0067_b170, package_data::dialogue_construct(u32) -> u32),
+        entry!(0x0067_b950, package_data::eat_construct(u32) -> u32),
+        entry!(0x0067_bbf0, package_data::escort_construct(u32) -> u32),
+        entry!(0x0067_bfd0, package_data::follow_construct(u32) -> u32),
+        entry!(0x0067_c330, package_data::patrol_load_game(u32, u32)),
+        entry!(0x0067_c3f0, package_data::patrol_construct(u32) -> u32),
+        entry!(0x0067_c420, package_data::patrol_scalar_deleting_destructor(u32, u32) -> u32),
+        entry!(0x0067_c450, package_data::patrol_construct_from(u32, u32) -> u32),
+        entry!(0x0067_c490, package_data::patrol_destruct(u32)),
+        entry!(0x0067_c770, package_data::use_item_construct(u32) -> u32),
+        entry!(0x0067_ca10, package_data::use_weapon_swap_endian(u32)),
+        entry!(0x0067_da20, package_data::clear_word_4(u32, u32)),
+        entry!(0x0067_da40, package_data::event_action_construct(u32) -> u32),
+        entry!(0x0067_da80, package_data::event_action_clear(u32)),
+        entry!(0x0067_dad0, package_data::event_action_copy(u32, u32)),
+        entry!(0x0067_eff0, package_data::location_swap_endian(u32)),
+        entry!(0x0068_0890, conditions::construct(u32) -> u32),
+        entry!(0x0068_08b0, conditions::destruct(u32)),
+        entry!(0x0068_0fe0, conditions::clear(u32)),
+        entry!(0x0068_1050, conditions::compare_values(u32, f32, f32) -> bool),
+        entry!(0x0068_1110, conditions::swap_function_data(u32)),
     ]
 }
 
@@ -379,7 +513,13 @@ mod tests {
                 row.addr
             );
         }
-        for seam in [0x0048_3669, 0x0048_449a, 0x0048_4e03, 0x0048_6903] {
+        for seam in [
+            0x0048_3669,
+            0x0048_449a,
+            0x0048_4e03,
+            0x0048_6903,
+            0x0050_ef46,
+        ] {
             assert!(engine_core::extend::all_sites().any(|row| row.addr == seam));
             assert!(!members.contains(&seam));
         }

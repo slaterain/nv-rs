@@ -116,6 +116,60 @@ check "crlf: the list has CRLF line ends" grep -q "$(printf '\r')" "$tmp/crlf/sc
 check "crlf: the list has no line end after its last needle" sh -c '[ "$(tail -c 1 "$1" | od -An -c | tr -d " ")" != "\n" ]' x "$tmp/crlf/scripts/package-needles.txt"
 package "$tmp/crlf" crlf
 
+# A release package made where the game is not (--game-check-later, as the package workflow makes
+# it), by this checkout's script on another checkout (--source): a clone whose origin is a local
+# copy with this commit as its main, so the script's "HEAD is on origin's main" holds without the
+# network. It is named and filled as a release package (crash-reports.txt in it, package-check
+# asked to compare it with the repository's) and BUILD.txt says the game check comes later.
+git clone -q --bare -- "$here" "$tmp/origin.git"
+git -C "$tmp/origin.git" update-ref refs/heads/main "$(git -C "$here" rev-parse HEAD)"
+git -C "$tmp/origin.git" symbolic-ref HEAD refs/heads/main
+git clone -q -- "$tmp/origin.git" "$tmp/rel"
+out=$tmp/out-release
+mkdir -p -- "$out"
+rm -f -- "$recorded"
+status=0
+sh "$here/scripts/package-playtest.sh" --source "$tmp/rel" --version selftest --system "$system" --game-check-later \
+    --use-built --target "$tmp/target" --out "$out" >"$tmp/log" 2>&1 || status=$?
+cat "$tmp/log"
+name=nv-rs-preview-$system
+archive=$out/$name.tar.gz
+check "release: package-playtest.sh ended with status 0 (was $status)" [ "$status" = 0 ]
+check "release: the archive has the release name" [ -s "$archive" ]
+check "release: its checksum file is there" [ -s "$archive.sha256" ]
+if [ -s "$archive" ]; then
+    tar -tzf "$archive" >"$tmp/entries"
+    check "release: the archive holds crash-reports.txt" grep -qxF -e "$name/crash-reports.txt" "$tmp/entries"
+    tar -xzf "$archive" -C "$tmp" "$name/BUILD.txt" "$name/crash-reports.txt"
+    check "release: its crash-reports.txt is the repository's" cmp -s "$tmp/rel/distribution/crash-reports.txt" "$tmp/$name/crash-reports.txt"
+    check "release: BUILD.txt names the source commit" grep -qxF -e "Source commit: $(git -C "$here" rev-parse HEAD)" "$tmp/$name/BUILD.txt"
+    check "release: BUILD.txt says the game check was not made where it was built" grep -q '^Checked against the game: not where it was built' "$tmp/$name/BUILD.txt"
+    check "release: BUILD.txt says it is published only with its CHECKED.txt" grep -qF 'A release package: it is published only with that CHECKED.txt' "$tmp/$name/BUILD.txt"
+fi
+if [ -f "$recorded" ]; then
+    check "release: package-check was asked to compare the crash service file" grep -qxF -e --crash-reports "$recorded"
+    check "release: package-check was not given a game" sh -c '! grep -qxF -e --game "$1"' x "$recorded"
+else
+    check "release: package-check was run" false
+fi
+# The refusals: a release package without the game and without --game-check-later, a package of
+# both kinds, and --game-check-later with a game.
+refused() { # NAME, TEXT the refusal must hold, then package-playtest.sh's arguments
+    rwhat=$1
+    rwant=$2
+    shift 2
+    status=0
+    sh "$here/scripts/package-playtest.sh" --source "$tmp/rel" --version selftest --system "$system" --use-built \
+        --target "$tmp/target" --out "$tmp/out-refused" "$@" >"$tmp/log" 2>&1 || status=$?
+    check "refused: $rwhat (status $status)" [ "$status" != 0 ]
+    check "refused: $rwhat says why" grep -qF -e "$rwant" "$tmp/log"
+    check "refused: $rwhat made no archive" sh -c '! ls "$1"/*.tar.gz >/dev/null 2>&1' x "$tmp/out-refused"
+}
+refused "a release package without the game" "needs --game"
+refused "a package of both kinds" "give one of them" --game-check-later --test-build
+printf 'not the game\n' >"$tmp/FalloutNV.exe"
+refused "--game-check-later with a game" "with --game the check is made here" --game-check-later --game "$tmp/FalloutNV.exe"
+
 # The real package-check refuses a file holding a Windows user folder in UTF-16 with these needles.
 if [ -n "$checker" ]; then
     mkdir -p -- "$tmp/utf16"

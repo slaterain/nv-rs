@@ -26,7 +26,7 @@ pub fn fn_0067ad70(e: &mut Engine, this: Ptr) {
 /// (`fn_0067ad70`), then frees `this` with `00401030` when bit 0 of `flags`
 /// is set. Returns `this` (`RET 4`).
 pub fn fn_0067ad40(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_0067ad70(e, this);
+    e.call(0x0067_ad70, &args![this]);
     if flags & 1 != 0 {
         e.call(0x0040_1030, &args![this]);
     }

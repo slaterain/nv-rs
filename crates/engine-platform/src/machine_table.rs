@@ -686,7 +686,9 @@ fn process_env(name: &str) -> Option<String> {
 }
 
 /// The profile a run plays in: `mods` when [`PROFILE_VARIABLE`] says so (play.sh's `--mods`: saves
-/// and settings made with mods stay apart, as the Windows launcher's `userdata\mods`), else `game`.
+/// and settings made with mods stay apart, as the Windows launcher's `userdata\mods`), `manager`
+/// for play.sh's `--mod-manager` (a mod manager's game, as the Windows launcher's
+/// `userdata\manager`: [`MANAGER_APPDATA_VARIABLE`]), else `game`.
 pub fn profile() -> &'static str {
     profile_with(&process_env)
 }
@@ -697,13 +699,34 @@ pub fn profile_with(env: &dyn Fn(&str) -> Option<String>) -> &'static str {
     profile_from(env(PROFILE_VARIABLE).as_deref())
 }
 
-/// [`profile`] for the variable's value: `mods` for `mods`; `game` for `game`, for none, and for
-/// anything else.
+/// [`profile`] for the variable's value: `mods` for `mods`, `manager` for `manager`; `game` for
+/// `game`, for none, and for anything else.
 pub fn profile_from(value: Option<&str>) -> &'static str {
     match value {
         Some("mods") => "mods",
+        Some("manager") => "manager",
         _ => "game",
     }
+}
+
+/// The variable naming, in the `manager` profile ([`profile`]), the local AppData folder a mod
+/// manager deployed the game's plugin list into (play.sh's `--mod-manager`: Amethyst's, in the
+/// game's Proton prefix, `.../drive_c/users/steamuser/AppData/Local`). The game reads its
+/// `FalloutNV/plugins.txt` there, as the Windows launcher's `manager` profile reads the player's
+/// real local AppData. Only read: every file the game writes stays in memory (`crate::files`).
+/// In the other profiles it is not read.
+pub const MANAGER_APPDATA_VARIABLE: &str = "NV_RS_MANAGER_APPDATA";
+
+/// The local AppData folder the game is answered with (`SHGetFolderPathA` 0x1c) when it is not
+/// the profile's own `local` (in nv-rs's own folder): [`MANAGER_APPDATA_VARIABLE`]'s full path in
+/// the `manager` profile.
+fn manager_appdata(env: &dyn Fn(&str) -> Option<String>) -> Option<std::path::PathBuf> {
+    if profile_with(env) != "manager" {
+        return None;
+    }
+    env(MANAGER_APPDATA_VARIABLE)
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.has_root())
 }
 
 /// The game's Documents, roaming and local AppData folders inside nv-rs's own folder `own` (a
@@ -752,7 +775,9 @@ fn on_drive_z(path: &std::path::Path) -> Result<String, String> {
 }
 
 /// The `SHGetFolderPathA` lines for the Documents (5), roaming (0x1a) and local (0x1c) AppData
-/// folders inside nv-rs's own folder `own` ([`game_folders`]), as the game names them on `Z:`.
+/// folders inside nv-rs's own folder `own` ([`game_folders`]), as the game names them on `Z:`. In
+/// the `manager` profile the local AppData is the mod manager's ([`MANAGER_APPDATA_VARIABLE`]),
+/// read only.
 pub fn folder_lines(own: &std::path::Path) -> Result<String, String> {
     folder_lines_with(own, &process_env)
 }
@@ -763,10 +788,11 @@ pub fn folder_lines_with(
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, String> {
     let mut lines = String::new();
-    for (csidl, folder) in [5u32, 0x1a, 0x1c]
-        .into_iter()
-        .zip(game_folders_with(own, env))
-    {
+    let mut folders = game_folders_with(own, env);
+    if let Some(local) = manager_appdata(env) {
+        folders[2] = local;
+    }
+    for (csidl, folder) in [5u32, 0x1a, 0x1c].into_iter().zip(folders) {
         let game = on_drive_z(&folder)?;
         if csidl == 5 && documents_too_long(&game) {
             return Err(format!(

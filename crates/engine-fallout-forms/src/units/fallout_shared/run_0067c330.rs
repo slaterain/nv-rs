@@ -29,7 +29,7 @@ pub fn fn_0067c3f0(e: &mut Engine, this: Ptr) -> Ptr {
 /// [`fn_0067c490`], then the release `00401030` when bit 0 of `flags` is
 /// set. Returns `this`.
 pub fn fn_0067c420(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_0067c490(e, this);
+    e.call(0x0067_c490, &args![this]);
     if flags & 1 != 0 {
         e.call(0x0040_1030, &args![this]);
     }

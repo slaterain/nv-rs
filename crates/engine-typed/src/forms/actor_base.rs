@@ -21,12 +21,12 @@
 //! (`008df040`), a save buffer's change flags (`00428110`, `004280f0`), a setting's value
 //! (`00408d60`), the change flags' word (`008c71b0`) and the iterator's base constructor
 //! (`005d8b10`). `TESForm`'s, `TESActorBaseData`'s, `TESAttributes`' and `TESAIForm`'s functions
-//! are this family's typed calls, `memset` and `_ftol2` the C runtime family's; a word the exe
-//! reads again with nothing between that could change it is read once, and so is the save/load
-//! game (`011de45c`), which the exe reads again after calls by address but which is set once at
-//! start-up and stays the same through a save or a load. Every virtual call goes through its slot,
-//! and the rest (the RTTI casts, the spell list's functions, the save/load game's change tests,
-//! the combat formulas, the logger) are calls by address.
+//! and the `strlen` wrapper (`0044a670`) are this family's typed calls, `memset` and `_ftol2` the
+//! C runtime family's; a word the exe reads again with nothing between that could change it is
+//! read once, and so is the save/load game (`011de45c`), which the exe reads again after calls by
+//! address but which is set once at start-up and stays the same through a save or a load. Every
+//! virtual call goes through its slot, and the rest (the RTTI casts, the spell list's functions,
+//! the save/load game's change tests, the combat formulas, the logger) are calls by address.
 //!
 //! Floats: the AI and the loading threads ask the desirability too, so it is the exe's x87
 //! arithmetic as the translation does it (`x87_add` under the running thread's control word, each
@@ -34,7 +34,7 @@
 //! loaded exactly and stored as an `f32`; the karma read as an actor value is made an integer by
 //! `_ftol2`, the C runtime family's.
 
-use super::{actor_base_data, ai_form, attributes, tesform, FAMILY};
+use super::{actor_base_data, ai_form, attributes, debug_string, tesform, FAMILY};
 use crate::crt;
 use engine_core::typed::leaf;
 use engine_core::x87::{fistp_chop, x87_add, x87_quiet, x87_store32};
@@ -116,7 +116,6 @@ const TEXT_UNDERRUN_FORM: u32 = 0x0101_5500;
 const TEXT_OVERRUN_PLAIN: u32 = 0x0101_54a0;
 const TEXT_UNDERRUN_PLAIN: u32 = 0x0101_5440;
 const EMPTY_STRING: u32 = 0x0101_1584;
-const STRING_LENGTH: u32 = 0x0044_a670;
 const SET_NAME: u32 = 0x0048_9100;
 const SAVE_STRING: u32 = 0x0086_5e70;
 const LOAD_STRING: u32 = 0x0086_49a0;
@@ -749,7 +748,11 @@ pub fn save_size(e: &mut Engine, this: u32, flags: u32) -> u16 {
     ));
     if flags & CHANGE_NAME != 0 {
         let text = name_text(e, this);
-        let length = e.call(STRING_LENGTH, &args![text]).u16();
+        let length = low_half(typed_call!(
+            FAMILY,
+            0x0044_a670,
+            debug_string::text_length(e, text)
+        ));
         size = size.wrapping_add(1).wrapping_add(length);
     }
     if reports_save_sizes(e) {
@@ -810,7 +813,11 @@ pub fn save_game(e: &mut Engine, this: u32, flags: u32) {
         );
         if flags & CHANGE_NAME != 0 {
             let text = name_text(e, this);
-            let length = e.call(STRING_LENGTH, &args![text]).u8();
+            let length = low_byte(typed_call!(
+                FAMILY,
+                0x0044_a670,
+                debug_string::text_length(e, text)
+            ));
             e.mem.set_u8(length_slot, length);
             typed_call!(
                 FAMILY,

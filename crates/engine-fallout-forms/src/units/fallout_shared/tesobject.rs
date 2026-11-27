@@ -235,14 +235,15 @@ pub fn std_string_construct_c_str(
     this: Ptr<DebugString>,
     text: Ptr,
 ) -> Ptr<DebugString> {
-    let slot = e.mem.alloc(4);
-    e.mem.set_u32(slot, this.addr());
-    typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, slot));
-    let allocator = e.mem.u32(slot);
-    e.mem.free(slot);
-    fn_0044a7b0(e, this, allocator);
-    std_string_tidy(e, this, false, 0);
-    std_string_assign_c_str(e, this, text);
+    // 0044a4c9: the allocator argument is the word `PUSH ECX` leaves on the stack.
+    let allocator = e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), this.addr());
+        typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, slot));
+        e.mem.u32(slot.addr())
+    });
+    e.call(0x0044_a7b0, &args![this, allocator]);
+    e.call(0x0044_a730, &args![this, 0u32, 0u32]);
+    e.call(0x0044_a640, &args![this, text]);
     this
 }
 
@@ -255,17 +256,17 @@ pub fn std_string_copy_construct(
     this: Ptr<DebugString>,
     right: Ptr<DebugString>,
 ) -> Ptr<DebugString> {
-    fn_0044a7d0(e, this, right.cast());
-    std_string_tidy(e, this, false, 0);
+    e.call(0x0044_a7d0, &args![this, right]);
+    e.call(0x0044_a730, &args![this, 0u32, 0u32]);
     let npos = e.global::<u32>(STRING_NPOS);
-    std_string_assign_substring(e, this, right, 0, npos);
+    e.call(0x0044_a580, &args![this, right, 0u32, npos]);
     this
 }
 
 // Translated from 0044a540 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The destructor body of the debug-heap `std::string`: `_Tidy(true, 0)`.
 pub fn std_string_destruct(e: &mut Engine, this: Ptr<DebugString>) {
-    std_string_tidy(e, this, true, 0);
+    e.call(0x0044_a730, &args![this, 1u32, 0u32]);
 }
 
 // Translated from 0044a560 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -298,8 +299,8 @@ pub fn std_string_assign_substring(
     }
     if this == right {
         let npos = e.global::<u32>(STRING_NPOS);
-        std_string_erase(e, this, offset.wrapping_add(length), npos);
-        std_string_erase(e, this, 0, offset);
+        e.call(0x0044_a690, &args![this, offset.wrapping_add(length), npos]);
+        e.call(0x0044_a690, &args![this, 0u32, offset]);
     } else if e.call(STRING_GROW, &args![this, length, 0u32]).bool() {
         let source = e
             .call(STRING_DATA, &args![right])
@@ -321,8 +322,8 @@ pub fn std_string_assign_c_str(
     this: Ptr<DebugString>,
     text: Ptr,
 ) -> Ptr<DebugString> {
-    let length = fn_0044a670(e, text);
-    std_string_assign_chars(e, this, text, length)
+    let length = e.call(0x0044_a670, &args![text]).u32();
+    e.call(0x0044_a7f0, &args![this, text, length]).ptr()
 }
 
 // Translated from 0044a670 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -399,10 +400,11 @@ pub fn std_string_tidy(e: &mut Engine, this: Ptr<DebugString>, built: bool, new_
 /// The allocator-proxy constructor of the debug-heap `std::string`, taking
 /// the allocator by value: its address is passed to the proxy constructor.
 pub fn fn_0044a7b0(e: &mut Engine, this: Ptr<DebugString>, allocator: u32) -> Ptr<DebugString> {
-    let slot = e.mem.alloc(4);
-    e.mem.set_u32(slot, allocator);
-    e.call(ALLOCATOR_PROXY_CONSTRUCT, &args![this, slot]);
-    e.mem.free(slot);
+    // 0044a7b7: the proxy is given the address of the argument's own stack word.
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), allocator);
+        e.call(ALLOCATOR_PROXY_CONSTRUCT, &args![this, slot]);
+    });
     this
 }
 
@@ -429,7 +431,7 @@ pub fn std_string_assign_chars(
     if e.call(STRING_INSIDE, &args![this, text]).bool() {
         let data = e.call(STRING_DATA, &args![this]).u32();
         let offset = text.addr().wrapping_sub(data);
-        return std_string_assign_substring(e, this, this, offset, count);
+        return e.call(0x0044_a580, &args![this, this, offset, count]).ptr();
     }
     if e.call(STRING_GROW, &args![this, count, 0u32]).bool() {
         let reserve = e.get(this, DebugString::reserve);
@@ -450,21 +452,15 @@ pub fn tes_bound_object_construct(
     e: &mut Engine,
     this: Ptr<TESBoundObject>,
 ) -> Ptr<TESBoundObject> {
-    tes_object_construct(e, this.cast());
+    e.call(0x0050_f8c0, &args![this]);
     e.mem.set_u32(this.addr(), TES_BOUND_OBJECT_VTABLE);
-    fn_0050e9c0(e, this.at(TESBoundObject::BoundData));
-    let default = fn_0050e8f0(e);
-    fn_0050e8b0(
-        e,
-        this.at(TESBoundObject::BoundData).at(BoundData::BoundMin),
-        default,
-    );
-    let default = fn_0050e8f0(e);
-    fn_0050e8b0(
-        e,
-        this.at(TESBoundObject::BoundData).at(BoundData::BoundMax),
-        default,
-    );
+    e.call(0x0050_e9c0, &args![this.at(TESBoundObject::BoundData)]);
+    let default = e.call(0x0050_e8f0, &[]).u32();
+    let minimum = this.at(TESBoundObject::BoundData).at(BoundData::BoundMin);
+    e.call(0x0050_e8b0, &args![minimum, default]);
+    let default = e.call(0x0050_e8f0, &[]).u32();
+    let maximum = this.at(TESBoundObject::BoundData).at(BoundData::BoundMax);
+    e.call(0x0050_e8b0, &args![maximum, default]);
     this
 }
 
@@ -494,7 +490,7 @@ pub fn fn_0050e8f0(e: &mut Engine) -> Ptr<NiNPShortPoint3> {
     if e.global::<u32>(DEFAULT_BOUND_GUARD) & 1 == 0 {
         let guard = e.global::<u32>(DEFAULT_BOUND_GUARD);
         e.set_global(DEFAULT_BOUND_GUARD, guard | 1);
-        fn_0050e960(e, Ptr::new(DEFAULT_BOUND), 0, 0, 0);
+        e.call(0x0050_e960, &args![DEFAULT_BOUND, 0u32, 0u32, 0u32]);
     }
     Ptr::new(DEFAULT_BOUND)
 }
@@ -519,7 +515,7 @@ pub fn fn_0050e960(
 /// The scalar deleting destructor of `TESBoundObject`: runs the destructor
 /// body (`0050e9f0`) and, when bit 0 of `flags` is set, `operator delete`.
 pub fn fn_0050e990(e: &mut Engine, this: Ptr<TESBoundObject>, flags: u32) -> Ptr<TESBoundObject> {
-    tes_bound_object_destruct(e, this);
+    e.call(0x0050_e9f0, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -544,7 +540,7 @@ pub fn fn_0050e9c0(e: &mut Engine, this: Ptr<BoundData>) -> Ptr<BoundData> {
 /// `TESObject` destructor body (`0050f930`).
 pub fn tes_bound_object_destruct(e: &mut Engine, this: Ptr<TESBoundObject>) {
     e.mem.set_u32(this.addr(), TES_BOUND_OBJECT_VTABLE);
-    tes_object_destruct(e, this.cast());
+    e.call(0x0050_f930, &args![this]);
 }
 
 // Translated from 0050ea10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -607,9 +603,9 @@ pub fn fn_0050ead0(e: &mut Engine, this: Ptr<TESBoundObject>, result: Ptr) -> Pt
 /// The body shared by `0050ead0` and `0050eb90`: reads z, y, x of the point,
 /// builds a `NiPoint3` in a temporary and copies it to `result`.
 fn point_to_floats(e: &mut Engine, point: Ptr<NiNPShortPoint3>, result: Ptr) -> Ptr {
-    let z = fn_0050eb70(e, point);
-    let y = fn_0050eb50(e, point);
-    let x = fn_0050eb30(e, point);
+    let z = e.call(0x0050_eb70, &args![point]).f32();
+    let y = e.call(0x0050_eb50, &args![point]).f32();
+    let x = e.call(0x0050_eb30, &args![point]).f32();
     e.with_stack(12, |e, temporary| {
         typed_call!(
             leaf::FAMILY,
@@ -654,8 +650,10 @@ pub fn tes_bound_object_get_bound_size(e: &mut Engine, this: Ptr<TESBoundObject>
     let minimum = this.at(TESBoundObject::BoundData).at(BoundData::BoundMin);
     let maximum = this.at(TESBoundObject::BoundData).at(BoundData::BoundMax);
     let length = e.with_stack(6, |e, difference| {
-        let difference = fn_0050ec30(e, minimum, difference.cast(), maximum);
-        fn_0050ec80(e, difference)
+        let difference = e
+            .call(0x0050_ec30, &args![minimum, difference, maximum])
+            .u32();
+        e.call(0x0050_ec80, &args![difference]).f64()
     });
     let half: f64 = e.global(HALF);
     (length * half) as f32
@@ -676,7 +674,8 @@ pub fn fn_0050ec30(
         i32::from(e.get(this, NiNPShortPoint3::y)) - i32::from(e.get(other, NiNPShortPoint3::y));
     let x =
         i32::from(e.get(this, NiNPShortPoint3::x)) - i32::from(e.get(other, NiNPShortPoint3::x));
-    fn_0050e960(e, result, x as i16, y as i16, z as i16);
+    // 0050ec47: the whole 32-bit differences are pushed; the constructor keeps their low halves.
+    e.call(0x0050_e960, &args![result, x, y, z]);
     result
 }
 
@@ -702,11 +701,11 @@ pub fn fn_0050ec80(e: &mut Engine, this: Ptr<NiNPShortPoint3>) -> f64 {
 pub fn fn_0050ece0(e: &mut Engine, this: Ptr<TESBoundObject>) {
     let bound = this.at(TESBoundObject::BoundData);
     if e.call(BYTE_SWAP_FLAG_GETTER, &[]).bool() {
-        fn_0050ed30(e, bound);
+        e.call(0x0050_ed30, &args![bound]);
     }
     e.call(ADD_CHUNK_DATA, &args![OBND_CHUNK, bound, 12u32]);
     if e.call(BYTE_SWAP_FLAG_GETTER, &[]).bool() {
-        fn_0050ed30(e, bound);
+        e.call(0x0050_ed30, &args![bound]);
     }
 }
 
@@ -733,7 +732,7 @@ pub fn fn_0050edd0(e: &mut Engine, this: Ptr<TESBoundObject>, file: Ptr) {
     let bound = this.at(TESBoundObject::BoundData);
     e.call(FILE_READ_CHUNK, &args![file, bound, 12u32]);
     if e.call(FILE_FLAG_GETTER, &args![file]).bool() {
-        fn_0050ed30(e, bound);
+        e.call(0x0050_ed30, &args![bound]);
     }
 }
 
@@ -834,7 +833,7 @@ pub fn tes_bound_object_clone_3d(
                             .call(0x0065_3270, &args![CLONE_ADDRESS_ARGUMENT, key])
                             .u32();
                         if found != 0 {
-                            let table = fn_0050f5c0(e);
+                            let table = e.call(0x0050_f5c0, &[]).u32();
                             if e.call(0x0047_a520, &args![found, table]).u32() != 0 {
                                 shareable = false;
                             }
@@ -977,7 +976,7 @@ pub fn tes_bound_object_clone_3d(
         e.call(0x0043_fa80, &args![clone, CLONE_NAME_TABLE]);
         e.call(0x0044_0460, &args![clone, CLONE_DATA_TABLE]);
         if e.call(0x0096_11e0, &args![clone]).u32() != 0 {
-            fn_0050f5a0(e, Ptr::new(clone));
+            e.call(0x0050_f5a0, &args![clone]);
         }
     }
     Ptr::new(clone)
@@ -1062,7 +1061,7 @@ pub fn tes_bound_anim_object_construct(
     e: &mut Engine,
     this: Ptr<TESBoundObject>,
 ) -> Ptr<TESBoundObject> {
-    tes_bound_object_construct(e, this);
+    e.call(0x0050_e820, &args![this]);
     e.mem.set_u32(this.addr(), TES_BOUND_ANIM_OBJECT_VTABLE);
     this
 }
@@ -1070,7 +1069,7 @@ pub fn tes_bound_anim_object_construct(
 // Translated from 0050f710 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The scalar deleting destructor of `TESBoundAnimObject`.
 pub fn fn_0050f710(e: &mut Engine, this: Ptr<TESBoundObject>, flags: u32) -> Ptr<TESBoundObject> {
-    tes_bound_anim_object_destruct(e, this);
+    e.call(0x0050_f740, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -1082,13 +1081,13 @@ pub fn fn_0050f710(e: &mut Engine, this: Ptr<TESBoundObject>, flags: u32) -> Ptr
 /// `TESBoundObject` destructor body.
 pub fn tes_bound_anim_object_destruct(e: &mut Engine, this: Ptr<TESBoundObject>) {
     e.mem.set_u32(this.addr(), TES_BOUND_ANIM_OBJECT_VTABLE);
-    tes_bound_object_destruct(e, this);
+    e.call(0x0050_e9f0, &args![this]);
 }
 
 // Translated from 0050f760 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Calls `0050f600` with its argument and returns its result (`AL`).
 pub fn fn_0050f760(e: &mut Engine, this: Ptr<TESBoundObject>, argument: u32) -> bool {
-    fn_0050f600(e, this, argument)
+    e.call(0x0050_f600, &args![this, argument]).bool()
 }
 
 // Translated from 0050f780 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1106,7 +1105,7 @@ pub fn tes_bound_tree_object_construct(
     e: &mut Engine,
     this: Ptr<TESBoundObject>,
 ) -> Ptr<TESBoundObject> {
-    tes_bound_object_construct(e, this);
+    e.call(0x0050_e820, &args![this]);
     e.mem.set_u32(this.addr(), TES_BOUND_TREE_OBJECT_VTABLE);
     this
 }
@@ -1114,7 +1113,7 @@ pub fn tes_bound_tree_object_construct(
 // Translated from 0050f7c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The scalar deleting destructor of `TESBoundTreeObject`.
 pub fn fn_0050f7c0(e: &mut Engine, this: Ptr<TESBoundObject>, flags: u32) -> Ptr<TESBoundObject> {
-    tes_bound_tree_object_destruct(e, this);
+    e.call(0x0050_f7f0, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -1126,7 +1125,7 @@ pub fn fn_0050f7c0(e: &mut Engine, this: Ptr<TESBoundObject>, flags: u32) -> Ptr
 /// `TESBoundObject` destructor body.
 pub fn tes_bound_tree_object_destruct(e: &mut Engine, this: Ptr<TESBoundObject>) {
     e.mem.set_u32(this.addr(), TES_BOUND_TREE_OBJECT_VTABLE);
-    tes_bound_object_destruct(e, this);
+    e.call(0x0050_e9f0, &args![this]);
 }
 
 // Translated from 0050f810 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1170,7 +1169,7 @@ pub fn tes_object_construct(e: &mut Engine, this: Ptr<TESObject>) -> Ptr<TESObje
 // Translated from 0050f900 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The scalar deleting destructor of `TESObject`.
 pub fn fn_0050f900(e: &mut Engine, this: Ptr<TESObject>, flags: u32) -> Ptr<TESObject> {
-    tes_object_destruct(e, this);
+    e.call(0x0050_f930, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -1297,7 +1296,7 @@ pub fn fn_0050fbf0(e: &mut Engine, this: Ptr, reference: Ptr) {
     {
         reference = Ptr::NULL;
     }
-    let path = fn_0050fd90(e, this, reference);
+    let path = e.call(0x0050_fd90, &args![this, reference]).u32();
     let loader: u32 = e.global(MODEL_LOADER_POINTER);
     if path != 0 && e.mem.i8(path) != 0 {
         let mut scaled = false;
@@ -1373,11 +1372,11 @@ const ONE_HUNDRED: u32 = 0x0101_7a40;
 /// float-to-int helper `00406d90`) into the 0x104 byte buffer `name`, with
 /// the `sprintf_s` variant `00406d00` and the format `"%s%i"`.
 pub fn tes_object_get_scaled_model_file_name(e: &mut Engine, this: Ptr, reference: Ptr, name: Ptr) {
-    let path = fn_0050fd90(e, this, reference);
+    let path = e.call(0x0050_fd90, &args![this, reference]).u32();
     let scale = e.call(0x0056_7400, &args![reference]).f64();
     let percent = e.global::<f64>(ONE_HUNDRED);
-    // FMUL, FSTP to a float, then FLD/FSTP again to push it on the stack.
-    let product = x87_quiet_bits(((scale * percent) as f32).to_bits());
+    // FMUL under the thread's precision, FSTP to a float, then FLD/FSTP again to push it.
+    let product = x87_quiet_bits(crate::x87::x87_store32(crate::x87::x87_mul(scale, percent)));
     let rounded = e.call(0x0040_6d90, &args![product]).u32();
     e.call(
         0x0040_6d00,
@@ -1712,8 +1711,8 @@ mod tests {
         assert_eq!(e.global::<u32>(SCRATCH), this);
         let log = calls(&mut e);
         assert_eq!(
-            addresses(&log)[..2].to_vec(),
-            vec![ALLOCATOR_CONSTRUCT, ALLOCATOR_PROXY_CONSTRUCT]
+            addresses(&log)[..3].to_vec(),
+            vec![ALLOCATOR_CONSTRUCT, 0x0044_a7b0, ALLOCATOR_PROXY_CONSTRUCT]
         );
     }
 
@@ -1726,7 +1725,8 @@ mod tests {
         assert_eq!(e.call(0x0044a500, &[this, right]).u32(), this);
         assert_eq!(string_text(&e, this), b"hello");
         let log = calls(&mut e);
-        assert_eq!(log[0], (ALLOCATOR_PROXY_CONSTRUCT, vec![this, right]));
+        assert_eq!(log[0], (0x0044_a7d0, vec![this, right]));
+        assert_eq!(log[1], (ALLOCATOR_PROXY_CONSTRUCT, vec![this, right]));
         assert!(log.contains(&(STRING_GROW, vec![this, 5, 0])));
     }
 
@@ -1736,7 +1736,13 @@ mod tests {
         let inline = new_string(&mut e, b"ab");
         start_log(&mut e);
         e.call(0x0044a540, &[inline]);
-        assert_eq!(calls(&mut e), vec![(STRING_SET_LENGTH, vec![inline, 0])]);
+        assert_eq!(
+            calls(&mut e),
+            vec![
+                (0x0044_a730, vec![inline, 1, 0]),
+                (STRING_SET_LENGTH, vec![inline, 0])
+            ]
+        );
         assert_eq!(e.mem.u32(inline + 0x14), 0);
 
         let heap_string = e.mem.alloc(0x1c);
@@ -1747,7 +1753,7 @@ mod tests {
         start_log(&mut e);
         e.call(0x0044a540, &[heap_string]);
         let log = calls(&mut e);
-        assert_eq!(log[0], (STRING_FREE, vec![heap_string, heap, 0x21]));
+        assert_eq!(log[1], (STRING_FREE, vec![heap_string, heap, 0x21]));
         assert_eq!(e.mem.u32(heap_string + 0x18), 0xf);
     }
 
@@ -1800,7 +1806,9 @@ mod tests {
         start_log(&mut e);
         assert_eq!(e.call(0x0044a640, &[this, text]).u32(), this);
         assert_eq!(string_text(&e, this), b"xyz");
-        assert_eq!(calls(&mut e)[0], (STRLEN, vec![text]));
+        let log = calls(&mut e);
+        assert_eq!(log[0], (0x0044_a670, vec![text]));
+        assert_eq!(log[1], (STRLEN, vec![text]));
     }
 
     #[test]
@@ -1950,7 +1958,9 @@ mod tests {
         assert_eq!(point(&e, object + 0x2a), (0, 0, 0));
         assert_eq!(e.global::<u32>(DEFAULT_BOUND_GUARD) & 1, 1);
         let log = calls(&mut e);
-        assert_eq!(log[0], (TES_FORM_CONSTRUCT, vec![object]));
+        assert_eq!(log[0], (0x0050_f8c0, vec![object]));
+        assert_eq!(log[1], (TES_FORM_CONSTRUCT, vec![object]));
+        assert!(log.contains(&(0x0050_e9c0, vec![object + 0x24])));
         assert!(log.contains(&(ALLOCATOR_CONSTRUCT, vec![object + 0x24])));
 
         // With the default already built, both points take its value.
@@ -2013,6 +2023,8 @@ mod tests {
         assert_eq!(
             log,
             vec![
+                (0x0050_e9f0, vec![object]),
+                (0x0050_f930, vec![object]),
                 (LIST_REMOVE, vec![list, object]),
                 (TES_FORM_DESTRUCT, vec![object]),
             ]
@@ -2045,7 +2057,13 @@ mod tests {
         start_log(&mut e);
         e.call(0x0050e9f0, &[object]);
         assert_eq!(e.mem.u32(object), TES_OBJECT_VTABLE);
-        assert_eq!(calls(&mut e), vec![(TES_FORM_DESTRUCT, vec![object])]);
+        assert_eq!(
+            calls(&mut e),
+            vec![
+                (0x0050_f930, vec![object]),
+                (TES_FORM_DESTRUCT, vec![object])
+            ]
+        );
     }
 
     #[test]
@@ -2140,7 +2158,11 @@ mod tests {
         );
         let log = calls(&mut e);
         assert_eq!(
-            log[0].1[1..].to_vec(),
+            addresses(&log)[..3].to_vec(),
+            vec![0x0050_eb70, 0x0050_eb50, 0x0050_eb30]
+        );
+        assert_eq!(
+            log[3].1[1..].to_vec(),
             vec![(-3.0f32).to_bits(), 4.0f32.to_bits(), 5.0f32.to_bits()]
         );
         assert_eq!(e.call(0x0050eb90, &[object, result]).u32(), result);
@@ -2178,7 +2200,15 @@ mod tests {
         let expected = (f64::from(504.0f32.sqrt()) * 0.5) as f32;
         assert_eq!(size, expected);
         // 6, 12 and 18 squared: 36 + 144 + 324.
-        assert_eq!(calls(&mut e), vec![(SQUARE_ROOT, vec![504.0f32.to_bits()])]);
+        let log = calls(&mut e);
+        assert_eq!(
+            addresses(&log),
+            vec![0x0050_ec30, 0x0050_e960, 0x0050_ec80, SQUARE_ROOT]
+        );
+        assert_eq!(log[0].1[0], object + 0x24);
+        assert_eq!(log[0].1[2], object + 0x2a);
+        assert_eq!(log[1].1[1..].to_vec(), vec![6, 12, 18]);
+        assert_eq!(log[3], (SQUARE_ROOT, vec![504.0f32.to_bits()]));
     }
 
     #[test]
@@ -2234,11 +2264,13 @@ mod tests {
         assert_eq!(e.global::<u32>(SCRATCH), 0x3412);
         assert_eq!(e.mem.u16(object + 0x24), 0x1234);
         let log = calls(&mut e);
-        assert_eq!(log.len(), 1 + 6 + 1 + 1 + 6);
+        assert_eq!(log.len(), 1 + 1 + 6 + 1 + 1 + 1 + 6);
+        assert_eq!(log[1], (0x0050_ed30, vec![object + 0x24]));
         assert_eq!(
-            log[7],
+            log[8],
             (ADD_CHUNK_DATA, vec![OBND_CHUNK, object + 0x24, 12])
         );
+        assert_eq!(log[10], (0x0050_ed30, vec![object + 0x24]));
 
         e.set_global(SCRATCH_COUNT, 0u32);
         start_log(&mut e);
@@ -2295,7 +2327,8 @@ mod tests {
         e.call(0x0050edd0, &[object, file]);
         let log = calls(&mut e);
         assert_eq!(log[1], (FILE_READ_CHUNK, vec![file, object + 0x24, 12]));
-        assert_eq!(log.len(), 3 + 6);
+        assert_eq!(log[3], (0x0050_ed30, vec![object + 0x24]));
+        assert_eq!(log.len(), 3 + 1 + 6);
     }
 
     #[test]
@@ -2435,6 +2468,7 @@ mod tests {
                 0x0043_fa80,
                 0x0044_0460,
                 0x0096_11e0,
+                0x0050_f5a0,
             ]
         );
         assert_eq!(log[4].1[1], 1.0f32.to_bits());
@@ -2843,7 +2877,14 @@ mod tests {
             start_log(&mut e);
             e.call(body, &[object]);
             assert_eq!(e.mem.u32(object), TES_OBJECT_VTABLE);
-            assert_eq!(calls(&mut e), vec![(TES_FORM_DESTRUCT, vec![object])]);
+            assert_eq!(
+                calls(&mut e),
+                vec![
+                    (0x0050_e9f0, vec![object]),
+                    (0x0050_f930, vec![object]),
+                    (TES_FORM_DESTRUCT, vec![object])
+                ]
+            );
 
             start_log(&mut e);
             assert_eq!(e.call(deleting, &[object, 1]).u32(), object);
@@ -2946,7 +2987,7 @@ mod tests {
         assert_eq!(e.call(0x0050f900, &[object, 1]).u32(), object);
         assert_eq!(
             addresses(&calls(&mut e)),
-            vec![TES_FORM_DESTRUCT, OPERATOR_DELETE]
+            vec![0x0050_f930, TES_FORM_DESTRUCT, OPERATOR_DELETE]
         );
     }
 
@@ -3105,7 +3146,7 @@ mod tests {
         e.call(0x0050fbf0, &[form, 0x4000]);
         assert_eq!(
             addresses(&calls(&mut e)),
-            vec![0x0057_15d0, FORM_TYPE, 0x0060_3bb0]
+            vec![0x0050_fd90, 0x0057_15d0, FORM_TYPE, 0x0060_3bb0]
         );
         e.set_global(SPECIAL_FORM_A, form);
         start_log(&mut e);
@@ -3152,6 +3193,7 @@ mod tests {
         assert_eq!(
             calls(&mut e),
             vec![
+                (0x0050_fd90, vec![0x1000, 0x2000]),
                 (0x0057_15d0, vec![0x2000]),
                 (0x0056_7400, vec![0x2000]),
                 (0x0040_6d90, vec![150.0f32.to_bits()]),
@@ -3174,8 +3216,37 @@ mod tests {
         start_log(&mut e);
         e.call(0x0050fdf0, &[0x1000, 0x2000, 0x3000]);
         let log = calls(&mut e);
-        let pushed = log[2].1[0];
+        let pushed = log[3].1[0];
         assert!(f32::from_bits(pushed).is_nan());
         assert_ne!(pushed & 0x0040_0000, 0);
+    }
+
+    /// `FMUL` rounds at the running thread's precision (`0050fe10`): on the main thread (24 bits) a
+    /// product just above the midpoint of two floats rounds up, where a double rounded to a float
+    /// lands on the midpoint and rounds to even. The scale here times 100 is 130.5 plus a little:
+    /// 130.5 plus one float step on the main thread (131 once rounded), 130.5 on the others (130).
+    #[test]
+    fn scaled_model_file_name_multiplies_at_the_threads_precision() {
+        for (word, pushed) in [(0x007fu16, 0x4302_8001u32), (0x027f, 0x4302_8000)] {
+            let mut e = engine();
+            e.set_global(ONE_HUNDRED, 100.0f64);
+            e.register(0x0057_15d0, |_, _| ret(0x11));
+            e.register(0x0056_7400, |_, _| {
+                float_ret(f64::from_bits(0x3ff4_e147_c28f_5c29))
+            });
+            e.register(0x0040_6d90, |_, _| ret(0));
+            e.register(0x0040_6d00, |_, _| ret(0));
+            start_log(&mut e);
+            let saved = crate::x87::control_word();
+            crate::x87::set_control_word(word);
+            e.call(0x0050fdf0, &[0x1000, 0x2000, 0x3000]);
+            crate::x87::set_control_word(saved);
+            let log = calls(&mut e);
+            assert_eq!(
+                log[3],
+                (0x0040_6d90, vec![pushed]),
+                "control word {word:#06x}"
+            );
+        }
     }
 }
