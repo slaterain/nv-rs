@@ -1852,7 +1852,7 @@ pub fn fn_006d12a0(
             e.call(POINT3_ADD_ASSIGN, &args![target, position]);
         } else {
             copy_words(e, push, position, 3);
-            let angle = fn_006d1600(e);
+            let angle = e.call(0x006d_1600, &args![]).f32();
             let first_scale = e.call(ANGLE_FUNCTION_004E44B0, &args![angle]).f64();
             let distance = fn_006d2c20(e, request.cast()) as f64;
             let first_scale = (distance * first_scale) as f32;

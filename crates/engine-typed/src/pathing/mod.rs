@@ -39,6 +39,7 @@ use layout::{
 pub mod layout;
 pub mod location;
 pub mod navmesh;
+pub mod pathfind;
 pub mod point;
 pub mod pov;
 pub mod search;
@@ -267,5 +268,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The pathfind solvers' random-angle helpers.
+        entry!(0x006d_1600, pathfind::random_angle() -> f32),
+        entry!(0x006d_1620, pathfind::random_angle_on(Ptr) -> f32),
     ]
 }
