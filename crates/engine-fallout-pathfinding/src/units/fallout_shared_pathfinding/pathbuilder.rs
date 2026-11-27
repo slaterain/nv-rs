@@ -603,7 +603,7 @@ fn within_reach(e: &mut Engine, reach: f32, offset: u32) -> bool {
 /// The reach `fn_006cc5e0` uses for the node `node`: the door reach for a
 /// door node (`fn_006ca0c0`), the request's target radius otherwise.
 fn node_reach(e: &mut Engine, request: u32, node: u32) -> f32 {
-    if fn_006ca0c0(e, node) {
+    if e.call(0x006c_a0c0, &args![node]).bool() {
         f32::from_bits(float_constant_bits(e, DOOR_REACH_0101E33C))
     } else {
         e.call(REQUEST_TARGET_RADIUS, &[request]).f32()
@@ -662,12 +662,12 @@ fn add_door_nodes(
     let linked = call_u32(e, REFERENCE_LINKED_DOOR_POSITION, &[door]);
     copy_point(e, position, linked);
     let info = word_element(e, infos, index);
-    fn_006c9a70(e, solution, info, position, door);
+    e.call(0x006c_9a70, &args![solution, info, position, door]);
     let owner = call_u32(e, REFERENCE_GET_POSITION_OWNER, &[door]);
     let owner_point = node_location(e, owner);
     copy_point(e, point, owner_point);
     let next = word_element(e, infos, index + 1);
-    fn_006c99c0(e, solution, point, next);
+    e.call(0x006c_99c0, &args![solution, point, next]);
 }
 
 // Translated from 006c94c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1035,7 +1035,7 @@ pub fn fn_006ca0e0(e: &mut Engine, this: Ptr<PathBuilder>, segment_word: u32, in
             return false;
         }
         let req = request(e, this);
-        if fn_006ca4c0(e, req)
+        if e.call(0x006c_a4c0, &args![req]).bool()
             && call_u32(e, SOLUTION_FIRST_LOADED, &[sol]) == 0
             && call_u32(e, SOLUTION_CURRENT_NODE_COUNT, &[sol]) >= 2
         {
@@ -1050,7 +1050,7 @@ pub fn fn_006ca0e0(e: &mut Engine, this: Ptr<PathBuilder>, segment_word: u32, in
                 let distance = e.call(POINT3_LENGTH_SQUARED, &[offset]).f64();
                 if distance > e.global::<f64>(TANGENT_DISTANCE_01017A10) {
                     let radius = e.call(REQUEST_ACTOR_RADIUS, &[req]).f32();
-                    let heading = fn_006ca4e0(e, req);
+                    let heading = e.call(0x006c_a4e0, &args![req]).f32();
                     e.call(
                         BUILD_FIRST_TANGENT,
                         &[
@@ -1425,7 +1425,7 @@ pub fn fn_006cac90(
                 } else {
                     None
                 }
-            } else if !fn_006ca0c0(e, node) {
+            } else if !e.call(0x006c_a0c0, &args![node]).bool() {
                 Some(f.at(-0x64))
             } else {
                 None
@@ -1787,7 +1787,7 @@ pub fn fn_006cb900(e: &mut Engine, this: u32, source: u32) -> u32 {
 /// last current node gets the door flag (`fn_006cc5a0`).
 fn link_segment_end(e: &mut Engine, solution: u32, last: u32) {
     let node = virtual_node(e, solution, last);
-    if fn_006ca0c0(e, node) {
+    if e.call(0x006c_a0c0, &args![node]).bool() {
         let door = call_u32(e, VIRTUAL_NODE_DOOR, &[node]);
         let current = call_u32(e, SOLUTION_LAST_CURRENT_NODE, &[solution]);
         pathing_node_set_teleport_door(e, current, door);
@@ -2295,7 +2295,7 @@ pub fn fn_006cc5e0(
                             e.call(TRIANGLE_ARRAY_A_DESTRUCT, &[search_triangles]);
                             return 2;
                         }
-                        if !fn_006ca0c0(e, goal_node) {
+                        if !e.call(0x006c_a0c0, &args![goal_node]).bool() {
                             incomplete = true;
                             fn_006c9fa0(e, sol, 1);
                         }
@@ -3353,7 +3353,7 @@ pub fn path_builder_build_nav_mesh_info_path_in_space(
         let mut index = 1u32;
         while index < array_size(e, infos).wrapping_sub(1) {
             let info = word_element(e, infos, index);
-            fn_006c9920(e, sol, info);
+            e.call(0x006c_9920, &args![sol, info]);
             index += 1;
         }
         if found {
@@ -3367,7 +3367,7 @@ pub fn path_builder_build_nav_mesh_info_path_in_space(
             let info = e.mem.u32(last);
             let last = call_u32(e, LAST_WORD_ELEMENT, &[infos]);
             let point = e.mem.u32(last) + 0x10;
-            fn_006c99c0(e, sol, point, info);
+            e.call(0x006c_99c0, &args![sol, point, info]);
         }
         finish(e, found)
     })
@@ -3398,7 +3398,7 @@ pub fn fn_006cec40(e: &mut Engine, this: Ptr<PathBuilder>, first: u32, last: u32
             index = index.wrapping_add(1);
         }
         let node = virtual_node(e, sol, last);
-        if fn_006ca0c0(e, node) {
+        if e.call(0x006c_a0c0, &args![node]).bool() {
             let node = virtual_node(e, sol, last);
             let door = call_u32(e, VIRTUAL_NODE_DOOR, &[node]);
             let current = call_u32(e, SOLUTION_LAST_CURRENT_NODE, &[sol]);

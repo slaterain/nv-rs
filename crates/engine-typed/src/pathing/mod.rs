@@ -36,6 +36,7 @@ use layout::{
     Sphere,
 };
 
+pub mod builder_nodes;
 pub mod layout;
 pub mod location;
 pub mod navmesh;
@@ -267,5 +268,12 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The builder's virtual-node appenders, door-flag test and heading accessors.
+        entry!(0x006c_9920, builder_nodes::add_virtual_node_info(u32, u32) -> u32),
+        entry!(0x006c_99c0, builder_nodes::add_virtual_node_point_info(u32, u32, u32) -> u32),
+        entry!(0x006c_9a70, builder_nodes::add_virtual_node_info_point_door(u32, u32, u32, u32) -> u32),
+        entry!(0x006c_a0c0, builder_nodes::virtual_node_is_door(u32) -> bool),
+        entry!(0x006c_a4c0, builder_nodes::request_first_tangent_uses_heading(Ptr) -> bool),
+        entry!(0x006c_a4e0, builder_nodes::request_initial_path_heading(Ptr) -> f32),
     ]
 }
