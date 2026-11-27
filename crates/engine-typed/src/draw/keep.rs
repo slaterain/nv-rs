@@ -372,6 +372,11 @@ struct Stats {
     /// the set-up: the set-up and draw alone, as with the switch off (no look-up, no compare).
     sampled: u64,
     sample_ns: u64,
+    /// Patched replays timed part by part (one in [`SAMPLE_EVERY`], [`replay_patched`]), and their nanoseconds in its
+    /// writes, setter calls, camera set-ups, device calls kept, the item (the platform layer's take of the calls, or
+    /// their making) and the ops after the draw.
+    patched_timed: u64,
+    patched_parts: [u64; 6],
 }
 
 const REPORT_EVERY: u64 = 1_000_000;
@@ -740,7 +745,10 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
             // packets on: review of #1227); else its own commands one item when the backend has them.
             match (item, patched) {
                 (Some((id, _)), Some(p)) if capture::mode() == capture::Mode::Off => {
-                    let came = replay_patched(e, &ops, id, p);
+                    // One in [`SAMPLE_EVERY`] timed part by part (the line's breakdown).
+                    let timed =
+                        KEEP.with(|k| k.borrow().stats.replayed % SAMPLE_EVERY == SAMPLE_EVERY / 2);
+                    let came = replay_patched(e, &ops, id, p, timed);
                     KEEP.with(|k| {
                         let mut k = k.borrow_mut();
                         let k = &mut *k;
@@ -1356,9 +1364,11 @@ enum Patch {
 /// code (the state cache written as the plain set-up writes it), its own device calls kept, none made. At the draw the
 /// platform layer takes them all at once as record `id`'s patched item (`engine_core::draw_items::patched`); when it
 /// cannot, they are made as they came, in their order (the device then gets what the plain set-up gives it). The ops
-/// after the draw run as ever. Also when a stop unwinds through the replay, what waited is made first.
-fn replay_patched(e: &mut Engine, ops: &[Op], id: u32, p: Patched) -> Patch {
+/// after the draw run as ever. Also when a stop unwinds through the replay, what waited is made first. `timed`: each
+/// part's time added to the counters ([`Stats::patched_parts`]).
+fn replay_patched(e: &mut Engine, ops: &[Op], id: u32, p: Patched, timed: bool) -> Patch {
     let (run_from, draw_at) = (p.run_from as usize, p.draw_at as usize);
+    let mut parts = [0u64; 6];
     rt::device_defer_begin();
     let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         for (i, op) in ops[..=draw_at].iter().enumerate() {
@@ -1366,12 +1376,27 @@ fn replay_patched(e: &mut Engine, ops: &[Op], id: u32, p: Patched) -> Patch {
             if i == run_from {
                 rt::device_defer_mark();
             }
-            match op {
-                Op::Write(at, bytes) => e.mem.write(*at, bytes),
-                Op::Leaf(leaf) => replay_call(e, *leaf),
+            let start = timed.then(Instant::now);
+            let part = match op {
+                Op::Write(at, bytes) => {
+                    e.mem.write(*at, bytes);
+                    0
+                }
+                Op::Leaf(leaf) => {
+                    replay_call(e, *leaf);
+                    if is_setter(leaf) {
+                        1
+                    } else {
+                        2
+                    }
+                }
                 Op::Device(call) => {
                     rt::device_replay(e, call);
+                    3
                 }
+            };
+            if let Some(start) = start {
+                parts[part] += nanos(start);
             }
         }
     }));
@@ -1380,6 +1405,7 @@ fn replay_patched(e: &mut Engine, ops: &[Op], id: u32, p: Patched) -> Patch {
         rt::device_deferred_make(e);
         std::panic::resume_unwind(stop);
     }
+    let start = timed.then(Instant::now);
     let came = match how {
         rt::Deferral::Kept if draw_items::patched(e, id) => Patch::Drawn,
         rt::Deferral::Kept => {
@@ -1392,8 +1418,34 @@ fn replay_patched(e: &mut Engine, ops: &[Op], id: u32, p: Patched) -> Patch {
             Patch::Missed
         }
     };
+    let after = timed.then(Instant::now);
     replay(e, &ops[draw_at + 1..]);
+    if let (Some(start), Some(after)) = (start, after) {
+        parts[4] = u64::try_from((after - start).as_nanos()).unwrap_or(u64::MAX);
+        parts[5] = nanos(after);
+        count(|s| {
+            s.patched_timed += 1;
+            for (all, n) in s.patched_parts.iter_mut().zip(parts) {
+                *all += n;
+            }
+        });
+    }
     came
+}
+
+/// Whether a kept call is a state cache setter's (or a texture stage's bind), not a camera set-up's.
+fn is_setter(leaf: &Leaf) -> bool {
+    matches!(
+        leaf,
+        Leaf::RenderState { .. }
+            | Leaf::StageState { .. }
+            | Leaf::SamplerState { .. }
+            | Leaf::Texture { .. }
+            | Leaf::VertexShader { .. }
+            | Leaf::PixelShader { .. }
+            | Leaf::Declaration { .. }
+            | Leaf::StageBind { .. }
+    )
 }
 
 fn replay_leaf(e: &mut Engine, leaf: Leaf) {
@@ -1722,7 +1774,7 @@ fn summary(s: &Stats, records: usize) -> String {
     let each = |ns: u64, n: u64| ns as f64 / 1000.0 / n.max(1) as f64;
     let per = |n: u64| n as f64 / s.replayed.max(1) as f64;
     format!(
-        "NV_DRAW_ITEMS: {} draws: {} replayed, {} built (new {}, own bytes changed {}, inputs changed {}, device reached outside the record {}), {} plain while resting ({} rests); {} checked, {} differed{}; {records} records; inputs that broke records most since the last line: [{top}]; differed first at: [{differed}]{audit}; patched items: {} drawn, {} refused, {} with a call that could not wait, {} with the device reached besides the calls; items: {} drawn, {} plain, {} not the record's; backend records: {} sent, {} plain; check items: {} beside their old form, {} dropped; records dropped for a new device: {}; microseconds each: build {:.2}, replay {:.2} (look-up and compares {:.2}, its ops {:.2}; {:.1} writes, {:.1} kept calls, {:.1} device calls a replay), plain {:.2} (the set-up and draw alone, as with the switch off; {} replayable draws drawn plainly), plain while resting {:.2}",
+        "NV_DRAW_ITEMS: {} draws: {} replayed, {} built (new {}, own bytes changed {}, inputs changed {}, device reached outside the record {}), {} plain while resting ({} rests); {} checked, {} differed{}; {records} records; inputs that broke records most since the last line: [{top}]; differed first at: [{differed}]{audit}; patched items: {} drawn, {} refused, {} with a call that could not wait, {} with the device reached besides the calls; items: {} drawn, {} plain, {} not the record's; backend records: {} sent, {} plain; check items: {} beside their old form, {} dropped; records dropped for a new device: {}; microseconds each: build {:.2}, replay {:.2} (look-up and compares {:.2}, its ops {:.2}; {:.1} writes, {:.1} kept calls, {:.1} device calls a replay), plain {:.2} (the set-up and draw alone, as with the switch off; {} replayable draws drawn plainly), plain while resting {:.2}; patched replays timed part by part ({} of them, the timer's cost in each part): writes {:.2}, setter calls {:.2}, camera set-ups {:.2}, device calls kept {:.2}, the item {:.2}, after the draw {:.2}",
         s.seen,
         s.replayed,
         built,
@@ -1757,6 +1809,13 @@ fn summary(s: &Stats, records: usize) -> String {
         each(s.sample_ns, s.sampled),
         s.sampled,
         each(s.rest_ns, s.rested),
+        s.patched_timed,
+        each(s.patched_parts[0], s.patched_timed),
+        each(s.patched_parts[1], s.patched_timed),
+        each(s.patched_parts[2], s.patched_timed),
+        each(s.patched_parts[3], s.patched_timed),
+        each(s.patched_parts[4], s.patched_timed),
+        each(s.patched_parts[5], s.patched_timed),
     )
 }
 
