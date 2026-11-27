@@ -8,8 +8,8 @@
 //! lookup, `AddExtra`, `RemoveExtra` and `memset` as typed calls.
 
 use super::{
-    access, cell_data, first_of_kind, followers, links, list_add, list_remove, new_object,
-    packages, records, rooms, setters, word_at, zero_bytes, EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE,
+    access, cell_data, first_of_kind, followers, links, list_add, list_remove, more_setters,
+    new_object, packages, records, rooms, setters, word_at, zero_bytes, EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE,
     OPERATOR_NEW, SIMPLE_LIST_NEW,
 };
 use crate::crt::{low_byte, low_half, signed};
@@ -71,11 +71,6 @@ const REFR_LOCK_SET_LOCKED: u32 = 0x0043_0a90;
 const REGION_LIST_FIND: u32 = 0x004f_66c0;
 const REGION_LIST_ADD: u32 = 0x004f_6600;
 const PRIMITIVE_CREATE: u32 = 0x004a_4e90;
-/// The list's getters and setters of the other part files (by address until they are typed).
-const GET_AMMO: u32 = 0x0042_eb40;
-const SET_AMMO: u32 = 0x0042_eb60;
-const SET_NAVMESH_PORTAL: u32 = 0x0042_e2c0;
-const SET_IGNORED_BY_SANDBOX: u32 = 0x0042_f200;
 
 /// A chunk's four letters as the word the file holds.
 const fn tag(name: &[u8; 4]) -> u32 {
@@ -435,16 +430,24 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
         // EXTRA_AMMO's count, for the ammo the list already has.
         T_XAMC => {
             let count = file_word(e, file);
-            if e.call(GET_AMMO, &args![this]).u32() != 0 {
-                let ammo = e.call(GET_AMMO, &args![this]).u32();
+            if typed_call!(FAMILY, 0x0042_eb40, more_setters::ammo(e, this)) != 0 {
+                let ammo = typed_call!(FAMILY, 0x0042_eb40, more_setters::ammo(e, this));
                 let form = word_at(e, ammo, EXTRA_PAYLOAD);
-                e.call(SET_AMMO, &args![this, form, count]);
+                typed_call!(
+                    FAMILY,
+                    0x0042_eb60,
+                    more_setters::set_ammo(e, this, form, count)
+                );
             }
         }
         // EXTRA_AMMO's form id, with a count of 999.
         T_XAMT => {
             let ammo_id = file_word(e, file);
-            e.call(SET_AMMO, &args![this, ammo_id, 999u32]);
+            typed_call!(
+                FAMILY,
+                0x0042_eb60,
+                more_setters::set_ammo(e, this, ammo_id, 999)
+            );
         }
         T_XLOC => load_lock(e, this, file),
         // EXTRA_RADIO_DATA: a RADIO_DATA (0x10 bytes) for the setter.
@@ -770,7 +773,11 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
             );
         }
         T_XIBS => {
-            e.call(SET_IGNORED_BY_SANDBOX, &args![this, 1u32]);
+            typed_call!(
+                FAMILY,
+                0x0042_f200,
+                more_setters::set_ignored_by_sandbox(e, this, 1)
+            );
         }
         // Type 0x92: the word at +0xc, then the float at +0x10.
         T_XSRF => {
@@ -924,7 +931,11 @@ fn load_old_portal(e: &mut Engine, this: u32, file: u32) {
                 0x0041_6ad0,
                 records::portal_extra_new(e, made, first, second)
             );
-            e.call(SET_NAVMESH_PORTAL, &args![this, made]);
+            typed_call!(
+                FAMILY,
+                0x0042_e2c0,
+                more_setters::set_navmesh_portal(e, this, made)
+            );
             e.call(NAVMESH_PORTAL_EXTRA_DESTROY, &args![made]);
         });
     });

@@ -424,8 +424,8 @@ pub fn fn_0042df90(e: &mut Engine, this: Ptr<ExtraDataList>, argument: u32) -> u
         return 0;
     }
     let topic = e.mem.u32(extra.addr() + 0x0c);
-    if topic != 0 && fn_0042dff0(e, Ptr::new(topic)) {
-        fn_0042e010(e, Ptr::new(topic), argument);
+    if topic != 0 && e.call(0x0042_dff0, &args![topic]).bool() {
+        e.call(0x0042_e010, &args![topic, argument]);
     }
     topic
 }
@@ -495,7 +495,7 @@ pub fn fn_0042e150(e: &mut Engine, this: Ptr<ExtraDataList>, model_swap: u32, sw
     let extra = find_extra(e, this, EXTRA_MODEL_SWAP);
     if extra.is_null() {
         let extra = Ptr::new(new_object(e, 0x14, |e, block| {
-            fn_0042e210(e, Ptr::new(block), model_swap, swap_form).addr()
+            e.call(0x0042_e210, &args![block, model_swap, swap_form]).u32()
         }));
         add_extra(e, this, extra);
     } else {
@@ -572,12 +572,12 @@ pub fn extra_data_list_set_weapon_mod_slot(e: &mut Engine, this: Ptr<ExtraDataLi
     let extra = find_extra(e, this, EXTRA_WEAPON_MOD_SLOTS);
     if extra.is_null() && slot != 0 {
         let extra: Ptr = Ptr::new(new_object(e, 0x10, |e, block| {
-            fn_0042e450(e, Ptr::new(block), slot).addr()
+            e.call(0x0042_e450, &args![block, slot]).u32()
         }));
-        fn_0042e480(e, extra, slot);
+        e.call(0x0042_e480, &args![extra, slot]);
         add_extra(e, this, extra.cast());
     } else {
-        fn_0042e480(e, extra.cast(), slot);
+        e.call(0x0042_e480, &args![extra, slot]);
     }
 }
 
@@ -609,10 +609,10 @@ pub fn fn_0042e4a0(e: &mut Engine, this: Ptr<ExtraDataList>, value: u8) {
     let extra = find_extra(e, this, EXTRA_WEAPON_MOD_SLOTS);
     if extra.is_null() {
         let extra: Ptr = build_extra(e, 0x10, EXTRA_WEAPON_MOD_SLOTS_INIT, &[]).cast();
-        fn_0042e680(e, extra, value);
+        e.call(0x0042_e680, &args![extra, value]);
         add_extra(e, this, extra.cast());
     } else {
-        fn_0042e680(e, extra.cast(), value);
+        e.call(0x0042_e680, &args![extra, value]);
     }
 }
 
@@ -637,11 +637,11 @@ pub fn extra_data_list_set_is_modding(e: &mut Engine, this: Ptr<ExtraDataList>, 
     let extra = find_extra(e, this, EXTRA_WEAPON_IS_MODDING);
     if extra.is_null() {
         let extra = Ptr::new(new_object(e, 0x10, |e, block| {
-            fn_0042e650(e, Ptr::new(block), modding).addr()
+            e.call(0x0042_e650, &args![block, modding]).u32()
         }));
         add_extra(e, this, extra);
     } else {
-        fn_0042e680(e, extra.cast(), modding);
+        e.call(0x0042_e680, &args![extra, modding]);
     }
 }
 
@@ -669,7 +669,7 @@ pub fn fn_0042e680(e: &mut Engine, this: Ptr, value: u8) {
 /// (`fn_0042e6d0`), then `operator delete` when bit 0 of `flags` is set.
 /// Returns `this`.
 pub fn fn_0042e6a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_0042e6d0(e, this);
+    e.call(0x0042_e6d0, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -768,10 +768,10 @@ pub fn fn_0042e930(e: &mut Engine, this: Ptr<ExtraDataList>, cause: u32) {
     let extra = find_extra(e, this, EXTRA_ACTOR_CAUSE);
     if extra.is_null() {
         let extra: Ptr = build_extra(e, 0x10, EXTRA_ACTOR_CAUSE_INIT, &[]).cast();
-        fn_0042ea00(e, extra, cause);
+        e.call(0x0042_ea00, &args![extra, cause]);
         add_extra(e, this, extra.cast());
     } else {
-        fn_0042ea00(e, extra.cast(), cause);
+        e.call(0x0042_ea00, &args![extra, cause]);
     }
 }
 
@@ -842,7 +842,7 @@ pub fn extra_data_list_set_ammo(e: &mut Engine, this: Ptr<ExtraDataList>, ammo: 
     let extra = find_extra(e, this, EXTRA_AMMO);
     if extra.is_null() {
         let extra = Ptr::new(new_object(e, 0x14, |e, block| {
-            fn_0042ec30(e, Ptr::new(block), ammo, count).addr()
+            e.call(0x0042_ec30, &args![block, ammo, count]).u32()
         }));
         add_extra(e, this, extra);
     } else {
@@ -870,7 +870,7 @@ pub fn fn_0042ec30(e: &mut Engine, this: Ptr, ammo: u32, count: u32) -> Ptr {
 /// added.
 pub fn fn_0042ec70(e: &mut Engine, this: Ptr<ExtraDataList>, info: u32) {
     if info == 0 {
-        extra_data_list_remove_say_to_info_extra(e, this);
+        e.call(0x0042_edb0, &args![this]);
         return;
     }
     let extra = find_extra(e, this, EXTRA_SAY_TO_TOPIC_INFO);
@@ -927,7 +927,7 @@ pub fn extra_data_list_get_say_to_extra(
 /// 0x0C.
 pub fn fn_0042ee00(e: &mut Engine, this: Ptr<ExtraDataList>, topic: u32) {
     if topic == 0 {
-        extra_data_list_remove_say_to_info_extra(e, this);
+        e.call(0x0042_edb0, &args![this]);
         return;
     }
     let mut extra = find_extra(e, this, EXTRA_SAY_TO_TOPIC_INFO);
@@ -969,7 +969,7 @@ pub fn fn_0042eef0(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
 /// `00437510` given `value`) and added.
 pub fn fn_0042ef20(e: &mut Engine, this: Ptr<ExtraDataList>, value: u32) {
     if value == 0 {
-        fn_0042f000(e, this);
+        e.call(0x0042_f000, &args![this]);
         return;
     }
     let extra = find_extra(e, this, EXTRA_SAY_TOPIC_INFO_ONCE_A_DAY);
@@ -1058,7 +1058,7 @@ pub fn fn_0042f130(e: &mut Engine, this: Ptr<ExtraDataList>, value: u32) -> bool
 /// address of the key and of two output words, and returns the first output
 /// word; 0 otherwise.
 pub fn fn_0042f180(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
-    let map = extra_data_list_q_water_zone_map(e, this);
+    let map = Ptr::new(e.call(0x0042_f1d0, &args![this]).u32());
     if map.is_null() {
         return 0;
     }
@@ -1189,7 +1189,7 @@ pub fn bs_simple_array_nav_mesh_ptr_scalar_deleting_destructor(
     this: Ptr,
     flags: u32,
 ) -> Ptr {
-    fn_0042f830(e, this);
+    e.call(0x0042_f830, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -1383,7 +1383,7 @@ pub fn fn_0042f850(e: &mut Engine, this: Ptr<BSSimpleArray>, word: u32) -> u32 {
         &args![this, buffer + index * 4, 1u32],
     );
     let buffer = e.get(this, BSSimpleArray::pBuffer);
-    fn_0042f4c0(e, Ptr::new(buffer + index * 4), word);
+    e.call(0x0042_f4c0, &args![buffer + index * 4, word]);
     index
 }
 
@@ -1457,7 +1457,7 @@ pub fn fn_0042f9c0(e: &mut Engine, this: Ptr<BSSimpleArray>, free_buffer: u8) {
         return;
     }
     let size = e.get(this, BSSimpleArray::iSize);
-    fn_0042fb20(e, this.cast(), buffer, size);
+    e.call(0x0042_fb20, &args![this, buffer, size]);
     if free_buffer != 0 {
         e.call(ARRAY_FREE_BUFFER, &args![this]);
         e.set(this, BSSimpleArray::pBuffer, 0);
@@ -1470,14 +1470,14 @@ pub fn fn_0042f9c0(e: &mut Engine, this: Ptr<BSSimpleArray>, free_buffer: u8) {
 /// Copy constructor of the one-word smart pointer: runs `fn_0042fd40` with
 /// `source` (the address of the pointer to copy). Returns `this`.
 pub fn fn_0042fa20(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
-    fn_0042fd40(e, this, source);
+    e.call(0x0042_fd40, &args![this, source]);
     this
 }
 
 // Translated from 0042fa40 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Destructor of the one-word smart pointer: runs `fn_0042fda0`.
 pub fn fn_0042fa40(e: &mut Engine, this: Ptr) {
-    fn_0042fda0(e, this);
+    e.call(0x0042_fda0, &args![this]);
 }
 
 // Translated from 0042fa60 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1491,7 +1491,7 @@ pub fn fn_0042fa60(e: &mut Engine, _this: Ptr, address: u32, count: u32) {
         let slot = address.wrapping_add(index.wrapping_mul(4));
         let block = e.call(PLACEMENT_NEW, &args![4u32, slot]).u32();
         if block != 0 {
-            fn_0042fb00(e, Ptr::new(block));
+            e.call(0x0042_fb00, &args![block]);
         }
     }
 }
@@ -1500,7 +1500,7 @@ pub fn fn_0042fa60(e: &mut Engine, _this: Ptr, address: u32, count: u32) {
 /// Default constructor of the one-word smart pointer: `fn_0042fd70` with a
 /// null object. Returns `this`.
 pub fn fn_0042fb00(e: &mut Engine, this: Ptr) -> Ptr {
-    fn_0042fd70(e, this, 0);
+    e.call(0x0042_fd70, &args![this, 0u32]);
     this
 }
 
@@ -1510,7 +1510,7 @@ pub fn fn_0042fb00(e: &mut Engine, this: Ptr) -> Ptr {
 /// The array `this` is not used.
 pub fn fn_0042fb20(e: &mut Engine, _this: Ptr, address: u32, count: u32) {
     for index in 0..count {
-        fn_0042ffa0(e, Ptr::new(address.wrapping_add(index.wrapping_mul(4))), 0);
+        e.call(0x0042_ffa0, &args![address.wrapping_add(index.wrapping_mul(4)), 0u32]);
     }
 }
 
@@ -1576,7 +1576,7 @@ pub fn fn_0042fc00(e: &mut Engine, this: Ptr<BSSimpleArray>, new_capacity: u32, 
     } else {
         let new_buffer = e.vcall(this.addr(), 4, &args![new_capacity]).u32();
         let old_buffer = e.get(this, BSSimpleArray::pBuffer);
-        fn_0042fb60(e, this.cast(), new_buffer, old_buffer, count);
+        e.call(0x0042_fb60, &args![this, new_buffer, old_buffer, count]);
         e.call(ARRAY_FREE_BUFFER, &args![this]);
         e.set(this, BSSimpleArray::pBuffer, new_buffer);
     }
@@ -1600,7 +1600,7 @@ pub fn fn_0042fcb0(e: &mut Engine, this: Ptr<BSSimpleArray>, capacity: u32, size
     }
     if size != 0 {
         let buffer = e.get(this, BSSimpleArray::pBuffer);
-        fn_0042fa60(e, this.cast(), buffer, size);
+        e.call(0x0042_fa60, &args![this, buffer, size]);
         e.set(this, BSSimpleArray::iSize, size);
     }
 }
@@ -1704,7 +1704,7 @@ pub fn fn_0042fe10(e: &mut Engine, this: Ptr, hash_size: u32) -> Ptr {
 pub fn fn_0042fe80(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), VTABLE_NI_T_MAP_REFR_BOOL);
     e.call(MAP_REMOVE_ALL, &args![this]);
-    fn_0042fee0(e, this);
+    e.call(0x0042_fee0, &args![this]);
 }
 
 // Translated from 0042fee0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1722,7 +1722,7 @@ pub fn fn_0042fee0(e: &mut Engine, this: Ptr) {
 /// Cdecl wrapper of `fn_0042ff30`: `first` is `this`, `second` the other
 /// pointer. Returns its result.
 pub fn fn_0042ff10(e: &mut Engine, first: Ptr, second: Ptr) -> u32 {
-    fn_0042ff30(e, first, second)
+    e.call(0x0042_ff30, &args![first, second]).u32()
 }
 
 // Translated from 0042ff30 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1742,7 +1742,7 @@ pub fn bs_simple_array_tes_bound_object_scalar_deleting_destructor(
     this: Ptr,
     flags: u32,
 ) -> Ptr {
-    fn_0042ff80(e, this);
+    e.call(0x0042_ff80, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -1764,7 +1764,7 @@ pub fn fn_0042ff80(e: &mut Engine, this: Ptr) {
 /// `fn_0042fa40`, then `operator delete` when bit 0 of `flags` is set.
 /// Returns `this`.
 pub fn fn_0042ffa0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_0042fa40(e, this);
+    e.call(0x0042_fa40, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -1780,7 +1780,7 @@ pub fn ni_t_map_base_tes_object_refr_bool_scalar_deleting_destructor(
     this: Ptr,
     flags: u32,
 ) -> Ptr {
-    fn_0042fee0(e, this);
+    e.call(0x0042_fee0, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }

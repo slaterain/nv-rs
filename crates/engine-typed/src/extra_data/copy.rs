@@ -7,7 +7,7 @@
 //! by address as the exe calls them.
 
 use super::{
-    access, cell_data, cell_refs, copy_words, delete_extra_data, first_of_kind, followers,
+    access, cell_data, cell_refs, copy_words, more_setters, delete_extra_data, first_of_kind, followers,
     forget_cached_all, give_lock, head_of, kind_of, links, list_remove, new_object, next_node,
     next_of, packages, read_word, rooms, set_next_of, setters, take_lock, word_at, EXTRA_PAYLOAD,
     FAMILY, LIST_HEAD,
@@ -240,10 +240,9 @@ fn copy_byte(e: &mut Engine, list: u32, kind: u8, extra: u32) -> bool {
         return false;
     }
     let byte = e.mem.u8(extra.wrapping_add(EXTRA_PAYLOAD));
-    let setter = match kind {
+    match kind {
         0x26 => {
             typed_call!(FAMILY, 0x0041_9a20, access::set_uses(e, list, byte));
-            return true;
         }
         0x0e => {
             typed_call!(
@@ -251,16 +250,15 @@ fn copy_byte(e: &mut Engine, list: u32, kind: u8, extra: u32) -> bool {
                 0x0041_b3d0,
                 setters::set_action_flags(e, list, u32::from(byte))
             );
-            return true;
         }
         0x31 => {
             typed_call!(FAMILY, 0x0041_ac30, setters::set_seed(e, list, byte));
-            return true;
         }
-        0x4a => 0x0042_dde0,
+        0x4a => {
+            typed_call!(FAMILY, 0x0042_dde0, more_setters::set_hot_key(e, list, byte));
+        }
         _ => unreachable!(),
-    };
-    e.call(setter, &args![list, byte]);
+    }
     true
 }
 
@@ -621,11 +619,15 @@ fn copy_by_arm(e: &mut Engine, list: u32, extra: u32, kind: u8) {
             e.call(0x0043_42b0, &args![existing, extra]);
         }
         0x5a => {
-            e.call(0x0042_e2c0, &args![list, extra]);
+            typed_call!(
+                FAMILY,
+                0x0042_e2c0,
+                more_setters::set_navmesh_portal(e, list, extra)
+            );
         }
         0x5e => {
-            e.call(0x0042_e760, &args![list]);
-            let target = e.call(0x0042_e800, &args![list]).u32();
+            typed_call!(FAMILY, 0x0042_e760, more_setters::add_faction_changes(e, list));
+            let target = typed_call!(FAMILY, 0x0042_e800, more_setters::faction_changes(e, list));
             each_item(e, word_at(e, extra, 0x0c), true, |e, entry| {
                 // The entry is a word and a signed byte.
                 let word = e.mem.u32(entry);
@@ -677,7 +679,11 @@ fn copy_by_arm(e: &mut Engine, list: u32, extra: u32, kind: u8) {
         }
         0x6e => {
             let (first, second) = (word_at(e, extra, 0x0c), word_at(e, extra, 0x10));
-            e.call(0x0042_eb60, &args![list, first, second]);
+            typed_call!(
+                FAMILY,
+                0x0042_eb60,
+                more_setters::set_ammo(e, list, first, second)
+            );
         }
         0x72 => {
             let word = word_at(e, extra, 0x0c);
@@ -697,7 +703,7 @@ fn copy_by_arm(e: &mut Engine, list: u32, extra: u32, kind: u8) {
             );
         }
         0x73 => each_item(e, word_at(e, extra, 0x0c), true, |e, entry| {
-            e.call(0x0042_ef20, &args![list, entry]);
+            typed_call!(FAMILY, 0x0042_ef20, more_setters::add_said_once(e, list, entry));
         }),
         0x76 => {
             let source = word_at(e, extra, 0x0c);
@@ -745,7 +751,11 @@ fn copy_by_arm(e: &mut Engine, list: u32, extra: u32, kind: u8) {
             );
         }
         0x80 => {
-            e.call(0x0042_f200, &args![list, 1u32]);
+            typed_call!(
+                FAMILY,
+                0x0042_f200,
+                more_setters::set_ignored_by_sandbox(e, list, 1)
+            );
         }
         0x84 => {
             let existing = get_or_add(e, list, 0x84, 0x14, |e, block| {
@@ -769,7 +779,11 @@ fn copy_by_arm(e: &mut Engine, list: u32, extra: u32, kind: u8) {
         }
         0x8b => {
             // The get-or-create (`0042f420`) adds the new extra data itself.
-            let target = e.call(0x0042_f420, &args![list]).u32();
+            let target = typed_call!(
+                FAMILY,
+                0x0042_f420,
+                more_setters::follower_swim_breadcrumbs(e, list)
+            );
             copy_words(e, extra, target, 0x10, 0x1c);
             let word = word_at(e, extra, 0x1c);
             e.mem.set_u32(target.wrapping_add(0x1c), word);
@@ -790,7 +804,11 @@ fn copy_by_arm(e: &mut Engine, list: u32, extra: u32, kind: u8) {
             // the byte read for each slot as the exe reads it).
             for mask in [1u8, 2, 4] {
                 if e.mem.u8(extra.wrapping_add(EXTRA_PAYLOAD)) & mask != 0 {
-                    e.call(0x0042_e380, &args![list, u32::from(mask)]);
+                    typed_call!(
+                        FAMILY,
+                        0x0042_e380,
+                        more_setters::set_weapon_mod_slot(e, list, mask)
+                    );
                 }
             }
         }
