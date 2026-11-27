@@ -38,6 +38,7 @@ use layout::{
 
 pub mod layout;
 pub mod location;
+pub mod manager_state;
 pub mod navmesh;
 pub mod point;
 pub mod pov;
@@ -267,5 +268,12 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The path manager's state machine.
+        entry!(0x006e_b310, manager_state::pause(Ptr)),
+        entry!(0x006e_b390, manager_state::is_paused(Ptr) -> bool),
+        entry!(0x006e_b3b0, manager_state::resume(Ptr)),
+        entry!(0x006e_b420, manager_state::is_running(Ptr) -> bool),
+        entry!(0x006e_b670, manager_state::cancel_unless_complete(Ptr, u8)),
+        entry!(0x006e_b790, manager_state::pause_event_signalled(Ptr) -> bool),
     ]
 }

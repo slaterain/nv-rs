@@ -173,7 +173,7 @@ pub fn pathing_task_data_process(e: &mut Engine, this: Ptr) {
         e.call(0x0048_3710, &args![category]);
         let category = e.call(0x0047_d0b0, &args![]).u32();
         let category = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, category));
-        let was_signaled = fn_006eb790(e, Ptr::new(category));
+        let was_signaled = e.call(0x006e_b790, &args![category]).bool();
 
         if was_signaled {
             if !fn_006ea490(e, this) {
@@ -1003,7 +1003,7 @@ pub fn fn_006eb440(e: &mut Engine, this: Ptr) {
     e.call(0x006c_09d0, &args![this]);
     e.mem
         .set_u8(this.addr() + PATH_MANAGER_IMPL_CANCEL_PATHS, 1);
-    fn_006eb670(e, this, 0);
+    e.call(0x006e_b670, &args![this, 0u8]);
     e.with_stack(0x70, |e, locals| {
         let completion = locals.addr();
         fn_006ea9d0(e, Ptr::new(completion));
@@ -1297,25 +1297,25 @@ pub fn fn_006ebc50(e: &mut Engine, this: Ptr) {
 // Translated from 006ebc70 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Pauses the owned implementation.
 pub fn fn_006ebc70(e: &mut Engine, this: Ptr) {
-    fn_006eb310(e, Ptr::new(e.mem.u32(this.addr())))
+    e.call(0x006e_b310, &args![e.mem.u32(this.addr())]);
 }
 
 // Translated from 006ebc90 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Queries the paused state of the owned implementation.
 pub fn fn_006ebc90(e: &mut Engine, this: Ptr) -> bool {
-    fn_006eb390(e, Ptr::new(e.mem.u32(this.addr())))
+    e.call(0x006e_b390, &args![e.mem.u32(this.addr())]).bool()
 }
 
 // Translated from 006ebcb0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Queries the running state of the owned implementation.
 pub fn fn_006ebcb0(e: &mut Engine, this: Ptr) -> bool {
-    fn_006eb420(e, Ptr::new(e.mem.u32(this.addr())))
+    e.call(0x006e_b420, &args![e.mem.u32(this.addr())]).bool()
 }
 
 // Translated from 006ebcd0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Resumes the owned implementation.
 pub fn fn_006ebcd0(e: &mut Engine, this: Ptr) {
-    fn_006eb3b0(e, Ptr::new(e.mem.u32(this.addr())))
+    e.call(0x006e_b3b0, &args![e.mem.u32(this.addr())]);
 }
 
 // Translated from 006ebcf0 (decompiled, FalloutNV.exe 1.4.0.525)
