@@ -66,7 +66,7 @@ pub(super) const ADD_USER_TRAIT: u32 = 0x00a0_0940;
 /// `"_selected_height"`, `"_number_of_items"`.
 pub(super) const NUM_FILTERED_TEXT: u32 = 0x0106_f8d0;
 pub(super) const SCROLL_DELTA_TEXT: u32 = 0x0106_f90c;
-const ENABLED_TEXT: u32 = 0x0107_0244;
+pub(super) const ENABLED_TEXT: u32 = 0x0107_0244;
 pub(super) const HIGHLIGHT_Y_TEXT: u32 = 0x0106_f8c0;
 pub(super) const SELECTED_HEIGHT_TEXT: u32 = 0x0106_f8ac;
 pub(super) const NUMBER_OF_ITEMS_TEXT: u32 = 0x0106_f8f8;
@@ -104,8 +104,8 @@ pub(super) const SCROLL_BAR: u32 = 0x14;
 pub(super) const TEMPLATE_NAME: u32 = 0x18;
 pub(super) const NEXT_INDEX: u32 = 0x1c;
 pub(super) const TOTAL_HEIGHT: u32 = 0x20;
-const SAVED_HIGHLIGHT_INDEX: u32 = 0x24;
-const SAVED_SCROLLBAR_VALUE: u32 = 0x28;
+pub(super) const SAVED_HIGHLIGHT_INDEX: u32 = 0x24;
+pub(super) const SAVED_SCROLLBAR_VALUE: u32 = 0x28;
 const FLAGS: u32 = 0x2c;
 /// A `ListBoxItem`'s (Xbox PDB) data (`+4`) and filtered byte (`+8`); its tile is its first word.
 pub(super) const ITEM_DATA: u32 = 4;
@@ -120,7 +120,8 @@ const LOVE_TESTER_TEXT_ITEMS_VTABLE: u32 = 0x0107_03dc;
 const LOVE_TESTER_GLOWS_VTABLE: u32 = 0x0107_03f0;
 const LOVE_TESTER_BUTTONS_VTABLE: u32 = 0x0107_0404;
 
-/// One of the six `ListBox<T>` instances.
+/// One of the eleven `ListBox<T>` instances: this unit's six and the map menu's five
+/// ([`super::map_menu`]).
 #[derive(Clone, Copy)]
 pub(super) enum Of {
     ActorValue,
@@ -129,6 +130,11 @@ pub(super) enum Of {
     StatusEffect,
     Reputation,
     UnsignedInt,
+    Quest,
+    Note,
+    Reference,
+    Objective,
+    Challenge,
 }
 
 impl Of {
@@ -144,6 +150,11 @@ impl Of {
             Of::StatusEffect => (0x0107_033c, [0x011d_8e0c, 0x011d_8e18, 0x011d_8e60]),
             Of::Reputation => (0x0107_0364, [0x011d_8e20, 0x011d_8e2c, 0x011d_8e68]),
             Of::UnsignedInt => (0x0107_038c, [0x011d_8e34, 0x011d_8e40, 0x011d_8e70]),
+            Of::Quest => (0x0107_5544, [0x011d_a460, 0x011d_a46c, 0x011d_a4e4]),
+            Of::Note => (0x0107_556c, [0x011d_a47c, 0x011d_a488, 0x011d_a474]),
+            Of::Reference => (0x0107_5594, [0x011d_a498, 0x011d_a4a4, 0x011d_a490]),
+            Of::Objective => (0x0107_55bc, [0x011d_a4b4, 0x011d_a4c0, 0x011d_a4ac]),
+            Of::Challenge => (0x0107_55e4, [0x011d_a4d0, 0x011d_a4dc, 0x011d_a4c8]),
         }
     }
 
@@ -157,7 +168,7 @@ impl Of {
 }
 
 /// The instance's `RemoveAll`.
-fn remove_all_of(e: &mut Engine, of: Of, this: Ptr) {
+pub(super) fn remove_all_of(e: &mut Engine, of: Of, this: Ptr) {
     match of {
         Of::ActorValue => typed_call!(
             super::FAMILY,
@@ -188,6 +199,31 @@ fn remove_all_of(e: &mut Engine, of: Of, this: Ptr) {
             super::FAMILY,
             0x0072_3890,
             list_box_unsigned_int_remove_all(e, this)
+        ),
+        Of::Quest => typed_call!(
+            super::FAMILY,
+            0x007a_2070,
+            super::map_menu::list_box_tes_quest_remove_all(e, this)
+        ),
+        Of::Note => typed_call!(
+            super::FAMILY,
+            0x007a_2bd0,
+            super::map_menu::list_box_bgs_note_remove_all(e, this)
+        ),
+        Of::Reference => typed_call!(
+            super::FAMILY,
+            0x007a_3ac0,
+            super::map_menu::list_box_tes_object_refr_remove_all(e, this)
+        ),
+        Of::Objective => typed_call!(
+            super::FAMILY,
+            0x007a_4780,
+            super::map_menu::list_box_bgs_quest_objective_remove_all(e, this)
+        ),
+        Of::Challenge => typed_call!(
+            super::FAMILY,
+            0x007a_54d0,
+            super::map_menu::list_box_tes_challenge_remove_all(e, this)
         ),
     }
 }
@@ -225,11 +261,36 @@ pub(super) fn synchronize_of(e: &mut Engine, of: Of, this: Ptr) {
             0x0072_6090,
             list_box_unsigned_int_synchronize(e, this)
         ),
+        Of::Quest => typed_call!(
+            super::FAMILY,
+            0x007a_6480,
+            super::map_menu::list_box_tes_quest_synchronize(e, this)
+        ),
+        Of::Note => typed_call!(
+            super::FAMILY,
+            0x007a_6b00,
+            super::map_menu::list_box_bgs_note_synchronize(e, this)
+        ),
+        Of::Reference => typed_call!(
+            super::FAMILY,
+            0x007a_7260,
+            super::map_menu::list_box_tes_object_refr_synchronize(e, this)
+        ),
+        Of::Objective => typed_call!(
+            super::FAMILY,
+            0x007a_78e0,
+            super::map_menu::list_box_bgs_quest_objective_synchronize(e, this)
+        ),
+        Of::Challenge => typed_call!(
+            super::FAMILY,
+            0x007a_80e0,
+            super::map_menu::list_box_tes_challenge_synchronize(e, this)
+        ),
     }
 }
 
 /// The instance's `IsEnabled`.
-fn is_enabled_of(e: &mut Engine, of: Of, this: Ptr) -> bool {
+pub(super) fn is_enabled_of(e: &mut Engine, of: Of, this: Ptr) -> bool {
     match of {
         Of::ActorValue => typed_call!(
             super::FAMILY,
@@ -261,11 +322,36 @@ fn is_enabled_of(e: &mut Engine, of: Of, this: Ptr) -> bool {
             0x0072_6160,
             list_box_unsigned_int_is_enabled(e, this)
         ),
+        Of::Quest => typed_call!(
+            super::FAMILY,
+            0x007a_6550,
+            super::map_menu::list_box_tes_quest_is_enabled(e, this)
+        ),
+        Of::Note => typed_call!(
+            super::FAMILY,
+            0x007a_6bd0,
+            super::map_menu::list_box_bgs_note_is_enabled(e, this)
+        ),
+        Of::Reference => typed_call!(
+            super::FAMILY,
+            0x007a_7330,
+            super::map_menu::list_box_tes_object_refr_is_enabled(e, this)
+        ),
+        Of::Objective => typed_call!(
+            super::FAMILY,
+            0x007a_79b0,
+            super::map_menu::list_box_bgs_quest_objective_is_enabled(e, this)
+        ),
+        Of::Challenge => typed_call!(
+            super::FAMILY,
+            0x007a_81b0,
+            super::map_menu::list_box_tes_challenge_is_enabled(e, this)
+        ),
     }
 }
 
 /// The instance's `UpdateHighlightBoxPos`.
-fn update_highlight_box_pos_of(e: &mut Engine, of: Of, this: Ptr) {
+pub(super) fn update_highlight_box_pos_of(e: &mut Engine, of: Of, this: Ptr) {
     match of {
         Of::ActorValue => typed_call!(
             super::FAMILY,
@@ -296,6 +382,31 @@ fn update_highlight_box_pos_of(e: &mut Engine, of: Of, this: Ptr) {
             super::FAMILY,
             0x0072_6210,
             list_box_unsigned_int_update_highlight_box_pos(e, this)
+        ),
+        Of::Quest => typed_call!(
+            super::FAMILY,
+            0x007a_6600,
+            super::map_menu::list_box_tes_quest_update_highlight_box_pos(e, this)
+        ),
+        Of::Note => typed_call!(
+            super::FAMILY,
+            0x007a_6c80,
+            super::map_menu::list_box_bgs_note_update_highlight_box_pos(e, this)
+        ),
+        Of::Reference => typed_call!(
+            super::FAMILY,
+            0x007a_73e0,
+            super::map_menu::list_box_tes_object_refr_update_highlight_box_pos(e, this)
+        ),
+        Of::Objective => typed_call!(
+            super::FAMILY,
+            0x007a_7a60,
+            super::map_menu::list_box_bgs_quest_objective_update_highlight_box_pos(e, this)
+        ),
+        Of::Challenge => typed_call!(
+            super::FAMILY,
+            0x007a_8260,
+            super::map_menu::list_box_tes_challenge_update_highlight_box_pos(e, this)
         ),
     }
 }
@@ -333,11 +444,36 @@ pub(super) fn set_total_list_height_of(e: &mut Engine, of: Of, this: Ptr) {
             0x0072_6530,
             list_box_unsigned_int_set_total_list_height(e, this)
         ),
+        Of::Quest => typed_call!(
+            super::FAMILY,
+            0x007a_6920,
+            super::map_menu::list_box_tes_quest_set_total_list_height(e, this)
+        ),
+        Of::Note => typed_call!(
+            super::FAMILY,
+            0x007a_7080,
+            super::map_menu::list_box_bgs_note_set_total_list_height(e, this)
+        ),
+        Of::Reference => typed_call!(
+            super::FAMILY,
+            0x007a_7700,
+            super::map_menu::list_box_tes_object_refr_set_total_list_height(e, this)
+        ),
+        Of::Objective => typed_call!(
+            super::FAMILY,
+            0x007a_7d80,
+            super::map_menu::list_box_bgs_quest_objective_set_total_list_height(e, this)
+        ),
+        Of::Challenge => typed_call!(
+            super::FAMILY,
+            0x007a_8580,
+            super::map_menu::list_box_tes_challenge_set_total_list_height(e, this)
+        ),
     }
 }
 
 /// The instance's `NumUnfiltered`.
-fn num_unfiltered_of(e: &mut Engine, of: Of, this: Ptr) -> i32 {
+pub(super) fn num_unfiltered_of(e: &mut Engine, of: Of, this: Ptr) -> i32 {
     match of {
         Of::ActorValue => typed_call!(
             super::FAMILY,
@@ -368,6 +504,31 @@ fn num_unfiltered_of(e: &mut Engine, of: Of, this: Ptr) -> i32 {
             super::FAMILY,
             0x0072_6b40,
             list_box_unsigned_int_num_unfiltered(e, this)
+        ),
+        Of::Quest => typed_call!(
+            super::FAMILY,
+            0x007a_86e0,
+            super::map_menu::list_box_tes_quest_num_unfiltered(e, this)
+        ),
+        Of::Note => typed_call!(
+            super::FAMILY,
+            0x007a_6a50,
+            super::map_menu::fn_007a6a50(e, this)
+        ),
+        Of::Reference => typed_call!(
+            super::FAMILY,
+            0x007a_71b0,
+            super::map_menu::list_box_tes_object_refr_num_unfiltered(e, this)
+        ),
+        Of::Objective => typed_call!(
+            super::FAMILY,
+            0x007a_7830,
+            super::map_menu::fn_007a7830(e, this)
+        ),
+        Of::Challenge => typed_call!(
+            super::FAMILY,
+            0x007a_8030,
+            super::map_menu::list_box_tes_challenge_num_unfiltered(e, this)
         ),
     }
 }
@@ -488,7 +649,7 @@ pub(super) fn set_flag(e: &mut Engine, at: u32, bit: u32, set: bool) {
 /// `ListBox<T>::ListBox` (Xbox PDB): the `ListBoxBase` vtable (`007240c0`), the embedded list, the
 /// instance's vtable, the fields cleared, the flag 0 set (`007a1950` with 0 and 1, in place), the
 /// list box added to the collection (`00721130`). `this`.
-fn construct(e: &mut Engine, of: Of, this: Ptr) -> Ptr {
+pub(super) fn construct(e: &mut Engine, of: Of, this: Ptr) -> Ptr {
     let at = this.addr();
     e.mem.set_u32(at, LIST_BOX_BASE_VTABLE);
     super::menu_manager::empty_list(e, at.wrapping_add(4));
@@ -509,7 +670,7 @@ fn construct(e: &mut Engine, of: Of, this: Ptr) -> Ptr {
 
 /// `ListBox<T>::~ListBox` (Xbox PDB): the vtable, `RemoveAll`, the list box removed from the
 /// collection (`007211c0`), the embedded list destroyed.
-fn destruct(e: &mut Engine, of: Of, this: Ptr) {
+pub(super) fn destruct(e: &mut Engine, of: Of, this: Ptr) {
     let at = this.addr();
     e.mem.set_u32(at, of.vtable());
     remove_all_of(e, of, this);
@@ -555,7 +716,7 @@ fn delete_item(e: &mut Engine, this: Ptr, second: bool, item: u32) {
 /// node; then the first item deleted; the first item, `usNextIndex` and `fTotalListHeight`
 /// cleared, the container's `"_num_filtered"` set to 0, the height recomputed, no item highlighted
 /// and the highlight box moved. A field the code reads again after a call is read again.
-fn remove_all(e: &mut Engine, of: Of, this: Ptr) {
+pub(super) fn remove_all(e: &mut Engine, of: Of, this: Ptr) {
     let at = this.addr();
     let second = at.wrapping_add(SECOND_NODE);
     loop {
@@ -595,7 +756,7 @@ fn remove_all(e: &mut Engine, of: Of, this: Ptr) {
 }
 
 /// `ListBox<T>::Sort` (Xbox PDB): the embedded list sorted with `compare`, then `Synchronize`.
-fn sort(e: &mut Engine, of: Of, this: Ptr, compare: u32) {
+pub(super) fn sort(e: &mut Engine, of: Of, this: Ptr, compare: u32) {
     e.call(LIST_SORT, &args![this.addr().wrapping_add(4), compare]);
     synchronize_of(e, of, this);
 }
@@ -603,7 +764,7 @@ fn sort(e: &mut Engine, of: Of, this: Ptr, compare: u32) {
 /// `ListBox<T>::Highlight` (Xbox PDB): with the list enabled and `tile` null, or one of the list's
 /// (`007242f0`) and `"_enabled"`, `tile` becomes the highlighted item, the highlight box moves and
 /// the answer is true; otherwise false.
-fn highlight(e: &mut Engine, of: Of, this: Ptr, tile: u32) -> bool {
+pub(super) fn highlight(e: &mut Engine, of: Of, this: Ptr, tile: u32) -> bool {
     if !is_enabled_of(e, of, this) {
         return false;
     }
@@ -644,7 +805,7 @@ fn page_step(e: &mut Engine, this: Ptr, up: bool) -> i32 {
 /// is the answer when it is `"_enabled"`; else the search goes on one further, and past the end
 /// (or before the start) walks back (or on) through `GetTileAt` (vtable slot +0x14) to an enabled
 /// tile.
-fn get_highlight_target(e: &mut Engine, of: Of, this: Ptr, direction: u32) -> u32 {
+pub(super) fn get_highlight_target(e: &mut Engine, of: Of, this: Ptr, direction: u32) -> u32 {
     let at = this.addr();
     let step = match direction {
         1 => -1,
@@ -740,7 +901,7 @@ fn get_highlight_target(e: &mut Engine, of: Of, this: Ptr, direction: u32) -> u3
 /// `ListBox<T>::Synchronize` (Xbox PDB): `usNextIndex` and `fTotalListHeight` cleared, then each
 /// item not filtered (its byte at +8 clear) gives its tile the next index (trait `0xfac`) and its
 /// position (`InitTilePosition`); then `SetTotalListHeight` and `UpdateHighlightBoxPos`.
-fn synchronize(e: &mut Engine, of: Of, this: Ptr) {
+pub(super) fn synchronize(e: &mut Engine, of: Of, this: Ptr) {
     let at = this.addr();
     e.mem.set_u16(at.wrapping_add(NEXT_INDEX), 0);
     e.mem.set_f32(at.wrapping_add(TOTAL_HEIGHT), 0.0);
@@ -767,7 +928,7 @@ fn synchronize(e: &mut Engine, of: Of, this: Ptr) {
 
 /// `ListBox<T>::IsEnabled` (Xbox PDB): there is a container and its `"_enabled"` trait (the id a
 /// function-local static) is true.
-fn is_enabled(e: &mut Engine, of: Of, this: Ptr) -> bool {
+pub(super) fn is_enabled(e: &mut Engine, of: Of, this: Ptr) -> bool {
     let guard = of.guards()[0];
     let enabled = static_trait(e, guard, 1, guard.wrapping_sub(4), ENABLED_TEXT);
     let container = e.mem.u32(this.addr().wrapping_add(CONTAINER));
@@ -797,7 +958,7 @@ pub(super) fn mark_tile(e: &mut Engine, tile: u32, flag: u8) {
 /// calculated) and the container's `"lb_highlight_box"` tile, its `"top"` and, when `"top"` exists,
 /// its `"bottom"`, `"left"` and `"right"` (not checked for null), take the highlighted tile's byte
 /// at +0x35 (as 1 or 0) and an update.
-fn update_highlight_box_pos(e: &mut Engine, of: Of, this: Ptr) {
+pub(super) fn update_highlight_box_pos(e: &mut Engine, of: Of, this: Ptr) {
     let at = this.addr();
     let guard = of.guards()[1];
     let y_trait = static_trait(e, guard, 1, guard.wrapping_sub(4), HIGHLIGHT_Y_TEXT);
@@ -879,7 +1040,7 @@ pub(super) fn child_by_name(e: &mut Engine, tile: u32, name: u32) -> u32 {
 /// `(total - visible) / (steps - 1)`; with a scroll bar its `"_number_of_items"` becomes the steps.
 /// Each step rounds to a float (the main thread's precision): the product of the whole count is
 /// exact in an `f64` and rounded once, as is the quotient by the whole number of steps.
-fn set_total_list_height(e: &mut Engine, of: Of, this: Ptr) {
+pub(super) fn set_total_list_height(e: &mut Engine, of: Of, this: Ptr) {
     let at = this.addr();
     let container = e.mem.u32(at.wrapping_add(CONTAINER));
     if container == 0 {
@@ -919,7 +1080,7 @@ fn set_total_list_height(e: &mut Engine, of: Of, this: Ptr) {
 /// `ListBox<T>::NumUnfiltered` (Xbox PDB): the list's count (`00726c40`) less the container's
 /// `"_num_filtered"` (the id a function-local static), truncated by a 64-bit `FISTP` and taken to
 /// 32 bits.
-fn num_unfiltered(e: &mut Engine, of: Of, this: Ptr) -> i32 {
+pub(super) fn num_unfiltered(e: &mut Engine, of: Of, this: Ptr) -> i32 {
     let guard = of.guards()[2];
     let num_filtered = static_trait(e, guard, 1, guard.wrapping_sub(4), NUM_FILTERED_TEXT);
     let count = typed_call!(

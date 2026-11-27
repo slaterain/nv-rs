@@ -21,6 +21,7 @@ pub fn fn_007a1aa0(e: &mut Engine, this: Ptr) {
 }
 
 use crate::types::BSSimpleArray;
+use crate::units::fallout_interface::menumanager;
 use crate::units::fallout_interface::startmenu::ListBox;
 
 layout! {
@@ -572,11 +573,14 @@ const SHOW_MESSAGE_007052F0: u32 = 0x0070_52f0;
 const TRIGGER_BURST: u32 = 0x007f_b150;
 /// Cdecl: `AL` (`interface.cpp`).
 const FLAG_00709D40: u32 = 0x0070_9d40;
-/// The `ListBox` base helpers (`menumanager.rs`): the `ListBoxBase`
-/// constructor, the registration with the menu manager and its removal.
-const LIST_BOX_BASE_CONSTRUCT: u32 = 0x0072_40c0;
-const LIST_BOX_REGISTER: u32 = 0x0072_1130;
-const LIST_BOX_UNREGISTER: u32 = 0x0072_11c0;
+/// The list box collection's add and remove (thiscall on the collection, the
+/// address of a word holding the list box), which `menumanager.rs`'s
+/// `00721130` and `007211c0` (reached with plain calls by the instances'
+/// constructors and destructors) make.
+#[cfg(test)]
+const LIST_BOX_COLLECTION_ADD: u32 = 0x005a_e3d0;
+#[cfg(test)]
+const LIST_BOX_COLLECTION_REMOVE: u32 = 0x0090_5330;
 /// Thiscall on a list box (flag bit), `RET 4`: `AL` (`menumanager.rs`).
 const LIST_BOX_HAS_FLAG: u32 = 0x0072_42c0;
 /// Thiscall on a list box (tile), `RET 4`: `AL`, whether the tile is one of
@@ -730,17 +734,17 @@ pub fn map_menu_map_menu(e: &mut Engine, this: Ptr<MapMenu>) -> Ptr<MapMenu> {
     e.call(MENU_CONSTRUCT, &args![this]);
     e.mem.set_u32(base, MAP_MENU_VTABLE);
     e.call(SOUND_LIST_CONSTRUCT, &args![base + 0x98]);
-    fn_007a1a70(e, Ptr::new(base + 0xa8));
+    e.call(0x007a_1a70, &args![base + 0xa8]);
     e.call(LIST_CONSTRUCT, &args![base + 0xd8]);
     e.call(LIST_CONSTRUCT, &args![base + 0xe0]);
     for offset in [0xe8u32, 0xf0, 0xfc, 0x120] {
         typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, base + offset));
     }
-    fn_007a1c90(e, Ptr::new(base + 0x130));
-    fn_007a27f0(e, Ptr::new(base + 0x160));
-    fn_007a36e0(e, Ptr::new(base + 0x190));
-    fn_007a43a0(e, Ptr::new(base + 0x1c0));
-    fn_007a50f0(e, Ptr::new(base + 0x1f0));
+    e.call(0x007a_1c90, &args![base + 0x130]);
+    e.call(0x007a_27f0, &args![base + 0x160]);
+    e.call(0x007a_36e0, &args![base + 0x190]);
+    e.call(0x007a_43a0, &args![base + 0x1c0]);
+    e.call(0x007a_50f0, &args![base + 0x1f0]);
     e.call(WAYPOINTS_CONSTRUCT, &args![base + 0x220]);
     for (cache, name) in [
         (TRAIT_TITLE, TITLE_TEXT),
@@ -819,14 +823,14 @@ pub fn fn_00796a80(e: &mut Engine, this: Ptr<MapMenu>) {
     e.mem.set_u32(base, MAP_MENU_VTABLE);
     e.mem.set_u32(MAP_MENU_SINGLETON, 0);
     e.call(WAYPOINTS_DESTRUCT, &args![base + 0x220]);
-    fn_007a51c0(e, Ptr::new(base + 0x1f0));
-    fn_007a4470(e, Ptr::new(base + 0x1c0));
-    fn_007a37b0(e, Ptr::new(base + 0x190));
-    fn_007a28c0(e, Ptr::new(base + 0x160));
-    fn_007a1d60(e, Ptr::new(base + 0x130));
+    e.call(0x007a_51c0, &args![base + 0x1f0]);
+    e.call(0x007a_4470, &args![base + 0x1c0]);
+    e.call(0x007a_37b0, &args![base + 0x190]);
+    e.call(0x007a_28c0, &args![base + 0x160]);
+    e.call(0x007a_1d60, &args![base + 0x130]);
     e.call(LIST_DESTRUCT, &args![base + 0xe0]);
     e.call(LIST_DESTRUCT, &args![base + 0xd8]);
-    fn_007a1aa0(e, Ptr::new(base + 0xa8));
+    e.call(0x007a_1aa0, &args![base + 0xa8]);
     e.call(SOUND_LIST_DESTRUCT, &args![base + 0x98]);
     e.call(MENU_DESTRUCT, &args![this]);
 }
@@ -923,7 +927,7 @@ pub fn map_menu_create(e: &mut Engine) -> u32 {
         );
         if flag {
             let menu = map_menu(e);
-            fn_007a1930(e, Ptr::new(menu + list), 0);
+            e.call(0x007a_1930, &args![menu + list, 0]);
         }
     }
     let menu = map_menu(e);
@@ -1004,10 +1008,10 @@ pub fn map_menu_do_click(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32)
         }
         0x15 => {
             let quests = Ptr::new(base + 0x130);
-            if fn_007a1910(e, quests) != 0 {
-                let quest = fn_007a1910(e, quests);
+            if e.call(0x007a_1910, &args![quests]).u32() != 0 {
+                let quest = e.call(0x007a_1910, &args![quests]).u32();
                 if !e.call(QUEST_FLAG_0059E400, &args![quest]).bool() {
-                    let quest = fn_007a1910(e, quests);
+                    let quest = e.call(0x007a_1910, &args![quests]).u32();
                     let player = e.mem.u32(PLAYER_011DEA3C);
                     e.call(SET_ACTIVE_QUEST, &args![player, quest]);
                     e.call(PLAY_MENU_SOUND, &args![3u32]);
@@ -1036,6 +1040,8 @@ pub fn map_menu_do_click(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32)
                 let turn_on = !selected;
                 fn_0079c090(e, this);
                 e.call(
+                    LIST_BOX_COLLECTION_ADD,
+                    LIST_BOX_COLLECTION_REMOVE,
                     LIST_BOX_FILTER_007314C0,
                     &args![radio, RADIO_FILTER_CALLBACK, 0u32, 0x7fff_ffffu32],
                 );
@@ -1044,7 +1050,7 @@ pub fn map_menu_do_click(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32)
                 }
                 if turn_on {
                     e.call(RADIO_ENABLE, &args![1u32]);
-                    let station = fn_007a1910(e, Ptr::new(radio));
+                    let station = e.call(0x007a_1910, &args![radio]).u32();
                     e.call(RADIO_SET_STATION_00832240, &args![station, 0u32]);
                     let selected_trait = e.mem.u32(TRAIT_SELECTED);
                     e.call(TILE_SET_INT, &args![highlighted, selected_trait, 1u32]);
@@ -1780,7 +1786,7 @@ pub fn map_menu_do_idle(e: &mut Engine, this: Ptr<MapMenu>) {
                             if e.call(FLAG_004B71D0, &args![]).bool()
                                 || e.get(this, MapMenu::pSelectedNote) == 0
                             {
-                                let note = fn_007a1910(e, Ptr::new(base + 0x160));
+                                let note = e.call(0x007a_1910, &args![base + 0x160]).u32();
                                 e.mem.set_u32(note_slot.addr(), note);
                             }
                             let note_tile = e
@@ -2170,7 +2176,7 @@ pub fn fn_007a1910(e: &mut Engine, this: Ptr<ListBox>) -> u32 {
 /// Unnamed in the engine map: `007a1950(this, 0, value)` (flag bit 0 of
 /// `usFlags`).
 pub fn fn_007a1930(e: &mut Engine, this: Ptr<ListBox>, value: u8) {
-    fn_007a1950(e, this, 0, value);
+    e.call(0x007a_1950, &args![this, 0, value]);
 }
 
 // Translated from 007a1950 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2193,7 +2199,7 @@ pub fn fn_007a1950(e: &mut Engine, this: Ptr<ListBox>, bit: u8, value: u8) {
 /// `01075530`): the vtable, then `007a63f0(this, 0, 0)`. Returns `this`.
 pub fn fn_007a1a70(e: &mut Engine, this: Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray> {
     e.mem.set_u32(this.addr(), ARRAY_VTABLE_01075530);
-    fn_007a63f0(e, this, 0, 0);
+    e.call(0x007a_63f0, &args![this, 0, 0]);
     this
 }
 
@@ -2278,14 +2284,23 @@ fn static_trait(e: &mut Engine, which: StaticTrait) {
 
 /// One instance of the `ListBox<T *>` template whose methods this unit
 /// holds: the vtable, the statics of `IsEnabled` and `UpdateHighlightBoxPos`
-/// and the instance's `NumUnfiltered` (not in this unit). The instances'
-/// code is the same apart from these.
+/// and the instance's own methods the shared bodies call (by address, as
+/// the code calls them directly; thiscall without arguments). The
+/// instances' code is the same apart from these.
 #[derive(Clone, Copy)]
 struct ListBoxKind {
     vtable: u32,
     enabled: StaticTrait,
     highlight_y: StaticTrait,
     selected_height: StaticTrait,
+    /// `RemoveAll`, `Synchronize`, `IsEnabled` (`AL`),
+    /// `UpdateHighlightBoxPos`, `SetTotalListHeight` and `NumUnfiltered`
+    /// (`EAX`).
+    remove_all: u32,
+    synchronize: u32,
+    is_enabled: u32,
+    update_highlight_box_pos: u32,
+    set_total_list_height: u32,
     num_unfiltered: u32,
 }
 
@@ -2293,10 +2308,15 @@ const fn list_box_kind(
     vtable: u32,
     enabled_guard: u32,
     highlight_guard: u32,
-    num_unfiltered: u32,
+    [remove_all, synchronize, is_enabled, update_highlight_box_pos, set_total_list_height, num_unfiltered]: [u32; 6],
 ) -> ListBoxKind {
     ListBoxKind {
         vtable,
+        remove_all,
+        synchronize,
+        is_enabled,
+        update_highlight_box_pos,
+        set_total_list_height,
         enabled: StaticTrait {
             guard: enabled_guard,
             bit: 1,
@@ -2320,25 +2340,84 @@ const fn list_box_kind(
 }
 
 /// `ListBox<TESQuest *>` (vtable RTTI `.?AV?$ListBox@PAVTESQuest@@@@`).
-const QUEST_LIST: ListBoxKind = list_box_kind(0x0107_5544, 0x011d_a460, 0x011d_a46c, 0x007a_86e0);
+const QUEST_LIST: ListBoxKind = list_box_kind(
+    0x0107_5544,
+    0x011d_a460,
+    0x011d_a46c,
+    [
+        0x007a_2070,
+        0x007a_6480,
+        0x007a_6550,
+        0x007a_6600,
+        0x007a_6920,
+        0x007a_86e0,
+    ],
+);
 /// `ListBox<BGSNote *>` (RTTI `.?AV?$ListBox@PAVBGSNote@@@@`).
-const NOTE_LIST: ListBoxKind = list_box_kind(0x0107_556c, 0x011d_a47c, 0x011d_a488, 0x007a_6a50);
+const NOTE_LIST: ListBoxKind = list_box_kind(
+    0x0107_556c,
+    0x011d_a47c,
+    0x011d_a488,
+    [
+        0x007a_2bd0,
+        0x007a_6b00,
+        0x007a_6bd0,
+        0x007a_6c80,
+        0x007a_7080,
+        0x007a_6a50,
+    ],
+);
 /// `ListBox<TESObjectREFR *>` (RTTI `.?AV?$ListBox@PAVTESObjectREFR@@@@`).
-const REFERENCE_LIST: ListBoxKind =
-    list_box_kind(0x0107_5594, 0x011d_a498, 0x011d_a4a4, 0x007a_71b0);
+const REFERENCE_LIST: ListBoxKind = list_box_kind(
+    0x0107_5594,
+    0x011d_a498,
+    0x011d_a4a4,
+    [
+        0x007a_3ac0,
+        0x007a_7260,
+        0x007a_7330,
+        0x007a_73e0,
+        0x007a_7700,
+        0x007a_71b0,
+    ],
+);
 /// `ListBox<BGSQuestObjective *>` (RTTI
 /// `.?AV?$ListBox@PAVBGSQuestObjective@@@@`).
-const OBJECTIVE_LIST: ListBoxKind =
-    list_box_kind(0x0107_55bc, 0x011d_a4b4, 0x011d_a4c0, 0x007a_7830);
+const OBJECTIVE_LIST: ListBoxKind = list_box_kind(
+    0x0107_55bc,
+    0x011d_a4b4,
+    0x011d_a4c0,
+    [
+        0x007a_4780,
+        0x007a_78e0,
+        0x007a_79b0,
+        0x007a_7a60,
+        0x007a_7d80,
+        0x007a_7830,
+    ],
+);
 /// `ListBox<TESChallenge *>` (RTTI `.?AV?$ListBox@PAVTESChallenge@@@@`).
-const CHALLENGE_LIST: ListBoxKind =
-    list_box_kind(0x0107_55e4, 0x011d_a4d0, 0x011d_a4dc, 0x007a_8030);
+const CHALLENGE_LIST: ListBoxKind = list_box_kind(
+    0x0107_55e4,
+    0x011d_a4d0,
+    0x011d_a4dc,
+    [
+        0x007a_54d0,
+        0x007a_80e0,
+        0x007a_81b0,
+        0x007a_8260,
+        0x007a_8580,
+        0x007a_8030,
+    ],
+);
 
 /// The constructor of a `ListBox<T *>` instance: the `ListBoxBase` base
 /// (`007240c0`), the embedded list (+4, `0096a2d0`), the vtable, the fields
-/// cleared, `007a1950(this, 0, 1)` and the list box handed to `00721130`.
+/// cleared, `007a1950(this, 0, 1)` and the list box handed to `00721130`
+/// (the base and the collection's add are `menumanager.rs`'s, reached with a
+/// plain call as that file's instances reach them).
 fn list_box_construct(e: &mut Engine, this: Ptr<ListBox>, kind: ListBoxKind) -> Ptr<ListBox> {
-    e.call(LIST_BOX_BASE_CONSTRUCT, &args![this]);
+    menumanager::fn_007240c0(e, this.cast());
     e.call(LIST_CONSTRUCT, &args![this.addr() + 4]);
     e.mem.set_u32(this.addr(), kind.vtable);
     e.set(this, ListBox::pScrollBar, Ptr::NULL);
@@ -2350,17 +2429,18 @@ fn list_box_construct(e: &mut Engine, this: Ptr<ListBox>, kind: ListBoxKind) -> 
     e.set(this, ListBox::fSavedScrollbarValue, 0.0);
     e.set(this, ListBox::fSavedHighlightIndex, 0.0);
     e.set(this, ListBox::fTotalListHeight, 0.0);
-    fn_007a1950(e, this, 0, 1);
-    e.call(LIST_BOX_REGISTER, &args![this]);
+    e.call(0x007a_1950, &args![this, 0, 1]);
+    menumanager::fn_00721130(e, this.addr());
     this
 }
 
 /// The destructor of a `ListBox<T *>` instance: the vtable, `RemoveAll`, the
-/// list box handed to `007211c0`, then the embedded list destroyed.
+/// list box handed to `007211c0` (`menumanager.rs`'s, a plain call), then the
+/// embedded list destroyed.
 fn list_box_destruct(e: &mut Engine, this: Ptr<ListBox>, kind: ListBoxKind) {
     e.mem.set_u32(this.addr(), kind.vtable);
-    list_box_remove_all(e, this, kind);
-    e.call(LIST_BOX_UNREGISTER, &args![this]);
+    e.call(kind.remove_all, &args![this]);
+    menumanager::fn_007211c0(e, this.addr());
     e.call(LIST_DESTRUCT, &args![this.addr() + 4]);
 }
 
@@ -2436,9 +2516,9 @@ fn list_box_remove_all(e: &mut Engine, this: Ptr<ListBox>, kind: ListBoxKind) {
             &args![container, num_filtered, 0.0f32.to_bits(), 1u32],
         );
     }
-    list_box_set_total_list_height(e, this, kind);
+    e.call(kind.set_total_list_height, &args![this]);
     e.set(this, ListBox::pHighlightedItem, Ptr::NULL);
-    list_box_update_highlight_box_pos(e, this, kind);
+    e.call(kind.update_highlight_box_pos, &args![this]);
 }
 
 /// `ListBox<T *>::Highlight`: when the list is enabled and `tile` is null,
@@ -2446,7 +2526,7 @@ fn list_box_remove_all(e: &mut Engine, this: Ptr<ListBox>, kind: ListBoxKind) {
 /// `pHighlightedItem`, moves the highlight box and returns true; otherwise
 /// false.
 fn list_box_highlight(e: &mut Engine, this: Ptr<ListBox>, tile: u32, kind: ListBoxKind) -> bool {
-    if !list_box_is_enabled(e, this, kind) {
+    if !e.call(kind.is_enabled, &args![this]).bool() {
         return false;
     }
     if tile != 0 {
@@ -2461,7 +2541,7 @@ fn list_box_highlight(e: &mut Engine, this: Ptr<ListBox>, tile: u32, kind: ListB
         }
     }
     e.set(this, ListBox::pHighlightedItem, Ptr::new(tile));
-    list_box_update_highlight_box_pos(e, this, kind);
+    e.call(kind.update_highlight_box_pos, &args![this]);
     true
 }
 
@@ -2943,6 +3023,9 @@ const FLOAT_PAIR_004BD510: u32 = 0x004b_d510;
 /// `"_number_of_visible_items"`, `"_SetInCode"`.
 const NUMBER_OF_VISIBLE_ITEMS_TEXT: u32 = 0x0106_f860;
 const SET_IN_CODE_TEXT: u32 = 0x0107_0250;
+/// `ListBox<BGSNote *>::NumUnfiltered` (`007a6a50`, thiscall: `EAX`), which the
+/// notes' restore (`007a3580`) calls.
+const NOTE_NUM_UNFILTERED: u32 = 0x007a_6a50;
 
 // Translated from 007983c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (the map menu code calls it on the interface
@@ -3162,7 +3245,10 @@ pub fn fn_007a1850(e: &mut Engine, value: f32) {
 pub fn fn_007a1ac0(e: &mut Engine, this: Ptr<BSSimpleArray>, text: u32) -> u32 {
     let index = e.call(ARRAY_ADD_SLOT_00845460, &args![this]).u32();
     let buffer = e.get(this, BSSimpleArray::pBuffer);
-    fn_007a6310(e, this, buffer.wrapping_add(index.wrapping_mul(8)), 1);
+    e.call(
+        0x007a_6310,
+        &args![this, buffer.wrapping_add(index.wrapping_mul(8)), 1],
+    );
     let buffer = e.get(this, BSSimpleArray::pBuffer);
     let slot = buffer.wrapping_add(index.wrapping_mul(8));
     e.call(STRING_ASSIGN_00501C10, &args![slot, text]);
@@ -3174,22 +3260,23 @@ pub fn fn_007a1ac0(e: &mut Engine, this: Ptr<BSSimpleArray>, text: u32) -> u32 {
 /// map): the destructor `007a1aa0`, then the object freed when bit 0 of
 /// `flags` is set. Returns `this`.
 pub fn fn_007a6100(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_007a1aa0(e, this);
+    e.call(0x007a_1aa0, &args![this]);
     if flags & 1 != 0 {
         e.call(FREE, &args![this]);
     }
     this
 }
 
-/// A list box's scalar deleting destructor: `destructor`, then the object
-/// freed when bit 0 of `flags` is set. Returns `this`.
+/// A list box's scalar deleting destructor: the destructor at `destructor`
+/// (by address, as the code calls it directly), then the object freed when
+/// bit 0 of `flags` is set. Returns `this`.
 fn list_box_deleting_destructor(
     e: &mut Engine,
     this: Ptr<ListBox>,
     flags: u32,
-    destructor: fn(&mut Engine, Ptr<ListBox>),
+    destructor: u32,
 ) -> Ptr<ListBox> {
-    destructor(e, this);
+    e.call(destructor, &args![this]);
     if flags & 1 != 0 {
         e.call(FREE, &args![this]);
     }
@@ -3200,35 +3287,35 @@ fn list_box_deleting_destructor(
 /// `ListBox<TESQuest_P>`'s scalar deleting destructor (engine map):
 /// `007a1d60`, then freed on bit 0 of `flags`.
 pub fn fn_007a6130(e: &mut Engine, this: Ptr<ListBox>, flags: u32) -> Ptr<ListBox> {
-    list_box_deleting_destructor(e, this, flags, fn_007a1d60)
+    list_box_deleting_destructor(e, this, flags, 0x007a_1d60)
 }
 
 // Translated from 007a6160 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ListBox<BGSNote_P>`'s scalar deleting destructor (engine map):
 /// `007a28c0`, then freed on bit 0 of `flags`.
 pub fn fn_007a6160(e: &mut Engine, this: Ptr<ListBox>, flags: u32) -> Ptr<ListBox> {
-    list_box_deleting_destructor(e, this, flags, fn_007a28c0)
+    list_box_deleting_destructor(e, this, flags, 0x007a_28c0)
 }
 
 // Translated from 007a6190 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ListBox<TESObjectREFR_P>`'s scalar deleting destructor (engine map):
 /// `007a37b0`, then freed on bit 0 of `flags`.
 pub fn fn_007a6190(e: &mut Engine, this: Ptr<ListBox>, flags: u32) -> Ptr<ListBox> {
-    list_box_deleting_destructor(e, this, flags, fn_007a37b0)
+    list_box_deleting_destructor(e, this, flags, 0x007a_37b0)
 }
 
 // Translated from 007a61c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ListBox<BGSQuestObjective_P>`'s scalar deleting destructor (engine map):
 /// `007a4470`, then freed on bit 0 of `flags`.
 pub fn fn_007a61c0(e: &mut Engine, this: Ptr<ListBox>, flags: u32) -> Ptr<ListBox> {
-    list_box_deleting_destructor(e, this, flags, fn_007a4470)
+    list_box_deleting_destructor(e, this, flags, 0x007a_4470)
 }
 
 // Translated from 007a61f0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ListBox<TESChallenge_P>`'s scalar deleting destructor (engine map):
 /// `007a51c0`, then freed on bit 0 of `flags`.
 pub fn fn_007a61f0(e: &mut Engine, this: Ptr<ListBox>, flags: u32) -> Ptr<ListBox> {
-    list_box_deleting_destructor(e, this, flags, fn_007a51c0)
+    list_box_deleting_destructor(e, this, flags, 0x007a_51c0)
 }
 
 // Translated from 007a6310 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3258,7 +3345,7 @@ pub fn fn_007a63b0(e: &mut Engine, this: Ptr<BSSimpleArray>, buffer: u32, count:
     let mut index = 0u32;
     while index < count {
         let slot = buffer.wrapping_add(index.wrapping_mul(8));
-        fn_007a86b0(e, Ptr::new(slot), 0);
+        e.call(0x007a_86b0, &args![slot, 0]);
         index = index.wrapping_add(1);
     }
 }
@@ -3315,7 +3402,7 @@ const QUEST_NUM_FILTERED: StaticTrait = list_box_static(0x011d_a4e4, NUM_FILTERE
 /// (`0083fd60`), then `Synchronize`.
 fn list_box_sort(e: &mut Engine, this: Ptr<ListBox>, compare: u32, kind: ListBoxKind) {
     e.call(LIST_SORT_0083FD60, &args![this.addr() + 4, compare]);
-    list_box_synchronize(e, this, kind);
+    e.call(kind.synchronize, &args![this]);
 }
 
 /// `ListBox<T *>::SetEnabled`: the container's `"_enabled"` trait (a
@@ -3347,8 +3434,8 @@ fn list_box_synchronize(e: &mut Engine, this: Ptr<ListBox>, kind: ListBoxKind) {
         }
         node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
     }
-    list_box_set_total_list_height(e, this, kind);
-    list_box_update_highlight_box_pos(e, this, kind);
+    e.call(kind.set_total_list_height, &args![this]);
+    e.call(kind.update_highlight_box_pos, &args![this]);
 }
 
 /// `ListBox<T *>::NumUnfiltered`: the number of items (`00726c40`) minus the
@@ -3428,7 +3515,7 @@ fn list_box_get_highlight_target(
         _ => 0,
     };
     'end: {
-        if !list_box_is_enabled(e, this, kind) || step == 0 {
+        if !e.call(kind.is_enabled, &args![this]).bool() || step == 0 {
             break 'end;
         }
         if e.get(this, ListBox::usNextIndex) == 0 {
@@ -3518,7 +3605,7 @@ fn new_list_box_item(e: &mut Engine, tile: u32, data: u32) -> u32 {
     }
     e.with_stack(4, |e, slot| {
         e.mem.set_u32(slot.addr(), data);
-        fn_007a62e0(e, Ptr::new(item), tile, slot.addr()).addr()
+        e.call(0x007a_62e0, &args![item, tile, slot]).u32()
     })
 }
 
@@ -3575,7 +3662,7 @@ fn list_box_insert(
             &args![this.addr() + 4, item, compare],
         );
         if e.call(LIST_BOX_HAS_FLAG, &args![this, 0u32]).bool() {
-            list_box_synchronize(e, this, kind);
+            e.call(kind.synchronize, &args![this]);
         }
     } else {
         let item = new_list_box_item(e, tile, data);
@@ -3585,7 +3672,7 @@ fn list_box_insert(
         });
         if e.call(LIST_BOX_HAS_FLAG, &args![this, 0u32]).bool() {
             e.call(LIST_BOX_INIT_TILE_POSITION, &args![this, tile]);
-            list_box_set_total_list_height(e, this, kind);
+            e.call(kind.set_total_list_height, &args![this]);
         }
         let index = e.get(this, ListBox::usNextIndex);
         e.set(this, ListBox::usNextIndex, index.wrapping_add(1));
@@ -3636,14 +3723,15 @@ fn list_box_insert(
 /// container's `"_num_filtered"` (a function-local static id) is the count
 /// (`00715c60`), `SetTotalListHeight`; a highlight lost with a kept index
 /// goes to vtable +0x14 (kept index, 0), or else to the last unfiltered
-/// item (`last`); then `UpdateHighlightBoxPos`.
+/// item (`last`, by address as the code calls it); then
+/// `UpdateHighlightBoxPos`.
 fn list_box_filter(
     e: &mut Engine,
     this: Ptr<ListBox>,
     callback: u32,
     which: StaticTrait,
     kind: ListBoxKind,
-    last: fn(&mut Engine, Ptr<ListBox>) -> u32,
+    last: u32,
 ) {
     let mut filtered = 0u32;
     let mut kept = -1i32;
@@ -3688,16 +3776,16 @@ fn list_box_filter(
     let id = e.mem.u32(which.cache);
     let container = e.get(this, ListBox::pContainerRect);
     e.call(TILE_SET_COUNT_00715C60, &args![container, id, filtered]);
-    list_box_set_total_list_height(e, this, kind);
+    e.call(kind.set_total_list_height, &args![this]);
     if e.get(this, ListBox::pHighlightedItem).is_null() && kept >= 0 {
         let tile = e.vcall(this.addr(), 0x14, &args![kept, 0u32]).u32();
         e.set(this, ListBox::pHighlightedItem, Ptr::new(tile));
     }
     if e.get(this, ListBox::pHighlightedItem).is_null() && kept >= 0 {
-        let tile = last(e, this);
+        let tile = e.call(last, &args![this]).u32();
         e.set(this, ListBox::pHighlightedItem, Ptr::new(tile));
     }
-    list_box_update_highlight_box_pos(e, this, kind);
+    e.call(kind.update_highlight_box_pos, &args![this]);
 }
 
 // Translated from 007a22a0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3896,7 +3984,7 @@ pub fn fn_007a5230(
 // Translation incomplete: 007a2e30 - the C++ exception frame (FS:[0] chain, unwind state 0 around the static's look-up) is not translated.
 /// `ListBox<BGSNote_P>::Filter` (Xbox PDB): see [`list_box_filter`].
 pub fn list_box_bgs_note_filter(e: &mut Engine, this: Ptr<ListBox>, callback: u32) {
-    list_box_filter(e, this, callback, NOTE_FILTER, NOTE_LIST, fn_007a6220);
+    list_box_filter(e, this, callback, NOTE_FILTER, NOTE_LIST, 0x007a_6220);
 }
 
 // Translated from 007a3d20 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3909,7 +3997,7 @@ pub fn list_box_tes_object_refr_filter(e: &mut Engine, this: Ptr<ListBox>, callb
         callback,
         REFERENCE_FILTER,
         REFERENCE_LIST,
-        fn_007a6250,
+        0x007a_6250,
     );
 }
 
@@ -3924,7 +4012,7 @@ pub fn list_box_bgs_quest_objective_filter(e: &mut Engine, this: Ptr<ListBox>, c
         callback,
         OBJECTIVE_FILTER,
         OBJECTIVE_LIST,
-        fn_007a6280,
+        0x007a_6280,
     );
 }
 
@@ -3938,7 +4026,7 @@ pub fn list_box_tes_challenge_filter(e: &mut Engine, this: Ptr<ListBox>, callbac
         callback,
         CHALLENGE_FILTER,
         CHALLENGE_LIST,
-        fn_007a62b0,
+        0x007a_62b0,
     );
 }
 
@@ -4072,7 +4160,7 @@ pub fn fn_007a3580(e: &mut Engine, this: Ptr<ListBox>, focus: u8) {
     let set_in_code = e.call(TEXT_TO_TRAIT, &args![SET_IN_CODE_TEXT]).u32();
     let scroll_bar = e.get(this, ListBox::pScrollBar);
     e.call(TILE_POKE, &args![scroll_bar, set_in_code, 1.0f32.to_bits()]);
-    let count = fn_007a6a50(e, this);
+    let count = e.call(NOTE_NUM_UNFILTERED, &args![this]).u32();
     // `FILD qword` of the count with a zero high word, minus 1.0, stored as a
     // `float`.
     let one: f64 = e.global(ONE_DOUBLE);
@@ -4405,7 +4493,7 @@ fn stop_note_sounds(e: &mut Engine, menu: impl Fn(&Engine) -> u32) {
     let sounds = menu(e) + 0x98;
     e.call(SOUND_LIST_CLEAR_0076B7A0, &args![sounds]);
     let subtitles = menu(e) + 0xa8;
-    fn_007a1c30(e, Ptr::new(subtitles), 1);
+    e.call(0x007a_1c30, &args![subtitles, 1]);
     let base = menu(e);
     e.mem.set_u32(base + 0xb8, 0);
     let base = menu(e);
@@ -4496,10 +4584,10 @@ pub fn map_menu_do_enter(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32)
                 }
             }
         }
-        15 => list_box_bgs_note_set_enabled(e, Ptr::new(base + 0x160), 0),
+        15 => e.call(0x007a_30e0, &args![base + 0x160, 0]),
         16 => {
-            list_box_tes_quest_set_enabled(e, Ptr::new(base + 0x130), 0);
-            list_box_bgs_quest_objective_set_enabled(e, Ptr::new(base + 0x1c0), 1);
+            e.call(0x007a_2350, &args![base + 0x130, 0]);
+            e.call(0x007a_4c50, &args![base + 0x1c0, 1]);
         }
         0x18 => {
             if tile != 0 {
@@ -4887,10 +4975,10 @@ pub fn map_menu_do_leave(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32)
                 }
             }
         }
-        15 => list_box_bgs_note_set_enabled(e, Ptr::new(base + 0x160), 1),
+        15 => e.call(0x007a_30e0, &args![base + 0x160, 1]),
         16 => {
-            list_box_tes_quest_set_enabled(e, Ptr::new(base + 0x130), 1);
-            list_box_bgs_quest_objective_set_enabled(e, Ptr::new(base + 0x1c0), 0);
+            e.call(0x007a_2350, &args![base + 0x130, 1]);
+            e.call(0x007a_4c50, &args![base + 0x1c0, 0]);
         }
         0x19 => {
             if e.call(FLAG_004B71D0, &args![]).bool() || e.get(this, MapMenu::pSelectedNote) == 0 {
@@ -5583,7 +5671,10 @@ pub fn fn_007a1b10(e: &mut Engine, this: Ptr<BSSimpleArray>, index: u32, shrink:
         let old = e.get(this, BSSimpleArray::pBuffer);
         e.call(ARRAY_MOVE_00692480, &args![this, buffer, old, index]);
         let old = e.get(this, BSSimpleArray::pBuffer);
-        fn_007a63b0(e, this, old.wrapping_add(index.wrapping_mul(8)), 1);
+        e.call(
+            0x007a_63b0,
+            &args![this, old.wrapping_add(index.wrapping_mul(8)), 1],
+        );
         let count = e.get(this, BSSimpleArray::iSize).wrapping_sub(1);
         let old = e.get(this, BSSimpleArray::pBuffer);
         let from = old.wrapping_add(index.wrapping_mul(8)).wrapping_add(8);
@@ -5594,7 +5685,10 @@ pub fn fn_007a1b10(e: &mut Engine, this: Ptr<BSSimpleArray>, index: u32, shrink:
         e.set(this, BSSimpleArray::iReservedSize, reserve);
     } else {
         let old = e.get(this, BSSimpleArray::pBuffer);
-        fn_007a63b0(e, this, old.wrapping_add(index.wrapping_mul(8)), 1);
+        e.call(
+            0x007a_63b0,
+            &args![this, old.wrapping_add(index.wrapping_mul(8)), 1],
+        );
         let count = e
             .get(this, BSSimpleArray::iSize)
             .wrapping_sub(index)
@@ -5624,12 +5718,12 @@ pub fn fn_007a1b10(e: &mut Engine, this: Ptr<BSSimpleArray>, index: u32, shrink:
 /// focuses the tile at that index and calls the list's vtable +0x10.
 pub fn map_menu_update_current_page(e: &mut Engine, this: Ptr<MapMenu>) {
     let base = this.addr();
-    list_box_tes_quest_set_enabled(e, Ptr::new(base + 0x130), 0);
-    list_box_bgs_quest_objective_set_enabled(e, Ptr::new(base + 0x1c0), 0);
-    list_box_bgs_note_set_enabled(e, Ptr::new(base + 0x160), 0);
-    fn_007a5a30(e, Ptr::new(base + 0x160), 0);
-    list_box_tes_challenge_set_enabled(e, Ptr::new(base + 0x1f0), 0);
-    fn_007a5a30(e, Ptr::new(base + 0x1f0), 0);
+    e.call(0x007a_2350, &args![base + 0x130, 0]);
+    e.call(0x007a_4c50, &args![base + 0x1c0, 0]);
+    e.call(0x007a_30e0, &args![base + 0x160, 0]);
+    e.call(0x007a_5a30, &args![base + 0x160, 0]);
+    e.call(0x007a_59a0, &args![base + 0x1f0, 0]);
+    e.call(0x007a_5a30, &args![base + 0x1f0, 0]);
     for (index, id, value) in [
         (11u32, 0xfafu32, 1u32),
         (12, 0xfa3, 1),
@@ -5666,7 +5760,7 @@ pub fn map_menu_update_current_page(e: &mut Engine, this: Ptr<MapMenu>) {
             e.call(TILE_SET_INT, &args![tile_18, 0xfa3u32, 1u32]);
             if e.mem.u8(CHALLENGE_MODE_011DA36D) == 0 {
                 let menu = map_menu(e);
-                list_box_bgs_note_save_list_state(e, Ptr::new(menu + 0x160));
+                e.call(0x0073_12e0, &args![menu + 0x160]);
                 let menu = map_menu(e);
                 map_menu_update_notes(e, Ptr::new(menu));
                 if e.get(this, MapMenu::pSelectedNote) != 0
@@ -5683,7 +5777,7 @@ pub fn map_menu_update_current_page(e: &mut Engine, this: Ptr<MapMenu>) {
                     }
                 }
                 let menu = map_menu(e);
-                fn_007a3580(e, Ptr::new(menu + 0x160), 1);
+                e.call(0x007a_3580, &args![menu + 0x160, 1]);
             }
             let menu = map_menu(e);
             fn_0079b600(e, Ptr::new(menu));
@@ -5780,14 +5874,19 @@ pub fn map_menu_update_notes(e: &mut Engine, this: Ptr<MapMenu>) {
         let player = e.mem.u32(PLAYER_011DEA3C);
         let note = e.call(PLAYER_NOTE_AT_00966BB0, &args![player, index]).u32();
         let name = e.call(MARKER_GET_LOCATION_NAME, &args![note + 0x48]).u32();
-        let tile = fn_007a2930(e, Ptr::new(base + 0x160), note, name, 0, 0);
+        let tile = e
+            .call(0x007a_2930, &args![base + 0x160, note, name, 0, 0])
+            .u32();
         e.call(TILE_SET_INT, &args![tile, 0xfaau32, 0x18u32]);
         let dim = fn_00798420(e, Ptr::new(note)) != 0;
         set_item_alpha(e, tile, dim);
         index = index.wrapping_add(1);
     }
-    list_box_bgs_note_set_enabled(e, Ptr::new(base + 0x160), 1);
-    list_box_bgs_note_filter(e, Ptr::new(base + 0x160), NOTES_FILTER_CALLBACK_0079B390);
+    e.call(0x007a_30e0, &args![base + 0x160, 1]);
+    e.call(
+        0x007a_2e30,
+        &args![base + 0x160, NOTES_FILTER_CALLBACK_0079B390],
+    );
     let showing = u32::from(e.get(this, MapMenu::bShowingAllNotes));
     let showing_id = e.call(TEXT_TO_TRAIT, &args![SHOWING_ALL_NOTES_TEXT]).u32();
     let tile_12 = map_tile(e, base, 12);
@@ -5839,13 +5938,13 @@ pub fn map_menu_toggle_notes_challenge_mode(e: &mut Engine, this: Ptr<MapMenu>, 
         e.mem.set_u8(CHALLENGE_MODE_011DA36D, u8::from(mode == 0));
     }
     let mode = e.mem.u8(CHALLENGE_MODE_011DA36D);
-    list_box_tes_challenge_set_enabled(e, Ptr::new(base + 0x1f0), mode);
+    e.call(0x007a_59a0, &args![base + 0x1f0, mode]);
     let mode = e.mem.u8(CHALLENGE_MODE_011DA36D);
-    fn_007a5a30(e, Ptr::new(base + 0x1f0), mode);
+    e.call(0x007a_5a30, &args![base + 0x1f0, mode]);
     let notes = u8::from(e.mem.u8(CHALLENGE_MODE_011DA36D) == 0);
-    list_box_bgs_note_set_enabled(e, Ptr::new(base + 0x160), notes);
+    e.call(0x007a_30e0, &args![base + 0x160, notes]);
     let notes = u8::from(e.mem.u8(CHALLENGE_MODE_011DA36D) == 0);
-    fn_007a5a30(e, Ptr::new(base + 0x160), notes);
+    e.call(0x007a_5a30, &args![base + 0x160, notes]);
     let tile_13 = map_tile(e, base, 13);
     e.call(TILE_SET_INT, &args![tile_13, 0xfa3u32, 1u32]);
     if toggle != 0 {
@@ -5909,7 +6008,9 @@ pub fn fn_0079b600(e: &mut Engine, this: Ptr<MapMenu>) {
             let name = e
                 .call(MARKER_GET_LOCATION_NAME, &args![challenge + 0x18])
                 .u32();
-            let tile = fn_007a5230(e, Ptr::new(base + 0x1f0), challenge, name, 0, 0);
+            let tile = e
+                .call(0x007a_5230, &args![base + 0x1f0, challenge, name, 0, 0])
+                .u32();
             e.call(TILE_SET_INT, &args![tile, 0xfaau32, 0x18u32]);
             let dim = e.call(CHALLENGE_STATE_005A6150, &args![challenge]).u32() != 0;
             set_item_alpha(e, tile, dim);
@@ -6059,7 +6160,9 @@ pub fn map_menu_update_quests(e: &mut Engine, this: Ptr<MapMenu>) {
                 let objective = node_item(e, node);
                 let text = e.call(OBJECTIVE_NAME_005EC330, &args![objective]).u32();
                 let objective = node_item(e, node);
-                let tile = fn_007a44e0(e, Ptr::new(base + 0x1c0), objective, text, 0, 0);
+                let tile = e
+                    .call(0x007a_44e0, &args![base + 0x1c0, objective, text, 0, 0])
+                    .u32();
                 let width = float_constant(e, OBJECTIVE_WIDTH_FLOAT);
                 let first = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, tile + 4));
                 let child = e.call(CHILD_OF_006317A0, &args![tile + 4, first]).u32();
@@ -6086,7 +6189,9 @@ pub fn map_menu_update_quests(e: &mut Engine, this: Ptr<MapMenu>) {
                     let quest = e.mem.u32(quest_slot.addr());
                     let name = e.call(MARKER_GET_LOCATION_NAME, &args![quest + 0x30]).u32();
                     let quest = e.mem.u32(quest_slot.addr());
-                    let quest_tile = fn_007a1dd0(e, Ptr::new(base + 0x130), quest, name, 0, 0);
+                    let quest_tile = e
+                        .call(0x007a_1dd0, &args![base + 0x130, quest, name, 0, 0])
+                        .u32();
                     e.call(TILE_SET_INT, &args![quest_tile, 0xfaau32, 0x17u32]);
                     let quest = e.mem.u32(quest_slot.addr());
                     let done = e.call(QUEST_FLAG_0059E400, &args![quest]).bool();
@@ -6104,7 +6209,7 @@ pub fn map_menu_update_quests(e: &mut Engine, this: Ptr<MapMenu>) {
     });
     e.vcall(base + 0x1c0, 0x20, &args![QUESTS_SORT_CALLBACK_0079BC90]);
     e.vcall(base + 0x130, 0x20, &args![QUESTS_SORT_CALLBACK_0079BC90]);
-    list_box_tes_quest_set_enabled(e, Ptr::new(base + 0x130), 1);
+    e.call(0x007a_2350, &args![base + 0x130, 1]);
     let player = e.mem.u32(PLAYER_011DEA3C);
     if e.call(PLAYER_QUEST_005CBB50, &args![player]).u32() == 0 {
         list_box_bgs_quest_objective_filter(
@@ -6217,7 +6322,9 @@ pub fn map_menu_update_radio_list(e: &mut Engine, this: Ptr<MapMenu>) {
             let station = node_item(e, node);
             let name = e.call(STATION_NAME_0055D520, &args![station]).u32();
             let station = node_item(e, node);
-            let tile = fn_007a3820(e, Ptr::new(base + 0x190), station, name, 0, 0);
+            let tile = e
+                .call(0x007a_3820, &args![base + 0x190, station, name, 0, 0])
+                .u32();
             e.call(TILE_SET_INT, &args![tile, 0xfaau32, 0x19u32]);
             let station = node_item(e, node);
             let name = e.call(STATION_NAME_0055D520, &args![station]).u32();
@@ -9841,8 +9948,7 @@ mod map_menu_tests {
                 LIST_CONSTRUCT,
                 SELF,
                 WAYPOINTS_CONSTRUCT,
-                LIST_BOX_BASE_CONSTRUCT,
-                LIST_BOX_REGISTER,
+                LIST_BOX_COLLECTION_ADD,
                 ARRAY_CONSTRUCT_ELEMENTS_007A6310,
             ],
         );
@@ -9905,7 +10011,7 @@ mod map_menu_tests {
                 LIST_DESTRUCT,
                 SOUND_LIST_DESTRUCT,
                 MENU_DESTRUCT,
-                LIST_BOX_UNREGISTER,
+                LIST_BOX_COLLECTION_REMOVE,
                 TEXT_TO_TRAIT,
                 ADD_USER_TRAIT,
                 ARRAY_RELEASE_007A1C30,
@@ -9926,16 +10032,11 @@ mod map_menu_tests {
         assert_eq!(e.mem.u32(MAP_MENU_SINGLETON), 0);
         assert_eq!(e.mem.u32(base), MAP_MENU_VTABLE);
         assert_eq!(calls_to(&e, WAYPOINTS_DESTRUCT), vec![vec![base + 0x220]]);
-        assert_eq!(
-            calls_to(&e, LIST_BOX_UNREGISTER),
-            vec![
-                vec![base + 0x1f0],
-                vec![base + 0x1c0],
-                vec![base + 0x190],
-                vec![base + 0x160],
-                vec![base + 0x130]
-            ]
-        );
+        // The five list boxes leave the collection (`007211c0`, a plain call: its
+        // remove on the collection, given a stack word holding the list box).
+        let removes = calls_to(&e, LIST_BOX_COLLECTION_REMOVE);
+        assert_eq!(removes.len(), 5);
+        assert!(removes.iter().all(|words| words[0] == 0x011d_8b54));
         let lists = calls_to(&e, LIST_DESTRUCT);
         assert_eq!(
             lists[lists.len() - 2..],
@@ -11351,10 +11452,7 @@ mod map_menu_tests {
     fn list_box_constructors_set_the_vtable_and_register() {
         for (kind, functions) in INSTANCES {
             let mut e = engine();
-            quiet(
-                &mut e,
-                &[LIST_BOX_BASE_CONSTRUCT, LIST_CONSTRUCT, LIST_BOX_REGISTER],
-            );
+            quiet(&mut e, &[LIST_CONSTRUCT, LIST_BOX_COLLECTION_ADD]);
             let list: Ptr<ListBox> = e.new_object();
             e.mem.set_u32(list.addr() + 0x14, 0x55);
             e.call_log = Some(vec![]);
@@ -11363,7 +11461,9 @@ mod map_menu_tests {
             assert_eq!(e.mem.u32(list.addr() + 0x14), 0);
             assert_eq!(e.get(list, ListBox::usFlags), 1);
             assert_eq!(calls_to(&e, LIST_CONSTRUCT), vec![vec![list.addr() + 4]]);
-            assert_eq!(calls_to(&e, LIST_BOX_REGISTER), vec![vec![list.addr()]]);
+            let adds = calls_to(&e, LIST_BOX_COLLECTION_ADD);
+            assert_eq!(adds.len(), 1);
+            assert_eq!(adds[0][0], 0x011d_8b54);
         }
     }
 
@@ -11391,7 +11491,7 @@ mod map_menu_tests {
                 TILE_SET_INT,
                 ADD_USER_TRAIT,
                 0x0050_0000,
-                LIST_BOX_UNREGISTER,
+                LIST_BOX_COLLECTION_REMOVE,
                 LIST_DESTRUCT,
             ],
         );
@@ -11462,7 +11562,9 @@ mod map_menu_tests {
             e.call(functions[1], &args![list]);
             assert_eq!(e.mem.u32(list.addr()), kind.vtable);
             assert_eq!(calls_to(&e, FREE).len(), 2);
-            assert_eq!(calls_to(&e, LIST_BOX_UNREGISTER), vec![vec![list.addr()]]);
+            let removes = calls_to(&e, LIST_BOX_COLLECTION_REMOVE);
+            assert_eq!(removes.len(), 1);
+            assert_eq!(removes[0][0], 0x011d_8b54);
             assert_eq!(calls_to(&e, LIST_DESTRUCT), vec![vec![list.addr() + 4]]);
         }
     }
@@ -11731,7 +11833,6 @@ mod n056_tests {
         LIST_BOX_HAS_FLAG,
         LIST_BOX_INIT_TILE_POSITION,
         LIST_BOX_ITEM_OF_007E1110,
-        LIST_BOX_UNREGISTER,
         LIST_CONSTRUCT,
         LIST_CONTAINS_005F65D0,
         LIST_DESTRUCT,
@@ -12327,9 +12428,9 @@ mod n056_tests {
             (0x007a_86b0, STRING_DESTRUCT),
         ] {
             let mut e = engine();
-            // The list box destructors run for real (direct calls); their
-            // callees outside this file are doubled.
-            for addr in [destructor, LIST_BOX_UNREGISTER, LIST_DESTRUCT] {
+            // The destructors (called by address) and what a list box's
+            // destructor calls outside this file are doubled.
+            for addr in [destructor, LIST_BOX_COLLECTION_REMOVE, LIST_DESTRUCT] {
                 e.register(addr, |_, _| Ret::default());
             }
             let object = e.mem.alloc(0x40);
