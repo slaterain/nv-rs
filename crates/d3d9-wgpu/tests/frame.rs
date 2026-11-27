@@ -7127,3 +7127,235 @@ fn held_draws_over_one_surface_keep_their_order_across_keys() {
         assert_eq!(mismatches, 0, "each held draw drawn with its own state");
     }
 }
+
+/// TEST DATA: a draw's own commands as the game side sends them for a kept record: the quad of
+/// stream 0 at `offset`, the pixel shader's colour register, the draw.
+fn kept_draw(offset: u32, colour: [f32; 4]) -> Vec<(Cmd<()>, Vec<u8>)> {
+    vec![
+        (
+            Cmd::SetStreamSource {
+                device: DEVICE,
+                stream: 0,
+                buffer: VB,
+                offset,
+                stride: 16,
+            },
+            Vec::new(),
+        ),
+        (
+            Cmd::SetConstants {
+                device: DEVICE,
+                kind: 3,
+                start: 0,
+                count: 1,
+                data: (),
+            },
+            floats(&colour),
+        ),
+        (
+            Cmd::DrawPrimitive {
+                device: DEVICE,
+                kind: 4,
+                start: 0,
+                count: 2,
+            },
+            Vec::new(),
+        ),
+    ]
+}
+
+/// The kept-record script after [`Gpu::recording`]'s set-up, written to its recording only: a
+/// quad on the left half uploaded, the target cleared, then `second`'s commands (plain draws, a
+/// record and its item, or a check run's two forms).
+fn kept_script(second: impl FnOnce(&mut Vec<u8>)) -> Option<Vec<u8>> {
+    let mut g = Gpu::recording(16, 1)?;
+    let mut rec = g.rec.take().expect("the commands kept");
+    drop(g);
+    let quad = floats(&[
+        -1.0, -1.0, 0.5, 1.0, -1.0, 1.0, 0.5, 1.0, 0.0, -1.0, 0.5, 1.0, //
+        0.0, -1.0, 0.5, 1.0, -1.0, 1.0, 0.5, 1.0, 0.0, 1.0, 0.5, 1.0,
+    ]);
+    for cmd in [
+        Cmd::UploadBuffer {
+            buffer: VB,
+            offset: 96,
+            flags: 0,
+            data: Data::Bytes(&quad),
+        },
+        Cmd::Clear {
+            device: DEVICE,
+            count: 0,
+            rects: None,
+            flags: 3,
+            colour: 0,
+            z: 1.0f32.to_bits(),
+            stencil: 0,
+            model: 0,
+        },
+    ] {
+        d3d9_stream::wire::encode(&cmd, &mut rec);
+    }
+    second(&mut rec);
+    Some(rec)
+}
+
+/// Encodes `cmds` into `rec`.
+fn put_kept(rec: &mut Vec<u8>, cmds: &[(Cmd<()>, Vec<u8>)]) {
+    for (c, data) in cmds {
+        d3d9_stream::wire::encode(&c.map(|()| Data::Bytes(data)), rec);
+    }
+}
+
+/// `rec` replayed into an offscreen backend through kept records in `form`: each draw's digest of
+/// what it gave wgpu, the target's pixels, and what the records did.
+fn replay_kept(
+    rec: &[u8],
+    form: d3d9_stream::kept::Form,
+) -> (Vec<u64>, Vec<[u8; 4]>, d3d9_stream::kept::Counts) {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let mut b = d3d9_stream::Kept::with_form(WgpuBackend::new(Output::Offscreen), form);
+    let mut on = false;
+    for c in d3d9_stream::wire::commands(rec).expect("the script's recording") {
+        b.execute(c.expect("a command"));
+        if !on {
+            if let Some(d) = b.inner_mut().device() {
+                d.record_draw_digests(true);
+                on = true;
+            }
+        }
+    }
+    let counts = b.counts();
+    let d = b.inner_mut().device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0);
+    let digests = d.take_draw_digests();
+    let (_, _, px) = d.read_surface_pixels(RT).expect("the target's pixels");
+    let px = px
+        .chunks_exact(4)
+        .map(|p| [p[0], p[1], p[2], p[3]])
+        .collect();
+    (digests, px, counts)
+}
+
+const KEPT_RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+const KEPT_GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+
+/// The plain run the kept-record scripts are compared with: the left quad red, then green.
+fn kept_plain() -> Option<Vec<u8>> {
+    kept_script(|rec| {
+        put_kept(rec, &kept_draw(96, KEPT_RED));
+        put_kept(rec, &kept_draw(96, KEPT_GREEN));
+    })
+}
+
+/// An item of a kept record ([`d3d9_stream::Kept`], `DrawItem`) gives wgpu what its draw's own
+/// commands give it with the item's registers: the same digest at each draw and the same pixels as
+/// the plain commands, the record's draw first (red) and then the item (green), on the left half
+/// only (the record's quad); the right half is the clear's.
+#[test]
+fn an_item_gives_wgpu_what_its_draws_own_commands_give() {
+    let Some(plain) = kept_plain() else {
+        return;
+    };
+    let item = kept_script(|rec| {
+        d3d9_stream::wire::encode(
+            &Cmd::RecordNext {
+                device: DEVICE,
+                id: 1,
+                forget: 0,
+                check: 0,
+            },
+            rec,
+        );
+        put_kept(rec, &kept_draw(96, KEPT_RED));
+        let green = floats(&KEPT_GREEN);
+        d3d9_stream::wire::encode(
+            &Cmd::DrawItem {
+                device: DEVICE,
+                id: 1,
+                check: 0,
+                constants: Data::Bytes(&green),
+            },
+            rec,
+        );
+    })
+    .expect("a GPU adapter, as above");
+    let (want, want_px, _) = replay_kept(&plain, d3d9_stream::kept::Form::Old);
+    let (got, got_px, counts) = replay_kept(&item, d3d9_stream::kept::Form::Old);
+    assert_eq!(want.len(), 2, "both draws noted");
+    assert_eq!(got, want, "the digests, draw by draw");
+    assert_eq!(got_px, want_px, "the pixels");
+    assert_eq!((counts.records, counts.items, counts.missing), (1, 1, 0));
+    let green = [0, 255, 0, 255];
+    assert_eq!(
+        got_px[16 * 8 + 3],
+        green,
+        "the left half: the item's colour"
+    );
+    assert_eq!(
+        got_px[16 * 8 + 12],
+        [0, 0, 0, 0],
+        "the right half: the clear's"
+    );
+}
+
+/// A check run's recording (`NV_DRAW_ITEMS=check`): each draw it could have drawn from its record
+/// holds the item and then its old form. Replayed as its old form and as its items it gives the
+/// same digests and pixels when the item is right (here: a plain run's), and other ones when the
+/// item's registers are not its draw's: the proof the check run gives, and that it sees an item
+/// that draws otherwise.
+#[test]
+fn a_check_runs_two_forms_agree_only_when_the_item_draws_as_its_draw() {
+    let check = |item_colour: [f32; 4]| {
+        kept_script(move |rec| {
+            d3d9_stream::wire::encode(
+                &Cmd::RecordNext {
+                    device: DEVICE,
+                    id: 1,
+                    forget: 0,
+                    check: 0,
+                },
+                rec,
+            );
+            put_kept(rec, &kept_draw(96, KEPT_RED));
+            let regs = floats(&item_colour);
+            d3d9_stream::wire::encode(
+                &Cmd::DrawItem {
+                    device: DEVICE,
+                    id: 1,
+                    check: 1,
+                    constants: Data::Bytes(&regs),
+                },
+                rec,
+            );
+            d3d9_stream::wire::encode(
+                &Cmd::RecordNext {
+                    device: DEVICE,
+                    id: 2,
+                    forget: 1,
+                    check: 1,
+                },
+                rec,
+            );
+            put_kept(rec, &kept_draw(96, KEPT_GREEN));
+        })
+    };
+    let Some(right) = check(KEPT_GREEN) else {
+        return;
+    };
+    let plain = kept_plain().expect("a GPU adapter, as above");
+    let (want, want_px, _) = replay_kept(&plain, d3d9_stream::kept::Form::Old);
+    let (old, old_px, old_counts) = replay_kept(&right, d3d9_stream::kept::Form::Old);
+    let (items, items_px, item_counts) = replay_kept(&right, d3d9_stream::kept::Form::Items);
+    assert_eq!(old, want, "the old form: as a plain run");
+    assert_eq!(old_px, want_px);
+    assert_eq!(items, old, "the items: as the old form, draw by draw");
+    assert_eq!(items_px, old_px);
+    assert_eq!((old_counts.items, item_counts.items), (0, 1));
+    let wrong = check([0.0, 0.0, 1.0, 1.0]).expect("a GPU adapter, as above");
+    let (old, old_px, _) = replay_kept(&wrong, d3d9_stream::kept::Form::Old);
+    let (items, items_px, _) = replay_kept(&wrong, d3d9_stream::kept::Form::Items);
+    assert_eq!(old, want, "the old form is the run's own picture");
+    assert_eq!(items[0], old[0], "the record's own draw");
+    assert_ne!(items[1], old[1], "the wrong item's digest");
+    assert_ne!(items_px, old_px, "and its pixels");
+}

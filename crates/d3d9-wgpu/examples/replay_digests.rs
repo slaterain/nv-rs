@@ -17,6 +17,9 @@
 //! held draws merged (and sorted): its digests as the game gave the draws equal the first
 //! replay's, and as given to the pass the same within each Present (merged in place, `1`: in the
 //! same order).
+//! `NV_DIGESTS_ITEMS=1`: a check run's recording (`NV_DRAW_ITEMS=check`) replayed as its old form
+//! and as its items (`d3d9_stream::Kept`, records on): the old form's digests equal the first
+//! replay's, and the items' equal the old form's (every item gave wgpu what its draw gave it).
 //! `NV_WGPU_CACHE=DIR` as the game's host.
 fn replay(bytes: &[u8], records: bool, storage: bool, from: u64, to: u64) -> Vec<(u64, u64)> {
     let cache = std::env::var_os("NV_WGPU_CACHE").map(Into::into);
@@ -121,6 +124,18 @@ fn main() {
             &given,
         );
         println!("merged (sort {sort}, across blended draws {across}): {moved} draws given at another place");
+    }
+    if std::env::var_os("NV_DIGESTS_ITEMS").is_some() {
+        let cache = || std::env::var_os("NV_WGPU_CACHE").map(Into::into);
+        let form = |form| {
+            d3d9_wgpu::replay_item_digests(&bytes, form, from, to, cache())
+                .expect("a command file")
+                .expect("a GPU adapter")
+        };
+        let old = form(d3d9_stream::kept::Form::Old);
+        let items = form(d3d9_stream::kept::Form::Items);
+        ok &= compare("records off and the check run's old form", &off, &old);
+        ok &= compare("the check run's old form and its items", &old, &items);
     }
     if let Some(saved) = saved {
         ok &= compare("saved and records off", &saved, &off);

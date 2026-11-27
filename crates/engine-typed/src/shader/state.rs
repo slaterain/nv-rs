@@ -13,7 +13,7 @@ use super::layout::{
 };
 use super::{elem_addr, low8, FAMILY};
 use crate::anim_keys::narrow;
-use crate::draw::capture;
+use crate::draw::{capture, keep};
 use engine_core::ptr::{Field, Ptr};
 use engine_core::typed::leaf;
 use engine_core::{args, typed_call, Engine};
@@ -447,9 +447,25 @@ pub fn set_render_state(
     this: Ptr<NiDX9RenderState>,
     state: u32,
     value: u32,
-    _unused: u32,
+    unused: u32,
     lock: u8,
 ) {
+    if keep::building() {
+        let leaf = keep::Leaf::RenderState {
+            this: this.addr(),
+            state,
+            value,
+            unused,
+            lock,
+        };
+        return keep::leaf(e, leaf, |e| render_state_now(e, this, state, value, lock));
+    }
+    render_state_now(e, this, state, value, lock);
+}
+
+/// [`set_render_state`]'s work (a kept draw record replays the call, which does it again).
+#[inline(always)]
+fn render_state_now(e: &mut Engine, this: Ptr<NiDX9RenderState>, state: u32, value: u32, lock: u8) {
     let locked = elem_addr(this, NiDX9RenderState::abLocked, state, 1);
     if capture::own_at::<u8>(e, locked) != 0 {
         return;
@@ -479,7 +495,29 @@ pub fn set_stage_state(
     stage: u32,
     state: u32,
     value: u32,
-    _unused: u32,
+    unused: u32,
+) {
+    if keep::building() {
+        let leaf = keep::Leaf::StageState {
+            this: this.addr(),
+            stage,
+            state,
+            value,
+            unused,
+        };
+        return keep::leaf(e, leaf, |e| stage_state_now(e, this, stage, state, value));
+    }
+    stage_state_now(e, this, stage, state, value);
+}
+
+/// [`set_stage_state`]'s work (a kept draw record replays the call, which does it again).
+#[inline(always)]
+fn stage_state_now(
+    e: &mut Engine,
+    this: Ptr<NiDX9RenderState>,
+    stage: u32,
+    state: u32,
+    value: u32,
 ) {
     let Some(slot) = slot_of(e, STAGE_SLOT_OF_STATE, state, 8) else {
         return;
@@ -506,7 +544,29 @@ pub fn set_sampler_state(
     stage: u32,
     state: u32,
     value: u32,
-    _unused: u32,
+    unused: u32,
+) {
+    if keep::building() {
+        let leaf = keep::Leaf::SamplerState {
+            this: this.addr(),
+            stage,
+            state,
+            value,
+            unused,
+        };
+        return keep::leaf(e, leaf, |e| sampler_state_now(e, this, stage, state, value));
+    }
+    sampler_state_now(e, this, stage, state, value);
+}
+
+/// [`set_sampler_state`]'s work (a kept draw record replays the call, which does it again).
+#[inline(always)]
+fn sampler_state_now(
+    e: &mut Engine,
+    this: Ptr<NiDX9RenderState>,
+    stage: u32,
+    state: u32,
+    value: u32,
 ) {
     let Some(slot) = slot_of(e, SAMPLER_SLOT_OF_STATE, state, 5) else {
         return;
@@ -529,6 +589,20 @@ pub fn set_sampler_state(
 /// `thiscall(cache, stage, texture)`: the stage's texture, cached then sent (`SetTexture`) when it
 /// differs.
 pub fn set_texture(e: &mut Engine, this: Ptr<NiDX9RenderState>, stage: u32, texture: u32) {
+    if keep::building() {
+        let leaf = keep::Leaf::Texture {
+            this: this.addr(),
+            stage,
+            texture,
+        };
+        return keep::leaf(e, leaf, |e| texture_now(e, this, stage, texture));
+    }
+    texture_now(e, this, stage, texture);
+}
+
+/// [`set_texture`]'s work (a kept draw record replays the call, which does it again).
+#[inline(always)]
+fn texture_now(e: &mut Engine, this: Ptr<NiDX9RenderState>, stage: u32, texture: u32) {
     let cached = elem_addr(this, NiDX9RenderState::apTextures, stage, 4);
     if !capture::main_must_send(e, capture::own_at::<u32>(e, cached) == texture) {
         return;
@@ -565,6 +639,20 @@ fn set_cached(
 // Typed from 00e90e00
 /// `thiscall(cache, shader, keep)`: the vertex shader (`SetVertexShader`).
 pub fn set_vertex_shader(e: &mut Engine, this: Ptr<NiDX9RenderState>, shader: u32, keep: u8) {
+    if keep::building() {
+        let leaf = keep::Leaf::VertexShader {
+            this: this.addr(),
+            shader,
+            keep,
+        };
+        return keep::leaf(e, leaf, |e| vertex_shader_now(e, this, shader, keep));
+    }
+    vertex_shader_now(e, this, shader, keep);
+}
+
+/// [`set_vertex_shader`]'s work (a kept draw record replays the call, which does it again).
+#[inline(always)]
+fn vertex_shader_now(e: &mut Engine, this: Ptr<NiDX9RenderState>, shader: u32, keep: u8) {
     set_cached(
         e,
         this,
@@ -579,6 +667,20 @@ pub fn set_vertex_shader(e: &mut Engine, this: Ptr<NiDX9RenderState>, shader: u3
 // Typed from 00e88870
 /// `thiscall(cache, shader, keep)`: the pixel shader (`SetPixelShader`).
 pub fn set_pixel_shader(e: &mut Engine, this: Ptr<NiDX9RenderState>, shader: u32, keep: u8) {
+    if keep::building() {
+        let leaf = keep::Leaf::PixelShader {
+            this: this.addr(),
+            shader,
+            keep,
+        };
+        return keep::leaf(e, leaf, |e| pixel_shader_now(e, this, shader, keep));
+    }
+    pixel_shader_now(e, this, shader, keep);
+}
+
+/// [`set_pixel_shader`]'s work (a kept draw record replays the call, which does it again).
+#[inline(always)]
+fn pixel_shader_now(e: &mut Engine, this: Ptr<NiDX9RenderState>, shader: u32, keep: u8) {
     set_cached(
         e,
         this,
@@ -595,6 +697,20 @@ pub fn set_pixel_shader(e: &mut Engine, this: Ptr<NiDX9RenderState>, shader: u32
 /// does nothing; the same one again does nothing once one is set. Else the set byte goes on, the
 /// current one is saved when asked, and the new one is cached and sent.
 pub fn set_declaration(e: &mut Engine, this: Ptr<NiDX9RenderState>, declaration: u32, keep: u8) {
+    if keep::building() {
+        let leaf = keep::Leaf::Declaration {
+            this: this.addr(),
+            declaration,
+            keep,
+        };
+        return keep::leaf(e, leaf, |e| declaration_now(e, this, declaration, keep));
+    }
+    declaration_now(e, this, declaration, keep);
+}
+
+/// [`set_declaration`]'s work (a kept draw record replays the call, which does it again).
+#[inline(always)]
+fn declaration_now(e: &mut Engine, this: Ptr<NiDX9RenderState>, declaration: u32, keep: u8) {
     if declaration == 0 {
         return;
     }

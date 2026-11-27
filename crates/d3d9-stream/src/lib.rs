@@ -22,6 +22,7 @@
 //!   [`Slot`] while main goes on; the backend sees the serial order. [`StateDigest`], a backend
 //!   for checks, hashes each draw's device state.
 //! - [`Tee`]: two backends fed the same commands, the primary answering.
+//! - [`Kept`]: kept draw records, a draw's own commands carried out again by number ([`Cmd::DrawItem`]).
 //! - [`wire`]: commands as bytes: a file of them (recorded once, replayed into any backend), and
 //!   the hashes that check the hand-over (`NV_D3D9_STREAM_CHECK=1`).
 //!
@@ -32,12 +33,14 @@ mod chunk;
 mod cmd;
 mod digest;
 pub mod hitch;
+pub mod kept;
 mod runner;
 mod tee;
 pub mod wire;
 
 pub use cmd::{Backend, Cmd, Data, Handle, Native, Rect, Reply, Rows};
 pub use digest::{DrawSnapshot, StateDigest};
+pub use kept::Kept;
 pub use runner::{CutWaiter, Settings, Slot, Stream, IDLE_POLL};
 pub use tee::Tee;
 

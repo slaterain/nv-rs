@@ -19,6 +19,17 @@ pub const MAGIC: &[u8; 8] = b"NVD3D9S1";
 /// The hash of the command list this build encodes with (its text: names, fields, kinds).
 pub const LIST_HASH: u64 = hash_const(LIST.as_bytes());
 
+/// The [`LIST_HASH`] of the list before the kept draw records' commands (`RecordNext`, `DrawItem`,
+/// `ForgetRecords`) were added at its end: every command of such a file has the number and layout it
+/// has now, so it is read as ever (the recordings made before them).
+pub const OLDER_LIST_HASH: u64 = 0x2220_7750_95dd_ca44;
+
+/// Whether a file written with the command list of hash `file` is read: this build's, or
+/// [`OLDER_LIST_HASH`].
+fn reads_list(file: u64) -> bool {
+    file == LIST_HASH || file == OLDER_LIST_HASH
+}
+
 /// [`hash`] at compile time.
 const fn hash_const(bytes: &[u8]) -> u64 {
     let mut h = HASH_START;
@@ -213,7 +224,7 @@ pub fn commands(bytes: &[u8]) -> Result<Commands<'_>, WireError> {
         return Err(WireError::NotAStream);
     }
     let file = u64::from_le_bytes(bytes[8..16].try_into().expect("8 bytes"));
-    if file != LIST_HASH {
+    if !reads_list(file) {
         return Err(WireError::OtherList {
             file,
             this: LIST_HASH,
@@ -333,7 +344,7 @@ impl<R: std::io::Read> Records<R> {
             return Err(WireError::NotAStream.to_string());
         }
         let file = u64::from_le_bytes(head[8..].try_into().expect("8 bytes"));
-        if file != LIST_HASH {
+        if !reads_list(file) {
             return Err(WireError::OtherList {
                 file,
                 this: LIST_HASH,
@@ -447,9 +458,20 @@ pub fn frame_draws(from: impl std::io::Read) -> Result<Vec<u32>, String> {
 /// a time: two runs whose streams differ only in states set again to the value they had (the device
 /// layer leaving those out) give the same list, and any difference a draw could see gives another.
 pub fn draw_digests(from: impl std::io::Read) -> Result<Vec<u64>, String> {
+    draw_digests_as(from, crate::kept::Form::Old)
+}
+
+/// [`draw_digests`] with a check run's draws in `form` ([`crate::Kept`]): one check recording gives
+/// the digests of its old form and of its items, which agree draw by draw when every item gave the
+/// device what its draw gave it.
+pub fn draw_digests_as(
+    from: impl std::io::Read,
+    form: crate::kept::Form,
+) -> Result<Vec<u64>, String> {
     let mut records = Records::new(from)?;
     let (mut names, mut buf) = (Names::default(), Vec::new());
-    let (mut digest, list) = crate::StateDigest::new();
+    let (digest, list) = crate::StateDigest::new();
+    let mut digest = crate::Kept::with_form(digest, form);
     while let Some(record) = records.next()? {
         // Objects by their first use, not their handles: a run whose heap gave a buffer another address draws the same.
         digest.execute(rename(record, &mut names, &mut buf)?);

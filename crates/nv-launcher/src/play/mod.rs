@@ -1693,7 +1693,7 @@ fn play(
 
 /// The game's variables for the player's options on its command ([`game_ini::switches`]).
 ///
-/// In play the fourteen that would beat the profile's `Fallout.ini` are taken out, not even one left
+/// In play the fifteen that would beat the profile's `Fallout.ini` are taken out, not even one left
 /// from Play.exe's own environment. When a variable set before the start makes the run a test,
 /// which never reads the file, nothing is taken out and the file's choices are passed on, so the
 /// run plays like the player's game; the line for the log says which variable did it, what was
@@ -2978,12 +2978,12 @@ mod tests {
     }
 
     /// The variables on the game's own command (`pass_switches` on a `Command`, as `play` makes
-    /// it). In play the fourteen are taken out and nothing else is said; with a test variable set
+    /// it). In play the fifteen are taken out and nothing else is said; with a test variable set
     /// before Play.exe, the file's choices are set on the command, nothing is taken out, the one
     /// set before is left to come through as it was, and the log line names all of it.
     #[test]
     fn the_games_command_gets_the_files_choices_only_in_a_test() {
-        let fourteen = [
+        let fifteen = [
             "NV_PRESET",
             "NV_BORDERLESS",
             "NV_D3D9",
@@ -2995,6 +2995,7 @@ mod tests {
             "NV_SUN_SHADOWS",
             "NV_SUN_LIGHT_FROM_SKY",
             "NV_SUN_SHADOWS_CHARACTERS",
+            "NV_DRAW_ITEMS",
             "NV_THREADS",
             "NV_RENDER_THREAD",
             "NV_NOT_BACKGROUND",
@@ -3018,7 +3019,7 @@ mod tests {
         play.env("NV_SETTINGS", "settings.ini");
         let line = pass_switches(&mut play, &game_ini::switches(&ini, None, |_| false));
         assert_eq!(line, None);
-        let mut want: Vec<(String, Option<String>)> = fourteen
+        let mut want: Vec<(String, Option<String>)> = fifteen
             .iter()
             .map(|name| (name.to_string(), None))
             .collect();
@@ -3045,6 +3046,7 @@ mod tests {
             ("NV_SUN_SHADOWS", "0"),
             ("NV_SUN_LIGHT_FROM_SKY", "1"),
             ("NV_SUN_SHADOWS_CHARACTERS", "1"),
+            ("NV_DRAW_ITEMS", "0"),
             ("NV_RENDER_THREAD", "1"),
             ("NV_NOT_BACKGROUND", "1"),
             ("NV_GRAB_PUSH", "0"),
@@ -3302,6 +3304,7 @@ mod tests {
             ("NV_SUN_SHADOWS", "0"),
             ("NV_SUN_LIGHT_FROM_SKY", "1"),
             ("NV_SUN_SHADOWS_CHARACTERS", "1"),
+            ("NV_DRAW_ITEMS", "0"),
             ("NV_THREADS", "stepped"),
             ("NV_RENDER_THREAD", "1"),
             ("NV_NOT_BACKGROUND", "1"),

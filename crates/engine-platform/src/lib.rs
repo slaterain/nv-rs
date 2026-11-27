@@ -90,6 +90,7 @@ pub mod d3d9;
 pub mod d3d9backend;
 pub mod d3d9device;
 pub mod d3d9draw;
+mod d3d9items;
 pub mod d3d9query;
 pub mod d3d9real;
 pub mod d3d9resource;
@@ -320,6 +321,7 @@ pub fn device_held(e: &Engine) -> bool {
 /// The [`d3d9::DeviceState`] in an engine's `Engine::device`; `held` is [`device_held`].
 #[inline]
 pub fn device(slot: &DeviceRef, held: bool) -> &d3d9::DeviceState {
+    engine_core::real_threads::note_device_state();
     debug_assert!(held, "the Direct3D 9 state reached without the device lock");
     let any = slot
         .get()
@@ -335,6 +337,7 @@ pub fn device(slot: &DeviceRef, held: bool) -> &d3d9::DeviceState {
 /// [`device_held`].
 #[inline]
 pub fn device_mut(slot: &mut DeviceRef, held: bool) -> &mut d3d9::DeviceState {
+    engine_core::real_threads::note_device_state();
     debug_assert!(held, "the Direct3D 9 state reached without the device lock");
     let any = slot
         .get_mut()

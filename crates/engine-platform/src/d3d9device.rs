@@ -568,11 +568,24 @@ pub(super) fn skip_repeats(e: &mut Engine) -> bool {
 pub(super) fn skip_repeats_in(objects: &mut Objects) -> bool {
     static KEEP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let keep = *objects.keep_repeats.get_or_insert_with(|| {
-        *KEEP.get_or_init(|| std::env::var("NV_D3D9_REPEATS").is_ok_and(|v| v == "keep"))
+        *KEEP.get_or_init(|| {
+            repeats_kept(
+                std::env::var("NV_D3D9_REPEATS").is_ok_and(|v| v == "keep"),
+                engine_core::draw_items::mode(),
+            )
+        })
     });
     !keep
         && (!super::d3d9draw::cut_open_in(&objects.draw)
             || super::d3d9draw::drawing_side(&objects.draw))
+}
+
+/// Whether states set again to their value reach the backend: `NV_D3D9_REPEATS=keep`, or a kept draw records'
+/// check run (`NV_DRAW_ITEMS=check`). There an item made from a record's replay comes before the set-up's old
+/// form, and the model already took the item's registers: the old form's identical sets would be left out as
+/// repeats, and neither form's draw would get them when the recording is replayed one way or the other.
+pub(super) fn repeats_kept(asked: bool, items: engine_core::draw_items::Mode) -> bool {
+    asked || items == engine_core::draw_items::Mode::Check
 }
 
 /// Tests: whether states set again to the value they hold still reach the backend on `e`
@@ -1094,6 +1107,7 @@ static WRITER: engine_core::real_threads::DeviceWriter = {
 
 fn register_code(e: &mut Engine) {
     engine_core::real_threads::install_device_writer(&WRITER);
+    engine_core::draw_items::install(&super::d3d9items::HOOKS);
     let device: [(u32, crate::AbiFn); 48] = [
         (16, crate::entry!(0, reset(Ptr, Ptr) -> u32).1),
         (
