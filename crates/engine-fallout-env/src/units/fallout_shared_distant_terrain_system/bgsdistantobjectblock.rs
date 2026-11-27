@@ -2039,6 +2039,13 @@ mod tests {
         e.register(FILE_EXISTS, |_, _| ret(1));
         construct(&mut e, 1, 0, 0);
         assert!(calls(&e, PRINT_FORMATTED).is_empty());
+        // A high-priority block with the flag: the high-priority name, no PA name.
+        construct(&mut e, 1, 1, 0);
+        assert!(calls(&e, BUILD_BLOCK_FILE_NAME_PA).is_empty());
+        assert_eq!(
+            calls(&e, PRINT_FORMATTED)[0][2],
+            BLOCK_FILE_HIGH_PRIORITY_FORMAT
+        );
         // The stinger version.
         construct(&mut e, 0, 1, 2);
         assert_eq!(e.mem.u8(task + TASK_STINGER_VERSION), 2);
@@ -2119,89 +2126,6 @@ mod tests {
             calls(&e, BUILD_BLOCK_FILE_NAME_PA).len(),
             1,
             "no answer: the exe"
-        );
-    }
-
-    /// JIP LN NVSE's MakeObjLODPath end to end (`0x006F6DF1`, JIP's real handler): with JIP
-    /// installed answering "installed", a script's `SwapObjectLOD Wasteland -2 3` (through its
-    /// record) makes the load task of that cell hand the LOD loader JIP's `AltLOD` file name
-    /// (past `Data\`) when that file exists; before the command, for another cell, or for a
-    /// high-priority block, the exe's own name is built.
-    #[test]
-    fn construct_takes_jip_swapped_lod_name() {
-        use jip::test_support::{call, form_arg, install_into, int_arg, script_ref};
-        use jip::world_hooks::SWAP_OBJECT_LOD;
-        let mut e = engine();
-        construct_doubles(&mut e);
-        install_into(&mut e);
-        // The world space: form type 0x41 (`kFormType_TESWorldSpace`), editor id "Wasteland"
-        // from its slot `0x130`.
-        let world_space = object(&mut e, 0x40, &[(WORLD_SPACE_SLOT_NAME, NAME_SLOT_DOUBLE)]);
-        e.mem.set_u8(world_space + 4, 0x41);
-        e.mem.set_u32(world_space + 0xc, 0x0001_0000);
-        let edid = e.mem.alloc(0x10);
-        e.mem.write(edid, b"Wasteland\0");
-        e.register_double(NAME_SLOT_DOUBLE, move |_, _| ret(edid));
-        script_ref(&mut e, 1, world_space);
-        // The name the LOD loader gets (`QueuedFile::SetName`'s text), and every file exists.
-        let names = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let seen = names.clone();
-        e.register_double(QUEUED_FILE_SET_NAME, move |e, a| {
-            // At most the buffer's 0x104 bytes: the exe's names here are stand-ins' (unwritten).
-            let text: Vec<u8> = (a[1]..a[1] + 0x104)
-                .map(|at| e.mem.u8(at))
-                .take_while(|b| *b != 0)
-                .collect();
-            seen.borrow_mut().push(text);
-            Ret::default()
-        });
-        e.register(FILE_EXISTS, |_, _| ret(1));
-        let task = e.mem.alloc(0x58);
-        let construct = |e: &mut Engine, x: i32, y: i32, high: u32| {
-            e.call_log = Some(vec![]);
-            let words = args![
-                task,
-                0x500u32,
-                world_space,
-                x as u32,
-                y as u32,
-                8u32,
-                1u32,
-                high,
-                0u32
-            ];
-            e.call(0x006f_6d10, &words);
-            names.take()
-        };
-        // Before the command: the exe's PA name.
-        construct(&mut e, -2, 3, 0);
-        assert_eq!(calls(&e, BUILD_BLOCK_FILE_NAME_PA).len(), 1, "no swap yet");
-        let (ok, _) = call(
-            &mut e,
-            SWAP_OBJECT_LOD,
-            &[form_arg(1), int_arg(-2), int_arg(3)],
-        );
-        assert_eq!(ok, 1);
-        assert_eq!(
-            construct(&mut e, -2, 3, 0),
-            vec![
-                b"Meshes\\Landscape\\LOD\\Wasteland\\Blocks\\Wasteland.Level8.X-2.Y3.AltLOD.nif"
-                    .to_vec()
-            ],
-            "the swapped cell's AltLOD name"
-        );
-        assert!(calls(&e, BUILD_BLOCK_FILE_NAME_PA).is_empty());
-        construct(&mut e, -2, 4, 0);
-        assert_eq!(
-            calls(&e, BUILD_BLOCK_FILE_NAME_PA).len(),
-            1,
-            "another cell: the exe's name"
-        );
-        construct(&mut e, -2, 3, 1);
-        assert!(
-            calls(&e, BUILD_BLOCK_FILE_NAME_PA).is_empty()
-                && calls(&e, PRINT_FORMATTED)[0][2] == BLOCK_FILE_HIGH_PRIORITY_FORMAT,
-            "a high-priority block: the exe's high-priority name"
         );
     }
 

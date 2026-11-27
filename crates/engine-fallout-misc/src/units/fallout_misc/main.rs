@@ -384,45 +384,6 @@ fn raise_single_processor_count(e: &mut Engine) {
     }
 }
 
-/// Before the launcher test (`0x86AC60`, the call of `004da570`). JIP LN NVSE's G115 (a fix, the
-/// row `NV_JIP_GAME_PATCHES`; `WriteRelCall(0x86AC60, ProcessCustomINI)`) applies
-/// `FalloutCustom.ini` to the INI settings there, then makes the same call: the seam is asked with
-/// no words (the answer is not read) and the exe's call follows. With the word's `FIXES` bit
-/// clear: one load, nothing else.
-#[inline]
-fn jip_custom_ini(e: &mut Engine) {
-    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
-        e.site(0x0086_ac60, &[]);
-    }
-}
-
-/// The C runtime's call of `main` (`0x00ECC46B`, `CALL 0x0086A850` in `__tmainCRTStartup`, after
-/// the static initializers), where xNVSE's loader loads xNVSE and its plugins before `main` runs:
-/// JIP LN NVSE's `InitGamePatches` sets `fRepairSkillMax` there (G112, a fix, the row
-/// `NV_JIP_GAME_PATCHES`), so the value comes after the exe's static initializer and before
-/// `Main::InitTES` loads the data files (a plugin's `GMST` still sets it). The port's CRT start-up
-/// calls `main` directly, so `main` asks the seam first thing, with no words (the answer is not
-/// read). With the word's `FIXES` bit clear: one load, nothing else.
-#[inline]
-fn jip_before_main(e: &mut Engine) {
-    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
-        e.site(0x00ec_c46b, &[]);
-    }
-}
-
-/// The process lists' time refresh at start-up (`0x86B1EE`, `CALL 0x00970D50` on the process
-/// lists `0x011E0E80`). JIP LN NVSE's D02 (its `PostLoad`: `SAFE_WRITE_BUF(0x86B1EE, 5-byte NOP)`)
-/// removes this call and makes it at its deferred start instead (`DeferredInit`'s
-/// `ThisCall(0x970D50, ProcessManager::Get())`, the `jip` crate's `cosave::refresh_process_time`).
-/// JIP does both whenever it is loaded, so the seam is asked while JIP answers "installed" (the
-/// same condition as the deferred call), with no words; true when JIP's handler takes the call
-/// away. Without JIP: one load, the exe's call.
-#[inline]
-fn jip_moves_process_refresh(e: &mut Engine) -> bool {
-    e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
-        && e.site(0x0086_b1ee, &[]).is_some()
-}
-
 /// Resizes the game window to the renderer's screen size: the client rectangle
 /// (`0, 0, 004dc1f0(), 004dc200()`) grown by the window's style, then `SetWindowPos` with the
 /// rectangle's left and bottom as the position and (right - left, top - bottom) as the size,
@@ -489,7 +450,6 @@ fn scope_begin(e: &mut Engine, scope: u32, category: u32, line: u32) {
 /// frames call `Main`'s per-frame function, inactive ones sleep 50 ms and suspend audio); and
 /// the shutdown of everything in reverse.
 pub fn main(e: &mut Engine, instance: u32, _unused_1: u32, _unused_2: u32, _unused_3: u32) -> u32 {
-    jip_before_main(e);
     e.with_stack(MAIN_FRAME_SIZE, |e, frame| {
         let ebp = frame.addr() + MAIN_FRAME_SIZE;
         run_main(e, ebp, instance)
@@ -626,7 +586,6 @@ fn run_main(e: &mut Engine, ebp: u32, instance: u32) -> u32 {
     e.call(0x005e_0200, &args![object, path]);
     raise_single_processor_count(e);
 
-    jip_custom_ini(e);
     // Hand over to the launcher when the launcher is wanted and starts.
     if e.call(0x004d_a570, &args![]).bool() {
         e.call(0x004d_a4d0, &args![1u32]);
@@ -805,9 +764,8 @@ fn run_main(e: &mut Engine, ebp: u32, instance: u32) -> u32 {
     let object = e.global::<u32>(0x011d_e45c);
     e.call(0x008a_8150, &args![object, 1u32]);
     typed_call!(leaf::FAMILY, 0x0040_fbe0, leaf::nothing(e); words 0x0108_293cu32);
-    if !jip_moves_process_refresh(e) {
-        e.call(0x0097_0d50, &args![0x011e_0e80u32]);
-    }
+    // The process lists' time refresh at start-up (`0x86B1EE`).
+    e.call(0x0097_0d50, &args![0x011e_0e80u32]);
     let data_handler = e.global::<u32>(0x011c_3f2c);
     e.call(0x0046_14e0, &args![data_handler]);
     let object = e.global::<u32>(0x011d_df38);
@@ -5008,155 +4966,15 @@ mod tests {
         e
     }
 
-    /// G115's seam at `0x86AC60`: JIP not installed, or installed with the row off, asks nothing;
-    /// with the row it is asked once, with no words, right before the launcher test (`004da570`),
-    /// which still runs.
+    /// The process lists' time refresh at start-up (`0x86B1EE`, `00970d50` on `0x011E0E80`) runs
+    /// once.
     #[test]
-    fn g115_seam_comes_before_the_launcher_test() {
-        use engine_core::extend::{jip_patches, Owner, SiteSlot};
-        /// The seam's asks, then how many there were when `004da570` ran.
-        const ASKED: u32 = 0x0118_0400;
-        let run = |word: u32| {
-            let mut e = main_engine();
-            if !e.mem.is_mapped(ASKED) {
-                e.map(ASKED & !0xfff, 0x1000);
-            }
-            e.mem.set_u32(ASKED, 0);
-            e.mem.set_u32(ASKED + 4, 0xffff);
-            e.set_jip_patches(word);
-            e.on_site(SiteSlot::new(Owner::Jip, 0x0086_ac60), |e, a| {
-                assert!(a.is_empty());
-                let n = e.mem.u32(ASKED);
-                e.mem.set_u32(ASKED, n + 1);
-                Some(0)
-            });
-            e.register(0x004d_a570, |e, _| {
-                e.mem.set_u32(ASKED + 4, e.mem.u32(ASKED));
-                1u32.into_ret()
-            });
-            e.register(API_SHELL_EXECUTE, |_, _| 33u32.into_ret());
-            assert_eq!(run_main_entry(&mut e), 0);
-            (e.mem.u32(ASKED), e.mem.u32(ASKED + 4))
-        };
-        for word in [0, jip_patches::INSTALLED] {
-            assert_eq!(run(word), (0, 0), "{word:08x}");
-        }
-        assert_eq!(run(jip_patches::FIXES), (1, 1));
-    }
-
-    /// G112's seam at `0x00ECC46B` (the C runtime's call of `main`): JIP not installed, or
-    /// installed with the row off, asks nothing; with the row it is asked once, with no words,
-    /// first thing (before the single-instance mutex), and `main` goes on. Its value lands
-    /// between the exe's static initializer (9.0 at `fRepairSkillMax`) and `Main::InitTES`
-    /// (`0086cf20`, the data files): `InitTES` sees JIP's 10.0, and a plugin's `GMST` written
-    /// there is what stays.
-    #[test]
-    fn g112_seam_comes_first_and_before_the_data_load() {
-        use engine_core::extend::{jip_patches, Owner, SiteSlot};
-        /// `fRepairSkillMax`'s value word; then the asks, the ask count when the mutex was made,
-        /// and the value `InitTES` found.
-        const SKILL_MAX: u32 = 0x011d_0190;
-        const ASKED: u32 = 0x0118_0400;
-        let run = |word: u32, plugin: Option<f32>| {
-            let mut e = main_engine();
-            for at in [ASKED, SKILL_MAX] {
-                if !e.mem.is_mapped(at) {
-                    e.map(at & !0xfff, 0x1000);
-                }
-            }
-            e.mem.set_u32(SKILL_MAX, 0x4110_0000);
-            for i in 0..3 {
-                e.mem.set_u32(ASKED + 4 * i, 0xffff);
-            }
-            e.mem.set_u32(ASKED, 0);
-            e.set_jip_patches(word);
-            e.on_site(SiteSlot::new(Owner::Jip, 0x00ec_c46b), |e, a| {
-                assert!(a.is_empty());
-                let n = e.mem.u32(ASKED);
-                e.mem.set_u32(ASKED, n + 1);
-                // JIP's write (the handler in `jip`'s `game_patches/gb.rs`).
-                e.mem.set_u32(SKILL_MAX, 0x4120_0000);
-                None
-            });
-            e.register(API_CREATE_MUTEX, |e, _| {
-                e.mem.set_u32(ASKED + 4, e.mem.u32(ASKED));
-                0u32.into_ret()
-            });
-            // The plugin's value (its bits; 0: no plugin sets it) for `InitTES` to write.
-            e.mem.set_u32(ASKED + 12, plugin.map_or(0, f32::to_bits));
-            e.register(0x0086_cf20, |e, _| {
-                e.mem.set_u32(ASKED + 8, e.mem.u32(SKILL_MAX));
-                let plugin = e.mem.u32(ASKED + 12);
-                if plugin != 0 {
-                    e.mem.set_u32(SKILL_MAX, plugin);
-                }
-                Ret::default()
-            });
-            assert_eq!(run_main_entry(&mut e), 0);
-            (
-                e.mem.u32(ASKED),
-                e.mem.u32(ASKED + 4),
-                e.mem.u32(ASKED + 8),
-                e.mem.f32(SKILL_MAX),
-            )
-        };
-        for word in [0, jip_patches::INSTALLED] {
-            assert_eq!(run(word, None), (0, 0, 0x4110_0000, 9.0), "{word:08x}");
-        }
-        assert_eq!(run(jip_patches::FIXES, None), (1, 1, 0x4120_0000, 10.0));
-        assert_eq!(
-            run(jip_patches::FIXES, Some(12.5)),
-            (1, 1, 0x4120_0000, 12.5),
-            "a plugin's setting wins"
-        );
-    }
-
-    /// D02's seam at `0x86B1EE`: JIP not installed (the game-patch row alone does not count),
-    /// nothing is asked and the process lists' time refresh (`00970d50` on `0x011E0E80`) runs
-    /// once; JIP installed, the seam is asked once with no words, and a taken answer leaves the
-    /// refresh out (JIP makes it at its deferred start); no answer keeps the exe's call.
-    #[test]
-    fn d02_takes_the_start_up_process_refresh_away_while_jip_is_installed() {
-        use engine_core::extend::{jip_patches, Owner, SiteSlot};
-        thread_local! {
-            static D02_ASKED: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
-        }
-        fn taken(_: &mut Engine, a: &[u32]) -> Option<u32> {
-            D02_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
-            Some(1)
-        }
-        fn kept(_: &mut Engine, a: &[u32]) -> Option<u32> {
-            D02_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
-            None
-        }
-        let run = |word: u32, handler: fn(&mut Engine, &[u32]) -> Option<u32>| {
-            D02_ASKED.with(|s| s.borrow_mut().clear());
-            let mut e = main_engine();
-            e.set_jip_patches(word);
-            e.on_site(SiteSlot::new(Owner::Jip, 0x0086_b1ee), handler);
-            e.call_log = Some(vec![]);
-            assert_eq!(run_main_entry(&mut e), 0);
-            let log = take_log(&mut e);
-            (
-                calls_to(&log, 0x0097_0d50),
-                D02_ASKED.with(|s| s.borrow().clone()),
-            )
-        };
-        let refresh = vec![vec![0x011e_0e80]];
-        for word in [0, jip_patches::FIXES] {
-            assert_eq!(run(word, taken), (refresh.clone(), vec![]), "{word:08x}");
-        }
-        for word in [
-            jip_patches::INSTALLED,
-            jip_patches::INSTALLED | jip_patches::FIXES,
-        ] {
-            assert_eq!(run(word, taken), (vec![], vec![vec![]]), "{word:08x}");
-            assert_eq!(
-                run(word, kept),
-                (refresh.clone(), vec![vec![]]),
-                "{word:08x}"
-            );
-        }
+    fn main_refreshes_the_process_lists_time_once() {
+        let mut e = main_engine();
+        e.call_log = Some(vec![]);
+        assert_eq!(run_main_entry(&mut e), 0);
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, 0x0097_0d50), vec![vec![0x011e_0e80]]);
     }
 
     #[test]

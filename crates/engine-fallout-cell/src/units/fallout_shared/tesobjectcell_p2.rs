@@ -5038,20 +5038,8 @@ fn drop_items(e: &mut Engine, list: u32) {
 
 /// The dropped item list of the actor, cleared by [`drop_items`] and then
 /// removed from the actor's extra data (nothing when it has none).
-fn clear_dropped_items(e: &mut Engine, actor: Ptr, respawn: bool) {
-    // JIP LN's O17 (`bNPCWeaponMods`, `WriteRelCall(0x54E2A4, ResetActorFlagsRespawnHook)`, the
-    // respawn's place only): the handler clears the actor's "weapon mods dealt" mark and answers
-    // its extra list. Words: the actor.
-    let jip_list =
-        if respawn && e.jip_patches() & engine_core::extend::jip_patches::NPC_WEAPON_MODS != 0 {
-            e.site(0x0054_e2a4, &[actor.addr()])
-        } else {
-            None
-        };
-    let extra = match jip_list {
-        Some(list) => list,
-        None => reference_extra_list(e, actor),
-    };
+fn clear_dropped_items(e: &mut Engine, actor: Ptr) {
+    let extra = reference_extra_list(e, actor);
     let list = e
         .call(EXTRA_LIST_GET_DROPPED_ITEM_LIST, &args![extra])
         .u32();
@@ -5195,7 +5183,7 @@ pub fn fn_0054df30(e: &mut Engine, this: Ptr<TESObjectCELL>) -> u8 {
         if !actor.is_null() {
             if e.call(ACTOR_TEST_87F4A0, &args![actor]).bool() {
                 e.vcall(actor.addr(), ACTOR_SLOT_324, &args![1u32, 0u32, 0u32]);
-                clear_dropped_items(e, actor, true);
+                clear_dropped_items(e, actor);
                 e.with_stack(12, |e, placed| {
                     e.vcall(actor.addr(), REFERENCE_SLOT_170, &args![placed]);
                     let mut back = false;
@@ -5234,20 +5222,13 @@ pub fn fn_0054df30(e: &mut Engine, this: Ptr<TESObjectCELL>) -> u8 {
                     && !e.call(REFERENCE_TEST_577DE0, &args![actor]).bool()
                 {
                     e.call(REFERENCE_MARK_AS_DELETED, &args![actor]);
-                    // JIP LN NVSE (step 3.9 G103, fix row) jumps over the ash pile's deletion
-                    // (`0x54E421`): the pile goes when the walk reaches it.
-                    let keep_ash_pile = e.jip_patches() & engine_core::extend::jip_patches::FIXES
-                        != 0
-                        && e.site(0x0054_e421, &[actor.addr()]).is_some();
-                    if !keep_ash_pile {
-                        let extra = reference_extra_list(e, actor);
-                        let ash = e.call(EXTRA_LIST_GET_ASH_PILE_REF, &args![extra]).u32();
-                        if ash != 0 {
-                            e.call(REFERENCE_MARK_AS_DELETED, &args![ash]);
-                        }
+                    let extra = reference_extra_list(e, actor);
+                    let ash = e.call(EXTRA_LIST_GET_ASH_PILE_REF, &args![extra]).u32();
+                    if ash != 0 {
+                        e.call(REFERENCE_MARK_AS_DELETED, &args![ash]);
                     }
                 }
-                clear_dropped_items(e, actor, false);
+                clear_dropped_items(e, actor);
             }
         } else {
             let base = base_form(e, item);
@@ -5264,12 +5245,6 @@ pub fn fn_0054df30(e: &mut Engine, this: Ptr<TESObjectCELL>) -> u8 {
                         }
                     }
                 }
-            } else if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
-                && e.site(0x0054_e4e1, &[item.addr(), base.addr()]).is_some()
-            {
-                // JIP LN NVSE's `ClearAshPilesHook` (step 3.9 G103, fix row) replaces the type
-                // tests from `0x54E4E1` on: it handles an ash pile and goes on at `0x54E5E6`,
-                // so the branches for the types 0x1D and 0x26 below do not run.
             } else if kind == 0x1d {
                 if typed_call!(leaf::FAMILY, 0x0044_0d80, leaf::form_flag_20(e, item))
                     && !e.call(REFERENCE_TEST_565450, &args![item]).bool()
@@ -13269,47 +13244,19 @@ mod tests {
         c
     }
 
-    /// JIP LN's O17 seam at `0x54E2A4` (`bNPCWeaponMods`): a respawned actor's dropped items are
-    /// looked up in the list the handler answers (in place of `005d43c0`'s); only with the
-    /// switch's bit, only for the respawn (not the deleted actor's `0x54E444`); no answer is the
-    /// exe's.
+    /// A respawned actor's dropped items are looked up in its own extra list (`0x54E2A4`).
     #[test]
-    fn long_detached_cell_asks_jip_o17_for_a_respawned_actors_list() {
-        use super::super::tesobjectrefr::jip_seam;
-        use engine_core::extend::jip_patches;
+    fn long_detached_cell_looks_up_a_respawned_actors_dropped_items() {
         let mut e = detach_engine(500);
         let c = detach_world(&mut e);
-        let refs = list_items(&e, c.addr() + 0xac);
-        let (restored, killed) = (refs[1], refs[2]);
-        let answered = e.mem.alloc(0x10);
-        jip_seam::put(&mut e, 0x0054_e2a4, Some(answered));
-        let dropped_lists = |e: &mut Engine| {
-            start_log(e);
-            e.call(0x0054_df30, &args![c]);
-            let log = take_log(e);
-            calls_to(&log, EXTRA_LIST_GET_DROPPED_ITEM_LIST)
-        };
-        e.set_jip_patches(jip_patches::FIXES | jip_patches::NPC_PERKS);
-        let exe = dropped_lists(&mut e);
-        assert!(jip_seam::seen().is_empty(), "only the switch's bit asks");
-        assert_eq!(exe[0], vec![restored + 0x44]);
-        e.set_jip_patches(jip_patches::NPC_WEAPON_MODS);
-        let jip = dropped_lists(&mut e);
+        let restored = list_items(&e, c.addr() + 0xac)[1];
+        start_log(&mut e);
+        e.call(0x0054_df30, &args![c]);
+        let log = take_log(&mut e);
         assert_eq!(
-            jip_seam::seen(),
-            vec![vec![restored]],
-            "not the deleted actor"
+            calls_to(&log, EXTRA_LIST_GET_DROPPED_ITEM_LIST)[0],
+            vec![restored + 0x44]
         );
-        assert_eq!(jip[0], vec![answered]);
-        assert_eq!(
-            jip[1..],
-            exe[1..],
-            "the deleted actor's lookup as the exe's"
-        );
-        assert!(exe.iter().any(|w| w[0] == killed + 0x44));
-        jip_seam::answer_with(None);
-        assert_eq!(dropped_lists(&mut e), exe);
-        jip_seam::seen();
     }
 
     #[test]
@@ -13388,59 +13335,6 @@ mod tests {
         assert!(!reset.contains(&skipped));
         assert!(flags.borrow().iter().all(|a| a[2] == 0x8000_0000));
         assert_eq!(*times.borrow(), vec![vec![c.addr(), 0, 0]]);
-    }
-
-    /// JIP's ash pile seams (step 3.9 G103, fix row) in the reset walk: with the word clear or
-    /// only `INSTALLED` not asked (the exe's walk: the killed actor's ash pile deleted, the 0x1D
-    /// form re-attached, the 0x26 one emptied); with `FIXES` the deleted actor's seam is asked
-    /// with the actor and an answer keeps its ash pile; the other references past the container
-    /// test are asked with themselves and their base, and an answer passes over the 0x1D and
-    /// 0x26 branches; no answer leaves the exe's walk.
-    #[test]
-    fn long_detached_cell_jip_ash_pile_seams() {
-        use engine_core::extend::jip_patches;
-        let mut e = detach_engine(500);
-        let c = detach_world(&mut e);
-        let refs = list_items(&e, c.addr() + 0xac);
-        let (killed, destructible, door_like, emptied) = (refs[2], refs[4], refs[5], refs[6]);
-        let ash = e.mem.u32(killed + 0x44);
-        let slot_c4 = record(&mut e, fake(0xc4), 0);
-        let deleted = record(&mut e, REFERENCE_MARK_AS_DELETED, 0);
-        let emptied_calls = record(&mut e, FORM_SET_EMPTY, 0);
-        super::super::tesobjectrefr::jip_seam::put(&mut e, 0x0054_e4e1, Some(0));
-        super::super::tesobjectrefr::jip_seam::put(&mut e, 0x0054_e421, Some(0));
-        let run = |e: &mut Engine| {
-            for r in [&slot_c4, &deleted, &emptied_calls] {
-                r.borrow_mut().clear();
-            }
-            // The walk empties the killed actor's dropped items: give them back.
-            let nodes = e.mem.alloc(8);
-            let item = object(e);
-            embedded_list(e, nodes, &[item]);
-            e.mem.set_u32(killed + 0x48, nodes);
-            e.call(0x0054_df30, &args![c]);
-            (
-                deleted.borrow().iter().any(|a| a[0] == ash),
-                !slot_c4.borrow().is_empty(),
-                !emptied_calls.borrow().is_empty(),
-            )
-        };
-        assert_eq!(run(&mut e), (true, true, true));
-        e.set_jip_patches(jip_patches::INSTALLED);
-        assert_eq!(run(&mut e), (true, true, true));
-        assert!(super::super::tesobjectrefr::jip_seam::seen().is_empty());
-        e.set_jip_patches(jip_patches::FIXES);
-        assert_eq!(run(&mut e), (false, false, false), "JIP's walk");
-        let seen = super::super::tesobjectrefr::jip_seam::seen();
-        let base = |e: &Engine, r: u32| e.mem.u32(r + 0x20);
-        assert!(seen.contains(&vec![killed]));
-        for r in [destructible, door_like, emptied] {
-            assert!(seen.contains(&vec![r, base(&e, r)]), "{r:#x}");
-        }
-        assert_eq!(seen.len(), 4, "the actors and the container are not asked");
-        super::super::tesobjectrefr::jip_seam::answer_with(None);
-        assert_eq!(run(&mut e), (true, true, true), "no answer");
-        super::super::tesobjectrefr::jip_seam::seen();
     }
 
     #[test]
