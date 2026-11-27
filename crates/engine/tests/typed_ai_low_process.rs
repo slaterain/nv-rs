@@ -977,8 +977,8 @@ impl World {
         let least = self.pick4(FLOATS);
         e.mem.set_u32(SANDBOX_LEAST_TIME, least);
         e.mem.set_f64(HOURS_PER_DAY, 24.0);
-        // The procedure lists' rows of types 3 and 4 sometimes hold the destinations' other cases:
-        // the instance data's (42), the location or target's (47) and none (9).
+        // The procedure lists' rows 3 and 4 (package types 2 and 3) sometimes hold the destinations'
+        // other cases: the instance data's (42), the location or target's (47) and none (9).
         for kind in [3, 4] {
             let row = LISTS + 0x10 + 0x20 * kind;
             for index in 0..5 {
@@ -1045,7 +1045,7 @@ impl World {
         let r = self.objects[7];
         let location = self.one_of4(&[0, TARGET, ACTOR]);
         e.mem.set_u32(r + 0x10, location);
-        let reference = self.one_of4(&[0, TARGET, LOCATION]);
+        let reference = self.one_of4(&[0, TARGET]);
         e.mem.set_u32(r + 0x3c, reference);
         // The packages: the location's flag bit 4, the created flag, the flag 0x200000 and the
         // procedure of an unequip-all or a pursue.
@@ -1066,6 +1066,19 @@ impl World {
                 e.mem.set_u8(o + 0x20, procedure as u8);
             }
         }
+        // Last (nothing after reads the stream): more of the destinations' instance data case (42)
+        // in rows 3 and 4 (package types 2 and 3), and the instance data's reference more often a
+        // location, which no process targets, so its row tells that case from the target's.
+        for kind in [3, 4] {
+            let row = LISTS + 0x10 + 0x20 * kind;
+            for index in 0..5 {
+                if self.next4() % 4 == 0 {
+                    e.mem.set_u32(row - 4 + 4 * index, 42);
+                }
+            }
+        }
+        let reference = self.one_of4(&[0, TARGET, LOCATION, LOCATION]);
+        e.mem.set_u32(r + 0x3c, reference);
     }
 
     fn next4(&mut self) -> u64 {

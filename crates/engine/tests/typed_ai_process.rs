@@ -408,6 +408,8 @@ struct World {
     rng: u64,
     /// The second stream.
     rng2: u64,
+    /// The buffer of its own the second stream makes (see [`World::low_buffer`]).
+    buffer: u32,
 }
 
 impl World {
@@ -416,6 +418,7 @@ impl World {
             objects: [0; 5],
             rng: (u64::from(seed) ^ 0x9e37_79b9_7f4a_7c15).wrapping_mul(0xbf58_476d_1ce4_e5b9) | 1,
             rng2: (u64::from(seed) ^ 0x2545_f491_4f6c_dd1d).wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1,
+            buffer: 0,
         };
         e.map(CONTROL, 0x2000);
         e.map(BUFFER, 0x2_0000);
@@ -673,6 +676,19 @@ impl World {
         e.map(0x0102_2000, 0x1000);
         e.mem.set_u32(0x0101_6410, 0x42c8_0000);
         e.mem.set_u32(0x0102_2958, 0x461c_4000);
+        // The save buffer past the first stream's: the blocks of three process levels, each with
+        // numeric ids or lists that move the position on by up to 0x10000, end far out.
+        e.map(BUFFER + 0x2_0000, 0xe_0000);
+        // A buffer of its own: the other process's vtable (its slot 0 answers a version), its change
+        // flags (+0x17) and revert flags (+0x2c) with the modifiers' flag or without.
+        let buffer = e.mem.alloc(0x40);
+        let vt = e.mem.u32(self.objects[1]);
+        e.mem.set_u32(buffer, vt);
+        let changed = self.pick2(&[0, 0x0020_0000, 0x0030_0000]);
+        e.mem.set_u32(buffer + 0x17, changed);
+        let reverted = self.pick2(&[0, 0x0020_0000, 0x0030_0000]);
+        e.mem.set_u32(buffer + 0x2c, reverted);
+        self.buffer = buffer;
         // The save/load game's word at +0x48 (0: not loading a save).
         let loading = self.pick2(&[0, 0, 1]);
         e.mem.set_u32(self.objects[4] + 0x48, loading);
@@ -693,6 +709,18 @@ impl World {
     fn one_of2(&mut self, from: &[u32]) -> u32 {
         let word = self.pick2(from);
         self.resolve(word)
+    }
+
+    /// The process and a buffer: one of the forms, the other process, or (two times in five) the
+    /// buffer of its own, whose flags are seeded.
+    fn low_buffer(&mut self) -> Vec<u32> {
+        let pick = self.pick2(&[FORM_A, FORM_B, OTHER, 0, 0]);
+        let buffer = if pick == 0 {
+            self.buffer
+        } else {
+            self.resolve(pick)
+        };
+        vec![self.process(), buffer]
     }
 
     /// The process, an actor value code (one with a seeded info) and an actor (a form whose value
@@ -1327,17 +1355,17 @@ fn low_process_save_and_load() {
 #[test]
 fn low_process_save_and_load_of_a_buffer() {
     Diff::new(entry!(0x0091_0450, low_process::save_game_buffer(Ptr, Ptr)))
-        .in_world(&MOST, |w| w.with_buffer(false))
+        .in_world(&MOST, World::low_buffer)
         .ignore_calls(LOW_IN_PLACE)
         .run()
         .assert_same();
     Diff::new(entry!(0x0091_0630, low_process::load_game_buffer(Ptr, u32)))
-        .in_world(&MOST, |w| w.with_buffer(false))
+        .in_world(&MOST, World::low_buffer)
         .ignore_calls(LOW_IN_PLACE)
         .run()
         .assert_same();
     Diff::new(entry!(0x0091_0a60, low_process::revert_buffer(Ptr, u32)))
-        .in_world(&MANY, |w| w.with_buffer(false))
+        .in_world(&MANY, World::low_buffer)
         .ignore_calls(LOW_IN_PLACE)
         .run()
         .assert_same();
@@ -1345,7 +1373,7 @@ fn low_process_save_and_load_of_a_buffer() {
         0x0092_ea30,
         middle_low_process::save_game_buffer(Ptr, Ptr)
     ))
-    .in_world(&MANY, |w| w.with_buffer(false))
+    .in_world(&MANY, World::low_buffer)
     .ignore_calls(LOW_IN_PLACE)
     .run()
     .assert_same();
@@ -1353,7 +1381,7 @@ fn low_process_save_and_load_of_a_buffer() {
         0x0092_eaa0,
         middle_low_process::load_game_buffer(Ptr, u32)
     ))
-    .in_world(&MANY, |w| w.with_buffer(false))
+    .in_world(&MANY, World::low_buffer)
     .ignore_calls(LOW_IN_PLACE)
     .run()
     .assert_same();
@@ -1361,7 +1389,7 @@ fn low_process_save_and_load_of_a_buffer() {
         0x0092_eb00,
         middle_low_process::revert_buffer(Ptr, u32)
     ))
-    .in_world(&MANY, |w| w.with_buffer(false))
+    .in_world(&MANY, World::low_buffer)
     .ignore_calls(LOW_IN_PLACE)
     .run()
     .assert_same();
@@ -1862,7 +1890,7 @@ fn low_process_reaches() {
     reaches(
         0x0091_0450,
         &MOST,
-        |w| w.with_buffer(false),
+        World::low_buffer,
         &["no locations", "locations counted", "the modifiers saved"],
         |e, _, _| {
             let count = e.mem.u32(block(double(0x0086_5ff0)) + 0x28);
@@ -1872,14 +1900,14 @@ fn low_process_reaches() {
     reaches(
         0x0091_0630,
         &MOST,
-        |w| w.with_buffer(false),
+        World::low_buffer,
         &["locations added", "the modifiers loaded"],
         |e, _, _| vec![calls(e, 0x005a_e3d0) > 0, calls(e, 0x0093_7c60) > 0],
     );
     reaches(
         0x0091_0a60,
         &MANY,
-        |w| w.with_buffer(false),
+        World::low_buffer,
         &["the modifiers reverted"],
         |e, _, _| vec![calls(e, 0x0093_7b30) > 0],
     );
