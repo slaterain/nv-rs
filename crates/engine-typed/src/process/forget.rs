@@ -7,13 +7,15 @@
 //! hundreds of times over every actor: in the load window of 2026-11-10 they were 151 and 82 ms of
 //! one cell load (a profiled run).
 //!
-//! Here an object's extra data list (`005d43c0`: the object plus 0x44) and the word at +0x70
-//! (`004fd380`) are read in place, and the process array's tail and elements and the extra data
-//! getters (followers, head-track target, package data, package target, the lookup itself) are the
-//! process and dispatch families' Rust functions, and the actors' package and fight
+//! Here an object's extra data list (`005d43c0`: the object plus 0x44), the word at +0x70
+//! (`004fd380`) and the temp list's nodes (`006815c0`, `00726070`, `008256d0`) are read in place,
+//! and the process array's tail and elements and the extra data getters (followers, head-track
+//! target, package data, package target, the lookup itself) are the process and dispatch families'
+//! Rust functions, and the actors' package and fight
 //! questions (the current package and its type, the package location, the flee test, the byte at
 //! +0x104, and the slots 0x22c, 0x128, 0x428 and 0x2c8 when they hold the typed bodies) the AI
-//! queries family's. Every other call (the virtual slots of the actors
+//! queries family's; slot 0x47c, when it holds `LowProcess::ClearObjectFromAcquireList`, the AI
+//! family's. Every other call (the virtual slots of the actors
 //! and their processes, the package and combat functions) is made in the exe's order with the exe's
 //! words.
 //!
@@ -22,7 +24,7 @@
 
 use super::{array, FAMILY};
 use crate::ai_queries::{self, queries};
-use crate::dispatch;
+use crate::{ai, dispatch, slot_target};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
 use engine_core::{args, typed_call, Engine};
@@ -87,13 +89,19 @@ fn array_object(e: &mut Engine, array: u32, index: u32) -> u32 {
     )
 }
 
-fn node_value(e: &mut Engine, node: u32) -> u32 {
-    let item = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
-    e.mem.u32(item)
+/// A list node's item (`006815c0` answers the node, whose first word it is).
+fn node_value(e: &Engine, node: u32) -> u32 {
+    e.mem.u32(node)
 }
 
-fn node_next(e: &mut Engine, node: u32) -> u32 {
-    typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node))
+/// A list node's next node (`00726070`: its word at +4).
+fn node_next(e: &Engine, node: u32) -> u32 {
+    e.mem.u32(node.wrapping_add(4))
+}
+
+/// Whether a list is empty (`008256d0`: both words of its head 0).
+fn list_empty(e: &Engine, node: u32) -> bool {
+    e.mem.u32(node) == 0 && e.mem.u32(node.wrapping_add(4)) == 0
 }
 
 fn skipped(e: &mut Engine, object: u32) -> bool {
@@ -355,7 +363,7 @@ fn forget_in_array_actor(e: &mut Engine, high: u32, list: u32, target: u32, flag
                 }
             }
         }
-        e.vcall(process, 0x47c, &args![target]);
+        clear_from_acquire_list(e, process, target);
         clear_extra_record_reference(e, high, target);
         if is_fleeing(e, high) {
             forget_flee_target(e, high, target);
@@ -435,7 +443,7 @@ fn forget_in_temp_actor(e: &mut Engine, high: u32, list: u32, target: u32, array
         if array_index < 2 {
             e.vcall(process, 0x2c4, &args![target, 3u32]);
         }
-        e.vcall(process, 0x47c, &args![target]);
+        clear_from_acquire_list(e, process, target);
         clear_extra_record_reference(e, high, target);
         if is_fleeing(e, high) {
             forget_flee_target(e, high, target);
@@ -558,7 +566,7 @@ pub fn null_out_target_ref(e: &mut Engine, this: Ptr, target: u32, flag: u8) {
 
     // The objects of the temp list.
     let mut node = this.addr().wrapping_add(TEMP_SHOULD_MOVE_LIST);
-    while node != 0 && !typed_call!(leaf::FAMILY, 0x0082_56d0, leaf::both_words_zero(e, node)) {
+    while node != 0 && !list_empty(e, node) {
         let item = node_value(e, node);
         if item != 0 && !skipped(e, item) {
             let mut high = 0u32;
@@ -697,11 +705,25 @@ fn forget_destructed_in_actor(
             e.vcall(process, 0x664, &args![target]);
         }
     }
-    e.vcall(process, 0x47c, &args![target]);
+    clear_from_acquire_list(e, process, target);
     if array.is_some() {
         e.vcall(process, 0x7b0, &args![target]);
     }
     forget_actor_tail(e, high, process, target);
+}
+
+/// The actor's process's slot 0x47c with the target (`LowProcess::ClearObjectFromAcquireList` on
+/// every process class, the AI family's): that typed call when the slot holds it.
+fn clear_from_acquire_list(e: &mut Engine, process: u32, target: u32) {
+    if slot_target(e, process, 0x47c) == 0x0090_cc10 {
+        typed_call!(
+            ai::FAMILY,
+            0x0090_cc10,
+            ai::low_process::clear_object_from_acquire_list(e, Ptr::new(process), target)
+        );
+    } else {
+        e.vcall(process, 0x47c, &args![target]);
+    }
 }
 
 /// A non-actor of slot 0x224 (`009c4c80`) or 0x220 (`009b28a0`) told about `target`.
@@ -756,7 +778,7 @@ pub fn reference_destructed(e: &mut Engine, this: Ptr, target: u32) {
     }
 
     let mut node = this.addr().wrapping_add(TEMP_SHOULD_MOVE_LIST);
-    while node != 0 && !typed_call!(leaf::FAMILY, 0x0082_56d0, leaf::both_words_zero(e, node)) {
+    while node != 0 && !list_empty(e, node) {
         let item = node_value(e, node);
         let high = if is_actor(e, item) {
             node_value(e, node)

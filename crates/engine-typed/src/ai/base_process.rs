@@ -16,7 +16,7 @@
 
 use super::FAMILY;
 use super::{actor_package, low_process, middle_low_process};
-use crate::{ai_queries, dispatch, multibound, slot_target};
+use crate::{ai_queries, dispatch, forms, multibound, slot_target};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
 use engine_core::x87::x87_quiet_bits;
@@ -93,8 +93,6 @@ const LOADING_RECORD: u32 = 0x84;
 pub(super) const WRITE_BYTES: u32 = 0x0085_79b0;
 /// Reads `size` bytes from the save buffer into an address.
 pub(super) const READ_BYTES: u32 = 0x0085_79e0;
-/// The form for a record's id word (`cdecl`).
-pub(super) const FORM_FOR_ID: u32 = 0x0048_39c0;
 /// The SAVELOAD warnings (`cdecl`, variable arguments). A fix or built-in may replace it, so it is
 /// called by address.
 pub(super) const SAVELOAD_WARNING: u32 = 0x005b_5e40;
@@ -196,7 +194,11 @@ pub(super) struct RecordWords {
 /// `with_version`), then the form's name (slot 0x130), then its id again.
 pub(super) fn record_words(e: &mut Engine, record: u32, with_version: bool) -> RecordWords {
     let id = e.mem.u32(record);
-    let form = e.call(FORM_FOR_ID, &args![id]).u32();
+    let form = typed_call!(
+        forms::FAMILY,
+        0x0048_39c0,
+        forms::tesform::form_by_id(e, id)
+    );
     let flags = e.mem.u32(record.wrapping_add(5));
     let version = if with_version {
         u32::from(e.mem.u8(record.wrapping_add(9)))
@@ -861,7 +863,11 @@ pub fn load_game(e: &mut Engine, this: Ptr, argument_0: u32, argument_1: u32, _u
     let expected = u32::from(length).wrapping_add(block_start);
     if record != 0 {
         let id = e.mem.u32(record);
-        let form = e.call(FORM_FOR_ID, &args![id]).u32();
+        let form = typed_call!(
+            forms::FAMILY,
+            0x0048_39c0,
+            forms::tesform::form_by_id(e, id)
+        );
         let (format, bytes) = if end > expected {
             (OVERRUN_FORM_FORMAT, end.wrapping_sub(expected))
         } else if end < expected {

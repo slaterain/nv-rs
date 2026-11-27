@@ -20,7 +20,7 @@
 //! `008c65a0` does nothing.
 
 use super::FAMILY;
-use crate::{ai_queries, dispatch, save, slot_target};
+use crate::{ai_queries, dispatch, forms, save, slot_target};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
 use engine_core::x87::{x87_quiet_bits, x87_store32};
@@ -87,9 +87,7 @@ const BUFFER_READ: u32 = 0x0086_4980;
 /// (`thiscall`, one id).
 const ADD_CHANGED_FORM_ID: u32 = 0x0084_aa30;
 const CHANGED_FORM_LOOKUP: u32 = 0x0084_aa90;
-/// The form for an id (`cdecl`) and `__RTDynamicCast` (`cdecl`, five words) from `TESForm` to
-/// `TESPackage` or `TESObjectREFR`.
-const FORM_FOR_ID: u32 = 0x0048_39c0;
+/// `__RTDynamicCast` (`cdecl`, five words) from `TESForm` to `TESPackage` or `TESObjectREFR`.
 const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
 const TYPE_TES_FORM: u32 = 0x0118_3028;
 const TYPE_TES_PACKAGE: u32 = 0x0118_46a0;
@@ -169,9 +167,14 @@ fn clamp_procedure_index(e: &mut Engine, this: Ptr) {
     }
 }
 
-/// The form for `id` cast to `target` (`004839c0`, then `__RTDynamicCast` from `TESForm`).
+/// The form for `id` (`004839c0`, the forms family's) cast to `target` (`__RTDynamicCast`
+/// from `TESForm`).
 fn cast_form(e: &mut Engine, id: u32, target: u32) -> u32 {
-    let form = e.call(FORM_FOR_ID, &args![id]).u32();
+    let form = typed_call!(
+        forms::FAMILY,
+        0x0048_39c0,
+        forms::tesform::form_by_id(e, id)
+    );
     e.call(
         RT_DYNAMIC_CAST,
         &args![form, 0u32, TYPE_TES_FORM, target, 0u32],

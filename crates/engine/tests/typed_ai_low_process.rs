@@ -181,7 +181,7 @@ const DOUBLES_2: &[(u32, &[u32])] = &[
     (0x0094_df60, BOOLS),            // the player sleeps or rests
     (0x0045_11e0, BOOLS),            // TES::IsCellLoaded
     (0x006e_25d0, FLOATS),           // the patrol's travel time
-    (0x0067_6280, &[0, 1, 6, 0x0100_0001]), // the package's count for the actor
+    (0x0067_6280, &[0, 1, 6, 0x8000_0001]), // the package's count for the actor (bit 31: unsigned)
     (0x006e_2420, UNREAD),           // PathingRequest's constructor
     (0x006e_2620, UNREAD),           // its destructor
     (0x008b_3880, UNREAD),           // Actor::BuildRequest
@@ -318,6 +318,8 @@ const BY_ADDRESS: &[u32] = &[
     0x0041_cc00,
     0x0041_cc30,
     0x0041_cc60,
+    0x0042_11d0,
+    0x0042_12e0,
 ];
 
 /// The callees the translations call and the typed code does in place (one load, store or test
@@ -975,8 +977,8 @@ impl World {
         let least = self.pick4(FLOATS);
         e.mem.set_u32(SANDBOX_LEAST_TIME, least);
         e.mem.set_f64(HOURS_PER_DAY, 24.0);
-        // The procedure lists' rows of types 2 and 3 sometimes hold the destinations' other cases:
-        // the instance data's (42), the location or target's (47) and none (9).
+        // The procedure lists' rows 3 and 4 (package types 2 and 3) sometimes hold the destinations'
+        // other cases: the instance data's (42), the location or target's (47) and none (9).
         for kind in [3, 4] {
             let row = LISTS + 0x10 + 0x20 * kind;
             for index in 0..5 {
@@ -1064,6 +1066,21 @@ impl World {
                 e.mem.set_u8(o + 0x20, procedure as u8);
             }
         }
+        // Last (nothing after reads the stream): more of the destinations' instance data case (42)
+        // and location or target case (47) in rows 3 and 4 (package types 2 and 3), and the instance
+        // data's reference more often a location, which no process targets, so its row tells that
+        // case from the target's.
+        for kind in [3, 4] {
+            let row = LISTS + 0x10 + 0x20 * kind;
+            for index in 0..5 {
+                if self.next4() % 4 == 0 {
+                    let procedure = self.pick4(&[42, 42, 47]);
+                    e.mem.set_u32(row - 4 + 4 * index, procedure);
+                }
+            }
+        }
+        let reference = self.one_of4(&[0, TARGET, LOCATION, LOCATION]);
+        e.mem.set_u32(r + 0x3c, reference);
     }
 
     fn next4(&mut self) -> u64 {
@@ -1779,8 +1796,8 @@ const REQUEST_BYTES: u32 = 0xb4;
 
 /// Runs the translation at `addr` in each seed's world and counts the seeds whose `check` says each
 /// branch was taken; every branch must be taken by one. `seen` is the answer, the call's words, then
-/// the process's `pTarget`, `fTrackedDamage` and the patrol data's time waited (the record's +8) as
-/// they were before the call.
+/// the process's `pTarget`, `fTrackedDamage`, the patrol data's time waited (the record's +8) and the
+/// acquire and saved acquire records as they were before the call.
 fn reaches(
     addr: u32,
     seeds: &[u32],
@@ -1793,8 +1810,14 @@ fn reaches(
         let mut e = Engine::new_untyped_for_test();
         let mut w = World::new(&mut e, seed);
         let args = words(&mut w);
-        let before =
-            [w.process() + 0x40, w.process() + 0xac, w.objects[7] + 8].map(|at| e.mem.u32(at));
+        let before = [
+            w.process() + 0x40,
+            w.process() + 0xac,
+            w.objects[7] + 8,
+            w.process() + 0x64,
+            w.process() + 0x68,
+        ]
+        .map(|at| e.mem.u32(at));
         let answer = e.call(addr, &args).eax;
         let mut seen = vec![answer];
         seen.extend_from_slice(&args);
@@ -2142,8 +2165,18 @@ fn the_seeds_reach_every_branch() {
         0x0090_70a0,
         &MANY,
         |w| vec![w.process()],
-        &["a record deleted", "the record at +0x84 deleted"],
-        |e, _| vec![calls(e, 0x007b_3fa0) > 0, slot_calls(e, 0x10) > 0],
+        &[
+            "a record deleted",
+            "the record at +0x84 deleted",
+            "the saved record the acquire one (cleared first)",
+        ],
+        |e, seen| {
+            vec![
+                calls(e, 0x007b_3fa0) > 0,
+                slot_calls(e, 0x10) > 0,
+                seen[5] != 0 && seen[5] == seen[6],
+            ]
+        },
     );
     let by_reference: fn(&mut World) -> Vec<u32> = |w| {
         let reference = w.one_of(&[0, TARGET, ACTOR, ACTOR, FORM]);
@@ -2212,7 +2245,7 @@ fn the_seeds_reach_every_branch() {
         },
         &[
             "no target",
-            "a low target let go",
+            "a high target or none let go",
             "far: the follow",
             "near: the actor's slot 0x304",
         ],
@@ -2249,6 +2282,7 @@ fn the_seeds_reach_every_branch() {
             "no data",
             "started",
             "placed",
+            "placed in the same cell (not moved)",
             "moved to the new space",
             "paths there",
         ],
@@ -2257,6 +2291,7 @@ fn the_seeds_reach_every_branch() {
                 e.mem.u32(seen[1] + 8) == 0,
                 calls(e, 0x009f_3af0) > 0,
                 slot_calls(e, 0x2a8) > 0,
+                slot_calls(e, 0x2a8) > 0 && calls(e, 0x0057_3800) == 0,
                 calls(e, 0x0057_3800) > 0,
                 calls(e, 0x008b_36f0) > 0,
             ]
@@ -2266,8 +2301,26 @@ fn the_seeds_reach_every_branch() {
         0x0090_f3f0,
         &MOST,
         |w| w.process_actor(),
-        &["the package location", "the target slot"],
-        |e, _| vec![calls(e, 0x0067_5a50) > 0, slot_calls(e, 0x128) > 0],
+        &[
+            "the package location",
+            "the target slot",
+            "the instance data's reference",
+            "the target's",
+        ],
+        |e, seen| {
+            let (process, actor) = (seen[1], seen[2]);
+            let asked = last_first(e, 0x0057_5d70);
+            let data = e.mem.u32(process + 8);
+            let reference = if data == 0 { 0 } else { e.mem.u32(data + 0x3c) };
+            let target = e.mem.u32(process + 0x40);
+            let other = |word: u32| word != 0 && word != actor && calls(e, 0x0057_5d70) > 0;
+            vec![
+                calls(e, 0x0067_5a50) > 0,
+                slot_calls(e, 0x128) > 0,
+                other(reference) && asked == reference && reference != target,
+                other(target) && asked == target && target != reference,
+            ]
+        },
     );
     reaches(
         0x0090_f0e0,
@@ -2322,12 +2375,21 @@ fn the_seeds_reach_every_branch() {
             "started from the kept package",
             "its instance data handed over",
             "none kept",
+            "the kept index set",
+            "an index past the count reset to 0",
         ],
-        |e, _| {
+        |e, seen| {
+            // Slot 0x238's body stores the index in the embedded package (the process's +0x10).
+            let stores = e.mem.u32(e.mem.u32(seen[1]) + 0x238) == 0x008d_03c0;
+            let kept = last_answer(e, 0x0041_cb40);
+            let index = e.mem.u32(seen[1] + 0x10);
+            let asked = calls(e, 0x0041_cb40) > 0 && stores && (kept == 1 || kept == 7);
             vec![
                 calls(e, 0x0041_cc60) > 0,
                 calls(e, 0x006e_cd40) > 0,
                 calls(e, 0x0041_cc60) == 0,
+                asked && index == kept,
+                asked && index == 0,
             ]
         },
     );
