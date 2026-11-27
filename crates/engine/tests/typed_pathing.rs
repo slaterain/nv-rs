@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, builder_nodes, location, navmesh, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -660,6 +660,9 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x006d_b4f0, &[0x006d_bbb0]),
     (0x006d_cf20, &[0x0069_0830, 0x006d_cfe0]),
     (0x006e_78b0, &[0x006e_8f40]),
+    (0x006c_9920, &[0x006c_ef10]),
+    (0x006c_99c0, &[0x006c_ef10]),
+    (0x006c_9a70, &[0x006c_ef10]),
 ];
 
 trait Common {
@@ -4365,4 +4368,173 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- PathBuilder virtual-node appenders, door-flag test, request heading accessors ----
+
+/// Stands in for the virtual-node appender's callees: each logs its words; the element slot is
+/// `data + 4 * index` and the placement-new returns a fresh block.
+fn builder_nodes_stubs(e: &mut Engine) {
+    e.register(0x006e_8f40, |e, a| {
+        log(e, 0x006e_8f40, a[0]);
+        log(e, 0x006e_8f40 + 1, a[1]);
+        let data = e.mem.u32(a[0] + 4);
+        ret(data + 4 * a[1])
+    });
+    e.register(0x006e_6da0, |e, a| {
+        log(e, 0x006e_6da0, a[0]);
+        log(e, 0x006e_6da0 + 1, a[1]);
+        let place = e.mem.alloc(a[0]);
+        ret(place)
+    });
+    e.register(0x006f_4e40, |e, a| {
+        for (i, w) in a.iter().enumerate() {
+            log(e, 0x006f_4e40 + i as u32, *w);
+        }
+        ret(0)
+    });
+    e.register(0x006f_4f90, |e, a| {
+        for (i, w) in a.iter().enumerate() {
+            log(e, 0x006f_4f90 + i as u32, *w);
+        }
+        ret(0)
+    });
+    e.register(0x006f_4f00, |e, a| {
+        for (i, w) in a.iter().enumerate() {
+            log(e, 0x006f_4f00 + i as u32, *w);
+        }
+        ret(0)
+    });
+}
+
+/// A `PathingSolution` block whose `VirtualNodes` array (inline at +8) has `size` elements.
+fn builder_solution(e: &mut Engine, size: u32) -> u32 {
+    let sol = e.mem.alloc(0x100);
+    let data = e.mem.alloc(0x40);
+    let vt = vtable(e);
+    e.mem.set_u32(sol + 8, vt);
+    e.mem.set_u32(sol + 8 + 4, data);
+    e.mem.set_u32(sol + 8 + 8, size);
+    e.mem.set_u32(sol + 8 + 0xc, 0x10);
+    sol
+}
+
+#[test]
+fn add_virtual_node_info() {
+    Diff::new(entry!(
+        0x006c_9920,
+        builder_nodes::add_virtual_node_info(u32, u32) -> u32
+    ))
+    .common()
+    .plain(0x006c_9920)
+    .inputs(&[Input::Of(&[0, 1, 3]), Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        builder_nodes_stubs(e);
+        vec![builder_solution(e, case.word(0)), case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn add_virtual_node_point_info() {
+    Diff::new(entry!(
+        0x006c_99c0,
+        builder_nodes::add_virtual_node_point_info(u32, u32, u32) -> u32
+    ))
+    .common()
+    .plain(0x006c_99c0)
+    .inputs(&[Input::Of(&[0, 1, 3]), Input::Word, Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        builder_nodes_stubs(e);
+        vec![
+            builder_solution(e, case.word(0)),
+            case.word(1),
+            case.word(2),
+        ]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn add_virtual_node_info_point_door() {
+    Diff::new(entry!(
+        0x006c_9a70,
+        builder_nodes::add_virtual_node_info_point_door(u32, u32, u32, u32) -> u32
+    ))
+    .common()
+    .plain(0x006c_9a70)
+    .inputs(&[Input::Of(&[0, 1, 3]), Input::Word, Input::Word, Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        builder_nodes_stubs(e);
+        vec![
+            builder_solution(e, case.word(0)),
+            case.word(1),
+            case.word(2),
+            case.word(3),
+        ]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn virtual_node_is_door() {
+    Diff::new(entry!(
+        0x006c_a0c0,
+        builder_nodes::virtual_node_is_door(u32) -> bool
+    ))
+    .common()
+    .plain(0x006c_a0c0)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        let node = e.mem.alloc(4);
+        e.mem.set_u32(node, case.word(0));
+        vec![node]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn request_first_tangent_uses_heading() {
+    Diff::new(entry!(
+        0x006c_a4c0,
+        builder_nodes::request_first_tangent_uses_heading(Ptr) -> bool
+    ))
+    .common()
+    .plain(0x006c_a4c0)
+    .inputs(&[Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        stand_ins(e);
+        let req = e.mem.alloc(0xa4);
+        e.mem.set_u8(req + 0xa0, case.word(0) as u8);
+        vec![req]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn request_initial_path_heading() {
+    Diff::new(entry!(
+        0x006c_a4e0,
+        builder_nodes::request_initial_path_heading(Ptr) -> f32
+    ))
+    .common()
+    .plain(0x006c_a4e0)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        let req = e.mem.alloc(0xa4);
+        e.mem.set_u32(req + 0x90, case.word(0));
+        vec![req]
+    })
+    .run()
+    .assert_same();
 }
