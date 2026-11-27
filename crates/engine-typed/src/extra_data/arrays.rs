@@ -77,13 +77,13 @@ fn set_word(e: &mut Engine, this: u32, offset: u32, value: u32) {
 
 /// Element `index` of the buffer at `buffer` (pointer-sized elements).
 #[inline]
-fn element(buffer: u32, index: u32) -> u32 {
+fn slot_at(buffer: u32, index: u32) -> u32 {
     buffer.wrapping_add(index.wrapping_mul(4))
 }
 
 /// A buffer of `capacity` elements from the array's vtable (slot 1).
 #[inline]
-fn allocate(e: &mut Engine, this: u32, capacity: u32) -> u32 {
+fn new_buffer(e: &mut Engine, this: u32, capacity: u32) -> u32 {
     e.vcall(this, SLOT_ALLOCATE, &args![capacity]).u32()
 }
 
@@ -200,7 +200,7 @@ pub fn set_size(e: &mut Engine, this: u32, new_size: u32, shrink: u8) {
     let capacity = word(e, this, CAPACITY);
     if new_size > capacity {
         if capacity == 0 {
-            let buffer = allocate(e, this, new_size);
+            let buffer = new_buffer(e, this, new_size);
             set_word(e, this, BUFFER, buffer);
         } else {
             let size = word(e, this, SIZE);
@@ -218,7 +218,7 @@ pub fn set_size(e: &mut Engine, this: u32, new_size: u32, shrink: u8) {
             let buffer = word(e, this, BUFFER);
             e.call(
                 ELEMENTS_DESTROY,
-                &args![this, element(buffer, new_size), size.wrapping_sub(new_size)],
+                &args![this, slot_at(buffer, new_size), size.wrapping_sub(new_size)],
             );
             set_word(e, this, SIZE, new_size);
             if shrink != 0 && new_size <= word(e, this, CAPACITY) >> 2 {
@@ -243,7 +243,7 @@ fn construct_past(e: &mut Engine, this: u32, new_size: u32) {
     let buffer = word(e, this, BUFFER);
     e.call(
         ELEMENTS_CONSTRUCT,
-        &args![this, element(buffer, size), new_size.wrapping_sub(size)],
+        &args![this, slot_at(buffer, size), new_size.wrapping_sub(size)],
     );
     set_word(e, this, SIZE, new_size);
 }
@@ -322,9 +322,9 @@ pub fn navmesh_array_drop(e: &mut Engine, this: u32) {
 /// `source` ([`element_assign`]). Answers the index.
 pub fn navmesh_array_add(e: &mut Engine, this: u32, source: u32) -> u32 {
     let index = e.call(ADD_SLOT, &args![this]).u32();
-    let slot = element(word(e, this, BUFFER), index);
+    let slot = slot_at(word(e, this, BUFFER), index);
     typed_call!(FAMILY, 0x0042_fa60, navmesh_ptrs_new(e, this, slot, 1));
-    let slot = element(word(e, this, BUFFER), index);
+    let slot = slot_at(word(e, this, BUFFER), index);
     typed_call!(FAMILY, 0x0042_f4c0, element_assign(e, slot, source));
     index
 }
@@ -345,7 +345,7 @@ pub fn navmesh_array_remove_at(e: &mut Engine, this: u32, index: u32, shrink: u8
         )
     {
         let capacity = e.call(SHRUNK_CAPACITY, &args![this]).u32();
-        let fresh = allocate(e, this, capacity);
+        let fresh = new_buffer(e, this, capacity);
         let buffer = word(e, this, BUFFER);
         typed_call!(
             FAMILY,
@@ -356,7 +356,7 @@ pub fn navmesh_array_remove_at(e: &mut Engine, this: u32, index: u32, shrink: u8
         typed_call!(
             FAMILY,
             0x0042_fb20,
-            navmesh_ptrs_drop(e, this, element(buffer, index), 1)
+            navmesh_ptrs_drop(e, this, slot_at(buffer, index), 1)
         );
         let count = word(e, this, SIZE).wrapping_sub(1);
         let buffer = word(e, this, BUFFER);
@@ -366,8 +366,8 @@ pub fn navmesh_array_remove_at(e: &mut Engine, this: u32, index: u32, shrink: u8
             move_words(
                 e,
                 this,
-                element(fresh, index),
-                element(buffer, index).wrapping_add(4),
+                slot_at(fresh, index),
+                slot_at(buffer, index).wrapping_add(4),
                 count
             )
         );
@@ -379,10 +379,10 @@ pub fn navmesh_array_remove_at(e: &mut Engine, this: u32, index: u32, shrink: u8
         typed_call!(
             FAMILY,
             0x0042_fb20,
-            navmesh_ptrs_drop(e, this, element(buffer, index), 1)
+            navmesh_ptrs_drop(e, this, slot_at(buffer, index), 1)
         );
         let count = word(e, this, SIZE).wrapping_sub(index).wrapping_sub(1);
-        let at = element(word(e, this, BUFFER), index);
+        let at = slot_at(word(e, this, BUFFER), index);
         typed_call!(
             FAMILY,
             0x0042_fb60,
@@ -436,7 +436,7 @@ pub fn navmesh_ptr_drop(e: &mut Engine, this: u32) {
 /// exe's null test does). The array is not read.
 pub fn navmesh_ptrs_new(e: &mut Engine, _this: u32, address: u32, count: u32) {
     for index in 0..count {
-        let slot = element(address, index);
+        let slot = slot_at(address, index);
         if slot != 0 {
             e.mem.set_u32(slot, 0);
         }
@@ -456,7 +456,7 @@ pub fn navmesh_ptr_null(e: &mut Engine, this: u32) -> u32 {
 /// [`navmesh_ptr_delete`]). The array is not read.
 pub fn navmesh_ptrs_drop(e: &mut Engine, _this: u32, address: u32, count: u32) {
     for index in 0..count {
-        let slot = element(address, index);
+        let slot = slot_at(address, index);
         typed_call!(FAMILY, 0x0042_ffa0, navmesh_ptr_delete(e, slot, 0));
     }
 }
@@ -471,8 +471,8 @@ pub fn move_words(e: &mut Engine, _this: u32, destination: u32, source: u32, cou
         return;
     }
     let move_one = |e: &mut Engine, index: u32| {
-        let w = e.mem.u32(element(source, index));
-        e.mem.set_u32(element(destination, index), w);
+        let w = e.mem.u32(slot_at(source, index));
+        e.mem.set_u32(slot_at(destination, index), w);
     };
     if destination < source {
         for index in 0..count {
@@ -495,7 +495,7 @@ pub fn move_words(e: &mut Engine, _this: u32, destination: u32, source: u32, cou
 pub fn reallocate_buffer(e: &mut Engine, this: u32, capacity: u32, count: u32) {
     let buffer = word(e, this, BUFFER);
     if buffer == 0 {
-        let fresh = allocate(e, this, capacity);
+        let fresh = new_buffer(e, this, capacity);
         set_word(e, this, BUFFER, fresh);
         set_word(e, this, CAPACITY, capacity);
     } else if count == word(e, this, CAPACITY) {
@@ -504,7 +504,7 @@ pub fn reallocate_buffer(e: &mut Engine, this: u32, capacity: u32, count: u32) {
             .u32();
         set_word(e, this, BUFFER, fresh);
     } else {
-        let fresh = allocate(e, this, capacity);
+        let fresh = new_buffer(e, this, capacity);
         let old = word(e, this, BUFFER);
         typed_call!(FAMILY, 0x0042_fb60, move_words(e, this, fresh, old, count));
         free_buffer(e, this);
@@ -522,7 +522,7 @@ pub fn navmesh_array_init(e: &mut Engine, this: u32, capacity: u32, size: u32) {
     set_word(e, this, CAPACITY, 0);
     let capacity = capacity.max(size);
     if capacity != 0 {
-        let buffer = allocate(e, this, capacity);
+        let buffer = new_buffer(e, this, capacity);
         set_word(e, this, BUFFER, buffer);
         set_word(e, this, CAPACITY, capacity);
     }
