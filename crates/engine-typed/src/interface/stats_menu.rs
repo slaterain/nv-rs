@@ -76,8 +76,6 @@ pub const IN_PLACE: &[u32] = &[
     0x0042_f5a0, // the smaller of two words (unsigned)
     0x005a_e380, // a list's count of nodes with an item
     0x0061_55c0, // a reputation's value (+0x44 or +0x48)
-    0x0050_1c10, // `BSStringT::Set` on its object, `this` answered
-    0x004f_4280, // a string's length plus 1
 ];
 
 /// The open stats menu (`StatsMenu::Create` stores it), the fade object made on first use, the time
@@ -1619,8 +1617,9 @@ pub fn list_box_misc_stat_id_add_item(
 /// icon and title (thiscall); `004e4430` (cdecl, a float: rounded, `ST0`); the Pip-Boy's
 /// `SetTabKnobPosition` (`RET 8`) and `MoveKnob` (`RET 0x10`) and the two settings the knob moves
 /// by; an active effect's magnitude (`00495460`, `ST0`); `__RTDynamicCast` (cdecl, five words);
-/// the strings' `BSStringT::Set` (`RET 4`), growth (`004037f0`, `RET 8`) and length (`004048e0`)
-/// and an entry's text into a string (`004046b0`, `RET 4`).
+/// the strings' `BSStringT::Set` (`RET 4`), growth (`004037f0`, `RET 8`), length (`004048e0`), length
+/// with the terminator (`004f4280`) and set on an object (`00501c10`, `RET 4`), and an entry's text
+/// into a string (`004046b0`, `RET 4`).
 const GET_SOUND_HANDLE_BY_NAME: u32 = 0x00ad_7550;
 const SOUND_HANDLE_PLAY: u32 = 0x00ad_8830;
 const AUDIO: u32 = 0x011f_6d98;
@@ -1641,7 +1640,9 @@ const EFFECT_MAGNITUDE: u32 = 0x0049_5460;
 const DYNAMIC_CAST: u32 = 0x00ec_43fb;
 const STRING_SET: u32 = 0x0043_8470;
 const STRING_GROW: u32 = 0x0040_37f0;
+const STRING_OBJECT_SET: u32 = 0x0050_1c10;
 const STRING_LENGTH: u32 = 0x0040_48e0;
+const STRING_COPY_LENGTH: u32 = 0x004f_4280;
 const ENTRY_TEXT: u32 = 0x0040_46b0;
 /// The RTTI type descriptors the casts name: `TESForm`, `TESFullName`, an effect's target.
 const TYPE_FORM: u32 = 0x0118_3028;
@@ -1989,9 +1990,13 @@ pub fn fn_007dde00(e: &mut Engine, this: Ptr) {
 }
 
 // Typed from 007df120
-/// `00501c10` on `+0x20` with `value`: `BSStringT::Set` (`00438470`) on it, the wrapper in place.
+/// `00501c10` (a string set) on `+0x20` with `value`. (Done in place, its call of `BSStringT::Set`
+/// would be one the translation's side never shows: the wrapper stays by address.)
 pub fn fn_007df120(e: &mut Engine, this: Ptr, value: u32) {
-    e.call(STRING_SET, &args![this.addr().wrapping_add(0x20), value]);
+    e.call(
+        STRING_OBJECT_SET,
+        &args![this.addr().wrapping_add(0x20), value],
+    );
 }
 
 // Typed from 007df140
@@ -2414,8 +2419,7 @@ fn string_length(e: &mut Engine, string: u32) -> u32 {
 /// appended to a string with characters (grown with `004037f0` when the summed length passes the
 /// capacity (`+6`, `004039a0` in place), copied with its terminator (`00401460`) to the end, the
 /// length set (`004039c0` in place: at most 0xffff)); a string without characters takes the source
-/// (`BSStringT::Set`). The copy's count is the source's length plus 1 (`004f4280`, in place).
-/// `this`.
+/// (`BSStringT::Set`). `this`.
 pub fn bs_string_operator_add_assign_ov2(e: &mut Engine, this: Ptr, source: u32) -> Ptr {
     let at = this.addr();
     if e.mem.u32(source) == 0 {
@@ -2432,8 +2436,7 @@ pub fn bs_string_operator_add_assign_ov2(e: &mut Engine, this: Ptr, source: u32)
         let characters = e.mem.u32(at);
         e.call(STRING_GROW, &args![this, characters, length]);
     }
-    // `004f4280`, in place: the length with the terminator.
-    let count = string_length(e, source).wrapping_add(1);
+    let count = e.call(STRING_COPY_LENGTH, &args![source]).u32();
     let from = e.mem.u32(source);
     let to = string_length(e, at).wrapping_add(e.mem.u32(at));
     typed_call!(

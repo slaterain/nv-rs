@@ -109,8 +109,10 @@ const CALLEES: &[u32] = &[
     0x004d_e490,
     0x004e_4430,
     0x004e_ef00,
+    0x004f_4280,
     0x004f_8a30,
     0x004f_e160,
+    0x0050_1c10,
     0x0050_3a70,
     0x0052_5980,
     0x0052_5b20,
@@ -6118,6 +6120,11 @@ fn put_stats_menu(e: &mut Engine, variant: u32) {
             e.mem.set_u32(menu + 0x90 + 4 * i, object(110 + i % 40));
         }
     }
+    // No stage effects and an empty status effect list (`+0x74` to `+0x80`, `+0x84`): the arena's
+    // words there would make status effects of small numbers, whose clean-up calls through them.
+    for slot in [0x74u32, 0x78, 0x7c, 0x80, 0x88, 0x8c] {
+        e.mem.set_u32(menu + slot, 0);
+    }
     e.mem.set_u8(menu + 0x2a0, u8::from(variant == 0));
     e.mem.set_u8(menu + 0x2a1, u8::from(variant == 3));
     e.mem.set_u32(menu + 0x118, object(107));
@@ -7402,7 +7409,7 @@ impl StatsThirdWorlds for Diff {
         self.in_arena_without_and(
             args,
             CALLEES,
-            &[],
+            &[0x0071_f9f0, 0x0071_f570, 0x0070_27b0, 0x0070_2680],
             &[0x00ec_782f],
             &STATS_VARIANTS,
             put_stats_third,
