@@ -452,6 +452,12 @@ pub fn edge_array_drop(e: &mut Engine, this: Ptr<SimpleArray>) {
     e.call(ARRAY_CLEAR, &args![this, 1u32]);
 }
 
+// Typed from 006e6da0
+/// Placement `new` (`cdecl(size, place) -> place`): answers the place, the size unread.
+pub fn placement_new(_e: &mut Engine, _size: u32, place: u32) -> u32 {
+    place
+}
+
 /// `count` placements of `size` bytes from `elements` on (`006e6da0`).
 fn construct_each(e: &mut Engine, elements: u32, count: u32, size: u32) {
     for i in 0..count {
