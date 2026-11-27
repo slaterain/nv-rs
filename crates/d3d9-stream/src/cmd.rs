@@ -474,6 +474,23 @@ commands! {
     DrawItem { device: Handle, id: u32, check: u32, constants: payload },
     /// The records `ids` (words) dropped.
     ForgetRecords { device: Handle, ids: payload },
+
+    // Patched items (the renderer design's item form, A.4): a record drawn with no command of its
+    // set-up at all. Added after the kept records' first three, so a file written with those still
+    // reads ([`crate::wire::ITEMS_LIST_HASH`]).
+
+    /// The `count` commands that follow (state sets: [`crate::kept::is_state`]) are the states record
+    /// `id` sets first when drawn as a [`Cmd::DrawPatched`]: what its set-up's setter calls leave,
+    /// each sent whether or not the device held it already. Kept by [`crate::Kept`], never carried
+    /// out (right after the record's draw the device holds them already). `id` must be the record
+    /// made last; otherwise they are dropped.
+    KeepStates { device: Handle, id: u32, count: u32 },
+    /// Record `id` drawn with no command of its set-up: the states it keeps ([`Cmd::KeepStates`])
+    /// set, its own commands carried out with their own registers, then `patches` set just before
+    /// its draw: words, one patch after another, each the `SetConstants` kind, first register,
+    /// register count and the registers as `SetConstants` takes them (the registers that follow
+    /// the camera, the sun and the lamps). `check` as [`Cmd::DrawItem`]'s.
+    DrawPatched { device: Handle, id: u32, check: u32, patches: payload },
 }
 
 impl Cmd<Data<'_>> {
@@ -571,6 +588,9 @@ impl Cmd<Data<'_>> {
             } => exact("data", data, u64::from(*row) * u64::from(*rows)),
             Cmd::DrawItem { constants, .. } => whole("constants", constants, 4),
             Cmd::ForgetRecords { ids, .. } => whole("ids", ids, 4),
+            Cmd::DrawPatched { patches, .. } => {
+                crate::kept::patches_check(&patches.bytes()).map_err(|why| format!("{name}: {why}"))
+            }
             _ => Ok(()),
         }
     }

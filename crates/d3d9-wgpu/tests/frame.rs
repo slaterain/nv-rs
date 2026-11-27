@@ -7359,3 +7359,91 @@ fn a_check_runs_two_forms_agree_only_when_the_item_draws_as_its_draw() {
     assert_ne!(items[1], old[1], "the wrong item's digest");
     assert_ne!(items_px, old_px, "and its pixels");
 }
+
+/// Encodes the colour write mask's set into `rec` (a setter's send, or a kept state).
+fn put_colour_writes(rec: &mut Vec<u8>, mask: u32) {
+    d3d9_stream::wire::encode(
+        &Cmd::SetRenderState {
+            device: DEVICE,
+            state: COLORWRITEENABLE,
+            value: mask,
+        },
+        rec,
+    );
+}
+
+/// A patched item ([`d3d9_stream::Kept`], `DrawPatched`: no command of its set-up) gives wgpu what
+/// its draw's set-up gives it: the record's kept state (the colour write mask, which another set-up
+/// turned off since) set again, its commands, the patched colour register and the draw: the same
+/// digest at each draw and the same pixels as the plain commands (the left half green). Without its
+/// kept states nothing is drawn.
+#[test]
+fn a_patched_item_gives_wgpu_what_its_draws_set_up_gives() {
+    let Some(plain) = kept_script(|rec| {
+        put_colour_writes(rec, 0xf);
+        put_kept(rec, &kept_draw(96, KEPT_RED));
+        put_colour_writes(rec, 0);
+        put_colour_writes(rec, 0xf);
+        put_kept(rec, &kept_draw(96, KEPT_GREEN));
+    }) else {
+        return;
+    };
+    let patched = |keep: bool| {
+        kept_script(move |rec| {
+            d3d9_stream::wire::encode(
+                &Cmd::RecordNext {
+                    device: DEVICE,
+                    id: 1,
+                    forget: 0,
+                    check: 0,
+                },
+                rec,
+            );
+            put_colour_writes(rec, 0xf);
+            put_kept(rec, &kept_draw(96, KEPT_RED));
+            if keep {
+                d3d9_stream::wire::encode(
+                    &Cmd::KeepStates {
+                        device: DEVICE,
+                        id: 1,
+                        count: 1,
+                    },
+                    rec,
+                );
+                put_colour_writes(rec, 0xf);
+            }
+            put_colour_writes(rec, 0);
+            let mut patch: Vec<u8> = [3u32, 0, 1].iter().flat_map(|w| w.to_le_bytes()).collect();
+            patch.extend(floats(&KEPT_GREEN));
+            d3d9_stream::wire::encode(
+                &Cmd::DrawPatched {
+                    device: DEVICE,
+                    id: 1,
+                    check: 0,
+                    patches: Data::Bytes(&patch),
+                },
+                rec,
+            );
+        })
+        .expect("a GPU adapter, as above")
+    };
+    let (want, want_px, _) = replay_kept(&plain, d3d9_stream::kept::Form::Old);
+    let (got, got_px, counts) = replay_kept(&patched(true), d3d9_stream::kept::Form::Old);
+    assert_eq!(want.len(), 2, "both draws noted");
+    assert_eq!(got, want, "the digests, draw by draw");
+    assert_eq!(got_px, want_px, "the pixels");
+    assert_eq!((counts.records, counts.items, counts.missing), (1, 1, 0));
+    assert_eq!(
+        got_px[16 * 8 + 3],
+        [0, 255, 0, 255],
+        "the left half: the patch's colour"
+    );
+    let (none, none_px, counts) = replay_kept(&patched(false), d3d9_stream::kept::Form::Old);
+    assert_eq!(none, want[..1], "no states: the item draws nothing");
+    assert_eq!(
+        none_px[16 * 8 + 3],
+        [0, 0, 255, 255],
+        "the record's own draw only (red: the pixels are BGRA)"
+    );
+    assert_eq!((counts.items, counts.missing), (0, 1));
+}

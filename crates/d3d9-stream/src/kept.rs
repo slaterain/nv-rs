@@ -15,6 +15,18 @@
 //! its own). [`Form::Old`] carries out the old form and leaves the item; [`Form::Items`] draws the
 //! item and keeps the old form without carrying it out: one recording replayed both ways gives the
 //! two pictures and the two digest lists to compare.
+//!
+//! **Patched items** (the design's item form, A.4): a record drawn with no command of its set-up at
+//! all, so the game side neither calls the state cache's setters nor the device for it. The record
+//! is then every command of the draw from its set-up's start (the `RecordNext` before the set-up),
+//! and, right after its draw, the states its setter calls leave ([`Cmd::KeepStates`] and that many
+//! state sets: each state the setters set, to its last value, whether the cache let the set through
+//! or not). A [`Cmd::DrawPatched`] sets those states, carries out the record's commands with their
+//! own registers, sets its patches (the registers that follow the camera, the sun and the lamps)
+//! and draws. The states the setters set end as the set-up leaves them (the record's own sets come
+//! after the kept states, and a set the cache let through is the setter's last value); every other
+//! state is the one the device holds, as for the draw itself: nothing is taken from the time the
+//! record was made.
 
 use crate::cmd::{Backend, Cmd, Data, Reply};
 use std::collections::HashMap;
@@ -159,13 +171,118 @@ impl Commands {
     }
 }
 
-type Record = Commands;
+/// A kept record: the draw's commands, and the states it sets first as a patched item.
+#[derive(Default)]
+struct Record {
+    cmds: Commands,
+    /// [`Cmd::KeepStates`]' commands; `None` until they came (a [`Cmd::DrawPatched`] of it draws nothing).
+    states: Option<Commands>,
+}
 
 /// A record being made: its number, its form, its commands so far.
 struct Pending {
     id: u32,
     check: bool,
-    record: Record,
+    record: Commands,
+}
+
+/// [`Cmd::KeepStates`]' commands being taken: the record they are for (`None`: dropped), how many are
+/// still to come.
+struct Taking {
+    id: Option<u32>,
+    left: u32,
+    states: Commands,
+}
+
+/// Whether `cmd` is a state set that [`Cmd::KeepStates`] may keep: what a set-up's setter calls send
+/// (render, stage and sampler states, textures, the declaration or format, shaders, streams, indices,
+/// registers, clip planes, the fixed-function material and lights). Never a draw, a target, a
+/// transform (the port's own frame values travel as transforms), a resource or a sync call.
+pub fn is_state<P>(cmd: &Cmd<P>) -> bool {
+    matches!(
+        cmd,
+        Cmd::SetRenderState { .. }
+            | Cmd::SetTextureStageState { .. }
+            | Cmd::SetSamplerState { .. }
+            | Cmd::SetTexture { .. }
+            | Cmd::SetVertexDeclaration { .. }
+            | Cmd::SetFvf { .. }
+            | Cmd::SetShader { .. }
+            | Cmd::SetStreamSource { .. }
+            | Cmd::SetIndices { .. }
+            | Cmd::SetConstants { .. }
+            | Cmd::SetClipPlane { .. }
+            | Cmd::SetMaterial { .. }
+            | Cmd::SetLight { .. }
+            | Cmd::LightEnable { .. }
+    )
+}
+
+/// One patch of a [`Cmd::DrawPatched`]: a `SetConstants`' kind, first register, register count and
+/// registers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Patch<'a> {
+    pub kind: u8,
+    pub start: u32,
+    pub count: u32,
+    pub registers: &'a [u8],
+}
+
+/// The bytes one register of `SetConstants` kind `kind` takes (a boolean's word, else four words).
+fn register_bytes(kind: u32) -> u64 {
+    if kind % 3 == 2 {
+        4
+    } else {
+        16
+    }
+}
+
+/// A [`Cmd::DrawPatched`]'s patches, in order; an error names the first that is not whole.
+pub fn patches(bytes: &[u8]) -> impl Iterator<Item = Result<Patch<'_>, String>> {
+    let mut at = 0usize;
+    std::iter::from_fn(move || {
+        let here = at;
+        if here == bytes.len() {
+            return None;
+        }
+        let word = |i: usize| {
+            bytes
+                .get(at + 4 * i..at + 4 * i + 4)
+                .map(|w| u32::from_le_bytes(w.try_into().expect("4 bytes")))
+        };
+        let (Some(kind), Some(start), Some(count)) = (word(0), word(1), word(2)) else {
+            at = bytes.len();
+            return Some(Err(format!("a patch's head at byte {here} is cut short")));
+        };
+        if kind > 5 {
+            at = bytes.len();
+            return Some(Err(format!("a patch of kind {kind}")));
+        }
+        let len = register_bytes(kind) * u64::from(count);
+        let from = at + 12;
+        let Some(to) = usize::try_from(len)
+            .ok()
+            .and_then(|len| from.checked_add(len))
+            .filter(|&to| to <= bytes.len())
+        else {
+            at = bytes.len();
+            return Some(Err(format!(
+                "a patch of {count} registers of kind {kind} is cut short"
+            )));
+        };
+        at = to;
+        Some(Ok(Patch {
+            kind: kind as u8,
+            start,
+            count,
+            registers: &bytes[from..to],
+        }))
+    })
+}
+
+/// Whether a [`Cmd::DrawPatched`]'s patches are whole ([`Cmd::check`]).
+pub fn patches_check(bytes: &[u8]) -> Result<(), String> {
+    patches(bytes).try_for_each(|p| p.map(|_| ()))
 }
 
 /// The most commands one record keeps: a draw's own commands are a handful (streams, indices,
@@ -180,14 +297,17 @@ const REPORT_PRESENTS: u64 = 1000;
 /// this often (frames).
 const BAD_REPORT_GAP: u64 = 60;
 
-/// A backend that carries out [`Cmd::RecordNext`], [`Cmd::DrawItem`] and [`Cmd::ForgetRecords`]
-/// and hands every other command to `inner` ([`Form`] says which form of a check run it carries
-/// out). Without them it adds one test a command.
+/// A backend that carries out [`Cmd::RecordNext`], [`Cmd::DrawItem`], [`Cmd::ForgetRecords`],
+/// [`Cmd::KeepStates`] and [`Cmd::DrawPatched`], and hands every other command to `inner` ([`Form`]
+/// says which form of a check run it carries out). Without them it adds one test a command.
 pub struct Kept<B> {
     inner: B,
     form: Form,
     records: HashMap<u32, Record>,
     pending: Option<Pending>,
+    /// The record whose draw came last, while no other record began: what [`Cmd::KeepStates`] may name.
+    last_made: Option<u32>,
+    taking: Option<Taking>,
     counts: Counts,
     warned: bool,
     /// The game's own run ([`Kept::reporting`]): its counts printed at `Present`s; the frames
@@ -210,6 +330,8 @@ impl<B: Backend> Kept<B> {
             form,
             records: HashMap::new(),
             pending: None,
+            last_made: None,
+            taking: None,
             counts: Counts::default(),
             warned: false,
             report: false,
@@ -302,8 +424,8 @@ impl<B: Backend> Kept<B> {
             self.warn(format_args!("an item of record {id}, which is not kept"));
             return;
         };
-        if u64::from(constants.len()) != r.constants {
-            let want = r.constants;
+        if u64::from(constants.len()) != r.cmds.constants {
+            let want = r.cmds.constants;
             self.counts.mismatched += 1;
             self.warn(format_args!(
                 "an item of record {id} with {} bytes of registers, not {want}",
@@ -313,10 +435,89 @@ impl<B: Backend> Kept<B> {
         }
         let given = constants.bytes();
         let Kept { inner, records, .. } = self;
-        for cmd in records[&id].with_registers(&given) {
+        for cmd in records[&id].cmds.with_registers(&given) {
             inner.execute(cmd);
         }
         self.counts.items += 1;
+    }
+
+    /// A [`Cmd::DrawPatched`]: record `id`'s kept states, its commands up to its draw, the patches,
+    /// its draw. Nothing for a record not kept or kept without its states, or for patches not whole.
+    fn draw_patched(&mut self, device: u32, id: u32, given: Data<'_>) {
+        let Some(r) = self.records.get(&id) else {
+            self.counts.missing += 1;
+            self.warn(format_args!(
+                "a patched item of record {id}, which is not kept"
+            ));
+            return;
+        };
+        if r.states.is_none() {
+            self.counts.missing += 1;
+            self.warn(format_args!(
+                "a patched item of record {id}, which was kept without its states"
+            ));
+            return;
+        }
+        let bytes = given.bytes();
+        if let Err(why) = patches_check(&bytes) {
+            self.counts.mismatched += 1;
+            self.warn(format_args!("a patched item of record {id}: {why}"));
+            return;
+        }
+        let Kept { inner, records, .. } = self;
+        let r = &records[&id];
+        for cmd in r.states.iter().flat_map(Commands::iter) {
+            inner.execute(cmd);
+        }
+        // A record ends with its draw (it is kept only then).
+        let last = r.cmds.len() - 1;
+        let mut draw = None;
+        for (i, cmd) in r.cmds.iter().enumerate() {
+            if i == last {
+                draw = Some(cmd);
+            } else {
+                inner.execute(cmd);
+            }
+        }
+        for p in patches(&bytes).flatten() {
+            inner.execute(Cmd::SetConstants {
+                device,
+                kind: p.kind,
+                start: p.start,
+                count: p.count,
+                data: Data::Bytes(p.registers),
+            });
+        }
+        inner.execute(draw.expect("a record's draw"));
+        self.counts.items += 1;
+    }
+
+    /// A state of [`Cmd::KeepStates`] while they are taken; `false` (and they are given up) for any
+    /// other command, which is then carried out as ever.
+    fn take_state(&mut self, cmd: &Cmd<Data<'_>>) -> bool {
+        let Some(t) = self.taking.as_mut() else {
+            return false;
+        };
+        if !is_state(cmd) {
+            self.taking = None;
+            self.counts.cut += 1;
+            self.warn(format_args!(
+                "a record's kept states cut short by {}",
+                cmd.name()
+            ));
+            return false;
+        }
+        if t.id.is_some() {
+            t.states.keep(*cmd);
+        }
+        t.left -= 1;
+        if t.left == 0 {
+            let t = self.taking.take().expect("states being taken");
+            if let Some(r) = t.id.and_then(|id| self.records.get_mut(&id)) {
+                r.states = Some(t.states);
+            }
+        }
+        true
     }
 }
 
@@ -330,6 +531,9 @@ fn is_draw<P>(cmd: &Cmd<P>) -> bool {
 
 impl<B: Backend> Backend for Kept<B> {
     fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+        if self.take_state(&cmd) {
+            return Reply::None;
+        }
         match cmd {
             Cmd::RecordNext {
                 id, forget, check, ..
@@ -338,11 +542,56 @@ impl<B: Backend> Backend for Kept<B> {
                 if forget != 0 {
                     self.records.remove(&forget);
                 }
+                // A record made again: the old one goes now, so an item never draws it if the new
+                // one is cut.
+                self.records.remove(&id);
+                self.last_made = None;
                 self.pending = Some(Pending {
                     id,
                     check: check != 0,
-                    record: Record::default(),
+                    record: Commands::default(),
                 });
+                Reply::None
+            }
+            Cmd::KeepStates { id, count, .. } => {
+                self.cut();
+                let id =
+                    (self.last_made == Some(id) && self.records.contains_key(&id)).then_some(id);
+                if id.is_none() || count as usize > MOST_COMMANDS {
+                    self.counts.cut += 1;
+                    self.warn(format_args!(
+                        "{count} kept states of a record that is not the one made last, or too many"
+                    ));
+                }
+                if count as usize > MOST_COMMANDS {
+                    return Reply::None;
+                }
+                let t = Taking {
+                    id,
+                    left: count,
+                    states: Commands::default(),
+                };
+                if count == 0 {
+                    if let Some(r) = id.and_then(|id| self.records.get_mut(&id)) {
+                        r.states = Some(t.states);
+                    }
+                } else {
+                    self.taking = Some(t);
+                }
+                Reply::None
+            }
+            Cmd::DrawPatched {
+                device,
+                id,
+                check,
+                patches,
+            } => {
+                self.cut();
+                if check != 0 && self.form == Form::Old {
+                    self.counts.other_form += 1;
+                } else {
+                    self.draw_patched(device, id, patches);
+                }
                 Reply::None
             }
             Cmd::DrawItem {
@@ -370,6 +619,7 @@ impl<B: Backend> Backend for Kept<B> {
                 // The records' objects are the old device's: all go.
                 self.cut();
                 self.records.clear();
+                self.last_made = None;
                 self.inner.execute(cmd)
             }
             _ => {
@@ -394,7 +644,14 @@ impl<B: Backend> Backend for Kept<B> {
                         self.counts.other_form += u64::from(only_kept);
                     }
                     self.counts.records += 1;
-                    self.records.insert(p.id, p.record);
+                    self.last_made = Some(p.id);
+                    self.records.insert(
+                        p.id,
+                        Record {
+                            cmds: p.record,
+                            states: None,
+                        },
+                    );
                 }
                 if only_kept {
                     Reply::None

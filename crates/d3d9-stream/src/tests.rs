@@ -556,6 +556,8 @@ struct Payloads {
     light: [u32; 26],
     cube: [u32; 6],
     tokens: [u32; 5],
+    /// One patch of a `DrawPatched`: a pixel register.
+    patch: [u32; 7],
     elements: [u32; 4],
     level: [u32; 2],
 }
@@ -578,6 +580,7 @@ impl Payloads {
             light: words(130),
             cube: words(160),
             tokens: words(170),
+            patch: [3, 2, 1, 0x3f80_0000, 0, 0, 0x3f80_0000],
             elements: words(180),
             level: words(190),
         }
@@ -891,6 +894,17 @@ fn every_command<'a>(p: &'a Payloads, big: Data<'a>) -> Vec<Cmd<Data<'a>>> {
         Cmd::ForgetRecords {
             device: d,
             ids: w(&p.handles),
+        },
+        Cmd::KeepStates {
+            device: d,
+            id: 5,
+            count: 0,
+        },
+        Cmd::DrawPatched {
+            device: d,
+            id: 5,
+            check: 1,
+            patches: w(&p.patch),
         },
     ]
 }
@@ -3617,4 +3631,323 @@ fn the_games_kept_records_report_their_counts() {
         .presented()
         .expect("then again")
         .contains("2 items of no record"));
+}
+
+/// A file written with the kept records' first three commands (a stage-1 run's) reads as ever after
+/// the patched items' commands were added: its list's hash ([`wire::ITEMS_LIST_HASH`]) is the hash of
+/// today's list up to them, and it is read.
+#[test]
+fn files_written_before_the_patched_items_commands_still_read() {
+    let list = crate::cmd::LIST;
+    let at = list
+        .find("KeepStates")
+        .expect("the patched items' first command");
+    let older = list[..at].trim_end_matches([',', ' ']);
+    // (`stringify!` breaks long lists into lines: the last command is read apart.)
+    let last = &older[older
+        .rfind("ForgetRecords")
+        .expect("the kept records' last command")..];
+    assert!(last.ends_with("ids : payload }"), "{last}");
+    assert_eq!(
+        wire::hash(wire::HASH_START, older.as_bytes()),
+        wire::ITEMS_LIST_HASH
+    );
+    let mut file = wire::header().to_vec();
+    file[8..].copy_from_slice(&wire::ITEMS_LIST_HASH.to_le_bytes());
+    wire::encode(
+        &Cmd::DrawItem {
+            device: 1,
+            id: 2,
+            check: 0,
+            constants: Data::Bytes(&[0; 16]),
+        },
+        &mut file,
+    );
+    let read: Vec<_> = wire::commands(&file)
+        .expect("the stage-1 list is read")
+        .collect::<Result<_, _>>()
+        .expect("its command");
+    assert_eq!(read.len(), 1);
+}
+
+/// TEST DATA: a set-up's setter sends (the cull mode and stage 0's texture), as the state cache lets
+/// them through or as [`Cmd::KeepStates`] keeps them.
+fn setter_states(cull: u32, texture: u32) -> Vec<(Cmd<()>, Vec<u8>)> {
+    vec![
+        (
+            Cmd::SetRenderState {
+                device: 1,
+                state: 22,
+                value: cull,
+            },
+            Vec::new(),
+        ),
+        (
+            Cmd::SetTexture {
+                device: 1,
+                sampler: 0,
+                texture,
+            },
+            Vec::new(),
+        ),
+    ]
+}
+
+/// TEST DATA: a state no set-up of the record sets (the shade mode), set between draws by others.
+fn other_state(value: u32) -> Vec<(Cmd<()>, Vec<u8>)> {
+    vec![(
+        Cmd::SetRenderState {
+            device: 1,
+            state: 9,
+            value,
+        },
+        Vec::new(),
+    )]
+}
+
+/// Words as a payload's bytes.
+fn word_bytes(w: &[u32]) -> Vec<u8> {
+    w.iter().flat_map(|w| w.to_le_bytes()).collect()
+}
+
+/// A patched item ([`Cmd::DrawPatched`]) gives the device what its draw's set-up would have given it
+/// then: the states the record keeps (the setters' last values, one the cache kept back when the
+/// record was made, both set back after another draw's set-up changed them), its own commands with their own registers, the patched registers (one
+/// vertex register of the two its constants set: the other keeps the record's value) and the draw;
+/// a state the set-up never sets stays the one the device holds (not the one it held when the record
+/// was made). Draw for draw the same device-state digests as the plain commands; a check run's
+/// patched item is drawn only by a replay of the items.
+#[test]
+fn a_patched_item_sets_its_kept_states_its_commands_and_patches_and_nothing_else() {
+    let first: [u32; 12] = std::array::from_fn(|i| i as u32);
+    let second: [u32; 12] = std::array::from_fn(|i| 100 + i as u32);
+    // Vertex register 5 patched: register 4 and the pixel register stay the record's.
+    let mut want = first;
+    want[4..8].copy_from_slice(&second[4..8]);
+    let (mut plain, plain_digests) = StateDigest::new();
+    for cmds in [
+        other_state(1),
+        setter_states(2, 0x70),
+        kept_draw(&first),
+        setter_states(3, 0x71),
+        other_state(2),
+        setter_states(2, 0x70),
+        kept_draw(&want),
+    ] {
+        run_kept(&mut plain, &cmds);
+    }
+    let plain_digests = plain_digests.lock().unwrap().clone();
+    assert_eq!(plain_digests.len(), 2);
+    let patches = word_bytes(&[0, 5, 1, 104, 105, 106, 107]);
+    for (check, form) in [
+        (0, kept::Form::Old),
+        (1, kept::Form::Old),
+        (1, kept::Form::Items),
+    ] {
+        let (digest, digests) = StateDigest::new();
+        let mut b = Kept::with_form(digest, form);
+        run_kept(&mut b, &other_state(1));
+        // The cull mode was the set-up's already (an earlier draw's): the cache keeps its set back,
+        // so only the kept states hold it.
+        let [cull, texture] = <[_; 2]>::try_from(setter_states(2, 0x70)).expect("two");
+        run_kept(&mut b, &[cull]);
+        b.execute(Cmd::RecordNext {
+            device: 1,
+            id: 7,
+            forget: 0,
+            check: 0,
+        });
+        run_kept(&mut b, &[texture]);
+        run_kept(&mut b, &kept_draw(&first));
+        b.execute(Cmd::KeepStates {
+            device: 1,
+            id: 7,
+            count: 2,
+        });
+        run_kept(&mut b, &setter_states(2, 0x70));
+        run_kept(&mut b, &setter_states(3, 0x71));
+        run_kept(&mut b, &other_state(2));
+        b.execute(Cmd::DrawPatched {
+            device: 1,
+            id: 7,
+            check,
+            patches: Data::Bytes(&patches),
+        });
+        let digests = digests.lock().unwrap();
+        let c = b.counts();
+        assert_eq!((c.records, c.missing, c.mismatched, c.cut), (1, 0, 0, 0));
+        if check == 1 && form == kept::Form::Old {
+            assert_eq!(c.other_form, 1);
+            assert_eq!(*digests, plain_digests[..1], "the item left");
+        } else {
+            assert_eq!(c.items, 1, "check {check} {form:?}");
+            assert_eq!(*digests, plain_digests, "check {check} {form:?}");
+        }
+    }
+}
+
+/// [`Cmd::KeepStates`] keeps its states for the record made last only; they are never carried out;
+/// a command that is no state cuts them short (it is carried out, the record has no states). A
+/// patched item of a record without its states, or of one made again and cut, draws nothing.
+#[test]
+fn kept_states_go_only_to_the_record_made_last_and_are_never_carried_out() {
+    let regs: [u32; 12] = std::array::from_fn(|i| i as u32);
+    let make = |b: &mut Kept<Log>, id: u32| {
+        b.execute(Cmd::RecordNext {
+            device: 1,
+            id,
+            forget: 0,
+            check: 0,
+        });
+        run_kept(b, &kept_draw(&regs));
+    };
+    let patched = |b: &mut Kept<Log>, id: u32| {
+        b.execute(Cmd::DrawPatched {
+            device: 1,
+            id,
+            check: 0,
+            patches: Data::Bytes(&[]),
+        });
+    };
+    let log = Log::default();
+    let lines = log.lines();
+    let mut b = Kept::new(log);
+    make(&mut b, 1);
+    make(&mut b, 2);
+    let before = lines.lock().unwrap().len();
+    // Record 1 is not the one made last: its states are taken and dropped.
+    b.execute(Cmd::KeepStates {
+        device: 1,
+        id: 1,
+        count: 2,
+    });
+    run_kept(&mut b, &setter_states(2, 0x70));
+    assert_eq!(
+        lines.lock().unwrap().len(),
+        before,
+        "states never carried out"
+    );
+    assert_eq!(b.counts().cut, 1);
+    patched(&mut b, 1);
+    assert_eq!(
+        lines.lock().unwrap().len(),
+        before,
+        "record 1 has no states"
+    );
+    assert_eq!(b.counts().missing, 1);
+    // Record 2's states cut short by a transform (the port's frame values are never a kept state):
+    // carried out, and record 2 has none.
+    b.execute(Cmd::KeepStates {
+        device: 1,
+        id: 2,
+        count: 3,
+    });
+    run_kept(&mut b, &setter_states(2, 0x70));
+    let matrix = [0u8; 64];
+    b.execute(Cmd::SetTransform {
+        device: 1,
+        state: 256,
+        matrix: Data::Bytes(&matrix),
+    });
+    assert_eq!(
+        lines.lock().unwrap().len(),
+        before + 1,
+        "the transform carried out"
+    );
+    assert_eq!(b.counts().cut, 2);
+    patched(&mut b, 2);
+    assert_eq!(b.counts().missing, 2);
+    // Made again with no states: drawn whole.
+    make(&mut b, 3);
+    b.execute(Cmd::KeepStates {
+        device: 1,
+        id: 3,
+        count: 0,
+    });
+    let before = lines.lock().unwrap().len();
+    patched(&mut b, 3);
+    assert_eq!(lines.lock().unwrap().len(), before + 5, "its five commands");
+    assert_eq!(b.counts().items, 1);
+    // Record 3 made again and cut by a Present before its draw: the old record went with the new start.
+    b.execute(Cmd::RecordNext {
+        device: 1,
+        id: 3,
+        forget: 0,
+        check: 0,
+    });
+    b.execute(Cmd::Present {
+        device: 1,
+        source: None,
+        dest: None,
+        window: 0,
+        dirty: false,
+        model: 0,
+        frame: 0,
+    });
+    let before = lines.lock().unwrap().len();
+    patched(&mut b, 3);
+    assert_eq!(
+        lines.lock().unwrap().len(),
+        before,
+        "nothing of the old record"
+    );
+    assert_eq!(b.counts().missing, 3);
+}
+
+/// A patched item's patches are whole or nothing is drawn; a file's `DrawPatched` with patches not
+/// whole is refused ([`Cmd::check`]).
+#[test]
+fn a_patched_items_patches_must_be_whole() {
+    let ok = word_bytes(&[3, 1, 1, 1, 2, 3, 4, 2, 0, 2, 1, 0]);
+    let read: Vec<_> = kept::patches(&ok).collect::<Result<_, _>>().expect("whole");
+    assert_eq!(read.len(), 2);
+    assert_eq!((read[0].kind, read[0].start, read[0].count), (3, 1, 1));
+    assert_eq!(read[0].registers, &ok[12..28]);
+    assert_eq!(
+        (read[1].kind, read[1].count),
+        (2, 2),
+        "booleans: a word each"
+    );
+    assert_eq!(read[1].registers, &ok[40..48]);
+    for (bad, why) in [
+        (word_bytes(&[3, 1]), "head"),
+        (word_bytes(&[6, 0, 0]), "kind 6"),
+        (word_bytes(&[0, 0, 2, 1, 2, 3, 4]), "cut short"),
+    ] {
+        let err = kept::patches_check(&bad).expect_err(why);
+        assert!(err.contains(why), "{err}");
+        let cmd = Cmd::DrawPatched {
+            device: 1,
+            id: 1,
+            check: 0,
+            patches: Data::Bytes(&bad),
+        };
+        assert!(cmd.check().is_err(), "{why}");
+    }
+    let regs: [u32; 12] = std::array::from_fn(|i| i as u32);
+    let log = Log::default();
+    let lines = log.lines();
+    let mut b = Kept::new(log);
+    b.execute(Cmd::RecordNext {
+        device: 1,
+        id: 1,
+        forget: 0,
+        check: 0,
+    });
+    run_kept(&mut b, &kept_draw(&regs));
+    b.execute(Cmd::KeepStates {
+        device: 1,
+        id: 1,
+        count: 0,
+    });
+    let before = lines.lock().unwrap().len();
+    let bad = word_bytes(&[0, 0, 2, 1]);
+    b.execute(Cmd::DrawPatched {
+        device: 1,
+        id: 1,
+        check: 0,
+        patches: Data::Bytes(&bad),
+    });
+    assert_eq!(lines.lock().unwrap().len(), before, "nothing drawn");
+    assert_eq!(b.counts().mismatched, 1);
 }
