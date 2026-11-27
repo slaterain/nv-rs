@@ -9,11 +9,11 @@
 
 use super::{
     access, cell_data, first_of_kind, followers, links, list_add, list_remove, more_setters,
-    new_object, packages, records, rooms, setters, word_at, zero_bytes, EXTRA_PAYLOAD, FAMILY,
-    OPERATOR_DELETE, OPERATOR_NEW, SIMPLE_LIST_NEW,
+    new_object, packages, records, rooms, setters, simple_list_init, word_at, zero_bytes,
+    EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE, OPERATOR_NEW,
 };
 use crate::crt::{low_byte, low_half, signed};
-use crate::{cell_refs, forms, pathing};
+use crate::{cell_refs, forms};
 use engine_core::x87::x87_quiet_bits;
 use engine_core::{args, typed_call, Engine};
 
@@ -534,12 +534,8 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
         }
         T_XCLR => load_regions(e, this, file),
         // EXTRA_PACKAGESTARTLOC: a WORLD_LOCATION (0x14 bytes).
+        // Its constructor (`006d5320`) stores nothing: in place.
         T_XPSL => e.with_stack(0x14, |e, record| {
-            typed_call!(
-                pathing::FAMILY,
-                0x006d_5320,
-                pathing::location::world_location_new(e, record)
-            );
             let at = record.addr();
             zero_bytes(e, at, 0x14);
             file_bytes(e, file, at, 0x14);
@@ -953,7 +949,7 @@ fn load_old_portal(e: &mut Engine, this: u32, file: u32) {
 fn load_reflector(e: &mut Engine, this: u32, file: u32) {
     e.with_stack(8, |e, record| {
         let at = record.addr();
-        e.call(SIMPLE_LIST_NEW, &args![at]);
+        simple_list_init(e, at);
         zero_bytes(e, at, 8);
         file_bytes(e, file, at, 8);
         if file_swaps(e, file) {

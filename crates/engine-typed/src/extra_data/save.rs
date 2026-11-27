@@ -6,11 +6,11 @@
 //! `011c54ba`, read in place; never set in the PC build).
 
 use super::{
-    access, give_lock, head_of, kind_of, links, next_of, read_word, records, take_lock, word_at,
-    EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE, OPERATOR_NEW, SIMPLE_LIST_NEW,
+    access, give_lock, head_of, kind_of, links, next_of, read_word, records, simple_list_init,
+    take_lock, word_at, EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE, OPERATOR_NEW,
 };
 use crate::crt::low_word;
-use crate::{cell_refs, crt, forms, pathing};
+use crate::{cell_refs, crt, forms};
 use engine_core::x87::x87_quiet_bits;
 use engine_core::{args, typed_call, Engine, Ptr};
 
@@ -208,12 +208,8 @@ fn save_one(e: &mut Engine, list: u32, extra: u32, kind: u8) {
             e.call(RAGDOLL_DATA_SAVE, &args![value]);
         }
         // EXTRA_PACKAGESTARTLOC: the location as a form id, then the three words at +0x10.
+        // The record's constructor (`006d5320`) stores nothing: in place.
         0x18 => e.with_stack(0x14, |e, record| {
-            typed_call!(
-                pathing::FAMILY,
-                0x006d_5320,
-                pathing::location::world_location_new(e, record)
-            );
             let at = record.addr();
             let id = id_of(e, value);
             e.mem.set_u32(at, id);
@@ -496,7 +492,7 @@ fn save_reflectors(e: &mut Engine, extra: u32) {
         let data = e.mem.u32(node);
         e.with_stack(8, |e, record| {
             let at = record.addr();
-            e.call(SIMPLE_LIST_NEW, &args![at]);
+            simple_list_init(e, at);
             copy_record(e, at, data, 8);
             let reference = e.mem.u32(data);
             let id = id_of(e, reference);

@@ -4090,6 +4090,15 @@ const XD_IN_PLACE: &[u32] = &[
     0x006e_6da0,
     0x0040_1020,
     0x00ec_7230,
+    // The objects unit's (an array's element, a form's process, the guards' word compare, a
+    // reference's angles) and the empty list's and world location's constructors, which the whole
+    // family does in place.
+    0x006a_7ad0,
+    0x008d_8520,
+    0x009a_3830,
+    0x0043_0830,
+    0x0096_a2d0,
+    0x006d_5320,
 ];
 
 /// The families an extra data function reaches (the extra list's with its lock, type getter,
@@ -4966,7 +4975,16 @@ fn xd_set_anim_ptr() {
 #[test]
 fn xd_starting_position() {
     Diff::new(entry!(0x0041_8d50, extra_data::access::starting_position(u32, u32) -> u32))
-        .xd_setter(0x0f, XD_VALUES)
+        .extra_data_case()
+        .max_cases(EXTRA_SEEDS.len() * 2)
+        .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            // The reference a new starting position is built from: an object whose slot 0x1f4
+            // answers its position (the constructor, `00430780`, runs as itself).
+            let w = xd_world(e, case.word(0));
+            place_kind(e, &w, case.word(0), 0x0f);
+            vec![w.list, xo_object(e, 0x40, 0x0f + case.word(1))]
+        })
         .run()
         .assert_same();
 }
@@ -7028,7 +7046,8 @@ impl XeShapes for Diff {
                 let w = xd_world(e, case.word(0));
                 place_kind(e, &w, case.word(0), 0x0f);
                 let out = junk(e, 0x10);
-                let position = xd_block(e, 0x10, 0x0f);
+                // The reference a new starting position is built from (its slot 0x1f4 answers).
+                let position = xo_object(e, 0x40, 0x0f);
                 let mut words = vec![w.list, out, position];
                 if setter {
                     let k = case.word(1) as usize;
@@ -10473,9 +10492,37 @@ fn xp_remove_actor_package_data() {
 #[test]
 fn xp_add_guard() {
     Diff::new(entry!(0x0042_1310, extra_data::rooms::add_guard(u32, u32)))
-        .xd_setter(0x7c, XD_VALUES)
+        .extra_data_case()
+        .max_cases(EXTRA_SEEDS.len() * 3)
+        .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(&[0, 1, 2])])
+        .setup(|e, case| {
+            let w = xd_world(e, case.word(0));
+            xp_guards(e, &w, case.word(0));
+            // No guard, or a reference whose id the guards hold or not.
+            let guard = match case.word(1) {
+                0 => 0,
+                n => {
+                    let reference = xo_object(e, 0x40, 0x13);
+                    e.mem.set_u32(reference + 0xc, [0, 0x22, 0x55][n as usize]);
+                    reference
+                }
+            };
+            vec![w.list, guard]
+        })
         .run()
         .assert_same();
+}
+
+/// The guards' extra data placed for some seeds (and the one the cache holds): its array of three ids
+/// (`xo_form` makes actors with and without a process of the odd ones) with room for one more.
+fn xp_guards(e: &mut Engine, w: &ExtraWorld, seed: u32) {
+    let placed = place_kind(e, w, seed, 0x7c);
+    let cached = xe_cached(e, 0x7c);
+    for extra in [placed, cached] {
+        if extra != 0 {
+            xo_array_at(e, extra + 0xc, &[0x0f, 0x22, 0x07], 1);
+        }
+    }
 }
 
 #[test]
@@ -10484,7 +10531,14 @@ fn xp_guard_two_words() {
         0x0042_13c0,
         extra_data::rooms::guard_two_words(u32, u32, u32)
     ))
-    .xe_pair(&[0x7c], XD_VALUES, XD_VALUES)
+    .extra_data_case()
+    .max_cases(EXTRA_SEEDS.len() * 2)
+    .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(&[0, 0x8000_0001])])
+    .setup(|e, case| {
+        let w = xd_world(e, case.word(0));
+        xp_guards(e, &w, case.word(0));
+        vec![w.list, case.word(1), 0x1234_5678]
+    })
     .run()
     .assert_same();
 }
@@ -11536,7 +11590,24 @@ fn xq_trespass_package_extra_delete() {
     Diff::new(
         entry!(0x0042_c890, extra_data::classes::trespass_package_extra_delete(u32, u32) -> u32),
     )
-    .xd_data_delete()
+    .extra_data_case()
+    .inputs(&[Input::Of(&[0, 1]), Input::Of(&[0, 1, 2, 3])])
+    .setup(|e, case| {
+        // No package, or one (its slot 0x10 deletes); the save-load object's global mapped (the
+        // translation reads it for its test that always answers false).
+        xd_stand_ins(e);
+        e.map(0x011d_e000, 0x1000);
+        e.register(0x0040_1030, nothing);
+        e.register(0x0067_4d70, noted);
+        let this = junk(e, 0x10);
+        let package = if case.word(0) == 0 {
+            0
+        } else {
+            xo_object(e, 0x40, 0x1a)
+        };
+        e.mem.set_u32(this + 0xc, package);
+        vec![this, case.word(1)]
+    })
     .run()
     .assert_same();
 }
@@ -13091,8 +13162,9 @@ const XT_NOTED: &[u32] = &[
 ];
 
 /// The range's typed calls into the pathing family (an array's buffer freed, the bound object
-/// array's body, the shrink test), which the extra data Diffs do not name: they go by address, to the translations.
-const XT_BY_ADDRESS: &[u32] = &[0x006a_8500, 0x006b_3eb0, 0x006f_3170];
+/// array's body, the shrink test) and the forms family's lookup by id, which the extra data Diffs do
+/// not name: they go by address, to the translations or the stand-ins.
+const XT_BY_ADDRESS: &[u32] = &[0x006a_8500, 0x006b_3eb0, 0x006f_3170, XO_FORM_BY_ID];
 
 /// The world's array vtable's slots (allocate, free, reallocate) and its counted objects' reference
 /// vtable's delete; the world's map vtable's hash and key compare.
@@ -15055,19 +15127,8 @@ fn xt_lock_data_at_44() {
 
 // ---- The extra data family's objects unit, part 1 (`004300f0` to `00432c90`) --------------------
 
-/// What the objects functions do in place besides [`XD_IN_PLACE`]: an array's element (`006a7ad0`),
-/// a form's process (`008d8520`), the actor list's constructor (`0096a2d0`), the world location's
-/// constructor (`006d5320`), a reference's angles (`00430830`), and the guards' word compare
-/// (`009a3830`, which the dispatch family's search does in place).
-const XO_IN_PLACE: &[u32] = &[
-    0x006a_7ad0,
-    0x008d_8520,
-    0x0096_a2d0,
-    0x006d_5320,
-    0x0043_0830,
-    0x009a_3830,
-];
-/// The forms family's lookup by id, stood in here (the world has no form map).
+/// The forms family's lookup by id, which the guards' notice calls: stood in (the worlds have no
+/// form map), by address in the extra data Diffs.
 const XO_FORM_BY_ID: u32 = 0x0048_39c0;
 /// The world's control words: whether the dynamic cast fails, the levels the two level getters
 /// answer, the leveled lock setting's float, the perk entry's answer.
@@ -15086,9 +15147,7 @@ const XO_FN_FALSE: u32 = 0x00ff_ca08;
 const XO_NOTED: &[u32] = &[
     0x0041_8f10,
     0x004b_f150,
-    0x0043_8570,
     0x0043_85a0,
-    0x0043_8660,
     0x0043_8690,
     0x0069_2710,
     0x0060_5fc0,
@@ -15120,6 +15179,14 @@ fn xo_cast(e: &mut Engine, a: &[u32]) -> Ret {
     } else {
         a[0]
     })
+}
+
+/// An array's constructor: an empty array (no buffer, no items, no room). Answers it.
+fn xo_array_new(e: &mut Engine, a: &[u32]) -> Ret {
+    for at in [4, 8, 0xc] {
+        e.mem.set_u32(a[0] + at, 0);
+    }
+    noted(e, a)
 }
 
 /// A data compare: whether the two objects' first words differ in their low bit.
@@ -15191,6 +15258,11 @@ fn xo_shared_stand_ins(e: &mut Engine) {
     for &addr in XO_NOTED {
         e.register(addr, noted);
     }
+    // The limbs' and the guards' array constructors: an empty array.
+    for addr in [0x0043_8570, 0x0043_8660] {
+        e.register(addr, xo_array_new);
+    }
+    e.register(XO_FORM_BY_ID, xo_form);
     for addr in [0x0043_a860, 0x0043_8e40, 0x0058_97c0, 0x0040_1290] {
         e.register(addr, xo_data_compare);
     }
@@ -15222,7 +15294,6 @@ fn xo_stand_ins(e: &mut Engine) {
         e.register(addr, noted);
     }
     e.register(0x00ec_43fb, xo_cast);
-    e.register(XO_FORM_BY_ID, xo_form);
 }
 
 /// [`xd_world`] with the objects' stand-ins, the lock level settings' tops, the levels, the lock
@@ -15312,19 +15383,8 @@ trait XoShapes {
 impl XoShapes for Diff {
     /// The families an objects function reaches, with what it does in place (but its own address).
     fn xo_case(self, own: u32) -> Diff {
-        let ignored: Vec<u32> = XD_IN_PLACE
-            .iter()
-            .chain(XO_IN_PLACE)
-            .copied()
-            .filter(|&a| a != own)
-            .collect();
-        let mut by_address = XT_BY_ADDRESS.to_vec();
-        by_address.push(XO_FORM_BY_ID);
-        self.extra_list_case()
-            .family(&EXTRA_DATA)
+        self.extra_data_case_but(own)
             .family(&engine_typed::multibound::MULTIBOUND)
-            .ignore_calls(&ignored)
-            .goes_by_address(&by_address)
     }
 
     /// A constructor: a block of `n` bytes of a pattern, the words of `args` after it, in worlds whose
@@ -16474,7 +16534,7 @@ fn xo_rank_compare() {
 fn xo_count_new() {
     Diff::new(entry!(
         0x0043_1c20,
-        extra_data::objects::count_new(u32, i16) -> u32
+        extra_data::objects::count_new(u32, u32) -> u32
     ))
     .xo_new(0x0043_1c20, 0x10, &[XO_HALVES])
     .run()

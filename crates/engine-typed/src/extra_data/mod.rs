@@ -53,11 +53,15 @@
 //! file's header lists them), and for part 5 a form's flags word and its bit test, the byte at +0xc
 //! of an extra data, the say-to topic info's topic store, the water zone map's counts, placement
 //! `new`, the compare of two counted pointers, a 4-byte `memmove`, the memory manager's address and
-//! a list held at +0x28 of its object. Each type, next or word is read once where the exe reads it
-//! again with nothing in between that could change it. A virtual call (an extra data's slot 0
-//! delete, its slot 4 `Compare`, the type 0x92 copy's slot 0xc, a primitive's slot 0) stays a call
-//! through the slot: each class has its own body. The constructors, destructors and setters of
-//! other units, `operator new` and `operator delete` are called by address.
+//! a list held at +0x28 of its object, and for the objects unit an array's element (`006a7ad0`), a
+//! form's process (`008d8520`), the guards' word compare (`009a3830`) and a reference's angles
+//! (`00430830`); the empty simple list's constructor (`0096a2d0`) and the world location's
+//! (`006d5320`, which stores nothing) are done in place by the whole family. Each type, next or
+//! word is read once where the exe reads it again with nothing in between that could change it. A
+//! virtual call (an extra data's slot 0 delete, its slot 4 `Compare`, the type 0x92 copy's slot
+//! 0xc, a primitive's slot 0) stays a call through the slot: each class has its own body. The
+//! constructors, destructors and setters of other units, `operator new` and `operator delete` are
+//! called by address.
 //!
 //! **Extenders.** JIP LN NVSE has nine sites here, each kept where the translation has it:
 //! `AddExtraCopy`'s arm for its keyed data's type 0x27 (`0x411978`), that type's entries in the two
@@ -770,7 +774,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0043_1b10, objects::global_compare(u32, u32) -> bool),
         entry!(0x0043_1b80, objects::rank_new(u32, u32) -> u32),
         entry!(0x0043_1bb0, objects::rank_compare(u32, u32) -> bool),
-        entry!(0x0043_1c20, objects::count_new(u32, i16) -> u32),
+        entry!(0x0043_1c20, objects::count_new(u32, u32) -> u32),
         entry!(0x0043_1c50, objects::count_compare(u32, u32) -> bool),
         entry!(0x0043_1cc0, objects::leveled_item_compare(u32, u32) -> bool),
         entry!(0x0043_1d10, objects::health_new(u32, u32) -> u32),
@@ -839,8 +843,12 @@ const VTABLE_BS_EXTRA_DATA: u32 = 0x0101_4210;
 /// `operator new` (`cdecl(size)`) and `operator delete` (`cdecl(block)`).
 const OPERATOR_NEW: u32 = 0x0040_1000;
 const OPERATOR_DELETE: u32 = 0x0040_1030;
-/// The constructor of an empty `BSSimpleList` (two null words, `thiscall(list)`).
-const SIMPLE_LIST_NEW: u32 = 0x0096_a2d0;
+/// An empty `BSSimpleList` made at `at`: its constructor (`0096a2d0`) in place, two null words.
+#[inline]
+fn simple_list_init(e: &mut Engine, at: u32) {
+    e.mem.set_u32(at, 0);
+    e.mem.set_u32(at.wrapping_add(4), 0);
+}
 
 /// The extra data lock taken (`0040fbf0`) under `name`.
 #[inline]

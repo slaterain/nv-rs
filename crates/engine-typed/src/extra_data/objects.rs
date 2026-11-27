@@ -385,8 +385,7 @@ fn slot_of(e: &Engine, array: u32, index: u32) -> u32 {
 fn new_actor_list(e: &mut Engine) -> u32 {
     let block = e.call(OPERATOR_NEW, &args![8u32]).u32();
     if block != 0 {
-        e.mem.set_u32(block, 0);
-        e.mem.set_u32(block.wrapping_add(4), 0);
+        super::simple_list_init(e, block);
     }
     block
 }
@@ -1196,10 +1195,14 @@ pub fn rank_compare(e: &mut Engine, this: u32, other: u32) -> bool {
 
 // Typed from 00431c20
 /// `ExtraCount`'s constructor (type 0x24) with its count (a 16-bit store). Answers `this`.
-pub fn count_new(e: &mut Engine, this: u32, count: i16) -> u32 {
+pub fn count_new(e: &mut Engine, this: u32, count: u32) -> u32 {
     extra_with_vtable(e, this, KIND_COUNT, VTABLE_COUNT);
-    e.mem
-        .set_u16(this.wrapping_add(EXTRA_PAYLOAD), count as u16);
+    // The word handed on, stored as its low half.
+    let bytes = count.to_le_bytes();
+    e.mem.set_u16(
+        this.wrapping_add(EXTRA_PAYLOAD),
+        u16::from_le_bytes([bytes[0], bytes[1]]),
+    );
     this
 }
 
@@ -1649,7 +1652,7 @@ pub(super) fn construct_at(e: &mut Engine, construct: u32, block: u32, words: &[
         0x0043_1a40 => ownership_new(0 as u32),
         0x0043_1ae0 => global_new(0 as u32),
         0x0043_1b80 => rank_new(0 as u32),
-        0x0043_1c20 => count_new(0 as i16),
+        0x0043_1c20 => count_new(0 as u32),
         0x0043_1d10 => health_new(0 as u32),
         0x0043_1e20 => uses_new(0 as u8),
         0x0043_1ec0 => time_left_new(0 as u32),
