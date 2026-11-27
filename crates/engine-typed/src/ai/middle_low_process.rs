@@ -34,7 +34,7 @@ use super::base_process::{
 };
 use super::{low_process, FAMILY};
 use crate::native::{float_precision, to_float, Real};
-use crate::{ai_queries, crt, interface, slot_target};
+use crate::{ai_queries, crt, forms, interface, slot_target};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
 use engine_core::x87::x87_quiet_bits;
@@ -665,7 +665,11 @@ pub(super) fn check_block_end(e: &mut Engine, expected: u32, source: u32, line: 
     let record = loading_record(e);
     if record != 0 {
         let id = e.mem.u32(record);
-        let form = e.call(base_process::FORM_FOR_ID, &args![id]).u32();
+        let form = typed_call!(
+            forms::FAMILY,
+            0x0048_39c0,
+            forms::tesform::form_by_id(e, id)
+        );
         let (format, bytes) = if end > expected {
             (
                 base_process::OVERRUN_FORM_FORMAT,

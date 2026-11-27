@@ -57,6 +57,50 @@ const EXTRA: u32 = CONTROL + 0x1800;
 /// How far the modifier lists' save and load move the save/load game's position on (the second
 /// stream's).
 const EXTRA_2: u32 = CONTROL + 0x1804;
+/// The second stream's picks of `EXTRA_2` that work it out: LowProcess's own block of exactly 0xffff
+/// bytes when saved, one past, and of 0xfff0 bytes when loaded.
+const SAVE_EDGE: u32 = 1;
+const SAVE_PAST: u32 = 2;
+const LOAD_EDGE: u32 = 3;
+
+/// LowProcess's own block's bytes besides the modifiers' in this world (with the modifiers' change
+/// flag and without the old extra block): at version 0x4b and later the length, the flags, the
+/// essential down timer, three ids (each 4 + `EXTRA`), the items to activate and the tracked damage
+/// (27 + 3 `EXTRA`); earlier the length, the flags, two ids and the tracked damage, and the old date
+/// when loading (`early` + 2 `EXTRA`: 15 saved, 19 loaded).
+fn low_block_rest(e: &Engine, early: u32) -> u32 {
+    let extra = e.mem.u32(EXTRA);
+    if e.mem.u8(e.mem.u32(SAVE_LOAD_GAME) + 0x80) >= 0x4b {
+        extra.wrapping_mul(3).wrapping_add(27)
+    } else {
+        extra.wrapping_mul(2).wrapping_add(early)
+    }
+}
+
+/// Whether this world's save/load game uses blocks (version 0x1f to 0x59).
+fn blocks_on(e: &Engine) -> bool {
+    (0x1f..0x5a).contains(&e.mem.u8(e.mem.u32(SAVE_LOAD_GAME) + 0x80))
+}
+
+/// Whether a block saved last, ending at the save/load game's position, is exactly 0xffff bytes: its
+/// placeholder there holds 0xffff.
+fn saved_block_of_0xffff(e: &Engine) -> bool {
+    let end = e.mem.u32(e.mem.u32(SAVE_LOAD_GAME) + 0x14);
+    let placeholder = end.wrapping_sub(0xffff);
+    e.mem.is_mapped(placeholder)
+        && e.mem.is_mapped(placeholder + 1)
+        && e.mem.u16(placeholder) == 0xffff
+}
+
+/// Whether a load with blocks ended its block where its length says: no overrun or underrun warning
+/// from `source`.
+fn clean_end(e: &Engine, source: u32) -> bool {
+    blocks_on(e)
+        && ![0x0101_5588, 0x0101_5500, 0x0101_54a0, 0x0101_5440]
+            .into_iter()
+            .any(|format| warned_from(e, format, 2, source))
+}
+
 /// The save buffer the positions point into.
 const BUFFER: u32 = 0x0400_0000;
 /// The save buffer past the first stream's: the blocks of three process levels (`MiddleLowProcess`'s
@@ -608,7 +652,19 @@ impl World {
     /// The second stream: its doubles, `LowProcess`'s fields of the two processes, the actors'
     /// value owners, the actor value infos and the save/load game's loading word.
     fn seed_low(&mut self, e: &mut Engine) {
-        let extra = self.pick2(&[0, 0, 4, 0xfff9, 0xfffa, 0x1_0000]);
+        // The modifier lists' extra bytes: plain values (6 + 0xfff9 is a middle-low block of
+        // exactly 0xffff bytes, 0xfffa one past) and three worked out from this world's version and
+        // `EXTRA` that put LowProcess's own block on its edges: a saved block of exactly 0xffff
+        // bytes and one past, and a loaded one of 0xfff0 bytes, a length the byte reader gives.
+        let extra = match self.pick2(&[
+            0, 0, 4, 0xfff9, 0xfffa, 0x1_0000, SAVE_EDGE, SAVE_PAST, LOAD_EDGE, LOAD_EDGE,
+            LOAD_EDGE,
+        ]) {
+            SAVE_EDGE => 0xffff_u32.wrapping_sub(low_block_rest(e, 15)),
+            SAVE_PAST => 0x1_0000_u32.wrapping_sub(low_block_rest(e, 15)),
+            LOAD_EDGE => 0xfff0_u32.wrapping_sub(low_block_rest(e, 19)),
+            plain => plain,
+        };
         e.mem.set_u32(EXTRA_2, extra);
         for (k, (addr, answers, kind)) in DOUBLES_2.iter().enumerate() {
             let block = block(DOUBLES.len() + k);
@@ -1314,11 +1370,12 @@ fn low_process_save_and_load() {
         .ignore_calls(LOW_IN_PLACE)
         .run()
         .assert_same();
+    // Every seed: a block's clean end needs a length from the byte reader that few seeds give.
     Diff::new(entry!(
         0x0090_fd80,
         low_process::load_game(Ptr, u32, u32, u32)
     ))
-    .in_world(&MOST, load_words)
+    .in_world(&ALL, load_words)
     .ignore_calls(LOW_IN_PLACE)
     .allow_nan_payloads()
     .run()
@@ -1345,11 +1402,12 @@ fn low_process_save_and_load() {
     .ignore_calls(LOW_IN_PLACE)
     .run()
     .assert_same();
+    // Every seed, as LowProcess's load.
     Diff::new(entry!(
         0x0092_e730,
         middle_low_process::load_game(Ptr, u32, u32, u32)
     ))
-    .in_world(&MOST, load_words)
+    .in_world(&ALL, load_words)
     .ignore_calls(LOW_IN_PLACE)
     .allow_nan_payloads()
     .run()
@@ -1850,11 +1908,17 @@ fn low_process_reaches() {
         0x0090_fa70,
         &MOST,
         save_words,
-        &["its block too large", "the modifiers saved"],
+        &[
+            "its block too large",
+            "the modifiers saved",
+            "exactly 0xffff",
+        ],
         |e, _, _| {
+            let too_large = warned_from(e, 0x0101_5318, 1, LOW);
             vec![
-                warned_from(e, 0x0101_5318, 1, LOW),
+                too_large,
                 calls(e, 0x0093_78d0) > 0,
+                blocks_on(e) && !too_large && saved_block_of_0xffff(e),
             ]
         },
     );
@@ -1870,6 +1934,7 @@ fn low_process_reaches() {
             "underrun, the version",
             "the old date",
             "the modifiers loaded",
+            "the block's end",
         ],
         |e, _, _| {
             vec![
@@ -1880,6 +1945,7 @@ fn low_process_reaches() {
                 warned_from(e, 0x0101_5440, 2, LOW),
                 calls(e, 0x004b_1500) > 0,
                 calls(e, 0x0093_79c0) > 0,
+                clean_end(e, LOW),
             ]
         },
     );
@@ -1928,8 +1994,15 @@ fn low_process_reaches() {
         0x0092_e560,
         &MOST,
         save_words,
-        &["its block too large"],
-        |e, _, _| vec![warned_from(e, 0x0101_5318, 1, MIDDLE_LOW)],
+        &["its block too large", "exactly 0xffff", "reported"],
+        |e, _, _| {
+            let too_large = warned_from(e, 0x0101_5318, 1, MIDDLE_LOW);
+            vec![
+                too_large,
+                blocks_on(e) && !too_large && saved_block_of_0xffff(e),
+                calls(e, 0x0048_39c0) > 0,
+            ]
+        },
     );
     reaches(
         0x0092_e730,
@@ -1941,6 +2014,7 @@ fn low_process_reaches() {
             "underrun, a record",
             "overrun, the version",
             "underrun, the version",
+            "the block's end",
         ],
         |e, _, _| {
             vec![
@@ -1950,6 +2024,7 @@ fn low_process_reaches() {
                 warned_from(e, 0x0101_5500, 2, MIDDLE_LOW),
                 warned_from(e, 0x0101_54a0, 2, MIDDLE_LOW),
                 warned_from(e, 0x0101_5440, 2, MIDDLE_LOW),
+                clean_end(e, MIDDLE_LOW),
             ]
         },
     );
