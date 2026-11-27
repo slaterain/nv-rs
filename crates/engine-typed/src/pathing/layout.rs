@@ -168,6 +168,15 @@ image! {
         0x2070 goal: Inline<SearchLocation> = SearchLocationImage,
     }
 
+    /// NavMeshSearchMaxCost (Xbox PDB), through its distance limit and goal flag.
+    pub struct MaxCostSearch / MaxCostSearchImage: 0x20ac {
+        0x0000 base: Inline<AStarSearch> = AStarSearchImage,
+        0x2084 rest_of_base: [u32; 8],
+        0x20a4 max_distance: f32,
+        0x20a8 has_goal: u8,
+        0x20a9 pad: [u8; 3],
+    }
+
     /// A search location: a triangle of a mesh and a point.
     pub struct SearchLocation / SearchLocationImage: 0x14 {
         0x0 mesh: u32,

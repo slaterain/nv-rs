@@ -2691,6 +2691,37 @@ fn queue_new() {
 }
 
 #[test]
+fn max_cost_search_new() {
+    Diff::new(entry!(
+        0x006a_b410,
+        search::max_cost_search_new(Ptr<_>) -> Ptr<_>
+    ))
+    .common()
+    // The translated A* base constructor calls its heap constructor directly.
+    .translation_calls_plainly(&[0x006a_8380])
+    .inputs(&[Input::Flag])
+    .setup(|e, case| {
+        stand_ins(e);
+        let search = e.mem.alloc(0x20ac);
+        for offset in (0..0x20ac).step_by(4) {
+            e.mem.set_u32(search + offset, 0x7575_7575);
+        }
+        if case.word(0) != 0 {
+            // Distinguish writes performed before the base constructor from writes after it.
+            e.register(0x006a_6a40, |e, args| {
+                e.mem.set_u32(args[0], 0x1234);
+                e.mem.set_u32(args[0] + 0x20a4, 0x3f80_0000);
+                e.mem.set_u32(args[0] + 0x20a8, 0x7654_3210);
+                ret(0)
+            });
+        }
+        vec![search]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
 fn search_new() {
     Diff::new(entry!(0x006a_7b10, search::search_new(Ptr<_>) -> Ptr<_>))
         .common()

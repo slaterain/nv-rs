@@ -2,8 +2,8 @@
 //! slots the A* searches keep their nodes in.
 
 use super::layout::{
-    AStarQueue, AStarSearch, Counter, InfoNode, InfoSearch, MeshEdge, NodeSlots, PathingRequest,
-    Scale, SearchLocation, SimpleArray, SmootherNode, SortNode,
+    AStarQueue, AStarSearch, Counter, InfoNode, InfoSearch, MaxCostSearch, MeshEdge, NodeSlots,
+    PathingRequest, Scale, SearchLocation, SimpleArray, SmootherNode, SortNode,
 };
 use super::point::{length_xy_squared, subtract};
 use super::{double_global, float_global, low_word, real, FAMILY};
@@ -499,6 +499,19 @@ pub fn queue_new(e: &mut Engine, this: Ptr<AStarQueue>) -> Ptr<AStarQueue> {
     let best = float_global(e, MINUS_ONE);
     e.set(this, AStarQueue::best, best);
     e.call(MEMSET, &args![this.byte_add(4), 0u32, 0x50u32]);
+    this
+}
+
+// Typed from 006ab410
+pub fn max_cost_search_new(e: &mut Engine, this: Ptr<MaxCostSearch>) -> Ptr<MaxCostSearch> {
+    e.call(0x006a_6a40, &args![this]);
+    e.set(
+        this.at(MaxCostSearch::base),
+        AStarSearch::vtable,
+        0x0106_b87c,
+    );
+    e.set(this, MaxCostSearch::max_distance, 0.0);
+    e.set(this, MaxCostSearch::has_goal, 0);
     this
 }
 
