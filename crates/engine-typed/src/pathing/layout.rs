@@ -205,6 +205,17 @@ image! {
         0x68 radius: f32,
     }
 
+    /// `PathingRequestLOS` (Xbox PDB), 0xD8 bytes; only the members after the `PathingRequest`
+    /// base (0xB0 bytes).
+    pub struct PathingRequestLOS / PathingRequestLOSImage: 0xd8 {
+        0x00 head: [u32; 0x2c],
+        0xb0 spLOSGridMap: u32,
+        0xb4 ignore_locations: Inline<SimpleArray> = SimpleArrayImage,
+        0xc4 fIgnoreLocationRadius: f32,
+        0xc8 search_center: Inline<NiPoint3> = NiPoint3Image,
+        0xd4 fSearchCenterRadius: f32,
+    }
+
     /// A path smoother node, as far as its flag byte.
     pub struct SmootherNode / SmootherNodeImage: 0x44 {
         0x00 head: [u32; 16],

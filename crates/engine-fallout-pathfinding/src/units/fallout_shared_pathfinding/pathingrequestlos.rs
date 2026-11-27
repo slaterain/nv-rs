@@ -141,7 +141,7 @@ pub fn pathing_request_los_scalar_deleting_destructor(
     this: Ptr<PathingRequestLOS>,
     flags: u32,
 ) -> Ptr<PathingRequestLOS> {
-    pathing_request_los_destructor(e, this);
+    e.call(0x006e_58d0, &args![this]);
     if flags & 1 != 0 {
         e.call(DEALLOCATE, &args![this, 0xd8u32]);
     }
@@ -197,7 +197,7 @@ pub fn fn_006e5940(
         let x = e.mem.u32(copy);
         let y = e.mem.u32(copy + 4);
         let z = e.mem.u32(copy + 8);
-        fn_006e5a40(e, this, x, y, z, search_radius);
+        e.call(0x006e_5a40, &args![this, x, y, z, search_radius]);
     });
     this
 }
@@ -253,7 +253,7 @@ pub fn pathing_request_los_copy_to(
     let x = e.mem.u32(t + SEARCH_CENTER_OFFSET);
     let y = e.mem.u32(t + SEARCH_CENTER_OFFSET + 4);
     let z = e.mem.u32(t + SEARCH_CENTER_OFFSET + 8);
-    fn_006e5a40(e, dest, x, y, z, search_radius);
+    e.call(0x006e_5a40, &args![dest, x, y, z, search_radius]);
 }
 
 // Translated from 006e5b20 (decompiled, FalloutNV.exe 1.4.0.525)

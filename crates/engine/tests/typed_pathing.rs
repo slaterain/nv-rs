@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, los_request, navmesh, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -4364,4 +4364,200 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- The LOS request ----
+
+/// A `PathingRequestLOS`: 0xd8 bytes, the ignore array headered at +0xb4 (data, size, capacity).
+fn los_request(e: &mut Engine, data: u32, size: u32) -> u32 {
+    let t = e.mem.alloc(0xd8);
+    let vt = vtable(e);
+    e.mem.set_u32(t + 0xb4, vt);
+    e.mem.set_u32(t + 0xb8, data);
+    e.mem.set_u32(t + 0xbc, size);
+    e.mem.set_u32(t + 0xc0, 4);
+    t
+}
+
+/// The LOS request's foreign callees, stubbed; `00979260` reads the search radius and
+/// `01013d84` holds the constructor's ignore radius (500.0).
+fn los_request_stubs(e: &mut Engine) {
+    for a in [
+        0x006e_2420,
+        0x006e_26a0,
+        0x006e_2620,
+        0x006e_2750,
+        0x006e_3230,
+        0x006e_34f0,
+        0x0063_3c90,
+        0x0055_9a40,
+        0x0045_cec0,
+        0x006e_5cc0,
+        0x0049_f1c0,
+        0x0049_f1f0,
+        0x0069_cfe0,
+        0x0069_cea0,
+        0x0086_5e50,
+        0x0086_5f60,
+        0x0086_4980,
+        0x0086_4a60,
+        0x00aa_1460,
+    ] {
+        e.register(a, |_, _| Ret::default());
+    }
+    // `00979260(request)`: `fSearchCenterRadius` (+0xD4), in ST0.
+    e.register(0x0097_9260, |e, a| ret_f(f64::from(e.mem.f32(a[0] + 0xd4))));
+    // `00864a60(buffer)`: the count, from the buffer's first word.
+    e.register(0x0086_4a60, |e, a| e.mem.u32(a[0]).into_ret());
+    e.map(0x0101_3000, 0x1000);
+    e.mem.set_u32(0x0101_3d84, 500.0f32.to_bits());
+}
+
+#[test]
+fn los_request_new() {
+    Diff::new(entry!(0x006e_57e0, los_request::new(Ptr<_>) -> Ptr<_>))
+        .family(&pathing::PATHING)
+        .family(&leaf::LEAVES)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            los_request_stubs(e);
+            let t = los_request(e, 0, 0);
+            // A dirty ignore radius: the constructor overwrites it.
+            e.mem.set_u32(t + 0xc4, case.word(0));
+            vec![t]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_request_scalar_deleting_destructor() {
+    Diff::new(entry!(
+        0x006e_5890,
+        los_request::scalar_deleting_destructor(Ptr<_>, u32) -> Ptr<_>
+    ))
+    .family(&pathing::PATHING)
+    .family(&leaf::LEAVES)
+    .inputs(&[Input::Flag])
+    .setup(|e, case| {
+        los_request_stubs(e);
+        vec![los_request(e, 0, 0), case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn los_request_destructor() {
+    Diff::new(entry!(0x006e_58d0, los_request::destructor(Ptr<_>)))
+        .family(&pathing::PATHING)
+        .family(&leaf::LEAVES)
+        .inputs(&[Input::Flag])
+        .setup(|e, _| {
+            los_request_stubs(e);
+            vec![los_request(e, 0, 0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_request_copy_new() {
+    Diff::new(entry!(
+        0x006e_5940,
+        los_request::copy_new(Ptr<_>, Ptr<_>) -> Ptr<_>
+    ))
+    .family(&pathing::PATHING)
+    .family(&leaf::LEAVES)
+    .inputs(&[Input::Word, Input::Word, Input::Word, Input::Word])
+    .setup(|e, case| {
+        los_request_stubs(e);
+        let source = los_request(e, 0, 0);
+        e.mem.set_u32(source + 0xc4, case.word(0));
+        e.mem.set_u32(source + 0xd4, case.word(1));
+        point_at(e, source + 0xc8, [case.word(2), case.word(3), ONE]);
+        vec![los_request(e, 0, 0), source]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn los_request_set_search_center() {
+    Diff::new(entry!(
+        0x006e_5a40,
+        los_request::set_search_center(Ptr<_>, u32, u32, u32, f32)
+    ))
+    .family(&pathing::PATHING)
+    .family(&leaf::LEAVES)
+    .inputs(&[
+        Input::Word,
+        Input::Word,
+        Input::Word,
+        Input::Word,
+        Input::F32,
+    ])
+    .setup(|e, case| {
+        los_request_stubs(e);
+        let t = los_request(e, 0, 0);
+        let mut words = vec![t];
+        words.extend(case.words()[..4].iter().copied());
+        words.extend(case.words()[4..].iter().copied());
+        words
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn los_request_copy_to() {
+    Diff::new(entry!(0x006e_5a80, los_request::copy_to(Ptr<_>, Ptr<_>)))
+        .family(&pathing::PATHING)
+        .family(&leaf::LEAVES)
+        .inputs(&[Input::Word, Input::Word, Input::Word, Input::Word])
+        .setup(|e, case| {
+            los_request_stubs(e);
+            let this = los_request(e, 0, 0);
+            e.mem.set_u32(this + 0xc4, case.word(0));
+            e.mem.set_u32(this + 0xd4, case.word(1));
+            point_at(e, this + 0xc8, [case.word(2), case.word(3), ONE]);
+            vec![this, los_request(e, 0, 0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_request_save_game() {
+    Diff::new(entry!(0x006e_5b20, los_request::save_game(Ptr<_>, Ptr)))
+        .family(&pathing::PATHING)
+        .family(&leaf::LEAVES)
+        .inputs(&[Input::Of(&[0, 1, 2])])
+        .setup(|e, case| {
+            los_request_stubs(e);
+            let data = e.mem.alloc(0xc * 3);
+            let this = los_request(e, data, case.word(0));
+            let buffer = e.mem.alloc(0x40);
+            vec![this, buffer]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_request_load_game() {
+    Diff::new(entry!(0x006e_5c00, los_request::load_game(Ptr<_>, Ptr)))
+        .family(&pathing::PATHING)
+        .family(&leaf::LEAVES)
+        .inputs(&[Input::Of(&[0, 1, 2])])
+        .setup(|e, case| {
+            los_request_stubs(e);
+            let data = e.mem.alloc(0xc * 3);
+            let this = los_request(e, data, 0);
+            let buffer = e.mem.alloc(0x40);
+            e.mem.set_u32(buffer, case.word(0));
+            vec![this, buffer]
+        })
+        .run()
+        .assert_same();
 }
