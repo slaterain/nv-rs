@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, message_list, navmesh, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -4365,4 +4365,45 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+fn message_list_storage(e: &mut Engine, _: &Case) -> Vec<u32> {
+    let object = e.mem.alloc(16);
+    for offset in [0, 4, 8, 12] {
+        e.mem.set_u32(object + offset, 0xabab_abab);
+    }
+    vec![object]
+}
+
+#[test]
+fn free_list_item_base_new() {
+    Diff::new(entry!(0x006e_cc00, message_list::free_list_item_base_new(Ptr) -> Ptr))
+        .family(&pathing::PATHING)
+        .inputs(&FIXED)
+        .setup(message_list_storage)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn list_node_base_new() {
+    Diff::new(entry!(0x006e_cc20, message_list::list_node_base_new(Ptr) -> Ptr))
+        .family(&pathing::PATHING)
+        .inputs(&FIXED)
+        .setup(message_list_storage)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn free_list_new() {
+    Diff::new(entry!(
+        0x006e_cc40,
+        message_list::free_list_new(Ptr<_>) -> Ptr<_>
+    ))
+    .family(&pathing::PATHING)
+    .inputs(&FIXED)
+    .setup(message_list_storage)
+    .run()
+    .assert_same();
 }

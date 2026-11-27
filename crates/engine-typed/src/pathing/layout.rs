@@ -8,6 +8,13 @@ use crate::image;
 use engine_core::ptr::{Field, Inline};
 
 image! {
+    /// Path manager message free list, with its spin lock and first node.
+    pub struct PathFreeList / PathFreeListImage: 0xc {
+        0x0 vtable: u32,
+        0x4 lock: u32,
+        0x8 head: u32,
+    }
+
     /// A two-float point or direction (an angle's cosine and sine, an arc's ends).
     pub struct Point2 / Point2Image: 0x8 {
         0x0 x: f32,
