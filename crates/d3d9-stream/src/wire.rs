@@ -456,7 +456,9 @@ impl Backend for FrameDraws {
     fn execute(&mut self, cmd: Cmd<Data<'_>>) -> crate::cmd::Reply {
         match cmd {
             Cmd::Present { .. } => self.frames.push(std::mem::take(&mut self.now)),
-            Cmd::DrawPrimitive { .. } | Cmd::DrawIndexedPrimitive { .. } | Cmd::DrawPrimitiveUp { .. } => self.now += 1,
+            Cmd::DrawPrimitive { .. }
+            | Cmd::DrawIndexedPrimitive { .. }
+            | Cmd::DrawPrimitiveUp { .. } => self.now += 1,
             _ => {}
         }
         crate::cmd::Reply::None
