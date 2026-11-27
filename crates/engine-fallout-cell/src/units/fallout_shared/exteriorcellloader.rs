@@ -1203,10 +1203,11 @@ mod tests {
 
     /// A task still loading (3) that the loader thread moves on one state a sleep (3, 4, 5): the
     /// row waits for both running states and then post-processes it; the exe's wait ends at 4 and
-    /// leaves it for the IO manager's queue.
+    /// leaves it for the IO manager's queue. (A wait that also sleeps on 5 is cancelled out at the
+    /// 1000th sleep, so it fails here instead of hanging.)
     #[test]
     fn a_running_task_is_waited_for_and_then_post_processed_by_the_row() {
-        let next = |_: u32, state: u32| (state + 1).min(5);
+        let next = |n: u32, state: u32| if n >= 1000 { 6 } else { (state + 1).min(5) };
         assert_eq!(
             walk_with_state(fn_005282d0_waiting_while_running, 3, next),
             (2, 1)
