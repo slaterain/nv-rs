@@ -57,9 +57,9 @@
 //! `new`, the compare of two counted pointers, a 4-byte `memmove`, the memory manager's address and
 //! a list held at +0x28 of its object, and for the objects unit an array's element (`006a7ad0`), a
 //! form's process (`008d8520`), the guards' word compare (`009a3830`) and a reference's angles
-//! (`00430830`), and for its last 86 the two record constructors the copies call (`00414010`,
-//! `0055a400`) and `NiPoint3`'s (`00416870`); the empty simple list's constructor (`0096a2d0`) and
-//! the world location's (`006d5320`, which stores nothing) are done in place by the whole family.
+//! (`00430830`), and for its last 86 `NiPoint3`'s constructor (`00416870`); the empty simple list's
+//! constructor (`0096a2d0`), the world location's (`006d5320`) and `REF_DECAL_DATA`'s (`0055a400`),
+//! which store nothing or two null words, are done in place by the whole family.
 //! Each type, next or word is read once where the exe reads it again with nothing in between that
 //! could change it. A virtual call (an extra data's slot 0 delete, its slot 4 `Compare`, the type
 //! 0x92 copy's slot 0xc, a primitive's slot 0) stays a call through the slot: each class has its

@@ -49,7 +49,6 @@ const MAP_MARKER_DATA_INIT: u32 = 0x0043_8bb0;
 const AUDIO_MARKER_DATA_INIT: u32 = 0x0058_9450;
 const AUDIO_BUOY_MARKER_DATA_INIT: u32 = 0x0068_0890;
 const REGION_LIST_INIT: u32 = 0x004f_6320;
-const DECAL_DATA_INIT: u32 = 0x0055_a400;
 const MULTIBOUND_MARKER_DATA_INIT: u32 = 0x0043_8f50;
 const NAVMESH_PORTAL_INIT: u32 = 0x0069_2870;
 const OCCLUSION_PLANE_INIT: u32 = 0x00c3_35d0;
@@ -620,7 +619,7 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
         // EXTRA_DECAL_REFS: one REF_DECAL_DATA (0x1c bytes).
         T_XDCR => e.with_stack(0x1c, |e, decal| {
             let at = decal.addr();
-            e.call(DECAL_DATA_INIT, &args![at]);
+            // `REF_DECAL_DATA`'s constructor (`0055a400`) stores nothing: done in place.
             zero_bytes(e, at, 0x1c);
             file_bytes(e, file, at, 0x1c);
             if file_swaps(e, file) {

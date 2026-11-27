@@ -3123,6 +3123,18 @@ impl ExtraWorld {
 /// What the list meets: the lock's imports (as the lighting world has them), the extra data's
 /// delete, `operator delete` and the reference lists' destructors.
 fn extra_stand_ins(e: &mut Engine) {
+    extra_stand_ins_but_drops(e);
+    for addr in REF_LIST_DROPS {
+        e.register(addr, |e, a| {
+            e.mem.set_u32(a[0] + 0x14, 0xd00d);
+            Ret::default()
+        });
+    }
+}
+
+/// [`extra_stand_ins`] but the reference lists' destructors (the extra data family's, which its
+/// worlds run as themselves).
+fn extra_stand_ins_but_drops(e: &mut Engine) {
     lighting_stand_ins(e);
     e.register(EXTRA_VT_FN, |e, a| {
         let n = e.mem.u32(a[0] + EXTRA_DELETES);
@@ -3130,12 +3142,6 @@ fn extra_stand_ins(e: &mut Engine) {
         Ret::default()
     });
     e.register(0x0040_1030, nothing);
-    for addr in REF_LIST_DROPS {
-        e.register(addr, |e, a| {
-            e.mem.set_u32(a[0] + 0x14, 0xd00d);
-            Ret::default()
-        });
-    }
 }
 
 /// An extra data of `kind` with the world's vtable, a null next and a payload word of its own.
@@ -3162,10 +3168,19 @@ fn jip_head(_: &mut Engine, _: &[u32]) -> Option<u32> {
 }
 
 fn extra_world(e: &mut Engine, seed: u32) -> ExtraWorld {
+    extra_world_with(e, seed, true)
+}
+
+/// [`extra_world`], with the reference lists' destructors standing in or (`drops` false) not.
+fn extra_world_with(e: &mut Engine, seed: u32, drops: bool) -> ExtraWorld {
     use engine_core::extend::{Owner, SiteSlot};
     e.map(0x011c_3000, 0x1000);
     e.map(CONTROL, 0x1000);
-    extra_stand_ins(e);
+    if drops {
+        extra_stand_ins(e);
+    } else {
+        extra_stand_ins_but_drops(e);
+    }
     let mut d = Draw(seed.wrapping_mul(0x9e37_79b9) ^ 0xf680);
     // JIP: off, installed, installed with its head site, or off with the site's handler still there.
     let jip = seed % 4;
@@ -3485,6 +3500,7 @@ trait ExtraDeleter {
 impl ExtraDeleter for Diff {
     fn junk_deleted(self) -> Diff {
         self.family(&CELL_REFS)
+            .goes_by_address(&REF_LIST_DROPS)
             .inputs(&[Input::Of(FLAGS_WORDS)])
             .setup(|e, case| {
                 extra_stand_ins(e);
@@ -4099,6 +4115,10 @@ const XD_IN_PLACE: &[u32] = &[
     0x0043_0830,
     0x0096_a2d0,
     0x006d_5320,
+    // The objects unit's last 86's: `NiPoint3`'s constructor (the distant data's normal) and
+    // `REF_DECAL_DATA`'s, which stores nothing (the whole family does it in place).
+    0x0041_6870,
+    0x0055_a400,
 ];
 
 /// The families an extra data function reaches (the extra list's with its lock, type getter,
@@ -4199,17 +4219,11 @@ const XD_NOTED: &[u32] = &[
     0x0058_9450,
     0x0058_9770,
     0x0068_0890,
-    0x0043_3b70,
-    0x0043_42b0,
     0x0043_6f80,
     0x0043_8f50,
     0x0043_9120,
-    0x0043_46f0,
-    0x0043_4c80,
     0x004a_4d40,
     0x0053_7e90,
-    0x0043_4a70,
-    0x0043_4ee0,
     0x0047_0470,
     0x0090_5820,
     XD_SLOT_3_FN,
@@ -4228,16 +4242,13 @@ fn xd_stand_ins(e: &mut Engine) {
         ($($addr:expr => $kind:expr),* $(,)?) => { $( e.register($addr, built::<$kind>); )* };
     }
     constructors! {
-        0x0043_5150 => 0x3f, 0x0043_5ec0 => 0x46, 0x0043_61e0 => 0x7d, 0x0043_6300 => 0x8a,
-        0x0043_6420 => 0x83, 0x0043_6540 => 0x86, 0x0043_5fa0 => 0x4c, 0x0043_38b0 => 0x53,
-        0x0043_3ca0 => 0x57,
+        0x0043_5ec0 => 0x46, 0x0043_61e0 => 0x7d, 0x0043_6300 => 0x8a,
+        0x0043_6420 => 0x83, 0x0043_6540 => 0x86, 0x0043_5fa0 => 0x4c,
         0x0043_60c0 => 0x4f,
         0x0043_6660 => 0x87, 0x0040_eda0 => 0x01, 0x0040_ec00 => 0x02, 0x0040_ef00 => 0x04,
         0x0040_ef30 => 0x07, 0x0040_efd0 => 0x81, 0x0040_f070 => 0x08, 0x0040_f110 => 0x59,
         0x0040_f1b0 => 0x8c, 0x0040_f440 => 0x0a,
-        0x0043_2cb0 => 0x14, 0x0043_3010 => 0x1b, 0x0043_3260 => 0x13, 0x0043_3300 => 0x37,
-        0x0043_5920 => 0x39, 0x0040_f370 => 0x03, 0x0043_34b0 => 0x3b, 0x0043_36c0 => 0x89,
-        0x0043_3640 => 0x51,
+        0x0043_5920 => 0x39, 0x0040_f370 => 0x03,
     }
     xe_stand_ins(e);
     xp_stand_ins(e);
@@ -4254,7 +4265,7 @@ fn xd_stand_ins(e: &mut Engine) {
 fn xd_world(e: &mut Engine, seed: u32) -> ExtraWorld {
     use engine_core::extend::jip_patches::{FIXES, INSTALLED};
     use engine_core::extend::{Owner, SiteSlot};
-    let w = extra_world(e, seed);
+    let w = extra_world_with(e, seed, false);
     // JIP on: installed with its fixes, installed alone, or its fixes alone, so a seam gated by
     // the other bit shows.
     if w.jip % 3 != 0 {
@@ -4281,6 +4292,12 @@ fn xd_world(e: &mut Engine, seed: u32) -> ExtraWorld {
     e.map(0x011d_d000, 0x1000);
     // The save/load singleton's global, which the reference pointer setter's translation reads.
     e.map(0x011d_e000, 0x1000);
+    // The leveled creature modifiers' table of float settings (`01184ab0`, read for a modifier of
+    // -1 to 3): each a setting of its own (their value stands in).
+    e.map(0x0118_4000, 0x1000);
+    for i in 0..8 {
+        e.mem.set_u32(0x0118_4aa0 + 4 * i, 0x0118_4f00 + 0x10 * i);
+    }
     let mut d = Draw(seed.wrapping_mul(0x2545_f491) ^ 0x0041_8200);
     e.mem.set_u32(XD_NEW_FAILS, u32::from(d.next(6) == 0));
     let tls = e.tls();
@@ -6257,7 +6274,6 @@ const XF_NOTED: &[u32] = &[
     0x0043_8bb0,
     0x0058_9450,
     0x0068_0890,
-    0x0055_a400,
     0x0043_8f50,
     0x0069_2870,
     0x00c3_35d0,
@@ -6268,19 +6284,13 @@ const XF_NOTED: &[u32] = &[
     0x0058_9890,
     0x0043_8fc0,
     0x0069_dfd0,
-    0x0043_2f30,
     0x0067_dd20,
     0x004a_4e90,
     0x0048_4e60,
     0x0046_1630,
     0x0043_7730,
-    0x0043_3db0,
-    0x0043_3ed0,
-    0x0043_4050,
     0x0067_c6c0,
     0x0058_f210,
-    0x0090_5330,
-    0x0063_f7b0,
     0x004d_93c0,
     0x0043_a420,
     0x0043_8c10,
@@ -6293,7 +6303,7 @@ const XF_NOTED: &[u32] = &[
 ];
 
 /// The stand-ins of the extra data world and these three's: the file, the forms, the casts, the
-/// log and chunk adds, the coins, the ragdoll extra data's constructor.
+/// log and chunk adds, the coins.
 fn xf_stand_ins(e: &mut Engine) {
     for &addr in XF_NOTED {
         e.register(addr, noted);
@@ -6306,7 +6316,6 @@ fn xf_stand_ins(e: &mut Engine) {
     e.register(0x00ec_43fb, xf_cast);
     e.register(0x005a_e380, xf_list_count);
     e.register(0x00aa_13e0, xd_new);
-    e.register(0x0043_2cb0, built::<0x14>);
     for addr in [
         0x005b_5e40,
         0x0048_5910,
@@ -6827,20 +6836,18 @@ const XE_SLOT_FN: u32 = 0x00ff_c300;
 const XE_CELL_FN: u32 = 0x00ff_c304;
 
 /// What the part 2 range calls by address in other units: each a stand-in that counts (the
-/// `NiPointer` assignment, the editor id's string, the base destructor's body, the reference's
-/// persistence, the packages', ragdolls' and run-once packages' callees, the list adds and frees).
+/// `NiPointer` assignment, the editor id's string, the reference's persistence, the packages' and
+/// ragdolls' callees, the list adds and frees).
 const XE_NOTED: &[u32] = &[
     0x0066_b0d0,
     0x0040_37b0,
     0x0040_37d0,
     0x0040_37f0,
-    0x0043_2f30,
     0x0056_53d0,
     0x0067_4d70,
     0x004d_9800,
     0x004d_9670,
     0x004d_9330,
-    0x0043_31c0,
     0x005a_e3d0,
     0x009e_ba00,
     0x0047_02f0,
@@ -6852,31 +6859,6 @@ fn xe_world_space(_: &mut Engine, a: &[u32]) -> Ret {
     ret(if a[0] & 0x10 != 0 { 0 } else { a[0] ^ 0x100 })
 }
 
-/// `BSSimpleList::Remove(&item)`: the first node holding the item unlinked (the head's next moved
-/// into the head), so a walk that starts again ends.
-fn xe_list_remove(e: &mut Engine, a: &[u32]) -> Ret {
-    noted(e, a);
-    let want = e.mem.u32(a[1]);
-    let (mut node, mut previous) = (a[0], 0);
-    while node != 0 {
-        if e.mem.u32(node) == want {
-            let next = e.mem.u32(node + 4);
-            if previous != 0 {
-                e.mem.set_u32(previous + 4, next);
-            } else if next != 0 {
-                e.mem.set_u32(node, e.mem.u32(next));
-                e.mem.set_u32(node + 4, e.mem.u32(next + 4));
-            } else {
-                e.mem.set_u32(node, 0);
-            }
-            break;
-        }
-        previous = node;
-        node = e.mem.u32(node + 4);
-    }
-    ret(0)
-}
-
 /// The part 2 range's stand-ins (`xd_stand_ins` holds them): the counted callees, the world
 /// space, the list remove, the package's two flags and the reference's cell from the setup's words.
 fn xe_stand_ins(e: &mut Engine) {
@@ -6884,7 +6866,6 @@ fn xe_stand_ins(e: &mut Engine) {
         e.register(addr, noted);
     }
     e.register(0x0054_ddd0, xe_world_space);
-    e.register(0x0090_5330, xe_list_remove);
     e.register(0x0067_4d40, |e, _| ret(e.mem.u32(XE_PACKAGE_FLAGS) & 1));
     e.register(
         0x0067_4e40,
@@ -8425,19 +8406,10 @@ const XP_VISITED_MAX: u32 = 16;
 const XP_SEARCHES: u32 = CONTROL + 0x780;
 const XP_SEARCHES_MAX: u32 = 64;
 
-/// What the part 3 range calls by address in other units and only counts: the decal list's add,
-/// the reflect lists' flag set, the guards' add and two-word method, the patrol data's
-/// destructor body, a simple list's destructor body, the strings' copy and C string constructors,
-/// the visited set's destructor and the remover of a list's head node.
-const XP_NOTED: &[u32] = &[
-    0x0043_4480,
-    0x0043_48a0,
-    0x0067_c670,
-    0x0046_ffb0,
-    0x0040_47f0,
-    0x0040_c0e0,
-    0x0063_f7b0,
-];
+/// What the part 3 range calls by address in other units and only counts: the guards' add and
+/// two-word method, the patrol data's destructor body, a simple list's destructor body, the strings'
+/// copy and C string constructors and the visited set's destructor.
+const XP_NOTED: &[u32] = &[0x0067_c670, 0x0046_ffb0, 0x0040_47f0, 0x0040_c0e0];
 
 /// A constructor of a list extra data of type `K`: [`built`]'s, with the payload's three words
 /// cleared (an empty inline list, no flags, no timer), as the classes' own constructors leave them.
@@ -8449,53 +8421,6 @@ fn built_list<const K: u32>(e: &mut Engine, a: &[u32]) -> Ret {
         e.mem.set_u32(a[0] + offset, 0);
     }
     ret(a[0])
-}
-
-/// `ExtraActivateRef`'s search of its parents (`00433a00`): the entry of the list at +0xc whose
-/// reference is the one asked for, or 0 (null entries passed over; at most 64 nodes).
-fn xp_activate_find(e: &mut Engine, a: &[u32]) -> Ret {
-    let mut node = a[0].wrapping_add(0xc);
-    for _ in 0..64 {
-        if node == 0 {
-            break;
-        }
-        let entry = e.mem.u32(node);
-        if entry != 0 && e.mem.u32(entry) == a[1] {
-            return ret(entry);
-        }
-        node = e.mem.u32(node + 4);
-    }
-    ret(0)
-}
-
-/// The reflect lists' remove (`00434800`, `thiscall(extra, reference)`): counted, and the first node
-/// of the list at +0xc whose entry is for `reference` unlinked (the next node's words moved into the
-/// head when it is the head; the head's item cleared when it is alone), so a flag clear can empty
-/// the list and delete the extra data.
-fn xp_reflect_remove(e: &mut Engine, a: &[u32]) -> Ret {
-    noted(e, a);
-    let (mut node, mut previous) = (a[0].wrapping_add(0xc), 0);
-    for _ in 0..64 {
-        if node == 0 {
-            break;
-        }
-        let entry = e.mem.u32(node);
-        if entry != 0 && e.mem.u32(entry) == a[1] {
-            let next = e.mem.u32(node + 4);
-            if previous != 0 {
-                e.mem.set_u32(previous + 4, next);
-            } else if next != 0 {
-                e.mem.set_u32(node, e.mem.u32(next));
-                e.mem.set_u32(node + 4, e.mem.u32(next + 4));
-            } else {
-                e.mem.set_u32(node, 0);
-            }
-            break;
-        }
-        previous = node;
-        node = e.mem.u32(node + 4);
-    }
-    ret(0)
 }
 
 /// `NiTMap::GetAt(key, &value)` (`0057c850`): true, with the value byte 1, for a key recorded; the
@@ -8526,21 +8451,15 @@ fn xp_visited_insert(e: &mut Engine, a: &[u32]) -> Ret {
 }
 
 /// The part 3 range's stand-ins (`xd_stand_ins` holds them): the counted callees, the list extra
-/// data's constructors, the activate parents' search, the visited set and `PatrolRefData::Compare`
+/// data's constructors of other units, the visited set and `PatrolRefData::Compare`
 /// (whether the two data's first words differ in their low bit).
 fn xp_stand_ins(e: &mut Engine) {
     for &addr in XP_NOTED {
         e.register(addr, noted);
     }
-    e.register(0x0043_38b0, built_list::<0x53>);
-    e.register(0x0043_33a0, built_list::<0x38>);
     e.register(0x0043_5950, built_list::<0x3a>);
-    e.register(0x0043_3530, built_list::<0x52>);
-    e.register(0x0043_3790, built_list::<0x54>);
     e.register(0x0043_5820, built_list::<0x78>);
     e.register(0x0043_58a0, built_list::<0x79>);
-    e.register(0x0043_3a00, xp_activate_find);
-    e.register(0x0043_4800, xp_reflect_remove);
     e.register(0x0057_c850, xp_visited_find);
     e.register(0x0084_d310, xp_visited_insert);
     e.register(0x0067_c720, |e, a| {
@@ -10560,36 +10479,14 @@ const XQ_NOTED: &[u32] = &[
 ];
 
 /// The part 4 range's stand-ins (`xd_stand_ins` holds them): the counted callees and the
-/// constructors of the saved animation and havok data, the last finished sequence (given its name)
-/// and the friend hits, each giving its type, and the leveled creature modifier's two getters.
+/// constructors of the saved animation and havok data and the friend hits, each giving its type.
 fn xq_stand_ins(e: &mut Engine) {
     for &addr in XQ_NOTED {
         e.register(addr, noted);
     }
     e.register(0x0043_5a60, built::<0x42>);
     e.register(0x0043_5b50, built::<0x3d>);
-    e.register(0x0043_51d0, built::<0x41>);
     e.register(0x0043_5c40, built::<0x45>);
-    e.register(0x0043_50c0, xq_lev_float);
-    e.register(0x0043_5100, xq_lev_word);
-}
-
-/// The leveled creature modifier's `float` (`004350c0`: 1.0 for the neutral index 4, else the game
-/// setting the index names): 1.0 or the payload's bits, in ST0.
-fn xq_lev_float(e: &mut Engine, a: &[u32]) -> Ret {
-    match e.mem.u32(a[0] + 0xc) {
-        4 => float_ret(1.0f32.to_bits()),
-        word => float_ret(word),
-    }
-}
-
-/// The leveled creature modifier's word (`00435100`): 1 for the index 0, 0 for 4, else all ones.
-fn xq_lev_word(e: &mut Engine, a: &[u32]) -> Ret {
-    ret(match e.mem.u32(a[0] + 0xc) {
-        0 => 1,
-        4 => 0,
-        _ => u32::MAX,
-    })
 }
 
 /// The leveled creature modifier's setter's values: 4 (its neutral value), 0, 1, all ones.
@@ -12098,18 +11995,6 @@ fn xs_reach_stand_ins(e: &mut Engine) {
     e.register(0x0042_e250, xs_pick::<0x0042_e250>);
 }
 
-/// The last finished sequence's constructor (`004351d0`, type 0x41): the name copied (16 bytes) to a
-/// block of its own, as the string it keeps, so no later read follows a local that is gone.
-fn xs_sequence_new(e: &mut Engine, a: &[u32]) -> Ret {
-    xs_mark(e, 0x0043_51d0);
-    let copy = e.mem.alloc(0x20);
-    for i in 0..0x10 {
-        let byte = e.mem.u8(a[1] + i);
-        e.mem.set_u8(copy + i, byte);
-    }
-    built::<0x41>(e, &[a[0], copy])
-}
-
 /// A maker of an object: a new block of 0x80 bytes with the world's object vtable.
 fn xs_object<const A: u32>(e: &mut Engine, _: &[u32]) -> Ret {
     xs_mark(e, A);
@@ -12380,14 +12265,12 @@ fn xs_stand_ins(e: &mut Engine) {
         ($($a:expr => $k:expr),* $(,)?) => { $( e.register($a, xs_extra::<$a, $k>); )* };
     }
     extras! {
-        0x0043_3010 => 0x1b,
-        0x0043_5040 => 0x1e, 0x0082_5a10 => 0x32, 0x0082_5ea0 => 0x33,
-        0x0043_5920 => 0x39, 0x0043_4fc0 => 0x3c,
+        0x0082_5a10 => 0x32, 0x0082_5ea0 => 0x33,
+        0x0043_5920 => 0x39,
         0x0043_6ac0 => 0x55, 0x0043_6cb0 => 0x5e,
-        0x0043_7440 => 0x73, 0x0043_2e60 => 0x74, 0x0043_7690 => 0x75,
-        0x0043_36c0 => 0x89, 0x0043_7c40 => 0x8b,
+        0x0043_7440 => 0x73, 0x0043_7690 => 0x75,
+        0x0043_7c40 => 0x8b,
     }
-    e.register(0x0043_51d0, xs_sequence_new);
     e.register(0x0043_5c40, xs_friend_hits_new);
     // A package's procedure type: none or all ones (the same address as the topic's check).
     e.register(0x0096_11e0, xs_none_or_all::<0x0096_11e0>);
@@ -13164,7 +13047,15 @@ const XT_NOTED: &[u32] = &[
 /// The range's typed calls into the pathing family (an array's buffer freed, the bound object
 /// array's body, the shrink test) and the forms family's lookup by id, which the extra data Diffs do
 /// not name: they go by address, to the translations or the stand-ins.
-const XT_BY_ADDRESS: &[u32] = &[0x006a_8500, 0x006b_3eb0, 0x006f_3170, XO_FORM_BY_ID];
+const XT_BY_ADDRESS: &[u32] = &[
+    0x006a_8500,
+    0x006b_3eb0,
+    0x006f_3170,
+    XO_FORM_BY_ID,
+    XR_FORM_FILE,
+    XR_COMPILE_INDEX,
+    XR_TEXT_LENGTH,
+];
 
 /// The world's array vtable's slots (allocate, free, reallocate) and its counted objects' reference
 /// vtable's delete; the world's map vtable's hash and key compare.
@@ -15263,6 +15154,9 @@ fn xo_shared_stand_ins(e: &mut Engine) {
         e.register(addr, xo_array_new);
     }
     e.register(XO_FORM_BY_ID, xo_form);
+    // A form's file (its owner) and the compile index (the id's low bit turned).
+    e.register(XR_FORM_FILE, noted);
+    e.register(XR_COMPILE_INDEX, xf_compile_index);
     for addr in [0x0043_a860, 0x0043_8e40, 0x0058_97c0] {
         e.register(addr, xo_data_compare);
     }
@@ -17056,4 +16950,1653 @@ fn xo_persistent_cell_drop() {
     .xo_drop(0x0043_2c90, 0x10, &[], false)
     .run()
     .assert_same();
+}
+
+// ---- The extra data family's objects unit, part 2 (`00432cb0` to `00435bb0`) --------------------
+
+/// The forms family's functions the `InitItem`s and the sequence's constructor call as typed calls,
+/// by address in the extra data Diffs: a form's file, the compile index and the `strlen` wrapper.
+const XR_FORM_FILE: u32 = 0x0048_4e60;
+const XR_COMPILE_INDEX: u32 = 0x0048_5d50;
+const XR_TEXT_LENGTH: u32 = 0x0044_a670;
+/// The world's word for a reference's persistence: one bit per question, the low bit first.
+const XR_PERSISTS: u32 = CONTROL + 0xa20;
+/// The float the distant data's normal takes as its z (`010145a8`).
+const XR_NORMAL_Z: u32 = 0x0101_45a8;
+/// The references the lists hold, and one no list holds.
+const XR_REFS: &[u32] = &[0x11, 0x22, 0x33, 0x44];
+const XR_STRANGER: u32 = 0x55;
+/// A list's seeds: its entries by seed (none, one, two, four with a null one second) and how many.
+const XR_SEEDS: &[u32] = &[0, 1, 2, 3];
+const XR_COUNTS: [u32; 4] = [0, 1, 2, 4];
+/// How the other list of a `Compare` is made from this one's: the same entries copied, copied in
+/// reverse, a byte of an entry turned, one entry fewer, one reference that is not here, an entry
+/// that repeats another.
+const XR_HOWS: &[u32] = &[0, 1, 2, 3, 4, 5];
+/// The references a find, add or removal is given: each held one, and one no list holds.
+const XR_ASKED: &[u32] = &[0x11, 0x22, 0x44, 0x55];
+/// The form ids an `InitItem` resolves (after the compile index turns the low bit: an even id finds
+/// a reference, an odd one none).
+const XR_IDS: [u32; 5] = [2, 3, 4, 7, 0x10];
+
+/// `BSSimpleList::AddHead(&item)` (`005ae3d0`): counted, the item put in the head (the head's words
+/// moved to a new node after it when it holds any).
+fn xr_adds(e: &mut Engine, a: &[u32]) -> Ret {
+    noted(e, a);
+    let list = a[0];
+    if list == 0 {
+        return ret(0);
+    }
+    let item = e.mem.u32(a[1]);
+    let (head, next) = (e.mem.u32(list), e.mem.u32(list + 4));
+    if head != 0 || next != 0 {
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, head);
+        e.mem.set_u32(node + 4, next);
+        e.mem.set_u32(list + 4, node);
+    }
+    e.mem.set_u32(list, item);
+    ret(0)
+}
+
+/// `BSSimpleList::RemoveAll` (`00470470`): counted, the head emptied (the nodes after it left).
+fn xr_empties(e: &mut Engine, a: &[u32]) -> Ret {
+    noted(e, a);
+    if a[0] != 0 {
+        e.mem.set_u32(a[0], 0);
+        e.mem.set_u32(a[0] + 4, 0);
+    }
+    ret(0)
+}
+
+/// `BSSimpleList::Count` (`005ae380`): the nodes with an item (at most 16 looked at).
+fn xr_count(e: &mut Engine, a: &[u32]) -> Ret {
+    let (mut node, mut n) = (a[0], 0u32);
+    for _ in 0..16 {
+        if node == 0 {
+            break;
+        }
+        n += u32::from(e.mem.u32(node) != 0);
+        node = e.mem.u32(node + 4);
+    }
+    ret(n)
+}
+
+/// A reference's persistence (`005653d0`): the world's next bit.
+fn xr_persistence(e: &mut Engine, _: &[u32]) -> Ret {
+    let bits = e.mem.u32(XR_PERSISTS);
+    e.mem.set_u32(XR_PERSISTS, bits.rotate_right(1));
+    ret(bits & 1)
+}
+
+/// The lookup by id for the `InitItem`s: a reference (an object with an empty extra list at +0x44)
+/// for an odd id, none for an even one.
+fn xr_lookup(e: &mut Engine, a: &[u32]) -> Ret {
+    if a[0] & 1 == 0 {
+        return ret(0);
+    }
+    let form = xo_object(e, 0x80, a[0]);
+    for at in (0x44..0x64).step_by(4) {
+        e.mem.set_u32(form + at, 0);
+    }
+    e.mem.set_u32(form + 0x44, 0x0101_43e8);
+    ret(form)
+}
+
+/// The `strcpy_s` wrapper (`00406d30`, `cdecl(to, size, from)`): the C string copied, cut to the
+/// size; 22 for no buffer or size, else 0.
+fn xr_strcpy(e: &mut Engine, a: &[u32]) -> Ret {
+    let (to, size, from) = (a[0], a[1], a[2]);
+    if to == 0 || size == 0 {
+        return ret(22);
+    }
+    for i in 0..size.min(0x100) {
+        let byte = if i + 1 == size { 0 } else { e.mem.u8(from + i) };
+        e.mem.set_u8(to + i, byte);
+        if byte == 0 {
+            break;
+        }
+    }
+    ret(0)
+}
+
+/// [`xo_world`] with the lists' add, clear and count, the `strcpy_s` wrapper, the rag doll data's destructor body (counted)
+/// and compare, the string copy (counted) and length, the persistence, the lookup, the persistence
+/// bits and the distant data's z (one of [`XO_FLOATS`] by the seed).
+fn xr_world(e: &mut Engine, seed: u32) -> ExtraWorld {
+    let w = xo_world(e, seed);
+    e.register(0x005a_e3d0, xr_adds);
+    e.register(0x0047_0470, xr_empties);
+    e.register(0x005a_e380, xr_count);
+    e.register(0x0040_6d30, xr_strcpy);
+    for addr in [0x004d_9380, 0x0043_8470] {
+        e.register(addr, noted);
+    }
+    e.register(0x004d_9780, xo_data_compare);
+    e.register(0x0040_48e0, |e, a| ret(u32::from(e.mem.u16(a[0] + 4))));
+    e.register(0x0056_53d0, xr_persistence);
+    e.register(XO_FORM_BY_ID, xr_lookup);
+    let mut d = Draw(seed.wrapping_mul(0x6c07_8965) ^ 0x0043_2cb0);
+    let bits = d.next(0x1_0000) | d.next(0x1_0000) << 16;
+    e.mem.set_u32(XR_PERSISTS, bits);
+    e.mem
+        .set_u32(XR_NORMAL_Z, XO_FLOATS[seed as usize % XO_FLOATS.len()]);
+    w
+}
+
+/// `n` entries of `size` bytes (a pattern), each led by a reference of [`XR_REFS`] (repeats too);
+/// for a size of 0 the references themselves.
+fn xr_items(e: &mut Engine, d: &mut Draw, n: u32, size: u32) -> Vec<u32> {
+    (0..n)
+        .map(|_| {
+            let reference = XR_REFS[d.next(XR_REFS.len() as u32) as usize];
+            if size == 0 {
+                return reference;
+            }
+            let entry = xd_block(e, size, d.next(4));
+            e.mem.set_u32(entry, reference);
+            entry
+        })
+        .collect()
+}
+
+/// A list of the seed's count of entries (a null one second for seed 3).
+fn xr_seeded_items(e: &mut Engine, d: &mut Draw, seed: u32, size: u32) -> Vec<u32> {
+    let mut items = xr_items(e, d, XR_COUNTS[seed as usize % 4], size);
+    if seed % 4 == 3 {
+        items[1] = 0;
+    }
+    items
+}
+
+/// An extra data of `kind` (0x40 bytes of a pattern, the objects' vtable) whose list at +0xc holds
+/// `items`.
+fn xr_holder(e: &mut Engine, kind: u32, items: &[u32]) -> u32 {
+    let this = xo_object(e, 0x40, kind);
+    e.mem.set_u8(this + 4, kind as u8);
+    let [item, next] = xp_nodes(e, items);
+    e.mem.set_u32(this + 0xc, item);
+    e.mem.set_u32(this + 0x10, next);
+    this
+}
+
+/// A copy of each of `items` (`size` bytes each; the references themselves for 0), reversed or not.
+fn xr_copies(e: &mut Engine, items: &[u32], size: u32, reverse: bool) -> Vec<u32> {
+    let mut out: Vec<u32> = items
+        .iter()
+        .map(|&item| {
+            if size == 0 || item == 0 {
+                return item;
+            }
+            let copy = e.mem.alloc(size);
+            for i in 0..size {
+                let byte = e.mem.u8(item + i);
+                e.mem.set_u8(copy + i, byte);
+            }
+            copy
+        })
+        .collect();
+    if reverse {
+        out.reverse();
+    }
+    out
+}
+
+/// `ExtraActivateRef`'s text (+0x18: the characters and a 16-bit length): none, "ab" or "ac".
+fn xr_text(e: &mut Engine, this: u32, which: u32) {
+    let chars = match which % 3 {
+        0 => 0,
+        n => {
+            let s = e.mem.alloc(4);
+            e.mem.set_u32(s, if n == 1 { 0x6261 } else { 0x6361 });
+            s
+        }
+    };
+    e.mem.set_u32(this + 0x18, chars);
+    e.mem
+        .set_u32(this + 0x1c, if chars == 0 { 0 } else { 0x0002_0002 });
+}
+
+/// A `Compare`'s two list classes of `kind` (entries of `size` bytes; references for 0): this one's
+/// list by the seed, the other's from it by `how` ([`XR_HOWS`]); for the activate class also the
+/// flags (+0x14, different for a seed's bit 2) and texts (by the seed). `[this, other]`.
+fn xr_lists_world(e: &mut Engine, seed: u32, how: u32, kind: u32, size: u32) -> [u32; 2] {
+    xr_world(e, seed);
+    let mut d = Draw(seed.wrapping_mul(0x2f) ^ how << 8 ^ kind);
+    let mine = xr_seeded_items(e, &mut d, seed, size);
+    let mut theirs = xr_copies(e, &mine, size, how == 1);
+    let last = theirs.len().saturating_sub(1);
+    match how {
+        2 if size > 4 && !theirs.is_empty() && theirs[last] != 0 => {
+            let at = theirs[last] + 4 + d.next(size - 4);
+            let byte = e.mem.u8(at);
+            e.mem.set_u8(at, byte ^ 0x40);
+        }
+        3 => {
+            theirs.pop();
+        }
+        4 if !theirs.is_empty() => {
+            if size == 0 {
+                theirs[0] = XR_STRANGER;
+            } else if theirs[0] != 0 {
+                e.mem.set_u32(theirs[0], XR_STRANGER);
+            }
+        }
+        5 if theirs.len() > 1 => theirs[0] = theirs[last],
+        _ => {}
+    }
+    let this = xr_holder(e, kind, &mine);
+    let other = xr_holder(e, kind, &theirs);
+    if kind == 0x53 {
+        e.mem.set_u8(this + 0x14, 1);
+        e.mem
+            .set_u8(other + 0x14, if seed & 4 != 0 { 2 } else { 1 });
+        let texts = d.next(9);
+        xr_text(e, this, texts % 3);
+        xr_text(e, other, texts / 3);
+    }
+    [this, other]
+}
+
+/// A list holder of `kind` for a method: its list by the seed (entries of `size` bytes, references
+/// for 0) in [`xr_world`].
+fn xr_list_world(e: &mut Engine, seed: u32, kind: u32, size: u32) -> u32 {
+    xr_world(e, seed);
+    let mut d = Draw(seed.wrapping_mul(0x3b) ^ kind);
+    let items = xr_seeded_items(e, &mut d, seed, size);
+    xr_holder(e, kind, &items)
+}
+
+/// An `InitItem`'s holder of `kind`: its list of the seed's count of entries (`size` bytes led by a
+/// form id of [`XR_IDS`], the reflector's flags 0 to 3 after it; for 0 the ids themselves), and its
+/// owner. `[this, owner]`.
+fn xr_init_world(e: &mut Engine, seed: u32, kind: u32, size: u32) -> [u32; 2] {
+    xr_world(e, seed);
+    let mut d = Draw(seed.wrapping_mul(0x4d) ^ kind);
+    let n = [1, 2, 3, 4, 5, 3][seed as usize % 6];
+    let items: Vec<u32> = (0..n)
+        .map(|_| {
+            let id = XR_IDS[d.next(XR_IDS.len() as u32) as usize];
+            if size == 0 {
+                return id;
+            }
+            let entry = xd_block(e, size, id);
+            e.mem.set_u32(entry, id);
+            e.mem.set_u32(entry + 4, d.next(4));
+            entry
+        })
+        .collect();
+    let this = xr_holder(e, kind, &items);
+    let owner = xo_object(e, 0x80, 0x0e);
+    [this, owner]
+}
+
+/// The objects' part 2 test shapes.
+trait XrShapes {
+    fn xr_new(self, own: u32, n: u32, args: &'static [&'static [u32]]) -> Diff;
+    fn xr_drop(self, own: u32, n: u32, owned: &'static [u32], flags: bool) -> Diff;
+    fn xr_list_drop(self, own: u32, kind: u32, size: u32, flags: bool) -> Diff;
+    fn xr_lists_compare(self, own: u32, kind: u32, size: u32) -> Diff;
+    fn xr_lists_copy(self, own: u32, kind: u32, size: u32) -> Diff;
+    fn xr_list_method(self, own: u32, kind: u32, size: u32, asked: bool) -> Diff;
+    fn xr_init_item(self, own: u32, kind: u32, size: u32) -> Diff;
+}
+
+impl XrShapes for Diff {
+    /// A constructor: [`XoShapes::xo_new`]'s in [`xr_world`].
+    fn xr_new(self, own: u32, n: u32, args: &'static [&'static [u32]]) -> Diff {
+        let seeds: &'static [u32] = if args.is_empty() {
+            &EXTRA_SEEDS[..12]
+        } else {
+            &EXTRA_SEEDS[..2]
+        };
+        let mut inputs = vec![Input::Of(seeds)];
+        inputs.extend(args.iter().map(|&a| Input::Of(a)));
+        self.xo_case(own)
+            .max_cases(64)
+            .inputs(&inputs)
+            .setup(move |e, case| {
+                xr_world(e, case.word(0));
+                let mut words = vec![xd_block(e, n, 0x5a)];
+                words.extend((1..=args.len()).map(|i| case.word(i)));
+                words
+            })
+    }
+
+    /// A destructor of a class without a list: [`XoShapes::xo_drop`]'s in [`xr_world`].
+    fn xr_drop(self, own: u32, n: u32, owned: &'static [u32], flags: bool) -> Diff {
+        let mut inputs = vec![Input::Of(&[0, 1])];
+        if flags {
+            inputs.push(Input::Of(&[0, 1, 2, 3]));
+        }
+        self.xo_case(own).inputs(&inputs).setup(move |e, case| {
+            xr_world(e, 3);
+            let this = xo_object(e, n, 0x11);
+            for &at in owned {
+                let object = if case.word(0) == 0 {
+                    0
+                } else {
+                    xo_object(e, 0x40, at)
+                };
+                e.mem.set_u32(this + at, object);
+            }
+            let mut words = vec![this];
+            if flags {
+                words.push(case.word(1));
+            }
+            words
+        })
+    }
+
+    /// A destructor of a list class (`flags`: its scalar deleting one, with each flag): the list by
+    /// the seed.
+    fn xr_list_drop(self, own: u32, kind: u32, size: u32, flags: bool) -> Diff {
+        let mut inputs = vec![Input::Of(XR_SEEDS)];
+        if flags {
+            inputs.push(Input::Of(&[0, 1, 2, 3]));
+        }
+        self.xo_case(own).inputs(&inputs).setup(move |e, case| {
+            let this = xr_list_world(e, case.word(0), kind, size);
+            let mut words = vec![this];
+            if flags {
+                words.push(case.word(1));
+            }
+            words
+        })
+    }
+
+    /// A list class's `Compare` ([`xr_lists_world`]), the other none, refused by the cast, of
+    /// another type or of the type ([`XO_WHICH`]).
+    fn xr_lists_compare(self, own: u32, kind: u32, size: u32) -> Diff {
+        self.xo_case(own)
+            .max_cases(XO_WHICH.len() * XR_HOWS.len() * 8)
+            .inputs(&[
+                Input::Of(XO_WHICH),
+                Input::Of(XR_HOWS),
+                Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7]),
+            ])
+            .setup(move |e, case| {
+                let (which, how, seed) = (case.word(0), case.word(1), case.word(2));
+                let [this, other] = xr_lists_world(e, seed, how, kind, size);
+                if which == 2 {
+                    e.mem.set_u8(other + 4, kind as u8 ^ 1);
+                }
+                e.mem.set_u32(XO_CAST_FAILS, u32::from(which == 1));
+                vec![this, if which == 0 { 0 } else { other }]
+            })
+    }
+
+    /// A list class's `Copy`: this one's list and the other's each by a seed, the other as in
+    /// [`XoShapes::xo_compare`].
+    fn xr_lists_copy(self, own: u32, kind: u32, size: u32) -> Diff {
+        self.xo_case(own)
+            .max_cases(XO_WHICH.len() * 4 * 4)
+            .inputs(&[
+                Input::Of(XO_WHICH),
+                Input::Of(XR_SEEDS),
+                Input::Of(XR_SEEDS),
+            ])
+            .setup(move |e, case| {
+                let (which, mine, theirs) = (case.word(0), case.word(1), case.word(2));
+                let [this, _] = xr_lists_world(e, mine, 0, kind, size);
+                let mut d = Draw(theirs.wrapping_mul(0x61) ^ kind);
+                let items = xr_seeded_items(e, &mut d, theirs, size);
+                let other = xr_holder(e, kind, &items);
+                if kind == 0x53 {
+                    e.mem.set_u8(other + 0x14, theirs as u8);
+                    xr_text(e, other, theirs);
+                }
+                e.mem.set_u32(XO_CAST_FAILS, u32::from(which == 1));
+                vec![this, if which == 0 { 0 } else { other }]
+            })
+    }
+
+    /// A list method of `kind`'s holder (entries of `size` bytes, references for 0): the list by the
+    /// seed, and (`asked`) a reference of [`XR_ASKED`].
+    fn xr_list_method(self, own: u32, kind: u32, size: u32, asked: bool) -> Diff {
+        let mut inputs = vec![Input::Of(&EXTRA_SEEDS[..8])];
+        if asked {
+            inputs.push(Input::Of(XR_ASKED));
+        }
+        self.xo_case(own).inputs(&inputs).setup(move |e, case| {
+            let this = xr_list_world(e, case.word(0), kind, size);
+            let mut words = vec![this];
+            if asked {
+                words.push(case.word(1));
+            }
+            words
+        })
+    }
+
+    /// An `InitItem` ([`xr_init_world`]).
+    fn xr_init_item(self, own: u32, kind: u32, size: u32) -> Diff {
+        self.xo_case(own)
+            .max_cases(EXTRA_SEEDS.len())
+            .inputs(&[Input::Of(EXTRA_SEEDS)])
+            .setup(move |e, case| xr_init_world(e, case.word(0), kind, size).to_vec())
+    }
+}
+
+#[test]
+fn xr_rag_doll_new() {
+    Diff::new(entry!(
+        0x0043_2cb0,
+        extra_data::object_refs::rag_doll_new(u32) -> u32
+    ))
+    .xr_new(0x0043_2cb0, 0x10, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_rag_doll_delete() {
+    Diff::new(entry!(
+        0x0043_2ce0,
+        extra_data::object_refs::rag_doll_delete(u32, u32) -> u32
+    ))
+    .xr_drop(0x0043_2ce0, 0x10, &[0xc], true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_rag_doll_drop() {
+    Diff::new(entry!(
+        0x0043_2d10,
+        extra_data::object_refs::rag_doll_drop(u32)
+    ))
+    .xr_drop(0x0043_2d10, 0x10, &[0xc], false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_encounter_zone_new() {
+    Diff::new(entry!(
+        0x0043_2e60,
+        extra_data::object_refs::encounter_zone_new(u32) -> u32
+    ))
+    .xr_new(0x0043_2e60, 0x10, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_encounter_zone_compare() {
+    Diff::new(entry!(
+        0x0043_2e90,
+        extra_data::object_refs::encounter_zone_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_2e90, 0x74, 4, XO_WORDS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_used_markers_new() {
+    Diff::new(entry!(
+        0x0043_2f00,
+        extra_data::object_refs::used_markers_new(u32) -> u32
+    ))
+    .xr_new(0x0043_2f00, 0x10, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_base_only_drop() {
+    Diff::new(entry!(
+        0x0043_2f30,
+        extra_data::object_refs::base_only_drop(u32)
+    ))
+    .xr_drop(0x0043_2f30, 0x10, &[0xc], false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_reserved_markers_new() {
+    Diff::new(entry!(
+        0x0043_2f50,
+        extra_data::object_refs::reserved_markers_new(u32) -> u32
+    ))
+    .xr_new(0x0043_2f50, 0x10, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_run_once_new() {
+    Diff::new(entry!(
+        0x0043_3010,
+        extra_data::object_refs::run_once_new(u32) -> u32
+    ))
+    .xr_new(0x0043_3010, 0x10, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_distant_data_new() {
+    Diff::new(entry!(
+        0x0043_3260,
+        extra_data::object_refs::distant_data_new(u32) -> u32
+    ))
+    .xr_new(0x0043_3260, 0x18, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_enable_parent_new() {
+    Diff::new(entry!(
+        0x0043_3300,
+        extra_data::object_refs::enable_parent_new(u32) -> u32
+    ))
+    .xr_new(0x0043_3300, 0x14, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_enable_parent_compare() {
+    Diff::new(entry!(
+        0x0043_3340,
+        extra_data::object_refs::enable_parent_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_3340, 0x37, 5, &[0, 1, 2, 4])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_enable_children_new() {
+    Diff::new(entry!(
+        0x0043_33a0,
+        extra_data::object_refs::enable_children_new(u32) -> u32
+    ))
+    .xr_new(0x0043_33a0, 0x14, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_enable_children_delete() {
+    Diff::new(entry!(
+        0x0043_3410,
+        extra_data::object_refs::enable_children_delete(u32, u32) -> u32
+    ))
+    .xr_list_drop(0x0043_3410, 0x38, 0, true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_enable_children_drop() {
+    Diff::new(entry!(
+        0x0043_3440,
+        extra_data::object_refs::enable_children_drop(u32)
+    ))
+    .xr_list_drop(0x0043_3440, 0x38, 0, false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_random_teleport_new() {
+    Diff::new(entry!(
+        0x0043_34b0,
+        extra_data::object_refs::random_teleport_new(u32) -> u32
+    ))
+    .xr_new(0x0043_34b0, 0x10, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_random_teleport_compare() {
+    Diff::new(entry!(
+        0x0043_34e0,
+        extra_data::object_refs::random_teleport_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_34e0, 0x3b, 4, XO_WORDS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_linked_children_new() {
+    Diff::new(entry!(
+        0x0043_3530,
+        extra_data::object_refs::linked_children_new(u32) -> u32
+    ))
+    .xr_new(0x0043_3530, 0x14, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_linked_children_delete() {
+    Diff::new(entry!(
+        0x0043_35a0,
+        extra_data::object_refs::linked_children_delete(u32, u32) -> u32
+    ))
+    .xr_list_drop(0x0043_35a0, 0x52, 0, true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_linked_children_drop() {
+    Diff::new(entry!(
+        0x0043_35d0,
+        extra_data::object_refs::linked_children_drop(u32)
+    ))
+    .xr_list_drop(0x0043_35d0, 0x52, 0, false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_linked_ref_new() {
+    Diff::new(entry!(
+        0x0043_3640,
+        extra_data::object_refs::linked_ref_new(u32) -> u32
+    ))
+    .xr_new(0x0043_3640, 0x10, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_linked_ref_compare() {
+    Diff::new(entry!(
+        0x0043_3670,
+        extra_data::object_refs::linked_ref_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_3670, 0x51, 4, XO_WORDS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_ash_pile_new() {
+    Diff::new(entry!(
+        0x0043_36c0,
+        extra_data::object_refs::ash_pile_new(u32) -> u32
+    ))
+    .xr_new(0x0043_36c0, 0x10, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_activate_children_new() {
+    Diff::new(entry!(
+        0x0043_3790,
+        extra_data::object_refs::activate_children_new(u32) -> u32
+    ))
+    .xr_new(0x0043_3790, 0x18, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_activate_children_delete() {
+    Diff::new(entry!(
+        0x0043_3800,
+        extra_data::object_refs::activate_children_delete(u32, u32) -> u32
+    ))
+    .xr_list_drop(0x0043_3800, 0x54, 8, true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_activate_children_drop() {
+    Diff::new(entry!(
+        0x0043_3830,
+        extra_data::object_refs::activate_children_drop(u32)
+    ))
+    .xr_list_drop(0x0043_3830, 0x54, 8, false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_activate_ref_new() {
+    Diff::new(entry!(
+        0x0043_38b0,
+        extra_data::object_refs::activate_ref_new(u32) -> u32
+    ))
+    .xr_new(0x0043_38b0, 0x20, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_activate_ref_delete() {
+    Diff::new(entry!(
+        0x0043_3940,
+        extra_data::object_refs::activate_ref_delete(u32, u32) -> u32
+    ))
+    .xr_list_drop(0x0043_3940, 0x53, 8, true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_activate_ref_drop() {
+    Diff::new(entry!(
+        0x0043_3970,
+        extra_data::object_refs::activate_ref_drop(u32)
+    ))
+    .xr_list_drop(0x0043_3970, 0x53, 8, false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_activate_ref_find() {
+    Diff::new(entry!(
+        0x0043_3a00,
+        extra_data::object_refs::activate_ref_find(u32, u32) -> u32
+    ))
+    .xr_list_method(0x0043_3a00, 0x53, 8, true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_activate_ref_compare() {
+    Diff::new(entry!(
+        0x0043_3a20,
+        extra_data::object_refs::activate_ref_compare(u32, u32) -> bool
+    ))
+    .xr_lists_compare(0x0043_3a20, 0x53, 8)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_activate_ref_copy() {
+    Diff::new(entry!(
+        0x0043_3b70,
+        extra_data::object_refs::activate_ref_copy(u32, u32)
+    ))
+    .xr_lists_copy(0x0043_3b70, 0x53, 8)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_decal_new() {
+    Diff::new(entry!(
+        0x0043_3ca0,
+        extra_data::object_refs::decal_new(u32) -> u32
+    ))
+    .xr_new(0x0043_3ca0, 0x14, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_decal_delete() {
+    Diff::new(entry!(
+        0x0043_3d10,
+        extra_data::object_refs::decal_delete(u32, u32) -> u32
+    ))
+    .xr_list_drop(0x0043_3d10, 0x57, 0x1c, true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_decal_drop() {
+    Diff::new(entry!(
+        0x0043_3d40,
+        extra_data::object_refs::decal_drop(u32)
+    ))
+    .xr_list_drop(0x0043_3d40, 0x57, 0x1c, false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_decal_init_item() {
+    Diff::new(entry!(
+        0x0043_3db0,
+        extra_data::object_refs::decal_init_item(u32, u32)
+    ))
+    .xr_init_item(0x0043_3db0, 0x57, 0x1c)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_reflector_init_item() {
+    Diff::new(entry!(
+        0x0043_3ed0,
+        extra_data::object_refs::reflector_init_item(u32, u32)
+    ))
+    .xr_init_item(0x0043_3ed0, 0x5b, 8)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_lit_water_init_item() {
+    Diff::new(entry!(
+        0x0043_4050,
+        extra_data::object_refs::lit_water_init_item(u32, u32)
+    ))
+    .xr_init_item(0x0043_4050, 0x5d, 0)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_decal_compare() {
+    Diff::new(entry!(
+        0x0043_41e0,
+        extra_data::object_refs::decal_compare(u32, u32) -> bool
+    ))
+    .xr_lists_compare(0x0043_41e0, 0x57, 0x1c)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_decal_copy() {
+    Diff::new(entry!(
+        0x0043_42b0,
+        extra_data::object_refs::decal_copy(u32, u32)
+    ))
+    .xr_lists_copy(0x0043_42b0, 0x57, 0x1c)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_decal_clear() {
+    Diff::new(entry!(
+        0x0043_43c0,
+        extra_data::object_refs::decal_clear(u32)
+    ))
+    .xr_list_method(0x0043_43c0, 0x57, 0x1c, false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_decal_find() {
+    Diff::new(entry!(
+        0x0043_4410,
+        extra_data::object_refs::decal_find(u32, u32) -> u32
+    ))
+    .xr_list_method(0x0043_4410, 0x57, 0x1c, true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_reflected_drop() {
+    Diff::new(entry!(
+        0x0043_4560,
+        extra_data::object_refs::reflected_drop(u32)
+    ))
+    .xr_list_drop(0x0043_4560, 0x5a, 8, false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_reflected_compare() {
+    Diff::new(entry!(
+        0x0043_4620,
+        extra_data::object_refs::reflected_compare(u32, u32) -> bool
+    ))
+    .xr_lists_compare(0x0043_4620, 0x5a, 8)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_reflected_copy() {
+    Diff::new(entry!(
+        0x0043_46f0,
+        extra_data::object_refs::reflected_copy(u32, u32)
+    ))
+    .xr_lists_copy(0x0043_46f0, 0x5a, 8)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_reflected_remove() {
+    Diff::new(entry!(
+        0x0043_4800,
+        extra_data::object_refs::reflected_remove(u32, u32)
+    ))
+    .xr_list_method(0x0043_4800, 0x5a, 8, true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_water_light_drop() {
+    Diff::new(entry!(
+        0x0043_4950,
+        extra_data::object_refs::water_light_drop(u32)
+    ))
+    .xr_list_drop(0x0043_4950, 0x5c, 0, false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_water_light_compare() {
+    Diff::new(entry!(
+        0x0043_49c0,
+        extra_data::object_refs::water_light_compare(u32, u32) -> bool
+    ))
+    .xr_lists_compare(0x0043_49c0, 0x5c, 0)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_water_light_copy() {
+    Diff::new(entry!(
+        0x0043_4a70,
+        extra_data::object_refs::water_light_copy(u32, u32)
+    ))
+    .xr_lists_copy(0x0043_4a70, 0x5c, 0)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_reflector_drop() {
+    Diff::new(entry!(
+        0x0043_4af0,
+        extra_data::object_refs::reflector_drop(u32)
+    ))
+    .xr_list_drop(0x0043_4af0, 0x5b, 8, false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_reflector_compare() {
+    Diff::new(entry!(
+        0x0043_4bb0,
+        extra_data::object_refs::reflector_compare(u32, u32) -> bool
+    ))
+    .xr_lists_compare(0x0043_4bb0, 0x5b, 8)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_reflector_copy() {
+    Diff::new(entry!(
+        0x0043_4c80,
+        extra_data::object_refs::reflector_copy(u32, u32)
+    ))
+    .xr_lists_copy(0x0043_4c80, 0x5b, 8)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_clear_reference_data() {
+    Diff::new(entry!(
+        0x0043_4d90,
+        extra_data::object_refs::clear_reference_data(u32)
+    ))
+    .xr_list_method(0x0043_4d90, 0x5a, 8, false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_lit_water_drop() {
+    Diff::new(entry!(
+        0x0043_4dc0,
+        extra_data::object_refs::lit_water_drop(u32)
+    ))
+    .xr_list_drop(0x0043_4dc0, 0x5d, 0, false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_lit_water_compare() {
+    Diff::new(entry!(
+        0x0043_4e30,
+        extra_data::object_refs::lit_water_compare(u32, u32) -> bool
+    ))
+    .xr_lists_compare(0x0043_4e30, 0x5d, 0)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_lit_water_copy() {
+    Diff::new(entry!(
+        0x0043_4ee0,
+        extra_data::object_refs::lit_water_copy(u32, u32)
+    ))
+    .xr_lists_copy(0x0043_4ee0, 0x5d, 0)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_water_add() {
+    Diff::new(entry!(
+        0x0043_4f60,
+        extra_data::object_refs::water_add(u32, u32)
+    ))
+    .xr_list_method(0x0043_4f60, 0x5c, 0, true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_water_clear() {
+    Diff::new(entry!(
+        0x0043_4fa0,
+        extra_data::object_refs::water_clear(u32)
+    ))
+    .xr_list_method(0x0043_4fa0, 0x5c, 0, false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_merchant_new() {
+    Diff::new(entry!(
+        0x0043_4fc0,
+        extra_data::object_refs::merchant_new(u32) -> u32
+    ))
+    .xr_new(0x0043_4fc0, 0x10, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_merchant_compare() {
+    Diff::new(entry!(
+        0x0043_4ff0,
+        extra_data::object_refs::merchant_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_4ff0, 0x3c, 4, XO_WORDS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_lev_crea_new() {
+    Diff::new(entry!(
+        0x0043_5040,
+        extra_data::object_refs::lev_crea_new(u32) -> u32
+    ))
+    .xr_new(0x0043_5040, 0x10, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_lev_crea_compare() {
+    Diff::new(entry!(
+        0x0043_5070,
+        extra_data::object_refs::lev_crea_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_5070, 0x1e, 4, XO_WORDS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_poison_new() {
+    Diff::new(entry!(
+        0x0043_5150,
+        extra_data::object_refs::poison_new(u32, u32) -> u32
+    ))
+    .xr_new(0x0043_5150, 0x10, &[XD_VALUES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_poison_compare() {
+    Diff::new(entry!(
+        0x0043_5180,
+        extra_data::object_refs::poison_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_5180, 0x3f, 4, XO_WORDS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_last_sequence_delete() {
+    Diff::new(entry!(
+        0x0043_5270,
+        extra_data::object_refs::last_sequence_delete(u32, u32) -> u32
+    ))
+    .xr_drop(0x0043_5270, 0x10, &[0xc], true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_last_sequence_drop() {
+    Diff::new(entry!(
+        0x0043_52a0,
+        extra_data::object_refs::last_sequence_drop(u32)
+    ))
+    .xr_drop(0x0043_52a0, 0x10, &[0xc], false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_last_sequence_compare() {
+    Diff::new(entry!(
+        0x0043_5310,
+        extra_data::object_refs::last_sequence_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_5310, 0x41, 0, &[0, 1, 2])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_x_target_new() {
+    Diff::new(entry!(
+        0x0043_5370,
+        extra_data::object_refs::x_target_new(u32) -> u32
+    ))
+    .xr_new(0x0043_5370, 0x10, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_x_target_delete() {
+    Diff::new(entry!(
+        0x0043_53a0,
+        extra_data::object_refs::x_target_delete(u32, u32) -> u32
+    ))
+    .xr_drop(0x0043_53a0, 0x10, &[0xc], true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_x_target_drop() {
+    Diff::new(entry!(
+        0x0043_53d0,
+        extra_data::object_refs::x_target_drop(u32)
+    ))
+    .xr_drop(0x0043_53d0, 0x10, &[0xc], false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_saved_animation_drop() {
+    Diff::new(entry!(
+        0x0043_5ac0,
+        extra_data::object_refs::saved_animation_drop(u32)
+    ))
+    .xr_drop(0x0043_5ac0, 0x10, &[0xc], false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_saved_havok_drop() {
+    Diff::new(entry!(
+        0x0043_5bb0,
+        extra_data::object_refs::saved_havok_drop(u32)
+    ))
+    .xr_drop(0x0043_5bb0, 0x10, &[0xc], false)
+    .run()
+    .assert_same();
+}
+
+/// `ExtraRunOncePacks` in [`xr_world`]: its list (+0xc) none for seed 0, else a list of the seed's
+/// count of 8-byte entries (a package of [`XR_REFS`], a flag byte; a null one second for seed 3).
+fn xr_run_once(e: &mut Engine, seed: u32) -> u32 {
+    xr_world(e, seed);
+    let this = xo_object(e, 0x40, 0x1b);
+    e.mem.set_u8(this + 4, 0x1b);
+    let list = if seed % 4 == 0 {
+        0
+    } else {
+        let mut d = Draw(seed.wrapping_mul(0x71) ^ 0x1b);
+        let items = xr_seeded_items(e, &mut d, seed, 8);
+        let [item, next] = xp_nodes(e, &items);
+        let list = e.mem.alloc(8);
+        e.mem.set_u32(list, item);
+        e.mem.set_u32(list + 4, next);
+        list
+    };
+    e.mem.set_u32(this + 0xc, list);
+    this
+}
+
+#[test]
+fn xr_rag_doll_data_delete() {
+    Diff::new(entry!(
+        0x0043_2da0,
+        extra_data::object_refs::rag_doll_data_delete(u32, u32) -> u32
+    ))
+    .xo_case(0x0043_2da0)
+    .inputs(&[Input::Of(&[0, 1, 2, 3])])
+    .setup(|e, case| {
+        xr_world(e, 3);
+        vec![xo_object(e, 0x40, 0x14), case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_rag_doll_compare() {
+    Diff::new(entry!(
+        0x0043_2dd0,
+        extra_data::object_refs::rag_doll_compare(u32, u32) -> bool
+    ))
+    .xo_case(0x0043_2dd0)
+    .max_cases(XO_WHICH.len() * 9)
+    .inputs(&[
+        Input::Of(XO_WHICH),
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 1, 2]),
+    ])
+    .setup(|e, case| {
+        xr_world(e, 5);
+        let (which, a, b) = (case.word(0), case.word(1), case.word(2));
+        let this = xo_object(e, 0x40, 0x21);
+        let other = xo_object(e, 0x40, 0x21);
+        e.mem.set_u8(this + 4, 0x14);
+        e.mem
+            .set_u8(other + 4, if which == 2 { 0x15 } else { 0x14 });
+        e.mem.set_u32(XO_CAST_FAILS, u32::from(which == 1));
+        // The data: none, or one whose first word's low bit is 0 or 1 (the data compare's answer).
+        let data = [0, xo_object(e, 0x40, 0), xo_object(e, 0x40, 0)];
+        e.mem.set_u32(data[1], 0);
+        e.mem.set_u32(data[2], 1);
+        e.mem.set_u32(this + 0xc, data[a as usize]);
+        e.mem.set_u32(other + 0xc, data[b as usize]);
+        vec![this, if which == 0 { 0 } else { other }]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The used markers' words and the indexes asked: the ends of the 30 markers and past them.
+const XR_MARKERS: &[u32] = &[0, 1, 0x2000_0001, u32::MAX];
+const XR_MARKER_INDEXES: &[u32] = &[0, 1, 29, 30, 31, 32, 0x8000_0000];
+
+#[test]
+fn xr_marker_used() {
+    Diff::new(entry!(
+        0x0043_2f80,
+        extra_data::object_refs::marker_used(u32, u32) -> bool
+    ))
+    .xo_case(0x0043_2f80)
+    .inputs(&[Input::Of(XR_MARKERS), Input::Of(XR_MARKER_INDEXES)])
+    .setup(|e, case| {
+        xr_world(e, 3);
+        let this = xo_object(e, 0x40, 0x12);
+        e.mem.set_u32(this + 0xc, case.word(0));
+        vec![this, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_set_marker_used() {
+    Diff::new(entry!(
+        0x0043_2fc0,
+        extra_data::object_refs::set_marker_used(u32, u32, u8)
+    ))
+    .xo_case(0x0043_2fc0)
+    .max_cases(XR_MARKERS.len() * XR_MARKER_INDEXES.len() * XO_BYTES.len())
+    .inputs(&[
+        Input::Of(XR_MARKERS),
+        Input::Of(XR_MARKER_INDEXES),
+        Input::Of(XO_BYTES),
+    ])
+    .setup(|e, case| {
+        xr_world(e, 3);
+        let this = xo_object(e, 0x40, 0x12);
+        e.mem.set_u32(this + 0xc, case.word(0));
+        vec![this, case.word(1), case.word(2)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_run_once_delete() {
+    Diff::new(entry!(
+        0x0043_30b0,
+        extra_data::object_refs::run_once_delete(u32, u32) -> u32
+    ))
+    .xo_case(0x0043_30b0)
+    .inputs(&[Input::Of(XR_SEEDS), Input::Of(&[0, 1, 2, 3])])
+    .setup(|e, case| vec![xr_run_once(e, case.word(0)), case.word(1)])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_run_once_drop() {
+    Diff::new(entry!(
+        0x0043_30e0,
+        extra_data::object_refs::run_once_drop(u32)
+    ))
+    .xo_case(0x0043_30e0)
+    .inputs(&[Input::Of(&EXTRA_SEEDS[..8])])
+    .setup(|e, case| vec![xr_run_once(e, case.word(0))])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_run_once_set() {
+    Diff::new(entry!(
+        0x0043_31c0,
+        extra_data::object_refs::run_once_set(u32, u32, u8)
+    ))
+    .xo_case(0x0043_31c0)
+    .max_cases(8 * XR_ASKED.len() * 2)
+    .inputs(&[
+        Input::Of(&EXTRA_SEEDS[..8]),
+        Input::Of(XR_ASKED),
+        Input::Of(&[0, 0x1ff]),
+    ])
+    .setup(|e, case| {
+        let this = xr_run_once(e, case.word(0));
+        vec![this, case.word(1), case.word(2)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_activate_data_find() {
+    Diff::new(entry!(
+        0x0043_36f0,
+        extra_data::object_refs::activate_data_find(u32, u32) -> u32
+    ))
+    .xo_case(0x0043_36f0)
+    .inputs(&[Input::Of(&EXTRA_SEEDS[..8]), Input::Of(XR_ASKED)])
+    .setup(|e, case| {
+        let this = xr_list_world(e, case.word(0), 0x53, 8);
+        vec![case.word(1), this + 0xc]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_delete_entries() {
+    Diff::new(entry!(
+        0x0043_3750,
+        extra_data::object_refs::delete_entries(u32)
+    ))
+    .xo_case(0x0043_3750)
+    .inputs(&[Input::Of(&EXTRA_SEEDS[..8])])
+    .setup(|e, case| vec![xr_list_world(e, case.word(0), 0x54, 8) + 0xc])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_decal_set() {
+    Diff::new(entry!(
+        0x0043_4480,
+        extra_data::object_refs::decal_set(u32, u32, u32, u32)
+    ))
+    .xo_case(0x0043_4480)
+    .inputs(&[Input::Of(&EXTRA_SEEDS[..8]), Input::Of(XR_ASKED)])
+    .setup(|e, case| {
+        let this = xr_list_world(e, case.word(0), 0x57, 0x1c);
+        // The intersection and the normal: floats, a signalling NaN among them (moved as words).
+        let points = [e.mem.alloc(0xc), e.mem.alloc(0xc)];
+        for (i, &point) in points.iter().enumerate() {
+            for k in 0..3 {
+                let word = XO_FLOATS[(i * 3 + k) % XO_FLOATS.len()];
+                e.mem.set_u32(point + 4 * k as u32, word);
+            }
+        }
+        vec![this, case.word(1), points[0], points[1]]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_reflected_set() {
+    Diff::new(entry!(
+        0x0043_48a0,
+        extra_data::object_refs::reflected_set(u32, u32, u32)
+    ))
+    .xo_case(0x0043_48a0)
+    .max_cases(8 * XR_ASKED.len() * 2)
+    .inputs(&[
+        Input::Of(&EXTRA_SEEDS[..8]),
+        Input::Of(XR_ASKED),
+        Input::Of(&[1, 0x8000_0002]),
+    ])
+    .setup(|e, case| {
+        let this = xr_list_world(e, case.word(0), 0x5a, 8);
+        vec![this, case.word(1), case.word(2)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The leveled creature modifiers (easy to very hard, "none", past them both ways) and the float a
+/// setting answers.
+const XR_MODIFIERS: &[u32] = &[0, 1, 3, 4, 5, u32::MAX];
+
+#[test]
+fn xr_lev_crea_multiplier() {
+    Diff::new(entry!(
+        0x0043_50c0,
+        extra_data::object_refs::lev_crea_multiplier(u32) -> f32
+    ))
+    .xo_case(0x0043_50c0)
+    .inputs(&[Input::Of(XR_MODIFIERS), Input::Of(XO_FLOATS)])
+    .setup(|e, case| {
+        xr_world(e, 3);
+        e.mem.set_u32(XO_LOCK_SCALE, case.word(1));
+        let this = xo_object(e, 0x40, 0x1e);
+        e.mem.set_u32(this + 0xc, case.word(0));
+        vec![this]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_lev_crea_sign() {
+    Diff::new(entry!(
+        0x0043_5100,
+        extra_data::object_refs::lev_crea_sign(u32) -> i32
+    ))
+    .xo_case(0x0043_5100)
+    .inputs(&[Input::Of(XR_MODIFIERS)])
+    .setup(|e, case| {
+        xr_world(e, 3);
+        let this = xo_object(e, 0x40, 0x1e);
+        e.mem.set_u32(this + 0xc, case.word(0));
+        vec![this]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xr_last_sequence_new() {
+    Diff::new(entry!(
+        0x0043_51d0,
+        extra_data::object_refs::last_sequence_new(u32, u32) -> u32
+    ))
+    .xo_case(0x0043_51d0)
+    .inputs(&[Input::Of(&EXTRA_SEEDS[..6]), Input::Of(&[0, 1, 15])])
+    .setup(|e, case| {
+        xr_world(e, case.word(0));
+        // A name of 0, 1 or 15 characters.
+        let n = case.word(1);
+        let name = e.mem.alloc(0x10);
+        for i in 0..0x10 {
+            e.mem
+                .set_u8(name + i, if i < n { b'a' + i as u8 } else { 0 });
+        }
+        vec![xd_block(e, 0x10, 0x5a), name]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The items of the list at `list` (at most 16 nodes).
+fn xr_list_items(e: &Engine, list: u32) -> Vec<u32> {
+    let (mut node, mut items) = (list, Vec::new());
+    while node != 0 && items.len() < 16 {
+        items.push(e.mem.u32(node));
+        node = e.mem.u32(node + 4);
+    }
+    items
+}
+
+#[test]
+fn the_part_2_object_worlds_reach_every_branch() {
+    let mut reached = std::collections::BTreeSet::<String>::new();
+    // The list classes' `Compare`s: the same and different.
+    let compares = [
+        ("activate", 0x0043_3a20u32, 0x53u32, 8u32),
+        ("decal", 0x0043_41e0, 0x57, 0x1c),
+        ("reflected", 0x0043_4620, 0x5a, 8),
+        ("water light", 0x0043_49c0, 0x5c, 0),
+        ("reflector", 0x0043_4bb0, 0x5b, 8),
+        ("lit water", 0x0043_4e30, 0x5d, 0),
+    ];
+    for (name, at, kind, size) in compares {
+        for seed in 0..8 {
+            for &how in XR_HOWS {
+                let mut e = Engine::new_untyped_for_test();
+                let [this, other] = xr_lists_world(&mut e, seed, how, kind, size);
+                let differ = e.call(at, &args![this, other]).bool();
+                reached.insert(format!("{name} differ {differ}"));
+            }
+        }
+    }
+    // The `InitItem`s: an entry dropped at the head and after a kept one, and the two messages.
+    let inits = [
+        ("decal", 0x0043_3db0u32, 0x57u32, 0x1cu32),
+        ("reflector", 0x0043_3ed0, 0x5b, 8),
+        ("lit water", 0x0043_4050, 0x5d, 0),
+    ];
+    for (name, at, kind, size) in inits {
+        for &seed in EXTRA_SEEDS {
+            let mut e = Engine::new_untyped_for_test();
+            let [this, owner] = xr_init_world(&mut e, seed, kind, size);
+            let ids: Vec<u32> = xr_list_items(&e, this + 0xc)
+                .into_iter()
+                .map(|item| if size == 0 { item } else { e.mem.u32(item) })
+                .collect();
+            if size != 0 {
+                if ids.first().is_some_and(|id| id & 1 != 0) {
+                    reached.insert(format!("{name} drops at the head"));
+                }
+                if ids.windows(2).any(|w| w[0] & 1 == 0 && w[1] & 1 != 0) {
+                    reached.insert(format!("{name} drops after a kept one"));
+                }
+            }
+            // The log: which messages it was handed.
+            const LOGGED: u32 = CONTROL + 0xa40;
+            e.register(0x005b_5e40, |e, a| {
+                let bit = match a[0] {
+                    0x0101_5d30 => 1,
+                    _ => 2,
+                };
+                let seen = e.mem.u32(LOGGED);
+                e.mem.set_u32(LOGGED, seen | bit);
+                ret(0)
+            });
+            e.call(at, &args![this, owner]);
+            let logged = e.mem.u32(LOGGED);
+            if logged & 1 != 0 {
+                reached.insert(format!("{name} logs not persistent"));
+            }
+            if logged & 2 != 0 {
+                reached.insert(format!("{name} logs not found"));
+            }
+        }
+    }
+    // The finds and the removal: found or not, at the head or after.
+    for seed in 0..8 {
+        for &asked in XR_ASKED {
+            let mut e = Engine::new_untyped_for_test();
+            let this = xr_list_world(&mut e, seed, 0x57, 0x1c);
+            let found = e.call(0x0043_4410, &args![this, asked]).u32() != 0;
+            reached.insert(format!("decal find {found}"));
+            let mut e = Engine::new_untyped_for_test();
+            let this = xr_list_world(&mut e, seed, 0x5a, 8);
+            let items = xr_list_items(&e, this + 0xc);
+            let at = items
+                .iter()
+                .position(|&item| item != 0 && e.mem.u32(item) == asked);
+            reached.insert(format!("reflected remove at {:?}", at.map(|i| i.min(1))));
+            let mut e = Engine::new_untyped_for_test();
+            let this = xr_run_once(&mut e, seed);
+            let list = e.mem.u32(this + 0xc);
+            let mut held = false;
+            for item in xr_list_items(&e, list) {
+                if item == 0 {
+                    break;
+                }
+                held |= e.mem.u32(item) == asked;
+            }
+            reached.insert(format!("run-once set finds {held}"));
+        }
+    }
+    let mut wanted: Vec<String> = Vec::new();
+    for (name, ..) in compares {
+        wanted.push(format!("{name} differ true"));
+        wanted.push(format!("{name} differ false"));
+    }
+    for name in ["decal", "reflector"] {
+        wanted.push(format!("{name} drops at the head"));
+        wanted.push(format!("{name} drops after a kept one"));
+        wanted.push(format!("{name} logs not found"));
+    }
+    for name in ["reflector", "lit water"] {
+        wanted.push(format!("{name} logs not persistent"));
+    }
+    wanted.push("lit water logs not found".to_string());
+    for fact in [
+        "decal find true",
+        "decal find false",
+        "reflected remove at Some(0)",
+        "reflected remove at Some(1)",
+        "reflected remove at None",
+        "run-once set finds true",
+        "run-once set finds false",
+    ] {
+        wanted.push(fact.to_string());
+    }
+    let missed: Vec<&String> = wanted.iter().filter(|w| !reached.contains(*w)).collect();
+    assert!(missed.is_empty(), "no seed reaches {missed:?}: {reached:?}");
 }

@@ -4612,7 +4612,9 @@ pub fn fn_004350c0(e: &mut Engine, this: Ptr<ExtraLevCreaModifier>) -> f32 {
     if modifier == LEV_CREA_MODIFIER_NONE {
         return 1.0;
     }
-    let setting = e.mem.u32(LEV_CREA_SETTING_TABLE + modifier.wrapping_mul(4));
+    let setting = e
+        .mem
+        .u32(LEV_CREA_SETTING_TABLE.wrapping_add(modifier.wrapping_mul(4)));
     let value = e.call(SETTING_FLOAT_VALUE, &args![setting]).u32();
     e.mem.f32(value)
 }

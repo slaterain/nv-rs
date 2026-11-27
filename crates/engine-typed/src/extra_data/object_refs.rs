@@ -22,11 +22,11 @@
 //! item (`005f65d0`), the empty list's constructor (`0096a2d0`), `NiPoint3`'s constructor
 //! (`00416870`, the x87's load and store: a signalling NaN comes out quiet), a reference's extra
 //! list (`005d43c0`, +0x44), a string's characters (`00559450`, with JIP LN NVSE's null check as
-//! the leaf has it) and the two record constructors the copies call: `REF_ACTIVATE_DATA`'s
-//! (`00414010`, two null words) and `REF_DECAL_DATA`'s (`0055a400`, which stores nothing). Each
-//! item and next is read once. Typed calls: this family's own functions (the searches, clears, adds
-//! and removals the methods share, the destructors the scalar deleting ones call, the reflected
-//! flag and water light setters `0041f4c0`, `0041f650`, `0041f840`), the cell references family's
+//! the leaf has it) and `REF_DECAL_DATA`'s constructor (`0055a400`, which stores nothing; the whole
+//! family does it in place). Each item and next is read once. Typed calls: this family's own
+//! functions (the searches, clears, adds and removals the methods share, the destructors the scalar
+//! deleting ones call, `REF_ACTIVATE_DATA`'s constructor `00414010`, the reflected flag and water
+//! light setters `0041f4c0`, `0041f650`, `0041f840`), the cell references family's
 //! `BSExtraData` destructor and `Compare`, the C runtime's `memcmp` and `memcpy` wrapper
 //! (`00401460`), and the forms family's `strlen` wrapper (`0044a670`), a form's file (`00484e60`),
 //! its compile index (`00485d50`) and the lookup by id (`004839c0`). Called by address: `operator
@@ -50,7 +50,7 @@ use super::objects::{
     DYNAMIC_CAST, TYPE_BS_EXTRA_DATA,
 };
 use super::{
-    free_when, next_node, read_word, rooms, simple_list_init, word_at, EXTRA_PAYLOAD, FAMILY,
+    free_when, next_node, read_word, records, rooms, simple_list_init, word_at, EXTRA_PAYLOAD, FAMILY,
     OPERATOR_DELETE, OPERATOR_NEW,
 };
 use crate::{crt, forms};
@@ -266,8 +266,8 @@ fn copy_bytes(e: &mut Engine, to: u32, from: u32, n: u32) {
     );
 }
 
-/// An 8-byte record from `operator new` made an empty node in place (`00414010` and `0096a2d0`: two
-/// null words), or null when the allocation failed.
+/// An 8-byte record from `operator new` made an empty node in place (`0096a2d0`: two null words), or
+/// null when the allocation failed.
 #[inline]
 fn new_empty_record(e: &mut Engine) -> u32 {
     let block = e.call(OPERATOR_NEW, &args![8u32]).u32();
@@ -275,6 +275,17 @@ fn new_empty_record(e: &mut Engine) -> u32 {
         simple_list_init(e, block);
     }
     block
+}
+
+/// An 8-byte `REF_ACTIVATE_DATA` from `operator new` made by its constructor (`00414010`, this
+/// family's, a typed call as its other callers make it), or null when the allocation failed.
+#[inline]
+fn new_activate_record(e: &mut Engine) -> u32 {
+    let block = e.call(OPERATOR_NEW, &args![8u32]).u32();
+    if block == 0 {
+        return 0;
+    }
+    typed_call!(FAMILY, 0x0041_4010, records::empty_node_new(e, block))
 }
 
 /// Three words copied (a point moved as its bits).
@@ -748,7 +759,7 @@ pub fn activate_ref_copy(e: &mut Engine, this: u32, other: u32) {
     while walks(e, node) {
         let item = item_of(e, node);
         node = next_node(e, node);
-        let copy = new_empty_record(e);
+        let copy = new_activate_record(e);
         copy_bytes(e, copy, item, 8);
         add_head(e, list, copy);
     }

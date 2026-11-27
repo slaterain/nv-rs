@@ -29,7 +29,6 @@ const MAP_MARKER_DATA_SAVE: u32 = 0x0043_8c10;
 const MULTIBOUND_MARKER_DATA_SAVE: u32 = 0x0043_8f90;
 const AUDIO_MARKER_DATA_SAVE: u32 = 0x0058_9560;
 const PACKAGE_EVENT_ACTION_SAVE: u32 = 0x0067_dc80;
-const DECAL_DATA_INIT: u32 = 0x0055_a400;
 const PLANE_HALF_EXTENTS: u32 = 0x007d_6bb0;
 const MATRIX_TO_AXIS_ANGLE: u32 = 0x00a5_8550;
 const STRING_LENGTH: u32 = 0x0040_48e0;
@@ -474,7 +473,7 @@ fn save_decals(e: &mut Engine, extra: u32) {
         let decal = e.mem.u32(node);
         e.with_stack(0x1c, |e, record| {
             let at = record.addr();
-            e.call(DECAL_DATA_INIT, &args![at]);
+            // `REF_DECAL_DATA`'s constructor (`0055a400`) stores nothing: done in place.
             copy_record(e, at, decal, 0x1c);
             let reference = e.mem.u32(decal);
             let id = id_of(e, reference);
