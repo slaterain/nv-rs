@@ -7935,7 +7935,9 @@ const STRING_ARRAY_VARIANTS: [u32; 3] = [2, 1, 0];
 
 /// A `BSSimpleArray<BSStringT<char>,1024>` at both pointer arguments (objects 3 and 40): its buffer
 /// (+4: object 100, none in variant 0), its size (+8: 3, 1, 0) and reserved size (+0xc: 4), so the
-/// release walks a few strings instead of an arena word's count.
+/// release walks a few strings instead of an arena word's count. The slot append (`00845460`) is
+/// the array's own on those two: the buffer (object 100) made when there is none, the size grown by
+/// one and the old size answered (an arena answer was a slot far past any buffer).
 fn put_string_array(e: &mut Engine, variant: u32) {
     use arena::object;
     let size = [0u32, 1, 3][variant as usize];
@@ -7945,6 +7947,22 @@ fn put_string_array(e: &mut Engine, variant: u32) {
         e.mem.set_u32(array + 8, size);
         e.mem.set_u32(array + 0xc, 4);
     }
+    e.register_double(0x0084_5460, |e, words| {
+        let array = words[0];
+        if array != object(3) && array != object(40) {
+            return Ret::default();
+        }
+        if e.mem.u32(array + 4) == 0 {
+            e.mem.set_u32(array + 4, object(100));
+            e.mem.set_u32(array + 0xc, 4);
+        }
+        let index = e.mem.u32(array + 8);
+        e.mem.set_u32(array + 8, index + 1);
+        Ret {
+            eax: index,
+            ..Ret::default()
+        }
+    });
 }
 
 /// A list box flag set or cleared: done in place by every caller (the interface lists'), so its own
@@ -8826,6 +8844,7 @@ fn map_menu_fn_007a6310_diff() {
         interface::map_menu::fn_007a6310(Ptr, u32, u32)
     ))
     .in_string_array(&[Arg::Ptr, Arg::Ptr, Arg::Byte])
+    .max_calls(2000)
     .run()
     .assert_same();
 }
@@ -8837,6 +8856,7 @@ fn map_menu_fn_007a63b0_diff() {
         interface::map_menu::fn_007a63b0(Ptr, u32, u32)
     ))
     .in_string_array(&[Arg::Ptr, Arg::Ptr, Arg::Byte])
+    .max_calls(2000)
     .run()
     .assert_same();
 }
@@ -8848,6 +8868,7 @@ fn map_menu_fn_007a63f0_diff() {
         interface::map_menu::fn_007a63f0(Ptr, u32, u32)
     ))
     .in_string_array(&[Arg::Object, Arg::Byte, Arg::Byte])
+    .max_calls(2000)
     .run()
     .assert_same();
 }
