@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, navmesh, obstacle_ops, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -660,6 +660,14 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x006d_b4f0, &[0x006d_bbb0]),
     (0x006d_cf20, &[0x0069_0830, 0x006d_cfe0]),
     (0x006e_78b0, &[0x006e_8f40]),
+    (0x006c_0dc0, &[0x006c_0c30]),
+    (0x006c_1060, &[0x006c_0c80]),
+    (
+        0x006c_1920,
+        &[0x006c_1d60, 0x006c_1dd0, 0x006c_1da0, 0x0063_1620],
+    ),
+    (0x006c_2210, &[0x006c_23c0, 0x006c_2650]),
+    (0x006c_2550, &[0x006c_2650]),
 ];
 
 trait Common {
@@ -4365,4 +4373,476 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- NavMeshObstacleManager door handlers, reference replacement, node-tree builders ----
+
+/// The case's cells the obstacle-ops stubs read.
+const OP_MAP: u32 = 0x0300_2fe0;
+const OP_PREPARED: u32 = 0x0300_2fe4;
+const OP_OVERLAP: u32 = 0x0300_2fe8;
+const OP_ACTIVE: u32 = 0x0300_2fec;
+const OP_FORM_TYPE: u32 = 0x0300_2ff0;
+const OP_SLIDING: u32 = 0x0300_2ff4;
+const OP_MOTION: u32 = 0x0300_2ff8;
+const OP_RIGID: u32 = 0x0300_2ffc;
+const OP_COLLISION: u32 = 0x0300_2f10;
+const OP_CHILD_COUNT: u32 = 0x0300_2f14;
+const OP_CHILD0: u32 = 0x0300_2f18;
+const OP_CHILD1: u32 = 0x0300_2f1c;
+const OP_CONTAINS: u32 = 0x0300_2f20;
+/// A vtable slot stand-in that returns null (a node with no children).
+const VT_NULL: u32 = 0x00ff_2020;
+/// A vtable slot stand-in that returns the children object in the `OP_CHILDREN` cell.
+const VT_CHILDREN: u32 = 0x00ff_2010;
+const OP_CHILDREN: u32 = 0x0300_2f24;
+
+/// Stands in for the obstacle-ops callees: each logs its words; the queries read the case's
+/// cells.
+fn obstacle_ops_stubs(e: &mut Engine) {
+    e.register(0x0063_3c90, |e, a| {
+        log(e, 0x0063_3c90, a[0]);
+        log(e, 0x0063_3c90 + 1, a[1]);
+        e.mem.set_u32(a[0], a[1]);
+        ret(0)
+    });
+    e.register(0x0045_cec0, |e, a| {
+        log(e, 0x0045_cec0, a[0]);
+        ret(0)
+    });
+    e.register(0x0055_9a40, |e, a| {
+        log(e, 0x0055_9a40, a[0]);
+        log(e, 0x0055_9a40 + 1, a[1]);
+        let value = e.mem.u32(a[1]);
+        e.mem.set_u32(a[0], value);
+        ret(0)
+    });
+    e.register(0x0066_b0d0, |e, a| {
+        log(e, 0x0066_b0d0, a[0]);
+        log(e, 0x0066_b0d0 + 1, a[1]);
+        e.mem.set_u32(a[0], a[1]);
+        ret(0)
+    });
+    e.register(0x005a_e3d0, |e, a| {
+        log(e, 0x005a_e3d0, a[0]);
+        log(e, 0x005a_e3d0 + 1, e.mem.u32(a[1]));
+        ret(0)
+    });
+    e.register(0x007c_b2e0, |e, a| {
+        log(e, 0x007c_b2e0, a[0]);
+        log(e, 0x007c_b2e0 + 1, e.mem.u32(a[1]));
+        ret(0)
+    });
+    e.register(0x0090_5330, |e, a| {
+        log(e, 0x0090_5330, a[0]);
+        log(e, 0x0090_5330 + 1, e.mem.u32(a[1]));
+        ret(0)
+    });
+    e.register(0x005f_65d0, |e, a| {
+        log(e, 0x005f_65d0, a[0]);
+        log(e, 0x005f_65d0 + 1, e.mem.u32(a[1]));
+        ret(e.mem.u32(OP_CONTAINS))
+    });
+    e.register(0x006c_62d0, |e, a| {
+        log(e, 0x006c_62d0, a[0]);
+        log(e, 0x006c_62d0 + 1, a[1]);
+        log(e, 0x006c_62d0 + 2, a[2]);
+        if e.mem.u32(OP_MAP) != 0 {
+            let prepared = e.mem.u32(OP_PREPARED);
+            e.mem.set_u32(a[2], prepared);
+            ret(1)
+        } else {
+            ret(0)
+        }
+    });
+    e.register(0x0040_5430, |e, a| {
+        log(e, 0x0040_5430, a[0]);
+        log(e, 0x0040_5430 + 1, a[1]);
+        ret(0)
+    });
+    e.register(0x00aa_13e0, |e, a| {
+        log(e, 0x00aa_13e0, a[0]);
+        let memory = e.mem.alloc(a[0]);
+        ret(memory)
+    });
+    e.register(0x00aa_1460, |e, a| {
+        log(e, 0x00aa_1460, a[0]);
+        log(e, 0x00aa_1460 + 1, a[1]);
+        ret(0)
+    });
+    e.register(0x0056_09b0, |e, a| {
+        log(e, 0x0056_09b0, a[0]);
+        ret(e.mem.u32(OP_ACTIVE))
+    });
+    e.register(0x006c_3440, |e, a| {
+        log(e, 0x006c_3440, a[0]);
+        ret(0)
+    });
+    e.register(0x006c_5b20, |e, a| {
+        log(e, 0x006c_5b20, a[0]);
+        log(e, 0x006c_5b20 + 1, a[1]);
+        ret(0)
+    });
+    e.register(0x006c_5c50, |e, a| {
+        log(e, 0x006c_5c50, a[0]);
+        log(e, 0x006c_5c50 + 1, a[1]);
+        ret(0)
+    });
+    e.register(0x006c_1e00, |e, a| {
+        log(e, 0x006c_1e00, a[0]);
+        log(e, 0x006c_1e00 + 1, a[1]);
+        ret(0)
+    });
+    e.register(0x006c_3520, |e, a| {
+        log(e, 0x006c_3520, a[0]);
+        log(e, 0x006c_3520 + 1, a[1]);
+        ret(0)
+    });
+    e.register(0x006c_61b0, |e, a| {
+        log(e, 0x006c_61b0, a[0]);
+        log(e, 0x006c_61b0 + 1, a[1]);
+        ret(0)
+    });
+    e.register(0x006c_6c60, |e, a| {
+        log(e, 0x006c_6c60, a[0]);
+        e.mem.set_u32(a[0] + 4, 0);
+        e.mem.set_u32(a[0] + 8, 0);
+        e.mem.set_u32(a[0] + 0xc, 0);
+        ret(0)
+    });
+    e.register(0x006c_6ce0, |e, a| {
+        log(e, 0x006c_6ce0, a[0]);
+        ret(0)
+    });
+    e.register(0x006c_2050, |e, a| {
+        log(e, 0x006c_2050, a[0]);
+        log(e, 0x006c_2050 + 1, a[1]);
+        if e.mem.u32(OP_OVERLAP) != 0 {
+            let data = e.mem.alloc(4);
+            let navmesh = e.mem.alloc(0x108);
+            e.mem.set_u32(navmesh + 0x104, 0x777);
+            e.mem.set_u32(data, navmesh);
+            e.mem.set_u32(a[1] + 4, data);
+            e.mem.set_u32(a[1] + 8, 1);
+            e.mem.set_u32(a[1] + 0xc, 1);
+            ret(1)
+        } else {
+            ret(0)
+        }
+    });
+    e.register(0x006c_5ef0, |e, a| {
+        log(e, 0x006c_5ef0, a[0]);
+        log(e, 0x006c_5ef0 + 1, a[1]);
+        ret(0x9000)
+    });
+    e.register(0x006c_7a30, |e, a| {
+        log(e, 0x006c_7a30, a[0]);
+        log(e, 0x006c_7a30 + 1, a[1]);
+        log(e, 0x006c_7a30 + 2, a[2]);
+        ret(0)
+    });
+    // The door test's callees.
+    e.register(0x0040_1170, |e, a| {
+        log(e, 0x0040_1170, a[0]);
+        ret(e.mem.u32(OP_FORM_TYPE))
+    });
+    e.register(0x0051_8080, |e, a| {
+        log(e, 0x0051_8080, a[0]);
+        ret(e.mem.u32(OP_SLIDING))
+    });
+    // The node-tree callees.
+    e.register(0x0043_b610, |e, a| {
+        log(e, 0x0043_b610, a[0]);
+        ret(e.mem.u32(OP_COLLISION))
+    });
+    e.register(0x006f_a820, |e, a| {
+        log(e, 0x006f_a820, a[0]);
+        ret(e.mem.u32(OP_RIGID))
+    });
+    e.register(0x0043_b4f0, |e, a| {
+        log(e, 0x0043_b4f0, a[0]);
+        log(e, 0x0043_b4f0 + 1, a[1]);
+        ret(0x7000)
+    });
+    e.register(0x0043_b4d0, |e, a| {
+        log(e, 0x0043_b4d0, a[0]);
+        ret(e.mem.u32(OP_MOTION))
+    });
+    e.register(0x0043_b480, |e, a| {
+        log(e, 0x0043_b480, a[0]);
+        ret(e.mem.u32(OP_CHILD_COUNT))
+    });
+    e.register(0x0045_3470, |e, a| {
+        log(e, 0x0045_3470, a[0]);
+        ret(e.mem.u32(OP_CHILD_COUNT))
+    });
+    e.register(0x0043_b4a0, |e, a| {
+        log(e, 0x0043_b4a0, a[0]);
+        log(e, 0x0043_b4a0 + 1, a[1]);
+        if a[1] == 0 {
+            ret(e.mem.u32(OP_CHILD0))
+        } else {
+            ret(e.mem.u32(OP_CHILD1))
+        }
+    });
+    e.register(VT_NULL, |_, _| ret(0));
+    e.register(VT_CHILDREN, |e, _| ret(e.mem.u32(OP_CHILDREN)));
+    // The callees the plain-listed functions reach.
+    e.register(0x004a_e750, |e, a| {
+        log(e, 0x004a_e750, a[0]);
+        ret(0)
+    });
+    e.register(0x006c_5ff0, |e, a| {
+        log(e, 0x006c_5ff0, a[0]);
+        log(e, 0x006c_5ff0 + 1, e.mem.u32(a[1]));
+        ret(0)
+    });
+    e.register(0x0049_68b0, |e, a| {
+        log(e, 0x0049_68b0, a[0]);
+        ret(0)
+    });
+    e.register(0x0049_6910, |e, a| {
+        log(e, 0x0049_6910, a[0]);
+        ret(0)
+    });
+    e.register(0x0069_aee0, |e, a| {
+        log(e, 0x0069_aee0, a[0]);
+        ret(0)
+    });
+    e.register(0x0069_af10, |e, a| {
+        log(e, 0x0069_af10, a[0]);
+        ret(0)
+    });
+    e.register(0x0082_2510, |e, a| {
+        log(e, 0x0082_2510, a[0]);
+        log(e, 0x0082_2510 + 1, a[1]);
+        ret(0)
+    });
+    e.register(0x004a_4460, |e, a| {
+        log(e, 0x004a_4460, a[0]);
+        ret(1)
+    });
+    e.register(0x0062_0b80, |e, a| {
+        log(e, 0x0062_0b80, a[0]);
+        ret(e.mem.u32(a[0] + 8))
+    });
+}
+
+/// A manager block of `0x1a4` bytes with the case's draw flag.
+fn ops_manager(e: &mut Engine, draw: u8) -> u32 {
+    let m = e.mem.alloc(0x1a4);
+    e.mem.set_u8(m + 0x198, draw);
+    e.mem.set_u32(m + 0x120, 0x1111);
+    e.mem.set_u32(m + 0x124, 0x2222);
+    m
+}
+
+/// An `ObstacleData` block: a rigid-body cell, the active flag and an empty `Navmeshes` array.
+fn ops_obstacle_data(e: &mut Engine, index: u32, active: u8) -> u32 {
+    let o = e.mem.alloc(0x8c);
+    let rb = e.mem.alloc(4);
+    e.mem.set_u32(rb, 0x5000 + index);
+    e.mem.set_u32(o + 0x0c, rb);
+    e.mem.set_u8(o + 0x74, active);
+    let data = e.mem.alloc(4);
+    let navmeshes = array(e, data, 0, 1);
+    e.mem.set_u32(o + 0x78, navmeshes);
+    o
+}
+
+/// A prepared `ReferenceObstacleArray` of two obstacles, in the map cell.
+fn ops_prepared_array(e: &mut Engine) -> u32 {
+    let data = e.mem.alloc(8);
+    for i in 0..2 {
+        let slot = e.mem.alloc(4);
+        let o = ops_obstacle_data(e, i, u8::from(i == 0));
+        e.mem.set_u32(slot, o);
+        e.mem.set_u32(data + 4 * i, slot);
+    }
+    let obstacles = array(e, data, 2, 2);
+    let parr = e.mem.alloc(0x1c);
+    e.mem.set_u32(parr + 0x0c, obstacles);
+    e.mem.set_u32(parr + 8, 0x44);
+    e.mem.set_u32(OP_PREPARED, parr);
+    parr
+}
+
+/// A reference block: form id `0x44` at `+0xc`, a base form at `+0x20`.
+fn ops_reference(e: &mut Engine) -> u32 {
+    let reference = e.mem.alloc(0x24);
+    e.mem.set_u32(reference + 0xc, 0x44);
+    let form = e.mem.alloc(8);
+    e.mem.set_u32(reference + 0x20, form);
+    reference
+}
+
+/// Maps the obstacle setting's page and turns the setting on (the real `006c0c30`/`006c0c80`
+/// read it through `00408d60`).
+fn ops_obstacles_enabled(e: &mut Engine) {
+    e.map(0x011d_7000, 0x1000);
+    e.mem.set_u32(0x011d_73e8, 0x011d_73f0);
+    e.mem.set_u8(0x011d_73f0, 1);
+}
+
+/// A node with a fresh vtable (slot `0x0c` overridden to `VT_NULL` when `children` is false).
+fn ops_node(e: &mut Engine, children: bool) -> u32 {
+    let node = e.mem.alloc(0x20);
+    let vt = vtable(e);
+    if children {
+        e.mem.set_u32(vt + 0xc, VT_CHILDREN);
+    } else {
+        e.mem.set_u32(vt + 0xc, VT_NULL);
+    }
+    e.mem.set_u32(node, vt);
+    node
+}
+
+#[test]
+fn door_opened() {
+    Diff::new(entry!(0x006c_0dc0, obstacle_ops::door_opened(Ptr, u32)))
+        .common()
+        .plain(0x006c_0dc0)
+        .inputs(&[
+            Input::Of(&[0, 0x1c]),
+            Input::Of(&[0, 1]),
+            Input::Of(&[0, 1]),
+            Input::Of(&[0, 1]),
+        ])
+        .setup(|e, case| {
+            stand_ins(e);
+            obstacle_ops_stubs(e);
+            ops_obstacles_enabled(e);
+            e.mem.set_u32(OP_FORM_TYPE, case.word(0));
+            e.mem.set_u32(OP_SLIDING, case.word(1));
+            e.mem.set_u32(OP_CONTAINS, case.word(2));
+            e.mem.set_u32(OP_MAP, case.word(3));
+            vec![ops_manager(e, 0), ops_reference(e)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn door_gone() {
+    Diff::new(entry!(0x006c_1060, obstacle_ops::door_gone(Ptr, u32)))
+        .common()
+        .plain(0x006c_1060)
+        .inputs(&[
+            Input::Of(&[0, 0x1c]),
+            Input::Of(&[0, 1]),
+            Input::Of(&[0, 1]),
+        ])
+        .setup(|e, case| {
+            stand_ins(e);
+            obstacle_ops_stubs(e);
+            ops_obstacles_enabled(e);
+            e.mem.set_u32(OP_FORM_TYPE, case.word(0));
+            e.mem.set_u32(OP_SLIDING, case.word(1));
+            e.mem.set_u32(OP_CONTAINS, case.word(2));
+            vec![ops_manager(e, 0), ops_reference(e)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn replace_reference_obstacles() {
+    Diff::new(entry!(
+        0x006c_1920,
+        obstacle_ops::replace_reference_obstacles(Ptr, u32, u32) -> bool
+    ))
+    .common()
+    .plain(0x006c_1920)
+    .inputs(&[Input::Of(&[0, 1]), Input::Of(&[0, 1]), Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        stand_ins(e);
+        obstacle_ops_stubs(e);
+        e.mem.set_u32(OP_MAP, case.word(0));
+        e.mem.set_u32(OP_OVERLAP, case.word(1));
+        let manager = ops_manager(e, case.word(2) as u8);
+        ops_prepared_array(e);
+        vec![manager, 0x44, 0xabcd]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn collect_node_obstacles() {
+    Diff::new(entry!(
+        0x006c_2210,
+        obstacle_ops::collect_node_obstacles(u32, u32) -> bool
+    ))
+    .common()
+    .plain(0x006c_2210)
+    .inputs(&[
+        Input::Of(&[0, 1]),
+        Input::Of(&[0, 1]),
+        Input::Of(&[0, 2, 4]),
+        Input::Of(&[0, 1]),
+    ])
+    .setup(|e, case| {
+        stand_ins(e);
+        obstacle_ops_stubs(e);
+        // A collision object whose rigid body has no Havok object (word at +8 is 0), so
+        // `006c2650` stops early.
+        let rigid = e.mem.alloc(0x10);
+        e.mem
+            .set_u32(OP_COLLISION, if case.word(0) != 0 { 0x6000 } else { 0 });
+        e.mem
+            .set_u32(OP_RIGID, if case.word(1) != 0 { rigid } else { 0 });
+        e.mem.set_u32(OP_MOTION, case.word(2));
+        let child = ops_node(e, false);
+        e.mem
+            .set_u32(OP_CHILD_COUNT, if case.word(3) != 0 { 1 } else { 0 });
+        e.mem.set_u32(OP_CHILD0, child);
+        e.mem.set_u32(OP_CHILD1, 0);
+        let children = e.mem.alloc(0x10);
+        e.mem.set_u32(OP_CHILDREN, children);
+        let node = ops_node(e, true);
+        let parr = ops_prepared_array(e);
+        let array_slot = e.mem.alloc(4);
+        e.mem.set_u32(array_slot, parr);
+        vec![node, array_slot]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn fill_obstacle_from_node() {
+    Diff::new(entry!(
+        0x006c_2550,
+        obstacle_ops::fill_obstacle_from_node(u32, u32) -> bool
+    ))
+    .common()
+    .plain(0x006c_2550)
+    .inputs(&[
+        Input::Of(&[0, 1]),
+        Input::Of(&[0, 1]),
+        Input::Of(&[0, 1, 4]),
+        Input::Of(&[0, 1]),
+    ])
+    .setup(|e, case| {
+        stand_ins(e);
+        obstacle_ops_stubs(e);
+        let rigid = e.mem.alloc(0x10);
+        e.mem
+            .set_u32(OP_COLLISION, if case.word(0) != 0 { 0x6000 } else { 0 });
+        e.mem
+            .set_u32(OP_RIGID, if case.word(1) != 0 { rigid } else { 0 });
+        e.mem.set_u32(OP_MOTION, case.word(2));
+        let child = ops_node(e, false);
+        e.mem
+            .set_u32(OP_CHILD_COUNT, if case.word(3) != 0 { 1 } else { 0 });
+        e.mem.set_u32(OP_CHILD0, child);
+        e.mem.set_u32(OP_CHILD1, 0);
+        let children = e.mem.alloc(0x10);
+        e.mem.set_u32(OP_CHILDREN, children);
+        let node = ops_node(e, true);
+        let data = e.mem.alloc(0x8c);
+        vec![node, data]
+    })
+    .run()
+    .assert_same();
 }

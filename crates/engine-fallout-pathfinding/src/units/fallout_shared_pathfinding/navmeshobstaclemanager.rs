@@ -2319,7 +2319,7 @@ pub fn fn_006c2210(e: &mut Engine, node: u32, array: u32) -> bool {
         while index < e.call(CHILDREN_COUNT, &args![children]).u32() {
             if e.call(CHILDREN_AT, &args![children, index]).u32() != 0 {
                 let child = e.call(CHILDREN_AT, &args![children, index]).u32();
-                fn_006c2210(e, child, array);
+                e.call(0x006c_2210, &args![child, array]);
             }
             index += 1;
         }
@@ -2416,7 +2416,7 @@ pub fn fn_006c2550(e: &mut Engine, node: u32, data: u32) -> bool {
         while index < e.call(CHILDREN_COUNT_SHALLOW, &args![children]).u32() {
             if e.call(CHILDREN_AT, &args![children, index]).u32() != 0 {
                 let child = e.call(CHILDREN_AT, &args![children, index]).u32();
-                if fn_006c2550(e, child, data) {
+                if e.call(0x006c_2550, &args![child, data]).bool() {
                     return true;
                 }
             }
@@ -2484,7 +2484,7 @@ pub fn fn_006c3520(e: &mut Engine, reference: u32, array: u32) -> bool {
         return false;
     }
     let node = e.vcall(reference, REFERENCE_NODE_SLOT, &args![]).u32();
-    fn_006c2210(e, node, array)
+    e.call(0x006c_2210, &args![node, array]).bool()
 }
 
 // Translated from 006c3570 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3522,12 +3522,12 @@ pub fn fn_006c45e0(e: &mut Engine, this: Ptr<NavMeshObstacleManager>) {
             let form_id_map = manager + NavMeshObstacleManager::FormIDMap.off;
             if map_get(e, form_id_map, form_id, array_slot) {
                 let form_id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, reference));
-                fn_006c1920(e, this, form_id, reference);
+                e.call(0x006c_1920, &args![this, form_id, reference]);
                 e.call(ARRAY_ADD, &args![handled, reference_slot]);
             } else if e.vcall(reference, REFERENCE_NODE_SLOT, &args![]).u32() != 0 {
                 fn_006c23c0(e, Ptr::new(scratch));
                 let node_3d = e.vcall(reference, REFERENCE_NODE_SLOT, &args![]).u32();
-                if fn_006c2550(e, node_3d, scratch) {
+                if e.call(0x006c_2550, &args![node_3d, scratch]).bool() {
                     let rigid_body = pointer_get(e, scratch + ObstacleData::pRigidBody.off);
                     if e.vcall(rigid_body, RIGID_BODY_SLOT_0X94, &args![]).u32() != 0 {
                         fn_006c1190(e, this, reference);

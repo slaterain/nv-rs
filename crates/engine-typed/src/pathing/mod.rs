@@ -39,6 +39,7 @@ use layout::{
 pub mod layout;
 pub mod location;
 pub mod navmesh;
+pub mod obstacle_ops;
 pub mod point;
 pub mod pov;
 pub mod search;
@@ -267,5 +268,11 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The obstacle manager's door handlers, reference replacement and node-tree builders.
+        entry!(0x006c_0dc0, obstacle_ops::door_opened(Ptr, u32)),
+        entry!(0x006c_1060, obstacle_ops::door_gone(Ptr, u32)),
+        entry!(0x006c_1920, obstacle_ops::replace_reference_obstacles(Ptr, u32, u32)),
+        entry!(0x006c_2210, obstacle_ops::collect_node_obstacles(u32, u32) -> bool),
+        entry!(0x006c_2550, obstacle_ops::fill_obstacle_from_node(u32, u32) -> bool),
     ]
 }
