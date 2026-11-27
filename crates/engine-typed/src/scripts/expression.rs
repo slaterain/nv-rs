@@ -12,7 +12,7 @@
 use super::numbers;
 use super::FAMILY;
 use crate::crt;
-use crate::native::float_precision;
+use crate::native::{float_precision, round_to_24_bits};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
 use engine_core::x87;
@@ -162,24 +162,6 @@ fn precision() -> Precision {
 #[inline]
 fn needs_exact(value: f64) -> bool {
     near_bottom(value) || value.to_bits() & 0x1fff_ffff == 0x1000_0000
-}
-
-/// One arithmetic step's result rounded to a float's 24 bits (to nearest, ties to even, the
-/// exponent kept), as the exe's x87 arithmetic rounds on the main thread. Infinities, NaNs and
-/// zeros as they are.
-#[inline]
-fn at_precision(value: f64) -> f64 {
-    let bits = value.to_bits();
-    let exponent = (bits >> 52) & 0x7ff;
-    if exponent == 0 || exponent == 0x7ff {
-        return value;
-    }
-    const DROPPED: u64 = (1 << 29) - 1;
-    const HALF: u64 = 1 << 28;
-    let rest = bits & DROPPED;
-    let kept = bits >> 29;
-    let up = rest > HALF || (rest == HALF && kept & 1 != 0);
-    f64::from_bits((kept + u64::from(up)) << 29)
 }
 
 /// Whether a result lies at the bottom of the double range (below 2^-1000, zero included), where
@@ -717,7 +699,7 @@ fn binary(
             };
             Some(Value::Float(match precision {
                 Precision::Double => v,
-                Precision::Float if !needs_exact(v) => at_precision(v),
+                Precision::Float if !needs_exact(v) => round_to_24_bits(v),
                 _ => match operator {
                     10 => x87::x87_sub(l, r),
                     11 => x87::x87_add(l, r),
@@ -745,7 +727,7 @@ fn binary(
                     let v = l / r;
                     match precision {
                         Precision::Double => v,
-                        Precision::Float if !needs_exact(v) => at_precision(v),
+                        Precision::Float if !needs_exact(v) => round_to_24_bits(v),
                         _ => x87::x87_div(l, r),
                     }
                 }

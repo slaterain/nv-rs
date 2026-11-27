@@ -1,18 +1,10 @@
-//! The avoid nodes (Xbox PDB names): the extra cost a point, or a segment with a radius, adds to
-//! a point, and the sum of them over an array.
-//!
-//! Native float maths (ADR-0014's float rule, [`super`]'s floats): the radius squared and the
-//! array's running sum are each one operation on two floats, stored, so they are plain `f32`;
-//! the segment's squared length, projection and difference (a sum of products and a quotient,
-//! compared before it is stored) run in [`Real`] at the thread's precision. The squared lengths
-//! are computed in place rather than called: the exe reads the length's `ST0` where it is not
-//! stored (the projection's total), and a call would give the stored `float`.
+//! The cost a point or segment avoidance node adds to a pathfinding query.
 
 use super::layout::PathingAvoidNode;
-use super::point;
-use super::{double_global, float, float_global, get, real, FAMILY};
+use super::point::{length_squared, subtract};
+use super::{double_global, float_global, FAMILY};
 use crate::culling::layout::NiPoint3;
-use crate::native::{float_precision, Real};
+use crate::native::{float_precision, round_to_24_bits, to_float};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
 use engine_core::{args, typed_call, Engine};
@@ -24,70 +16,6 @@ const ZERO: u32 = 0x0101_2060;
 /// `006a1400`: the array's element `index` (`thiscall`, one word).
 const ARRAY_AT: u32 = 0x006a_1400;
 
-/// The node's cost at `point` in `R` ([`cost_for_point`]).
-fn cost_in<R: Real>(e: &mut Engine, this: Ptr, point: Ptr) -> f32 {
-    let node = this.cast::<PathingAvoidNode>();
-    let start = node.at(PathingAvoidNode::start);
-    let end = node.at(PathingAvoidNode::end);
-    let point = point.cast::<NiPoint3>();
-    // `radius * radius`, one operation on two floats, stored to a float: plain `f32`.
-    let radius = e.get(node, PathingAvoidNode::radius);
-    let radius_squared = radius * radius;
-    let mut distance = float_global(e, FLOAT_MAX);
-    let kind = e.get(node, PathingAvoidNode::kind);
-    e.with_stack(0x40, |e, frame| {
-        let frame = frame.addr();
-        let offset = Ptr::<NiPoint3>::new(frame + 0x2c);
-        let segment = Ptr::<NiPoint3>::new(frame + 0xc);
-        let from_start = Ptr::<NiPoint3>::new(frame + 0x18);
-        match kind {
-            0 | 2 => {
-                typed_call!(
-                    FAMILY,
-                    0x0043_9ef0,
-                    point::subtract(e, start, offset, point)
-                );
-                distance = float(point::squares_xyz::<R>(e, offset));
-            }
-            1 => {
-                typed_call!(FAMILY, 0x0043_9ef0, point::subtract(e, end, segment, start));
-                typed_call!(
-                    FAMILY,
-                    0x0043_9ef0,
-                    point::subtract(e, point, from_start, start)
-                );
-                let segment_squared = float(point::squares_xyz::<R>(e, segment));
-                let along = typed_call!(
-                    leaf::FAMILY,
-                    0x004b_6190,
-                    leaf::point3_dot(e, from_start, segment)
-                );
-                // `TEST AH,5; JNP`, then `JP`: below zero, or past the end, is `FLT_MAX`
-                // (a NaN is neither).
-                let before = f64::from(along) < double_global(e, ZERO);
-                let past = real::<R>(segment_squared) < real::<R>(along);
-                if before || past {
-                    distance = float_global(e, FLOAT_MAX);
-                } else {
-                    let total = point::squares_xyz::<R>(e, from_start);
-                    let along = real::<R>(along);
-                    let projected = (along * along) / real::<R>(segment_squared);
-                    distance = float(total - projected);
-                }
-            }
-            _ => {}
-        }
-    });
-    // `TEST AH,0x41; JNZ`: the cost only when `r2 > d` (ordered, so a NaN is not).
-    let (r2, d) = (real::<R>(radius_squared), real::<R>(distance));
-    if r2 > d {
-        let cost = get::<R, _>(e, node, PathingAvoidNode::cost);
-        float((R::ONE - d / r2) * cost)
-    } else {
-        0.0
-    }
-}
-
 // Typed from 006dc780
 /// No map name: the avoid node's cost at `point`: with the radius (`+0x18`) squared as `r2` and the
 /// node's squared distance `d` to the point (type `+0x20` 0 or 2: from the node's position at `+0`;
@@ -95,25 +23,76 @@ fn cost_in<R: Real>(e: &mut Engine, this: Ptr, point: Ptr) -> f32 {
 /// past its end; other types: `FLT_MAX`), the cost is `(1 - d / r2) * cost` (`+0x1c`) when
 /// `d < r2`, else 0.
 pub fn cost_for_point(e: &mut Engine, this: Ptr, point: Ptr) -> f32 {
+    let node = this.cast();
+    let point = point.cast();
     if float_precision() {
-        cost_in::<f32>(e, this, point)
+        cost_at(e, node, point, round_to_24_bits)
     } else {
-        cost_in::<f64>(e, this, point)
+        cost_at(e, node, point, std::convert::identity)
+    }
+}
+
+// The squared projection can exceed f32 range before division brings it back.
+// Keep the register exponent through the chain, rounding each step to the thread precision.
+fn cost_at(
+    e: &mut Engine,
+    node: Ptr<PathingAvoidNode>,
+    point: Ptr<NiPoint3>,
+    step: impl Fn(f64) -> f64,
+) -> f32 {
+    let radius = f64::from(e.get(node, PathingAvoidNode::radius));
+    let radius_squared = to_float(step(radius * radius));
+    let max_distance = float_global(e, FLOAT_MAX);
+    let start = node.at(PathingAvoidNode::start);
+    let distance = e.with_stack(0x40, |e, frame| match e.get(node, PathingAvoidNode::kind) {
+        0 | 2 => {
+            let offset = frame.byte_add(0x2c).cast();
+            typed_call!(FAMILY, 0x0043_9ef0, subtract(e, start, offset, point));
+            typed_call!(FAMILY, 0x004a_7290, length_squared(e, offset))
+        }
+        1 => {
+            let segment = frame.byte_add(0xc).cast();
+            let offset = frame.byte_add(0x18).cast();
+            let end = node.at(PathingAvoidNode::end);
+            typed_call!(FAMILY, 0x0043_9ef0, subtract(e, end, segment, start));
+            typed_call!(FAMILY, 0x0043_9ef0, subtract(e, point, offset, start));
+            let squared = typed_call!(FAMILY, 0x004a_7290, length_squared(e, segment));
+            let along = typed_call!(
+                leaf::FAMILY,
+                0x004b_6190,
+                leaf::point3_dot(e, offset, segment)
+            );
+            if f64::from(along) < double_global(e, ZERO) || squared < along {
+                return float_global(e, FLOAT_MAX);
+            }
+            let total = typed_call!(FAMILY, 0x004a_7290, length_squared(e, offset));
+            let along = f64::from(along);
+            let projected = step(step(along * along) / f64::from(squared));
+            to_float(step(f64::from(total) - projected))
+        }
+        _ => max_distance,
+    });
+    if radius_squared > distance {
+        let ratio = step(f64::from(distance) / f64::from(radius_squared));
+        to_float(step(
+            step(1.0 - ratio) * f64::from(e.get(node, PathingAvoidNode::cost)),
+        ))
+    } else {
+        0.0
     }
 }
 
 // Typed from 006dc990
 /// `PathingAvoidNodeArray::GetCostForPoint` (engine map): the sum of every node's cost at `point`
 /// ([`cost_for_point`]), each sum stored to a `float`: plain `f32`.
-pub fn array_cost_for_point(e: &mut Engine, this: Ptr, point: Ptr) -> f32 {
-    let mut sum = 0.0f32;
-    let count = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, this));
-    let mut index = 0u32;
-    while index < count {
-        let node = e.call(ARRAY_AT, &args![this, index]).ptr();
+#[allow(clippy::assign_op_pattern)] // FADD loads the new cost first, which matters for NaN payloads.
+pub fn array_cost_for_point(e: &mut Engine, array: Ptr, point: Ptr) -> f32 {
+    let count = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, array));
+    let mut sum = 0.0;
+    for index in 0..count {
+        let node = e.call(ARRAY_AT, &args![array, index]).ptr();
         let cost = typed_call!(FAMILY, 0x006d_c780, cost_for_point(e, node, point));
-        sum += cost;
-        index = index.wrapping_add(1);
+        sum = cost + sum;
     }
     sum
 }

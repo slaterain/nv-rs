@@ -4403,9 +4403,6 @@ fn avoid_node_cost_for_point() {
         .common()
         .by(base)
         .plain(0x006d_c780)
-        // The typed version computes the squared lengths in place: the exe reads their `ST0`
-        // where it is not stored (the projection's total).
-        .ignore_calls(&[0x004a_7290])
         .inputs(&inputs(&[
             &[Input::Of(&[0, 1, 2, 3, 0xffff_ffff])],
             &P3,
@@ -4447,7 +4444,6 @@ fn avoid_node_array_cost_for_point() {
         .common()
         .by(base)
         .plain(0x006d_c990)
-        .ignore_calls(&[0x004a_7290])
         .inputs(&inputs(&[&P3, &[Input::Of(&[0, 1, 2, 3])]]))
         .float_sweep(FLOAT_SWEEP)
         .setup(|e, case| {
@@ -4465,4 +4461,70 @@ fn avoid_node_array_cost_for_point() {
         .run()
         .assert_same();
     }
+}
+
+#[test]
+fn avoid_node_boundary_cost() {
+    // Endpoints, before and beyond the segment, on the radius, a degenerate segment,
+    // unordered comparisons and a projection whose intermediate values require rounding.
+    let cases: &[(u32, f32, f32, f32)] = &[
+        (0, 4.0, 0.0, 0.0),
+        (2, 4.0, 1.0, 2.0),
+        (3, 4.0, 1.0, 1.0),
+        (1, 4.0, -1.0, 1.0),
+        (1, 4.0, 5.0, 1.0),
+        (1, 4.0, 0.0, 1.0),
+        (1, 4.0, 4.0, 1.0),
+        (1, 4.0, 2.0, 4.0),
+        (1, 0.0, 0.0, 0.0),
+        (1, 4.0, f32::NAN, 1.0),
+        (1, 3.71, 2.07, 1.439),
+        (1, 1.0e18, 1.0e18, 0.0),
+    ];
+    for &(kind, end, x, y) in cases {
+        Diff::new(entry!(0x006d_c780, avoid_node::cost_for_point(Ptr, Ptr) -> f32))
+            .family(&pathing::PATHING)
+            .family(&leaf::LEAVES)
+            .setup(move |e, _| {
+                stand_ins(e);
+                avoid_node_constants(e);
+                let node = e.mem.alloc(0x24);
+                avoid_node_at(
+                    e,
+                    node,
+                    [0; 3],
+                    [end.to_bits(), 0, 0],
+                    FOUR,
+                    7.319_f32.to_bits(),
+                    kind,
+                );
+                let p = point(e, [x.to_bits(), y.to_bits(), 0]);
+                vec![node, p]
+            })
+            .run()
+            .assert_same();
+    }
+}
+
+#[test]
+fn avoid_array_cost_rounding() {
+    Diff::new(entry!(
+        0x006d_c990,
+        avoid_node::array_cost_for_point(Ptr, Ptr) -> f32
+    ))
+    .family(&pathing::PATHING)
+    .family(&leaf::LEAVES)
+    .inputs(&[Input::Of(&[0, 1, 2, 3, 4])])
+    .setup(|e, case| {
+        stand_ins(e);
+        avoid_node_constants(e);
+        let nodes = e.mem.alloc(4 * 0x24);
+        for (i, cost) in (0..4).zip([16_777_216.0_f32, 1.0, -16_777_216.0, 3.5]) {
+            avoid_node_at(e, nodes + i * 0x24, [0; 3], [0; 3], FOUR, cost.to_bits(), 0);
+        }
+        let header = array(e, nodes, case.word(0), 4);
+        vec![header, point(e, [0; 3])]
+    })
+    .run()
+    .assert_same();
 }
