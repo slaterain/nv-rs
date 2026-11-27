@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, navmesh, point, pov, search, smoother_arrays};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -225,7 +225,15 @@ fn stand_ins(e: &mut Engine) {
         ret(e.mem.alloc(0x100))
     });
     // The arrays' vtables in the exe's data, each slot the stand-in for it.
-    for vt in [0x0106_abe4u32, 0x0106_b1e0] {
+    for vt in [
+        0x0106_abe4u32,
+        0x0106_b1e0,
+        0x0106_ba1c,
+        0x0106_ba30,
+        0x0106_ba44,
+        0x0106_ba58,
+        0x0106_ba6c,
+    ] {
         for slot in (0..0x20).step_by(4) {
             e.mem.set_u32(vt + slot, VT_FN + slot);
         }
@@ -659,6 +667,11 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x006d_b4f0, &[0x006d_bbb0]),
     (0x006d_cf20, &[0x0069_0830, 0x006d_cfe0]),
     (0x006e_78b0, &[0x006e_8f40]),
+    (0x006b_3730, &[0x006a_eb70]),
+    (0x006b_3800, &[0x006b_3eb0]),
+    (0x006b_3880, &[0x006b_35a0]),
+    (0x006b_38b0, &[0x006b_35f0]),
+    (0x006b_38e0, &[0x006b_3640]),
 ];
 
 trait Common {
@@ -4364,4 +4377,203 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+#[test]
+fn edge_vert_array_new() {
+    Diff::new(entry!(
+        0x006b_36e0,
+        smoother_arrays::edge_vert_array_new(Ptr<_>) -> Ptr<_>
+    ))
+    .common()
+    .plain(0x006b_36e0)
+    .inputs(&[Input::Flag])
+    .setup(|e, _| {
+        stand_ins(e);
+        e.register(0x006b_4190, |e, a| {
+            log(e, 0x006b_4190, a[0]);
+            e.mem.set_u32(a[0] + 4, 0);
+            e.mem.set_u32(a[0] + 8, 0);
+            e.mem.set_u32(a[0] + 0xc, 0);
+            ret(a[0])
+        });
+        vec![array(e, 0x77, 0x77, 0x77)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn edge_vert_array_drop() {
+    Diff::new(entry!(
+        0x006b_3710,
+        smoother_arrays::edge_vert_array_drop(Ptr<_>)
+    ))
+    .common()
+    .plain(0x006b_3710)
+    .inputs(&[Input::Of(&[0, 1, 2])])
+    .setup(|e, case| {
+        stand_ins(e);
+        vec![growing(e, case)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn navmesh_array_new() {
+    Diff::new(entry!(
+        0x006b_3800,
+        smoother_arrays::navmesh_array_new(Ptr<_>) -> Ptr<_>
+    ))
+    .common()
+    .plain(0x006b_3800)
+    .inputs(&[Input::Flag])
+    .setup(|e, _| {
+        stand_ins(e);
+        vec![array(e, 0x77, 0x77, 0x77)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn navmesh_array_drop() {
+    Diff::new(entry!(
+        0x006b_3830,
+        smoother_arrays::navmesh_array_drop(Ptr<_>)
+    ))
+    .common()
+    .plain(0x006b_3830)
+    .inputs(&[Input::Of(&[0, 1, 2])])
+    .setup(|e, case| {
+        stand_ins(e);
+        vec![growing(e, case)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The link array's append stand-ins: the new index is the size, the prepare grows to the slot's
+/// index plus one, the copy copies the 0x40-byte link.
+fn link_append_stubs(e: &mut Engine) {
+    e.register(0x006b_3fd0, |e, a| {
+        log(e, 0x006b_3fd0, a[0]);
+        ret(e.mem.u32(a[0] + 8))
+    });
+    e.register(0x006a_2630, |e, a| {
+        log(e, 0x006a_2630, a[1]);
+        let i = a[1] >> 6;
+        if i + 1 > e.mem.u32(a[0] + 8) {
+            e.mem.set_u32(a[0] + 8, i + 1);
+        }
+        ret(0)
+    });
+    e.register(0x006b_3910, |e, a| {
+        log(e, 0x006b_3910, a[0]);
+        for i in 0..0x10 {
+            let w = e.mem.u32(a[1] + 4 * i);
+            e.mem.set_u32(a[0] + 4 * i, w);
+        }
+        ret(a[0])
+    });
+}
+
+#[test]
+fn link_array_append() {
+    Diff::new(entry!(
+        0x006b_3660,
+        smoother_arrays::link_array_append(Ptr<_>, Ptr) -> u32
+    ))
+    .common()
+    .plain(0x006b_3660)
+    .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        link_append_stubs(e);
+        let data = e.mem.alloc(0x40 * 8);
+        let size = [0u32, 1, 3, 7][case.word(0) as usize];
+        let link = e.mem.alloc(0x40);
+        for i in 0..0x10 {
+            e.mem
+                .set_u32(link + 4 * i, case.word(1).wrapping_mul(i + 1));
+        }
+        vec![array(e, data, size, 8), link]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn vert_array_append() {
+    Diff::new(entry!(
+        0x006b_3730,
+        smoother_arrays::vert_array_append(Ptr<_>, Ptr) -> u32
+    ))
+    .common()
+    .plain(0x006b_3730)
+    .inputs(&[Input::Of(&[0, 1, 2]), Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        let a = growing(e, case);
+        let vert = e.mem.alloc(0x20);
+        for i in 0..8 {
+            e.mem
+                .set_u32(vert + 4 * i, case.word(1).wrapping_mul(i + 1));
+        }
+        vec![a, vert]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pov_array_scalar_delete() {
+    Diff::new(entry!(
+        0x006b_3880,
+        smoother_arrays::pov_array_scalar_delete(Ptr, u32) -> Ptr
+    ))
+    .common()
+    .plain(0x006b_3880)
+    .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(&[0, 1, 2, 0xffff_fffe])])
+    .setup(|e, case| {
+        stand_ins(e);
+        vec![growing(e, case), case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn node_array_scalar_delete() {
+    Diff::new(entry!(
+        0x006b_38b0,
+        smoother_arrays::node_array_scalar_delete(Ptr, u32) -> Ptr
+    ))
+    .common()
+    .plain(0x006b_38b0)
+    .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(&[0, 1, 2, 0xffff_fffe])])
+    .setup(|e, case| {
+        stand_ins(e);
+        vec![growing(e, case), case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn link_array_scalar_delete() {
+    Diff::new(entry!(
+        0x006b_38e0,
+        smoother_arrays::link_array_scalar_delete(Ptr, u32) -> Ptr
+    ))
+    .common()
+    .plain(0x006b_38e0)
+    .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(&[0, 1, 2, 0xffff_fffe])])
+    .setup(|e, case| {
+        stand_ins(e);
+        vec![growing(e, case), case.word(1)]
+    })
+    .run()
+    .assert_same();
 }

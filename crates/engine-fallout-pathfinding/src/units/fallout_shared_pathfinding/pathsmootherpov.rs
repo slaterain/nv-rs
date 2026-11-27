@@ -553,8 +553,8 @@ pub fn path_smoother_pov_search_scalar_deleting_destructor(
 pub fn fn_006ad690(e: &mut Engine, this: Ptr<PathSmootherPOVSearch>) {
     let s = this.addr();
     e.mem.set_u32(s, VTABLE_SEARCH);
-    fn_006b3710(e, Ptr::new(s + RIGHT_VERTS));
-    fn_006b3710(e, Ptr::new(s + LEFT_VERTS));
+    e.call(0x006b_3710, &args![s + RIGHT_VERTS]);
+    e.call(0x006b_3710, &args![s + LEFT_VERTS]);
     fn_006b3640(e, Ptr::new(s + LINKS));
     fn_006b35f0(e, Ptr::new(s + NODES));
     fn_006b35a0(e, Ptr::new(s + ALL_POVS));
@@ -1128,7 +1128,7 @@ fn add_edge_vert(e: &mut Engine, s: u32, side: u32, other: u32, vert: Ptr, edge:
         let this_size = size(e, s + side);
         e.mem.set_u32(l.at(0x8), this_size);
         e.mem.set_u32(l.at(0x4), 0xffff_ffff);
-        fn_006b3730(e, Ptr::new(s + side), Ptr::new(l.at(0x20)));
+        let _: u32 = e.call(0x006b_3730, &args![s + side, l.at(0x20)]).u32();
     });
 }
 
@@ -1356,7 +1356,7 @@ pub fn fn_006af2b0(e: &mut Engine, this: Ptr<PathSmootherPOVSearch>) {
     let s = this.addr();
     with_frame(e, 0x48, |e, l| {
         let meshes = l.at(0x1c);
-        fn_006b3800(e, Ptr::new(meshes));
+        let _: u32 = e.call(0x006b_3800, &args![meshes]).u32();
         let mut i = 0u32;
         loop {
             let triangles = e.mem.u32(s + 0x207c);
@@ -2636,7 +2636,7 @@ pub fn fn_006b1970(e: &mut Engine, this: Ptr<PathSmootherPOVSearch>) -> bool {
         e.call(0x006c_f900, &args![l.at(0x20), l.at(0x6c)]);
         e.call(0x0069_85f0, &args![l.at(0x48), l.at(0xc0)]);
         e.call(0x0069_85f0, &args![l.at(0x40), l.at(0xb8)]);
-        fn_006b3660(e, Ptr::new(s + LINKS), Ptr::new(l.at(0x48)));
+        let _: u32 = e.call(0x006b_3660, &args![s + LINKS, l.at(0x48)]).u32();
         let goal = e.mem.u32(s + 0x20c8);
         e.mem.set_u32(l.at(0x54), goal);
         e.mem.set_f32(l.at(0x4c), 0.0);
