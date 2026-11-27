@@ -4366,3 +4366,43 @@ fn crossed_edge_rounding_main_thread() {
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
 }
+
+#[test]
+fn request_scan_match_item() {
+    // The callback can shorten the array. Its low return byte is the actual
+    // result, including noncanonical true values; the upper bits are ignored.
+    Diff::new(entry!(
+        0x006e_c900,
+        pathing::request_scan::match_item(Ptr<_>, u32) -> u8
+    ))
+    .family(&pathing::PATHING)
+    .family(&engine_typed::dispatch::DISPATCH)
+    .family(&leaf::LEAVES)
+    .inputs(&[Input::Of(&[0, 3]), Input::Of(&[0, 1, 2, 3, 4])])
+    .setup(|e, case| {
+        let scanner = e.mem.alloc(0x28);
+        let vtable = e.mem.alloc(0x1c);
+        e.mem.set_u32(scanner, vtable);
+        e.mem.set_u32(vtable + 0x18, VT_FN);
+        e.mem.set_u32(scanner + 8, case.word(0));
+        e.mem.set_u32(scanner + 0x20, 0x1234);
+        e.mem.set_u32(scanner + 0x24, 1);
+        e.register(engine_core::sync_direct::GET_CURRENT_THREAD_ID, |_, _| {
+            ret(0x1234)
+        });
+        e.register(VT_FN, |e, a| {
+            assert_eq!(e.mem.u32(a[0] + 0x24), 2);
+            if a[2] == 4 {
+                e.mem.set_u32(a[0] + 8, 1);
+            }
+            ret(if a[1] == a[2] {
+                0x1234_0085
+            } else {
+                0x1234_0000
+            })
+        });
+        vec![scanner, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
