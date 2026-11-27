@@ -23,7 +23,7 @@ use engine_core::typed::diff::{Diff, Input};
 use engine_typed::crt::CRT;
 use engine_typed::forms::{
     actor_base, actor_base_data, ai_form, animation, attributes, conditions, debug_string, object,
-    package_data, package_list, schedule, tesform, FORMS,
+    package_data, package_list, queued_maps, schedule, std_exceptions, tesform, word_vector, FORMS,
 };
 use engine_typed::pathing::PATHING;
 
@@ -6110,10 +6110,18 @@ const OB_IN_PLACE: &[u32] = &[
     0x0065_de30, // the proxy's empty constructor
     0x008d_0600, // the empty forward target
     0x0040_6d90, // the float-to-int helper
-    0x0044_a970, // _Myptr
     0x0082_5c00, // the string's length
-    0x0044_ab90, // _Inside
-    0x0044_a880, // _Eos
+    0x0065_f7f0, // the string allocator's max_size
+];
+/// The string's members the unit's typed code does in place (`_Eos`, `char_traits::assign`,
+/// `_Myptr`, `max_size`, `_Inside`): left out of the translation's calls in every test of the unit
+/// but each one's own.
+const OB_STRING_OWN: &[u32] = &[
+    0x0044_a880,
+    0x0044_a8c0,
+    0x0044_a970,
+    0x0044_a9d0,
+    0x0044_ab90,
 ];
 /// The family's own members the unit's callers do in place: only in the callers' tests.
 const OB_OWN_IN_PLACE: &[u32] = &[0x0044_a7b0, 0x0044_a7d0, 0x0050_e9c0];
@@ -6168,8 +6176,9 @@ fn ob_seam(e: &mut Engine, a: &[u32]) -> Option<u32> {
 }
 
 /// The world of the unit's cases: the shared one, the unit's globals and read-only doubles, the
-/// slots it calls, and its callees' doubles. `_Grow`, `copy_s` and `move_s` do their work on the
-/// test's strings; `_Xran` throws; the model holder keeps its word.
+/// slots it calls, and its callees' doubles. The string allocator answers heap blocks, `copy_s` and
+/// `move_s` do their work on the test's strings; `_Xran` and `_Xlen` throw; the model holder keeps
+/// its word.
 fn ob_world(e: &mut Engine) {
     world(e);
     for page in [
@@ -6256,25 +6265,12 @@ fn ob_world(e: &mut Engine) {
     );
     e.register(0x0056_7400, ob_scale);
     e.register(0x009c_dae0, ob_scale);
-    // `_Grow(count, trim)`: a heap buffer of its own when the reserve is too small, the characters
-    // copied over; whether `count` is not 0.
-    e.register(0x0044_a8d0, |e, a| {
-        let (s, count) = (a[0], a[1]);
-        let reserve = e.mem.u32(s + 0x18);
-        if count > reserve {
-            let new = count | 0xf;
-            let block = e.mem.alloc(new + 1);
-            let size = e.mem.u32(s + 0x14).min(new);
-            let old = if reserve >= 0x10 {
-                e.mem.u32(s + 4)
-            } else {
-                s + 4
-            };
-            copy_bytes(e, block, old, size);
-            e.mem.set_u32(s + 4, block);
-            e.mem.set_u32(s + 0x18, new);
-        }
-        ret(u32::from(count > 0))
+    // The string allocator's `allocate(count)`: a heap block (at most 0x100 bytes: a count near
+    // 4 GB gets a small one, which the cases never fill).
+    e.register(0x0065_f7a0, |e, a| ret(e.mem.alloc(a[1].clamp(1, 0x100))));
+    // `_Xlen` throws as `_Xran` does.
+    e.register(0x00ec_30b0, |e, _| {
+        engine_core::cxx_exception::throw(e, OB_THROWN, 0x0117_327c)
     });
     // `copy_s(dest, room, src, count)` and `move_s(string, dest, room, src, count)`.
     e.register(0x0044_ccd0, |e, a| {
@@ -6384,14 +6380,26 @@ fn ob_fresh(e: &mut Engine) -> u32 {
 /// The unit's cases: the forms family's, the pathing family (its point maths), the unit's in-place
 /// bodies, and the other families' typed callees that doubles stand at.
 fn ob_cases(d: Diff) -> Diff {
+    ob_cases_but(d, 0)
+}
+
+/// [`ob_cases`] for the test of `own`, one of [`OB_STRING_OWN`]: the others stay left out.
+fn ob_cases_but(d: Diff, own: u32) -> Diff {
+    let others: Vec<u32> = OB_STRING_OWN
+        .iter()
+        .copied()
+        .filter(|a| *a != own)
+        .collect();
     d.forms()
         .family(&PATHING)
         .ignore_calls(OB_IN_PLACE)
+        .ignore_calls(&others)
         .goes_by_address(OB_BY_ADDRESS)
 }
 
 trait ObCases {
     fn ob(self) -> Diff;
+    fn ob_own(self, own: u32) -> Diff;
     fn ob_caller(self) -> Diff;
     fn ob_root(self) -> Diff;
 }
@@ -6399,6 +6407,9 @@ trait ObCases {
 impl ObCases for Diff {
     fn ob(self) -> Diff {
         ob_cases(self)
+    }
+    fn ob_own(self, own: u32) -> Diff {
+        ob_cases_but(self, own)
     }
     fn ob_caller(self) -> Diff {
         ob_cases(self).ignore_calls(OB_OWN_IN_PLACE)
@@ -7965,7 +7976,8 @@ fn pick<T: Copy>(seed: u32, k: u32, from: &[T]) -> T {
 /// "any" or a value, and a duration.
 fn set_schedule(e: &mut Engine, schedule: u32, seed: u32) {
     e.mem.set_u8(schedule, pick(seed, 1, &[0xff, 0, 4, 11]));
-    e.mem.set_u8(schedule + 1, pick(seed, 2, &[0xff, 0, 3, 6]));
+    e.mem
+        .set_u8(schedule + 1, pick(seed, 2, &[0xff, 0, 3, 4, 6]));
     e.mem
         .set_u8(schedule + 2, pick(seed, 3, &[0, 1, 14, 15, 30, 0xff]));
     e.mem.set_u8(schedule + 3, pick(seed, 4, &[0xff, 0, 7, 22]));
@@ -8384,12 +8396,14 @@ fn pk_find_current_package() {
 }
 
 /// The missed packages' walks: the actor's process's day and month, and the calendar's month, day
-/// and hour: no day; today, ending at 8:00; from the day before; across the year's end to 2:00.
-const PK_WALKS: [(u32, u32, u32, u32, u32); 4] = [
+/// and hour: no day; today, ending at 8:00; from the day before; across the year's end to 2:00;
+/// from the day before onto the month's last day (30 of 30: no rollover), ending at 8:00.
+const PK_WALKS: [(u32, u32, u32, u32, u32); 5] = [
     (0, 4, 4, 15, 0x4100_0000),
     (15, 4, 4, 15, 0x4100_0000),
     (14, 4, 4, 15, 0x4100_0000),
     (30, 11, 0, 1, 0x4000_0000),
+    (29, 4, 4, 30, 0x4100_0000),
 ];
 
 #[test]
@@ -8403,7 +8417,8 @@ fn pk_missed_packages() {
         // The list's seed and size (0: empty).
         Input::Of(&[1, 2, 3, 4, 5]),
         Input::Of(&[0, 1, 2, 3]),
-        Input::Of(&[0, 1, 2, 3]),
+        // The walk (`PK_WALKS`).
+        Input::Of(&[0, 1, 2, 3, 4]),
         // The output list: empty, or holding the list's first package.
         Input::Flag,
         // The actor's current package: none or the list's second.
@@ -8417,14 +8432,19 @@ fn pk_missed_packages() {
         let items = packages(e, case.word(0), case.word(1), false);
         // List 5's first package: missable at 7:00 on any day, so the walks from 5:00 and 0:00 reach
         // its hour exactly (an equal hour has not passed it yet).
-        if case.word(0) == 5 {
-            if let Some(&first) = items.first() {
-                for (at, byte) in [(0, 0xff), (1, 0xff), (2, 0), (3, 7)] {
-                    e.mem.set_u8(first + PK_SCHEDULE + at, byte);
-                }
-                e.mem.set_u32(first + PK_FLAGS, 4);
-                e.mem.set_u8(first + PK_ACTOR_TEST, 1);
+        // List 4's: missable at any hour on day of the week 4, the calendar's (an equal day of the
+        // week passes).
+        let seeded_schedule = match case.word(0) {
+            4 => Some([0xff, 4, 0, 0xff]),
+            5 => Some([0xff, 0xff, 0, 7]),
+            _ => None,
+        };
+        if let (Some(bytes), Some(&first)) = (seeded_schedule, items.first()) {
+            for (at, byte) in bytes.into_iter().enumerate() {
+                e.mem.set_u8(first + PK_SCHEDULE + at as u32, byte);
             }
+            e.mem.set_u32(first + PK_FLAGS, 4);
+            e.mem.set_u8(first + PK_ACTOR_TEST, 1);
         }
         let list = new_list(e, &items);
         let (day, month, calendar_month, calendar_day, hour) = PK_WALKS[case.word(2) as usize];
@@ -8985,6 +9005,693 @@ fn pk_conditions_compare_values() {
 fn pk_conditions_swap_function_data() {
     Diff::new(entry!(0x0068_1110, conditions::swap_function_data(u32)))
         .pk_object(0xc)
+        .run()
+        .assert_same();
+}
+
+// The rest of the debug-heap string (`_Eos` to `_Inside`), the library's exceptions, the word
+// vector and its allocator, and the lock-free maps' deleting destructors with the task release.
+
+#[test]
+fn ob_string_end_string_at() {
+    Diff::new(entry!(0x0044_a880, debug_string::end_string_at(u32, u32)))
+        .ob_own(0x0044_a880)
+        .inputs(&[Input::Of(OB_PICK), Input::Of(&[0, 1, 3, 15])])
+        .setup(|e, case| {
+            ob_world(e);
+            vec![ob_string(e, OB_TEXTS[case.word(0) as usize]), case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_string_assign_char() {
+    Diff::new(entry!(0x0044_a8c0, debug_string::assign_char(u32, u32)))
+        .ob_own(0x0044_a8c0)
+        .inputs(&[Input::Of(&[0, 0x41, 0xff]), Input::Of(&[0, 0x7a, 0x80])])
+        .setup(|e, case| {
+            ob_world(e);
+            let bytes = e.mem.alloc(2);
+            e.mem.set_u8(bytes, case.word(0) as u8);
+            e.mem.set_u8(bytes + 1, case.word(1) as u8);
+            vec![bytes, bytes + 1]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_string_grow_storage() {
+    Diff::new(entry!(0x0044_a8d0, debug_string::grow_storage(u32, u32, bool) -> bool))
+        .ob()
+        .inputs(&[
+            Input::Of(OB_PICK),
+            Input::Of(&[0, 1, 3, 15, 16, 31, 32, 0x40, 0xffff_ffff]),
+            // Trim: no, yes, and a word whose low byte is 0.
+            Input::Of(&[0, 1, 0x100]),
+        ])
+        .expect_stops(|case| case.word(1) == 0xffff_ffff)
+        .setup(|e, case| {
+            ob_world(e);
+            let this = ob_string(e, OB_TEXTS[case.word(0) as usize]);
+            vec![this, case.word(1), case.word(2)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_string_characters() {
+    Diff::new(entry!(0x0044_a970, debug_string::string_characters(u32) -> u32))
+        .ob_own(0x0044_a970)
+        .inputs(&[Input::Of(OB_PICK)])
+        .setup(|e, case| {
+            ob_world(e);
+            vec![ob_string(e, OB_TEXTS[case.word(0) as usize])]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_string_max_size() {
+    Diff::new(entry!(0x0044_a9d0, debug_string::string_max_size(u32) -> u32))
+        .ob_own(0x0044_a9d0)
+        .inputs(&[Input::Of(OB_PICK)])
+        .setup(|e, case| {
+            ob_world(e);
+            vec![ob_string(e, OB_TEXTS[case.word(0) as usize])]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ob_string_copy_to_new_storage() {
+    Diff::new(entry!(
+        0x0044_aa10,
+        debug_string::copy_to_new_storage(u32, u32, u32)
+    ))
+    .ob()
+    .inputs(&[
+        // The strings, and (4) the heap one with a reserve too big for half again to fit.
+        Input::Of(&[0, 1, 2, 3, 4]),
+        Input::Of(&[0, 1, 0x10, 0x12, 0x20, 0x41, 0xffff_fff0, 0xffff_fff5]),
+        // The characters kept: none, up to two, all.
+        Input::Of(&[0, 1, 2]),
+    ])
+    .setup(|e, case| {
+        ob_world(e);
+        let pick = case.word(0).min(3) as usize;
+        let this = ob_string(e, OB_TEXTS[pick]);
+        if case.word(0) == 4 {
+            e.mem.set_u32(this + 0x18, 0xc000_0000);
+        }
+        let n = OB_TEXTS[pick].len() as u32;
+        let keep = [0, n.min(2), n][case.word(2) as usize];
+        vec![this, case.word(1), keep]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ob_string_holds() {
+    Diff::new(entry!(0x0044_ab90, debug_string::string_holds(u32, u32) -> bool))
+        .ob_own(0x0044_ab90)
+        .inputs(&[Input::Of(OB_PICK), Input::Of(&[0, 1, 2, 3, 4, 5])])
+        .setup(|e, case| {
+            ob_world(e);
+            let pick = case.word(0) as usize;
+            let this = ob_string(e, OB_TEXTS[pick]);
+            let start = ob_chars(e, this);
+            let n = OB_TEXTS[pick].len() as u32;
+            let text = match case.word(1) {
+                0 => 0,
+                1 => start - 1,
+                2 => start,
+                3 => start + n.saturating_sub(1),
+                4 => start + n,
+                _ => c_string(e, b"outside"),
+            };
+            vec![this, text]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The exceptions' base: `std::exception`'s constructor clears its two words, its copy copies them
+/// (after a vtable of its own), its destructor clears the vtable.
+fn ex_world(e: &mut Engine) {
+    ob_world(e);
+    e.register(0x00ec_78e0, |e, a| {
+        e.mem.set_u32(a[0] + 4, 0);
+        e.mem.set_u32(a[0] + 8, 0);
+        ret(a[0])
+    });
+    e.register(0x00ec_7944, |e, a| {
+        let (this, other) = (a[0], a[1]);
+        e.mem.set_u32(this, 0x0101_1e1e);
+        for at in [4, 8] {
+            let word = e.mem.u32(other + at);
+            e.mem.set_u32(this + at, word);
+        }
+        ret(this)
+    });
+    e.register(0x00ec_79a1, |e, a| {
+        e.mem.set_u32(a[0], 0);
+        ret(0)
+    });
+}
+
+/// A built `logic_error`: a vtable, the base's two words and `text` as the message at +0xc.
+fn ex_object(e: &mut Engine, text: &[u8]) -> u32 {
+    let x = e.mem.alloc(0x28);
+    e.mem.set_u32(x, 0x0101_73dc);
+    e.mem.set_u32(x + 4, 0x0123_4567);
+    e.mem.set_u32(x + 8, 1);
+    let s = ob_string(e, text);
+    copy_bytes(e, x + 0xc, s, 0x1c);
+    x
+}
+
+/// The exceptions' cases: a fresh object and a message, or a built one and flags.
+trait ExCases {
+    fn ex_message(self) -> Diff;
+    fn ex_built(self, with_flags: bool) -> Diff;
+    fn ex_copy(self) -> Diff;
+}
+
+impl ExCases for Diff {
+    fn ex_message(self) -> Diff {
+        self.ob_caller()
+            .inputs(&[Input::Of(OB_PICK)])
+            .setup(|e, case| {
+                ex_world(e);
+                let this = ob_garbage(e, 0x28);
+                vec![this, ob_string(e, OB_TEXTS[case.word(0) as usize])]
+            })
+    }
+    /// A built object, and the flags when `with_flags`.
+    fn ex_built(self, with_flags: bool) -> Diff {
+        let inputs: &[Input] = if with_flags {
+            &[Input::Of(OB_PICK), Input::Of(WORDS)]
+        } else {
+            &[Input::Of(OB_PICK)]
+        };
+        self.ob_caller().inputs(inputs).setup(move |e, case| {
+            ex_world(e);
+            let this = ex_object(e, OB_TEXTS[case.word(0) as usize]);
+            if with_flags {
+                vec![this, case.word(1)]
+            } else {
+                vec![this]
+            }
+        })
+    }
+    fn ex_copy(self) -> Diff {
+        self.ob_caller()
+            .inputs(&[Input::Of(OB_PICK)])
+            .setup(|e, case| {
+                ex_world(e);
+                let this = ob_garbage(e, 0x28);
+                vec![this, ex_object(e, OB_TEXTS[case.word(0) as usize])]
+            })
+    }
+}
+
+#[test]
+fn ex_length_error_construct() {
+    Diff::new(entry!(0x0044_a2e0, std_exceptions::length_error_construct(u32, u32) -> u32))
+        .ex_message()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ex_logic_error_construct() {
+    Diff::new(entry!(0x0044_a310, std_exceptions::logic_error_construct(u32, u32) -> u32))
+        .ex_message()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ex_logic_error_what() {
+    Diff::new(entry!(0x0044_a380, std_exceptions::logic_error_what(u32) -> u32))
+        .ex_built(false)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ex_logic_error_deleting_destructor() {
+    Diff::new(
+        entry!(0x0044_a3a0, std_exceptions::logic_error_deleting_destructor(u32, u32) -> u32),
+    )
+    .ex_built(true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ex_logic_error_destruct() {
+    Diff::new(entry!(
+        0x0044_a3d0,
+        std_exceptions::logic_error_destruct(u32)
+    ))
+    .ex_built(false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ex_length_error_destruct() {
+    Diff::new(entry!(
+        0x0044_a400,
+        std_exceptions::length_error_destruct(u32)
+    ))
+    .ex_built(false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ex_length_error_deleting_destructor() {
+    Diff::new(
+        entry!(0x0044_a420, std_exceptions::length_error_deleting_destructor(u32, u32) -> u32),
+    )
+    .ex_built(true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ex_logic_error_copy() {
+    Diff::new(entry!(0x0044_a450, std_exceptions::logic_error_copy(u32, u32) -> u32))
+        .ex_copy()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ex_length_error_copy() {
+    Diff::new(entry!(0x0044_a9a0, std_exceptions::length_error_copy(u32, u32) -> u32))
+        .ex_copy()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ex_bad_alloc_copy() {
+    Diff::new(entry!(0x0044_dd10, std_exceptions::bad_alloc_copy(u32, u32) -> u32))
+        .ex_copy()
+        .run()
+        .assert_same();
+}
+
+/// The vector's members its typed code does in place (`max_size` and the allocator's): left out of
+/// the translation's calls in every test of the vector but each one's own.
+const WV_OWN: &[u32] = &[0x0044_a2c0, 0x0044_abf0];
+
+/// The vector's world: the string world, and doubles for the checked iterators (an iterator is its
+/// vector and its element), the elements' move (words copied down, the new end answered), their
+/// destruction, the base's constructor and destructor, `_Tidy`, the length error and the array
+/// allocation (a heap block of up to 64 words).
+fn wv_world(e: &mut Engine) {
+    ob_world(e);
+    fn iterator(e: &mut Engine, at: u32, vector: u32, element: u32) {
+        e.mem.set_u32(at, vector);
+        e.mem.set_u32(at + 4, element);
+    }
+    e.register(0x0065_e000, |e, a| {
+        iterator(e, a[0], a[2], a[1]);
+        ret(a[0])
+    });
+    e.register(0x0065_ded0, |e, a| {
+        iterator(e, a[1], a[0], a[3]);
+        ret(a[1])
+    });
+    e.register(0x0065_f550, |e, a| {
+        let last = e.mem.u32(a[0] + 0x10);
+        iterator(e, a[1], a[0], last);
+        ret(a[1])
+    });
+    e.register(0x0065_dfd0, |e, a| {
+        ret(u32::from(e.mem.u32(a[0] + 4) != e.mem.u32(a[1] + 4)))
+    });
+    e.register(0x0044_d600, |e, a| {
+        let (from, to, destination) = (a[0], a[1], a[2]);
+        let n = to.saturating_sub(from) / 4;
+        for i in 0..n {
+            let word = e.mem.u32(from + 4 * i);
+            e.mem.set_u32(destination + 4 * i, word);
+        }
+        ret(destination + 4 * n)
+    });
+    e.register(0x0065_f2b0, |_, _| ret(0));
+    e.register(0x0065_d3a0, |e, a| {
+        e.mem.set_u32(a[0], 0x7a7a_0000 ^ (a[1] & 0xffff));
+        e.mem.set_u32(a[0] + 4, 0);
+        ret(a[0])
+    });
+    e.register(0x0065_cfb0, |e, a| {
+        e.mem.set_u32(a[0], 0);
+        ret(0)
+    });
+    e.register(0x0065_f240, |e, a| {
+        for at in [0xc, 0x10, 0x14] {
+            e.mem.set_u32(a[0] + at, 0);
+        }
+        ret(0)
+    });
+    e.register(0x0065_f640, |_, _| ret(0));
+    e.register(0x0044_d670, |e, a| {
+        ret(e.mem.alloc(4 * a[0].clamp(1, 0x40)))
+    });
+}
+
+/// A word vector of `count` elements in storage for 8, each element its index plus one times 0x11.
+fn wv_vector(e: &mut Engine, count: u32) -> u32 {
+    let v = ob_garbage(e, 0x18);
+    let storage = e.mem.alloc(8 * 4);
+    for i in 0..count {
+        e.mem.set_u32(storage + 4 * i, 0x11 * (i + 1));
+    }
+    e.mem.set_u32(v + 0xc, storage);
+    e.mem.set_u32(v + 0x10, storage + 4 * count);
+    e.mem.set_u32(v + 0x14, storage + 32);
+    v
+}
+
+/// [`wv_world`]'s cases, the vector's in-place members but `own` left out.
+fn wv_cases(d: Diff, own: u32) -> Diff {
+    let others: Vec<u32> = WV_OWN.iter().copied().filter(|a| *a != own).collect();
+    d.ob().ignore_calls(&others)
+}
+
+trait WvCases {
+    fn wv(self) -> Diff;
+    fn wv_own(self, own: u32) -> Diff;
+    fn wv_vector(self) -> Diff;
+}
+
+impl WvCases for Diff {
+    fn wv(self) -> Diff {
+        wv_cases(self, 0)
+    }
+    fn wv_own(self, own: u32) -> Diff {
+        wv_cases(self, own)
+    }
+    /// A vector of 0, 1, 3 or 8 elements, the one word.
+    fn wv_vector(self) -> Diff {
+        wv_cases(self, 0)
+            .inputs(&[Input::Of(&[0, 1, 3, 8])])
+            .setup(|e, case| {
+                wv_world(e);
+                vec![wv_vector(e, case.word(0))]
+            })
+    }
+}
+
+#[test]
+fn wv_vector_construct() {
+    Diff::new(entry!(0x0044_9fd0, word_vector::word_vector_construct(u32) -> u32))
+        .wv()
+        .setup(|e, _| {
+            wv_world(e);
+            vec![ob_garbage(e, 0x18)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn wv_vector_destruct() {
+    Diff::new(entry!(0x0044_a040, word_vector::word_vector_destruct(u32)))
+        .wv_vector()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn wv_vector_clear() {
+    Diff::new(entry!(0x0044_a0a0, word_vector::word_vector_clear(u32) -> u32))
+        .wv_vector()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn wv_vector_begin() {
+    Diff::new(entry!(0x0044_a170, word_vector::word_vector_begin(u32, u32) -> u32))
+        .wv()
+        .inputs(&[Input::Of(&[0, 1, 3, 8])])
+        .setup(|e, case| {
+            wv_world(e);
+            let v = wv_vector(e, case.word(0));
+            vec![v, ob_garbage(e, 8)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn wv_vector_erase() {
+    Diff::new(entry!(
+        0x0044_a1a0,
+        word_vector::word_vector_erase(u32, u32, u32, u32, u32, u32) -> u32
+    ))
+    .wv()
+    .inputs(&[
+        Input::Of(&[0, 1, 3, 8]),
+        // The range's first and last elements (cut to the end).
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 1, 3, 8]),
+    ])
+    .setup(|e, case| {
+        wv_world(e);
+        let count = case.word(0);
+        let v = wv_vector(e, count);
+        let storage = e.mem.u32(v + 0xc);
+        let first = storage + 4 * case.word(1).min(count);
+        let last = storage + 4 * case.word(2).min(count).max(case.word(1).min(count));
+        vec![v, ob_garbage(e, 8), v, first, v, last]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn wv_vector_buy() {
+    Diff::new(entry!(0x0044_a240, word_vector::word_vector_buy(u32, u32) -> bool))
+        .wv()
+        .inputs(&[Input::Of(&[0, 1, 3, 0x3fff_ffff, 0x4000_0000, 0xffff_ffff])])
+        .setup(|e, case| {
+            wv_world(e);
+            vec![wv_vector(e, 2), case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn wv_vector_max_size() {
+    Diff::new(entry!(0x0044_a2c0, word_vector::word_vector_max_size(u32) -> u32))
+        .wv_own(0x0044_a2c0)
+        .inputs(&[Input::Of(WORDS)])
+        .setup(|e, case| {
+            wv_world(e);
+            vec![case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn wv_word_allocator_allocate() {
+    Diff::new(entry!(0x0044_abd0, word_vector::word_allocator_allocate(u32, u32) -> u32))
+        .wv()
+        .inputs(&[
+            Input::Of(WORDS),
+            Input::Of(&[0, 1, 3, 0x3fff_ffff, 0x4000_0000, 0xffff_ffff]),
+        ])
+        .setup(|e, case| {
+            wv_world(e);
+            vec![case.word(0), case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn wv_word_allocator_max_size() {
+    Diff::new(entry!(0x0044_abf0, word_vector::word_allocator_max_size(u32) -> u32))
+        .wv_own(0x0044_abf0)
+        .inputs(&[Input::Of(WORDS)])
+        .setup(|e, case| {
+            wv_world(e);
+            vec![case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn wv_copy_word() {
+    Diff::new(entry!(0x0044_ac20, word_vector::copy_one_word(u32, u32)))
+        .wv()
+        .inputs(&[Input::Of(WORDS)])
+        .setup(|e, case| {
+            wv_world(e);
+            let words = e.mem.alloc(8);
+            e.mem.set_u32(words, 0x5151_5151);
+            e.mem.set_u32(words + 4, case.word(0));
+            vec![words, words + 4]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The lock-free maps' destructor bodies the deleting destructors run (the lock-free family's:
+/// doubles here, each storing the interfaced base's vtable as the real ones end).
+const QM_BODIES: [u32; 8] = [
+    0x0044_d8f0,
+    0x0044_d9b0,
+    0x0044_da70,
+    0x0044_db30,
+    0x0044_c1e0,
+    0x0044_c3f0,
+    0x0044_dc50,
+    0x0044_cae0,
+];
+
+trait QmCases {
+    fn qm_delete(self, body: u32) -> Diff;
+}
+
+impl QmCases for Diff {
+    /// A deleting destructor whose body is `body`: a map with a vtable, and the flags.
+    fn qm_delete(self, body: u32) -> Diff {
+        self.forms()
+            .goes_by_address(&[body])
+            .inputs(&[Input::Of(WORDS)])
+            .setup(|e, case| {
+                world(e);
+                for body in QM_BODIES {
+                    e.register(body, |e, a| {
+                        e.mem.set_u32(a[0], 0x0101_7458);
+                        ret(0)
+                    });
+                }
+                let map = e.mem.alloc(0x30);
+                e.mem.set_u32(map, 0x0101_747c);
+                vec![map, case.word(0)]
+            })
+    }
+}
+
+#[test]
+fn qm_queued_reference_map_delete() {
+    Diff::new(entry!(0x0044_d8c0, queued_maps::queued_reference_map_delete(u32, u32) -> u32))
+        .qm_delete(0x0044_d8f0)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn qm_anim_idle_map_delete() {
+    Diff::new(entry!(0x0044_d980, queued_maps::anim_idle_map_delete(u32, u32) -> u32))
+        .qm_delete(0x0044_d9b0)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn qm_replacement_kf_list_map_delete() {
+    Diff::new(entry!(0x0044_da40, queued_maps::replacement_kf_list_map_delete(u32, u32) -> u32))
+        .qm_delete(0x0044_da70)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn qm_helmet_map_delete() {
+    Diff::new(entry!(0x0044_db00, queued_maps::helmet_map_delete(u32, u32) -> u32))
+        .qm_delete(0x0044_db30)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn qm_model_map_delete() {
+    Diff::new(entry!(0x0044_dbc0, queued_maps::model_map_delete(u32, u32) -> u32))
+        .qm_delete(0x0044_c1e0)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn qm_kf_model_map_delete() {
+    Diff::new(entry!(0x0044_dbf0, queued_maps::kf_model_map_delete(u32, u32) -> u32))
+        .qm_delete(0x0044_c3f0)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn qm_texture_map_delete() {
+    Diff::new(entry!(0x0044_dc20, queued_maps::texture_map_delete(u32, u32) -> u32))
+        .qm_delete(0x0044_dc50)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn qm_loaded_file_map_delete() {
+    Diff::new(entry!(0x0044_dce0, queued_maps::loaded_file_map_delete(u32, u32) -> u32))
+        .qm_delete(0x0044_cae0)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn qm_release_task() {
+    Diff::new(entry!(0x0044_dd60, queued_maps::release_task(u32)))
+        .forms()
+        .goes_by_address(&[0x0040_19a0])
+        // The count before: the last reference, none, two, the top bit.
+        .inputs(&[Input::Of(&[1, 0, 2, 0x8000_0000])])
+        .setup(|e, case| {
+            world(e);
+            // InterlockedDecrement, as the import does it.
+            e.register(0x00fd_f1c4, |e, a| {
+                let n = e.mem.u32(a[0]).wrapping_sub(1);
+                e.mem.set_u32(a[0], n);
+                ret(n)
+            });
+            e.mem.set_u32(VTABLE, VT_FN);
+            let task = e.mem.alloc(0x20);
+            e.mem.set_u32(task, VTABLE);
+            e.mem.set_u32(task + 8, case.word(0));
+            vec![task]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn qm_iterator_flag_set() {
+    Diff::new(entry!(0x0044_de20, queued_maps::iterator_flag_set(u32) -> bool))
+        .forms()
+        .inputs(&[Input::Of(&[0, 1, 2, 0xfe, 0xff])])
+        .setup(|e, case| {
+            world(e);
+            let iterator = e.mem.alloc(0x10);
+            e.mem.set_u8(iterator + 0xc, case.word(0) as u8);
+            vec![iterator]
+        })
         .run()
         .assert_same();
 }

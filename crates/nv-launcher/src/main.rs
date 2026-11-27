@@ -16,7 +16,8 @@
 //!   nv-rs --game-card           the card and API the game will draw with on Vulkan, one line
 //!
 //! `NV_RS_NO_WINDOWS=1` (scripted tests): no window at all; the action runs as Play.exe and
-//! play.sh ran it, plain play when none is named.
+//! play.sh ran it, plain play when none is named. `NV_RS_LAUNCHER_CRASH` (Windows) is set only by
+//! the launcher itself, starting Play.exe again after its window crashed (crate::stopped).
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod app;
@@ -43,6 +44,7 @@ mod session;
 mod settings;
 mod sound;
 mod sound_files;
+mod stopped;
 
 use std::path::PathBuf;
 
@@ -169,6 +171,18 @@ fn main() {
     }
     if std::env::var_os("NV_RS_NO_WINDOWS").is_some_and(|v| v == "1") {
         std::process::exit(without_window(&raw));
+    }
+    // Never silent from here on (crate::stopped): a panic is said with its line, and on Windows a
+    // crash in native code too; a Play.exe started again by such a crash says it and plays in
+    // message boxes, without the window.
+    stopped::watch_panics();
+    #[cfg(windows)]
+    {
+        let crash = stopped::crash_passed_on();
+        stopped::watch_crashes();
+        if let Some(crash) = crash {
+            std::process::exit(app::after_crash(&raw, &crash));
+        }
     }
     std::process::exit(app::run(raw));
 }

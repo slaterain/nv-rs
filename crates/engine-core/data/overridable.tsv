@@ -35,6 +35,7 @@
 00525980	0	JIP
 00525a90	0	JIP
 00525b20	3	yUI
+005282d0	0	nv-rs grid shift waits only for running cell loads
 005702e0	0	ITR
 00583560	2	nv-rs cell offsets for every plugin, nv-rs no distant water under the Strip
 005854f0	1	nv-rs cell offsets for every plugin
@@ -96,6 +97,7 @@
 00903180	0	kNVSE
 00932a00	1	nv-rs half-loaded actor's level change
 00932b70	1	nv-rs half-loaded actor's level change
+009334b0	4	nv-rs the player keeps the high process
 0095f6c0	1	nv-rs dragged bodies by time
 00960520	3	nv-rs dragged bodies by time
 009613c0	1	nv-rs dragged bodies by time

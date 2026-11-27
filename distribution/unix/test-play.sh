@@ -211,6 +211,19 @@ check "7 stops" '[ $st = 1 ] && printf "%s" "$out" | grep -q -- "--game FOLDER"'
 # 8. --game: checked, remembered; a folder without the game refused.
 out=$(run --game "$T/elsewhere" </dev/null 2>&1); st=$?
 check "8 refused" '[ $st = 1 ] && printf "%s" "$out" | grep -q "no game in"'
+# Both spellings hold a game. The shell has already passed the exact folder as one argument.
+literal="$other "
+cp -R "$other" "$literal"
+out=$(run --game "$literal" </dev/null 2>&1); st=$?
+check "8 literal folder preferred" '[ $st = 0 ] && [ "$(cat "$own/game-folder.txt")" = "$literal" ]'
+# With its master missing, the exact directory must be refused even though the trimmed
+# name still identifies a working installation.
+rm "$literal/Data/FalloutNV.esm"
+out=$(run --game "$literal" </dev/null 2>&1); st=$?
+check "8 incomplete literal folder refused" '[ $st = 1 ] && printf "%s" "$out" | grep -qF "no game in $literal:"'
+check "8 other copy not remembered" '[ "$(cat "$own/game-folder.txt")" = "$literal" ]'
+out=$(run --game "'$other'" </dev/null 2>&1); st=$?
+check "8 pasted quoted folder accepted" '[ $st = 0 ] && [ "$(cat "$own/game-folder.txt")" = "$other" ]'
 out=$(run --game "$other/Data" </dev/null 2>&1); st=$?
 check "8 Data folder taken" '[ $st = 0 ] && [ "$(cat "$own/game-folder.txt")" = "$other/Data" ]'
 
@@ -437,9 +450,12 @@ local29="$T/pfx29/drive_c/users/steamuser/AppData/Local"
 mkdir -p "$game29/Data/NVSE/Plugins" "$local29/FalloutNV"
 echo x >"$game29/Data/FalloutNV.esm"
 echo x >"$game29/FalloutNV.exe"
+mkdir "$game29/Data/NVSE/Plugins/Backup.dll"
 echo x >"$game29/Data/NVSE/Plugins/kNVSE.dll"
 echo x >"$game29/Data/NVSE/Plugins/jip_nvse.dll"
 echo x >"$game29/Data/NVSE/Plugins/jip_nvse.ini"
+echo x >"$game29/Data/NVSE/Plugins/Example.dll"
+echo x >"$game29/Data/NVSE/Plugins/example.DLL"
 printf 'FalloutNV.esm\nMod One.esp\n' >"$local29/FalloutNV/plugins.txt"
 printf 'own%s%s\ngame%sSteam%s%s\nappdata%s%s\n' "$tab" "$own29" "$tab" "$tab" "$game29" "$tab" "$local29" >"$T/find29.txt"
 outside29() { (cd "$T" && find game29 pfx29 | sort && cksum "$local29/FalloutNV/plugins.txt"); }
@@ -452,7 +468,9 @@ check "29 plays the game's own folder" 'printf "%s" "$out" | grep -qxF "program 
 check "29 no mods build" '! printf "%s" "$out" | grep -q "^built:" && [ ! -e "$own29/modgame" ]'
 check "29 manager profile saves" 'printf "%s" "$out" | grep -qF "NV_SAVE_OUT=$own29/manager/Documents/My Games/FalloutNV/Saves"'
 check "29 a plugin that can't load, named once in the log" '[ "$(cat "$own29"/logs/game-*.log | grep -c "plugin kNVSE.dll can")" = 1 ]'
+check "29 a directory with a DLL suffix is ignored" '! cat "$own29"/logs/game-*.log | grep -q "Backup.dll"'
 check "29 a built-in plugin not named" '! cat "$own29"/logs/game-*.log | grep -q "jip_nvse"'
+check "29 case variants of one plugin produce one warning" '[ "$(grep -ic "plugin example[.]dll can" "$own29"/logs/game-*.log)" = 1 ]'
 check "29 nothing written in the game's folder or the prefix" '[ "$(outside29)" = "$before29" ]'
 out=$(env FAKE_FIND="$T/find29.txt" NV_RS_GAME="$game29" $SH "$pkg/play.sh" --mods --mod-manager </dev/null 2>&1); st=$?
 check "29 --mods with it refused" '[ $st = 1 ] && printf "%s" "$out" | grep -qF "choose one"'

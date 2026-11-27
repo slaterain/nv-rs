@@ -137,13 +137,14 @@ nvse_not_built_in() {
     children "$nv_data" NVSE | while IFS= read -r nv_nvse; do
         children "$nv_nvse" Plugins | while IFS= read -r nv_plugins; do
             ls -1 -- "$nv_plugins" 2>/dev/null | while IFS= read -r nv_name; do
+                [ -f "$nv_plugins/$nv_name" ] || continue
                 case $(lower "$nv_name") in
                 (jip_nvse.dll | johnnyguitarnvse.dll | ui_organizer.dll) ;;
                 (*.dll) printf '%s\n' "$nv_name" ;;
                 esac
             done
         done
-    done | sort -u | while IFS= read -r nv_name; do
+    done | LC_ALL=C sort -fu | while IFS= read -r nv_name; do
         say "nv-rs: the script extender plugin $nv_name can't load in nv-rs (xNVSE, JIP LN, UI Organizer and JohnnyGuitar NVSE are built in): mods that need it may not work"
     done
 }
@@ -346,7 +347,11 @@ usable_games() {
 remember=0
 game=''
 if [ -n "$opt_game" ]; then
-    game=$(typed_folder "$opt_game")
+    game=$opt_game
+    # Pasted paths may need decoding. An existing path is already unambiguous.
+    if [ ! -e "$game" ]; then
+        game=$(typed_folder "$opt_game")
+    fi
     has_game "$game" || fail "$(not_a_game "$game")"
     remember=1
 elif [ -n "${NV_RS_GAME:-}" ]; then

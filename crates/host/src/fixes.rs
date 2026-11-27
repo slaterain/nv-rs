@@ -60,6 +60,8 @@ pub static FIXES: &[Fix] = &[
     DEAD_LIGHTS,
     THREAD_HEAP,
     crate::half_loaded_move::FIX,
+    crate::player_high_process::FIX,
+    crate::grid_shift_wait::FIX,
     TEXTURE_READ_FIRST,
     crate::cell_entry_wait::FIX,
     crate::cell_offsets::FIX,
@@ -629,6 +631,11 @@ pub const PLAY_AMBIENT_OCCLUSION: bool = false;
 /// preset (a new look, not a fix). `crates/host/data/game_ini.tsv`'s `bSunShadows` row is held to it
 /// by a test.
 pub const PLAY_SUN_SHADOWS: bool = false;
+/// How the world's still lit objects are drawn (port-added: `engine_core::draw_items`, kept records drawn as the
+/// stream's items) when neither `NV_DRAW_ITEMS` nor `Fallout.ini`'s `sDrawItems` says ([`Choice::draw_items`]): as
+/// the original draws them, in every preset, until the picture proof and the speed check pass.
+/// `crates/host/data/game_ini.tsv`'s `sDrawItems` row is held to it by a test.
+pub const PLAY_DRAW_ITEMS: engine_core::draw_items::Mode = engine_core::draw_items::Mode::Off;
 /// Whether, with the sun shadows on, the sun light comes from the sun disc by day and the moon disc by
 /// night (port-added: `engine_fallout_env`'s `sun::LightFromSky`) when neither `NV_SUN_LIGHT_FROM_SKY`
 /// nor `Fallout.ini`'s `bSunLightFromSky` says ([`Choice::sun_light_from_sky`]): on, so the shadows,
@@ -779,6 +786,10 @@ pub struct Choice {
     /// [`PLAY_SUN_SHADOW_CHARACTERS`], on. Used only with [`Choice::sun_shadows`]. Not part of any
     /// preset.
     pub sun_shadow_characters: bool,
+    /// How the world's still lit objects are drawn (`engine_core::draw_items`): `NV_DRAW_ITEMS` when set (`1`,
+    /// `check`, else off); else, in a launcher's play run, `Fallout.ini`'s `[nv-rs Display] sDrawItems`; else
+    /// [`PLAY_DRAW_ITEMS`], as the original. Not part of any preset.
+    pub draw_items: engine_core::draw_items::Mode,
     /// How strong its shade is, from 0.1 (faint) to 1 (all of it): `NV_AO_STRENGTH` when it is a
     /// number; else, in a launcher's play run, `Fallout.ini`'s `[nv-rs Display]
     /// fAmbientOcclusionStrength`; else [`PLAY_AMBIENT_OCCLUSION_STRENGTH`]. Clamped to that range
@@ -830,6 +841,7 @@ impl Choice {
             sun_shadows: PLAY_SUN_SHADOWS,
             sun_light_from_sky: PLAY_SUN_LIGHT_FROM_SKY,
             sun_shadow_characters: PLAY_SUN_SHADOW_CHARACTERS,
+            draw_items: PLAY_DRAW_ITEMS,
             ambient_occlusion_strength: PLAY_AMBIENT_OCCLUSION_STRENGTH,
             not_background: PLAY_NOT_BACKGROUND,
             not_background_by: None,
@@ -995,6 +1007,7 @@ impl Choice {
             sun_shadow_characters: ini
                 .sun_shadow_characters
                 .unwrap_or(PLAY_SUN_SHADOW_CHARACTERS),
+            draw_items: ini.draw_items.unwrap_or(PLAY_DRAW_ITEMS),
             ambient_occlusion_strength: ini.ambient_occlusion_strength.map_or(
                 PLAY_AMBIENT_OCCLUSION_STRENGTH,
                 d3d9_wgpu::scene_light::clamp_strength,
@@ -1079,6 +1092,9 @@ impl Choice {
         }
         if let Some(value) = env("NV_SUN_SHADOWS_CHARACTERS").filter(|v| !v.trim().is_empty()) {
             choice.sun_shadow_characters = value.trim() == "1";
+        }
+        if let Some(value) = env("NV_DRAW_ITEMS").filter(|v| !v.trim().is_empty()) {
+            choice.draw_items = engine_core::draw_items::parse(Some(&value));
         }
         // A number, clamped; anything else leaves the strength as it is.
         if let Some(value) = env("NV_AO_STRENGTH")
@@ -2220,6 +2236,39 @@ mod tests {
         assert!(asked.show_frame_rate);
     }
 
+    /// The world is drawn as the original draws it in every run and preset unless asked for: `sDrawItems=1` (or
+    /// `check`) in a launcher's play run, or `NV_DRAW_ITEMS` anywhere, which wins; another word can't be used.
+    #[test]
+    fn the_kept_records_are_off_unless_asked_for() {
+        use engine_core::draw_items::Mode;
+        assert_eq!(Choice::vanilla().draw_items, Mode::Off);
+        for preset in ["fixes", "vanilla"] {
+            let file = format!("[nv-rs General]\nsPreset={preset}\n");
+            assert_eq!(with_ini(None, &file, &[]).draw_items, Mode::Off, "{preset}");
+        }
+        assert_eq!(
+            Choice::from_parts(None, no_env).unwrap().draw_items,
+            Mode::Off
+        );
+        let on = "[nv-rs Display]\nsDrawItems=1\n";
+        assert_eq!(with_ini(None, on, &[]).draw_items, Mode::On);
+        let check = "[nv-rs Display]\nsDrawItems=check\n";
+        assert_eq!(with_ini(None, check, &[]).draw_items, Mode::Check);
+        let bad = with_ini(None, "[nv-rs Display]\nsDrawItems=yes\n", &[]);
+        assert_eq!(bad.draw_items, Mode::Off);
+        assert!(bad.ini_note.unwrap().ends_with("sDrawItems=yes"));
+        assert_eq!(
+            with_ini(None, on, &[("NV_SHOT", "x")]).draw_items,
+            Mode::Off
+        );
+        assert_eq!(
+            with_ini(None, on, &[("NV_DRAW_ITEMS", "0")]).draw_items,
+            Mode::Off
+        );
+        let asked = Choice::from_parts(None, env_of(&[("NV_DRAW_ITEMS", "check")])).unwrap();
+        assert_eq!(asked.draw_items, Mode::Check);
+    }
+
     /// The new lighting is off in every run and preset unless asked for: `bAmbientOcclusion=1` in
     /// a launcher's play run, or `NV_AO=1` anywhere, which wins.
     #[test]
@@ -2547,7 +2596,8 @@ bSunShadowsCharacters=0
 
     /// What Linux's and macOS's play.sh exports makes the same play run as Play.exe's plain one
     /// (only `NV_SETTINGS`: Vulkan, play's threads and render thread; review of #687: without
-    /// NV_SETTINGS nothing drew), the whole choice alike, in both profiles. The variables are read
+    /// NV_SETTINGS nothing drew), the whole choice alike, in each profile (`--mod-manager`'s too,
+    /// which adds `NV_RS_MANAGER_APPDATA`, #1122). The variables are read
     /// from play.sh itself with the values it gives them, and must be exactly the ones listed here,
     /// so an export added later is looked at in this test: none may be a test's or a fix's
     /// variable (#763: play.sh exported `NV_PROFILE`, the profiler's switch, and every start ran as
@@ -2555,7 +2605,9 @@ bSunShadowsCharacters=0
     /// goes under the name the program reads (`engine-platform` machine_table::PROFILE_VARIABLE).
     #[test]
     fn play_sh_variables_make_a_play_run_on_vulkan() {
-        use engine_platform::machine_table::{profile_from, PROFILE_VARIABLE};
+        use engine_platform::machine_table::{
+            profile_from, MANAGER_APPDATA_VARIABLE, PROFILE_VARIABLE,
+        };
         let exported = play_sh_exports(PLAY_SH).unwrap();
         let mut names: Vec<&str> = exported.iter().map(|&(n, _)| n).collect();
         names.sort_unstable();
@@ -2566,6 +2618,7 @@ bSunShadowsCharacters=0
                 "NV_PREFS_OUT",
                 "NV_REPORT_DIR",
                 "NV_REPORT_LOG",
+                MANAGER_APPDATA_VARIABLE,
                 PROFILE_VARIABLE,
                 "NV_SAVE_OUT",
                 "NV_SETTINGS",
@@ -2584,7 +2637,7 @@ bSunShadowsCharacters=0
         assert_eq!(plain.renderer, Some(Renderer::Vulkan));
         assert_eq!(plain.threads, PLAY_THREADS);
         assert_eq!(plain.render_thread, PLAY_RENDER_THREAD);
-        for profile in ["game", "mods"] {
+        for profile in ["game", "mods", "manager"] {
             let env = |name: &str| {
                 exported
                     .iter()

@@ -576,3 +576,37 @@ pub fn tagged_new(e: &mut Engine, this: Ptr, mode: u8, value: u32) -> Ptr {
     e.call(TAG_INIT, &args![this, u32::from(mode)]);
     this
 }
+
+/// These path-smoother arrays share an empty-array initializer and each installs its own vtable.
+fn empty_smoother_array(e: &mut Engine, this: Ptr<SimpleArray>, vtable: u32) -> Ptr<SimpleArray> {
+    e.set(this, SimpleArray::vtable, vtable);
+    typed_call!(FAMILY, 0x006b_3eb0, init_vertices(e, this, 0, 0));
+    this
+}
+
+// Typed from 006f30e0
+pub fn smoother_path_edge_array(e: &mut Engine, this: Ptr<SimpleArray>) -> Ptr<SimpleArray> {
+    empty_smoother_array(e, this, 0x0106_d800)
+}
+
+// Typed from 006f3110
+pub fn smoother_unique_vertex_array(e: &mut Engine, this: Ptr<SimpleArray>) -> Ptr<SimpleArray> {
+    empty_smoother_array(e, this, 0x0106_d828)
+}
+
+// Typed from 006f3140
+pub fn smoother_bounds_edge_array(e: &mut Engine, this: Ptr<SimpleArray>) -> Ptr<SimpleArray> {
+    empty_smoother_array(e, this, 0x0106_d850)
+}
+
+// Typed from 006f3170
+pub fn smoother_array_should_shrink(e: &mut Engine, this: Ptr<SimpleArray>) -> bool {
+    let capacity = e.get(this, SimpleArray::capacity);
+    // The subtraction also wraps for capacities between 0x401 and 0x7ff.
+    let limit = if capacity > 0x400 {
+        capacity.wrapping_sub(0x800)
+    } else {
+        capacity >> 2
+    };
+    e.get(this, SimpleArray::size) <= limit
+}

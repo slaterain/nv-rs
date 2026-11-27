@@ -377,6 +377,31 @@ pub fn exterior_cell_loader_try_cancel_tasks(e: &mut Engine, this: Ptr) -> i32 {
 /// Waits for each extracted task and invokes vtable slot `0x14` when its
 /// state reaches 5. Exception registration and unwinding are omitted.
 pub fn fn_005282d0(e: &mut Engine, this: Ptr) {
+    finish_left_tasks(e, this, fn_005289b0);
+}
+
+/// [`fn_005282d0`] whose wait for each task is [`wait_while_task_runs`] instead of the exe's
+/// [`fn_005289b0`]: the fixes preset's grid-shift row (`crates/host`, `grid_shift_wait.rs`). The
+/// same walk, the same calls in the same order; only the states waited on differ.
+pub fn fn_005282d0_waiting_while_running(e: &mut Engine, this: Ptr) {
+    finish_left_tasks(e, this, wait_while_task_runs);
+}
+
+/// The fixes row's wait in [`fn_005282d0_waiting_while_running`]: Sleep(0) (`0040fca0`) while the
+/// task's load runs on a loader thread (state 3, `00c3fc80`) or is being handed to the post-process
+/// queue (state 4, `00c3fca0`), both moved on by that thread. The exe's [`fn_005289b0`] waits on 3
+/// and 5 instead: 5 is a finished task waiting for its post-process, which only main runs (the
+/// walk's own slot `0x14` call right after the wait, or `IOManager`'s queue at `00c3dbf0`), and
+/// main is the thread waiting, so a task that finished before the wait looked at it is waited on
+/// for good. With this wait such a task goes straight to the post-process below.
+pub fn wait_while_task_runs(e: &mut Engine, _manager: Ptr, task: Ptr) {
+    while matches!(e.mem.u32(task.addr() + 0x0c), 3 | 4) {
+        e.call(0x0040_fca0, &args![0u32]);
+    }
+}
+
+/// [`fn_005282d0`]'s walk with `wait` as its wait for each task taken from the map.
+fn finish_left_tasks(e: &mut Engine, this: Ptr, wait: fn(&mut Engine, Ptr, Ptr)) {
     e.with_stack(16, |e, stack| {
         fn_00528c70(e, stack);
         while !e.call(0x006e_bde0, &args![stack]).bool() {
@@ -391,7 +416,7 @@ pub fn fn_005282d0(e: &mut Engine, this: Ptr) {
                 if removed {
                     let task = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, item));
                     let manager = e.global::<u32>(0x0120_2d98);
-                    fn_005289b0(e, Ptr::new(manager), Ptr::new(task));
+                    wait(e, Ptr::new(manager), Ptr::new(task));
                     // 00528360-0052838c: the task is read from the pointer for each use.
                     let task = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, item));
                     if e.call(0x0052_87e0, &args![task]).bool() {
@@ -1120,6 +1145,87 @@ mod tests {
         );
         assert_eq!(log[5].1, vec![task]);
         assert_eq!(log[7].1, vec![task]);
+    }
+
+    /// [`one_task_walk`] with the task in `state`, the real state test (`005287e0`), a count of the
+    /// task's post-process calls (its slot `0x14`) and a Sleep (`0040fca0`) that counts and runs
+    /// `on_sleep` (the loader thread moving the task on). Answers (sleeps, post-processes).
+    fn walk_with_state(
+        finish: fn(&mut Engine, Ptr),
+        state: u32,
+        on_sleep: fn(u32, u32) -> u32,
+    ) -> (u32, u32) {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        let mut e = engine();
+        let task = 0x0600_0100;
+        one_task_walk(&mut e, task);
+        e.mem.set_u32(0x0120_2d98, 0x0600_0200);
+        e.mem.set_u32(task + 0x0c, state);
+        let (at, f) = entry!(0x005287e0, fn_005287e0(Ptr) -> bool);
+        e.register(at, f);
+        let posts = Rc::new(Cell::new(0u32));
+        let seen = posts.clone();
+        e.register_double(0x0600_0400, move |_, _| {
+            seen.set(seen.get() + 1);
+            Ret::default()
+        });
+        let sleeps = Rc::new(Cell::new(0u32));
+        let slept = sleeps.clone();
+        e.register_double(0x0040_fca0, move |e, _| {
+            slept.set(slept.get() + 1);
+            let now = e.mem.u32(task + 0x0c);
+            e.mem.set_u32(task + 0x0c, on_sleep(slept.get(), now));
+            Ret::default()
+        });
+        finish(&mut e, Ptr::new(0x0600_0800));
+        (sleeps.get(), posts.get())
+    }
+
+    /// A task that finished (state 5) before the walk's wait looked at it: the exe's wait sleeps on
+    /// it with nothing to move it on (here it stops after 1000 sleeps by cancelling the task, 6, so
+    /// the test ends; in the game it never ends: the freeze on the speed-20000 flight).
+    #[test]
+    fn the_exes_walk_waits_on_a_finished_task_until_something_else_moves_it() {
+        let stop = |n: u32, state: u32| if n >= 1000 { 6 } else { state };
+        assert_eq!(walk_with_state(fn_005282d0, 5, stop), (1000, 0));
+    }
+
+    /// The row's walk post-processes a finished task at once, without sleeping.
+    #[test]
+    fn the_rows_walk_post_processes_a_finished_task_without_waiting() {
+        let stop = |n: u32, state: u32| if n >= 1000 { 6 } else { state };
+        assert_eq!(
+            walk_with_state(fn_005282d0_waiting_while_running, 5, stop),
+            (0, 1)
+        );
+    }
+
+    /// A task still loading (3) that the loader thread moves on one state a sleep (3, 4, 5): the
+    /// row waits for both running states and then post-processes it; the exe's wait ends at 4 and
+    /// leaves it for the IO manager's queue. (A wait that also sleeps on 5 is cancelled out at the
+    /// 1000th sleep, so it fails here instead of hanging.)
+    #[test]
+    fn a_running_task_is_waited_for_and_then_post_processed_by_the_row() {
+        let next = |n: u32, state: u32| if n >= 1000 { 6 } else { (state + 1).min(5) };
+        assert_eq!(
+            walk_with_state(fn_005282d0_waiting_while_running, 3, next),
+            (2, 1)
+        );
+        assert_eq!(walk_with_state(fn_005282d0, 3, next), (1, 0));
+    }
+
+    /// Neither wait sleeps on a task that is queued, cancelled or done (0, 1, 6, 7).
+    #[test]
+    fn no_wait_for_a_task_that_is_not_running() {
+        let stop = |_: u32, _: u32| 6;
+        for state in [0, 1, 6, 7] {
+            assert_eq!(walk_with_state(fn_005282d0, state, stop), (0, 0));
+            assert_eq!(
+                walk_with_state(fn_005282d0_waiting_while_running, state, stop),
+                (0, 0)
+            );
+        }
     }
 
     #[test]

@@ -2330,6 +2330,58 @@ fn free_data() {
 const SIZES: &[u32] = &[0, 1, 3];
 
 #[test]
+fn smoother_path_edge_array() {
+    Diff::new(entry!(
+        0x006f_30e0,
+        search::smoother_path_edge_array(Ptr<_>) -> Ptr<_>
+    ))
+    .family(&pathing::PATHING)
+    .setup(|e, _| vec![array(e, 0xfeed, 3, 7)])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn smoother_unique_vertex_array() {
+    Diff::new(entry!(
+        0x006f_3110,
+        search::smoother_unique_vertex_array(Ptr<_>) -> Ptr<_>
+    ))
+    .family(&pathing::PATHING)
+    .setup(|e, _| vec![array(e, 0xfeed, 3, 7)])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn smoother_bounds_edge_array() {
+    Diff::new(entry!(
+        0x006f_3140,
+        search::smoother_bounds_edge_array(Ptr<_>) -> Ptr<_>
+    ))
+    .family(&pathing::PATHING)
+    .setup(|e, _| vec![array(e, 0xfeed, 3, 7)])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn smoother_array_should_shrink() {
+    Diff::new(entry!(
+        0x006f_3170,
+        search::smoother_array_should_shrink(Ptr<_>) -> bool
+    ))
+    .family(&pathing::PATHING)
+    .inputs(&[
+        Input::Of(&[0, 7, 0x400, 0x401, 0x7ff, 0x800, 0x801, u32::MAX]),
+        Input::Of(&[0, 1, 2, 0x100, 0x101, 0xffff_fc01, 0xffff_fc02, u32::MAX]),
+    ])
+    .setup(|e, case| vec![array(e, 0, case.word(1), case.word(0))])
+    .run()
+    .assert_same();
+}
+
+#[test]
 fn init_vertices() {
     Diff::new(entry!(0x006b_3eb0, search::init_vertices(Ptr<_>, u32, u32)))
         .common()

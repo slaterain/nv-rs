@@ -55,6 +55,8 @@ const DESTROY_ELEMENTS: u32 = 0x0065_f2b0;
 const LENGTH_ERROR: u32 = 0x0065_f640;
 const ALLOCATE: u32 = 0x0044_abd0;
 const ALLOCATOR_MAX_SIZE: u32 = 0x0044_abf0;
+/// The vector's own `max_size` (`0044a2c0`), called by address (the forms family types it).
+const VECTOR_MAX_SIZE: u32 = 0x0044_a2c0;
 
 // Translated from 0044a170 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (`std::vector::begin` shape): constructs the
@@ -130,7 +132,7 @@ pub fn fn_0044a240(e: &mut Engine, this: Ptr, count: u32) -> bool {
     if count == 0 {
         return false;
     }
-    if fn_0044a2c0(e, this) < count {
+    if e.call(VECTOR_MAX_SIZE, &args![this]).u32() < count {
         e.call(LENGTH_ERROR, &args![]);
         return true;
     }
@@ -158,13 +160,17 @@ const EXCEPTION_DESTRUCT: u32 = 0x00ec_79a1;
 const MESSAGE_COPY: u32 = 0x0044_a500;
 /// `0044a540` (`thiscall`, no stack word): the message string's destructor.
 const MESSAGE_DESTRUCT: u32 = 0x0044_a540;
+/// `logic_error`'s constructor and destructor body (`0044a310`, `0044a3d0`), called by address
+/// (the forms family types them).
+const LOGIC_ERROR_CONSTRUCT: u32 = 0x0044_a310;
+const LOGIC_ERROR_DESTRUCT: u32 = 0x0044_a3d0;
 
 // Translated from 0044a2e0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `std::length_error`'s constructor from a message (`thiscall`, `RET 4`;
 /// the class from the vtable's RTTI): the `std::logic_error` constructor
 /// `0044a310` with the message, then the vtable `010173dc`. Returns `this`.
 pub fn fn_0044a2e0(e: &mut Engine, this: Ptr, message: u32) -> Ptr {
-    fn_0044a310(e, this, message);
+    e.call(LOGIC_ERROR_CONSTRUCT, &args![this, message]);
     e.mem.set_u32(this.addr(), LENGTH_ERROR_VTABLE);
     this
 }
@@ -196,7 +202,7 @@ pub fn fn_0044a3d0(e: &mut Engine, this: Ptr) {
 /// `010173dc`, then the `std::logic_error` one (`0044a3d0`).
 pub fn fn_0044a400(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), LENGTH_ERROR_VTABLE);
-    fn_0044a3d0(e, this);
+    e.call(LOGIC_ERROR_DESTRUCT, &args![this]);
 }
 
 // Translated from 0044a450 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -455,7 +461,9 @@ mod n038_tests {
         let (result, log) = run(&mut e, 0x0044_a2e0, &[this, 0x5000]);
         assert_eq!(result.u32(), this);
         assert_eq!(e.mem.u32(this), LENGTH_ERROR_VTABLE);
-        assert_eq!(log.len(), 2);
+        // logic_error's constructor by address, then its two calls.
+        assert_eq!(log.len(), 3);
+        assert_eq!(log[0], (LOGIC_ERROR_CONSTRUCT, vec![this, 0x5000]));
     }
 
     #[test]
@@ -467,6 +475,7 @@ mod n038_tests {
         assert_eq!(
             log,
             vec![
+                (LOGIC_ERROR_DESTRUCT, vec![this]),
                 (MESSAGE_DESTRUCT, vec![this + 0xc]),
                 (EXCEPTION_DESTRUCT, vec![this]),
             ]

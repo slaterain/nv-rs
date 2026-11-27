@@ -4,6 +4,10 @@
 //! the backend with the run's real Direct3D 9 frames without running the game again.
 //! `NV_WGPU_CACHE=DIR` keeps the driver's compiled pipelines there between replays, as the game's
 //! host does (`host::wgpu_cache_path`).
+//! A check run's recording (`NV_DRAW_ITEMS=check`) holds two forms of the draws it could have
+//! drawn from kept records (`d3d9_stream::Kept`): replayed as its old form (the default) or, with
+//! `NV_REPLAY_ITEMS=items`, as its items; `shot-diff` between the two sets of captures shows what
+//! the items change in the picture.
 fn main() {
     let path = std::env::args().nth(1).expect("the recording");
     let bytes = std::fs::read(path).expect("read");
@@ -11,7 +15,13 @@ fn main() {
     if let Some(dir) = std::env::var_os("NV_WGPU_CACHE") {
         b = b.with_cache_dir(dir.into());
     }
+    let form = match std::env::var("NV_REPLAY_ITEMS").as_deref() {
+        Ok("items") => d3d9_stream::kept::Form::Items,
+        _ => d3d9_stream::kept::Form::Old,
+    };
+    let mut b = d3d9_stream::Kept::with_form(b, form);
     let start = std::time::Instant::now();
     let n = d3d9_stream::wire::replay(&bytes, &mut b).expect("a recording");
-    eprintln!("{n} commands in {:?}", start.elapsed());
+    let c = b.counts();
+    eprintln!("{n} commands in {:?} ({form:?}: {c:?})", start.elapsed());
 }

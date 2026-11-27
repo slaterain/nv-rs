@@ -119,25 +119,53 @@ impl Package {
     }
 
     fn append(&self, line: &str) {
-        if std::fs::create_dir_all(&self.logs).is_ok() {
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(self.logs.join("launcher.log"))
-            {
-                let _ = writeln!(file, "{line}");
-            }
-        }
+        append_line(&self.logs, line);
     }
 
     /// From here on the log goes to its file, with what was kept so far first.
     fn start_writing(&self) {
         self.writing.set(true);
+        if let Ok(mut written) = PLAY_LOG.lock() {
+            *written = Some(self.logs.clone());
+        }
         let held = std::mem::take(&mut *self.held.borrow_mut());
         for line in held {
             self.append(&line);
         }
     }
+}
+
+/// `line` added to `launcher.log` in `logs`.
+fn append_line(logs: &Path, line: &str) {
+    if std::fs::create_dir_all(logs).is_ok() {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(logs.join("launcher.log"))
+        {
+            let _ = writeln!(file, "{line}");
+        }
+    }
+}
+
+/// The logs folder of a Play in this process that has passed its first write
+/// ([`clear_for_writing`]): the launcher's own later lines may go there at once.
+static PLAY_LOG: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+/// `text` written to the launcher's log at once if a Play in this process has passed its first
+/// write (a stop of the launcher said after it); false when none has, so it waits.
+pub fn append_if_written(text: &str) -> bool {
+    append_if_written_in(&PLAY_LOG, text)
+}
+
+/// [`append_if_written`] with the folder kept in `written`.
+fn append_if_written_in(written: &std::sync::Mutex<Option<PathBuf>>, text: &str) -> bool {
+    let Some(logs) = written.lock().ok().and_then(|w| w.clone()) else {
+        return false;
+    };
+    let (when, _) = win::now();
+    append_line(&logs, &format!("{when} {text}"));
+    true
 }
 
 /// The game's own folders in the package, one set for each way of playing.
@@ -1665,7 +1693,7 @@ fn play(
 
 /// The game's variables for the player's options on its command ([`game_ini::switches`]).
 ///
-/// In play the fourteen that would beat the profile's `Fallout.ini` are taken out, not even one left
+/// In play the fifteen that would beat the profile's `Fallout.ini` are taken out, not even one left
 /// from Play.exe's own environment. When a variable set before the start makes the run a test,
 /// which never reads the file, nothing is taken out and the file's choices are passed on, so the
 /// run plays like the player's game; the line for the log says which variable did it, what was
@@ -1757,14 +1785,27 @@ pub fn run_play(raw: &[String]) -> i32 {
             package.log("--mods is not used in the mod manager's way: the manager's mods are");
         }
     }
+    // The window's lines kept until the first write (a stop of the launcher's window said before
+    // or during this Play, say), once the log may be written.
+    let write_held = || {
+        if package.writing.get() {
+            for line in crate::place::take_held_lines() {
+                package.log(&line);
+            }
+        }
+    };
     match run(&package, &options) {
-        Ok(code) => code,
+        Ok(code) => {
+            write_held();
+            code
+        }
         Err(why) => {
             // A stop before the first write keeps the disk untouched, unless the package's place is
             // fine (nothing found, wrong version...): then the log is for the player's report.
             if !package.writing.get() && why.code != STOP_LOCATION {
                 let _ = clear_for_writing(&package, None);
             }
+            write_held();
             package.log(&format!("stopped ({}): {}", why.code, why.message));
             crate::session::set_stop_code(why.code);
             ui::error(&why.message);
@@ -2116,6 +2157,21 @@ mod tests {
         assert!(dir.join("game-202604.log").exists());
         assert!(dir.join("launcher.log").exists());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A stop of the launcher said after a Play passed its first write goes to that log at once;
+    /// before any has, nothing is written (it waits for Play's checks).
+    #[test]
+    fn a_stop_said_after_the_first_write_goes_to_the_log_at_once() {
+        let dir = scratch("stop-log");
+        let written = std::sync::Mutex::new(None);
+        assert!(!append_if_written_in(&written, "before"));
+        assert!(!dir.join("logs").exists());
+        *written.lock().unwrap() = Some(dir.join("logs"));
+        assert!(append_if_written_in(&written, "the window stopped"));
+        let log = std::fs::read_to_string(dir.join("logs\\launcher.log")).unwrap();
+        assert!(log.trim_end().ends_with(" the window stopped"), "{log}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn scratch(name: &str) -> PathBuf {
@@ -2922,12 +2978,12 @@ mod tests {
     }
 
     /// The variables on the game's own command (`pass_switches` on a `Command`, as `play` makes
-    /// it). In play the fourteen are taken out and nothing else is said; with a test variable set
+    /// it). In play the fifteen are taken out and nothing else is said; with a test variable set
     /// before Play.exe, the file's choices are set on the command, nothing is taken out, the one
     /// set before is left to come through as it was, and the log line names all of it.
     #[test]
     fn the_games_command_gets_the_files_choices_only_in_a_test() {
-        let fourteen = [
+        let fifteen = [
             "NV_PRESET",
             "NV_BORDERLESS",
             "NV_D3D9",
@@ -2939,6 +2995,7 @@ mod tests {
             "NV_SUN_SHADOWS",
             "NV_SUN_LIGHT_FROM_SKY",
             "NV_SUN_SHADOWS_CHARACTERS",
+            "NV_DRAW_ITEMS",
             "NV_THREADS",
             "NV_RENDER_THREAD",
             "NV_NOT_BACKGROUND",
@@ -2962,7 +3019,7 @@ mod tests {
         play.env("NV_SETTINGS", "settings.ini");
         let line = pass_switches(&mut play, &game_ini::switches(&ini, None, |_| false));
         assert_eq!(line, None);
-        let mut want: Vec<(String, Option<String>)> = fourteen
+        let mut want: Vec<(String, Option<String>)> = fifteen
             .iter()
             .map(|name| (name.to_string(), None))
             .collect();
@@ -2989,6 +3046,7 @@ mod tests {
             ("NV_SUN_SHADOWS", "0"),
             ("NV_SUN_LIGHT_FROM_SKY", "1"),
             ("NV_SUN_SHADOWS_CHARACTERS", "1"),
+            ("NV_DRAW_ITEMS", "0"),
             ("NV_RENDER_THREAD", "1"),
             ("NV_NOT_BACKGROUND", "1"),
             ("NV_GRAB_PUSH", "0"),
@@ -3246,6 +3304,7 @@ mod tests {
             ("NV_SUN_SHADOWS", "0"),
             ("NV_SUN_LIGHT_FROM_SKY", "1"),
             ("NV_SUN_SHADOWS_CHARACTERS", "1"),
+            ("NV_DRAW_ITEMS", "0"),
             ("NV_THREADS", "stepped"),
             ("NV_RENDER_THREAD", "1"),
             ("NV_NOT_BACKGROUND", "1"),
