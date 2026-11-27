@@ -9154,8 +9154,8 @@ impl MapMenuWorlds for Diff {
             variants,
             put_map_menu,
         )
-            .max_cases(28)
-            .max_calls(calls)
+        .max_cases(28)
+        .max_calls(calls)
     }
 }
 
