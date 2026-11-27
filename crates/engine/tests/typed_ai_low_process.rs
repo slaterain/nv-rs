@@ -1067,13 +1067,15 @@ impl World {
             }
         }
         // Last (nothing after reads the stream): more of the destinations' instance data case (42)
-        // in rows 3 and 4 (package types 2 and 3), and the instance data's reference more often a
-        // location, which no process targets, so its row tells that case from the target's.
+        // and location or target case (47) in rows 3 and 4 (package types 2 and 3), and the instance
+        // data's reference more often a location, which no process targets, so its row tells that
+        // case from the target's.
         for kind in [3, 4] {
             let row = LISTS + 0x10 + 0x20 * kind;
             for index in 0..5 {
                 if self.next4() % 4 == 0 {
-                    e.mem.set_u32(row - 4 + 4 * index, 42);
+                    let procedure = self.pick4(&[42, 42, 47]);
+                    e.mem.set_u32(row - 4 + 4 * index, procedure);
                 }
             }
         }
