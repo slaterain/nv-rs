@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, los_grid, navmesh, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -4364,4 +4364,215 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- The LOS grid map's table and arrays ----
+
+/// The grid callees as logged stand-ins: the element-offset target, the bucket-table allocation
+/// and clear, removing every item, freeing the table, `operator delete`, the array release, and
+/// the char array's init.
+fn grid_stubs(e: &mut Engine) {
+    e.register(0x006a_62f0, |e, a| {
+        log(e, 0x62f0, a[0]);
+        log(e, 0x62f1, a[1]);
+        ret(e.mem.u32(a[0] + 4).wrapping_add(a[1]))
+    });
+    e.register(0x00aa_1070, |e, a| {
+        log(e, 0x1070, a[0]);
+        ret(e.mem.alloc(a[0].max(4)))
+    });
+    e.register(0x0040_3d30, |e, a| {
+        log(e, 0x3d30, a[0]);
+        log(e, 0x3d31, a[1]);
+        log(e, 0x3d32, a[2]);
+        ret(0)
+    });
+    e.register(0x0043_8af0, |e, a| {
+        log(e, 0x8af0, a[0]);
+        ret(0)
+    });
+    e.register(0x00aa_10f0, |e, a| {
+        log(e, 0x10f0, a[0]);
+        ret(0)
+    });
+    e.register(0x0040_1030, |e, a| {
+        log(e, 0x1030, a[0]);
+        ret(0)
+    });
+    e.register(0x0084_54f0, |e, a| {
+        log(e, 0x54f0, a[0]);
+        log(e, 0x54f1, a[1]);
+        ret(0)
+    });
+    e.register(0x0069_b940, |e, a| {
+        log(e, 0xb940, a[0]);
+        log(e, 0xb941, a[1]);
+        log(e, 0xb942, a[2]);
+        ret(a[0])
+    });
+}
+
+#[test]
+fn los_grid_element_at() {
+    Diff::new(entry!(0x006e_0ed0, los_grid::element_at(Ptr, u32) -> Ptr))
+        .common()
+        .plain(0x006e_0ed0)
+        .inputs(&[Input::Of(&[0, 1, 0x10]), Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            grid_stubs(e);
+            let list = e.mem.alloc(0x10);
+            e.mem.set_u32(list + 4, case.word(1));
+            vec![list, case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_grid_table_base_ctor() {
+    Diff::new(entry!(0x006e_0f20, los_grid::table_base_ctor(Ptr, u32) -> Ptr))
+        .common()
+        .plain(0x006e_0f20)
+        .inputs(&[
+            Input::Of(&[0, 0x0106_ceb8, 0xdead_beef]),
+            Input::Of(&[0, 1, 0x25, 0x40]),
+        ])
+        .setup(|e, case| {
+            stand_ins(e);
+            grid_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this, case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_grid_table_ctor() {
+    Diff::new(entry!(0x006e_0ea0, los_grid::table_ctor(Ptr, u32) -> Ptr))
+        .common()
+        .plain(0x006e_0ea0)
+        .inputs(&[
+            Input::Of(&[0, 0x0106_ced8, 0xdead_beef]),
+            Input::Of(&[0, 1, 0x25, 0x40]),
+        ])
+        .setup(|e, case| {
+            stand_ins(e);
+            grid_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this, case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_grid_table_dtor() {
+    Diff::new(entry!(0x006e_0f90, los_grid::table_dtor(Ptr)))
+        .common()
+        .plain(0x006e_0f90)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            grid_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            e.mem.set_u32(this + 8, case.word(0).wrapping_mul(2));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_grid_table_base_dtor() {
+    Diff::new(entry!(0x006e_0ff0, los_grid::table_base_dtor(Ptr)))
+        .common()
+        .plain(0x006e_0ff0)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            grid_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            e.mem.set_u32(this + 8, case.word(0).wrapping_mul(2));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_grid_table_scalar_deleting_dtor() {
+    Diff::new(entry!(
+        0x006e_0ef0,
+        los_grid::table_scalar_deleting_dtor(Ptr, u32) -> Ptr
+    ))
+    .common()
+    .plain(0x006e_0ef0)
+    .inputs(&[Input::Word, Input::Of(&[0, 1, 2, 3])])
+    .setup(|e, case| {
+        stand_ins(e);
+        grid_stubs(e);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this, case.word(0));
+        e.mem.set_u32(this + 8, case.word(0).wrapping_mul(2));
+        vec![this, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn los_grid_char_array_ctor() {
+    Diff::new(entry!(0x006e_1070, los_grid::char_array_ctor(Ptr) -> Ptr))
+        .common()
+        .plain(0x006e_1070)
+        .inputs(&[Input::Of(&[0, 0x0106_cef8, 0xdead_beef])])
+        .setup(|e, case| {
+            stand_ins(e);
+            grid_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_grid_word_array_dtor() {
+    Diff::new(entry!(0x006e_10a0, los_grid::word_array_dtor(Ptr)))
+        .common()
+        .plain(0x006e_10a0)
+        .inputs(&[Input::Of(&[0, 0x0106_cef8, 0xdead_beef])])
+        .setup(|e, case| {
+            stand_ins(e);
+            grid_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_grid_cell_array_dtor() {
+    Diff::new(entry!(0x006e_1050, los_grid::cell_array_dtor(Ptr)))
+        .common()
+        .plain(0x006e_1050)
+        .inputs(&[Input::Of(&[0, 0x0106_cf0c, 0xdead_beef])])
+        .setup(|e, case| {
+            stand_ins(e);
+            grid_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
 }

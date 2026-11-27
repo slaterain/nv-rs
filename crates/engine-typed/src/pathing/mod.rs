@@ -38,6 +38,7 @@ use layout::{
 
 pub mod layout;
 pub mod location;
+pub mod los_grid;
 pub mod navmesh;
 pub mod point;
 pub mod pov;
@@ -267,5 +268,15 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The LOS grid map's table and arrays.
+        entry!(0x006e_0ed0, los_grid::element_at(Ptr, u32) -> Ptr),
+        entry!(0x006e_0f20, los_grid::table_base_ctor(Ptr, u32) -> Ptr),
+        entry!(0x006e_0ea0, los_grid::table_ctor(Ptr, u32) -> Ptr),
+        entry!(0x006e_0f90, los_grid::table_dtor(Ptr)),
+        entry!(0x006e_0ff0, los_grid::table_base_dtor(Ptr)),
+        entry!(0x006e_0ef0, los_grid::table_scalar_deleting_dtor(Ptr, u32) -> Ptr),
+        entry!(0x006e_1070, los_grid::char_array_ctor(Ptr) -> Ptr),
+        entry!(0x006e_10a0, los_grid::word_array_dtor(Ptr)),
+        entry!(0x006e_1050, los_grid::cell_array_dtor(Ptr)),
     ]
 }
