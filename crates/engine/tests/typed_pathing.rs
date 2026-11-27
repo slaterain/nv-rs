@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, navmesh, obstacle_listeners, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -659,6 +659,8 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x006d_b4f0, &[0x006d_bbb0]),
     (0x006d_cf20, &[0x0069_0830, 0x006d_cfe0]),
     (0x006e_78b0, &[0x006e_8f40]),
+    (0x006c_1d60, &[0x006c_1dd0, 0x006c_1da0]),
+    (0x006c_1e00, &[0x006c_1e70, 0x006c_1e40]),
 ];
 
 trait Common {
@@ -4364,4 +4366,221 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+/// Stands in for the rigid body's Havok entity getter: the entity, or null when the case's flag
+/// word (held through the cell at 0x03002ff8) says so.
+fn entity_stub(e: &mut Engine) {
+    e.register(0x004a_e750, |e, a| {
+        log(e, 0x004a_e750, a[0]);
+        let flag = e.mem.u32(e.mem.u32(0x0300_2ff8));
+        ret(if flag == 0 { 0x5000 } else { 0 })
+    });
+}
+
+/// Stands in for one of the listener callees: logs the entity and the listener.
+fn listener_stub(e: &mut Engine, addr: u32) {
+    match addr {
+        0x00c9_c5b0 => e.register(addr, |e, a| {
+            log(e, 0x00c9_c5b0, a[0]);
+            log(e, 0x00c9_c5b0 + 1, a[1]);
+            ret(0)
+        }),
+        0x00c9_c700 => e.register(addr, |e, a| {
+            log(e, 0x00c9_c700, a[0]);
+            log(e, 0x00c9_c700 + 1, a[1]);
+            ret(0)
+        }),
+        0x00c9_c670 => e.register(addr, |e, a| {
+            log(e, 0x00c9_c670, a[0]);
+            log(e, 0x00c9_c670 + 1, a[1]);
+            ret(0)
+        }),
+        _ => e.register(addr, |e, a| {
+            log(e, 0x00c9_c0f0, a[0]);
+            log(e, 0x00c9_c0f0 + 1, a[1]);
+            ret(0)
+        }),
+    }
+}
+
+/// The case's flag word in the cell at 0x03002ff8.
+fn flag_cell(e: &mut Engine, flag: u32) {
+    let cell = e.mem.alloc(4);
+    e.mem.set_u32(cell, flag);
+    e.mem.set_u32(0x0300_2ff8, cell);
+}
+
+#[test]
+fn queue_obstacle_add() {
+    Diff::new(entry!(
+        0x006c_1c70,
+        obstacle_listeners::queue_obstacle_add(Ptr, u32)
+    ))
+    .common()
+    .plain(0x006c_1c70)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x006c_5ff0, |e, a| {
+            log(e, 0x006c_5ff0, a[0]);
+            log(e, 0x006c_5ff0 + 1, e.mem.u32(a[1]));
+            ret(0)
+        });
+        vec![e.mem.alloc(0x128), case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn queue_obstacle_remove() {
+    Diff::new(entry!(
+        0x006c_1c90,
+        obstacle_listeners::queue_obstacle_remove(Ptr, u32)
+    ))
+    .common()
+    .plain(0x006c_1c90)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x006c_5ff0, |e, a| {
+            log(e, 0x006c_5ff0, a[0]);
+            log(e, 0x006c_5ff0 + 1, e.mem.u32(a[1]));
+            ret(0)
+        });
+        vec![e.mem.alloc(0x128), case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn add_entity_listener() {
+    Diff::new(entry!(
+        0x006c_1da0,
+        obstacle_listeners::add_entity_listener(Ptr, u32)
+    ))
+    .common()
+    .plain(0x006c_1da0)
+    .inputs(&[Input::Of(&[0, 1]), Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        entity_stub(e);
+        listener_stub(e, 0x00c9_c5b0);
+        flag_cell(e, case.word(0));
+        vec![e.mem.alloc(8), case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn add_activation_listener() {
+    Diff::new(entry!(
+        0x006c_1dd0,
+        obstacle_listeners::add_activation_listener(Ptr, u32)
+    ))
+    .common()
+    .plain(0x006c_1dd0)
+    .inputs(&[Input::Of(&[0, 1]), Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        entity_stub(e);
+        listener_stub(e, 0x00c9_c700);
+        flag_cell(e, case.word(0));
+        vec![e.mem.alloc(8), case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn remove_entity_listener() {
+    Diff::new(entry!(
+        0x006c_1e40,
+        obstacle_listeners::remove_entity_listener(Ptr, u32)
+    ))
+    .common()
+    .plain(0x006c_1e40)
+    .inputs(&[Input::Of(&[0, 1]), Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        entity_stub(e);
+        listener_stub(e, 0x00c9_c670);
+        flag_cell(e, case.word(0));
+        vec![e.mem.alloc(8), case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn remove_activation_listener() {
+    Diff::new(entry!(
+        0x006c_1e70,
+        obstacle_listeners::remove_activation_listener(Ptr, u32)
+    ))
+    .common()
+    .plain(0x006c_1e70)
+    .inputs(&[Input::Of(&[0, 1]), Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        entity_stub(e);
+        listener_stub(e, 0x00c9_c0f0);
+        flag_cell(e, case.word(0));
+        vec![e.mem.alloc(8), case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// A manager block with both listener pointers from the case's word.
+fn manager(e: &mut Engine, word: u32) -> u32 {
+    let m = e.mem.alloc(0x128);
+    e.mem.set_u32(m + 0x120, word.wrapping_mul(3));
+    e.mem.set_u32(m + 0x124, word.wrapping_add(0x1000));
+    m
+}
+
+#[test]
+fn register_listeners() {
+    Diff::new(entry!(
+        0x006c_1d60,
+        obstacle_listeners::register_listeners(Ptr, u32)
+    ))
+    .common()
+    .plain(0x006c_1d60)
+    .inputs(&[Input::Of(&[0, 1]), Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        entity_stub(e);
+        listener_stub(e, 0x00c9_c5b0);
+        listener_stub(e, 0x00c9_c700);
+        flag_cell(e, case.word(0));
+        vec![manager(e, case.word(1)), 0x501]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn unregister_listeners() {
+    Diff::new(entry!(
+        0x006c_1e00,
+        obstacle_listeners::unregister_listeners(Ptr, u32)
+    ))
+    .common()
+    .plain(0x006c_1e00)
+    .inputs(&[Input::Of(&[0, 1]), Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        entity_stub(e);
+        listener_stub(e, 0x00c9_c670);
+        listener_stub(e, 0x00c9_c0f0);
+        flag_cell(e, case.word(0));
+        vec![manager(e, case.word(1)), 0x501]
+    })
+    .run()
+    .assert_same();
 }

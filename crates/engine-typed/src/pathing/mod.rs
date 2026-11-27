@@ -39,6 +39,7 @@ use layout::{
 pub mod layout;
 pub mod location;
 pub mod navmesh;
+pub mod obstacle_listeners;
 pub mod point;
 pub mod pov;
 pub mod search;
@@ -267,5 +268,14 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The obstacle manager's update queues and Havok listeners.
+        entry!(0x006c_1c70, obstacle_listeners::queue_obstacle_add(Ptr, u32)),
+        entry!(0x006c_1c90, obstacle_listeners::queue_obstacle_remove(Ptr, u32)),
+        entry!(0x006c_1da0, obstacle_listeners::add_entity_listener(Ptr, u32)),
+        entry!(0x006c_1dd0, obstacle_listeners::add_activation_listener(Ptr, u32)),
+        entry!(0x006c_1e40, obstacle_listeners::remove_entity_listener(Ptr, u32)),
+        entry!(0x006c_1e70, obstacle_listeners::remove_activation_listener(Ptr, u32)),
+        entry!(0x006c_1d60, obstacle_listeners::register_listeners(Ptr, u32)),
+        entry!(0x006c_1e00, obstacle_listeners::unregister_listeners(Ptr, u32)),
     ]
 }
