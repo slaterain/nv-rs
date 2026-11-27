@@ -7,13 +7,13 @@
 //! A constructor is `BSExtraData`'s (`0040ec80`) in place with the class's type, then its vtable
 //! and its empty payload; a `float` payload's 0.0 (`FLDZ`, `FSTP`) is the word 0. The destructors
 //! and members of other units (`ExtraLock`'s, `ExtraTeleport`'s, `ExtraScript`'s,
-//! `ExtraTresPassPackage`'s and `ExtraHeadingTarget`'s destructors, the string members, the actor
-//! cause's handle, the flags record's member) are called by address; `BSExtraData`'s destructor
-//! (`0040ecb0`) and the lock record's constructor (`00411b00`) are typed calls into the cell
-//! references family.
+//! `ExtraTresPassPackage`'s and `ExtraHeadingTarget`'s destructors, the string members) are called
+//! by address; the actor cause's handle and the flags record's member (the part 5 file's, in
+//! [`super::arrays`]) are typed calls, and `BSExtraData`'s destructor (`0040ecb0`) and the lock
+//! record's constructor (`00411b00`) typed calls into the cell references family.
 
 use super::links::is_empty;
-use super::{cell_refs, extra_init, free_when, new_object, word_at, EXTRA_PAYLOAD, FAMILY};
+use super::{arrays, cell_refs, extra_init, free_when, new_object, word_at, EXTRA_PAYLOAD, FAMILY};
 use engine_core::x87::x87_quiet_bits;
 use engine_core::{args, typed_call, Engine};
 
@@ -84,12 +84,6 @@ const EXTRA_TELEPORT_DROP: u32 = 0x0043_1260;
 const EXTRA_SCRIPT_DROP: u32 = 0x0043_2040;
 const EXTRA_TRESPASS_PACKAGE_DROP: u32 = 0x0043_2900;
 const EXTRA_HEADING_TARGET_DROP: u32 = 0x0043_5ef0;
-/// The flags record's member (`thiscall(member)`), the actor cause's handle: its constructor
-/// (`thiscall(at, 0)`), assignment (`thiscall(at, value)`) and release (`thiscall(at)`).
-const FLAGS_MEMBER_INIT: u32 = 0x0042_f570;
-const ACTOR_CAUSE_HANDLE_INIT: u32 = 0x0042_f730;
-const ACTOR_CAUSE_HANDLE_ASSIGN: u32 = 0x0042_f780;
-const ACTOR_CAUSE_HANDLE_RELEASE: u32 = 0x0042_f760;
 /// `BSString`'s constructor and destructor (`thiscall(string)`) and its assignment from another
 /// (`thiscall(string, source)`).
 const STRING_INIT: u32 = 0x0040_37b0;
@@ -104,7 +98,7 @@ const GIVEN_WORD: u32 = 0x011c_6444;
 
 /// A constructor's start: `BSExtraData`'s (`0040ec80`, in place) with `kind`, then `vtable`.
 #[inline]
-fn extra_with_vtable(e: &mut Engine, this: u32, kind: u8, vtable: u32) {
+pub(super) fn extra_with_vtable(e: &mut Engine, this: u32, kind: u8, vtable: u32) {
     extra_init(e, this, kind);
     e.mem.set_u32(this, vtable);
 }
@@ -199,7 +193,12 @@ pub fn set_save_kind(e: &mut Engine, this: u32, kind: u32) {
 /// A record of four zeroed flag bytes and the member at +4 (`0042f570`). Answers `this`.
 pub fn flags_record_new(e: &mut Engine, this: u32) -> u32 {
     e.mem.set_u32(this, 0);
-    e.call(FLAGS_MEMBER_INIT, &args![this.wrapping_add(4)]);
+    let member = this.wrapping_add(4);
+    typed_call!(
+        FAMILY,
+        0x0042_f570,
+        arrays::bound_object_array_new(e, member)
+    );
     this
 }
 
@@ -407,9 +406,11 @@ pub fn radiation_extra_default(e: &mut Engine, this: u32) -> u32 {
 /// Answers `this`.
 pub fn actor_cause_extra_new(e: &mut Engine, this: u32) -> u32 {
     extra_with_vtable(e, this, KIND_ACTOR_CAUSE, VTABLE_EXTRA_ACTOR_CAUSE);
-    e.call(
-        ACTOR_CAUSE_HANDLE_INIT,
-        &args![this.wrapping_add(EXTRA_PAYLOAD), 0u32],
+    let handle = this.wrapping_add(EXTRA_PAYLOAD);
+    typed_call!(
+        FAMILY,
+        0x0042_f730,
+        arrays::actor_cause_handle_new(e, handle, 0)
     );
     this
 }
@@ -428,8 +429,16 @@ pub fn actor_cause_extra_delete(e: &mut Engine, this: u32, flags: u32) -> u32 {
 pub fn actor_cause_extra_drop(e: &mut Engine, this: u32) {
     e.mem.set_u32(this, VTABLE_EXTRA_ACTOR_CAUSE);
     let handle = this.wrapping_add(EXTRA_PAYLOAD);
-    e.call(ACTOR_CAUSE_HANDLE_ASSIGN, &args![handle, 0u32]);
-    e.call(ACTOR_CAUSE_HANDLE_RELEASE, &args![handle]);
+    typed_call!(
+        FAMILY,
+        0x0042_f780,
+        arrays::actor_cause_assign(e, handle, 0)
+    );
+    typed_call!(
+        FAMILY,
+        0x0042_f760,
+        arrays::actor_cause_handle_drop(e, handle)
+    );
     extra_drop(e, this);
 }
 

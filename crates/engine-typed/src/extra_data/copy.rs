@@ -7,10 +7,10 @@
 //! by address as the exe calls them.
 
 use super::{
-    access, cell_data, cell_refs, copy_words, more_setters, delete_extra_data, first_of_kind, followers,
-    forget_cached_all, give_lock, head_of, kind_of, links, list_remove, new_object, next_node,
-    next_of, packages, read_word, rooms, set_next_of, setters, take_lock, word_at, EXTRA_PAYLOAD,
-    FAMILY, LIST_HEAD,
+    access, cell_data, cell_refs, copy_words, delete_extra_data, first_of_kind, followers,
+    forget_cached_all, give_lock, head_of, kind_of, links, list_remove, more_setters, new_object,
+    next_node, next_of, packages, read_word, rooms, set_next_of, setters, take_lock, word_at,
+    EXTRA_PAYLOAD, FAMILY, LIST_HEAD,
 };
 use crate::crt;
 use engine_core::ptr::Ptr;
@@ -255,7 +255,11 @@ fn copy_byte(e: &mut Engine, list: u32, kind: u8, extra: u32) -> bool {
             typed_call!(FAMILY, 0x0041_ac30, setters::set_seed(e, list, byte));
         }
         0x4a => {
-            typed_call!(FAMILY, 0x0042_dde0, more_setters::set_hot_key(e, list, byte));
+            typed_call!(
+                FAMILY,
+                0x0042_dde0,
+                more_setters::set_hot_key(e, list, byte)
+            );
         }
         _ => unreachable!(),
     }
@@ -626,7 +630,11 @@ fn copy_by_arm(e: &mut Engine, list: u32, extra: u32, kind: u8) {
             );
         }
         0x5e => {
-            typed_call!(FAMILY, 0x0042_e760, more_setters::add_faction_changes(e, list));
+            typed_call!(
+                FAMILY,
+                0x0042_e760,
+                more_setters::add_faction_changes(e, list)
+            );
             let target = typed_call!(FAMILY, 0x0042_e800, more_setters::faction_changes(e, list));
             each_item(e, word_at(e, extra, 0x0c), true, |e, entry| {
                 // The entry is a word and a signed byte.
@@ -703,7 +711,11 @@ fn copy_by_arm(e: &mut Engine, list: u32, extra: u32, kind: u8) {
             );
         }
         0x73 => each_item(e, word_at(e, extra, 0x0c), true, |e, entry| {
-            typed_call!(FAMILY, 0x0042_ef20, more_setters::add_said_once(e, list, entry));
+            typed_call!(
+                FAMILY,
+                0x0042_ef20,
+                more_setters::add_said_once(e, list, entry)
+            );
         }),
         0x76 => {
             let source = word_at(e, extra, 0x0c);

@@ -20,10 +20,11 @@
 //! said-once list's add, the water zone map's update, key and lookup, the menu topic's forward and
 //! the simple list's count are called by address.
 
+use super::classes::extra_with_vtable;
 use super::setters::remove_kind;
 use super::{
-    access, arrays, cell_refs, classes, dispatch, extra_init, first_of_kind, followers, list_add,
-    list_remove, new_object, records, word_at, EXTRA_PAYLOAD, FAMILY,
+    access, arrays, cell_refs, classes, dispatch, first_of_kind, followers, list_add, list_remove,
+    new_object, records, word_at, EXTRA_PAYLOAD, FAMILY,
 };
 use engine_core::ptr::Ptr;
 use engine_core::{args, typed_call, Engine};
@@ -91,14 +92,6 @@ const WATER_ZONE_MAP_LOOKUP: u32 = 0x006b_7f20;
 const PATROL_REF_CAN_BE_USED_BY: u32 = 0x0043_7ab0;
 
 // ---- What the file shares --------------------------------------------------------------------
-
-/// The class constructors of this file: `BSExtraData`'s (`0040ec80`, in place) with `kind`, then
-/// `vtable`.
-#[inline]
-fn extra_with_vtable(e: &mut Engine, this: u32, kind: u8, vtable: u32) {
-    extra_init(e, this, kind);
-    e.mem.set_u32(this, vtable);
-}
 
 /// The removers by element: the first extra data of `kind` deleted (`RemoveExtra` with its destroy
 /// flag), if the list has one.
@@ -460,10 +453,10 @@ pub fn set_byte_c(e: &mut Engine, this: u32, value: u8) {
 }
 
 // Typed from 0042e6a0
-/// The is-modding extra data's scalar deleting destructor: [`is_modding_drop`] in place, then
+/// The is-modding extra data's scalar deleting destructor: [`is_modding_drop`], then
 /// `operator delete` for bit 0 of `flags`. Answers `this`.
 pub fn is_modding_delete(e: &mut Engine, this: u32, flags: u32) -> u32 {
-    is_modding_drop(e, this);
+    typed_call!(FAMILY, 0x0042_e6d0, is_modding_drop(e, this));
     super::free_when(e, this, flags)
 }
 
@@ -538,7 +531,7 @@ pub fn actor_cause(e: &mut Engine, this: u32) -> u32 {
 
 // Typed from 0042e930
 /// The actor cause's setter: a null `cause` removes the type 0x60 extra data by type; otherwise the
-/// cause is assigned to the handle of the one there, or of a new one (0x10 bytes, the family's
+/// cause is assigned ([`actor_cause_assign_at`]) to the handle of the one there, or of a new one (0x10 bytes, the family's
 /// `0042ca90`) added after.
 pub fn set_actor_cause(e: &mut Engine, this: u32, cause: u32) {
     if cause == 0 {
@@ -554,10 +547,10 @@ pub fn set_actor_cause(e: &mut Engine, this: u32, cause: u32) {
                     classes::actor_cause_extra_new(e, block)
                 )
             });
-            assign_cause(e, made, cause);
+            typed_call!(FAMILY, 0x0042_ea00, actor_cause_assign_at(e, made, cause));
             list_add(e, this, made);
         }
-        extra => assign_cause(e, extra, cause),
+        extra => typed_call!(FAMILY, 0x0042_ea00, actor_cause_assign_at(e, extra, cause)),
     }
 }
 

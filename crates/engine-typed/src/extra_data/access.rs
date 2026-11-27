@@ -1,12 +1,13 @@
 //! The getters and setters of single extra data (`004181e0` to `0041a540`): each finds the first
-//! extra data of its type with the dispatch family's lookup and reads it, or writes into it, deletes
-//! it or builds and adds one (`operator new` and the type's constructor by address, then `AddExtra`).
-//! With them the sound handle's constructors, copy and compares, done in place where the setters use
-//! them, and the destructors of the data the setters replace.
+//! extra data of its type with the dispatch family's lookup and reads it, or writes into it,
+//! deletes it or builds and adds one (`operator new` and the type's constructor by address, then
+//! `AddExtra`). With them the sound handle's constructors, copy and compares, done in place where
+//! the setters use them, and the destructors of the data the setters replace.
 
 use super::{
-    cell_refs, extra_init, first_of_kind, free_when, has_kind, list_add, list_remove, new_object,
-    read_word, records, word_at, zero_bytes, EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE, OPERATOR_NEW,
+    cell_refs, extra_init, first_of_kind, free_when, has_kind, list_add, list_remove, more_setters,
+    new_object, read_word, records, word_at, zero_bytes, EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE,
+    OPERATOR_NEW,
 };
 use engine_core::x87::x87_quiet_bits;
 use engine_core::{args, typed_call, Engine};
@@ -63,7 +64,6 @@ const KIND_AUDIO_MARKER: u8 = 0x90;
 const KIND_AUDIO_BUOY_MARKER: u8 = 0x91;
 
 /// The constructors the setters build their extra data with (`thiscall(block, value)`).
-const EXTRA_ANIM_INIT: u32 = 0x0043_00c0;
 const EXTRA_STARTING_POSITION_INIT: u32 = 0x0043_0780;
 const EXTRA_LOCK_INIT: u32 = 0x0043_0c70;
 const EXTRA_TELEPORT_INIT: u32 = 0x0043_1230;
@@ -200,8 +200,8 @@ pub(super) fn set_word_or_add(e: &mut Engine, list: u32, kind: u8, construct: u3
     });
 }
 
-/// The setters whose `none` means no extra data: the one there deleted for `none`, its word at
-/// +0xc set otherwise; a new one (0x10 bytes) unless the value is `none`.
+/// The setters whose `none` means no extra data: the one there deleted for `none`, its word at +0xc
+/// set otherwise; a new one (0x10 bytes) unless the value is `none`.
 pub(super) fn set_or_remove(
     e: &mut Engine,
     list: u32,
@@ -253,12 +253,12 @@ fn set_owned_pointer(
     extra
 }
 
-/// The body of the sound setters (four here, two in [`super::setters`]). With an extra data of `kind`: a handle whose id is an empty
-/// handle's deletes it, any other is copied in. Without one, a handle with another id builds one of
-/// 0x18 bytes with `construct`, the handle by value (its id, its success byte zero-extended as the
-/// exe's zeroed stack copy holds it, its state), and adds it. The exe's empty handles on the stack
-/// and their compares (`0041a250`, `0041a1f0`, `0041a220`, the empty destructor `00483710`) and the
-/// handle's copy (`00418900`) are done in place.
+/// The body of the sound setters (four here, two in [`super::setters`]). With an extra data of
+/// `kind`: a handle whose id is an empty handle's deletes it, any other is copied in. Without one,
+/// a handle with another id builds one of 0x18 bytes with `construct`, the handle by value (its id,
+/// its success byte zero-extended as the exe's zeroed stack copy holds it, its state), and adds it.
+/// The exe's empty handles on the stack and their compares (`0041a250`, `0041a1f0`, `0041a220`, the
+/// empty destructor `00483710`) and the handle's copy (`00418900`) are done in place.
 pub(super) fn sound_setter(e: &mut Engine, list: u32, kind: u8, construct: u32, sound: u32) {
     let extra = first_of_kind(e, list, kind);
     let empty = read_word(e, sound) == NO_SOUND;
@@ -607,8 +607,8 @@ pub fn package_start_location(e: &mut Engine, this: u32) -> u32 {
 }
 
 // Typed from 00418ba0
-/// `ExtraDataList::HasWeaponMods` (Xbox PDB): false without a type 0x8d extra data, else whether its
-/// byte at +0xc is nonzero (`00418be0`, in place).
+/// `ExtraDataList::HasWeaponMods` (Xbox PDB): false without a type 0x8d extra data, else whether
+/// its byte at +0xc is nonzero (`00418be0`, in place).
 pub fn has_weapon_mods(e: &mut Engine, this: u32) -> bool {
     match first_of_kind(e, this, KIND_WEAPON_MOD_SLOTS) {
         0 => false,
@@ -634,12 +634,20 @@ pub fn weapon_mod_slot_active(e: &mut Engine, this: u32, slot: u8) -> bool {
 
 // Typed from 00418c40
 /// `ExtraDataList::SetAnimPtr` (Xbox PDB): the type 0x10 extra data's animation set, the old one
-/// deleted first (`00418d20` with 1) when there was one; or an `ExtraAnim` (0x10 bytes, `004300c0`)
-/// added. Answers the extra data.
+/// deleted first (`00418d20` with 1) when there was one; or an `ExtraAnim` (0x10 bytes, the
+/// family's `004300c0`) added. Answers the extra data.
 pub fn set_anim_ptr(e: &mut Engine, this: u32, animation: u32) -> u32 {
     let extra = first_of_kind(e, this, KIND_ANIM);
     if extra == 0 {
-        return add_new(e, this, 0x10, EXTRA_ANIM_INIT, Some(animation));
+        let made = new_object(e, 0x10, |e, block| {
+            typed_call!(
+                FAMILY,
+                0x0043_00c0,
+                more_setters::anim_new(e, block, animation)
+            )
+        });
+        list_add(e, this, made);
+        return made;
     }
     let old = word_at(e, extra, EXTRA_PAYLOAD);
     if old != 0 {
@@ -660,9 +668,9 @@ pub fn starting_position(e: &mut Engine, this: u32, position: u32) -> u32 {
 }
 
 // Typed from 00419050
-/// `ExtraDataList::SetLockPtr` (Xbox PDB): the type 0x2a extra data's lock record set, the old block
-/// deleted first (`operator delete`, a null one too); or an `ExtraLock` (0x10 bytes, `00430c70`)
-/// added. Answers the extra data.
+/// `ExtraDataList::SetLockPtr` (Xbox PDB): the type 0x2a extra data's lock record set, the old
+/// block deleted first (`operator delete`, a null one too); or an `ExtraLock` (0x10 bytes,
+/// `00430c70`) added. Answers the extra data.
 pub fn set_lock_ptr(e: &mut Engine, this: u32, lock: u32) -> u32 {
     let extra = first_of_kind(e, this, KIND_LOCK);
     if extra == 0 {
@@ -742,8 +750,8 @@ pub fn set_audio_marker(e: &mut Engine, this: u32, data: u32) -> u32 {
 }
 
 // Typed from 00419480
-/// The audio marker data's scalar deleting destructor: `00589500`, then `operator delete` with bit 0
-/// of `flags`. Answers `this`.
+/// The audio marker data's scalar deleting destructor: `00589500`, then `operator delete` with bit
+/// 0 of `flags`. Answers `this`.
 pub fn audio_marker_data_delete(e: &mut Engine, this: u32, flags: u32) -> u32 {
     e.call(AUDIO_MARKER_DATA_DROP, &args![this]);
     free_when(e, this, flags)
@@ -916,9 +924,9 @@ pub fn set_script_locals(e: &mut Engine, this: u32, locals: u32) {
 }
 
 // Typed from 00419fb0
-/// `ExtraDataList::SetScale` (Xbox PDB): a scale equal to the `double` 1.0 at `01012070` deletes the
-/// type 0x30 extra data; any other (a NaN too) is stored, or one (0x10 bytes, `00432220`) added; the
-/// `float` through the x87.
+/// `ExtraDataList::SetScale` (Xbox PDB): a scale equal to the `double` 1.0 at `01012070` deletes
+/// the type 0x30 extra data; any other (a NaN too) is stored, or one (0x10 bytes, `00432220`)
+/// added; the `float` through the x87.
 pub fn set_scale(e: &mut Engine, this: u32, scale: f32) {
     let extra = first_of_kind(e, this, KIND_SCALE);
     let is_one = f64::from(scale) == e.mem.f64(ONE_DOUBLE);

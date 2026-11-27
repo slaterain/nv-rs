@@ -10,15 +10,16 @@
 //! The array is the shared `BSSimpleArray`: its vtable (slot 1 allocates a buffer, slot 3
 //! reallocates one), the buffer (+4), the size (+8) and the capacity (+0xc). The counted pointer
 //! holds an object whose reference count is at +0x1c (+4 of the `NiRefObject` there): taken and
-//! released through the dispatch family's `0040f6e0` and `00401970`. The file's one-instruction
-//! leaves (placement `new`, the counted pointer's null constructor, its destructor's release, the
-//! compare of the words two pointers hold, a 4-byte `memmove`, the memory manager's address) are
-//! done in place; its other functions call one another as typed calls. The array's allocate and
-//! reallocate stay calls through the vtable (each array class has its own); `operator delete`, the
-//! actor cause's reference calls, the map's empty-all, its table's allocation and free, the
-//! elements' constructions and destructions of the shared array, the array's add-a-slot and its
-//! shrink tests, and the memory manager's reallocation (an overridable function) are called by
-//! address.
+//! released through the dispatch family's `0040f6e0` and `00401970`. The pathing family's array
+//! free, bound object array body and shrink test (`006a8500`, `006b3eb0`, `006f3170`) are typed
+//! calls. The file's one-instruction leaves (placement `new`, the counted pointer's null
+//! constructor, the compare of the words two pointers hold, a 4-byte `memmove`, the memory
+//! manager's address) are done in place; its other functions call one another as typed calls. The
+//! array's allocate and reallocate stay calls through the vtable (each array class has its own);
+//! `operator delete`, the actor cause's reference calls, the map's empty-all, its table's
+//! allocation and free, the elements' constructions and destructions of the shared array, the
+//! array's add-a-slot and the capacity it shrinks to, and the memory manager's reallocation (an
+//! overridable function) are called by address.
 
 use super::{dispatch, free_when, zero_bytes, FAMILY};
 use crate::pathing;
@@ -53,7 +54,6 @@ const ACTOR_CAUSE_RELEASE: u32 = 0x0066_e2b0;
 const ELEMENTS_CONSTRUCT: u32 = 0x0043_0000;
 const ELEMENTS_DESTROY: u32 = 0x0072_ba80;
 const ADD_SLOT: u32 = 0x0076_1540;
-const CAN_SHRINK: u32 = 0x006f_3170;
 const SHRUNK_CAPACITY: u32 = 0x0086_9600;
 /// The map's empty-all (`thiscall(map)`), its table's allocation (`cdecl(bytes)`) and free
 /// (`cdecl(block)`).
@@ -331,13 +331,19 @@ pub fn navmesh_array_add(e: &mut Engine, this: u32, source: u32) -> u32 {
 
 // Typed from 0042f8a0
 /// The navmesh array's removal at `index` (`thiscall(array, index, shrink)`). With `shrink` and the
-/// array sparse enough (`006f3170`): a new buffer of the shrunk capacity (`00869600`, from the
-/// vtable), the elements before `index` moved to it, the element released, the rest moved after
-/// `index` (with the size less one as the count, as the exe does), the old buffer freed and the new
-/// one and its capacity set. Otherwise the element released in place and the rest moved down one.
-/// The size one less.
+/// array sparse enough (`006f3170`, the pathing family's): a new buffer of the shrunk capacity
+/// (`00869600`, from the vtable), the elements before `index` moved to it, the element released,
+/// the rest moved after `index` (with the size less one as the count, as the exe does), the old
+/// buffer freed and the new one and its capacity set. Otherwise the element released in place and
+/// the rest moved down one. The size one less.
 pub fn navmesh_array_remove_at(e: &mut Engine, this: u32, index: u32, shrink: u8) {
-    if shrink != 0 && e.call(CAN_SHRINK, &args![this]).u8() != 0 {
+    if shrink != 0
+        && typed_call!(
+            pathing::FAMILY,
+            0x006f_3170,
+            pathing::search::smoother_array_should_shrink(e, Ptr::new(this))
+        )
+    {
         let capacity = e.call(SHRUNK_CAPACITY, &args![this]).u32();
         let fresh = allocate(e, this, capacity);
         let buffer = word(e, this, BUFFER);
@@ -447,13 +453,11 @@ pub fn navmesh_ptr_null(e: &mut Engine, this: u32) -> u32 {
 
 // Typed from 0042fb20
 /// `count` counted pointers released from `address` on (each its scalar deleting destructor with 0,
-/// `0042ffa0`, in place: the object's reference released when not null). The array is not read.
+/// [`navmesh_ptr_delete`]). The array is not read.
 pub fn navmesh_ptrs_drop(e: &mut Engine, _this: u32, address: u32, count: u32) {
     for index in 0..count {
-        let object = e.mem.u32(element(address, index));
-        if object != 0 {
-            give_reference(e, object);
-        }
+        let slot = element(address, index);
+        typed_call!(FAMILY, 0x0042_ffa0, navmesh_ptr_delete(e, slot, 0));
     }
 }
 

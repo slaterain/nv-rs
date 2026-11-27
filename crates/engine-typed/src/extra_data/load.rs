@@ -9,8 +9,8 @@
 
 use super::{
     access, cell_data, first_of_kind, followers, links, list_add, list_remove, more_setters,
-    new_object, packages, records, rooms, setters, word_at, zero_bytes, EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE,
-    OPERATOR_NEW, SIMPLE_LIST_NEW,
+    new_object, packages, records, rooms, setters, word_at, zero_bytes, EXTRA_PAYLOAD, FAMILY,
+    OPERATOR_DELETE, OPERATOR_NEW, SIMPLE_LIST_NEW,
 };
 use crate::crt::{low_byte, low_half, signed};
 use crate::{cell_refs, forms, pathing};

@@ -1058,7 +1058,7 @@ pub fn fn_0042f130(e: &mut Engine, this: Ptr<ExtraDataList>, value: u32) -> bool
 /// address of the key and of two output words, and returns the first output
 /// word; 0 otherwise.
 pub fn fn_0042f180(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
-    let map = Ptr::new(e.call(0x0042_f1d0, &args![this]).u32());
+    let map: Ptr = Ptr::new(e.call(0x0042_f1d0, &args![this]).u32());
     if map.is_null() {
         return 0;
     }
