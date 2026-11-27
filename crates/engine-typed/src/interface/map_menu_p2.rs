@@ -1823,8 +1823,11 @@ pub fn map_menu_update_radio_list(e: &mut Engine, this: Ptr) {
                 0x0070_7e10,
                 interface_cpp_p2::fn_00707e10(e, tile, name)
             );
-            let current = typed_call!(super::FAMILY, 0x0079_c070, fn_0079c070(e));
-            let selected = current != 0 && e.mem.u32(node) == e.mem.u32(current);
+            // The exe asks for the current station again before reading it.
+            let selected = typed_call!(super::FAMILY, 0x0079_c070, fn_0079c070(e)) != 0 && {
+                let current = typed_call!(super::FAMILY, 0x0079_c070, fn_0079c070(e));
+                e.mem.u32(node) == e.mem.u32(current)
+            };
             let id = static_id(e, TRAIT_SELECTED);
             tile_set_int(e, tile, id, i32::from(selected));
             let reachable = list_holds(e, in_range, e.mem.u32(node));

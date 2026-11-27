@@ -8936,6 +8936,10 @@ fn put_map_menu(e: &mut Engine, variant: u32) {
         };
         e.mem.set_u32(menu + 0x28 + 4 * k, tile);
     }
+    // The subtitle array empty.
+    for offset in [0xacu32, 0xb0, 0xb4] {
+        e.mem.set_u32(menu + offset, 0);
+    }
     e.mem.set_u32(menu + 0x80, MAP_PAGES[variant as usize]);
     e.mem
         .set_f32(menu + 0x88, if variant == 0 { 0.0 } else { 100.0 });
@@ -9038,6 +9042,8 @@ fn put_map_menu(e: &mut Engine, variant: u32) {
         .set_u32(0x011d_d42c, if variant % 2 == 0 { 0x011d_d59c } else { 0 });
     e.mem.set_u32(0x011d_a418, 0);
     e.mem.set_u64(0x0107_5000, 75.0f64.to_bits());
+    // A string's length (`004048e0`) 0: the tab line's loops over its names end at once.
+    e.register_double(0x0040_48e0, |_, _| Ret::default());
     e.mem.set_u32(HEAP + 4, 100);
     e.register_double(0x0045_7fe0, |e, _| {
         let now = e.mem.u32(HEAP + 4);
@@ -9141,7 +9147,13 @@ trait MapMenuWorlds {
 
 impl MapMenuWorlds for Diff {
     fn in_map_menu(self, args: &'static [Arg], variants: &'static [u32], calls: usize) -> Diff {
-        self.in_arena_and(args, CALLEES, &[], variants, put_map_menu)
+        self.in_arena_and(
+            args,
+            CALLEES,
+            &[0x0070_27b0, 0x0070_2680],
+            variants,
+            put_map_menu,
+        )
             .max_cases(28)
             .max_calls(calls)
     }
