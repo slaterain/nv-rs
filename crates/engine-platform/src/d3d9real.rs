@@ -590,6 +590,8 @@ pub fn forget(e: &mut Engine, object: u32) {
     let device = match r.devices.iter().position(|(d, _)| *d == object) {
         Some(at) => {
             r.devices.remove(at);
+            // The records' epoch moves on, so a kept draw's cached device goes with it (`d3d9items`; review of #1145).
+            super::d3d9items::bump_epoch();
             true
         }
         None => false,

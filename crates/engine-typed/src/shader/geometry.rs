@@ -686,22 +686,7 @@ const SHADOW_PROJECTION: u32 = 0x011f_d968;
 /// (0, 0, 0, scale), each float copied through the x87 stack; with it, the identity with the
 /// camera position (`011f474c`) in the fourth column.
 /// `this` (`ECX`) is not read, but `SetupGeometryConstants` (`00b7dab0`) calls it with `ECX` set.
-pub fn shadow_proj(e: &mut Engine, this: Ptr, block: Ptr, flag: u32, transform: Ptr) {
-    if crate::draw::keep::building() {
-        let call = crate::draw::keep::Leaf::ShadowProj {
-            this: this.addr(),
-            block: block.addr(),
-            flag,
-            transform: transform.addr(),
-        };
-        return crate::draw::keep::leaf(e, call, |e| shadow_proj_now(e, block, flag, transform));
-    }
-    shadow_proj_now(e, block, flag, transform);
-}
-
-/// [`shadow_proj`]'s work (a kept draw record makes the call again with the frame's camera).
-#[inline(always)]
-fn shadow_proj_now(e: &mut Engine, block: Ptr, flag: u32, transform: Ptr) {
+pub fn shadow_proj(e: &mut Engine, _this: Ptr, block: Ptr, flag: u32, transform: Ptr) {
     if !entry_enabled(e, VERTEX_ENTRIES + 4 * 3) {
         return;
     }

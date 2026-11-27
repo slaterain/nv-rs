@@ -611,10 +611,7 @@ pub fn render_standard(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second
         );
     };
     let after_begin = AFTER_BEGIN.with(std::cell::Cell::get);
-    if crate::draw::keep::mode() != crate::draw::keep::Mode::Off
-        && after_begin != 0
-        && keepable(e, pass_type, geometry.addr(), shader)
-    {
+    if kept(e, after_begin, pass_type, geometry.addr(), shader) {
         let order = keep_order(
             (first, second, third),
             e.get(pass, RenderPass::ucSortFlag),
@@ -643,6 +640,16 @@ fn keep_order(
         | u32::from(sort) << 3
         | u32::from(restore_owed) << 11
         | u32::from(after_begin) << 19
+}
+
+/// Whether [`render_standard`] goes through the kept records (`crate::draw::keep`): the switch on, the draw made by
+/// [`render_pass`] (`after_begin` not 0: its first-or-later is known, [`AFTER_BEGIN`]) and [`keepable`]. The mode
+/// is tested first, so with the switch off nothing else is read.
+#[inline(always)]
+fn kept(e: &Engine, after_begin: u8, pass_type: u32, geometry: u32, shader: u32) -> bool {
+    crate::draw::keep::mode() != crate::draw::keep::Mode::Off
+        && after_begin != 0
+        && keepable(e, pass_type, geometry, shader)
 }
 
 /// Whether a plain geometry's draw may be kept (`crate::draw::keep`): a pass type without a set-up of its own
@@ -1887,6 +1894,69 @@ mod keep_tests {
             assert!(!keepable(&e, 0x60, geometry, shader), "slot {at:#x}");
             e.mem.set_u32(vtable + at, target);
         }
+        // render_standard's gate (review of #1145): the switch on and a draw of render_pass's (first or later).
+        use crate::draw::keep::{set_mode_for_tests, Mode};
+        set_mode_for_tests(Some(Mode::On));
+        assert!(kept(&e, 1, 0x60, geometry, shader) && kept(&e, 2, 0x60, geometry, shader));
+        assert!(!kept(&e, 0, 0x60, geometry, shader), "not from render_pass");
+        assert!(!kept(&e, 1, 0xfc, geometry, shader), "not keepable");
+        set_mode_for_tests(Some(Mode::Off));
+        assert!(!kept(&e, 1, 0x60, geometry, shader), "the switch off");
+        set_mode_for_tests(None);
+    }
+
+    /// render_pass keys its plain draws (review of #1145): the first after the pass's begin reaches render_standard
+    /// with [`AFTER_BEGIN`] 1, the next of the same type and shader (no begin) with 2, a draw after another begin
+    /// with 1 again; outside render_pass it is 0.
+    #[test]
+    fn render_pass_tells_the_first_plain_draw_after_its_begin_apart() {
+        use engine_core::abi::Ret;
+        thread_local! {
+            static SEEN: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+        }
+        /// TEST DATA: the stand-ins at the callees' addresses (the families are off in a bare engine).
+        fn begin(e: &mut Engine, a: &[u32]) -> Ret {
+            e.mem.set_u32(CURRENT_PASS_TYPE, a[0]);
+            e.mem.set_u32(CURRENT_SHADER, a[1]);
+            Ret::default()
+        }
+        fn standard(_: &mut Engine, _: &[u32]) -> Ret {
+            SEEN.with(|s| s.borrow_mut().push(AFTER_BEGIN.with(std::cell::Cell::get)));
+            Ret::default()
+        }
+        fn zero(_: &mut Engine, _: &[u32]) -> Ret {
+            Ret::default()
+        }
+        let mut e = Engine::new();
+        e.mem.map(0x011f_0000, 0x1_0000);
+        e.register(0x00b9_9390, begin);
+        e.register(0x00e7_2c20, zero);
+        e.register(0x00b9_8e80, standard);
+        e.register(0x0400_5000, zero);
+        let vtable = e.mem.alloc(0x400);
+        for i in 0..0x100 {
+            e.mem.set_u32(vtable + 4 * i, 0x0400_5000);
+        }
+        let pass = |e: &mut Engine, shader: u32| {
+            let geometry = e.mem.alloc(0x100);
+            e.mem.set_u32(geometry, vtable);
+            e.set(
+                Ptr::<NiGeometry>::new(geometry),
+                NiGeometry::m_spShader,
+                shader,
+            );
+            let pass = Ptr::<RenderPass>::new(e.mem.alloc(0x10));
+            e.set(pass, RenderPass::pGeometry, Ptr::new(geometry));
+            e.set(pass, RenderPass::usPassEnum, 0x60u16);
+            pass
+        };
+        let (a, b) = (e.mem.alloc(0x80), e.mem.alloc(0x80));
+        let (first, second, other) = (pass(&mut e, a), pass(&mut e, a), pass(&mut e, b));
+        for p in [first, second, other, first] {
+            render_pass(&mut e, p, 0x60, 0, 0, 0);
+        }
+        assert_eq!(SEEN.with(|s| s.take()), [1, 2, 1, 1]);
+        assert_eq!(AFTER_BEGIN.with(std::cell::Cell::get), 0);
     }
 
     /// Every order-dependent choice gives another key, the first draw after a begin too.

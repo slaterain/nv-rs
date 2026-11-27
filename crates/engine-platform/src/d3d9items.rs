@@ -649,5 +649,17 @@ mod tests {
         items::begin(&mut e, record);
         assert_eq!(HELD.with(|h| h.borrow().as_ref().map(|h| h.device)), device);
         items::end(&mut e);
+        // The device destroyed: the epoch moves on, and the next begin finds no device (nothing held).
+        let before = epoch();
+        let gone = device.unwrap();
+        super::super::d3d9real::forget(&mut e, gone);
+        assert_ne!(epoch(), before, "a destroyed device moves the epoch");
+        items::begin(&mut e, record);
+        assert_eq!(
+            HELD.with(|h| h.borrow().as_ref().map(|h| h.device)),
+            Some(0)
+        );
+        assert!(!HOLDING.with(Cell::get), "nothing held without a device");
+        items::end(&mut e);
     }
 }
