@@ -7,6 +7,7 @@
 //! and `operator delete` are called by address, the family's setters, getters and records, the
 //! lookup, `AddExtra`, `RemoveExtra` and `memset` as typed calls.
 
+use super::object_refs;
 use super::{
     access, cell_data, first_of_kind, followers, links, list_add, list_remove, more_setters,
     new_object, packages, records, rooms, setters, simple_list_init, word_at, zero_bytes,
@@ -42,8 +43,6 @@ const LOD_DEFAULT: u32 = 0x0101_45a8;
 /// `BSSimpleList::AddHead(&item)`.
 const LIST_ADD_HEAD: u32 = 0x005a_e3d0;
 /// Other units' constructors.
-const ACTIVATE_REF_INIT: u32 = 0x0043_38b0;
-const EXTRA_RAGDOLL_DATA_INIT: u32 = 0x0043_2cb0;
 const RAGDOLL_DATA_INIT: u32 = 0x004d_9330;
 const DOOR_TELEPORT_DATA_INIT: u32 = 0x0043_a160;
 const MAP_MARKER_DATA_INIT: u32 = 0x0043_8bb0;
@@ -64,7 +63,6 @@ const AUDIO_BUOY_MARKER_DATA_LOAD: u32 = 0x0058_9890;
 const RAGDOLL_DATA_LOAD: u32 = 0x004d_94a0;
 const MULTIBOUND_MARKER_DATA_LOAD: u32 = 0x0043_8fc0;
 const NAVMESH_PORTAL_LOAD: u32 = 0x0069_dfd0;
-const NAVMESH_PORTAL_EXTRA_DESTROY: u32 = 0x0043_2f30;
 const PACKAGE_EVENT_ACTION_LOAD: u32 = 0x0067_dd20;
 const REGION_LIST_FIND: u32 = 0x004f_66c0;
 const REGION_LIST_ADD: u32 = 0x004f_6600;
@@ -196,7 +194,7 @@ fn extra_or_new(
 /// the list has none.
 fn activate_ref_of(e: &mut Engine, list: u32) -> u32 {
     extra_or_new(e, list, 0x53, 0x20, |e, block| {
-        e.call(ACTIVATE_REF_INIT, &args![block]).u32()
+        typed_call!(FAMILY, 0x0043_38b0, object_refs::activate_ref_new(e, block))
     })
 }
 
@@ -877,7 +875,7 @@ fn load_ragdoll(e: &mut Engine, this: u32, file: u32) {
     let mut extra = first_of_kind(e, this, 0x14);
     if extra == 0 {
         extra = new_object(e, 0x10, |e, block| {
-            e.call(EXTRA_RAGDOLL_DATA_INIT, &args![block]).u32()
+            typed_call!(FAMILY, 0x0043_2cb0, object_refs::rag_doll_new(e, block))
         });
         let data = new_object(e, 0x14, |e, block| {
             e.call(RAGDOLL_DATA_INIT, &args![block]).u32()
@@ -940,7 +938,7 @@ fn load_old_portal(e: &mut Engine, this: u32, file: u32) {
                 0x0042_e2c0,
                 more_setters::set_navmesh_portal(e, this, made)
             );
-            e.call(NAVMESH_PORTAL_EXTRA_DESTROY, &args![made]);
+            typed_call!(FAMILY, 0x0043_2f30, object_refs::base_only_drop(e, made));
         });
     });
 }

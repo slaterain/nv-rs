@@ -10,6 +10,7 @@
 //! `BSSimpleList::AddHead` (`005ae3d0`) and the item remover (`00905330`) by address; each is given
 //! the address of a one-word local holding the item, as the translation has it.
 
+use super::object_refs;
 use super::{
     access, extra_init, first_of_kind, list_add, list_remove, new_object, records, setters,
     word_at, EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE,
@@ -53,7 +54,6 @@ pub(super) const LIST_REMOVE_ITEM: u32 = 0x0090_5330;
 const LIST_REMOVE_HEAD: u32 = 0x0063_f7b0;
 /// `ExtraActivateRef`'s search of its parents (`thiscall(extra, reference)`): the entry whose
 /// reference it is, or null.
-const ACTIVATE_REF_FIND: u32 = 0x0043_3a00;
 /// The form type the dropped item search looks for.
 const FORM_TYPE_DROPPED_MATCH: u8 = 0x28;
 /// `BSStringT<char>`'s copy constructor (`thiscall(string, source)`), its constructor from a C
@@ -210,7 +210,11 @@ fn new_activate_data(e: &mut Engine) -> u32 {
 /// The activate reference's entry for `reference` (`00433a00`, by address), or null.
 #[inline]
 fn activate_entry(e: &mut Engine, extra: u32, reference: u32) -> u32 {
-    e.call(ACTIVATE_REF_FIND, &args![extra, reference]).u32()
+    typed_call!(
+        FAMILY,
+        0x0043_3a00,
+        object_refs::activate_ref_find(e, extra, reference)
+    )
 }
 
 /// A new activate reference extra data (0x20 bytes, `004338b0`), added to the list.

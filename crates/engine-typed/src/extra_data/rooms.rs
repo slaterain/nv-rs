@@ -10,6 +10,7 @@
 //! (`0041fd00`); the destructors and the data they own run as the exe has them, each a typed call.
 
 use super::links::{add_unless_held, is_empty, new_by, remove_item, LIST_ADD_HEAD};
+use super::object_refs;
 use super::{
     access, arrays, cell_refs, extra_init, first_of_kind, free_when, list_add, list_remove,
     new_object, read_word, records, setters, word_at, EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE,
@@ -50,9 +51,6 @@ const EXTRA_ROOM_INIT: u32 = 0x0043_58a0;
 const GUARDED_REF_DATA_INIT: u32 = 0x0043_0f30;
 /// The decal list's add (`thiscall(extra, reference, intersection, normal)`), the reflect lists'
 /// remove (`thiscall(extra, reference)`) and flag set (`thiscall(extra, reference, flags)`).
-const DECAL_REFS_ADD: u32 = 0x0043_4480;
-const REFLECT_REFS_REMOVE: u32 = 0x0043_4800;
-const REFLECT_REFS_SET_FLAGS: u32 = 0x0043_48a0;
 /// `PatrolRefData::Compare` (`thiscall(data, other)`: true when they differ) and its destructor's
 /// body (`thiscall(data)`).
 const PATROL_DATA_COMPARE: u32 = 0x0067_c720;
@@ -169,7 +167,11 @@ fn set_reflect_flag(
                     let flags = flags & !bit;
                     e.mem.set_u32(at, flags);
                     if flags == 0 {
-                        e.call(REFLECT_REFS_REMOVE, &args![extra, reference]);
+                        typed_call!(
+                            FAMILY,
+                            0x0043_4800,
+                            object_refs::reflected_remove(e, extra, reference)
+                        );
                         if is_empty(e, extra.wrapping_add(EXTRA_PAYLOAD)) {
                             list_remove(e, list, extra, true);
                         }
@@ -185,7 +187,11 @@ fn set_reflect_flag(
             extra = new_object(e, 0x14, init);
             list_add(e, list, extra);
         }
-        e.call(REFLECT_REFS_SET_FLAGS, &args![extra, reference, bit]);
+        typed_call!(
+            FAMILY,
+            0x0043_48a0,
+            object_refs::reflected_set(e, extra, reference, bit)
+        );
     }
 }
 
@@ -295,7 +301,11 @@ pub fn add_decal(e: &mut Engine, this: u32, reference: u32, intersect: u32, norm
         extra = new_by(e, 0x14, DECAL_REFS_INIT);
         list_add(e, this, extra);
     }
-    e.call(DECAL_REFS_ADD, &args![extra, reference, intersect, normal]);
+    typed_call!(
+        FAMILY,
+        0x0043_4480,
+        object_refs::decal_set(e, extra, reference, intersect, normal)
+    );
 }
 
 // Typed from 0041f140

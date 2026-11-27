@@ -4,6 +4,7 @@
 //! the leveled item's index and flag, the persistent cell, the ragdoll data, the run-once packages,
 //! the distant data's land normal and the enable state parent.
 
+use super::object_refs;
 use super::{
     access, first_of_kind, give_lock, head_of, kind_of, list_add, list_remove, new_object,
     next_node, next_of, setters, take_lock, word_at, EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE,
@@ -30,17 +31,14 @@ const EXTRA_TRESPASS_PACKAGE_INIT: u32 = 0x0043_28d0;
 const EXTRA_PLAYER_CRIME_LIST_INIT: u32 = 0x0043_2aa0;
 const EXTRA_LEVELED_ITEM_INIT: u32 = 0x0043_2be0;
 const EXTRA_PERSISTENT_CELL_INIT: u32 = 0x0043_2c20;
-const EXTRA_RAG_DOLL_DATA_INIT: u32 = 0x0043_2cb0;
 const EXTRA_RUN_ONCE_PACKAGES_INIT: u32 = 0x0043_3010;
 const EXTRA_DISTANT_DATA_INIT: u32 = 0x0043_3260;
-const EXTRA_ENABLE_STATE_PARENT_INIT: u32 = 0x0043_3300;
 /// `RagDollData`'s constructor, `UpdateDataFromReference` and `Copy` (Xbox PDB, `thiscall(data,
 /// source)`).
 const RAG_DOLL_DATA_INIT: u32 = 0x004d_9330;
 const RAG_DOLL_UPDATE_FROM_REFERENCE: u32 = 0x004d_9800;
 const RAG_DOLL_COPY: u32 = 0x004d_9670;
 /// `ExtraRunOncePacks`' add of a package and a flag (`thiscall(extra, package, flag)`).
-const RUN_ONCE_PACKAGES_ADD: u32 = 0x0043_31c0;
 /// `TESPackage::GetIsCreated`, `IsNeverToRun` and `SetIsCreated(bool)` (Xbox PDB).
 const PACKAGE_GET_IS_CREATED: u32 = 0x0067_4d40;
 const PACKAGE_IS_NEVER_TO_RUN: u32 = 0x0067_4e40;
@@ -107,7 +105,7 @@ fn rag_doll_setter(e: &mut Engine, list: u32, source: u32, fill: u32) {
         return;
     }
     let holder = new_object(e, 0x10, |e, block| {
-        e.call(EXTRA_RAG_DOLL_DATA_INIT, &args![block]).u32()
+        typed_call!(FAMILY, 0x0043_2cb0, object_refs::rag_doll_new(e, block))
     });
     let data = new_object(e, 0x14, |e, block| {
         e.call(RAG_DOLL_DATA_INIT, &args![block]).u32()
@@ -521,9 +519,10 @@ pub fn add_run_once_package(e: &mut Engine, this: u32, package: u32, flag: u8) {
     if extra == 0 {
         extra = access::add_new(e, this, 0x10, EXTRA_RUN_ONCE_PACKAGES_INIT, None);
     }
-    e.call(
-        RUN_ONCE_PACKAGES_ADD,
-        &args![extra, package, u32::from(flag)],
+    typed_call!(
+        FAMILY,
+        0x0043_31c0,
+        object_refs::run_once_set(e, extra, package, flag)
     );
 }
 
@@ -638,7 +637,11 @@ pub fn set_enable_state_parent(e: &mut Engine, this: u32, parent: u32) {
         return;
     }
     let created = new_object(e, 0x14, |e, block| {
-        e.call(EXTRA_ENABLE_STATE_PARENT_INIT, &args![block]).u32()
+        typed_call!(
+            FAMILY,
+            0x0043_3300,
+            object_refs::enable_parent_new(e, block)
+        )
     });
     e.mem.set_u32(created.wrapping_add(EXTRA_PAYLOAD), parent);
     list_add(e, this, created);

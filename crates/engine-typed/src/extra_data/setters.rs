@@ -4,6 +4,7 @@
 //! location, the starting world or cell, the action's flags and reference, the health percentage
 //! and the object health with their extra data's constructors and destructor.
 
+use super::object_refs;
 use super::{
     access, cell_refs, extra_init, first_of_kind, free_when, has_kind, list_add, list_remove,
     new_object, word_at, EXTRA_PAYLOAD, FAMILY,
@@ -56,7 +57,6 @@ const LOG_MESSAGE: u32 = 0x005b_5e40;
 const MESSAGE_NO_PARENT_SAVE_CELL: u32 = 0x0101_5140;
 const REFERENCE_NAME_SLOT: u32 = 0x130;
 /// The body of `BSExtraData`'s destructor the health percentage's destructor runs (`fastcall`).
-const EXTRA_DATA_BASE_DESTRUCTOR: u32 = 0x0043_2f30;
 /// The vtables of `ExtraHealthPerc` and `ExtraObjectHealth`.
 const VTABLE_EXTRA_HEALTH_PERC: u32 = 0x0101_5178;
 const VTABLE_EXTRA_OBJECT_HEALTH: u32 = 0x0101_5184;
@@ -565,7 +565,7 @@ pub fn health_perc_new(e: &mut Engine, this: u32) -> u32 {
 /// `ExtraHealthPerc`'s scalar deleting destructor: the base's destructor (`00432f30`), then
 /// `operator delete` with bit 0 of `flags`. Answers `this`.
 pub fn health_perc_delete(e: &mut Engine, this: u32, flags: u32) -> u32 {
-    e.call(EXTRA_DATA_BASE_DESTRUCTOR, &args![this]);
+    typed_call!(FAMILY, 0x0043_2f30, object_refs::base_only_drop(e, this));
     free_when(e, this, flags)
 }
 
