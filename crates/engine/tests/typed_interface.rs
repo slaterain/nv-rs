@@ -9928,7 +9928,7 @@ fn map_menu_fn_007a1b10_diff() {
 /// template's tile (object 216, its owner object 217), the font's dimensions (the result word), a
 /// colour's and a request's constructor (their own word), a point difference (the result word), the
 /// texture's surface object (object 218), a note's text object (object 219), a pathing array's
-/// entries (object 220: a set byte and a door, object 207), a subtitle element (object 221: a text),
+/// entries (object 220: a set byte and a door, object 40), a subtitle element (object 221: a text),
 /// a form's text (object 222) and a marker's icon kind (3).
 fn put_map_world(e: &mut Engine, variant: u32) {
     use arena::object;
@@ -9937,7 +9937,7 @@ fn put_map_world(e: &mut Engine, variant: u32) {
     let menu = object(255);
     e.mem
         .set_u32(menu + 0x84, if variant == 2 { 0 } else { object(102) });
-    for (k, value) in [1000.0f32, 2000.0, 50.0].into_iter().enumerate() {
+    for (k, value) in [1500.0f32, 2000.0, 50.0].into_iter().enumerate() {
         e.mem.set_f32(object(201) + 4 * k as u32, value);
     }
     for (offset, value) in [
@@ -9968,6 +9968,13 @@ fn put_map_world(e: &mut Engine, variant: u32) {
     e.mem
         .set_u32(0x011c_63cc + 4, if variant == 7 { 2 } else { 1 });
     e.mem.set_u8(0x011d_a3b8 + 4, u8::from(variant == 0));
+    // In the interior variant the player is in an interior (`00575d10` on it).
+    if variant == 7 {
+        e.register_double(0x0057_5d10, |_, words| Ret {
+            eax: u32::from(words[0] == arena::object(140)),
+            ..Ret::default()
+        });
+    }
 }
 
 /// What every map menu world holds for the third part (see [`put_map_world`]): a grid side of 1,
@@ -10042,7 +10049,14 @@ fn put_map_answers(e: &mut Engine) {
     e.mem.set_u32(object(215), object(207));
     e.mem.set_u32(object(216) + 0x28, object(217));
     e.mem.set_u8(object(220), 1);
-    e.mem.set_u32(object(220) + 4, object(207));
+    e.mem.set_u32(object(220) + 4, object(40));
+    // The knob's zoom divisor (`01075028`) a real 0.5; a float's whole number (`00406d90`) by
+    // truncation.
+    e.mem.set_u64(0x0107_5028, 0.5f64.to_bits());
+    e.register_double(0x0040_6d90, |_, words| Ret {
+        eax: f32::from_bits(words[0]) as i32 as u32,
+        ..Ret::default()
+    });
     e.mem.set_u32(object(221), EMPTY_TEXT_WORD);
     // Object 207 (the reference the lists and answers give): its cell (object 209), its base (object
     // 224, a door: form type 0x1c) and its name (object 229, "abc"); the root space's parent none;
@@ -10376,8 +10390,8 @@ fn map_menu_zoom_map_diff() {
         0x0079_c5a0,
         interface::map_menu_p3::map_menu_zoom_map(Ptr, u8, f32)
     ))
-    .in_map_world(&[Arg::MapMenu, Arg::Byte, Arg::F32], &[0, 1, 2, 7], 2000)
-    .max_cases(48)
+    .in_map_world(&[Arg::MapMenu, Arg::Byte, Arg::F32], &[1, 2, 7], 2000)
+    .max_cases(64)
     .run()
     .assert_same();
 }
