@@ -10,14 +10,16 @@
 //! actors before the merge runs and names the last level changes that touched them:
 //! - `0096c710` is registered over (the process family's native merge when that family is on, its
 //!   translation when off; registering over it sends the family's direct calls by address while
-//!   the check runs): before the merge, every actor of level 0 whose process does not have the
-//!   player's process's vtable (always a `HighProcess`) is printed once per (actor, process) with
-//!   its form id and type, the process's vtable and asked size, all four levels' ranges, the other
-//!   indexes it sits at, and its noted level changes;
+//!   the check runs): before the merge, the player (whose process the merge treats the same way
+//!   first) and every actor of level 0 whose process does not have `HighProcess`'s vtable
+//!   ([`HIGH_PROCESS_VTABLE`]) are printed once per (actor, process) with the form id and type, the
+//!   process's vtable and asked size, all four levels' ranges, the indexes the actor sits at, and
+//!   its noted level changes;
 //! - the four level changes (`00881d30` high, `00882b90`, `00883240`, `00883800` middle-high; the
 //!   half-loaded row's own wrappers when that row is on) are registered over: each notes, per
 //!   actor (a ring of [`RING`]), the function, the game thread, the after-draw pass it ran in, the
-//!   time, the process before and after and its answer.
+//!   time, the process before and after, its answer and the calls it was made from (the guest call
+//!   stack, complete while the block check sends direct calls by address).
 //!
 //! Lines start with `NV_HIGH_LIST_CHECK:`; at most [`MAX_LINES`] findings. It reads game memory and
 //! calls the actor's `IsActor` slot, as the merge itself does; it writes nothing the game reads.
@@ -39,6 +41,12 @@ const LEVEL_CHANGES: [u32; 4] = half_loaded_move::LEVEL_CHANGES;
 /// The player (`011dea3c`) and an actor's process (+0x68).
 const PLAYER: u32 = 0x011d_ea3c;
 const ACTOR_PROCESS: u32 = 0x68;
+/// The vtables `HighProcess`'s constructor (`008d7510`) and `MiddleHighProcess`'s (`00913fe0`)
+/// store.
+const HIGH_PROCESS_VTABLE: u32 = 0x0108_7864;
+const MIDDLE_HIGH_PROCESS_VTABLE: u32 = 0x0108_904c;
+/// Calls kept of a level change's guest call stack, innermost first.
+const CHAIN: usize = 10;
 /// `IsActor` (actor slot +0x100).
 const SLOT_IS_ACTOR: u32 = 0x100;
 /// The process array (the lists' +4): its element block (+4), count (+0xa, a word), and the levels'
@@ -70,7 +78,7 @@ fn started() -> Instant {
 }
 
 /// One level change of an actor.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct Note {
     function: u32,
     thread: usize,
@@ -81,6 +89,32 @@ struct Note {
     after: u32,
     after_size: Option<u32>,
     answer: bool,
+    /// The guest call stack at the change, innermost first.
+    chain: String,
+}
+
+/// The innermost [`CHAIN`] calls of `stack` (innermost last), innermost first.
+fn chain_text(stack: &[u32]) -> String {
+    let calls: Vec<String> = stack
+        .iter()
+        .rev()
+        .take(CHAIN)
+        .map(|a| format!("{a:08x}"))
+        .collect();
+    if calls.is_empty() {
+        "no calls by address".to_string()
+    } else {
+        calls.join(" < ")
+    }
+}
+
+/// A process's vtable named.
+fn vtable_name(vtable: u32) -> &'static str {
+    match vtable {
+        HIGH_PROCESS_VTABLE => "HighProcess",
+        MIDDLE_HIGH_PROCESS_VTABLE => "MiddleHighProcess",
+        _ => "another class",
+    }
 }
 
 /// The rings, by (kernel, actor): run-wide state keyed on the kernel, as real threads need.
@@ -203,6 +237,7 @@ fn noted(e: &mut Engine, function: u32, actor: u32, f: impl FnOnce(&mut Engine) 
         after,
         after_size: process_size(e, after),
         answer,
+        chain: chain_text(&e.call_stack),
     };
     let mut rings = rings();
     let ring = rings.entry((e.kernel.id(), actor)).or_default();
@@ -213,99 +248,113 @@ fn noted(e: &mut Engine, function: u32, actor: u32, f: impl FnOnce(&mut Engine) 
     answer
 }
 
-/// Level 0 of the process lists `lists` checked before the merge.
+/// The player and level 0 of the process lists `lists` checked before the merge.
 fn check(e: &mut Engine, lists: u32) {
     let pass = PASSES.fetch_add(1, Ordering::Relaxed) + 1;
     if LINES.load(Ordering::Relaxed) >= MAX_LINES {
         return;
     }
     let player = e.mem.u32(PLAYER);
-    let player_process = if player != 0 {
-        e.mem.u32(player.wrapping_add(ACTOR_PROCESS))
-    } else {
-        0
-    };
-    if player_process == 0 {
+    if player == 0 {
         return;
     }
-    let high_vtable = e.mem.u32(player_process);
     let array = lists.wrapping_add(ARRAY);
+    // The merge's first call is for the player's own process.
+    let process = e.mem.u32(player.wrapping_add(ACTOR_PROCESS));
+    if process != 0 && e.mem.u32(process) != HIGH_PROCESS_VTABLE {
+        report(e, pass, array, player, process, None);
+    }
     let elements = e.mem.u32(array.wrapping_add(ELEMENTS));
-    let count = e.mem.u16(array.wrapping_add(COUNT)) as u32;
-    let range = |e: &Engine, level: u32| {
-        (
-            e.mem.u32(array.wrapping_add(HEADS + 4 * level)),
-            e.mem.u32(array.wrapping_add(TAILS + 4 * level)),
-        )
-    };
-    let (head, tail) = range(e, 0);
+    let (head, tail) = level_range(e, array, 0);
     for index in head..tail.min(head.saturating_add(4096)) {
         let actor = e.mem.u32(elements.wrapping_add(index.wrapping_mul(4)));
         if actor == 0 || !e.vcall(actor, SLOT_IS_ACTOR, &args![]).bool() {
             continue;
         }
         let process = e.mem.u32(actor.wrapping_add(ACTOR_PROCESS));
-        let vtable = if process != 0 { e.mem.u32(process) } else { 0 };
-        if vtable == high_vtable {
+        if process != 0 && e.mem.u32(process) == HIGH_PROCESS_VTABLE {
             continue;
         }
-        let key = (e.kernel.id(), actor, process);
-        if !printed().insert(key) {
-            continue;
-        }
-        if LINES.fetch_add(1, Ordering::Relaxed) >= MAX_LINES {
-            return;
-        }
-        let ranges: Vec<String> = (0..4)
-            .map(|level| {
-                let (h, t) = range(e, level);
-                format!("{level}: [{h}, {t})")
-            })
-            .collect();
-        let others: Vec<String> = (0..count.min(8192))
-            .filter(|&i| i != index && e.mem.u32(elements.wrapping_add(i * 4)) == actor)
-            .map(|i| i.to_string())
-            .collect();
-        let notes: Vec<String> = rings()
-            .get(&(e.kernel.id(), actor))
-            .map(|ring| {
-                ring.iter()
-                    .map(|n| {
-                        format!(
-                            "{} on game thread {} at pass {} ({} ms): process {:08x} {} -> {:08x} {}, answered {}",
-                            function_name(n.function),
-                            n.thread,
-                            n.pass,
-                            n.ms,
-                            n.before,
-                            size_text(n.before_size),
-                            n.after,
-                            size_text(n.after_size),
-                            n.answer
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        eprintln!(
-            "NV_HIGH_LIST_CHECK: after-draw pass {pass} ({} ms) on game thread {}: level 0 index {index} \
-             holds actor {actor:08x} (form {:08x}, type {:#x}) whose process {process:08x} has vtable \
-             {vtable:08x}, size {} (a HighProcess's vtable is {high_vtable:08x}); levels {}; count {count}; \
-             the actor also at indexes [{}]; its level changes, oldest first: [{}]",
-            started().elapsed().as_millis(),
-            e.thread_index(),
-            e.mem.u32(actor.wrapping_add(0xc)),
-            e.mem.u32(actor.wrapping_add(4)) & 0xff,
-            size_text(process_size(e, process)),
-            ranges.join(", "),
-            others.join(", "),
-            if notes.is_empty() {
-                "none noted".to_string()
-            } else {
-                notes.join("; ")
-            }
-        );
+        report(e, pass, array, actor, process, Some(index));
     }
+}
+
+/// Level `level`'s head and tail in the process array `array`.
+fn level_range(e: &Engine, array: u32, level: u32) -> (u32, u32) {
+    (
+        e.mem.u32(array.wrapping_add(HEADS + 4 * level)),
+        e.mem.u32(array.wrapping_add(TAILS + 4 * level)),
+    )
+}
+
+/// One finding printed, once per (actor, process): `index` is its place in level 0, `None` for
+/// the player.
+fn report(e: &mut Engine, pass: u64, array: u32, actor: u32, process: u32, index: Option<u32>) {
+    if !printed().insert((e.kernel.id(), actor, process)) {
+        return;
+    }
+    if LINES.fetch_add(1, Ordering::Relaxed) >= MAX_LINES {
+        return;
+    }
+    let vtable = if process != 0 { e.mem.u32(process) } else { 0 };
+    let elements = e.mem.u32(array.wrapping_add(ELEMENTS));
+    let count = e.mem.u16(array.wrapping_add(COUNT)) as u32;
+    let ranges: Vec<String> = (0..4)
+        .map(|level| {
+            let (h, t) = level_range(e, array, level);
+            format!("{level}: [{h}, {t})")
+        })
+        .collect();
+    let at: Vec<String> = (0..count.min(8192))
+        .filter(|&i| e.mem.u32(elements.wrapping_add(i * 4)) == actor)
+        .map(|i| i.to_string())
+        .collect();
+    let notes: Vec<String> = rings()
+        .get(&(e.kernel.id(), actor))
+        .map(|ring| {
+            ring.iter()
+                .map(|n| {
+                    format!(
+                        "{} on game thread {} at pass {} ({} ms): process {:08x} {} -> {:08x} {}, \
+                         answered {}, from {}",
+                        function_name(n.function),
+                        n.thread,
+                        n.pass,
+                        n.ms,
+                        n.before,
+                        size_text(n.before_size),
+                        n.after,
+                        size_text(n.after_size),
+                        n.answer,
+                        n.chain
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let place = match index {
+        Some(index) => format!("level 0 index {index} holds actor"),
+        None => "the player is actor".to_string(),
+    };
+    eprintln!(
+        "NV_HIGH_LIST_CHECK: after-draw pass {pass} ({} ms) on game thread {}: {place} {actor:08x} \
+         (form {:08x}, type {:#x}) whose process {process:08x} has vtable {vtable:08x} ({}), size \
+         {}; levels {}; count {count}; the actor is at indexes [{}]; its level changes, oldest \
+         first: [{}]",
+        started().elapsed().as_millis(),
+        e.thread_index(),
+        e.mem.u32(actor.wrapping_add(0xc)),
+        e.mem.u32(actor.wrapping_add(4)) & 0xff,
+        vtable_name(vtable),
+        size_text(process_size(e, process)),
+        ranges.join(", "),
+        at.join(", "),
+        if notes.is_empty() {
+            "none noted".to_string()
+        } else {
+            notes.join("; ")
+        }
+    );
 }
 
 #[cfg(test)]
@@ -329,5 +378,24 @@ mod tests {
             [0x0088_1d30, 0x0088_2b90, 0x0088_3240, 0x0088_3800]
         );
         assert_eq!(function_name(0x0088_3800), "00883800 (to middle-high)");
+    }
+
+    #[test]
+    fn the_two_vtables_are_named() {
+        assert_eq!(vtable_name(0x0108_7864), "HighProcess");
+        assert_eq!(vtable_name(0x0108_904c), "MiddleHighProcess");
+        assert_eq!(vtable_name(0), "another class");
+    }
+
+    #[test]
+    fn a_chain_reads_innermost_first_and_is_capped() {
+        assert_eq!(chain_text(&[]), "no calls by address");
+        assert_eq!(
+            chain_text(&[0x0086_a850, 0x0086_e650, 0x0088_3800]),
+            "00883800 < 0086e650 < 0086a850"
+        );
+        let deep: Vec<u32> = (0..20).collect();
+        assert_eq!(chain_text(&deep).split(" < ").count(), CHAIN);
+        assert!(chain_text(&deep).starts_with("00000013 < "));
     }
 }
