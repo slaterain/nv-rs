@@ -331,6 +331,8 @@ fn known_words(e: &mut Engine, seed: u32) {
     // item list box's node removal takes from the filtered count (`.rdata`).
     e.mem.set_u64(0x0101_2060, 0.0f64.to_bits());
     e.mem.set_u64(0x0101_2070, 1.0f64.to_bits());
+    // The float -1.0 the notes' list box saves for no highlight and no scroll bar (`.rdata`).
+    e.mem.set_f32(0x0101_2054, -1.0);
 }
 
 /// The manager singleton (`004b7210`'s word), the menus by class (`00a09030`'s data pointer and
@@ -510,6 +512,7 @@ const OTHER_FAMILIES: &[u32] = &[
     0x00a0_1290,
     0x0040_1460,
     0x0044_1110,
+    0x006a_8500,
 ];
 
 /// The world's settings for a Diff of the family.

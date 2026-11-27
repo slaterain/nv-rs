@@ -34,6 +34,10 @@
 //!   SPECIAL and skill rows, the face image, the radiation meter, the sorts and availability
 //!   callbacks, the status data list's `Register` (with JIP LN's G107 seam) and two list boxes'
 //!   `AddItem`.
+//! - [`map_menu`]: the map menu's unit, its first part: the five `ListBox<T *>` instances of the
+//!   Pip-Boy's data pages (quests, notes, radio stations, objectives, challenges) over the template's
+//!   bodies, with their `SetEnabled`, `Filter` and last tile, the notes' list state saved and
+//!   restored, the list box helpers emitted there and the menu's `BSSimpleArray` of strings.
 //!
 //! **Floats.** The menus run on the main thread ([`Threads::Main`]), at the float precision the
 //! exe's main thread computes in once Direct3D set it: plain `f32` (the camera frustum's products;
@@ -51,6 +55,7 @@ pub mod interface_cpp;
 pub mod interface_cpp_p2;
 pub mod interface_cpp_p3;
 pub mod item_list_box;
+pub mod map_menu;
 pub mod menu_manager;
 pub mod menu_manager_p2;
 pub mod small_units;
@@ -80,6 +85,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
     all.extend(item_list_box::funcs());
     all.extend(small_units::funcs());
     all.extend(stats_menu::funcs());
+    all.extend(map_menu::funcs());
     all
 }
 

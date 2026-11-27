@@ -13,7 +13,7 @@
 
 use engine as _;
 use engine_core::prelude::*;
-use engine_core::typed::diff::Diff;
+use engine_core::typed::diff::{Case, Diff, Input};
 use engine_typed::interface;
 
 #[path = "typed_interface/arena.rs"]
@@ -150,6 +150,7 @@ const CALLEES: &[u32] = &[
     0x0066_ec10,
     0x0066_ecf0,
     0x0066_ef20,
+    0x006a_8500,
     0x006b_3eb0,
     0x006f_fe10,
     0x0070_0320,
@@ -330,6 +331,7 @@ const CALLEES: &[u32] = &[
     0x007f_b150,
     0x0083_e510,
     0x0083_fd60,
+    0x0084_5460,
     0x0084_54f0,
     0x0085_79b0,
     0x0086_4980,
@@ -361,6 +363,7 @@ const CALLEES: &[u32] = &[
     0x00a0_1860,
     0x00a0_1b00,
     0x00a0_3c90,
+    0x00a0_3d40,
     0x00a0_3da0,
     0x00a0_3eb0,
     0x00a0_40a0,
@@ -4814,9 +4817,10 @@ fn list_box_unsigned_int_num_unfiltered_diff() {
 const LIST_BOX_VARIANTS: [u32; 7] = [6, 5, 3, 2, 1, 4, 0];
 
 /// The guard words of the list box instances' function-local statics: the six of the menu manager
-/// file (`IsEnabled`'s, `UpdateHighlightBoxPos`'s, `NumUnfiltered`'s of each) and the item list
-/// box's (`UpdateHighlightBoxPos`'s, `NumUnfiltered`'s).
-const LIST_BOX_GUARDS: [u32; 20] = [
+/// file (`IsEnabled`'s, `UpdateHighlightBoxPos`'s, `NumUnfiltered`'s of each), the item list
+/// box's (`UpdateHighlightBoxPos`'s, `NumUnfiltered`'s), the map menu's five (the same three of
+/// each) and its `SetEnabled`s' and `Filter`s'.
+const LIST_BOX_GUARDS: [u32; 43] = [
     0x011d_8dd0,
     0x011d_8ddc,
     0x011d_8e48,
@@ -4837,6 +4841,29 @@ const LIST_BOX_GUARDS: [u32; 20] = [
     0x011d_8e70,
     0x011d_8cd4,
     0x011d_8cdc,
+    0x011d_a460,
+    0x011d_a46c,
+    0x011d_a4e4,
+    0x011d_a47c,
+    0x011d_a488,
+    0x011d_a474,
+    0x011d_a498,
+    0x011d_a4a4,
+    0x011d_a490,
+    0x011d_a4b4,
+    0x011d_a4c0,
+    0x011d_a4ac,
+    0x011d_a4d0,
+    0x011d_a4dc,
+    0x011d_a4c8,
+    0x011d_a420,
+    0x011d_a430,
+    0x011d_a448,
+    0x011d_a458,
+    0x011d_a428,
+    0x011d_a438,
+    0x011d_a440,
+    0x011d_a450,
 ];
 
 /// A world for the list boxes (`ListBox<T>`, Xbox PDB), built at both pointer arguments (objects 3
@@ -7592,31 +7619,69 @@ fn stats_menu_update_active_effects_diff() {
     .assert_same();
 }
 
-/// `DoGamepad`'s worlds (limb mode, the page, the sub page, the stick's axis, its magnitude above
-/// the dead zone, the scroll's repeat time passed, the effects list visible, the manager's state
-/// test): each a variant of [`put_stats_pad`].
-const STATS_PAD: [(bool, u32, u32, i32, bool, bool, bool, bool); 8] = [
-    (false, 0, 0, 5, true, true, true, true),
-    (true, 0, 0, 0, false, false, false, true),
-    (false, 2, 1, -5, true, false, true, true),
-    (true, 2, 2, 5, false, true, false, true),
-    (false, 4, 0, 0, true, true, false, false),
-    (true, 4, 1, -5, true, true, true, true),
-    (false, 2, 2, 5, true, false, true, true),
-    (true, 0, 1, -5, true, false, true, false),
+/// One of `DoGamepad`'s worlds ([`put_stats_pad`]'s variant).
+struct Pad {
+    /// Limb mode.
+    limb: bool,
+    /// The page (`0x1004` of the menu's tile).
+    page: u32,
+    /// The sub page (`0x1004` of the skill page's tile).
+    sub: u32,
+    /// The right stick's axis.
+    axis: i32,
+    /// The stick's magnitude against the dead zone 0.5.
+    magnitude: f64,
+    /// The time against the scroll's repeat time.
+    time: u32,
+    /// The scroll's repeat time (`011dad5c`; 0 before the first press).
+    repeat: u32,
+    /// The effects list visible.
+    visible: bool,
+    /// The manager's state test.
+    ready: bool,
+    /// Every `Tile::IsTrue` (the healing button's, the description scroll's).
+    on: bool,
+    /// `Tile::SetFloat` keeps its value (`Tile::GetValueFloat` of that trait answers it after).
+    sticks: bool,
+}
+
+/// `DoGamepad`'s worlds: each a variant of [`put_stats_pad`]. Worlds 8 and 9 are the first page
+/// without limb mode on sub pages 1 and 2; the magnitude 0.5 (world 8) and the time 100 (world 9)
+/// sit on the dead zone and the repeat time.
+#[rustfmt::skip]
+const STATS_PAD: [Pad; 10] = [
+    Pad { limb: false, page: 0, sub: 0, axis: 5, magnitude: 1.0, time: 500, repeat: 100, visible: true, ready: true, on: true, sticks: true },
+    Pad { limb: true, page: 0, sub: 0, axis: 0, magnitude: 0.25, time: 50, repeat: 100, visible: false, ready: true, on: true, sticks: false },
+    Pad { limb: false, page: 2, sub: 1, axis: -5, magnitude: 1.0, time: 50, repeat: 100, visible: true, ready: true, on: false, sticks: false },
+    Pad { limb: true, page: 2, sub: 2, axis: 5, magnitude: 0.25, time: 500, repeat: 100, visible: false, ready: true, on: true, sticks: false },
+    Pad { limb: false, page: 4, sub: 0, axis: 0, magnitude: 1.0, time: 500, repeat: 100, visible: false, ready: false, on: false, sticks: false },
+    Pad { limb: true, page: 4, sub: 1, axis: -5, magnitude: 1.0, time: 500, repeat: 0, visible: true, ready: true, on: true, sticks: true },
+    Pad { limb: false, page: 2, sub: 2, axis: 5, magnitude: 1.0, time: 50, repeat: 100, visible: true, ready: true, on: false, sticks: false },
+    Pad { limb: true, page: 0, sub: 1, axis: -5, magnitude: 1.0, time: 50, repeat: 100, visible: true, ready: false, on: false, sticks: false },
+    Pad { limb: false, page: 0, sub: 1, axis: 5, magnitude: 0.5, time: 500, repeat: 0, visible: true, ready: true, on: true, sticks: true },
+    Pad { limb: false, page: 0, sub: 2, axis: -5, magnitude: 1.0, time: 100, repeat: 100, visible: false, ready: true, on: true, sticks: false },
 ];
-const STATS_PAD_VARIANTS: [u32; 8] = [0, 5, 2, 3, 4, 1, 6, 7];
+const STATS_PAD_VARIANTS: [u32; 10] = [0, 5, 2, 3, 4, 1, 6, 7, 8, 9];
 
 /// [`put_stats_third`] in limb mode (its variant 0) or not (3), with the stats menu on top of a ready
 /// manager's enter stack (as [`put_stats_page`]); `Tile::GetValueFloat` answers `0x1004` with the
-/// sub page for the skill page's tile (`+0xa4`) and the page for any other, every other float 1.0;
-/// the stick (`00a23390`) at -5, 0 or 5, its magnitude (`00408820`) 1.0 or 0.25 against the dead
-/// zone 0.5 (the double at `010745f8`), the time (`00457fe0`) 500 or 50 against the repeat time 100
-/// (`011dad5c`), the effects list's visibility (`00a040a0`) and the manager's state test
-/// (`004b71d0`, which `00709d40` asks) by the variant.
+/// sub page for the skill page's tile (`+0xa4`) and the page for any other, the trait of the last
+/// `Tile::SetFloat` with its value when the world's values stick, every other float 1.0; the stick
+/// (`00a23390`), its magnitude (`00408820`) against the dead zone 0.5 (the double at `010745f8`),
+/// the time (`00457fe0`) against the repeat time (`011dad5c`), the effects list's visibility
+/// (`00a040a0`), every `Tile::IsTrue` (`00a01230`) and the manager's state test (`004b71d0`, which
+/// `00709d40` asks) by the variant.
 fn put_stats_pad(e: &mut Engine, variant: u32) {
-    let (limb, page, sub, axis, above, passed, visible, ready) = STATS_PAD[variant as usize];
-    put_stats_third(e, if limb { 0 } else { 3 });
+    let world = &STATS_PAD[variant as usize];
+    let (page, sub, axis, magnitude, time) = (
+        world.page,
+        world.sub,
+        world.axis,
+        world.magnitude,
+        world.time,
+    );
+    let (visible, ready, on, sticks) = (world.visible, world.ready, world.on, world.sticks);
+    put_stats_third(e, if world.limb { 0 } else { 3 });
     let manager = e.mem.u32(0x011d_8a80);
     if manager != 0 {
         let mut top = 0;
@@ -7626,13 +7691,20 @@ fn put_stats_pad(e: &mut Engine, variant: u32) {
         e.mem.set_u32(manager + 0x114 + 4 * top, 0x3eb);
     }
     let menu = arena::object(3);
+    let stored = std::rc::Rc::new(std::cell::Cell::new(None::<(u32, f32)>));
+    let set = std::rc::Rc::clone(&stored);
+    e.register_double(0x00a0_12d0, move |_, words| {
+        if sticks {
+            set.set(Some((words[1], f32::from_bits(words[2]))));
+        }
+        Ret::default()
+    });
     e.register_double(0x00a0_11b0, move |e, words| Ret {
-        st0: if words[1] != 0x1004 {
-            1.0
-        } else if words[0] == e.mem.u32(menu + 0xa4) {
-            f64::from(sub)
-        } else {
-            f64::from(page)
+        st0: match stored.get() {
+            _ if words[1] == 0x1004 && words[0] == e.mem.u32(menu + 0xa4) => f64::from(sub),
+            _ if words[1] == 0x1004 => f64::from(page),
+            Some((id, value)) if id == words[1] => f64::from(value),
+            _ => 1.0,
         },
         ..Ret::default()
     });
@@ -7642,16 +7714,20 @@ fn put_stats_pad(e: &mut Engine, variant: u32) {
     });
     e.mem.set_u64(0x0107_45f8, 0.5f64.to_bits());
     e.register_double(0x0040_8820, move |_, _| Ret {
-        st0: if above { 1.0 } else { 0.25 },
+        st0: magnitude,
         ..Ret::default()
     });
-    e.mem.set_u32(0x011d_ad5c, 100);
+    e.mem.set_u32(0x011d_ad5c, world.repeat);
     e.register_double(0x0045_7fe0, move |_, _| Ret {
-        eax: if passed { 500 } else { 50 },
+        eax: time,
         ..Ret::default()
     });
     e.register_double(0x00a0_40a0, move |_, _| Ret {
         eax: u32::from(visible),
+        ..Ret::default()
+    });
+    e.register_double(0x00a0_1230, move |_, _| Ret {
+        eax: u32::from(on),
         ..Ret::default()
     });
     e.register_double(0x004b_71d0, move |_, _| Ret {
@@ -7684,7 +7760,7 @@ fn stats_menu_do_gamepad_every_key_diff() {
         &STATS_PAD_VARIANTS,
         put_stats_pad,
     )
-    .max_cases(200)
+    .max_cases(260)
     .max_calls(2000)
     .run()
     .assert_same();
@@ -7715,9 +7791,24 @@ fn put_stats_enter(e: &mut Engine, page: u32) {
         e.mem.set_u32(menu + list + 4, item);
         e.mem.set_u32(menu + list + 8, 0);
     }
+    // Page 0's fade-in: the record word of either healing mode (`+0x30`, `+0x60`) set, the manager's
+    // state test (`004b71d0`) false, and the fade object (`011dace4`, object 91) holding the clicked
+    // tile in its group 2 only.
+    e.mem.set_u32(menu + 0x30, object(106));
+    e.mem.set_u32(menu + 0x60, object(106));
+    e.register_double(0x004b_71d0, |_, _| Ret::default());
+    let fade = object(91);
+    e.mem.set_u32(0x011d_ace4, fade);
+    for group in 0..6u32 {
+        let list = fade + 4 + 8 * group;
+        e.mem
+            .set_u32(list, if group == 2 { object(116) } else { 0 });
+        e.mem.set_u32(list + 4, 0);
+    }
 }
 
-/// `DoEnter` on each page, the clicked tile in the page's list or not.
+/// `DoEnter` on each page, the clicked tile in the page's list or not; on page 0 the tile in a fade
+/// group (the fade-in, the limb sound and limb mode turned on).
 #[test]
 fn stats_menu_do_enter_every_page_diff() {
     Diff::new(engine_core::entry!(
@@ -7820,4 +7911,977 @@ fn stats_menu_update_active_effects_branches_diff() {
     .max_calls(6000)
     .run()
     .assert_same();
+}
+
+// ---- The map menu unit, its first part (`interface::map_menu`) ------------------------------------
+
+/// The map menu's worlds, as settings of a Diff.
+trait MapWorlds {
+    /// In [`put_list_box`]'s world, with `max` cases.
+    fn in_list_box(self, args: &'static [Arg], max: usize) -> Diff;
+    /// In [`put_string_array`]'s world.
+    fn in_string_array(self, args: &'static [Arg]) -> Diff;
+}
+
+impl MapWorlds for Diff {
+    fn in_list_box(self, args: &'static [Arg], max: usize) -> Diff {
+        self.in_arena_and(args, CALLEES, &[], &LIST_BOX_VARIANTS, put_list_box)
+            .max_cases(max)
+    }
+
+    fn in_string_array(self, args: &'static [Arg]) -> Diff {
+        self.in_arena_and(args, CALLEES, &[], &STRING_ARRAY_VARIANTS, put_string_array)
+            .max_cases(36)
+    }
+}
+
+/// The variants of [`put_string_array`]'s world, the richest first.
+const STRING_ARRAY_VARIANTS: [u32; 3] = [2, 1, 0];
+
+/// A `BSSimpleArray<BSStringT<char>,1024>` at both pointer arguments (objects 3 and 40): its buffer
+/// (+4: object 100, none in variant 0), its size (+8: 3, 1, 0) and reserved size (+0xc: 4), so the
+/// release walks a few strings instead of an arena word's count. The slot append (`00845460`) is
+/// the array's own on those two: the buffer (object 100) made when there is none, the size grown by
+/// one and the old size answered (an arena answer was a slot far past any buffer).
+fn put_string_array(e: &mut Engine, variant: u32) {
+    use arena::object;
+    let size = [0u32, 1, 3][variant as usize];
+    for array in [object(3), object(40)] {
+        e.mem
+            .set_u32(array + 4, if variant == 0 { 0 } else { object(100) });
+        e.mem.set_u32(array + 8, size);
+        e.mem.set_u32(array + 0xc, 4);
+    }
+    e.register_double(0x0084_5460, |e, words| {
+        let array = words[0];
+        if array != object(3) && array != object(40) {
+            return Ret::default();
+        }
+        if e.mem.u32(array + 4) == 0 {
+            e.mem.set_u32(array + 4, object(100));
+            e.mem.set_u32(array + 0xc, 4);
+        }
+        let index = e.mem.u32(array + 8);
+        e.mem.set_u32(array + 8, index + 1);
+        Ret {
+            eax: index,
+            ..Ret::default()
+        }
+    });
+}
+
+/// A list box flag set or cleared: done in place by every caller (the interface lists'), so its own
+/// Diff names none of those lists: every bit, past 15 and past 31 too, each way.
+#[test]
+fn map_menu_fn_007a1950_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_1950,
+        interface::map_menu::fn_007a1950(Ptr, u8, u8)
+    ))
+    .family(&engine_typed::interface::INTERFACE)
+    .inputs(&[
+        Input::Of(arena::SEEDS),
+        Input::Of(&[0, 1, 5, 15, 16, 31, 32, 0xff]),
+        Input::Of(&[0, 1, 0xff]),
+    ])
+    .setup(|e, case: &Case| {
+        arena::world(e, case.word(0), CALLEES, &[]);
+        vec![arena::object(3), case.word(1), case.word(2)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The `ListBoxItem` constructor: done in place by every caller, so its own Diff names none of the
+/// interface lists.
+#[test]
+fn map_menu_fn_007a62e0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_62e0,
+        interface::map_menu::fn_007a62e0(Ptr, u32, u32) -> Ptr
+    ))
+    .family(&engine_typed::interface::INTERFACE)
+    .inputs(&[
+        Input::Of(arena::SEEDS),
+        Input::Of(&[0, 0x0500_1000, 0x7d00_0040]),
+        Input::Of(&[0x0500_0604, 0x0500_8000, 0x0100_0010]),
+    ])
+    .setup(|e, case: &Case| {
+        arena::world(e, case.word(0), CALLEES, &[]);
+        vec![arena::object(3), case.word(1), case.word(2)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a1c90_diff() {
+    Diff::new(engine_core::entry!(0x007a_1c90, interface::map_menu::fn_007a1c90(Ptr) -> Ptr))
+        .in_arena(&[Arg::Object], CALLEES, &[])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a1d60_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_1d60,
+        interface::map_menu::fn_007a1d60(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a1dd0_diff() {
+    Diff::new(engine_core::entry!(0x007a_1dd0, interface::map_menu::fn_007a1dd0(Ptr, u32, u32, u32, u32) -> u32))
+    .in_item_list(&[Arg::Ptr, Arg::Word, Arg::Ptr, Arg::Code, Arg::Ptr], 48)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_quest_remove_all_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_2070,
+        interface::map_menu::list_box_tes_quest_remove_all(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_quest_sort_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_22a0,
+        interface::map_menu::list_box_tes_quest_sort(Ptr, u32)
+    ))
+    .in_list_box(&[Arg::Ptr, Arg::Word], 42)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_quest_set_enabled_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_2350,
+        interface::map_menu::list_box_tes_quest_set_enabled(Ptr, u8)
+    ))
+    .in_list_box(&[Arg::Ptr, Arg::Byte], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_quest_highlight_diff() {
+    Diff::new(engine_core::entry!(0x007a_23e0, interface::map_menu::list_box_tes_quest_highlight(Ptr, u32) -> bool))
+    .in_list_box(&[Arg::Ptr, Arg::ListTile], 42)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_quest_get_highlight_target_diff() {
+    Diff::new(engine_core::entry!(0x007a_2450, interface::map_menu::list_box_tes_quest_get_highlight_target(Ptr, u32) -> u32))
+    .in_list_box(&[Arg::Ptr, Arg::Direction], 56)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a6130_diff() {
+    Diff::new(engine_core::entry!(0x007a_6130, interface::map_menu::fn_007a6130(Ptr, u32) -> Ptr))
+        .in_list_box(&[Arg::Ptr, Arg::Byte], 42)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_quest_synchronize_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_6480,
+        interface::map_menu::list_box_tes_quest_synchronize(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_quest_is_enabled_diff() {
+    Diff::new(engine_core::entry!(0x007a_6550, interface::map_menu::list_box_tes_quest_is_enabled(Ptr) -> bool))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_quest_update_highlight_box_pos_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_6600,
+        interface::map_menu::list_box_tes_quest_update_highlight_box_pos(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_quest_set_total_list_height_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_6920,
+        interface::map_menu::list_box_tes_quest_set_total_list_height(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_quest_num_unfiltered_diff() {
+    Diff::new(engine_core::entry!(0x007a_86e0, interface::map_menu::list_box_tes_quest_num_unfiltered(Ptr) -> i32))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a27f0_diff() {
+    Diff::new(engine_core::entry!(0x007a_27f0, interface::map_menu::fn_007a27f0(Ptr) -> Ptr))
+        .in_arena(&[Arg::Object], CALLEES, &[])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a28c0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_28c0,
+        interface::map_menu::fn_007a28c0(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a2930_diff() {
+    Diff::new(engine_core::entry!(0x007a_2930, interface::map_menu::fn_007a2930(Ptr, u32, u32, u32, u32) -> u32))
+    .in_item_list(&[Arg::Ptr, Arg::Word, Arg::Ptr, Arg::Code, Arg::Ptr], 48)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_note_remove_all_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_2bd0,
+        interface::map_menu::list_box_bgs_note_remove_all(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_note_sort_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_2e00,
+        interface::map_menu::list_box_bgs_note_sort(Ptr, u32)
+    ))
+    .in_list_box(&[Arg::Ptr, Arg::Word], 42)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_note_set_enabled_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_30e0,
+        interface::map_menu::list_box_bgs_note_set_enabled(Ptr, u8)
+    ))
+    .in_list_box(&[Arg::Ptr, Arg::Byte], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_note_highlight_diff() {
+    Diff::new(engine_core::entry!(0x007a_3170, interface::map_menu::list_box_bgs_note_highlight(Ptr, u32) -> bool))
+    .in_list_box(&[Arg::Ptr, Arg::ListTile], 42)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_note_get_highlight_target_diff() {
+    Diff::new(engine_core::entry!(0x007a_31e0, interface::map_menu::list_box_bgs_note_get_highlight_target(Ptr, u32) -> u32))
+    .in_list_box(&[Arg::Ptr, Arg::Direction], 56)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a6160_diff() {
+    Diff::new(engine_core::entry!(0x007a_6160, interface::map_menu::fn_007a6160(Ptr, u32) -> Ptr))
+        .in_list_box(&[Arg::Ptr, Arg::Byte], 42)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_note_synchronize_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_6b00,
+        interface::map_menu::list_box_bgs_note_synchronize(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_note_is_enabled_diff() {
+    Diff::new(engine_core::entry!(0x007a_6bd0, interface::map_menu::list_box_bgs_note_is_enabled(Ptr) -> bool))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_note_update_highlight_box_pos_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_6c80,
+        interface::map_menu::list_box_bgs_note_update_highlight_box_pos(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_note_set_total_list_height_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_7080,
+        interface::map_menu::list_box_bgs_note_set_total_list_height(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a6a50_diff() {
+    Diff::new(engine_core::entry!(0x007a_6a50, interface::map_menu::fn_007a6a50(Ptr) -> i32))
+        .in_list_box(&[Arg::Ptr], 28)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_note_filter_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_2e30,
+        interface::map_menu::list_box_bgs_note_filter(Ptr, u32)
+    ))
+    .in_list_box(&[Arg::Ptr, Arg::Code], 42)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a6220_diff() {
+    Diff::new(engine_core::entry!(0x007a_6220, interface::map_menu::fn_007a6220(Ptr) -> u32))
+        .in_list_box(&[Arg::Ptr], 28)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a36e0_diff() {
+    Diff::new(engine_core::entry!(0x007a_36e0, interface::map_menu::fn_007a36e0(Ptr) -> Ptr))
+        .in_arena(&[Arg::Object], CALLEES, &[])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a37b0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_37b0,
+        interface::map_menu::fn_007a37b0(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a3820_diff() {
+    Diff::new(engine_core::entry!(0x007a_3820, interface::map_menu::fn_007a3820(Ptr, u32, u32, u32, u32) -> u32))
+    .in_item_list(&[Arg::Ptr, Arg::Word, Arg::Ptr, Arg::Code, Arg::Ptr], 48)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_object_refr_remove_all_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_3ac0,
+        interface::map_menu::list_box_tes_object_refr_remove_all(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_object_refr_sort_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_3cf0,
+        interface::map_menu::list_box_tes_object_refr_sort(Ptr, u32)
+    ))
+    .in_list_box(&[Arg::Ptr, Arg::Word], 42)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_object_refr_highlight_diff() {
+    Diff::new(engine_core::entry!(0x007a_3f90, interface::map_menu::list_box_tes_object_refr_highlight(Ptr, u32) -> bool))
+    .in_list_box(&[Arg::Ptr, Arg::ListTile], 42)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_object_refr_get_highlight_target_diff() {
+    Diff::new(engine_core::entry!(0x007a_4000, interface::map_menu::list_box_tes_object_refr_get_highlight_target(Ptr, u32) -> u32))
+    .in_list_box(&[Arg::Ptr, Arg::Direction], 56)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a6190_diff() {
+    Diff::new(engine_core::entry!(0x007a_6190, interface::map_menu::fn_007a6190(Ptr, u32) -> Ptr))
+        .in_list_box(&[Arg::Ptr, Arg::Byte], 42)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_object_refr_synchronize_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_7260,
+        interface::map_menu::list_box_tes_object_refr_synchronize(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_object_refr_is_enabled_diff() {
+    Diff::new(engine_core::entry!(0x007a_7330, interface::map_menu::list_box_tes_object_refr_is_enabled(Ptr) -> bool))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_object_refr_update_highlight_box_pos_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_73e0,
+        interface::map_menu::list_box_tes_object_refr_update_highlight_box_pos(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_object_refr_set_total_list_height_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_7700,
+        interface::map_menu::list_box_tes_object_refr_set_total_list_height(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_object_refr_num_unfiltered_diff() {
+    Diff::new(engine_core::entry!(0x007a_71b0, interface::map_menu::list_box_tes_object_refr_num_unfiltered(Ptr) -> i32))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_object_refr_filter_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_3d20,
+        interface::map_menu::list_box_tes_object_refr_filter(Ptr, u32)
+    ))
+    .in_list_box(&[Arg::Ptr, Arg::Code], 42)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a6250_diff() {
+    Diff::new(engine_core::entry!(0x007a_6250, interface::map_menu::fn_007a6250(Ptr) -> u32))
+        .in_list_box(&[Arg::Ptr], 28)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a43a0_diff() {
+    Diff::new(engine_core::entry!(0x007a_43a0, interface::map_menu::fn_007a43a0(Ptr) -> Ptr))
+        .in_arena(&[Arg::Object], CALLEES, &[])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a4470_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_4470,
+        interface::map_menu::fn_007a4470(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a44e0_diff() {
+    Diff::new(engine_core::entry!(0x007a_44e0, interface::map_menu::fn_007a44e0(Ptr, u32, u32, u32, u32) -> u32))
+    .in_item_list(&[Arg::Ptr, Arg::Word, Arg::Ptr, Arg::Code, Arg::Ptr], 48)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_quest_objective_remove_all_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_4780,
+        interface::map_menu::list_box_bgs_quest_objective_remove_all(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_quest_objective_sort_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_49b0,
+        interface::map_menu::list_box_bgs_quest_objective_sort(Ptr, u32)
+    ))
+    .in_list_box(&[Arg::Ptr, Arg::Word], 42)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_quest_objective_set_enabled_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_4c50,
+        interface::map_menu::list_box_bgs_quest_objective_set_enabled(Ptr, u8)
+    ))
+    .in_list_box(&[Arg::Ptr, Arg::Byte], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_quest_objective_highlight_diff() {
+    Diff::new(engine_core::entry!(0x007a_4ce0, interface::map_menu::list_box_bgs_quest_objective_highlight(Ptr, u32) -> bool))
+    .in_list_box(&[Arg::Ptr, Arg::ListTile], 42)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_quest_objective_get_highlight_target_diff() {
+    Diff::new(engine_core::entry!(0x007a_4d50, interface::map_menu::list_box_bgs_quest_objective_get_highlight_target(Ptr, u32) -> u32))
+    .in_list_box(&[Arg::Ptr, Arg::Direction], 56)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a61c0_diff() {
+    Diff::new(engine_core::entry!(0x007a_61c0, interface::map_menu::fn_007a61c0(Ptr, u32) -> Ptr))
+        .in_list_box(&[Arg::Ptr, Arg::Byte], 42)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_quest_objective_synchronize_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_78e0,
+        interface::map_menu::list_box_bgs_quest_objective_synchronize(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_quest_objective_is_enabled_diff() {
+    Diff::new(engine_core::entry!(0x007a_79b0, interface::map_menu::list_box_bgs_quest_objective_is_enabled(Ptr) -> bool))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_quest_objective_update_highlight_box_pos_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_7a60,
+        interface::map_menu::list_box_bgs_quest_objective_update_highlight_box_pos(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_quest_objective_set_total_list_height_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_7d80,
+        interface::map_menu::list_box_bgs_quest_objective_set_total_list_height(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a7830_diff() {
+    Diff::new(engine_core::entry!(0x007a_7830, interface::map_menu::fn_007a7830(Ptr) -> i32))
+        .in_list_box(&[Arg::Ptr], 28)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_quest_objective_filter_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_49e0,
+        interface::map_menu::list_box_bgs_quest_objective_filter(Ptr, u32)
+    ))
+    .in_list_box(&[Arg::Ptr, Arg::Code], 42)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a6280_diff() {
+    Diff::new(engine_core::entry!(0x007a_6280, interface::map_menu::fn_007a6280(Ptr) -> u32))
+        .in_list_box(&[Arg::Ptr], 28)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a50f0_diff() {
+    Diff::new(engine_core::entry!(0x007a_50f0, interface::map_menu::fn_007a50f0(Ptr) -> Ptr))
+        .in_arena(&[Arg::Object], CALLEES, &[])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a51c0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_51c0,
+        interface::map_menu::fn_007a51c0(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a5230_diff() {
+    Diff::new(engine_core::entry!(0x007a_5230, interface::map_menu::fn_007a5230(Ptr, u32, u32, u32, u32) -> u32))
+    .in_item_list(&[Arg::Ptr, Arg::Word, Arg::Ptr, Arg::Code, Arg::Ptr], 48)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_challenge_remove_all_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_54d0,
+        interface::map_menu::list_box_tes_challenge_remove_all(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_challenge_sort_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_5700,
+        interface::map_menu::list_box_tes_challenge_sort(Ptr, u32)
+    ))
+    .in_list_box(&[Arg::Ptr, Arg::Word], 42)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_challenge_set_enabled_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_59a0,
+        interface::map_menu::list_box_tes_challenge_set_enabled(Ptr, u8)
+    ))
+    .in_list_box(&[Arg::Ptr, Arg::Byte], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_challenge_highlight_diff() {
+    Diff::new(engine_core::entry!(0x007a_5a60, interface::map_menu::list_box_tes_challenge_highlight(Ptr, u32) -> bool))
+    .in_list_box(&[Arg::Ptr, Arg::ListTile], 42)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_challenge_get_highlight_target_diff() {
+    Diff::new(engine_core::entry!(0x007a_5ad0, interface::map_menu::list_box_tes_challenge_get_highlight_target(Ptr, u32) -> u32))
+    .in_list_box(&[Arg::Ptr, Arg::Direction], 56)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a61f0_diff() {
+    Diff::new(engine_core::entry!(0x007a_61f0, interface::map_menu::fn_007a61f0(Ptr, u32) -> Ptr))
+        .in_list_box(&[Arg::Ptr, Arg::Byte], 42)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_challenge_synchronize_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_80e0,
+        interface::map_menu::list_box_tes_challenge_synchronize(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_challenge_is_enabled_diff() {
+    Diff::new(engine_core::entry!(0x007a_81b0, interface::map_menu::list_box_tes_challenge_is_enabled(Ptr) -> bool))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_challenge_update_highlight_box_pos_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_8260,
+        interface::map_menu::list_box_tes_challenge_update_highlight_box_pos(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_challenge_set_total_list_height_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_8580,
+        interface::map_menu::list_box_tes_challenge_set_total_list_height(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_challenge_num_unfiltered_diff() {
+    Diff::new(engine_core::entry!(0x007a_8030, interface::map_menu::list_box_tes_challenge_num_unfiltered(Ptr) -> i32))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_tes_challenge_filter_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_5730,
+        interface::map_menu::list_box_tes_challenge_filter(Ptr, u32)
+    ))
+    .in_list_box(&[Arg::Ptr, Arg::Code], 42)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a62b0_diff() {
+    Diff::new(engine_core::entry!(0x007a_62b0, interface::map_menu::fn_007a62b0(Ptr) -> u32))
+        .in_list_box(&[Arg::Ptr], 28)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn map_menu_list_box_bgs_note_save_list_state_diff() {
+    Diff::new(engine_core::entry!(
+        0x0073_12e0,
+        interface::map_menu::list_box_bgs_note_save_list_state(Ptr)
+    ))
+    .in_list_box(&[Arg::Ptr], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a3580_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_3580,
+        interface::map_menu::fn_007a3580(Ptr, u8)
+    ))
+    .in_list_box(&[Arg::Ptr, Arg::Byte], 42)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a1910_diff() {
+    Diff::new(engine_core::entry!(0x007a_1910, interface::map_menu::fn_007a1910(Ptr) -> u32))
+        .in_list_box(&[Arg::Ptr], 28)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a1930_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_1930,
+        interface::map_menu::fn_007a1930(Ptr, u8)
+    ))
+    .in_list_box(&[Arg::Ptr, Arg::Byte], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a5a30_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_5a30,
+        interface::map_menu::fn_007a5a30(Ptr, u8)
+    ))
+    .in_list_box(&[Arg::Ptr, Arg::Byte], 28)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a1a70_diff() {
+    Diff::new(engine_core::entry!(0x007a_1a70, interface::map_menu::fn_007a1a70(Ptr) -> Ptr))
+        .in_arena(&[Arg::Object], CALLEES, &[])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a1aa0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_1aa0,
+        interface::map_menu::fn_007a1aa0(Ptr)
+    ))
+    .in_string_array(&[Arg::Ptr])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a1ac0_diff() {
+    Diff::new(engine_core::entry!(0x007a_1ac0, interface::map_menu::fn_007a1ac0(Ptr, u32) -> u32))
+        .in_string_array(&[Arg::Ptr, Arg::Word])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a1c30_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_1c30,
+        interface::map_menu::fn_007a1c30(Ptr, u8)
+    ))
+    .in_string_array(&[Arg::Ptr, Arg::Byte])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a6100_diff() {
+    Diff::new(engine_core::entry!(0x007a_6100, interface::map_menu::fn_007a6100(Ptr, u32) -> Ptr))
+        .in_string_array(&[Arg::Ptr, Arg::Byte])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a6310_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_6310,
+        interface::map_menu::fn_007a6310(Ptr, u32, u32)
+    ))
+    .in_string_array(&[Arg::Ptr, Arg::Ptr, Arg::Byte])
+    .max_calls(2000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a63b0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_63b0,
+        interface::map_menu::fn_007a63b0(Ptr, u32, u32)
+    ))
+    .in_string_array(&[Arg::Ptr, Arg::Ptr, Arg::Byte])
+    .max_calls(2000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a63f0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_63f0,
+        interface::map_menu::fn_007a63f0(Ptr, u32, u32)
+    ))
+    .in_string_array(&[Arg::Object, Arg::Byte, Arg::Byte])
+    .max_calls(2000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a86b0_diff() {
+    Diff::new(engine_core::entry!(0x007a_86b0, interface::map_menu::fn_007a86b0(Ptr, u32) -> Ptr))
+        .in_arena(&[Arg::Ptr, Arg::Byte], CALLEES, &[])
+        .run()
+        .assert_same();
 }
