@@ -192,7 +192,7 @@ pub fn fn_006a1490(e: &mut Engine, this: Ptr, index: u32) -> u32 {
 // Translated from 006a1400 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (`RET 4`): forwards to `006a1490`.
 pub fn fn_006a1400(e: &mut Engine, this: Ptr, index: u32) -> u32 {
-    fn_006a1490(e, this, index)
+    e.call(0x006a_1490, &args![this, index]).u32()
 }
 
 // Translated from 006a1b60 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1880,7 +1880,7 @@ pub fn fn_006a2500(e: &mut Engine, this: Ptr) -> Ptr {
 pub fn fn_006a25d0(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), SCRAP_ARRAY_VTABLE_0106B438);
     e.call(ARRAY_RELEASE_008454F0, &args![this, 1u32]);
-    fn_006a2580(e, this);
+    e.call(0x006a_2580, &args![this]);
 }
 
 // Translated from 006a1500 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1893,7 +1893,7 @@ pub fn fn_006a25d0(e: &mut Engine, this: Ptr) {
 pub fn fn_006a1500(e: &mut Engine, this: Ptr) -> Ptr {
     let base = this.addr();
     e.mem.set_u32(base, ASTAR_SEARCH_VTABLE);
-    fn_006a1f70(e, Ptr::new(base + 4));
+    e.call(0x006a_1f70, &args![base + 4]);
     e.call(NODE_MAP_CTOR_006B3DE0, &args![base + SEARCH_NODE_MAP]);
     e.call(QUEUE_CTOR_006B9470, &args![base + SEARCH_QUEUE]);
     e.mem.set_u32(base + BEST_NODE_SO_FAR, 0);
@@ -2570,19 +2570,19 @@ pub fn navmesh_pov_search_build_pov_list_for_triangles(
                 e.mem.set_u32(pov + 0x10, radius);
                 let vertex = e.mem.u16(handle + 4);
                 e.mem.set_u16(pov + 0x34, vertex);
-                let first_triangle = fn_0069ef40(e, Ptr::new(edge_refs)) & 0xffff;
+                let first_triangle = e.call(0x0069_ef40, &args![edge_refs]).u32() & 0xffff;
                 let navmesh = e.mem.u32(handle);
                 let first = e
                     .call(TRIANGLE_005582F0, &args![navmesh, first_triangle])
                     .u32();
                 e.mem.set_u32(ebp - 0x80, first);
-                let second_triangle = fn_0069ef40(e, Ptr::new(edge_refs + 2)) & 0xffff;
+                let second_triangle = e.call(0x0069_ef40, &args![edge_refs + 2]).u32() & 0xffff;
                 let navmesh = e.mem.u32(handle);
                 let second = e
                     .call(TRIANGLE_005582F0, &args![navmesh, second_triangle])
                     .u32();
                 e.mem.set_u32(ebp - 0x7c, second);
-                let first_edge = fn_0069ef60(e, Ptr::new(edge_refs));
+                let first_edge = e.call(0x0069_ef60, &args![edge_refs]).u32();
                 let flagged = e
                     .call(
                         EDGE_FLAG_0068F1D0,
@@ -2591,7 +2591,7 @@ pub fn navmesh_pov_search_build_pov_list_for_triangles(
                     .u8()
                     != 0
                     || {
-                        let second_edge = fn_0069ef60(e, Ptr::new(edge_refs + 2));
+                        let second_edge = e.call(0x0069_ef60, &args![edge_refs + 2]).u32();
                         e.call(
                             EDGE_FLAG_0068F1D0,
                             &args![e.mem.u32(ebp - 0x7c), second_edge],
@@ -2603,8 +2603,8 @@ pub fn navmesh_pov_search_build_pov_list_for_triangles(
                     e.mem.set_u32(pov, 1);
                 }
                 for (refs, out) in [(edge_refs, ebp - 0x8c), (edge_refs + 2, ebp - 0x94)] {
-                    let edge = fn_0069ef60(e, Ptr::new(refs));
-                    let triangle = fn_0069ef40(e, Ptr::new(refs)) & 0xffff;
+                    let edge = e.call(0x0069_ef60, &args![refs]).u32();
+                    let triangle = e.call(0x0069_ef40, &args![refs]).u32() & 0xffff;
                     let navmesh = e.mem.u32(handle);
                     e.call(
                         GET_EDGE_VERTICES_0068F040,
@@ -2845,7 +2845,7 @@ fn place_end_pov(
         let count = array_size(e, lists);
         list_at(e, lists, count.wrapping_sub(2))
     } else {
-        fn_006a1420(e, Ptr::new(lists))
+        e.call(0x006a_1420, &args![lists]).u32()
     };
     e.call(ARRAY_PUSH_007CB2E0, &args![list, base + field]);
 }
@@ -2959,7 +2959,7 @@ pub fn fn_0069f010(
         let scale: f64 = e.global(GOAL_DISTANCE_SCALE);
         let heuristic = x87_quiet_bits(x87_store32(x87_mul(distance, scale)));
         let start_pov = e.mem.u32(base + START_POV);
-        let key = fn_0069f900(e, this, start_pov, 0);
+        let key = e.call(0x0069_f900, &args![this, start_pov, 0u32]).u32();
         e.call(
             START_NODE_006B32F0,
             &args![this, key, start_data, heuristic],
@@ -3328,7 +3328,7 @@ fn connect_tangent(e: &mut Engine, this: Ptr, c: &Connection, k: u32) -> bool {
     e.mem.set_u32(ebp - 0xac, x87_store32(total));
     let cost = x87_quiet_bits(e.mem.u32(ebp - 0xac));
     let direction = e.mem.u32(entry);
-    let key = fn_0069f900(e, this, other, direction);
+    let key = e.call(0x0069_f900, &args![this, other, direction]).u32();
     let result = e
         .call(NODE_FOR_KEY_006B3420, &args![this, key, cost, ebp - 0xa8])
         .u32();
