@@ -58,6 +58,8 @@ const CALLEES: &[u32] = &[
     0x0043_9410,
     0x0043_aaf0,
     0x0043_b230,
+    0x0043_b480,
+    0x0043_b4a0,
     0x0043_cfd0,
     0x0043_d090,
     0x0044_1110,
@@ -71,6 +73,7 @@ const CALLEES: &[u32] = &[
     0x0045_7ba0,
     0x0045_7fe0,
     0x0045_a5e0,
+    0x0045_bc00,
     0x0045_cec0,
     0x0046_9880,
     0x0046_ffb0,
@@ -81,6 +84,7 @@ const CALLEES: &[u32] = &[
     0x0047_e0e0,
     0x0048_3a00,
     0x0048_73d0,
+    0x0048_7f50,
     0x0048_ebc0,
     0x0048_f200,
     0x0049_5460,
@@ -112,6 +116,8 @@ const CALLEES: &[u32] = &[
     0x004f_4280,
     0x004f_8a30,
     0x004f_e160,
+    0x004f_ee60,
+    0x004f_f1a0,
     0x0050_1c10,
     0x0050_3a70,
     0x0052_5980,
@@ -122,11 +128,13 @@ const CALLEES: &[u32] = &[
     0x0057_5610,
     0x0057_6260,
     0x0057_85e0,
+    0x0057_8870,
     0x0057_c730,
     0x0057_dd70,
     0x0058_db10,
     0x0059_2220,
     0x005a_3370,
+    0x005a_5e70,
     0x005a_e3d0,
     0x005b_5e40,
     0x005c_5420,
@@ -150,8 +158,10 @@ const CALLEES: &[u32] = &[
     0x0066_ec10,
     0x0066_ecf0,
     0x0066_ef20,
+    0x0069_2480,
     0x006a_8500,
     0x006b_3eb0,
+    0x006f_3170,
     0x006f_fe10,
     0x0070_0320,
     0x0070_10e0,
@@ -198,6 +208,7 @@ const CALLEES: &[u32] = &[
     0x0071_8630,
     0x0071_87a0,
     0x0071_8890,
+    0x0071_9b80,
     0x0071_b160,
     0x0071_d0a0,
     0x0071_d580,
@@ -236,8 +247,11 @@ const CALLEES: &[u32] = &[
     0x0076_54f0,
     0x0076_5b80,
     0x0076_b630,
+    0x0076_b8a0,
+    0x0076_b930,
     0x0076_bb40,
     0x0076_bfe0,
+    0x0077_00d0,
     0x0077_1700,
     0x0077_28f0,
     0x0077_2d10,
@@ -247,6 +261,7 @@ const CALLEES: &[u32] = &[
     0x0077_5380,
     0x0077_5920,
     0x0077_5a00,
+    0x0077_a450,
     0x0077_f0d0,
     0x0077_f270,
     0x0077_f2f0,
@@ -270,18 +285,11 @@ const CALLEES: &[u32] = &[
     0x0078_db00,
     0x0078_e7c0,
     0x0079_17a0,
-    0x0079_6740,
-    0x0079_6b90,
     0x0079_8bf0,
-    0x0079_aba0,
-    0x0079_c340,
+    0x0079_93d0,
+    0x0079_cdb0,
+    0x0079_d410,
     0x0079_f640,
-    0x007a_1490,
-    0x007a_17a0,
-    0x007a_17e0,
-    0x007a_1820,
-    0x007a_1850,
-    0x007a_1880,
     0x007a_22d0,
     0x007a_7eb0,
     0x007a_8a10,
@@ -329,6 +337,7 @@ const CALLEES: &[u32] = &[
     0x007f_a010,
     0x007f_a0f0,
     0x007f_b150,
+    0x0083_b8d0,
     0x0083_e510,
     0x0083_fd60,
     0x0084_5460,
@@ -337,7 +346,10 @@ const CALLEES: &[u32] = &[
     0x0086_4980,
     0x0086_49a0,
     0x0086_5e50,
+    0x0086_7970,
     0x0086_7a20,
+    0x0086_7da0,
+    0x0086_9600,
     0x0087_f4c0,
     0x0087_f6c0,
     0x0087_f9f0,
@@ -346,6 +358,7 @@ const CALLEES: &[u32] = &[
     0x0090_5330,
     0x0090_5820,
     0x0095_3060,
+    0x0096_6bb0,
     0x0096_ad30,
     0x009c_a4a0,
     0x009f_f340,
@@ -393,14 +406,17 @@ const CALLEES: &[u32] = &[
     0x00a1_eff0,
     0x00a2_3010,
     0x00a2_3390,
+    0x00a5_9d30,
     0x00a5_d2c0,
     0x00a6_faf0,
     0x00a6_fb90,
     0x00aa_4db0,
     0x00ad_7550,
+    0x00ad_7ae0,
     0x00ad_8830,
     0x00ba_30f0,
     0x00ba_3130,
+    0x00bb_7a10,
     0x00c3_a8a0,
     0x00ec_17c0,
     0x00ec_43fb,
@@ -8884,4 +8900,841 @@ fn map_menu_fn_007a86b0_diff() {
         .in_arena(&[Arg::Ptr, Arg::Byte], CALLEES, &[])
         .run()
         .assert_same();
+}
+
+// ---- The map menu, part 2 ----------------------------------------------------------------------
+
+/// The variants of [`put_map_menu`]'s world: the pages 0x20 to 0x24 (0 to 4), no map menu (5),
+/// the notes page in challenge mode with a tile missing (6).
+const MAP_VARIANTS: [u32; 7] = [0, 1, 2, 3, 4, 5, 6];
+
+/// The map menu (`MapMenu::pMe`: object 255, so its words past +0x200 are the zeros after the
+/// arena; none in variant 5) with its 22 tiles (objects 100 on; tile 9 none in variant 6), the page
+/// (`MAP_PAGES`), its five list boxes empty (the arena's vtables, the container object 196), all
+/// notes shown in the odd variants, the selected note object 40 in variant 3, the displayed quest
+/// object 40's quest in the even variants, the waveform started but in variant 0; tile 2's and tile
+/// 16's node (object 130) with one child of two (object 131), the node's child and its property
+/// (objects 133, 134; none in variant 2); the menu answered for the map file (00a03c90) and its
+/// class 0x3ff but in variant 2; the player (object 140): two notes (objects 150, 151: the first
+/// read, its quests the quest 160), two objectives (objects 170, 171 of the quests 160, done, and
+/// 161; the first's state 2) and the active quest 160 in variant 2; three challenges (objects 180 to
+/// 182 of the owner object 147: inserted dim, inserted, left out) and the type shown (the variant
+/// mod 3), challenge mode in variant 6; one radio station (object 185, the current one in the even
+/// variants); the clock in 50 ms steps (the step's time 0) and the waveform's frame 75.0; the heap.
+fn put_map_menu(e: &mut Engine, variant: u32) {
+    use arena::object;
+    const MAP_PAGES: [u32; 7] = [0x20, 0x21, 0x22, 0x23, 0x24, 0x22, 0x23];
+    put_heap(e);
+    let menu = object(255);
+    e.mem
+        .set_u32(0x011d_a368, if variant == 5 { 0 } else { menu });
+    for k in 0..22u32 {
+        let tile = if variant == 6 && k == 9 {
+            0
+        } else {
+            object(100 + k)
+        };
+        e.mem.set_u32(menu + 0x28 + 4 * k, tile);
+    }
+    e.mem.set_u32(menu + 0x80, MAP_PAGES[variant as usize]);
+    e.mem
+        .set_f32(menu + 0x88, if variant == 0 { 0.0 } else { 100.0 });
+    e.mem.set_u8(menu + 0x8c, u8::from(variant % 2 == 1));
+    e.mem
+        .set_u32(menu + 0x90, if variant == 3 { object(40) } else { 0 });
+    let quest_40 = e.mem.u32(object(40) + 0x10);
+    e.mem
+        .set_u32(menu + 0xcc, if variant % 2 == 0 { quest_40 } else { 1 });
+    for list in [0x130u32, 0x160, 0x190, 0x1c0, 0x1f0] {
+        let at = menu + list;
+        e.mem.set_u32(at, arena::VTABLES);
+        for offset in [4u32, 8, 0x10, 0x14, 0x18, 0x1c, 0x20, 0x2c] {
+            e.mem.set_u32(at + offset, 0);
+        }
+        e.mem.set_u32(at + 0xc, object(196));
+    }
+    for tile in [object(102), object(116)] {
+        e.mem.set_u32(tile + 0x2c, object(130));
+    }
+    e.register_double(0x0043_b480, |_, _| Ret {
+        eax: 2,
+        ..Ret::default()
+    });
+    e.register_double(0x0043_b4a0, |_, words| Ret {
+        eax: if words[1] == 0 { object(131) } else { 0 },
+        ..Ret::default()
+    });
+    let (child, property) = if variant == 2 {
+        (0, 0)
+    } else {
+        (object(133), object(134))
+    };
+    e.register_double(0x0045_bc00, move |_, _| Ret {
+        eax: child,
+        ..Ret::default()
+    });
+    e.register_double(0x00a5_9d30, move |_, _| Ret {
+        eax: property,
+        ..Ret::default()
+    });
+    let answer = if variant == 5 { 0 } else { menu };
+    e.register_double(0x00a0_3c90, move |_, _| Ret {
+        eax: answer,
+        ..Ret::default()
+    });
+    if variant != 2 {
+        e.register_double(arena::CODE + 0x34, |_, _| Ret {
+            eax: 0x3ff,
+            ..Ret::default()
+        });
+    }
+    let player = object(140);
+    e.mem.set_u32(0x011d_ea3c, player);
+    e.mem.set_u32(player + 0x5e4, object(150));
+    e.mem.set_u32(player + 0x5e8, object(145));
+    e.mem.set_u32(object(145), object(151));
+    e.mem.set_u32(object(145) + 4, 0);
+    e.mem
+        .set_u32(player + 0x6b8, if variant == 2 { object(160) } else { 0 });
+    e.mem.set_u32(player + 0x6bc, object(170));
+    e.mem.set_u32(player + 0x6c0, object(146));
+    e.mem.set_u32(object(146), object(171));
+    e.mem.set_u32(object(146) + 4, 0);
+    e.register_double(0x0096_6bb0, |_, words| Ret {
+        eax: object(150 + words[1] % 2),
+        ..Ret::default()
+    });
+    e.mem.set_u8(object(150) + 0x7d, 1);
+    e.mem.set_u8(object(151) + 0x7d, 0);
+    e.mem.set_u32(object(150) + 0x74, object(160));
+    e.mem.set_u32(object(150) + 0x78, 0);
+    for (objective, quest, state) in [(170u32, 160u32, 2u32), (171, 161, 0)] {
+        e.mem.set_u32(object(objective) + 0x10, object(quest));
+        e.mem.set_u32(object(objective) + 0x20, state);
+    }
+    e.mem.set_u8(object(160) + 0x3c, 2);
+    e.mem.set_u8(object(161) + 0x3c, 0);
+    let owner = object(147);
+    e.mem.set_u32(0x011c_3f2c, owner);
+    let nodes = [owner + 0x98, object(148), object(149)];
+    for (k, (flags, state, kind, value)) in [(0u16, 2u32, 1u32, 5u32), (1, 1, 3, 0), (5, 0, 9, 0)]
+        .into_iter()
+        .enumerate()
+    {
+        let challenge = object(180 + k as u32);
+        e.mem.set_u32(nodes[k], challenge);
+        e.mem
+            .set_u32(nodes[k] + 4, nodes.get(k + 1).copied().unwrap_or(0));
+        e.mem.set_u16(challenge + 0x5c, flags);
+        e.mem.set_u32(challenge + 0x70, state);
+        e.mem.set_u32(challenge + 0x54, kind);
+        e.mem.set_u32(challenge + 0x6c, value);
+    }
+    e.mem.set_u8(0x011d_a36d, u8::from(variant == 6));
+    e.mem.set_u8(0x011d_a36e, (variant % 3) as u8);
+    e.mem.set_u32(0x011d_d59c, object(185));
+    e.mem.set_u32(0x011d_d5a0, 0);
+    e.mem
+        .set_u32(0x011d_d42c, if variant % 2 == 0 { 0x011d_d59c } else { 0 });
+    e.mem.set_u32(0x011d_a418, 0);
+    e.mem.set_u64(0x0107_5000, 75.0f64.to_bits());
+    e.mem.set_u32(HEAP + 4, 100);
+    e.register_double(0x0045_7fe0, |e, _| {
+        let now = e.mem.u32(HEAP + 4);
+        e.mem.set_u32(HEAP + 4, now + 50);
+        Ret {
+            eax: now,
+            ..Ret::default()
+        }
+    });
+}
+
+/// The variants of [`put_map_items`]'s world.
+const MAP_ITEM_VARIANTS: [u32; 6] = [0, 1, 2, 3, 4, 5];
+
+/// [`put_map_menu`]'s world (its variant 0, no map menu in variant 5), with the pointer arguments
+/// (objects 3 and 40) as the callbacks' items. As challenges, each variant one case of the filter:
+/// kinds 0, 3, 9, 1, 8 and 0xe of the type shown 0, 1, 2, 2, 1 and 0, the value above 0 (variants
+/// 0, 4, 5), the flag bit 2 (1) or the state bit 2 (2), none (3). As notes: their first quest the
+/// player's active quest (object 160) but in variant 4, all notes shown in variant 1. As objectives:
+/// object 3's quest the displayed one in variant 0. As stations: the form flag 0x800 in variant 1.
+fn put_map_items(e: &mut Engine, variant: u32) {
+    use arena::object;
+    let v = variant as usize;
+    put_map_menu(e, if variant == 5 { 5 } else { 0 });
+    let menu = object(255);
+    e.mem.set_u8(menu + 0x8c, u8::from(variant == 1));
+    e.mem.set_u32(object(140) + 0x6b8, object(160));
+    e.mem.set_u8(0x011d_a36e, [0u8, 1, 2, 2, 1, 0][v]);
+    for item in [object(3), object(40)] {
+        e.mem.set_u32(item + 0x54, [0u32, 3, 9, 1, 8, 0xe][v]);
+        e.mem.set_u32(item + 0x6c, [1u32, 0, 0, 0, 2, 1][v]);
+        e.mem.set_u16(item + 0x5c, [0u16, 4, 0, 0, 0, 0][v]);
+        e.mem.set_u32(item + 0x70, [0u32, 0, 4, 0, 0, 0][v]);
+        e.mem
+            .set_u32(item + 0x74, if v == 4 { object(161) } else { object(160) });
+        e.mem.set_u32(item + 0x78, 0);
+        e.mem.set_u32(item + 8, if v == 1 { 0x800 } else { 0 });
+    }
+    let quest = e.mem.u32(object(3) + 0x10);
+    e.mem
+        .set_u32(menu + 0xcc, if v == 0 { quest } else { quest ^ 1 });
+}
+
+/// The variants of [`put_map_sort`]'s world.
+const MAP_SORT_VARIANTS: [u32; 5] = [0, 1, 2, 3, 4];
+
+/// Two list items for the sorts (objects 3 and 40: their tiles objects 110 and 112, their data
+/// objects 111 and 113, whose names are strings): the text alphas (`Tile::GetFloat` of any trait but
+/// `0xfac` answers the tile's float at +0x40, of `0xfac` its +0x44) 128.0 and 255.0, the other way
+/// round, both 255.0 with the indices 1 and 2, equal indices, the indices 2 and 1.
+fn put_map_sort(e: &mut Engine, variant: u32) {
+    use arena::object;
+    let v = variant as usize;
+    put_map_menu(e, 0);
+    e.mem.set_f32(0x011d_a344, 0.0);
+    e.mem.set_u64(0x0101_e568, 255.0f64.to_bits());
+    e.mem.set_u64(0x0102_e430, 128.0f64.to_bits());
+    let alphas = [
+        (128.0f32, 255.0f32),
+        (255.0, 128.0),
+        (255.0, 255.0),
+        (255.0, 255.0),
+        (128.0, 128.0),
+    ];
+    let indices = [
+        (0.0f32, 0.0f32),
+        (0.0, 0.0),
+        (1.0, 2.0),
+        (3.0, 3.0),
+        (2.0, 1.0),
+    ];
+    for (k, (item, tile, data)) in [(3u32, 110u32, 111u32), (40, 112, 113)]
+        .into_iter()
+        .enumerate()
+    {
+        e.mem.set_u32(object(item), object(tile));
+        e.mem.set_u32(object(item) + 4, object(data));
+        let (alpha, index) = if k == 0 {
+            (alphas[v].0, indices[v].0)
+        } else {
+            (alphas[v].1, indices[v].1)
+        };
+        e.mem.set_f32(object(tile) + 0x40, alpha);
+        e.mem.set_f32(object(tile) + 0x44, index);
+    }
+    e.register_double(0x00a0_11b0, |e, words| Ret {
+        st0: f64::from(e.mem.f32(words[0].wrapping_add(if words[1] == 0xfac {
+            0x44
+        } else {
+            0x40
+        }))),
+        ..Ret::default()
+    });
+}
+
+/// The map menu's worlds, as settings of a Diff.
+trait MapMenuWorlds {
+    /// In [`put_map_menu`]'s world with `args`, the variants `variants`, `calls` calls at most a run.
+    fn in_map_menu(self, args: &'static [Arg], variants: &'static [u32], calls: usize) -> Diff;
+}
+
+impl MapMenuWorlds for Diff {
+    fn in_map_menu(self, args: &'static [Arg], variants: &'static [u32], calls: usize) -> Diff {
+        self.in_arena_and(args, CALLEES, &[], variants, put_map_menu)
+            .max_cases(28)
+            .max_calls(calls)
+    }
+}
+
+#[test]
+fn map_menu_attach_tile_by_id_diff() {
+    Diff::new(engine_core::entry!(
+        0x0072_d040,
+        interface::map_menu_p2::map_menu_attach_tile_by_id(Ptr, i32, u32)
+    ))
+    .in_arena(&[Arg::Object, Arg::TileId, Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_map_menu_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_6740,
+        interface::map_menu_p2::map_menu_map_menu(Ptr) -> Ptr
+    ))
+    .in_map_menu(&[Arg::MapMenu], &[0], 400)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_get_class_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_6a40,
+        interface::map_menu_p2::map_menu_get_class(Ptr) -> u32
+    ))
+    .in_arena(&[Arg::Object], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_scalar_deleting_destructor_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_6a50,
+        interface::map_menu_p2::map_menu_scalar_deleting_destructor(Ptr, u32) -> Ptr
+    ))
+    .in_map_menu(&[Arg::MapMenu, Arg::Byte], &[0], 600)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_00796a80_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_6a80,
+        interface::map_menu_p2::fn_00796a80(Ptr)
+    ))
+    .in_map_menu(&[Arg::MapMenu], &[0], 600)
+    .run()
+    .assert_same();
+}
+
+/// `Create`: the whole set-up (variants 0 and 1), the menu not the map menu (2), none (5), a tile
+/// missing (6).
+#[test]
+fn map_menu_create_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_6b90,
+        interface::map_menu_p2::map_menu_create() -> u32
+    ))
+    .in_map_menu(&[], &[0, 1, 2, 5, 6], 3000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_00796f40_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_6f40,
+        interface::map_menu_p2::fn_00796f40(Ptr, u8)
+    ))
+    .in_arena(&[Arg::Object, Arg::Byte], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_00796f90_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_6f90,
+        interface::map_menu_p2::fn_00796f90(Ptr) -> bool
+    ))
+    .in_map_menu(&[Arg::MapMenu], &[0, 6], 100)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007983c0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_83c0,
+        interface::map_menu_p2::fn_007983c0(Ptr) -> f32
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_00798400_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_8400,
+        interface::map_menu_p2::fn_00798400(Ptr) -> u32
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_00798420_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_8420,
+        interface::map_menu_p2::fn_00798420(Ptr) -> u8
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_00798440_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_8440,
+        interface::map_menu_p2::fn_00798440() -> u8
+    ))
+    .in_arena(&[], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_00798450_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_8450,
+        interface::map_menu_p2::fn_00798450(Ptr, u32) -> Ptr
+    ))
+    .in_arena(&[Arg::Object, Arg::Byte], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_do_down_click_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_8480,
+        interface::map_menu_p2::map_menu_do_down_click(Ptr, i32, u32)
+    ))
+    .in_map_menu(&[Arg::MapMenu, Arg::Small, Arg::Ptr], &[0], 100)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_do_controller_switch_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_a610,
+        interface::map_menu_p2::map_menu_do_controller_switch(Ptr, u8)
+    ))
+    .in_map_menu(&[Arg::MapMenu, Arg::Byte], &[0], 100)
+    .run()
+    .assert_same();
+}
+
+/// `UpdateMenu`: every page (its `UpdateCurrentPage` runs) and no map menu.
+#[test]
+fn map_menu_update_menu_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_aba0,
+        interface::map_menu_p2::map_menu_update_menu()
+    ))
+    .in_map_menu(&[], &MAP_VARIANTS, 4000)
+    .run()
+    .assert_same();
+}
+
+/// `UpdateCurrentPage`: every page, the notes page in challenge mode too.
+#[test]
+fn map_menu_update_current_page_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_af30,
+        interface::map_menu_p2::map_menu_update_current_page(Ptr)
+    ))
+    .in_map_menu(&[Arg::MapMenu], &MAP_VARIANTS, 4000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_update_notes_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_b240,
+        interface::map_menu_p2::map_menu_update_notes(Ptr)
+    ))
+    .in_map_menu(&[Arg::MapMenu], &[0, 1, 5], 2000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_0079b390_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_b390,
+        interface::map_menu_p2::fn_0079b390(u32) -> u8
+    ))
+    .in_arena_and(&[Arg::Ptr], CALLEES, &[], &MAP_ITEM_VARIANTS, put_map_items)
+    .max_cases(24)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_0079b430_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_b430,
+        interface::map_menu_p2::fn_0079b430(u32)
+    ))
+    .in_map_menu(&[Arg::Ptr], &[3, 5, 0], 100)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_toggle_notes_challenge_mode_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_b460,
+        interface::map_menu_p2::map_menu_toggle_notes_challenge_mode(Ptr, u8)
+    ))
+    .in_map_menu(&[Arg::MapMenu, Arg::Byte], &[0, 6, 3], 4000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_0079b600_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_b600,
+        interface::map_menu_p2::fn_0079b600(Ptr)
+    ))
+    .in_map_menu(&[Arg::MapMenu], &[0, 1, 2], 2000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_0079b720_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_b720,
+        interface::map_menu_p2::fn_0079b720(u32) -> u8
+    ))
+    .in_arena_and(&[Arg::Ptr], CALLEES, &[], &MAP_ITEM_VARIANTS, put_map_items)
+    .max_cases(24)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_0079b800_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_b800,
+        interface::map_menu_p2::fn_0079b800(Ptr) -> bool
+    ))
+    .in_arena_and(&[Arg::Ptr], CALLEES, &[], &MAP_ITEM_VARIANTS, put_map_items)
+    .max_cases(24)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_0079b820_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_b820,
+        interface::map_menu_p2::fn_0079b820(u32, u32) -> i32
+    ))
+    .in_arena_and(
+        &[Arg::Object, Arg::Ptr],
+        CALLEES,
+        &[],
+        &MAP_SORT_VARIANTS,
+        put_map_sort,
+    )
+    .max_cases(30)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_update_quests_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_b8e0,
+        interface::map_menu_p2::map_menu_update_quests(Ptr)
+    ))
+    .in_map_menu(&[Arg::MapMenu], &[0, 2, 1], 3000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_0079bc30_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_bc30,
+        interface::map_menu_p2::fn_0079bc30(Ptr) -> u32
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_0079bc50_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_bc50,
+        interface::map_menu_p2::fn_0079bc50(u32) -> u8
+    ))
+    .in_arena_and(&[Arg::Ptr], CALLEES, &[], &MAP_ITEM_VARIANTS, put_map_items)
+    .max_cases(24)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_0079bc90_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_bc90,
+        interface::map_menu_p2::fn_0079bc90(u32, u32) -> i32
+    ))
+    .in_arena_and(
+        &[Arg::Object, Arg::Ptr],
+        CALLEES,
+        &[],
+        &MAP_SORT_VARIANTS,
+        put_map_sort,
+    )
+    .max_cases(30)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_0079bd70_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_bd70,
+        interface::map_menu_p2::fn_0079bd70(u32, u32) -> i32
+    ))
+    .in_arena_and(
+        &[Arg::Object, Arg::Ptr],
+        CALLEES,
+        &[],
+        &MAP_SORT_VARIANTS,
+        put_map_sort,
+    )
+    .max_cases(30)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_0079be30_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_be30,
+        interface::map_menu_p2::fn_0079be30(u32) -> u8
+    ))
+    .in_arena_and(&[Arg::Ptr], CALLEES, &[], &MAP_ITEM_VARIANTS, put_map_items)
+    .max_cases(24)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_0079be80_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_be80,
+        interface::map_menu_p2::fn_0079be80(u32)
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_update_radio_list_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_bea0,
+        interface::map_menu_p2::map_menu_update_radio_list(Ptr)
+    ))
+    .in_map_menu(&[Arg::MapMenu], &[0, 1], 2000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_0079c070_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_c070,
+        interface::map_menu_p2::fn_0079c070() -> u32
+    ))
+    .in_arena(&[], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_0079c080_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_c080,
+        interface::map_menu_p2::fn_0079c080() -> u32
+    ))
+    .in_arena(&[], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_0079c090_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_c090,
+        interface::map_menu_p2::fn_0079c090(Ptr)
+    ))
+    .in_map_menu(&[Arg::MapMenu], &[0], 100)
+    .run()
+    .assert_same();
+}
+
+/// The radio waveform: started (variant 0) or going on, with a property and without (variant 2).
+#[test]
+fn map_menu_fn_0079c0c0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_c0c0,
+        interface::map_menu_p2::fn_0079c0c0(Ptr)
+    ))
+    .in_map_menu(&[Arg::MapMenu], &[0, 1, 2, 3], 400)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_0079c340_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_c340,
+        interface::map_menu_p2::fn_0079c340(u8)
+    ))
+    .in_map_menu(&[Arg::Byte], &[0, 5], 100)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a1400_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_1400,
+        interface::map_menu_p2::fn_007a1400(Ptr, u32)
+    ))
+    .in_arena(&[Arg::Object, Arg::Word], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a1430_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_1430,
+        interface::map_menu_p2::fn_007a1430(Ptr, u8)
+    ))
+    .in_arena(&[Arg::Object, Arg::Byte], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a1450_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_1450,
+        interface::map_menu_p2::fn_007a1450(Ptr, u32)
+    ))
+    .in_arena(&[Arg::Object, Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a1480_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_1480,
+        interface::map_menu_p2::fn_007a1480() -> u32
+    ))
+    .in_arena(&[], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_clear_map_memory_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_1490,
+        interface::map_menu_p2::map_menu_clear_map_memory()
+    ))
+    .in_map_menu(&[], &[0, 2, 5], 400)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_clear_world_map_texture_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_1670,
+        interface::map_menu_p2::map_menu_clear_world_map_texture()
+    ))
+    .in_map_menu(&[], &[0, 1, 2, 5], 200)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a1750_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_1750,
+        interface::map_menu_p2::fn_007a1750() -> bool
+    ))
+    .in_map_menu(&[], &[0, 5], 100)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a17a0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_17a0,
+        interface::map_menu_p2::fn_007a17a0() -> f32
+    ))
+    .in_map_menu(&[], &[0, 5], 100)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a17e0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_17e0,
+        interface::map_menu_p2::fn_007a17e0() -> f32
+    ))
+    .in_map_menu(&[], &[0, 5], 100)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a1820_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_1820,
+        interface::map_menu_p2::fn_007a1820(f32)
+    ))
+    .in_map_menu(&[Arg::F32], &[0, 5], 100)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a1850_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_1850,
+        interface::map_menu_p2::fn_007a1850(f32)
+    ))
+    .in_map_menu(&[Arg::F32], &[0, 5], 100)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_set_root_map_space_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_1880,
+        interface::map_menu_p2::map_menu_set_root_map_space(u32)
+    ))
+    .in_map_menu(&[Arg::Ptr], &[0, 5], 100)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a1b10_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_1b10,
+        interface::map_menu_p2::fn_007a1b10(Ptr, u32, u8)
+    ))
+    .in_string_array(&[Arg::Ptr, Arg::Small, Arg::Byte])
+    .run()
+    .assert_same();
 }

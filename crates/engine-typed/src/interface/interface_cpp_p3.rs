@@ -20,8 +20,6 @@ const HUD_SET_GUN_SCOPE_VISIBLE: u32 = 0x0077_f3c0;
 const HUD_FORWARD_FLAG: u32 = 0x0077_f420;
 const HUD_FORWARD_SECOND_FLAG: u32 = 0x0077_f490;
 const HUD_FORWARD_CALL: u32 = 0x0077_f270;
-/// `MapMenu::SetRootMapSpace` (Xbox PDB).
-const MAP_MENU_SET_ROOT_MAP_SPACE: u32 = 0x007a_1880;
 
 /// A byte global returned by [`fn_00709d10`].
 const FLAG_BYTE: u32 = 0x011d_b0ce;
@@ -169,7 +167,11 @@ pub fn fn_00709d10(e: &mut Engine) -> u8 {
 /// `Interface::SetRootMapSpace` (Xbox PDB): forwards its argument to
 /// `MapMenu::SetRootMapSpace`.
 pub fn interface_set_root_map_space(e: &mut Engine, space: u32) {
-    e.call(MAP_MENU_SET_ROOT_MAP_SPACE, &args![space]);
+    typed_call!(
+        super::FAMILY,
+        0x007a_1880,
+        super::map_menu_p2::map_menu_set_root_map_space(e, space)
+    );
 }
 
 // Typed from 00709d40

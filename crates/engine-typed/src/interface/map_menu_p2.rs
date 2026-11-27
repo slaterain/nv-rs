@@ -527,7 +527,16 @@ pub fn map_menu_map_menu(e: &mut Engine, this: Ptr) -> Ptr {
         let value = e.mem.u32(MARKER_START + 4 * word);
         e.mem.set_u32(at.wrapping_add(0xfc + 4 * word), value);
     }
-    for offset in [0xf8u32, 0x108, MAP_TILE, DISPLAYED_QUEST, SELECTED_NOTE, 0x11c, 0xd4, 0x94] {
+    for offset in [
+        0xf8u32,
+        0x108,
+        MAP_TILE,
+        DISPLAYED_QUEST,
+        SELECTED_NOTE,
+        0x11c,
+        0xd4,
+        0x94,
+    ] {
         e.mem.set_u32(at.wrapping_add(offset), 0);
     }
     let audio = e.mem.u32(AUDIO);
@@ -663,7 +672,9 @@ pub fn map_menu_create(e: &mut Engine) -> u32 {
     let tabline = map_tile(e, singleton(e), 17);
     initialize_tabline(
         e,
-        &[tabline, 0x20, names[4], names[3], names[2], names[1], names[0], 0],
+        &[
+            tabline, 0x20, names[4], names[3], names[2], names[1], names[0], 0,
+        ],
     );
     for (list, index, first_flag) in [
         (QUESTS, 7u32, true),
@@ -692,7 +703,9 @@ pub fn map_menu_create(e: &mut Engine) -> u32 {
     if property != 0 {
         e.call(PROPERTY_SET_007700D0, &args![property, 1u32]);
     }
-    let title = e.call(ADD_USER_TRAIT, &args![0x0106_ed20u32, u32::MAX]).i32();
+    let title = e
+        .call(ADD_USER_TRAIT, &args![0x0106_ed20u32, u32::MAX])
+        .i32();
     let title_tile = map_tile(e, singleton(e), 6);
     set_text(e, title_tile, title, EMPTY_TEXT);
     for index in [5u32, 3] {
@@ -806,9 +819,7 @@ pub fn map_menu_update_menu(e: &mut Engine) {
             }
             let name = in_place::setting_text(e, MAP_TAB_SETTING);
             let tabline = map_tile(e, singleton(e), 17);
-            let child = e
-                .call(TILE_GET_CHILD_BY_ID, &args![tabline, 0x24u32])
-                .u32();
+            let child = e.call(TILE_GET_CHILD_BY_ID, &args![tabline, 0x24u32]).u32();
             set_text(e, child, 0xfc4, name);
             let headline = in_place::setting_text(e, HEADLINE_SETTING);
             let menu_tile = e.mem.u32(singleton(e).wrapping_add(4));
@@ -951,8 +962,7 @@ pub fn fn_0079c080(_e: &mut Engine) -> u32 {
 // Typed from 0079c090
 /// The waveform's start time and tile 16's trait `0xfa3` cleared.
 pub fn fn_0079c090(e: &mut Engine, this: Ptr) {
-    e.mem
-        .set_f32(this.addr().wrapping_add(WAVEFORM_START), 0.0);
+    e.mem.set_f32(this.addr().wrapping_add(WAVEFORM_START), 0.0);
     let tile = map_tile(e, this.addr(), 16);
     tile_set_int(e, tile, 0xfa3, 0);
 }
@@ -968,10 +978,7 @@ pub fn fn_0079c340(e: &mut Engine, flag: u8) {
     let page = e.mem.u32(menu.wrapping_add(PAGE)).wrapping_sub(0x20);
     let manager = in_place::manager(e);
     let pipboy = in_place::pipboy(e, manager);
-    e.call(
-        SET_TAB_KNOB_POSITION,
-        &args![pipboy, page, u32::from(flag)],
-    );
+    e.call(SET_TAB_KNOB_POSITION, &args![pipboy, page, u32::from(flag)]);
 }
 
 // Typed from 007a1400
@@ -1178,8 +1185,10 @@ pub fn map_menu_set_root_map_space(e: &mut Engine, space: u32) {
         current = parent;
     }
     e.mem.set_u32(root, current);
-    e.mem
-        .set_u8(menu.wrapping_add(ROOT_SPACE_CHANGED), u8::from(old != current));
+    e.mem.set_u8(
+        menu.wrapping_add(ROOT_SPACE_CHANGED),
+        u8::from(old != current),
+    );
 }
 
 // Typed from 007a1b10
@@ -1289,7 +1298,12 @@ pub fn map_menu_update_current_page(e: &mut Engine, this: Ptr) {
         0x007a_5a30,
         map_menu::fn_007a5a30(e, list(CHALLENGES), 0)
     );
-    for (index, id, value) in [(11u32, 0xfaf, 1), (12, 0xfa3, 1), (18, 0xfa3, 0), (21, 0xfa3, 0)] {
+    for (index, id, value) in [
+        (11u32, 0xfaf, 1),
+        (12, 0xfa3, 1),
+        (18, 0xfa3, 0),
+        (21, 0xfa3, 0),
+    ] {
         let tile = map_tile(e, singleton(e), index);
         tile_set_int(e, tile, id, value);
     }
@@ -1334,8 +1348,7 @@ pub fn map_menu_update_current_page(e: &mut Engine, this: Ptr) {
                     0x0079_b240,
                     map_menu_update_notes(e, Ptr::new(menu))
                 );
-                if e.mem.u32(at.wrapping_add(SELECTED_NOTE)) != 0 && e.mem.u8(CHALLENGE_MODE) == 0
-                {
+                if e.mem.u32(at.wrapping_add(SELECTED_NOTE)) != 0 && e.mem.u8(CHALLENGE_MODE) == 0 {
                     let tile = e
                         .call(
                             LIST_BOX_GET_TILE_FOR,
@@ -1381,9 +1394,7 @@ pub fn map_menu_update_current_page(e: &mut Engine, this: Ptr) {
                 0x0079_bea0,
                 map_menu_update_radio_list(e, Ptr::new(menu))
             );
-            let tile = e
-                .vcall(radio, TILE_AT_SLOT, &args![index, 0u32])
-                .u32();
+            let tile = e.vcall(radio, TILE_AT_SLOT, &args![index, 0u32]).u32();
             if tile != 0 {
                 let manager = in_place::manager(e);
                 e.call(
@@ -1413,7 +1424,7 @@ pub fn map_menu_update_notes(e: &mut Engine, this: Ptr) {
     loop {
         let player = e.mem.u32(PLAYER);
         // The count is signed in the exe's compare.
-        if index.cast_signed() >= item_count(e, player.wrapping_add(PLAYER_NOTES)).cast_signed() {
+        if index as i32 >= item_count(e, player.wrapping_add(PLAYER_NOTES)) as i32 {
             break;
         }
         let note = e.call(PLAYER_NOTE_AT, &args![player, index]).u32();
@@ -1515,7 +1526,7 @@ pub fn map_menu_toggle_notes_challenge_mode(e: &mut Engine, this: Ptr, toggle: u
         let heading = in_place::setting_text(e, CHALLENGES_HEADING);
         set_text(e, map_tile(e, singleton(e), 18), 0xfc4, heading);
         tile_set_int(e, map_tile(e, singleton(e), 21), 0xfa3, 1);
-        let kind = i32::from(e.mem.u8(CHALLENGE_TYPE).cast_signed()).cast_unsigned();
+        let kind = i32::from(e.mem.i8(CHALLENGE_TYPE)) as u32;
         let names = e
             .mem
             .u32(CHALLENGE_TYPE_NAMES.wrapping_add(kind.wrapping_mul(4)));
@@ -1588,7 +1599,7 @@ pub fn fn_0079b720(e: &mut Engine, challenge: u32) -> u8 {
     {
         return 1;
     }
-    match (e.mem.u8(CHALLENGE_TYPE).cast_signed(), kind) {
+    match (e.mem.i8(CHALLENGE_TYPE), kind) {
         (0, 0..=2) | (1, 3 | 8) | (2, 4..=6 | 9..=0xd) => 0,
         _ => 1,
     }
@@ -1604,11 +1615,15 @@ pub fn fn_0079b820(e: &mut Engine, first: u32, second: u32) -> i32 {
     }
     let second_name = name_characters(
         e,
-        e.mem.u32(second.wrapping_add(4)).wrapping_add(CHALLENGE_NAME),
+        e.mem
+            .u32(second.wrapping_add(4))
+            .wrapping_add(CHALLENGE_NAME),
     );
     let first_name = name_characters(
         e,
-        e.mem.u32(first.wrapping_add(4)).wrapping_add(CHALLENGE_NAME),
+        e.mem
+            .u32(first.wrapping_add(4))
+            .wrapping_add(CHALLENGE_NAME),
     );
     e.call(COMPARE, &args![first_name, second_name]).i32()
 }
@@ -1632,9 +1647,7 @@ pub fn map_menu_update_quests(e: &mut Engine, this: Ptr) {
     let mut node = typed_call!(super::FAMILY, 0x0079_bc30, fn_0079bc30(e, Ptr::new(player)));
     e.with_stack(4, |e, quest| {
         let slot = quest.addr();
-        while node != 0
-            && !(e.mem.u32(node.wrapping_add(4)) == 0 && e.mem.u32(node) == 0)
-        {
+        while node != 0 && !(e.mem.u32(node.wrapping_add(4)) == 0 && e.mem.u32(node) == 0) {
             let objective = e.mem.u32(node);
             e.mem
                 .set_u32(slot, e.mem.u32(objective.wrapping_add(OBJECTIVE_QUEST)));
@@ -1657,7 +1670,11 @@ pub fn map_menu_update_quests(e: &mut Engine, this: Ptr) {
         typed_call!(
             super::FAMILY,
             0x007a_49e0,
-            map_menu::list_box_bgs_quest_objective_filter(e, Ptr::new(objectives), OBJECTIVES_FILTER)
+            map_menu::list_box_bgs_quest_objective_filter(
+                e,
+                Ptr::new(objectives),
+                OBJECTIVES_FILTER
+            )
         );
         return;
     }
@@ -1757,7 +1774,7 @@ pub fn fn_0079bc90(e: &mut Engine, first: u32, second: u32) -> i32 {
 /// otherwise the stations' names compared (`00408b20`).
 pub fn fn_0079bd70(e: &mut Engine, first: u32, second: u32) -> i32 {
     let full: f64 = e.global(FULL_ALPHA_DOUBLE);
-    let mut full_alpha = |e: &mut Engine| {
+    let full_alpha = |e: &mut Engine| {
         let id = static_id(e, TRAIT_TEXT_ALPHA);
         let tile = e.mem.u32(first);
         f64::from(tile_float(e, tile, id)) == full
@@ -1786,10 +1803,7 @@ pub fn map_menu_update_radio_list(e: &mut Engine, this: Ptr) {
         let in_range = in_range.addr();
         empty_list(e, in_range);
         let player = e.mem.u32(PLAYER);
-        e.call(
-            GET_RADIO_STATIONS_IN_RANGE,
-            &args![player, in_range, 0u32],
-        );
+        e.call(GET_RADIO_STATIONS_IN_RANGE, &args![player, in_range, 0u32]);
         e.vcall(radio, REMOVE_ALL_SLOT, &args![]);
         let mut node = typed_call!(super::FAMILY, 0x0079_c080, fn_0079c080(e));
         while node != 0 && e.mem.u32(node) != 0 {

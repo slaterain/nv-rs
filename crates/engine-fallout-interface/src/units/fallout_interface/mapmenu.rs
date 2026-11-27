@@ -811,7 +811,7 @@ pub fn map_menu_scalar_deleting_destructor(
     this: Ptr<MapMenu>,
     flags: u32,
 ) -> Ptr<MapMenu> {
-    fn_00796a80(e, this);
+    e.call(0x0079_6a80, &args![this]);
     if flags & 1 != 0 {
         e.call(FREE, &args![this]);
     }
@@ -884,7 +884,7 @@ pub fn map_menu_create(e: &mut Engine) -> u32 {
     // The code stores `pMe` back into itself here.
     let menu = map_menu(e);
     e.mem.set_u32(MAP_MENU_SINGLETON, menu);
-    if !fn_00796f90(e, Ptr::new(map_menu(e))) {
+    if !e.call(0x0079_6f90, &args![map_menu(e)]).bool() {
         e.call(PRINT_WARNING, &args![CREATION_FAILED_TEXT]);
         return 0;
     }
@@ -950,11 +950,11 @@ pub fn map_menu_create(e: &mut Engine) -> u32 {
     e.call(TILE_SET_STRING, &args![title_tile, title, EMPTY_TEXT, 1u32]);
     let menu = map_menu(e);
     let tile_5 = map_tile(e, menu, 5);
-    fn_00796f40(e, Ptr::new(tile_5), 1);
+    e.call(0x0079_6f40, &args![tile_5, 1]);
     let menu = map_menu(e);
     let tile_3 = map_tile(e, menu, 3);
-    fn_00796f40(e, Ptr::new(tile_3), 1);
-    map_menu_clear_map_memory(e);
+    e.call(0x0079_6f40, &args![tile_3, 1]);
+    e.call(0x007a_1490, &[]);
     let menu = map_menu(e);
     e.call(MENU_PREP_FOR_VISIBILITY, &args![menu, 1u32]);
     tile
@@ -1044,7 +1044,7 @@ pub fn map_menu_do_click(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32)
                     .call(TILE_IS_TRUE, &args![highlighted, selected_trait])
                     .bool();
                 let turn_on = !selected;
-                fn_0079c090(e, this);
+                e.call(0x0079_c090, &args![this]);
                 e.call(
                     LIST_BOX_FILTER_007314C0,
                     &args![radio, RADIO_FILTER_CALLBACK, 0u32, 0x7fff_ffffu32],
@@ -1094,7 +1094,7 @@ pub fn map_menu_do_click(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32)
             e.call(TILE_SET_INT, &args![tile_13, 0xfa3u32, 0u32]);
             let tile_12 = map_tile(e, base, 12);
             e.call(TILE_SET_INT, &args![tile_12, 0xfafu32, 1u32]);
-            map_menu_update_menu(e);
+            e.call(0x0079_aba0, &[]);
             let interface = e.call(INTERFACE_MANAGER, &args![]).u32();
             let rendered = e.call(WORD_AT_174, &args![interface]).u32();
             if e.call(PIPBOY_FLAG_00974D90, &args![rendered]).bool() {
@@ -1556,7 +1556,7 @@ fn run_note_conversation(e: &mut Engine, this: Ptr<MapMenu>, note: u32, handle: 
         }
     }
     if conversation != 0 {
-        fn_00798450(e, Ptr::new(conversation), 1);
+        e.call(0x0079_8450, &args![conversation, 1]);
     }
     if speaker != 0 {
         e.vcall(speaker, 0x10, &args![1u32]);
@@ -1813,7 +1813,7 @@ pub fn map_menu_do_idle(e: &mut Engine, this: Ptr<MapMenu>) {
                 if e.call(FLAG_00798440, &args![]).bool() {
                     e.call(PAGE_0079C0C0, &args![this]);
                 } else {
-                    fn_0079c090(e, this);
+                    e.call(0x0079_c090, &args![this]);
                 }
             }
             _ => {}
@@ -2088,7 +2088,7 @@ pub fn map_menu_clear_map_memory(e: &mut Engine) {
         e.call(TILE_SET_STRING, &args![tile_16, 0xfccu32, EMPTY_TEXT, 1u32]);
     }
     let menu = map_menu(e);
-    fn_0079c090(e, Ptr::new(menu));
+    e.call(0x0079_c090, &args![menu]);
 }
 
 // Translated from 007a1670 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4364,7 +4364,7 @@ fn centre_cursor_tile(e: &mut Engine) {
         let tile = map_tile(e, map_menu(e), 6);
         e.call(TILE_SET_FLOAT, &args![tile, 0xfa1u32, x, 1u32]);
         let interface = e.call(INTERFACE_MANAGER, &args![]).u32();
-        let cursor_y = f64::from(fn_007983c0(e, Ptr::new(interface)));
+        let cursor_y = f64::from(e.call(0x0079_83c0, &args![interface]).f32());
         let tile = map_tile(e, map_menu(e), 6);
         let owner = typed_call!(leaf::FAMILY, 0x0045_cd60, leaf::word_at_28(e, tile));
         let top = e.call(TILE_GETTER_00A01440, &args![owner]).f64();
@@ -4648,7 +4648,7 @@ pub fn map_menu_do_enter(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32)
                 if e.call(FLAG_004B71D0, &args![]).bool()
                     || (note != 0 && e.get(this, MapMenu::pSelectedNote) == 0)
                 {
-                    map_menu_load_note(e, this, note);
+                    e.call(0x0079_93d0, &args![this, note]);
                 }
                 let kind = e.call(NOTE_TYPE, &args![note]).u32();
                 if kind == 0 || e.call(NOTE_TYPE, &args![note]).u32() == 3 {
@@ -4656,7 +4656,7 @@ pub fn map_menu_do_enter(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32)
                         && e.get(this, MapMenu::pCurrentSound) != 0;
                     let tile_13 = map_tile(e, base, 13);
                     e.call(TILE_SET_INT, &args![tile_13, 0x1004u32, u32::from(playing)]);
-                } else if fn_00798420(e, Ptr::new(note)) == 0 {
+                } else if e.call(0x0079_8420, &args![note]).u8() == 0 {
                     let now = e.call(TIMER_NOW, &args![TIMER_011F6394]).u32();
                     e.set(this, MapMenu::uiNoteEnterStartTime, now);
                 }
@@ -5496,7 +5496,7 @@ fn show_note_subtitle(e: &mut Engine, this: Ptr<MapMenu>, flag: u32) {
         );
     });
     let subtitles = Ptr::<BSSimpleArray>::new(base + 0xa8);
-    fn_007a1b10(e, subtitles, 0, 1);
+    e.call(0x007a_1b10, &args![subtitles, 0, 1]);
 }
 
 /// The play time text of an audio note into tile 13's `"_ItemStringInfo"`
@@ -5746,9 +5746,9 @@ pub fn map_menu_update_current_page(e: &mut Engine, this: Ptr<MapMenu>) {
             let menu = map_menu(e);
             let tile = map_tile(e, map_menu(e), 2);
             e.mem.set_u32(menu + 0x84, tile);
-            if !fn_007a1750(e) {
+            if !e.call(0x007a_1750, &[]).bool() {
                 let menu = map_menu(e);
-                map_menu_update_local_map(e, Ptr::new(menu));
+                e.call(0x0079_d410, &args![menu]);
             }
         }
         1 => {
@@ -5756,11 +5756,11 @@ pub fn map_menu_update_current_page(e: &mut Engine, this: Ptr<MapMenu>) {
             let tile = map_tile(e, map_menu(e), 4);
             e.mem.set_u32(menu + 0x84, tile);
             let menu = map_menu(e);
-            map_menu_update_world_map(e, Ptr::new(menu));
+            e.call(0x0079_cdb0, &args![menu]);
         }
         2 => {
             let menu = map_menu(e);
-            map_menu_update_quests(e, Ptr::new(menu));
+            e.call(0x0079_b8e0, &args![menu]);
         }
         3 => {
             let tile_18 = map_tile(e, map_menu(e), 18);
@@ -5769,7 +5769,7 @@ pub fn map_menu_update_current_page(e: &mut Engine, this: Ptr<MapMenu>) {
                 let menu = map_menu(e);
                 e.call(0x0073_12e0, &args![menu + 0x160]);
                 let menu = map_menu(e);
-                map_menu_update_notes(e, Ptr::new(menu));
+                e.call(0x0079_b240, &args![menu]);
                 if e.get(this, MapMenu::pSelectedNote) != 0
                     && e.mem.u8(CHALLENGE_MODE_011DA36D) == 0
                 {
@@ -5777,7 +5777,7 @@ pub fn map_menu_update_current_page(e: &mut Engine, this: Ptr<MapMenu>) {
                         .call(LIST_BOX_GET_TILE_FOR, &args![base + 0x160, base + 0x90])
                         .u32();
                     let note = e.get(this, MapMenu::pSelectedNote);
-                    map_menu_load_note(e, this, note);
+                    e.call(0x0079_93d0, &args![this, note]);
                     if tile != 0 {
                         let selected = e.mem.u32(TRAIT_SELECTED);
                         e.call(TILE_SET_INT, &args![tile, selected, 1u32]);
@@ -5787,8 +5787,8 @@ pub fn map_menu_update_current_page(e: &mut Engine, this: Ptr<MapMenu>) {
                 e.call(0x007a_3580, &args![menu + 0x160, 1]);
             }
             let menu = map_menu(e);
-            fn_0079b600(e, Ptr::new(menu));
-            map_menu_toggle_notes_challenge_mode(e, this, 0);
+            e.call(0x0079_b600, &args![menu]);
+            e.call(0x0079_b460, &args![this, 0]);
         }
         4 => {
             let tile_12 = map_tile(e, map_menu(e), 12);
@@ -5802,7 +5802,7 @@ pub fn map_menu_update_current_page(e: &mut Engine, this: Ptr<MapMenu>) {
             };
             let index = e.call(FTOL2, &args![x87_load32(value)]).u32();
             let menu = map_menu(e);
-            map_menu_update_radio_list(e, Ptr::new(menu));
+            e.call(0x0079_bea0, &args![menu]);
             let tile = e.vcall(list, 0x14, &args![index, 0u32]).u32();
             if tile != 0 {
                 let interface = e.call(INTERFACE_MANAGER, &args![]).u32();
@@ -5885,7 +5885,7 @@ pub fn map_menu_update_notes(e: &mut Engine, this: Ptr<MapMenu>) {
             .call(0x007a_2930, &args![base + 0x160, note, name, 0, 0])
             .u32();
         e.call(TILE_SET_INT, &args![tile, 0xfaau32, 0x18u32]);
-        let dim = fn_00798420(e, Ptr::new(note)) != 0;
+        let dim = e.call(0x0079_8420, &args![note]).u8() != 0;
         set_item_alpha(e, tile, dim);
         index = index.wrapping_add(1);
     }
@@ -5991,7 +5991,7 @@ pub fn map_menu_toggle_notes_challenge_mode(e: &mut Engine, this: Ptr<MapMenu>, 
         e.call(TILE_SET_INT, &args![tile_21, 0xfa3u32, 0u32]);
     }
     if toggle != 0 {
-        map_menu_update_current_page(e, this);
+        e.call(0x0079_af30, &args![this]);
     }
 }
 
@@ -6050,7 +6050,7 @@ pub fn fn_0079b720(e: &mut Engine, challenge: u32) -> u8 {
     }
     let kind = e.call(CHALLENGE_KIND_006A1B60, &args![challenge]).u32();
     if e.call(CHALLENGE_VALUE_005E3FA0, &args![challenge]).i32() <= 0
-        && !fn_0079b800(e, Ptr::new(challenge))
+        && !e.call(0x0079_b800, &args![challenge]).bool()
         && e.call(CHALLENGE_STATE_005DEF70, &args![challenge]).u32() == 0
     {
         return 1;
@@ -6155,7 +6155,7 @@ pub fn map_menu_update_quests(e: &mut Engine, this: Ptr<MapMenu>) {
     e.vcall(base + 0x130, 0x1c, &args![]);
     e.vcall(base + 0x1c0, 0x1c, &args![]);
     let player = e.mem.u32(PLAYER_011DEA3C);
-    let mut node = fn_0079bc30(e, Ptr::new(player));
+    let mut node = e.call(0x0079_bc30, &args![player]).u32();
     e.with_stack(4, |e, quest_slot| {
         while node != 0 && !typed_call!(leaf::FAMILY, 0x0082_56d0, leaf::both_words_zero(e, node)) {
             let objective = node_item(e, node);
@@ -6322,7 +6322,7 @@ pub fn map_menu_update_radio_list(e: &mut Engine, this: Ptr<MapMenu>) {
         let player = e.mem.u32(PLAYER_011DEA3C);
         e.call(GET_RADIO_STATIONS_IN_RANGE, &args![player, in_range, 0u32]);
         e.vcall(base + 0x190, 0x1c, &args![]);
-        let mut node = fn_0079c080(e);
+        let mut node = e.call(0x0079_c080, &[]).u32();
         while node != 0 && node_item(e, node) != 0 {
             let station = node_item(e, node);
             let name = e.call(STATION_NAME_0055D520, &args![station]).u32();
@@ -6334,9 +6334,9 @@ pub fn map_menu_update_radio_list(e: &mut Engine, this: Ptr<MapMenu>) {
             let station = node_item(e, node);
             let name = e.call(STATION_NAME_0055D520, &args![station]).u32();
             e.call(TILE_TEXT_SETTER_00707E10, &args![tile, name]);
-            let selected = fn_0079c070(e) != 0 && {
+            let selected = e.call(0x0079_c070, &[]).u32() != 0 && {
                 let at = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
-                let current = fn_0079c070(e);
+                let current = e.call(0x0079_c070, &[]).u32();
                 e.mem.u32(at) == e.mem.u32(current)
             };
             let selected_id = e.mem.u32(TRAIT_SELECTED);
@@ -6762,7 +6762,7 @@ pub fn map_menu_zoom_map(e: &mut Engine, this: Ptr<MapMenu>, zoom_in: u8, factor
     if e.get(this, MapMenu::pMapTile) == 0 {
         return;
     }
-    if e.get(this, MapMenu::iCurrentPage) == 0x20 && fn_007a1750(e) {
+    if e.get(this, MapMenu::iCurrentPage) == 0x20 && e.call(0x007a_1750, &[]).bool() {
         return;
     }
     let factor = factor.to_bits();
@@ -7630,7 +7630,7 @@ pub fn map_menu_add_map_icons(e: &mut Engine, this: Ptr<MapMenu>) {
     map_menu_add_quest_markers(e, this);
     map_menu_add_companion_markers(e, this);
     let player = e.mem.u32(PLAYER_011DEA3C);
-    if fn_00798400(e, Ptr::new(player)) != 0 {
+    if e.call(0x0079_8400, &args![player]).u32() != 0 {
         map_menu_delete_player_marker(e, this);
         map_menu_create_player_marker(e, this);
     }
@@ -8245,7 +8245,7 @@ pub fn map_menu_create_player_marker(e: &mut Engine, this: Ptr<MapMenu>) {
         let player = e.mem.u32(PLAYER_011DEA3C);
         let path = fn_0079f620(e, Ptr::new(player));
         let player = e.mem.u32(PLAYER_011DEA3C);
-        let marker = fn_00798400(e, Ptr::new(player));
+        let marker = e.call(0x0079_8400, &args![player]).u32();
         map_menu_get_world_map_tracking_ref(e, this, marker, path)
     } else {
         let player = e.mem.u32(PLAYER_011DEA3C);
@@ -8259,18 +8259,18 @@ pub fn map_menu_create_player_marker(e: &mut Engine, this: Ptr<MapMenu>) {
             let from = e.get(this, MapMenu::pMapPlayerRef);
             map_menu_create_waypoint_path(e, this, from, tracked, path, 0x1e);
         }
-    } else if fn_00798400(e, Ptr::new(player)) != 0 {
+    } else if e.call(0x0079_8400, &args![player]).u32() != 0 {
         let take = if e.get(this, MapMenu::iCurrentPage) == 0x21 {
-            let marker = fn_00798400(e, Ptr::new(player));
+            let marker = e.call(0x0079_8400, &args![player]).u32();
             !e.call(REFR_GET_INTERIOR, &args![marker]).bool()
         } else {
             e.get(this, MapMenu::iCurrentPage) == 0x20 && {
-                let marker = fn_00798400(e, Ptr::new(player));
+                let marker = e.call(0x0079_8400, &args![player]).u32();
                 in_player_cell(e, marker)
             }
         };
         if take {
-            tracked = fn_00798400(e, Ptr::new(player));
+            tracked = e.call(0x0079_8400, &args![player]).u32();
         }
     }
     if tracked == 0 {
@@ -8329,22 +8329,22 @@ pub fn map_menu_set_player_marker(e: &mut Engine) {
         return;
     }
     let player = e.mem.u32(PLAYER_011DEA3C);
-    if fn_00798400(e, Ptr::new(player)) == 0 {
+    if e.call(0x0079_8400, &args![player]).u32() == 0 {
         return;
     }
-    let marker = fn_00798400(e, Ptr::new(player));
+    let marker = e.call(0x0079_8400, &args![player]).u32();
     let position = e.vcall(marker, 0x1f4, &args![]).u32();
     let menu = map_menu(e);
     for word in 0..3 {
         let value = e.mem.u32(position + 4 * word);
         e.mem.set_u32(menu + 0xfc + 4 * word, value);
     }
-    let marker = fn_00798400(e, Ptr::new(player));
+    let marker = e.call(0x0079_8400, &args![player]).u32();
     let space = e.call(REFR_GET_WORLD_SPACE, &args![marker]).u32();
     let menu = map_menu(e);
     e.mem.set_u32(menu + 0xf8, space);
     if e.mem.u32(map_menu(e) + 0xf8) == 0 {
-        let marker = fn_00798400(e, Ptr::new(player));
+        let marker = e.call(0x0079_8400, &args![player]).u32();
         let cell = e.call(PLAYER_CELL_008D6F30, &args![marker]).u32();
         let menu = map_menu(e);
         e.mem.set_u32(menu + 0xf8, cell);
@@ -8880,7 +8880,7 @@ pub fn fn_0079ffb0(e: &mut Engine, save: u8) {
         return;
     }
     let tile_2 = map_tile(e, map_menu(e), 2);
-    if e.call(TILE_OBJECT_0056C7F0, &args![tile_2]).u32() == 0 || !fn_007a1750(e) {
+    if e.call(TILE_OBJECT_0056C7F0, &args![tile_2]).u32() == 0 || !e.call(0x007a_1750, &[]).bool() {
         return;
     }
     e.with_stack(0x60, |e, frame| {
@@ -8943,7 +8943,7 @@ fn local_map_step(e: &mut Engine, save: u8, locals: [u32; 6]) {
         let object = terrain_object(e);
         e.call(OBJECT_SET_FLAG_00450F90, &args![object, 1u32]);
     }
-    let other = fn_007a1480(e);
+    let other = e.call(0x007a_1480, &[]).u32();
     let other_flag = e.call(OBJECT_FLAG_00456610, &args![other]).u8();
     if other_flag == 0 {
         e.call(OBJECT_SET_FLAG_00450F90, &args![other, 1u32]);
@@ -9215,8 +9215,8 @@ fn local_map_step(e: &mut Engine, save: u8, locals: [u32; 6]) {
     let picture = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, texture));
     e.call(SET_TILE_TEXTURE, &args![property, picture]);
     e.call(PROPERTY_SET_008CC6D0, &args![property, 0u32]);
-    fn_007a1450(e, Ptr::new(property), color);
-    fn_007a1430(e, Ptr::new(property), 1);
+    e.call(0x007a_1450, &args![property, color]);
+    e.call(0x007a_1430, &args![property, 1]);
     e.call(TEXTURE_POINTER_SET_0066B0D0, &args![texture, 0u32]);
     e.call(AV_OBJECT_ATTACH_PROPERTY, &args![shape, property]);
     let memory = e.call(ALLOCATE_00AA13E0, &args![0x1cu32]).u32();
@@ -9249,7 +9249,7 @@ fn local_map_step(e: &mut Engine, save: u8, locals: [u32; 6]) {
     let node = e.call(TILE_OBJECT_0056C7F0, &args![tile_2]).u32();
     e.vcall(node, 0xdc, &args![shape, 1u32]);
     let tile_2 = map_tile(e, map_menu(e), 2);
-    fn_007a1400(e, Ptr::new(tile_2), 0x20);
+    e.call(0x007a_1400, &args![tile_2, 0x20]);
     for (index, word) in saved.iter().enumerate() {
         e.mem
             .set_u32(RENDER_STATE_011FF3A8 + 4 * index as u32, *word);
@@ -9292,10 +9292,10 @@ fn local_map_step(e: &mut Engine, save: u8, locals: [u32; 6]) {
     let next = e.mem.u32(menu + 0x128).wrapping_add(1);
     let menu = map_menu(e);
     e.mem.set_u32(menu + 0x128, next);
-    if !fn_007a1750(e) {
+    if !e.call(0x007a_1750, &[]).bool() {
         let menu = map_menu(e);
         if e.mem.u32(menu + 0x84) == map_tile(e, menu, 2) {
-            map_menu_update_local_map(e, Ptr::new(menu));
+            e.call(0x0079_d410, &args![menu]);
         }
     }
     e.call(WAVEFORM_LOCAL_DESTRUCT_0045CEC0, &args![texture]);
