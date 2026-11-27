@@ -9141,7 +9141,8 @@ fn put_map_sort(e: &mut Engine, variant: u32) {
 
 /// The map menu's worlds, as settings of a Diff.
 trait MapMenuWorlds {
-    /// In [`put_map_menu`]'s world with `args`, the variants `variants`, `calls` calls at most a run.
+    /// In [`put_map_menu`]'s world with `args`, the variants `variants`, `calls` calls at most a run;
+    /// `IsTopMenuID`'s translation reaches `007027b0` and `00702680` plainly.
     fn in_map_menu(self, args: &'static [Arg], variants: &'static [u32], calls: usize) -> Diff;
 }
 
