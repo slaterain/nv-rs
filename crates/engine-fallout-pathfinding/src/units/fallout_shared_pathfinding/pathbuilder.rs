@@ -696,7 +696,7 @@ pub fn path_builder_build_nav_mesh_info_path(
         let req = request(e, this);
         let mut request_5c = 0;
         if !call_bool(e, REQUEST_BYTE_98, &[req]) {
-            request_5c = fn_006c9900(e, req);
+            request_5c = e.call(0x006c_9900, &args![req]).u32();
         }
         let flag = u32::from(call_bool(e, REQUEST_BYTE_A4, &[req]));
         let destination = call_u32(e, REQUEST_DESTINATION, &[req]);
@@ -820,7 +820,7 @@ pub fn path_builder_build_teleport_door_path(e: &mut Engine, this: Ptr<PathBuild
         let req = request(e, this);
         let mut request_5c = 0;
         if !call_bool(e, REQUEST_BYTE_98, &[req]) {
-            request_5c = fn_006c9900(e, req);
+            request_5c = e.call(0x006c_9900, &args![req]).u32();
         }
         let destination = call_u32(e, REQUEST_DESTINATION, &[req]);
         let origin = call_u32(e, REQUEST_ORIGIN, &[req]);
@@ -897,7 +897,7 @@ pub fn path_builder_build_teleport_door_path(e: &mut Engine, this: Ptr<PathBuild
                 space,
                 next_door,
             ) {
-                fn_006c9fa0(e, sol, 1);
+                e.call(0x006c_9fa0, &args![sol, 1u8]);
                 return finish_teleport_path(e, search, path, false);
             }
             index += 1;
@@ -916,7 +916,7 @@ pub fn path_builder_build_teleport_door_path(e: &mut Engine, this: Ptr<PathBuild
             space,
             0,
         ) {
-            fn_006c9fa0(e, sol, 1);
+            e.call(0x006c_9fa0, &args![sol, 1u8]);
             return finish_teleport_path(e, search, path, false);
         }
         finish_teleport_path(e, search, path, found)
@@ -1035,7 +1035,7 @@ pub fn fn_006ca0e0(e: &mut Engine, this: Ptr<PathBuilder>, segment_word: u32, in
             return false;
         }
         let req = request(e, this);
-        if fn_006ca4c0(e, req)
+        if e.call(0x006c_a4c0, &args![req]).bool()
             && call_u32(e, SOLUTION_FIRST_LOADED, &[sol]) == 0
             && call_u32(e, SOLUTION_CURRENT_NODE_COUNT, &[sol]) >= 2
         {
@@ -1050,7 +1050,7 @@ pub fn fn_006ca0e0(e: &mut Engine, this: Ptr<PathBuilder>, segment_word: u32, in
                 let distance = e.call(POINT3_LENGTH_SQUARED, &[offset]).f64();
                 if distance > e.global::<f64>(TANGENT_DISTANCE_01017A10) {
                     let radius = e.call(REQUEST_ACTOR_RADIUS, &[req]).f32();
-                    let heading = fn_006ca4e0(e, req);
+                    let heading = e.call(0x006c_a4e0, &args![req]).f32();
                     e.call(
                         BUILD_FIRST_TANGENT,
                         &[
@@ -1145,7 +1145,7 @@ pub fn fn_006ca500(e: &mut Engine, this: Ptr<PathBuilder>, segments: u32) -> boo
         let mut index = first;
         while index <= last {
             let node = virtual_node(e, sol, index as u32);
-            let value = fn_006ca830(e, node);
+            let value = e.call(0x006c_a830, &args![node]).bool();
             e.mem.set_u8(f.at(-0x85), u8::from(value));
             e.call(BOOL_SCRAP_ARRAY_ADD, &[flags, f.at(-0x85)]);
             index = index.wrapping_add(1);
@@ -1263,7 +1263,7 @@ pub fn fn_006ca850(e: &mut Engine, this: Ptr<PathBuilder>, _unused_1: u32) -> bo
             return false;
         }
         let req = request(e, this);
-        let lenient = fn_006caa20(e, req);
+        let lenient = e.call(0x006c_aa20, &args![req]).bool();
         array_size(e, segments);
         let sol = solution(e, this);
         let mut index = 0u32;
@@ -1274,7 +1274,7 @@ pub fn fn_006ca850(e: &mut Engine, this: Ptr<PathBuilder>, _unused_1: u32) -> bo
                 if index > 0 {
                     let previous = call_u32(e, SPACE_ELEMENT, &[segments, index - 1]);
                     if e.mem.u8(previous + 8) != 0 && !lenient {
-                        fn_006c9fa0(e, sol, 1);
+                        e.call(0x006c_9fa0, &args![sol, 1u8]);
                         e.call(SEGMENT_SCRAP_ARRAY_DESTRUCT, &[segments]);
                         return false;
                     }
@@ -1549,7 +1549,7 @@ pub fn path_builder_build_path_to_valid_nav_mesh_triangle(
                     );
                     e.call(EDGE_ARRAY_COPY_TO, &[edges, ray_request + 0x58]);
                     let path = f.at(-0x12c);
-                    fn_006cb480(e, path);
+                    let _: u32 = e.call(0x006c_b480, &args![path]).u32();
                     let search = f.at(-0x114);
                     e.call(RAY_CAST_SEARCH_CONSTRUCT, &[search]);
                     let mut result = e
@@ -1567,8 +1567,8 @@ pub fn path_builder_build_path_to_valid_nav_mesh_triangle(
                         2
                     };
                     e.call(RAY_CAST_SEARCH_DESTRUCT, &[search]);
-                    fn_006cb4a0(e, path);
-                    fn_006cb410(e, ray_request);
+                    e.call(0x006c_b4a0, &args![path]);
+                    e.call(0x006c_b410, &args![ray_request]);
                     built
                 }
                 _ => 2,
@@ -1670,7 +1670,7 @@ pub fn path_builder_build_straight_path_using_ray_casts(
             req,
         );
         let path = f.at(-0x124);
-        fn_006cb480(e, path);
+        let _: u32 = e.call(0x006c_b480, &args![path]).u32();
         let search = f.at(-0x10c);
         e.call(RAY_CAST_SEARCH_CONSTRUCT, &[search]);
         let result = e
@@ -1683,8 +1683,8 @@ pub fn path_builder_build_straight_path_using_ray_casts(
             2
         };
         e.call(RAY_CAST_SEARCH_DESTRUCT, &[search]);
-        fn_006cb4a0(e, path);
-        fn_006cb410(e, ray_request);
+        e.call(0x006c_b4a0, &args![path]);
+        e.call(0x006c_b410, &args![ray_request]);
         built
     })
 }
@@ -1963,7 +1963,7 @@ pub fn fn_006cb950(e: &mut Engine, this: Ptr<PathBuilder>, first: u32, last: u32
                 return false;
             }
             if !fn_006cb6a0(e, this, last, arrays.end_edges, arrays.end_locations) {
-                fn_006c9fa0(e, sol, 1);
+                e.call(0x006c_9fa0, &args![sol, 1u8]);
             }
             let edge = fn_006cedf0(e, arrays.end_edges);
             let triangle = u32::from(e.mem.u16(edge + 4));
@@ -2003,7 +2003,7 @@ pub fn fn_006cb950(e: &mut Engine, this: Ptr<PathBuilder>, first: u32, last: u32
                 complete
             }
             1 => {
-                fn_006c9fa0(e, sol, 1);
+                e.call(0x006c_9fa0, &args![sol, 1u8]);
                 arrays.destroy(e);
                 false
             }
@@ -2034,7 +2034,7 @@ pub fn fn_006cb950(e: &mut Engine, this: Ptr<PathBuilder>, first: u32, last: u32
                             arrays.destroy(e);
                             return false;
                         }
-                        fn_006c9fa0(e, sol, 0);
+                        e.call(0x006c_9fa0, &args![sol, 0u8]);
                         add_location_nodes(e, sol, path);
                         let complete = !call_bool(e, SOLUTION_INCOMPLETE, &[sol]);
                         e.call(LOCATION_ARRAY_DESTRUCT, &[path]);
@@ -2297,7 +2297,7 @@ pub fn fn_006cc5e0(
                         }
                         if !fn_006ca0c0(e, goal_node) {
                             incomplete = true;
-                            fn_006c9fa0(e, sol, 1);
+                            e.call(0x006c_9fa0, &args![sol, 1u8]);
                         }
                     } else if attempt == 0 {
                         e.call(LOCATION_DESTRUCT, &[reached_end]);
@@ -2306,11 +2306,11 @@ pub fn fn_006cc5e0(
                         continue;
                     } else {
                         incomplete = true;
-                        fn_006c9fa0(e, sol, 1);
+                        e.call(0x006c_9fa0, &args![sol, 1u8]);
                     }
                 } else {
                     incomplete = true;
-                    fn_006c9fa0(e, sol, 1);
+                    e.call(0x006c_9fa0, &args![sol, 1u8]);
                 }
                 if !call_bool(e, REQUEST_BYTE_9B, &[req]) {
                     e.call(LOCATION_DESTRUCT, &[reached_end]);
@@ -2337,7 +2337,7 @@ pub fn fn_006cc5e0(
             let tries_now = e.mem.i32(tries);
             if attempt == tries_now.wrapping_sub(1) && fn_006cd1d0(e, req) {
                 incomplete = true;
-                fn_006c9fa0(e, sol, 1);
+                e.call(0x006c_9fa0, &args![sol, 1u8]);
                 let mut index = 0u32;
                 while index < array_size(e, locals.path_triangles) {
                     let handle =
@@ -2388,7 +2388,7 @@ pub fn fn_006cc5e0(
             if current != 0 {
                 // The game also sets its incomplete flag here; both exits
                 // below return a constant, so nothing reads it.
-                fn_006c9fa0(e, sol, 1);
+                e.call(0x006c_9fa0, &args![sol, 1u8]);
                 if call_bool(e, REQUEST_BYTE_9B, &[req]) {
                     locals.destroy(e);
                     e.call(TRIANGLE_ARRAY_A_DESTRUCT, &[search_triangles]);
@@ -3347,7 +3347,7 @@ pub fn path_builder_build_nav_mesh_info_path_in_space(
             if !call_bool(e, REQUEST_BYTE_9B, &[req]) {
                 return finish(e, false);
             }
-            fn_006c9fa0(e, sol, 1);
+            e.call(0x006c_9fa0, &args![sol, 1u8]);
         }
         e.call(SOLUTION_ADD_LOCATION_NODE, &[sol, start]);
         let mut index = 1u32;
