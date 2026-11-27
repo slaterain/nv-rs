@@ -466,12 +466,13 @@ const MAIN_WORD_DIFFERS: &[u32] = &[
 const NAN_PAYLOADS_DIFFER: &[u32] = &[0x0045_79e0, 0x0069_8620];
 
 /// The holder locals of the counted-pointer helpers.
-const HOLDER: [LocalAt; 5] = [
+const HOLDER: [LocalAt; 6] = [
     (0x0042_fdc0, 1, 4),
     (0x0042_fd70, 0, 4),
     (0x0046_4ff0, 0, 4),
     (0x0042_f4c0, 1, 4),
     (0x0042_fa40, 0, 4),
+    (0x0042_fda0, 0, 4),
 ];
 
 /// Stack locals the typed version places in other frames than the translation, by function under

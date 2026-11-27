@@ -10,8 +10,8 @@
 //! numeric ids and the other units' savers and loaders are called by address.
 
 use super::{
-    access, followers, give_lock, head_of, kind_of, links, new_object, next_of, packages, setters,
-    take_lock, word_at, zero_bytes, EXTRA_PAYLOAD, FAMILY,
+    access, followers, give_lock, head_of, kind_of, links, more_setters, new_object, next_of,
+    packages, setters, take_lock, word_at, zero_bytes, EXTRA_PAYLOAD, FAMILY,
 };
 use crate::crt::{low_byte, low_half};
 use crate::{cell_refs, forms, multibound};
@@ -86,7 +86,6 @@ const TOPIC_NEW: u32 = 0x0083_da50;
 const TOPIC_LOAD: u32 = 0x0083_f680;
 const TOPIC_CHECK: u32 = 0x0096_11e0;
 const TOPIC_DELETE: u32 = 0x0042_5ff0;
-const SET_INFO_GENERAL_TOPIC: u32 = 0x0042_dee0;
 const CELL_WORLD_SPACE: u32 = 0x0054_ddd0;
 const CELL_REMOVE_REFERENCE: u32 = 0x0054_ca90;
 const CELL_ADD_REFERENCE: u32 = 0x0054_8230;
@@ -784,7 +783,11 @@ pub fn load_game(e: &mut Engine, this: u32, flags: u32, _unused: u32, reference:
                 let topic = new_object(e, 0x2c, |e, block| e.call(TOPIC_NEW, &args![block]).u32());
                 e.call(TOPIC_LOAD, &args![topic, reference]);
                 if e.call(TOPIC_CHECK, &args![topic]).u32() != 0 {
-                    e.call(SET_INFO_GENERAL_TOPIC, &args![this, topic]);
+                    typed_call!(
+                        FAMILY,
+                        0x0042_dee0,
+                        more_setters::set_info_general_topic(e, this, topic)
+                    );
                 } else if topic != 0 {
                     e.call(TOPIC_DELETE, &args![topic, 1u32]);
                 }

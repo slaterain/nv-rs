@@ -4,22 +4,22 @@
 //! (`0042dae0`). The buffer's own accessors of this family are done in place: its save kind
 //! (`00428110`, the unaligned word at +0x17, tested by `004280f0` and set by `00428130`), its flags
 //! (`0042ce30`, +0x2c) and the flag bit 3 of its word at +0x28 (`0042ce90`, `0042ce50`); so are the
-//! leaves a map marker's byte (`00424940`), a form's id (`0084e3a0`), a list node's item and next,
-//! an item's word at +0x28 (`0045cd60`), an array's count (+8) and element (`006a7ad0`), a handle's
-//! word (`00559450`), an object's word at +0x14 (`00825c00`), a reference's extra list
-//! (`005d43c0`), a list node's item store (`00726c60`), the buffer's word at +0x24 (`007037c0`),
-//! the store of a payload word (`0041fd00`) and a created form's id (`00469860`). The buffer's
-//! reads and writes, the other units' savers, loaders and constructors are called by address; the
-//! list's own setters, getters and constructors are typed calls.
+//! leaves a map marker's byte (`00424940`) and its store (`0042e680`), a form's id (`0084e3a0`), a
+//! list node's item and next, an item's word at +0x28 (`0045cd60`), an array's count (+8) and
+//! element (`006a7ad0`), a handle's word (`00559450`), an object's word at +0x14 (`00825c00`), a
+//! reference's extra list (`005d43c0`), a list node's item store (`00726c60`), the buffer's word at
+//! +0x24 (`007037c0`), the store of a payload word (`0041fd00`) and a created form's id
+//! (`00469860`). The buffer's reads and writes, the other units' savers, loaders and constructors
+//! are called by address; the list's own setters, getters and constructors are typed calls.
 //!
 //! **Extenders.** JIP LN NVSE puts its own arm for type 0x27 into both jump tables (`0x427F30` in
 //! the save, `0x42C328` in the load) while JIP is installed: each runs as an `e.site` where the
 //! translation has it.
 
 use super::{
-    access, cell_data, classes, first_of_kind, followers, head_of, kind_of, links, list_add,
-    list_remove, new_object, next_of, packages, read_word, setters, word_at, EXTRA_PAYLOAD, FAMILY,
-    OPERATOR_DELETE, OPERATOR_NEW,
+    access, arrays, cell_data, classes, first_of_kind, followers, head_of, kind_of, links,
+    list_add, list_remove, more_setters, new_object, next_of, packages, read_word, setters,
+    word_at, EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE, OPERATOR_NEW,
 };
 use crate::crt::low_byte;
 use crate::{cell_refs, forms, save};
@@ -79,7 +79,6 @@ const PLAYER: u32 = 0x011d_ea3c;
 const OBJECT_MANAGER: u32 = 0x011d_df38;
 const PAIR_LOOKUP_OBJECT: u32 = 0x011e_0e80;
 /// Other units: arrays, lists, savers and loaders, constructors.
-const ARRAY_RESIZE: u32 = 0x0042_f5f0;
 const ARRAY_RESIZE_OTHER: u32 = 0x006f_2290;
 const ARRAY_REMOVE_AT: u32 = 0x009a_4320;
 const LIST_ADD_HEAD: u32 = 0x005a_e3d0;
@@ -117,11 +116,9 @@ const SELF_DAMAGE_STAGE: u32 = 0x0047_7bc0;
 const SET_SELF_DAMAGE: u32 = 0x0047_7ce0;
 const PAIR_LOOKUP: u32 = 0x0097_24e0;
 const OBJECT_OF_KIND: u32 = 0x008c_6ca0;
-const MARKER_SET_FLAGS: u32 = 0x0042_e680;
 const PACKAGE_NEW: u32 = 0x0067_0b90;
 const REGISTER_OBJECT: u32 = 0x0084_aa30;
 const HANDLE_OF_ID: u32 = 0x0066_e330;
-const ASSIGN_HANDLE: u32 = 0x0042_f780;
 const RECORD_8B_NEW: u32 = 0x0043_7c10;
 const LIMBS_NEW: u32 = 0x0043_0200;
 const LIMBS_COMPARE: u32 = 0x0043_0660;
@@ -139,7 +136,6 @@ const PROCEDURE_TYPE: u32 = 0x0096_11e0;
 const CALCULATE_PROCEDURE_TYPE: u32 = 0x0067_77b0;
 const CRIME_ITEM_FIX: u32 = 0x009e_b9c0;
 const SAY_TO_CALL_BACK: u32 = 0x0093_6a20;
-const MODEL_SWAP: u32 = 0x0042_e250;
 
 /// The load's constructors of the types it builds when the list has none: `(type, size,
 /// constructor)`. The ones of this family and the cell references' are typed calls ([`construct`]).
@@ -414,7 +410,8 @@ pub fn save_game_buffered(e: &mut Engine, this: u32, buffer: u32) {
     e.call(SAVE_SIZED_VALUE_AT, &args![buffer, count, start]);
 }
 
-/// One extra data's payload in [`save_game_buffered`] (the jump table at `00427ed8`).
+/// One extra data's payload in [`save_game_buffered`] (the address table at `00427ef0`, indexed by
+/// the bytes at `00427fe4`).
 fn save_payload(e: &mut Engine, buffer: u32, extra: u32, kind: u8, flag: u32) {
     // JIP LN NVSE's arm for type 0x27 (`SafeWrite32(0x427F30, ...)`) while JIP is installed.
     if e.jip_patches() & jip_patches::INSTALLED != 0
@@ -894,8 +891,12 @@ pub fn load_game_buffered(e: &mut Engine, this: u32, buffer: u32) {
     while extra != 0 {
         let kind = kind_of(e, extra);
         let mask = kind_mask(e, u32::from(kind));
+        // A type past the 0x93 marks (whose word past the save kind table has a bit of the save
+        // kind) is not marked: the exe's byte store lands past its array, in other locals.
         if mask != 0 && kind_allows(e, buffer, mask) {
-            marks[usize::from(kind)] = 1;
+            if let Some(mark) = marks.get_mut(usize::from(kind)) {
+                *mark = 1;
+            }
         }
         extra = next_of(e, extra);
     }
@@ -930,7 +931,8 @@ pub fn load_game_buffered(e: &mut Engine, this: u32, buffer: u32) {
     }
 }
 
-/// One extra data's payload in [`load_game_buffered`] (the jump table at `0042c2c8`).
+/// One extra data's payload in [`load_game_buffered`] (the address table at `0042c2e8`, indexed by
+/// the bytes at `0042c3dc`).
 fn load_payload(
     e: &mut Engine,
     this: u32,
@@ -1089,7 +1091,7 @@ fn load_payload(
             let extra = marked_or_new(e, this, marks, kind);
             let array = extra.wrapping_add(0x0c);
             let n = load_count(e, buffer);
-            e.call(ARRAY_RESIZE, &args![array, n, 1u32]);
+            typed_call!(FAMILY, 0x0042_f5f0, arrays::set_size(e, array, n, 1));
             for index in 0..n {
                 let hit = element(e, array, index);
                 e.call(TIME_STAMP_LOAD, &args![hit, buffer]);
@@ -1122,7 +1124,9 @@ fn load_payload(
             if extra != 0 {
                 let data = word_at(e, extra, 0x0c);
                 if data != 0 {
-                    e.call(MARKER_SET_FLAGS, &args![data, flags]);
+                    // `0042e680` in place: the byte at +0xc.
+                    e.mem
+                        .set_u8(data.wrapping_add(EXTRA_PAYLOAD), low_byte(flags));
                 }
             }
         }
@@ -1230,7 +1234,11 @@ fn load_payload(
             let extra = marked_or_new(e, this, marks, kind);
             let id = load_value(e, buffer, 4, Some(u32::MAX));
             let handle = e.call(HANDLE_OF_ID, &args![id]).u32();
-            e.call(ASSIGN_HANDLE, &args![extra.wrapping_add(0x0c), handle]);
+            typed_call!(
+                FAMILY,
+                0x0042_f780,
+                arrays::actor_cause_assign(e, extra.wrapping_add(0x0c), handle)
+            );
             if read_word(e, extra.wrapping_add(0x0c)) == 0 {
                 remove(e, this, 0x60);
             }
@@ -1854,7 +1862,7 @@ pub fn clean_up_loaded(e: &mut Engine, this: u32, buffer: u32) {
     let reference = e.vcall(buffer, 8, &args![]).u32();
     if reference != 0 {
         e.vcall(buffer, 0x0c, &args![]);
-        if e.call(MODEL_SWAP, &args![this]).u32() != 0 {
+        if typed_call!(FAMILY, 0x0042_e250, more_setters::model_swap(e, this)) != 0 {
             e.vcall(reference, 0x1cc, &args![0u32, 1u32]);
         }
         if first_of_kind(e, this, 0x56) != 0 {

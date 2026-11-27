@@ -11,8 +11,8 @@
 
 use super::links::{add_unless_held, is_empty, new_by, remove_item, LIST_ADD_HEAD};
 use super::{
-    access, cell_refs, extra_init, first_of_kind, free_when, list_add, list_remove, new_object,
-    read_word, records, setters, word_at, EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE,
+    access, arrays, cell_refs, extra_init, first_of_kind, free_when, list_add, list_remove,
+    new_object, read_word, records, setters, word_at, EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE,
 };
 use engine_core::{args, typed_call, Engine};
 
@@ -64,11 +64,9 @@ const PATROL_DATA_DROP: u32 = 0x0067_c670;
 const LIST_DROP: u32 = 0x0046_ffb0;
 /// `NiPointer<T>::operator=(T*)` (`thiscall(at, object)`).
 const NI_POINTER_ASSIGN: u32 = 0x0066_b0d0;
-/// The master room search's visited set (`NiTMap<TESObjectREFR *, bool>`, 0x10 bytes): its
-/// constructor (`thiscall(set, hash size)`), destructor body, `GetAt(key, &value)` and
+/// The master room search's visited set (`NiTMap<TESObjectREFR *, bool>`, 0x10 bytes; its
+/// constructor and destructor body the part 5 file's, [`super::arrays`]): `GetAt(key, &value)` and
 /// `SetAt(key, value)`.
-const VISITED_NEW: u32 = 0x0042_f4e0;
-const VISITED_DROP: u32 = 0x0042_fe80;
 const VISITED_FIND: u32 = 0x0057_c850;
 const VISITED_INSERT: u32 = 0x0084_d310;
 
@@ -874,13 +872,21 @@ pub fn master_room(e: &mut Engine, this: u32) -> u32 {
         return 0;
     }
     e.with_stack(0x10, |e, visited| {
-        e.call(VISITED_NEW, &args![visited, 0x25u32]);
+        typed_call!(
+            FAMILY,
+            0x0042_f4e0,
+            arrays::refr_map_new(e, visited.addr(), 0x25)
+        );
         let master = typed_call!(
             FAMILY,
             0x0042_0950,
             find_master_room(e, this, visited.addr())
         );
-        e.call(VISITED_DROP, &args![visited]);
+        typed_call!(
+            FAMILY,
+            0x0042_fe80,
+            arrays::refr_map_drop(e, visited.addr())
+        );
         master
     })
 }

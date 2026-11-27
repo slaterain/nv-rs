@@ -12,8 +12,12 @@
 //! the friend hits, the refraction property and the saved animation and havok data ([`followers`])
 //! and the constructors and destructors of the small classes with the save buffer's accessors
 //! ([`classes`]), the save size, `SaveGame` and `LoadGame` of the old save format ([`save_game`]),
-//! and `SaveGame_ov2`, `LoadGame_ov2`, the buffered load's fix-up, `FinishLoadGame` and the clean-up
-//! after a load of the buffered format ([`buffered`]). The list's own operations (its
+//! and `SaveGame_ov2`, `LoadGame_ov2`, the buffered load's fix-up, `FinishLoadGame` and the
+//! clean-up after a load of the buffered format ([`buffered`]), and from its part 5 file the last
+//! run of getters and setters with the saved state's drop and the two getters over a list held in
+//! an object ([`more_setters`]) and the small templates the compiler placed there: the navmesh
+//! array and its counted pointer, the shared array's set size, the actor cause's handle, the
+//! reference map and the bound object array ([`arrays`]). The list's own operations (its
 //! constructors, `AddExtra`, `RemoveExtra`, the type bitmap, the thread's cache) are the cell
 //! references family's (`cell_refs::extra_list`), the lookup `GetExtraData` (`00410220`) the
 //! dispatch family's. Every caller reaches these functions by address; the unit's translation that
@@ -43,25 +47,27 @@
 //! `00422420`) where their setters build one, the data handler's `bClearingData` (`004226e0`, whose
 //! answer the follower removal never uses) and a one-word local's store (`008c71b0`), and for the
 //! save and load functions the save-load object's and the buffers' accessors, an array's count and
-//! element, a reference's parent cell, a list node's item store and a created form's id (each file's
-//! header lists them). Each type,
-//! next or word is read once where the exe reads it again with nothing in between that could change
-//! it. A virtual call (an extra data's slot 0 delete, its slot 4 `Compare`, the type 0x92 copy's
-//! slot 0xc, a primitive's slot 0) stays a call through the slot: each class has its own body. The
-//! constructors, destructors and setters of other units, `operator new` and `operator delete` are
-//! called by address.
+//! element, a reference's parent cell, a list node's item store and a created form's id (each
+//! file's header lists them), and for part 5 a form's flags word and its bit test, the byte at +0xc
+//! of an extra data, the say-to topic info's topic store, the water zone map's counts, placement
+//! `new`, the compare of two counted pointers, a 4-byte `memmove`, the memory manager's address and
+//! a list held at +0x28 of its object. Each type, next or word is read once where the exe reads it
+//! again with nothing in between that could change it. A virtual call (an extra data's slot 0
+//! delete, its slot 4 `Compare`, the type 0x92 copy's slot 0xc, a primitive's slot 0) stays a call
+//! through the slot: each class has its own body. The constructors, destructors and setters of
+//! other units, `operator new` and `operator delete` are called by address.
 //!
 //! **Extenders.** JIP LN NVSE has nine sites here, each kept where the translation has it:
-//! `AddExtraCopy`'s arm for its keyed data's type 0x27 (`0x411978`), that type's entries in the
-//! two default scans' tables (`0x41D0F6`, `0x41D212`, `0x41D25A`) and in the buffered save's and
-//! load's jump tables (`0x427F30`, `0x42C328`), while JIP is installed; the
-//! hotkey copy of `CopyListForReference` (`0x412675`), the owner test of `CompareListForContainer`
-//! (`0x41271E`) and the reference pointer setter's persistence test (`0x41C833`), with its fixes
-//! on. JIP wraps `GetCanNotWear` (`00418b10`), which stays translated, and xNVSE `0041af70` (the
-//! script lines family's): both stay out of this family and are called by address, as a wrapped
-//! member would send the whole family by address. No other extender replaces or patches these
-//! functions; xNVSE, JIP and JohnnyGuitar call the getters, the setters and `AddExtraCopy` by
-//! address, which reaches them here.
+//! `AddExtraCopy`'s arm for its keyed data's type 0x27 (`0x411978`), that type's entries in the two
+//! default scans' tables (`0x41D0F6`, `0x41D212`, `0x41D25A`) and in the buffered save's and load's
+//! jump tables (`0x427F30`, `0x42C328`), while JIP is installed; the hotkey copy of
+//! `CopyListForReference` (`0x412675`), the owner test of `CompareListForContainer` (`0x41271E`)
+//! and the reference pointer setter's persistence test (`0x41C833`), with its fixes on. JIP wraps
+//! `GetCanNotWear` (`00418b10`), which stays translated, and xNVSE `0041af70` (the script lines
+//! family's): both stay out of this family and are called by address, as a wrapped member would
+//! send the whole family by address. No other extender replaces or patches these functions; xNVSE,
+//! JIP and JohnnyGuitar call the getters, the setters and `AddExtraCopy` by address, which reaches
+//! them here.
 //!
 //! **Which thread.** Every thread that touches a list (main, the loaders, the AI threads), under
 //! the extra data lock as the exe takes it: [`Threads::Both`]. The floats are moved, not computed
@@ -70,6 +76,7 @@
 //! stores, and the sine and cosine, the x87's `FSINCOS` as `engine_core::x87` has it.
 
 pub mod access;
+pub mod arrays;
 pub mod buffered;
 pub mod cell_data;
 pub mod classes;
@@ -78,6 +85,7 @@ pub mod followers;
 pub mod init_item;
 pub mod links;
 pub mod load;
+pub mod more_setters;
 pub mod packages;
 pub mod records;
 pub mod rooms;
@@ -587,6 +595,111 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0042_d9e0, buffered::finish_load_game(u32, u32)),
         entry!(0x0042_dae0, buffered::clean_up_loaded(u32, u32)),
         entry!(0x0042_dd70, classes::copy_byte_d_to_c(u32)),
+        entry!(0x0042_dd90, more_setters::drop_saved_state(u32, u32)),
+        entry!(0x0042_dde0, more_setters::set_hot_key(u32, u8)),
+        entry!(0x0042_de90, more_setters::hot_key(u32) -> u8),
+        entry!(0x0042_dec0, more_setters::remove_hot_key(u32)),
+        entry!(0x0042_dee0, more_setters::set_info_general_topic(u32, u32)),
+        entry!(0x0042_df90, more_setters::info_general_topic(u32, u32) -> u32),
+        entry!(0x0042_dff0, more_setters::topic_is_empty(u32) -> bool),
+        entry!(0x0042_e010, more_setters::topic_forward(u32, u32)),
+        entry!(0x0042_e040, more_setters::remove_info_general_topic(u32)),
+        entry!(0x0042_e060, more_setters::set_talking_actor(u32, u32, u32)),
+        entry!(0x0042_e110, more_setters::talking_actor(u32) -> u32),
+        entry!(0x0042_e130, more_setters::remove_talking_actor(u32)),
+        entry!(0x0042_e150, more_setters::set_model_swap(u32, u32, u32)),
+        entry!(0x0042_e210, more_setters::model_swap_new(u32, u32, u32) -> u32),
+        entry!(0x0042_e250, more_setters::model_swap(u32) -> u32),
+        entry!(0x0042_e280, more_setters::remove_model_swap(u32)),
+        entry!(0x0042_e2a0, more_setters::navmesh_portal(u32) -> u32),
+        entry!(0x0042_e2c0, more_setters::set_navmesh_portal(u32, u32)),
+        entry!(0x0042_e380, more_setters::set_weapon_mod_slot(u32, u8)),
+        entry!(0x0042_e450, more_setters::weapon_mod_flags_new(u32, u8) -> u32),
+        entry!(0x0042_e480, more_setters::or_byte_c(u32, u8)),
+        entry!(0x0042_e4a0, more_setters::set_weapon_mod_flags(u32, u8)),
+        entry!(0x0042_e560, more_setters::weapon_mod_flags(u32) -> u8),
+        entry!(0x0042_e5a0, more_setters::set_is_modding(u32, u8)),
+        entry!(0x0042_e650, more_setters::is_modding_new(u32, u8) -> u32),
+        entry!(0x0042_e680, more_setters::set_byte_c(u32, u8)),
+        entry!(0x0042_e6a0, more_setters::is_modding_delete(u32, u32) -> u32),
+        entry!(0x0042_e6d0, more_setters::is_modding_drop(u32)),
+        entry!(0x0042_e6f0, more_setters::remove_is_modding(u32)),
+        entry!(0x0042_e730, more_setters::remove_navmesh_portal(u32)),
+        entry!(0x0042_e760, more_setters::add_faction_changes(u32)),
+        entry!(0x0042_e800, more_setters::faction_changes(u32) -> u32),
+        entry!(0x0042_e820, more_setters::add_dismemberment(u32) -> u32),
+        entry!(0x0042_e8c0, more_setters::dismemberment(u32) -> u32),
+        entry!(0x0042_e8e0, more_setters::remove_dismemberment(u32)),
+        entry!(0x0042_e910, more_setters::actor_cause(u32) -> u32),
+        entry!(0x0042_e930, more_setters::set_actor_cause(u32, u32)),
+        entry!(0x0042_ea00, more_setters::actor_cause_assign_at(u32, u32)),
+        entry!(0x0042_ea20, more_setters::combat_style(u32) -> u32),
+        entry!(0x0042_ea50, more_setters::set_combat_style(u32, u32)),
+        entry!(0x0042_eb10, more_setters::combat_style_new(u32, u32) -> u32),
+        entry!(0x0042_eb40, more_setters::ammo(u32) -> u32),
+        entry!(0x0042_eb60, more_setters::set_ammo(u32, u32, u32)),
+        entry!(0x0042_ec30, more_setters::ammo_new(u32, u32, u32) -> u32),
+        entry!(0x0042_ec70, more_setters::set_say_to_info(u32, u32)),
+        entry!(0x0042_ed30, more_setters::say_to_topic(u32) -> u32),
+        entry!(0x0042_ed70, more_setters::say_to_info(u32) -> u32),
+        entry!(0x0042_edb0, more_setters::remove_say_to(u32)),
+        entry!(0x0042_ede0, more_setters::say_to_extra(u32) -> u32),
+        entry!(0x0042_ee00, more_setters::set_say_to_topic(u32, u32)),
+        entry!(0x0042_eec0, more_setters::set_say_to_response(u32, u32)),
+        entry!(0x0042_eef0, more_setters::say_to_response(u32) -> u32),
+        entry!(0x0042_ef20, more_setters::add_said_once(u32, u32)),
+        entry!(0x0042_efe0, more_setters::said_once(u32) -> u32),
+        entry!(0x0042_f000, more_setters::remove_said_once(u32)),
+        entry!(0x0042_f030, more_setters::update_water_zone(u32, u32, u8) -> u32),
+        entry!(0x0042_f130, more_setters::water_zone_has(u32, u32) -> bool),
+        entry!(0x0042_f180, more_setters::water_zone_lookup(u32) -> u32),
+        entry!(0x0042_f1d0, more_setters::water_zone_map(u32) -> u32),
+        entry!(0x0042_f200, more_setters::set_ignored_by_sandbox(u32, u8)),
+        entry!(0x0042_f2d0, more_setters::ignored_by_sandbox(u32) -> bool),
+        entry!(0x0042_f300, more_setters::set_patrol_ref_in_use(u32, u32)),
+        entry!(0x0042_f3d0, more_setters::patrol_ref_can_be_used_by(u32, u32) -> bool),
+        entry!(0x0042_f420, more_setters::follower_swim_breadcrumbs(u32) -> u32),
+        entry!(0x0042_f4c0, arrays::element_assign(u32, u32)),
+        entry!(0x0042_f4e0, arrays::refr_map_new(u32, u32) -> u32),
+        entry!(0x0042_f510, arrays::navmesh_array_delete(u32, u32) -> u32),
+        entry!(0x0042_f540, arrays::refr_map_delete(u32, u32) -> u32),
+        entry!(0x0042_f570, arrays::bound_object_array_new(u32) -> u32),
+        entry!(0x0042_f5a0, arrays::min_word(u32, u32) -> u32),
+        entry!(0x0042_f5d0, arrays::reallocate(u32, u32) -> u32),
+        entry!(0x0042_f5f0, arrays::set_size(u32, u32, u8)),
+        entry!(0x0042_f730, arrays::actor_cause_handle_new(u32, u32) -> u32),
+        entry!(0x0042_f760, arrays::actor_cause_handle_drop(u32)),
+        entry!(0x0042_f780, arrays::actor_cause_assign(u32, u32) -> u32),
+        entry!(0x0042_f7d0, arrays::navmesh_array_with(u32, u32) -> u32),
+        entry!(0x0042_f800, arrays::navmesh_array_new(u32) -> u32),
+        entry!(0x0042_f830, arrays::navmesh_array_drop(u32)),
+        entry!(0x0042_f850, arrays::navmesh_array_add(u32, u32) -> u32),
+        entry!(0x0042_f8a0, arrays::navmesh_array_remove_at(u32, u32, u8)),
+        entry!(0x0042_f9c0, arrays::navmesh_array_clear(u32, u8)),
+        entry!(0x0042_fa20, arrays::navmesh_ptr_copy_new(u32, u32) -> u32),
+        entry!(0x0042_fa40, arrays::navmesh_ptr_drop(u32)),
+        entry!(0x0042_fa60, arrays::navmesh_ptrs_new(u32, u32, u32)),
+        entry!(0x0042_fb00, arrays::navmesh_ptr_null(u32) -> u32),
+        entry!(0x0042_fb20, arrays::navmesh_ptrs_drop(u32, u32, u32)),
+        entry!(0x0042_fb60, arrays::move_words(u32, u32, u32, u32)),
+        entry!(0x0042_fc00, arrays::reallocate_buffer(u32, u32, u32)),
+        entry!(0x0042_fcb0, arrays::navmesh_array_init(u32, u32, u32)),
+        entry!(0x0042_fd40, arrays::navmesh_ptr_copy(u32, u32) -> u32),
+        entry!(0x0042_fd70, arrays::navmesh_ptr_set(u32, u32) -> u32),
+        entry!(0x0042_fda0, arrays::navmesh_ptr_release(u32)),
+        entry!(0x0042_fdc0, arrays::navmesh_ptr_assign(u32, u32) -> u32),
+        entry!(0x0042_fe10, arrays::refr_map_base_init(u32, u32) -> u32),
+        entry!(0x0042_fe80, arrays::refr_map_drop(u32)),
+        entry!(0x0042_fee0, arrays::refr_map_base_drop(u32)),
+        entry!(0x0042_ff10, arrays::navmesh_ptr_equal_of(u32, u32) -> u32),
+        entry!(0x0042_ff30, arrays::navmesh_ptr_equal(u32, u32) -> u32),
+        entry!(0x0042_ff50, arrays::bound_object_array_delete(u32, u32) -> u32),
+        entry!(0x0042_ff80, arrays::bound_object_array_drop(u32)),
+        entry!(0x0042_ffa0, arrays::navmesh_ptr_delete(u32, u32) -> u32),
+        entry!(0x0042_ffd0, arrays::refr_map_base_delete(u32, u32) -> u32),
+        entry!(0x0043_00c0, more_setters::anim_new(u32, u32) -> u32),
+        entry!(0x0055_5bc0, more_setters::seen_data_at_28(u32) -> u32),
+        entry!(0x0056_9140, more_setters::lock_data_at_44(u32) -> u32),
     ]
 }
 
