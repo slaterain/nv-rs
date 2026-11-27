@@ -3496,6 +3496,56 @@ fn raw_location(e: &mut Engine) -> u32 {
     l
 }
 
+fn virtual_node_storage(e: &mut Engine) -> u32 {
+    let node = e.mem.alloc(0x30);
+    for offset in (0..0x30).step_by(4) {
+        e.mem.set_u32(node + offset, 0x7575_7575);
+    }
+    node
+}
+
+#[test]
+fn virtual_node_new() {
+    Diff::new(entry!(
+        0x006f_4cd0,
+        location::virtual_node_new(Ptr<_>) -> Ptr<_>
+    ))
+    .common()
+    .setup(|e, _| {
+        stand_ins(e);
+        vec![virtual_node_storage(e)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn virtual_node_from_location() {
+    Diff::new(entry!(
+        0x006f_4d00,
+        location::virtual_node_from_location(Ptr<_>, Ptr<_>) -> Ptr<_>
+    ))
+    .common()
+    .inputs(&[Input::Of(&[0, 1, 2])])
+    .setup(|e, case| {
+        let w = world(e);
+        e.mem.set_u8(w.location + 0x26, 0);
+        e.mem.set_u32(w.location + 0x14, 0);
+        if case.word(0) == 0 {
+            e.mem.set_u32(w.location + 0x10, 0);
+        } else if case.word(0) == 2 {
+            // The success bit is added to the flags present after resolution.
+            e.register(0x006d_d6f0, |e, args| {
+                e.mem.set_u32(args[0] - 4, 0x42);
+                ret(1)
+            });
+        }
+        vec![virtual_node_storage(e), w.location]
+    })
+    .run()
+    .assert_same();
+}
+
 #[test]
 fn location_new() {
     Diff::new(entry!(0x006d_cbb0, location::new(Ptr<_>) -> Ptr<_>))

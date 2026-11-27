@@ -261,6 +261,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_d610, location::mesh(Ptr<PathingLocation>, Ptr) -> bool),
         entry!(0x006d_d6a0, location::has_triangle(Ptr<PathingLocation>) -> bool),
         entry!(0x006d_d4f0, location::cell(Ptr<PathingLocation>) -> u32),
+        entry!(0x006f_4cd0, location::virtual_node_new(Ptr<layout::VirtualPathingNode>) -> Ptr<layout::VirtualPathingNode>),
+        entry!(0x006f_4d00, location::virtual_node_from_location(Ptr<layout::VirtualPathingNode>, Ptr<PathingLocation>) -> Ptr<layout::VirtualPathingNode>),
         entry!(0x006d_cbb0, location::new(Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cee0, location::new_at(Ptr<PathingLocation>, u32, u32, u32) -> Ptr<PathingLocation>),
         entry!(0x006d_cf20, location::new_in(Ptr<PathingLocation>, Ptr<NiPoint3>, Ptr<NavMeshInfo>) -> Ptr<PathingLocation>),

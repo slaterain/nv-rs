@@ -226,6 +226,13 @@ image! {
         0x26 flags: u8,
         0x27 pad: u8,
     }
+
+    /// A virtual pathing node stores its location inline and may refer to a door.
+    pub struct VirtualPathingNode / VirtualPathingNodeImage: 0x30 {
+        0x00 flags: u32,
+        0x04 location: Inline<PathingLocation> = PathingLocationImage,
+        0x2c door: u32,
+    }
 }
 
 /// Vertex `i` of a triangle (the exe indexes the words from the start, `i` unchecked).
