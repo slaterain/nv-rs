@@ -4637,7 +4637,8 @@ impl XdShapes for Diff {
 
 /// Words a setter is given: none, one, all ones, a pointer-like word, the sign bit.
 const XD_VALUES: &[u32] = &[0, 1, u32::MAX, 0x1234_5678, 0x8000_0000];
-/// Floats a setter is given: 1.0, 0.0, a signalling NaN, -1.0, the quiet NaN, the float after 1.0.
+/// Floats a setter is given: 1.0, 0.0, a signalling NaN, -1.0, the quiet NaN, the float after 1.0,
+/// -0.0 (equal to 0.0 for the exe's compare, not by its bits).
 const XD_FLOATS: &[u32] = &[
     0x3f80_0000,
     0,
@@ -4645,6 +4646,7 @@ const XD_FLOATS: &[u32] = &[
     0xbf80_0000,
     0x7fc0_0000,
     0x3f80_0001,
+    0x8000_0000,
 ];
 
 #[test]
@@ -6535,6 +6537,16 @@ const XF_LIST_SEEDS: &[u32] = &[
 /// [`XF_LIST_KINDS`] at its head, and the reference (its vtable's slot 0x100 a coin, its words from
 /// the pool). Answers the list and the reference.
 fn xf_list_world(e: &mut Engine, seed: u32) -> Vec<u32> {
+    xf_list_world_and_plane(e, seed).0
+}
+
+/// What the occlusion plane [`xf_list_world_and_plane`] adds is filled with.
+const XF_PLANE_FILL: u32 = 0x7171_7171;
+
+/// [`xf_list_world`], and the occlusion plane (type 0x71, a block of [`XF_PLANE_FILL`]) it put at the
+/// head of a list that holds the plane references (type 0x76), in three of four seeds (0 if none):
+/// `InitItem` links that plane's planes, and the other seeds keep "no occlusion plane".
+fn xf_list_world_and_plane(e: &mut Engine, seed: u32) -> (Vec<u32>, u32) {
     let (w, pool) = xf_world(e, seed);
     let mut d = Draw(seed.wrapping_mul(0x6c07_8965) ^ 0x0041_6be0);
     let n = d.next(5);
@@ -6578,7 +6590,33 @@ fn xf_list_world(e: &mut Engine, seed: u32) -> Vec<u32> {
         e.mem.set_u32(reference + offset, word);
     }
     e.mem.set_u32(reference, vtable);
-    vec![w.list, reference]
+    // After every draw, so the draw stream (and each seed's list) is as it was.
+    let mut node = e.mem.u32(w.list + 4);
+    let mut holds_refs = false;
+    for _ in 0..32 {
+        if node == 0 {
+            break;
+        }
+        holds_refs |= e.mem.u32(node + 4) == 0x76;
+        node = e.mem.u32(node + 8);
+    }
+    let mut plane = 0;
+    if holds_refs && seed % 4 != 1 {
+        plane = e.mem.alloc(0x110);
+        for offset in (0..0x110).step_by(4) {
+            e.mem.set_u32(plane + offset, XF_PLANE_FILL);
+        }
+        let x = e.mem.alloc(0x40);
+        let head = e.mem.u32(w.list + 4);
+        let vt = e.mem.u32(XD_VT);
+        for (k, word) in [vt, 0x71, head, plane].into_iter().enumerate() {
+            e.mem.set_u32(x + 4 * k as u32, word);
+        }
+        e.mem.set_u32(w.list + 4, x);
+        let flags = e.mem.u8(w.list + 8 + (0x71 >> 3)) | (1 << (0x71 & 7));
+        e.mem.set_u8(w.list + 8 + (0x71 >> 3), flags);
+    }
+    (vec![w.list, reference], plane)
 }
 
 #[test]
@@ -6614,10 +6652,14 @@ fn the_list_load_worlds_reach_every_branch() {
     for &seed in XF_LIST_SEEDS {
         for function in [0x0041_6be0u32, 0x0041_2970] {
             let mut e = Engine::new_untyped_for_test();
-            let words = xf_list_world(&mut e, seed);
+            let (words, plane) = xf_list_world_and_plane(&mut e, seed);
             facts.insert(format!("big-endian {}", e.mem.u8(0x011c_54ba)));
             if function == 0x0041_6be0 {
                 e.call(function, &args![words[0], words[1]]);
+                // The found-plane branch: 004181c0 set one of the plane's linked planes (+0xec).
+                if plane != 0 && (0..4).any(|i| e.mem.u32(plane + 0xec + 4 * i) != XF_PLANE_FILL) {
+                    facts.insert("occlusion plane linked".into());
+                }
             } else {
                 e.call(function, &args![words[0]]);
             }
@@ -6712,6 +6754,7 @@ fn the_list_load_worlds_reach_every_branch() {
         "XAPD size 1",
         "XSED size 4",
         "XSED size 1",
+        "occlusion plane linked",
     ] {
         if !facts.contains(fact) {
             missing.push(fact.to_string());
@@ -10517,8 +10560,13 @@ const XQ_LEV_VALUES: &[u32] = &[4, 0, 1, u32::MAX];
 const XQ_PAIR: &[u32] = &[0, 1, 0x1234_5678];
 /// The player character's pointer.
 const XQ_PLAYER: u32 = 0x011d_ea3c;
+/// Words a one-bit leaf reads or writes: none, bits 1, 2, 1 and 2, 3 and 7 alone, all but bit 3, all.
+const XQ_FLAG_WORDS: &[u32] = &[0, 2, 4, 6, 8, 0x80, 0xffff_fff7, u32::MAX];
 /// The types whose getters and setters the reach test looks at.
-const XQ_KINDS: [u32; 10] = [0x05, 0x1e, 0x2e, 0x3d, 0x41, 0x42, 0x48, 0x5c, 0x61, 0x62];
+const XQ_KINDS: [u32; 21] = [
+    0x05, 0x1e, 0x2e, 0x3d, 0x41, 0x42, 0x48, 0x5c, 0x61, 0x62, 0x3c, 0x0b, 0x43, 0x44, 0x74, 0x67,
+    0x63, 0x71, 0x5d, 0x45, 0x4e,
+];
 
 /// [`XqShapes::xq_followers`]' world: the follower list (type 0x1d) placed or not, its payload a
 /// list of up to four of [`XP_REFS`] (repeats too) or, in some seeds, none; the player none or the
@@ -10548,6 +10596,8 @@ trait XqShapes {
     fn xq_seeded(self, n: u32) -> Diff;
     fn xq_list_word(self) -> Diff;
     fn xq_given_word(self) -> Diff;
+    fn xq_flag_word(self, n: u32, own: u32, at: u32) -> Diff;
+    fn xq_set_flag_word(self, n: u32, own: u32, at: u32) -> Diff;
 }
 
 impl XqShapes for Diff {
@@ -10616,6 +10666,32 @@ impl XqShapes for Diff {
                 vec![]
             })
     }
+
+    /// (block) with the word at `at` drawn from [`XQ_FLAG_WORDS`], for a leaf that tests one bit.
+    fn xq_flag_word(self, n: u32, own: u32, at: u32) -> Diff {
+        self.extra_data_case_but(own)
+            .inputs(&[Input::Of(XQ_FLAG_WORDS)])
+            .setup(move |e, case| {
+                xd_stand_ins(e);
+                let block = xd_block(e, n, 0x5a);
+                e.mem.set_u32(block + at, case.word(0));
+                vec![block]
+            })
+    }
+
+    /// (block, flag) with the word at `at` drawn from [`XQ_FLAG_WORDS`], for a leaf that sets or
+    /// clears one bit.
+    fn xq_set_flag_word(self, n: u32, own: u32, at: u32) -> Diff {
+        self.extra_data_case_but(own)
+            .max_cases(XQ_FLAG_WORDS.len() * XE_BYTES.len())
+            .inputs(&[Input::Of(XQ_FLAG_WORDS), Input::Of(XE_BYTES)])
+            .setup(move |e, case| {
+                xd_stand_ins(e);
+                let block = xd_block(e, n, 0x5a);
+                e.mem.set_u32(block + at, case.word(0));
+                vec![block, case.word(1)]
+            })
+    }
 }
 
 /// The part 4 range's worlds reach what its functions branch on (every miss listed at once): the
@@ -10666,6 +10742,9 @@ fn the_part_4_worlds_reach_every_branch() {
     }
     for &value in XD_FLOATS {
         reached.insert(format!("float zero {}", f32::from_bits(value) == 0.0));
+        if value == 0x8000_0000 {
+            reached.insert("float zero by compare, not by bits".into());
+        }
     }
     for &first in XQ_PAIR {
         for &second in XQ_PAIR {
@@ -10696,6 +10775,7 @@ fn the_part_4_worlds_reach_every_branch() {
         "follower held false",
         "float zero true",
         "float zero false",
+        "float zero by compare, not by bits",
         "pair removes true",
         "pair removes false",
         "modifier neutral true",
@@ -11133,7 +11213,7 @@ fn xq_set_refraction_property() {
         0x0042_2750,
         extra_data::followers::set_refraction_property(u32, u8, f32)
     ))
-    .xe_pair(&[0x48], XE_FLAGS, XD_FLOATS)
+    .xe_pair(&[0x48], XE_BYTES, XD_FLOATS)
     .run()
     .assert_same();
 }
@@ -11679,7 +11759,7 @@ fn xq_given_word() {
 #[test]
 fn xq_flag_2_of_244() {
     Diff::new(entry!(0x0042_ce10, extra_data::classes::flag_2_of_244(u32) -> bool))
-        .xd_on_pattern(0x250, 0x0042_ce10)
+        .xq_flag_word(0x250, 0x0042_ce10, 0x244)
         .run()
         .assert_same();
 }
@@ -11698,7 +11778,7 @@ fn xq_set_flag_8_of_28() {
         0x0042_ce50,
         extra_data::classes::set_flag_8_of_28(u32, u8)
     ))
-    .xp_on(0x30, 0x0042_ce50, XE_BYTES)
+    .xq_set_flag_word(0x30, 0x0042_ce50, 0x28)
     .run()
     .assert_same();
 }
@@ -11706,7 +11786,7 @@ fn xq_set_flag_8_of_28() {
 #[test]
 fn xq_flag_8_of_28() {
     Diff::new(entry!(0x0042_ce90, extra_data::classes::flag_8_of_28(u32) -> bool))
-        .xd_on_pattern(0x30, 0x0042_ce90)
+        .xq_flag_word(0x30, 0x0042_ce90, 0x28)
         .run()
         .assert_same();
 }
