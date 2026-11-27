@@ -11,6 +11,7 @@
 use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Diff, Input};
+use engine_typed::forms::{queued_maps, FORMS};
 use engine_typed::lockfree::{self, holder, iface, manager, map, node, queue, task_map};
 
 /// Where the test's map functions are registered: past `.text`, one per vtable slot.
@@ -294,6 +295,7 @@ fn fail_cas(e: &mut Engine, nth: u32) {
 /// copies.
 trait Cases {
     fn destructor_case(self) -> Diff;
+    fn deleting_case(self) -> Diff;
     fn assign_case(self) -> Diff;
     fn iterate_words_case(self) -> Diff;
     fn map_find_case(self) -> Diff;
@@ -303,6 +305,29 @@ trait Cases {
 }
 
 impl Cases for Diff {
+    // The forms family's scalar deleting destructors of the maps (`0044d8c0` to `0044dce0`): the
+    // destructor case with the flags word (bit 0 frees the block), the forms family named with the
+    // lock-free family, so each runs the lock-free body it names, as in play.
+    fn deleting_case(self) -> Diff {
+        self.family(&lockfree::LOCKFREE)
+            .family(&leaf::LEAVES)
+            .family(&FORMS)
+            .ignore_calls(INLINED)
+            .max_calls(MAX_CALLS)
+            .translation_calls_plainly(&[0x0066_65c0, 0x0052_9300, 0x0052_9330, 0x0052_93c0])
+            .inputs(&[Input::Flag, Input::Of(&[0, 1, 2, 0x8000_0000, 0xffff_ffff])])
+            .setup(|e, case| {
+                let w = world(e, true);
+                if case.word(0) == 0 {
+                    e.mem.set_u32(w.map + 0x14, 0);
+                }
+                for k in 0..NUM_BUCKETS {
+                    e.mem.set_u32(w.buckets + k * 4, 0);
+                }
+                vec![w.map, case.word(1)]
+            })
+    }
+
     // With an interface manager or none.
     fn destructor_case(self) -> Diff {
         self.family(&lockfree::LOCKFREE)
@@ -2849,4 +2874,68 @@ fn task_map_search_next_link_changed() {
     })
     .run()
     .assert_same();
+}
+
+#[test]
+fn queued_reference_map_delete() {
+    Diff::new(entry!(0x0044_d8c0, queued_maps::queued_reference_map_delete(u32, u32) -> u32))
+        .deleting_case()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn anim_idle_map_delete() {
+    Diff::new(entry!(0x0044_d980, queued_maps::anim_idle_map_delete(u32, u32) -> u32))
+        .deleting_case()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn replacement_kf_list_map_delete() {
+    Diff::new(entry!(0x0044_da40, queued_maps::replacement_kf_list_map_delete(u32, u32) -> u32))
+        .deleting_case()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn helmet_map_delete() {
+    Diff::new(entry!(0x0044_db00, queued_maps::helmet_map_delete(u32, u32) -> u32))
+        .deleting_case()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn model_map_delete() {
+    Diff::new(entry!(0x0044_dbc0, queued_maps::model_map_delete(u32, u32) -> u32))
+        .deleting_case()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn kf_model_map_delete() {
+    Diff::new(entry!(0x0044_dbf0, queued_maps::kf_model_map_delete(u32, u32) -> u32))
+        .deleting_case()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn texture_map_delete() {
+    Diff::new(entry!(0x0044_dc20, queued_maps::texture_map_delete(u32, u32) -> u32))
+        .deleting_case()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn loaded_file_map_delete() {
+    Diff::new(entry!(0x0044_dce0, queued_maps::loaded_file_map_delete(u32, u32) -> u32))
+        .deleting_case()
+        .run()
+        .assert_same();
 }
