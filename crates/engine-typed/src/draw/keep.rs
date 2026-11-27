@@ -504,9 +504,13 @@ fn make_spans(
             continue;
         }
         let mut now = [0u8; 0x100];
-        match now.get_mut(..len as usize) {
-            Some(now) if e.mem.try_read(at, now).is_ok() => pieces.push((at, bytes)),
-            _ => out.unread.push((at, len)),
+        let read = now
+            .get_mut(..len as usize)
+            .is_some_and(|now| e.mem.try_read(at, now).is_ok());
+        if read {
+            pieces.push((at, bytes));
+        } else {
+            out.unread.push((at, len));
         }
     }
     pieces.extend(inputs.iter().map(|(at, bytes, _)| (*at, bytes.as_slice())));
