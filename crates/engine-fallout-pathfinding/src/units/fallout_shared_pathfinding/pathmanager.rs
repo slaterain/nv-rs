@@ -1793,7 +1793,7 @@ pub fn fn_006ecb10(e: &mut Engine, this: Ptr, node: Ptr) {
 // Translated from 006ecb40 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Initializes the common linked queue base and its empty head.
 pub fn fn_006ecb40(e: &mut Engine, this: Ptr) -> Ptr {
-    fn_006ecc00(e, this);
+    e.call(0x006e_cc00, &args![this]);
     e.mem.set_u32(this.addr(), 0x0106_d698);
     e.mem.set_u32(this.addr() + 4, 0);
     this
@@ -1802,7 +1802,7 @@ pub fn fn_006ecb40(e: &mut Engine, this: Ptr) -> Ptr {
 // Translated from 006ecb70 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Initializes the static message queue base and its empty count.
 pub fn fn_006ecb70(e: &mut Engine, this: Ptr) -> Ptr {
-    fn_006ecc20(e, this);
+    e.call(0x006e_cc20, &args![this]);
     e.mem.set_u32(this.addr(), 0x0106_d6f0);
     e.mem.set_u32(this.addr() + 4, 0);
     this

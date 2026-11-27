@@ -32,12 +32,13 @@ use crate::native::Real;
 use engine_core::ptr::{Field, Ptr};
 use layout::{
     AStarQueue, AStarSearch, Arc, Counter, EdgeLocation, EdgePair, MeshEdge, NavMesh, NavMeshGrid,
-    NavMeshInfo, NavMeshTriangle, PathingLocation, Point2, SearchLocation, SimpleArray, SortNode,
-    Sphere,
+    NavMeshInfo, NavMeshTriangle, PathFreeList, PathingLocation, Point2, SearchLocation,
+    SimpleArray, SortNode, Sphere,
 };
 
 pub mod layout;
 pub mod location;
+pub mod message_list;
 pub mod navmesh;
 pub mod point;
 pub mod pov;
@@ -112,6 +113,9 @@ pub(crate) fn copy_point(e: &mut Engine, from: Ptr<NiPoint3>, to: Ptr<NiPoint3>)
 #[rustfmt::skip]
 fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x006e_cc00, message_list::free_list_item_base_new(Ptr) -> Ptr),
+        entry!(0x006e_cc20, message_list::list_node_base_new(Ptr) -> Ptr),
+        entry!(0x006e_cc40, message_list::free_list_new(Ptr<PathFreeList>) -> Ptr<PathFreeList>),
         // Point helpers.
         entry!(0x0043_9ef0, point::subtract(Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>) -> Ptr<NiPoint3>),
         entry!(0x0043_9e90, point::add(Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>) -> Ptr<NiPoint3>),
