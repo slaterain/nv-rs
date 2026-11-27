@@ -3154,12 +3154,12 @@ pub fn stats_menu_do_gamepad(e: &mut Engine, this: Ptr, key: u32, value: f32) ->
     if !top_is_stats_menu(e) {
         return false;
     }
-    let pipboy = typed_call!(
+    let pip_boy = typed_call!(
         super::FAMILY,
         0x0070_5990,
         super::interface_cpp::interface_get_pipboy(e)
     );
-    if e.mem.u8(pipboy.wrapping_add(in_place::PIPBOY_QUERY)) == 0 {
+    if e.mem.u8(pip_boy.wrapping_add(in_place::PIPBOY_QUERY)) == 0 {
         return false;
     }
     if !top_is_stats_menu(e) {
