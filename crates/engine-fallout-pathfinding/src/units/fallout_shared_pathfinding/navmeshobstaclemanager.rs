@@ -2286,7 +2286,7 @@ pub fn fn_006c2210(e: &mut Engine, node: u32, array: u32) -> bool {
         if rigid_body != 0 && rigid_body_has_motion_type(e, rigid_body, &[2, 4, 0x0a, 0x14, 0x1c]) {
             let memory = e.call(OPERATOR_NEW_SIZED, &args![OBSTACLE_DATA_SIZE]).u32();
             let created = if memory != 0 {
-                fn_006c23c0(e, Ptr::new(memory)).addr()
+                e.call(0x006c_23c0, &args![memory]).u32()
             } else {
                 0
             };
@@ -3525,7 +3525,7 @@ pub fn fn_006c45e0(e: &mut Engine, this: Ptr<NavMeshObstacleManager>) {
                 fn_006c1920(e, this, form_id, reference);
                 e.call(ARRAY_ADD, &args![handled, reference_slot]);
             } else if e.vcall(reference, REFERENCE_NODE_SLOT, &args![]).u32() != 0 {
-                fn_006c23c0(e, Ptr::new(scratch));
+                let _: u32 = e.call(0x006c_23c0, &args![scratch]).u32();
                 let node_3d = e.vcall(reference, REFERENCE_NODE_SLOT, &args![]).u32();
                 if fn_006c2550(e, node_3d, scratch) {
                     let rigid_body = pointer_get(e, scratch + ObstacleData::pRigidBody.off);
@@ -3534,7 +3534,7 @@ pub fn fn_006c45e0(e: &mut Engine, this: Ptr<NavMeshObstacleManager>) {
                         e.call(ARRAY_ADD, &args![handled, reference_slot]);
                     }
                 }
-                fn_006c24d0(e, Ptr::new(scratch));
+                e.call(0x006c_24d0, &args![scratch]);
             }
             pointer_release(e, array_slot);
         }
