@@ -2547,7 +2547,8 @@ bSunShadowsCharacters=0
 
     /// What Linux's and macOS's play.sh exports makes the same play run as Play.exe's plain one
     /// (only `NV_SETTINGS`: Vulkan, play's threads and render thread; review of #687: without
-    /// NV_SETTINGS nothing drew), the whole choice alike, in both profiles. The variables are read
+    /// NV_SETTINGS nothing drew), the whole choice alike, in each profile (`--mod-manager`'s too,
+    /// which adds `NV_RS_MANAGER_APPDATA`, #1122). The variables are read
     /// from play.sh itself with the values it gives them, and must be exactly the ones listed here,
     /// so an export added later is looked at in this test: none may be a test's or a fix's
     /// variable (#763: play.sh exported `NV_PROFILE`, the profiler's switch, and every start ran as
@@ -2555,7 +2556,9 @@ bSunShadowsCharacters=0
     /// goes under the name the program reads (`engine-platform` machine_table::PROFILE_VARIABLE).
     #[test]
     fn play_sh_variables_make_a_play_run_on_vulkan() {
-        use engine_platform::machine_table::{profile_from, PROFILE_VARIABLE};
+        use engine_platform::machine_table::{
+            profile_from, MANAGER_APPDATA_VARIABLE, PROFILE_VARIABLE,
+        };
         let exported = play_sh_exports(PLAY_SH).unwrap();
         let mut names: Vec<&str> = exported.iter().map(|&(n, _)| n).collect();
         names.sort_unstable();
@@ -2566,6 +2569,7 @@ bSunShadowsCharacters=0
                 "NV_PREFS_OUT",
                 "NV_REPORT_DIR",
                 "NV_REPORT_LOG",
+                MANAGER_APPDATA_VARIABLE,
                 PROFILE_VARIABLE,
                 "NV_SAVE_OUT",
                 "NV_SETTINGS",
@@ -2584,7 +2588,7 @@ bSunShadowsCharacters=0
         assert_eq!(plain.renderer, Some(Renderer::Vulkan));
         assert_eq!(plain.threads, PLAY_THREADS);
         assert_eq!(plain.render_thread, PLAY_RENDER_THREAD);
-        for profile in ["game", "mods"] {
+        for profile in ["game", "mods", "manager"] {
             let env = |name: &str| {
                 exported
                     .iter()
