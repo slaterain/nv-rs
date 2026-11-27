@@ -1,45 +1,48 @@
 //! The map menu unit (the Xbox PDB's `fallout/interface/menus/mapmenu` source), its second part:
 //! the menu's life (constructor, destructor, deleting destructor, class, `Create`, the tile ids,
 //! `UpdateMenu`), its small members (the tile flags, the down click and the controller switch, the
-//! selected note, the magnifications, the root map space, the local map's grid test, the map
-//! memory and the world map's texture cleared, the cursor's y), the data pages (the current page,
-//! the notes and their filter, the challenge mode, the challenges with their filter and sort, the
+//! selected note, the magnifications, the root map space, the local map's grid test, the map memory
+//! and the world map's texture cleared, the cursor's y), the data pages (the current page, the
+//! notes and their filter, the challenge mode, the challenges with their filter and sort, the
 //! quests with their sort and the objectives' quest filter, the radio stations with their filter
 //! and sort, the radio waveform), the array's remove and the conversation's deleting destructor.
 //! The translation is engine-fallout-interface's `mapmenu.rs`, which these functions replace at the
 //! same addresses. `DoClick` (JIP LN's sound flag seam), `DoGamepad`, `AddMapIcons` and
-//! `AddCompanionMarkers` (extender hooks) and the maps, sounds and markers stay translated.
+//! `AddCompanionMarkers` (extender hooks) stay translated; the maps, sounds and markers are the
+//! third part's ([`super::map_menu_p3`]).
 //!
 //! **Native.** The exe's order of work; `MapMenu::pMe` read again after each call, as the exe does
 //! (a call may close the menu). The calls of functions no family types stay calls by address (the
 //! trait ids by name, the file read, the menu's tile and XML archive, the tutorial, the list boxes'
 //! set-up and tile look-up, the focus, the calendar, the strings' format and destructor, the
-//! sounds' lists, the maps' updates, the note's load, the radio stations, the clock, the message
-//! box's text, an objective's display test (overridable)). The tile's getters and setters, a
-//! node's children and the waypoint array's clear are the dispatch family's, a node's child the
-//! multibound family's, an object's property the cell family's, the strip offset the HUD family's,
-//! the array's shrink test and free the pathing family's, `_ftol2` the C runtime's; the list boxes'
-//! methods, the `Interface::` functions and this file's own are this family's (all through
-//! `typed_call!`). Done in place ([`IN_PLACE`] and the other files' lists): the interface manager,
-//! its Pip-Boy and the Pip-Boy's query byte, the menu by class, the menus root, the `Menu` base's
-//! and the lists' constructors, a tile's node, a property's word and byte, the property kind (3), a
-//! world space's parent, a setting's text and value, a string's characters and constructor, the
-//! player's active quest and notes, a note's quest list, the challenges' list, flags and values, an
-//! objective's quest, text and state, a quest's done flag, a form's flag, a list's count and whether
-//! it holds a word, a node's next and item, a smart pointer's null constructor. A list box's
-//! `RemoveAll`, `Sort`, `GetTileAt` and `+0x10` slots, the menus' deletion, class and click slots
-//! and the node's `+0xe8` slot stay virtual: the object's class is not known here.
+//! sounds' lists, the radio stations, the clock, the message box's text, an objective's display
+//! test (overridable)). The tile's getters and setters, a node's children and the waypoint array's
+//! clear are the dispatch family's, a node's child the multibound family's, an object's property
+//! the cell family's, the strip offset the HUD family's, the array's shrink test and free the
+//! pathing family's, `_ftol2` the C runtime's; the list boxes' methods, the `Interface::`
+//! functions, the third part's map updates and note load and this file's own are this family's
+//! (all through `typed_call!`).
+//! Done in place ([`IN_PLACE`] and the other files' lists): the interface manager, its Pip-Boy and
+//! the Pip-Boy's query byte, the menu by class, the menus root, the `Menu` base's and the lists'
+//! constructors, a tile's node, a property's word and byte, the property kind (3), a world space's
+//! parent, a setting's text and value, a string's characters and constructor, the player's active
+//! quest and notes, a note's quest list, the challenges' list, flags and values, an objective's
+//! quest, text and state, a quest's done flag, a form's flag, a list's count and whether it holds a
+//! word, a node's next and item, a smart pointer's null constructor. A list box's `RemoveAll`,
+//! `Sort`, `GetTileAt` and `+0x10` slots, the menus' deletion, class and click slots and the node's
+//! `+0xe8` slot stay virtual: the object's class is not known here.
 //!
-//! **Floats.** The main thread's precision (the x87 control word of the thread that runs them):
-//! a step whose result the exe stores as a float is rounded once to the float; a step whose result
+//! **Floats.** The main thread's precision (the x87 control word of the thread that runs them): a
+//! step whose result the exe stores as a float is rounded once to the float; a step whose result
 //! stays on the x87 stack or goes into a double (the update's minutes into `_ftol2`, the cursor's
-//! product, the waveform's offset and elapsed time) goes through engine-core's x87 steps, which keep
-//! its wider exponent; the exe's double constants are read where it reads them; a float the exe moves
-//! through the x87 stack is quieted (`x87_quiet`).
+//! product, the waveform's offset and elapsed time) goes through engine-core's x87 steps, which
+//! keep its wider exponent; the exe's double constants are read where it reads them; a float the
+//! exe moves through the x87 stack is quieted (`x87_quiet`).
 
 use super::interface_cpp::{self, in_place};
 use super::interface_cpp_p2::{self, name_characters};
 use super::map_menu;
+use super::map_menu_p3;
 use super::menu_manager::{self, empty_list};
 use super::menu_manager_p2::{
     child_by_name, ftol2, tile_float, tile_set_float, tile_set_int, trait_by_name, ADD_USER_TRAIT,
@@ -297,7 +300,7 @@ const MENU_REMOVE_FROM_XML_ARCHIVE: u32 = 0x00a1_ca20;
 const MENU_SET_MENU_TILE: u32 = 0x00a1_dc70;
 const MENU_PREP_FOR_VISIBILITY: u32 = 0x00a1_dc20;
 const MENU_DESTRUCT: u32 = 0x00a1_c520;
-const CALENDAR_MARK_STALE: u32 = 0x0086_7a20;
+const MENU_SET_BYTE_1C: u32 = 0x0086_7a20;
 const CALENDAR_GET_HOUR: u32 = 0x0086_7da0;
 const CALENDAR_GET_DATE_STRING: u32 = 0x0086_7970;
 const PRINT_WARNING: u32 = 0x005b_5e40;
@@ -326,9 +329,6 @@ const TALKING_ACTIVATOR_TEST: u32 = 0x004f_ee60;
 const CONVERSATION_DESTRUCT: u32 = 0x0083_b8d0;
 const ARRAY_SHRUNK_SIZE: u32 = 0x0086_9600;
 const ARRAY_MOVE: u32 = 0x0069_2480;
-const UPDATE_LOCAL_MAP: u32 = 0x0079_d410;
-const UPDATE_WORLD_MAP: u32 = 0x0079_cdb0;
-const LOAD_NOTE: u32 = 0x0079_93d0;
 const PLAYER_NOTE_AT: u32 = 0x0096_6bb0;
 const OBJECTIVE_SHOWN: u32 = 0x005a_5e70;
 const STATION_NAME: u32 = 0x0055_d520;
@@ -625,13 +625,13 @@ pub fn fn_00796a80(e: &mut Engine, this: Ptr) {
 }
 
 // Typed from 00796b90
-/// `MapMenu::Create` (Xbox PDB): an open map menu deleted (its slot +0 with 1), `map_menu.xml`
-/// read into the menus root, its menu taken as `MapMenu::pMe` and the file removed from the XML
-/// archive. A menu that is not the map menu (class 0x3ff) is deleted again (when it has a tile) and
-/// 0 answered. Otherwise the calendar's days are marked, the menu's tile set, and unless a tile is
-/// missing (a warning, 0 answered) the tile's depth (trait `0xfad`) set to the top one when trait
-/// `0xfa7` is 6006.0 or 102.0, the tutorial message 0x1a shown, the tab line and the five list
-/// boxes set up, the map's property updated, the title emptied, tiles 5 and 3 given the flag
+/// `MapMenu::Create` (Xbox PDB): an open map menu deleted (its slot +0 with 1), `map_menu.xml` read
+/// into the menus root, its menu taken as `MapMenu::pMe` and the file removed from the XML archive.
+/// A menu that is not the map menu (class 0x3ff) is deleted again (when it has a tile) and 0
+/// answered. Otherwise the menu's byte at +0x1c set (`00867a20`), its tile set, and unless a tile
+/// is missing (a warning, 0 answered) the tile's depth (trait `0xfad`) set to the top one when
+/// trait `0xfa7` is 6006.0 or 102.0, the tutorial message 0x1a shown, the tab line and the five
+/// list boxes set up, the map's property updated, the title emptied, tiles 5 and 3 given the flag
 /// 0x8000, the map memory cleared and the menu prepared for visibility. The tile.
 pub fn map_menu_create(e: &mut Engine) -> u32 {
     let manager = in_place::manager(e);
@@ -652,7 +652,7 @@ pub fn map_menu_create(e: &mut Engine) -> u32 {
         }
         return 0;
     }
-    e.call(CALENDAR_MARK_STALE, &args![menu]);
+    e.call(MENU_SET_BYTE_1C, &args![menu]);
     let menu = singleton(e);
     e.call(MENU_SET_MENU_TILE, &args![menu, tile, 0u32]);
     let menu = singleton(e);
@@ -1208,9 +1208,9 @@ pub fn map_menu_set_root_map_space(e: &mut Engine, space: u32) {
 // Typed from 007a1b10
 /// `BSSimpleArray<BSStringT<char>,1024>`'s removal of element `index`: with `shrink` and the array
 /// wanting to shrink, a smaller buffer allocated (its slot +4), the elements before moved, the
-/// element destroyed, the `size - 1` elements after it moved (the exe's count), the old buffer freed
-/// and the new one and its size kept; else the element destroyed and the ones after moved down.
-/// Then one fewer.
+/// element destroyed, the `size - 1` elements after it moved (the exe's count), the old buffer
+/// freed and the new one and its size kept; else the element destroyed and the ones after moved
+/// down. Then one fewer.
 pub fn fn_007a1b10(e: &mut Engine, this: Ptr, index: u32, shrink: u8) {
     let at = this.addr();
     let offset = index.wrapping_mul(8);
@@ -1274,11 +1274,11 @@ pub fn fn_007a1b10(e: &mut Engine, this: Ptr, index: u32, shrink: u8) {
 /// `MapMenu::UpdateCurrentPage` (Xbox PDB): the quest, objective, note and challenge lists disabled
 /// (the note and challenge containers' trait `0xfa3` cleared), tiles 11, 12, 18 and 21 reset, then
 /// by the page: 0x20 the local map (tile 2 the map tile; updated unless `007a1750`), 0x21 the world
-/// map (tile 4, updated), 0x22 the quests, 0x23 the notes (tile 18 shown; outside challenge mode the
-/// list's state saved, the notes updated, the selected note loaded and its tile selected, the state
-/// restored with the focus), then the challenges and `ToggleNotesChallengeMode(0)`; 0x24 the radio
-/// (tile 12 hidden, the highlighted index kept, -1.0 without one, the list updated, the tile at that
-/// index focused and the list's slot +0x10 called).
+/// map (tile 4, updated), 0x22 the quests, 0x23 the notes (tile 18 shown; outside challenge mode
+/// the list's state saved, the notes updated, the selected note loaded and its tile selected, the
+/// state restored with the focus), then the challenges and `ToggleNotesChallengeMode(0)`; 0x24 the
+/// radio (tile 12 hidden, the highlighted index kept, -1.0 without one, the list updated, the tile
+/// at that index focused and the list's slot +0x10 called).
 pub fn map_menu_update_current_page(e: &mut Engine, this: Ptr) {
     let at = this.addr();
     let list = |offset: u32| Ptr::new(at.wrapping_add(offset));
@@ -1329,14 +1329,22 @@ pub fn map_menu_update_current_page(e: &mut Engine, this: Ptr) {
                 .set_u32(menu.wrapping_add(MAP_TILE), map_tile(e, menu, 2));
             if !typed_call!(super::FAMILY, 0x007a_1750, fn_007a1750(e)) {
                 let menu = singleton(e);
-                e.call(UPDATE_LOCAL_MAP, &args![menu]);
+                typed_call!(
+                    super::FAMILY,
+                    0x0079_d410,
+                    map_menu_p3::map_menu_update_local_map(e, Ptr::new(menu))
+                );
             }
         }
         1 => {
             let menu = singleton(e);
             e.mem
                 .set_u32(menu.wrapping_add(MAP_TILE), map_tile(e, menu, 4));
-            e.call(UPDATE_WORLD_MAP, &args![menu]);
+            typed_call!(
+                super::FAMILY,
+                0x0079_cdb0,
+                map_menu_p3::map_menu_update_world_map(e, Ptr::new(menu))
+            );
         }
         2 => {
             let menu = singleton(e);
@@ -1370,7 +1378,11 @@ pub fn map_menu_update_current_page(e: &mut Engine, this: Ptr) {
                         )
                         .u32();
                     let note = e.mem.u32(at.wrapping_add(SELECTED_NOTE));
-                    e.call(LOAD_NOTE, &args![at, note]);
+                    typed_call!(
+                        super::FAMILY,
+                        0x0079_93d0,
+                        map_menu_p3::map_menu_load_note(e, Ptr::new(at), note)
+                    );
                     if tile != 0 {
                         let selected = static_id(e, TRAIT_SELECTED);
                         tile_set_int(e, tile, selected, 1);
@@ -1563,8 +1575,8 @@ pub fn map_menu_toggle_notes_challenge_mode(e: &mut Engine, this: Ptr, toggle: u
 
 // Typed from 0079b600
 /// The challenge list filled: emptied, then every challenge of `011c3f2c`'s list without its flag
-/// bit 0 or with its state bit 0 inserted (its name) with trait `0xfaa` 0x18 and its text alpha (dim
-/// with state bit 1); filtered (`0079b720`) and sorted (`0079b820`).
+/// bit 0 or with its state bit 0 inserted (its name) with trait `0xfaa` 0x18 and its text alpha
+/// (dim with state bit 1); filtered (`0079b720`) and sorted (`0079b820`).
 pub fn fn_0079b600(e: &mut Engine, this: Ptr) {
     let list = this.addr().wrapping_add(CHALLENGES);
     e.vcall(list, REMOVE_ALL_SLOT, &args![]);
@@ -1863,8 +1875,8 @@ pub fn map_menu_update_radio_list(e: &mut Engine, this: Ptr) {
 /// The radio waveform (tile 16), with tile 16's property: started when its start time is 0.0 (the
 /// image path from the format setting and trait `0xfd2` into `0xfcc`, the clock as the start time,
 /// trait `0xfa3` 1); every 10 ms the property's strip moved by the step (wrapping above 1.0); after
-/// the frame time `"Forward"`, `"Backward"` or `"Left"` (a random number mod 3) as trait `0xfd2` and
-/// the start time cleared.
+/// the frame time `"Forward"`, `"Backward"` or `"Left"` (a random number mod 3) as trait `0xfd2`
+/// and the start time cleared.
 pub fn fn_0079c0c0(e: &mut Engine, this: Ptr) {
     let at = this.addr();
     let property = tile_shader_property(e, map_tile(e, singleton(e), 16));

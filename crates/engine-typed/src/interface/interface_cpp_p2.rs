@@ -830,7 +830,11 @@ pub fn interface_finish_load_game(e: &mut Engine) {
         0x007d_f5d0,
         super::stats_menu::stats_menu_update_player_title(e)
     );
-    e.call(0x0079_f640, &[]);
+    typed_call!(
+        super::FAMILY,
+        0x0079_f640,
+        super::map_menu_p3::map_menu_set_player_marker(e)
+    );
     typed_call!(super::FAMILY, 0x0070_6ac0, fn_00706ac0(e));
     typed_call!(
         super::FAMILY,
@@ -891,7 +895,11 @@ pub fn fn_00706ae0(e: &mut Engine) {
         super::stats_menu::fn_007dda60(e)
     );
     typed_call!(super::FAMILY, 0x0070_6ac0, fn_00706ac0(e));
-    e.call(0x0079_8bf0, &[]);
+    typed_call!(
+        super::FAMILY,
+        0x0079_8bf0,
+        super::map_menu_p3::map_menu_clear_audio_log_subtites(e)
+    );
     typed_call!(
         super::FAMILY,
         0x0070_6fd0,
