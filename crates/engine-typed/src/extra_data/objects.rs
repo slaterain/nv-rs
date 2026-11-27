@@ -704,7 +704,7 @@ pub fn lock_base_level(e: &mut Engine, this: u32, reference: u32) -> i32 {
         let setting = e.call(SETTING_FLOAT, &args![LEVELED_LOCK_SETTING]).u32();
         let scale = f64::from(e.mem.f32(setting));
         let whole = typed_call!(crt::FAMILY, 0x00ec_62c0, crt::math::ftol2_sse(e, scale));
-        let scale = crt::low_word(whole) as i32;
+        let scale = i32::from_le_bytes(crt::low_word(whole).to_le_bytes());
         level = scale.wrapping_mul(by).wrapping_add(level).min(99);
     }
     level

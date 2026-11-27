@@ -15505,9 +15505,25 @@ fn xo_sequence_word() {
     .assert_same();
 }
 
+/// The limbs' destructor and lock level shapes, as methods of the Diff.
+trait XoMore {
+    fn xo_limbs_drop(self, own: u32, flags: bool) -> Diff;
+    fn xo_lock_levels(self, own: u32) -> Diff;
+}
+
+impl XoMore for Diff {
+    fn xo_limbs_drop(self, own: u32, flags: bool) -> Diff {
+        xo_limbs_drop_shape(self, own, flags)
+    }
+
+    fn xo_lock_levels(self, own: u32) -> Diff {
+        xo_lock_levels_shape(self, own)
+    }
+}
+
 /// The limbs' destructors: records drawn by [`xo_records`] (`flags`: the scalar deleting one, with
 /// each flag).
-fn xo_limbs_drop(diff: Diff, own: u32, flags: bool) -> Diff {
+fn xo_limbs_drop_shape(diff: Diff, own: u32, flags: bool) -> Diff {
     let mut inputs = vec![Input::Of(&[0, 1, 2, 3])];
     if flags {
         inputs.push(Input::Of(&[0, 1, 2, 3]));
@@ -15525,17 +15541,21 @@ fn xo_limbs_drop(diff: Diff, own: u32, flags: bool) -> Diff {
 
 #[test]
 fn xo_limbs_delete() {
-    let diff = Diff::new(entry!(
+    Diff::new(entry!(
         0x0043_02a0,
         extra_data::objects::limbs_delete(u32, u32) -> u32
-    ));
-    xo_limbs_drop(diff, 0x0043_02a0, true).run().assert_same();
+    ))
+    .xo_limbs_drop(0x0043_02a0, true)
+    .run()
+    .assert_same();
 }
 
 #[test]
 fn xo_limbs_drop_body() {
-    let diff = Diff::new(entry!(0x0043_02d0, extra_data::objects::limbs_drop(u32)));
-    xo_limbs_drop(diff, 0x0043_02d0, false).run().assert_same();
+    Diff::new(entry!(0x0043_02d0, extra_data::objects::limbs_drop(u32)))
+        .xo_limbs_drop(0x0043_02d0, false)
+        .run()
+        .assert_same();
 }
 
 #[test]
@@ -15748,7 +15768,7 @@ fn xo_lock_record(e: &mut Engine, level: u32, key: u32, flags: u32, tries: u32, 
 
 /// The lock level getters: (lock record, reference): the base level, leveled or not (flag 4 among
 /// others), a reference or none, the scale's float drawn.
-fn xo_lock_levels(diff: Diff, own: u32) -> Diff {
+fn xo_lock_levels_shape(diff: Diff, own: u32) -> Diff {
     diff.xo_case(own)
         .max_cases(5 * 4 * 2 * 3)
         .inputs(&[
@@ -15772,20 +15792,24 @@ fn xo_lock_levels(diff: Diff, own: u32) -> Diff {
 
 #[test]
 fn xo_lock_level() {
-    let diff = Diff::new(entry!(
+    Diff::new(entry!(
         0x0043_09e0,
         extra_data::objects::lock_level(u32, u32) -> i32
-    ));
-    xo_lock_levels(diff, 0x0043_09e0).run().assert_same();
+    ))
+    .xo_lock_levels(0x0043_09e0)
+    .run()
+    .assert_same();
 }
 
 #[test]
 fn xo_lock_base_level() {
-    let diff = Diff::new(entry!(
+    Diff::new(entry!(
         0x0043_0a10,
         extra_data::objects::lock_base_level(u32, u32) -> i32
-    ));
-    xo_lock_levels(diff, 0x0043_0a10).run().assert_same();
+    ))
+    .xo_lock_levels(0x0043_0a10)
+    .run()
+    .assert_same();
 }
 
 #[test]
