@@ -205,12 +205,12 @@ impl Keys {
     }
 }
 
-/// `1` or `0`.
 /// `sDrawItems`'s words: `0`, `1` and `check` (anything else can't be used).
 fn items(raw: &str) -> Option<engine_core::draw_items::Mode> {
     matches!(raw, "0" | "1" | "check").then(|| engine_core::draw_items::parse(Some(raw)))
 }
 
+/// `1` or `0`.
 fn flag(raw: &str) -> Option<bool> {
     match raw {
         "1" => Some(true),

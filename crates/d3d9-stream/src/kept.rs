@@ -75,12 +75,12 @@ impl Commands {
     pub fn keep(&mut self, cmd: Cmd<Data<'_>>) {
         let bytes = &mut self.bytes;
         let kept = cmd.map(|d| {
-            // 4-aligned, as the stream keeps words.
-            bytes.resize(bytes.len().next_multiple_of(4), 0);
-            let at = bytes.len() as u32;
-            let b = d.bytes();
-            bytes.extend_from_slice(&b);
-            (at, b.len() as u32)
+            // 4-aligned, as the stream keeps words; read straight into place (no copy of their own made).
+            let at = bytes.len().next_multiple_of(4);
+            let len = d.len() as usize;
+            bytes.resize(at + len, 0);
+            d.copy_to(0, &mut bytes[at..]);
+            (at as u32, len as u32)
         });
         self.scratch.clear();
         if let Cmd::SetConstants { data: (_, len), .. } = kept {
@@ -112,11 +112,12 @@ impl Commands {
         self.constants
     }
 
+    /// Empty again, keeping the room it had (the platform's held draw commands are cleared at every draw).
     pub fn clear(&mut self) {
-        *self = Commands {
-            scratch: std::mem::take(&mut self.scratch),
-            ..Commands::default()
-        };
+        self.cmds.clear();
+        self.bytes.clear();
+        self.constants = 0;
+        self.shape = crate::wire::HASH_START;
     }
 
     /// The commands as they came.

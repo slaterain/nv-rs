@@ -497,6 +497,7 @@ pub fn render_pass(
             let holder = e.global::<u32>(RENDER_HOLDER);
             e.vcall(geometry.addr(), slot::OWN_RENDER, &args![holder]);
         } else {
+            let _after = AfterBegin::now(begun);
             typed_call!(
                 FAMILY,
                 0x00b9_8e80,
@@ -519,6 +520,31 @@ pub fn render_pass(
                 e.call(TAIL_KIND_11, &args![shader, pass_type]);
             }
         }
+    }
+}
+
+thread_local! {
+    /// How the plain draw [`render_standard`] makes now came ([`AfterBegin`]): 0 not from [`render_pass`], 1 the
+    /// first draw after its pass's begin (`00b99390`), 2 a later one.
+    static AFTER_BEGIN: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+/// [`AFTER_BEGIN`] for one plain draw of [`render_pass`], put back as it was when dropped (also when a stop unwinds).
+/// The shader's constant entries switched on differ between the first draw after a begin and the later ones (the
+/// tail of the kinds 1 to 5 switches some off after the first: `tail_kinds_1_to_5`), so a kept record
+/// (`crate::draw::keep`) is keyed by it: a first draw's record uploads constants a later draw's set-up does not, and
+/// the other way round (the check run's first difference: the fog parameters, vertex register 14).
+struct AfterBegin(u8);
+
+impl AfterBegin {
+    fn now(begun: bool) -> AfterBegin {
+        AfterBegin(AFTER_BEGIN.with(|a| a.replace(if begun { 1 } else { 2 })))
+    }
+}
+
+impl Drop for AfterBegin {
+    fn drop(&mut self) {
+        AFTER_BEGIN.with(|a| a.set(self.0));
     }
 }
 
@@ -584,13 +610,13 @@ pub fn render_standard(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second
             holder,
         );
     };
-    if crate::draw::keep::mode() != crate::draw::keep::Mode::Off
-        && keepable(e, pass_type, geometry.addr(), shader)
-    {
+    let after_begin = AFTER_BEGIN.with(std::cell::Cell::get);
+    if kept(e, after_begin, pass_type, geometry.addr(), shader) {
         let order = keep_order(
             (first, second, third),
             e.get(pass, RenderPass::ucSortFlag),
             e.global::<u8>(RESTORE_OWED),
+            after_begin,
         );
         crate::draw::keep::draw(e, (geometry.addr(), pass_type, shader, state, order), rest);
     } else {
@@ -598,15 +624,32 @@ pub fn render_standard(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second
     }
 }
 
-/// The draw's order-dependent choices, part of its key (`crate::draw::keep`): the flags, the pass's sort flag and
-/// whether a restore is owed (`RESTORE_OWED`): a record is only replayed where the set-up would take the same
-/// branches.
-fn keep_order((first, second, third): (bool, bool, bool), sort: u8, restore_owed: u8) -> u32 {
+/// The draw's order-dependent choices, part of its key (`crate::draw::keep`): the flags, the pass's sort flag,
+/// whether a restore is owed (`RESTORE_OWED`) and whether it is the first draw after its pass's begin
+/// ([`AFTER_BEGIN`]: 1 first, 2 later): a record is only replayed where the set-up would take the same branches
+/// and find the same constant entries switched on.
+fn keep_order(
+    (first, second, third): (bool, bool, bool),
+    sort: u8,
+    restore_owed: u8,
+    after_begin: u8,
+) -> u32 {
     u32::from(first)
         | u32::from(second) << 1
         | u32::from(third) << 2
         | u32::from(sort) << 3
         | u32::from(restore_owed) << 11
+        | u32::from(after_begin) << 19
+}
+
+/// Whether [`render_standard`] goes through the kept records (`crate::draw::keep`): the switch on, the draw made by
+/// [`render_pass`] (`after_begin` not 0: its first-or-later is known, [`AFTER_BEGIN`]) and [`keepable`]. The mode
+/// is tested first, so with the switch off nothing else is read.
+#[inline(always)]
+fn kept(e: &Engine, after_begin: u8, pass_type: u32, geometry: u32, shader: u32) -> bool {
+    crate::draw::keep::mode() != crate::draw::keep::Mode::Off
+        && after_begin != 0
+        && keepable(e, pass_type, geometry, shader)
 }
 
 /// Whether a plain geometry's draw may be kept (`crate::draw::keep`): a pass type without a set-up of its own
@@ -1851,19 +1894,84 @@ mod keep_tests {
             assert!(!keepable(&e, 0x60, geometry, shader), "slot {at:#x}");
             e.mem.set_u32(vtable + at, target);
         }
+        // render_standard's gate (review of #1145): the switch on and a draw of render_pass's (first or later).
+        use crate::draw::keep::{set_mode_for_tests, Mode};
+        set_mode_for_tests(Some(Mode::On));
+        assert!(kept(&e, 1, 0x60, geometry, shader) && kept(&e, 2, 0x60, geometry, shader));
+        assert!(!kept(&e, 0, 0x60, geometry, shader), "not from render_pass");
+        assert!(!kept(&e, 1, 0xfc, geometry, shader), "not keepable");
+        set_mode_for_tests(Some(Mode::Off));
+        assert!(!kept(&e, 1, 0x60, geometry, shader), "the switch off");
+        set_mode_for_tests(None);
     }
 
-    /// Every order-dependent choice gives another key.
+    /// render_pass keys its plain draws (review of #1145): the first after the pass's begin reaches render_standard
+    /// with [`AFTER_BEGIN`] 1, the next of the same type and shader (no begin) with 2, a draw after another begin
+    /// with 1 again; outside render_pass it is 0.
+    #[test]
+    fn render_pass_tells_the_first_plain_draw_after_its_begin_apart() {
+        use engine_core::abi::Ret;
+        thread_local! {
+            static SEEN: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+        }
+        /// TEST DATA: the stand-ins at the callees' addresses (the families are off in a bare engine).
+        fn begin(e: &mut Engine, a: &[u32]) -> Ret {
+            e.mem.set_u32(CURRENT_PASS_TYPE, a[0]);
+            e.mem.set_u32(CURRENT_SHADER, a[1]);
+            Ret::default()
+        }
+        fn standard(_: &mut Engine, _: &[u32]) -> Ret {
+            SEEN.with(|s| s.borrow_mut().push(AFTER_BEGIN.with(std::cell::Cell::get)));
+            Ret::default()
+        }
+        fn zero(_: &mut Engine, _: &[u32]) -> Ret {
+            Ret::default()
+        }
+        let mut e = Engine::new();
+        e.mem.map(0x011f_0000, 0x1_0000);
+        e.register(0x00b9_9390, begin);
+        e.register(0x00e7_2c20, zero);
+        e.register(0x00b9_8e80, standard);
+        e.register(0x0400_5000, zero);
+        let vtable = e.mem.alloc(0x400);
+        for i in 0..0x100 {
+            e.mem.set_u32(vtable + 4 * i, 0x0400_5000);
+        }
+        let pass = |e: &mut Engine, shader: u32| {
+            let geometry = e.mem.alloc(0x100);
+            e.mem.set_u32(geometry, vtable);
+            e.set(
+                Ptr::<NiGeometry>::new(geometry),
+                NiGeometry::m_spShader,
+                shader,
+            );
+            let pass = Ptr::<RenderPass>::new(e.mem.alloc(0x10));
+            e.set(pass, RenderPass::pGeometry, Ptr::new(geometry));
+            e.set(pass, RenderPass::usPassEnum, 0x60u16);
+            pass
+        };
+        let (a, b) = (e.mem.alloc(0x80), e.mem.alloc(0x80));
+        let (first, second, other) = (pass(&mut e, a), pass(&mut e, a), pass(&mut e, b));
+        for p in [first, second, other, first] {
+            render_pass(&mut e, p, 0x60, 0, 0, 0);
+        }
+        assert_eq!(SEEN.with(|s| s.take()), [1, 2, 1, 1]);
+        assert_eq!(AFTER_BEGIN.with(std::cell::Cell::get), 0);
+    }
+
+    /// Every order-dependent choice gives another key, the first draw after a begin too.
     #[test]
     fn each_order_choice_is_its_own_part_of_the_key() {
-        let base = keep_order((false, false, false), 0, 0);
+        let base = keep_order((false, false, false), 0, 0, 2);
         let all = [
-            keep_order((true, false, false), 0, 0),
-            keep_order((false, true, false), 0, 0),
-            keep_order((false, false, true), 0, 0),
-            keep_order((false, false, false), 1, 0),
-            keep_order((false, false, false), 0xff, 0),
-            keep_order((false, false, false), 0, 1),
+            keep_order((true, false, false), 0, 0, 2),
+            keep_order((false, true, false), 0, 0, 2),
+            keep_order((false, false, true), 0, 0, 2),
+            keep_order((false, false, false), 1, 0, 2),
+            keep_order((false, false, false), 0xff, 0, 2),
+            keep_order((false, false, false), 0, 1, 2),
+            keep_order((false, false, false), 0, 0xff, 2),
+            keep_order((false, false, false), 0, 0, 1),
         ];
         let mut seen = vec![base];
         seen.extend(all);
@@ -1872,8 +1980,32 @@ mod keep_tests {
         seen.dedup();
         assert_eq!(seen.len(), n, "{all:x?}");
         assert_eq!(
-            keep_order((true, true, true), 0xff, 1),
-            7 | 0xff << 3 | 1 << 11
+            keep_order((true, true, true), 0xff, 1, 1),
+            7 | 0xff << 3 | 1 << 11 | 1 << 19
         );
+    }
+
+    /// How a plain draw came: set for one draw of `render_pass` (1 after a begin, 2 a later one), put back after it,
+    /// also when a stop unwinds through the draw; 0 outside, where nothing is kept.
+    #[test]
+    fn the_first_draw_after_a_begin_is_told_apart_for_one_draw() {
+        let now = || AFTER_BEGIN.with(std::cell::Cell::get);
+        assert_eq!(now(), 0);
+        {
+            let _first = AfterBegin::now(true);
+            assert_eq!(now(), 1);
+            {
+                let _later = AfterBegin::now(false);
+                assert_eq!(now(), 2);
+            }
+            assert_eq!(now(), 1, "the outer draw's again");
+        }
+        assert_eq!(now(), 0);
+        let stopped = std::panic::catch_unwind(|| {
+            let _first = AfterBegin::now(true);
+            panic!("a C++ exception");
+        });
+        assert!(stopped.is_err());
+        assert_eq!(now(), 0, "put back by the unwind");
     }
 }

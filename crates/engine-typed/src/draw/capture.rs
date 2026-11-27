@@ -324,6 +324,12 @@ fn keep_reading() -> bool {
     KEEP_READS.with(|r| r.borrow().is_some())
 }
 
+/// Tests: [`keep_reading`].
+#[cfg(test)]
+pub(crate) fn keep_reading_for_tests() -> bool {
+    keep_reading()
+}
+
 /// Starts noting this thread's reads through the accessors (a kept draw record's build, `super::keep`).
 /// `[low, top)` is where the set-up's own stack locals will lie (`Engine::locals_below`): what the set-up reads
 /// there it wrote there itself (the store log leaves its writes there out too), and the next draw's set-up leaves

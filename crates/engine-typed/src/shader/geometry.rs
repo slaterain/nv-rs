@@ -184,7 +184,20 @@ const OFFSET: u32 = 0x011f_d8b4;
 /// position less the camera (`011f474c`), each rounded to a float on the stack and copied to
 /// `011fd8b4`.
 /// `this` (`ECX`) is not read, but `SetupGeometryConstants` (`00b7dab0`) calls it with `ECX` set.
-pub fn vertex_entry_17(e: &mut Engine, _this: Ptr, object: Ptr) {
+pub fn vertex_entry_17(e: &mut Engine, this: Ptr, object: Ptr) {
+    if crate::draw::keep::building() {
+        let call = crate::draw::keep::Leaf::Entry17 {
+            this: this.addr(),
+            object: object.addr(),
+        };
+        return crate::draw::keep::leaf(e, call, |e| entry_17_now(e, object));
+    }
+    entry_17_now(e, object);
+}
+
+/// [`vertex_entry_17`]'s work (a kept draw record makes the call again with the frame's camera).
+#[inline(always)]
+fn entry_17_now(e: &mut Engine, object: Ptr) {
     if !entry_enabled(e, VERTEX_ENTRIES + 4 * 17) {
         return;
     }
@@ -736,6 +749,32 @@ pub fn obj_to_cube(
     flag: u32,
     transform: u32,
 ) {
+    if crate::draw::keep::building() {
+        let call = crate::draw::keep::Leaf::ObjToCube {
+            this: this.addr(),
+            block: block.addr(),
+            pass_type,
+            flag,
+            transform,
+        };
+        return crate::draw::keep::leaf(e, call, |e| {
+            obj_to_cube_now(e, this, block, pass_type, flag, transform);
+        });
+    }
+    obj_to_cube_now(e, this, block, pass_type, flag, transform);
+}
+
+/// [`obj_to_cube`]'s work (a kept draw record makes the call again with the frame's camera and the renderer's
+/// matrix of the frame).
+#[inline(always)]
+fn obj_to_cube_now(
+    e: &mut Engine,
+    this: Ptr,
+    block: Ptr,
+    pass_type: u32,
+    flag: u32,
+    transform: u32,
+) {
     if !entry_enabled(e, VERTEX_ENTRIES + 4) {
         return;
     }
@@ -835,6 +874,20 @@ pub fn simple_shadow_clip_planes(e: &mut Engine, this: Ptr, pass_type: u32) {
     if pass_type.wrapping_sub(0x231) > 3 {
         return;
     }
+    if crate::draw::keep::building() {
+        let call = crate::draw::keep::Leaf::ClipPlanes {
+            this: this.addr(),
+            pass_type,
+        };
+        return crate::draw::keep::leaf(e, call, |e| clip_planes_now(e, this));
+    }
+    clip_planes_now(e, this);
+}
+
+/// [`simple_shadow_clip_planes`]'s work for the types 0x231 to 0x234 (a kept draw record makes the call again with
+/// the frame's camera and view, and the light's cache of the moment).
+#[inline(always)]
+fn clip_planes_now(e: &mut Engine, this: Ptr) {
     let light = rendering_object(e);
     // The light's clip-plane cache (+0x1a8, made +0x208), draw-written in main's light: the draw's own state (the cut
     // owns it per pass light), the device handed an image of the planes.
