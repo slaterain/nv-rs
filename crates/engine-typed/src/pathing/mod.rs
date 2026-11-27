@@ -32,8 +32,8 @@ use crate::native::Real;
 use engine_core::ptr::{Field, Ptr};
 use layout::{
     AStarQueue, AStarSearch, Arc, Counter, EdgeLocation, EdgePair, MeshEdge, NavMesh, NavMeshGrid,
-    NavMeshInfo, NavMeshTriangle, PathingLocation, Point2, SearchLocation, SimpleArray, SortNode,
-    Sphere,
+    NavMeshInfo, NavMeshTriangle, PathingLocation, PathingRequestSafeStraightLine, Point2,
+    SearchLocation, SimpleArray, SortNode, Sphere,
 };
 
 pub mod layout;
@@ -41,6 +41,7 @@ pub mod location;
 pub mod navmesh;
 pub mod point;
 pub mod pov;
+pub mod request;
 pub mod search;
 
 /// This family's bit: what each `typed_call!` of it names.
@@ -254,6 +255,15 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006b_9cf0, pov::height_in(Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr, f32, f32) -> bool),
         entry!(0x006b_ab00, pov::segment_within(Ptr<NiPoint3>, f32, Ptr<NiPoint3>, Ptr<NiPoint3>) -> bool),
         entry!(0x006b_b570, pov::sphere_tangents(Ptr<Sphere>, Ptr<Sphere>, u32, Ptr) -> u32),
+        // The safe straight-line request.
+        entry!(0x006e_5fd0, request::scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x006e_5fa0, request::new(Ptr<PathingRequestSafeStraightLine>) -> Ptr<PathingRequestSafeStraightLine>),
+        entry!(0x006e_6010, request::copy_new(Ptr<PathingRequestSafeStraightLine>, Ptr) -> Ptr<PathingRequestSafeStraightLine>),
+        entry!(0x006e_6080, request::copy_to(Ptr<PathingRequestSafeStraightLine>, Ptr)),
+        entry!(0x006e_60c0, request::set_target(Ptr<PathingRequestSafeStraightLine>, u32)),
+        entry!(0x006e_60e0, request::save_game(Ptr<PathingRequestSafeStraightLine>, u32)),
+        entry!(0x006e_6110, request::load_game(Ptr<PathingRequestSafeStraightLine>, u32)),
+        entry!(0x006e_6140, request::init_load_game(Ptr<PathingRequestSafeStraightLine>, u32)),
         // Pathing locations.
         entry!(0x0044_1110, location::world_space(Ptr<PathingLocation>) -> u32),
         entry!(0x006a_9520, location::is_valid(Ptr<PathingLocation>) -> bool),

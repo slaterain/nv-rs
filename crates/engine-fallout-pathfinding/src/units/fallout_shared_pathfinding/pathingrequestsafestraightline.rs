@@ -39,6 +39,8 @@ const CLOSE_POINT_CONSTRUCT: u32 = 0x006e_3f30;
 const CLOSE_POINT_COPY_CONSTRUCT: u32 = 0x006e_3fb0;
 /// `PathingRequest::CopyTo` (Xbox PDB).
 const REQUEST_COPY_TO: u32 = 0x006e_2750;
+/// `006e60c0` (`RET 4`): the target setter as compiled.
+const SET_TARGET: u32 = 0x006e_60c0;
 /// `PathingRequestOptimalLocation::SaveGame` / `LoadGame` (engine map; the
 /// bodies that save and load +0xB0 and +0xB4 after the `PathingRequest`).
 const DISTANCES_SAVE_GAME: u32 = 0x006e_5f00;
@@ -101,7 +103,7 @@ pub fn pathing_request_safe_straight_line_copy_to(
 ) {
     e.call(REQUEST_COPY_TO, &args![this, other]);
     let target = e.get(this, PathingRequestSafeStraightLine::pTarget);
-    fn_006e60c0(e, other.cast(), target);
+    e.call(SET_TARGET, &args![other, target]);
 }
 
 // Translated from 006e60c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -293,7 +295,14 @@ mod n032_tests {
         e.call_log = Some(vec![]);
         e.call(0x006e_6080, &args![this, other]);
         let log = e.call_log.take().unwrap();
-        assert_eq!(order(&log), vec![(REQUEST_COPY_TO, vec![this, other])]);
+        // The setter goes by address now, so its call is logged too.
+        assert_eq!(
+            order(&log),
+            vec![
+                (REQUEST_COPY_TO, vec![this, other]),
+                (SET_TARGET, vec![other, 0x1111]),
+            ]
+        );
         assert_eq!(e.mem.u32(other + 0xb8), 0x2222);
         e.call(0x006e_60c0, &args![other, 0x3333u32]);
         assert_eq!(e.mem.u32(other + 0xb8), 0x2222);

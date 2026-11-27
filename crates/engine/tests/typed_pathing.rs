@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, navmesh, point, pov, request, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -4364,4 +4364,138 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- The safe straight-line request ----
+
+/// A safe straight-line request: 0xbc bytes, the target at +0xb8.
+fn safe_straight_line(e: &mut Engine, target: u32) -> u32 {
+    let this = e.mem.alloc(0xbc);
+    e.mem.set_u32(this + 0xb8, target);
+    this
+}
+
+#[test]
+fn ssl_scalar_deleting_destructor() {
+    Diff::new(entry!(
+        0x006e_5fd0,
+        request::scalar_deleting_destructor(Ptr, u32) -> Ptr
+    ))
+    .family(&pathing::PATHING)
+    .inputs(&[Input::Flag])
+    .setup(|e, case| {
+        e.register(0x006d_3b20, |_, _| Ret::default());
+        e.register(0x00aa_1460, |_, _| Ret::default());
+        vec![safe_straight_line(e, 0x1234), case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ssl_new() {
+    Diff::new(entry!(0x006e_5fa0, request::new(Ptr<_>) -> Ptr<_>))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            e.register(0x006e_3f30, |_, _| Ret::default());
+            // A dirty target: the constructor clears it.
+            vec![safe_straight_line(e, case.word(0))]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ssl_copy_new() {
+    Diff::new(entry!(
+        0x006e_6010,
+        request::copy_new(Ptr<_>, Ptr) -> Ptr<_>
+    ))
+    .family(&pathing::PATHING)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        e.register(0x006e_3fb0, |_, _| Ret::default());
+        e.register(0x0040_36b0, |e, a| e.mem.u32(a[0] + 0xb8).into_ret());
+        let other = safe_straight_line(e, case.word(0));
+        vec![safe_straight_line(e, 0), other]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ssl_copy_to() {
+    Diff::new(entry!(0x006e_6080, request::copy_to(Ptr<_>, Ptr)))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            e.register(0x006e_2750, |_, _| Ret::default());
+            vec![
+                safe_straight_line(e, case.word(0)),
+                safe_straight_line(e, 0),
+            ]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ssl_set_target() {
+    Diff::new(entry!(0x006e_60c0, request::set_target(Ptr<_>, u32)))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Word, Input::Word])
+        .setup(|e, case| vec![safe_straight_line(e, case.word(0)), case.word(1)])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ssl_save_game() {
+    Diff::new(entry!(0x006e_60e0, request::save_game(Ptr<_>, u32)))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            e.register(0x006e_5f00, |_, _| Ret::default());
+            e.register(0x0086_5df0, |_, _| Ret::default());
+            let buffer = e.mem.alloc(0x10);
+            vec![safe_straight_line(e, case.word(0)), buffer]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ssl_load_game() {
+    Diff::new(entry!(0x006e_6110, request::load_game(Ptr<_>, u32)))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            e.register(0x006e_5f50, |_, _| Ret::default());
+            // The form id read from the buffer's second word.
+            e.register(0x0086_48e0, |e, a| {
+                e.mem.set_u32(a[1], e.mem.u32(a[0] + 4));
+                Ret::default()
+            });
+            let buffer = e.mem.alloc(0x10);
+            e.mem.set_u32(buffer + 4, case.word(0));
+            vec![safe_straight_line(e, 0), buffer]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ssl_init_load_game() {
+    Diff::new(entry!(0x006e_6140, request::init_load_game(Ptr<_>, u32)))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Of(&[0, 0x1234, 0xffff_ffff]), Input::Word])
+        .setup(|e, case| {
+            let form = e.mem.alloc(0x40);
+            e.register_double(0x0048_39c0, move |_, _| form.into_ret());
+            e.register(0x00ec_43fb, |_, a| a[0].into_ret());
+            vec![safe_straight_line(e, case.word(0)), case.word(1)]
+        })
+        .run()
+        .assert_same();
 }
