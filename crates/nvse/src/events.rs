@@ -38,7 +38,7 @@
 //! game loaded inside a handler cannot invalidate the walk (xNVSE's iterators would be left
 //! dangling by a load's flush there).
 
-use crate::expr::Eval;
+use crate::expr::{Eval, Tok};
 use crate::functions::{self, Caller};
 use crate::vars::{self, Data, Key, Value};
 use crate::{lambda, Nvse};
@@ -104,6 +104,7 @@ pub mod param {
     pub const INVALID: u8 = 7;
     pub const ANYTHING: u8 = 8;
     pub const FLOAT_PTR: u8 = 9;
+    pub const INT_PTR: u8 = 10;
     pub const BASE_FORM_PTR: u8 = 15;
 }
 use param::*;
@@ -678,6 +679,59 @@ fn register(e: &mut Engine, def: &Def) -> bool {
         s.names.entry(hash_name(alias.as_bytes())).or_insert(at);
     }
     true
+}
+
+/// A built-in plugin's typed event (`NVSEEventManagerInterface::RegisterEvent`,
+/// routed to RegisterEventEx in xNVSE 6.4.9). Unlike a script-created user
+/// event, its arguments have declared native types and no game-event mask or
+/// xNVSE hook. Register before mod startup; duplicate names are not replaced.
+pub fn register_native(
+    e: &mut Engine,
+    name: &'static str,
+    params: &'static [u8],
+    flags: u32,
+) -> bool {
+    init(e);
+    register(
+        e,
+        &Def {
+            name,
+            alias: None,
+            params,
+            mask: 0,
+            hook: Hook::None,
+            flags,
+        },
+    )
+}
+
+#[cfg(test)]
+mod native_registration_tests {
+    use super::*;
+
+    #[test]
+    fn plugin_event_keeps_native_types_and_duplicate_registration_changes_nothing() {
+        let mut e = Engine::new();
+        assert!(register_native(
+            &mut e,
+            "ShowOff:OnAdd",
+            &[BASE_FORM, REFERENCE],
+            0,
+        ));
+        let at = find(&mut e, b"showoff:onadd").unwrap();
+        let event = info(&mut e, at);
+        assert_eq!(event.params, [BASE_FORM, REFERENCE]);
+        assert_eq!(event.flags, 0);
+        assert_eq!(event.mask, 0);
+        assert!(!event.user_defined());
+        assert!(!register_native(&mut e, "SHOWOFF:ONADD", &[INT], 1));
+        assert_eq!(info(&mut e, at).params, [BASE_FORM, REFERENCE]);
+        assert_eq!(info(&mut e, at).flags, 0);
+        assert!(!register_native(&mut e, "too many", &[INT; 16], 0));
+        assert!(find(&mut e, b"too many").is_none());
+        // The native API initialized the ordinary registry before appending.
+        assert!(find(&mut e, b"OnHit").is_some());
+    }
 }
 
 /// `EventManager::Init`: the internal events, once.
@@ -2075,8 +2129,61 @@ pub fn dispatch_raw(
     types: &[u8],
     defer: bool,
     alt: bool,
-    mut ev: Option<&mut Eval>,
+    ev: Option<&mut Eval>,
 ) -> Dispatch {
+    dispatch_raw_result(e, at, this_obj, args, types, defer, alt, ev, None)
+}
+
+/// `NVSEArrayVarInterface::Element` returned to a native event result callback.
+/// Form ids and array ids are resolved as `BasicTokenToPluginElem` resolves
+/// their pointers. A missing/unsupported UDF result is `None`, not numeric zero.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NativeResult {
+    Number(f64),
+    Form(u32),
+    Array(u32),
+    String(Vec<u8>),
+}
+impl NativeResult {
+    /// `NVSEArrayVarInterface::Element::Bool`, including NaN's nonzero truth.
+    pub fn boolean(&self) -> bool {
+        match self {
+            Self::Number(n) => *n != 0.0,
+            Self::Form(p) | Self::Array(p) => *p != 0,
+            Self::String(s) => s.first().is_some_and(|&c| c != 0),
+        }
+    }
+}
+fn native_result(e: &mut Engine, token: Option<Tok>) -> Option<NativeResult> {
+    match token? {
+        Tok::Number { v, .. } => Some(NativeResult::Number(v)),
+        Tok::Form(id) => Some(NativeResult::Form(e.call(LOOKUP_FORM, &args![id]).u32())),
+        Tok::Array(id) => Some(NativeResult::Array(if vars::array_exists(e, id) {
+            id
+        } else {
+            0
+        })),
+        Tok::Str(s) => Some(NativeResult::String(s)),
+        _ => None,
+    }
+}
+type ResultCallback<'a> = dyn FnMut(&mut Engine, Option<&NativeResult>) -> bool + 'a;
+
+#[allow(clippy::too_many_arguments)]
+fn dispatch_raw_result(
+    e: &mut Engine,
+    at: usize,
+    this_obj: u32,
+    args: &[u32],
+    types: &[u8],
+    defer: bool,
+    alt: bool,
+    mut ev: Option<&mut Eval>,
+    mut result_callback: Option<&mut ResultCallback<'_>>,
+) -> Dispatch {
+    // Native DispatchEventAlt (the exposed callback entry below) is immediate.
+    // Existing deferred paths have no borrowed callback to retain.
+    debug_assert!(!defer || result_callback.is_none());
     if defer && !on_main_thread(e) {
         log_kept(e, at, 0, args);
         let d = Deferred {
@@ -2097,7 +2204,9 @@ pub fn dispatch_raw(
     let name = info(e, at).name.clone();
     let unknown = info(e, at).unknown_arg_types();
     let (has_ptr_arg, params) = (info(e, at).has_ptr_arg, info(e, at).params.clone());
+    let report_missing = info(e, at).flags & FLAG_REPORT_ERROR_IF_NO_RESULT != 0;
     push_event(e, at);
+    let mut outcome = Dispatch::Normal;
     let mut cursor = None;
     while let Some(key) = next_after(e, at, cursor) {
         cursor = Some(key);
@@ -2126,7 +2235,7 @@ pub fn dispatch_raw(
             continue;
         }
         log_call(e, at, cb.script, &args);
-        functions::call(
+        let result = functions::call(
             e,
             Caller::Internal {
                 script: cb.script,
@@ -2138,9 +2247,54 @@ pub fn dispatch_raw(
                 event_types: None,
             },
         );
+        if let Some(callback) = result_callback.as_deref_mut() {
+            let result = native_result(e, result);
+            if result.is_none() && report_missing {
+                script_error(e, cb.script, ev.as_deref_mut(),
+                    "Function script called from plugin failed to return a value when one was expected.".into());
+                outcome = Dispatch::GenericError;
+                break;
+            }
+            if !callback(e, result.as_ref()) {
+                outcome = Dispatch::EarlyBreak;
+                break;
+            }
+        }
     }
     pop_event(e);
-    Dispatch::Normal
+    outcome
+}
+
+/// Native `DispatchEventAlt` (xNVSE 0ccd23a EventManager.h:900-998 and
+/// EventManager.cpp:1741-1797): synchronous dispatch, native integer words,
+/// per-handler result callback, including an invalid element for no result.
+/// Returning false from the callback stops the walk. Pointer parameters are
+/// reread before every handler, so callback mutations affect later handlers.
+pub fn dispatch_with_result(
+    e: &mut Engine,
+    name: &[u8],
+    this_obj: u32,
+    args: &[u32],
+    callback: &mut ResultCallback<'_>,
+) -> Dispatch {
+    let Some(at) = find(e, name) else {
+        return Dispatch::UnknownEvent;
+    };
+    let n = info(e, at).params.len();
+    let mut words = args.to_vec();
+    words.resize(n, 0);
+    let types = info(e, at).arg_types();
+    dispatch_raw_result(
+        e,
+        at,
+        this_obj,
+        &words,
+        &types,
+        false,
+        false,
+        None,
+        Some(callback),
+    )
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), EventManager.cpp: DispatchEvent,
