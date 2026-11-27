@@ -55,7 +55,8 @@
 //! naming the thread. **Diagnostics force stepped threads** (R6): a trace, a recording, a profile,
 //! the heap census, the touch census, a watch, a per-call hook: [`start`] refuses and the run goes
 //! on stepped. Three run with real threads: the block check (`NV_BLOCK_CHECK`; it sees allocations
-//! and frees, each named with its thread, not stores), `NV_REAL_DUMP` ([`dump_threads`]) and
+//! and frees, each named with its thread, not stores), `NV_REAL_DUMP` ([`dump_threads`]; with
+//! `NV_HANG_DUMP=SECS` also printed when main begins no frame for SECS seconds, [`watch_for_hangs`]) and
 //! `NV_LOCK_STATS` (each frame's waits for the locks, [`LockStats`]).
 //!
 //! **Page-table changes.** Mapping pages is safe while other threads run (the page is committed
@@ -809,6 +810,8 @@ pub struct World {
     fls_in_use: Box<[AtomicBool]>,
     /// `NV_REAL_DUMP` (a diagnostic): every thread's record, for [`dump_threads`].
     dump: Option<Dump>,
+    /// Frames main has begun ([`Ctx::frame_begins`]): `NV_HANG_DUMP`'s watchdog ([`watch_for_hangs`]) reads it.
+    frames: AtomicU64,
 }
 
 impl World {
@@ -845,6 +848,7 @@ impl World {
             fls_gen: (0..FLS_INDEXES).map(|_| AtomicU32::new(0)).collect(),
             fls_in_use: (0..FLS_INDEXES).map(|_| AtomicBool::new(false)).collect(),
             dump: dump_from_env().then(Dump::default),
+            frames: AtomicU64::new(0),
         }
     }
 
@@ -1258,6 +1262,7 @@ impl Ctx {
     /// The host hands a frame to main (`thread_host::begin_main_frame`): the kernel lock it took
     /// at the last frame's end goes back.
     pub(crate) fn frame_begins(&self, host_holds: bool) {
+        self.world.frames.fetch_add(1, Ordering::Relaxed);
         if let Some(s) = lock_stats() {
             s.frame_begins();
         }
@@ -1448,6 +1453,9 @@ pub fn start(e: &mut Engine) -> Result<(), String> {
     // too (threads made at start-up wait for it at their first platform call).
     world.kernel.lock(world);
     world.held_from_start.store(true, Ordering::SeqCst);
+    if let Some(secs) = hang_dump_secs() {
+        watch_for_hangs(world, secs);
+    }
     for i in 1..e.kernel.threads.list.len() {
         if e.kernel.threads.list[i].suspend_count == 0 {
             start_thread(e, i);
@@ -2830,7 +2838,62 @@ const RECORD_STACK: usize = 64;
 /// read from a freed thread-local storage index is reported ([`stale_tls`]). Read once.
 fn dump_from_env() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("NV_REAL_DUMP").is_some())
+    *ON.get_or_init(|| std::env::var_os("NV_REAL_DUMP").is_some() || hang_dump_secs().is_some())
+}
+
+/// `NV_HANG_DUMP=SECS` (a diagnostic, off unless set; `0` or `off` is off, a value that is no number 10 s): the
+/// records of `NV_REAL_DUMP` are kept, and a watchdog thread ([`watch_for_hangs`]) prints [`dump_threads`] when main
+/// has begun no frame for SECS seconds, and once more SECS later if still none: a freeze then says where every game
+/// thread is, what it waits for and who holds it. Read once.
+fn hang_dump_secs() -> Option<u64> {
+    static SECS: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    *SECS.get_or_init(|| hang_secs(std::env::var("NV_HANG_DUMP").ok().as_deref()))
+}
+
+/// [`hang_dump_secs`]'s reading of the switch's value.
+fn hang_secs(value: Option<&str>) -> Option<u64> {
+    match value?.trim() {
+        "" | "0" | "off" => None,
+        v => Some(v.parse::<u64>().unwrap_or(10).max(1)),
+    }
+}
+
+/// Whether `still` seconds without a new frame print a dump ([`watch_for_hangs`]): `secs` and `2 * secs` after the
+/// last frame, and only once main has begun a first one (the start-up before it can be long).
+fn hang_dump_due(frames: u64, still: u64, secs: u64) -> bool {
+    frames > 0 && (still == secs || still == 2 * secs)
+}
+
+/// `NV_HANG_DUMP`'s watchdog: a thread of its own that looks at main's frame count once a second and, when it has
+/// not moved for `secs` seconds (and `2 * secs`), prints [`dump_threads`]. Nothing else: it changes no state and
+/// takes no lock but the dump's own brief ones.
+fn watch_for_hangs(world: &'static World, secs: u64) {
+    let watch = move || {
+        let mut seen = world.frames.load(Ordering::Relaxed);
+        let mut still = 0u64;
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let now = world.frames.load(Ordering::Relaxed);
+            if now != seen {
+                seen = now;
+                still = 0;
+                continue;
+            }
+            still += 1;
+            if hang_dump_due(now, still, secs) {
+                dump_threads(
+                    world,
+                    &format!("NV_HANG_DUMP: no frame for {still} s; main has begun {now} frames"),
+                );
+            }
+        }
+    };
+    if let Err(err) = std::thread::Builder::new()
+        .name("hang watch".into())
+        .spawn(watch)
+    {
+        eprintln!("NV_HANG_DUMP: the watchdog thread did not start ({err})");
+    }
 }
 
 /// The records of every game thread ([`World::dump`]).
@@ -2950,6 +3013,16 @@ pub(crate) fn dump_threads(w: &World, why: &str) {
         .map(|list| list.clone())
         .unwrap_or_default();
     let mut out = format!("real threads: dump ({why})\n");
+    for (name, lock) in [("kernel", &w.kernel), ("device", &w.device)] {
+        if lock.owner.load(Ordering::Relaxed) != 0 {
+            let thread = lock.holder.load(Ordering::Relaxed);
+            let call = call_words(w, lock.holder_call.load(Ordering::Relaxed));
+            let site = site_words(lock.holder_site.load(Ordering::Relaxed));
+            out.push_str(&format!(
+                "  the {name} lock: held by thread {thread} (0: main or the host); call [{call}]; site [{site}]\n"
+            ));
+        }
+    }
     for r in &records {
         let depth = r.depth.load(Ordering::Relaxed) as usize;
         let stack: Vec<u32> = (0..depth.min(RECORD_STACK))
@@ -3788,6 +3861,23 @@ fn draw_stopped(world: &'static World, e: &Engine, payload: &(dyn std::any::Any 
 mod tests {
     use super::*;
     use crate::args;
+
+    /// `NV_HANG_DUMP`: unset, empty, `0` and `off` are off; a number is its seconds (at least 1); anything else 10 s.
+    /// The watchdog dumps at `secs` and `2 * secs` without a frame, never before main's first frame.
+    #[test]
+    fn hang_dump_reads_its_seconds_and_dumps_twice() {
+        assert_eq!(hang_secs(None), None);
+        assert_eq!(hang_secs(Some("")), None);
+        assert_eq!(hang_secs(Some("0")), None);
+        assert_eq!(hang_secs(Some("off")), None);
+        assert_eq!(hang_secs(Some("15")), Some(15));
+        assert_eq!(hang_secs(Some(" 7 ")), Some(7));
+        assert_eq!(hang_secs(Some("1")), Some(1));
+        assert_eq!(hang_secs(Some("yes")), Some(10));
+        let due: Vec<u64> = (1..=40).filter(|&s| hang_dump_due(5, s, 10)).collect();
+        assert_eq!(due, [10, 20]);
+        assert!(!hang_dump_due(0, 10, 10), "no dump before the first frame");
+    }
 
     /// A device function's slot is its byte offset into the ranges laid end to end: every address
     /// of each range has its own slot, the second range's follow the first's, and an address

@@ -35,6 +35,7 @@
 00525980	0	JIP
 00525a90	0	JIP
 00525b20	3	yUI
+005282d0	0	nv-rs grid shift waits only for running cell loads
 005702e0	0	ITR
 00583560	2	nv-rs cell offsets for every plugin, nv-rs no distant water under the Strip
 005854f0	1	nv-rs cell offsets for every plugin
