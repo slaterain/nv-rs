@@ -216,6 +216,12 @@ literal="$other "
 cp -R "$other" "$literal"
 out=$(run --game "$literal" </dev/null 2>&1); st=$?
 check "8 literal folder preferred" '[ $st = 0 ] && [ "$(cat "$own/game-folder.txt")" = "$literal" ]'
+# With its master missing, the exact directory must be refused even though the trimmed
+# name still identifies a working installation.
+rm "$literal/Data/FalloutNV.esm"
+out=$(run --game "$literal" </dev/null 2>&1); st=$?
+check "8 incomplete literal folder refused" '[ $st = 1 ] && printf "%s" "$out" | grep -qF "no game in $literal:"'
+check "8 other copy not remembered" '[ "$(cat "$own/game-folder.txt")" = "$literal" ]'
 out=$(run --game "'$other'" </dev/null 2>&1); st=$?
 check "8 pasted quoted folder accepted" '[ $st = 0 ] && [ "$(cat "$own/game-folder.txt")" = "$other" ]'
 out=$(run --game "$other/Data" </dev/null 2>&1); st=$?
