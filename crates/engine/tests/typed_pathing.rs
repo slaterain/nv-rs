@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, navmesh, obstacle, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -659,6 +659,11 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x006d_b4f0, &[0x006d_bbb0]),
     (0x006d_cf20, &[0x0069_0830, 0x006d_cfe0]),
     (0x006e_78b0, &[0x006e_8f40]),
+    (0x006c_87c0, &[0x006c_8c70]),
+    (0x006c_87f0, &[0x006c_8a30]),
+    (0x006c_79a0, &[0x006c_8a30]),
+    (0x006c_7970, &[0x006c_8a30]),
+    (0x006c_89b0, &[0x006c_8a30]),
 ];
 
 trait Common {
@@ -4364,4 +4369,186 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- The obstacle task's tasklet data and operations array ----
+
+/// The obstacle callees as logged stand-ins: the task base destructor, the portal-swaps and
+/// holder destructors, `operator delete`, and the operations array's init and destroy-all.
+fn obstacle_stubs(e: &mut Engine) {
+    e.register(0x00b0_0ec0, |e, a| {
+        log(e, 0x0ec0, a[0]);
+        ret(0)
+    });
+    e.register(0x0069_94b0, |e, a| {
+        log(e, 0x94b0, a[0]);
+        ret(0)
+    });
+    e.register(0x0042_fa40, |e, a| {
+        log(e, 0xfa40, a[0]);
+        ret(0)
+    });
+    e.register(0x0040_1030, |e, a| {
+        log(e, 0x1030, a[0]);
+        ret(0)
+    });
+    // `006c8c70` (init) and `006c8a30` (destroy all) the translations reach plainly run for
+    // real on both sides; they are not doubled here.
+}
+
+#[test]
+fn obstacle_timer_byte() {
+    Diff::new(entry!(0x006c_85c0, obstacle::timer_byte(u32) -> u32))
+        .common()
+        .plain(0x006c_85c0)
+        .inputs(&[Input::Word])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn obstacle_tasklet_vtable() {
+    Diff::new(entry!(0x006c_78f0, obstacle::tasklet_vtable(Ptr)))
+        .common()
+        .plain(0x006c_78f0)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn obstacle_tasklet_data_scalar_deleting_dtor() {
+    Diff::new(entry!(
+        0x006c_7910,
+        obstacle::tasklet_data_scalar_deleting_dtor(Ptr, u32) -> Ptr
+    ))
+    .common()
+    .plain(0x006c_7910)
+    .inputs(&[Input::Word, Input::Of(&[0, 1, 2, 3])])
+    .setup(|e, case| {
+        stand_ins(e);
+        obstacle_stubs(e);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this, case.word(0));
+        vec![this, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn obstacle_task_base_deleting_dtor() {
+    Diff::new(entry!(
+        0x006c_7940,
+        obstacle::task_base_deleting_dtor(Ptr, u32) -> Ptr
+    ))
+    .common()
+    .plain(0x006c_7940)
+    .inputs(&[Input::Word, Input::Of(&[0, 1, 2, 3])])
+    .setup(|e, case| {
+        stand_ins(e);
+        obstacle_stubs(e);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this, case.word(0));
+        vec![this, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn obstacle_operations_array_ctor() {
+    Diff::new(entry!(0x006c_87c0, obstacle::operations_array_ctor(Ptr) -> Ptr))
+        .common()
+        .plain(0x006c_87c0)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            obstacle_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn obstacle_operations_array_dtor() {
+    Diff::new(entry!(0x006c_87f0, obstacle::operations_array_dtor(u32)))
+        .common()
+        .plain(0x006c_87f0)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            obstacle_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn obstacle_operations_array_scalar_deleting_dtor() {
+    Diff::new(entry!(
+        0x006c_89b0,
+        obstacle::operations_array_scalar_deleting_dtor(Ptr, u32) -> Ptr
+    ))
+    .common()
+    .plain(0x006c_89b0)
+    .inputs(&[Input::Word, Input::Of(&[0, 1, 2, 3])])
+    .setup(|e, case| {
+        stand_ins(e);
+        obstacle_stubs(e);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this, case.word(0));
+        vec![this, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn obstacle_task_data_dtor() {
+    Diff::new(entry!(0x006c_79a0, obstacle::obstacle_task_data_dtor(Ptr)))
+        .common()
+        .plain(0x006c_79a0)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            obstacle_stubs(e);
+            let this = e.mem.alloc(0x40);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn obstacle_task_data_scalar_deleting_dtor() {
+    Diff::new(entry!(
+        0x006c_7970,
+        obstacle::obstacle_task_data_scalar_deleting_dtor(Ptr, u32) -> Ptr
+    ))
+    .common()
+    .plain(0x006c_7970)
+    .inputs(&[Input::Word, Input::Of(&[0, 1, 2, 3])])
+    .setup(|e, case| {
+        stand_ins(e);
+        obstacle_stubs(e);
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this, case.word(0));
+        vec![this, case.word(1)]
+    })
+    .run()
+    .assert_same();
 }
