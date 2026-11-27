@@ -26,6 +26,9 @@ const CALLEES: &[u32] = &[
     0x0040_1000,
     0x0040_1030,
     0x0040_1460,
+    0x0040_18b0,
+    0x0040_2030,
+    0x0040_2760,
     0x0040_37d0,
     0x0040_37f0,
     0x0040_4010,
@@ -33,6 +36,7 @@ const CALLEES: &[u32] = &[
     0x0040_44d0,
     0x0040_46b0,
     0x0040_46f0,
+    0x0040_4820,
     0x0040_48e0,
     0x0040_4a70,
     0x0040_4dc0,
@@ -44,6 +48,7 @@ const CALLEES: &[u32] = &[
     0x0040_6d50,
     0x0040_6d90,
     0x0040_6f60,
+    0x0040_8820,
     0x0040_8b20,
     0x0040_9480,
     0x0040_fba0,
@@ -55,6 +60,7 @@ const CALLEES: &[u32] = &[
     0x0043_b230,
     0x0043_cfd0,
     0x0043_d090,
+    0x0044_1110,
     0x0044_31f0,
     0x0044_59e0,
     0x0044_7080,
@@ -118,6 +124,8 @@ const CALLEES: &[u32] = &[
     0x0057_85e0,
     0x0057_c730,
     0x0057_dd70,
+    0x0058_db10,
+    0x0059_2220,
     0x005a_3370,
     0x005a_e3d0,
     0x005b_5e40,
@@ -134,9 +142,13 @@ const CALLEES: &[u32] = &[
     0x0064_8b50,
     0x0066_29f0,
     0x0066_b0d0,
+    0x0066_e950,
     0x0066_e9b0,
     0x0066_e9f0,
     0x0066_ea20,
+    0x0066_eb00,
+    0x0066_ec10,
+    0x0066_ecf0,
     0x0066_ef20,
     0x006b_3eb0,
     0x006f_fe10,
@@ -165,6 +177,7 @@ const CALLEES: &[u32] = &[
     0x0071_4fd0,
     0x0071_51b0,
     0x0071_5860,
+    0x0071_5c60,
     0x0071_5d40,
     0x0071_5da0,
     0x0071_5e00,
@@ -181,6 +194,7 @@ const CALLEES: &[u32] = &[
     0x0071_7990,
     0x0071_7e30,
     0x0071_81d0,
+    0x0071_8630,
     0x0071_87a0,
     0x0071_8890,
     0x0071_b160,
@@ -203,10 +217,12 @@ const CALLEES: &[u32] = &[
     0x0074_0f30,
     0x0075_3230,
     0x0075_3420,
+    0x0075_4690,
     0x0075_4b40,
     0x0075_4cf0,
     0x0075_77f0,
     0x0075_7b70,
+    0x0075_a0d0,
     0x0075_b0d0,
     0x0075_b310,
     0x0075_b750,
@@ -248,6 +264,7 @@ const CALLEES: &[u32] = &[
     0x0078_4c80,
     0x0078_8440,
     0x0078_8cc0,
+    0x0078_a260,
     0x0078_d930,
     0x0078_db00,
     0x0078_e7c0,
@@ -277,6 +294,7 @@ const CALLEES: &[u32] = &[
     0x007a_c1f0,
     0x007a_c730,
     0x007b_3fa0,
+    0x007b_52a0,
     0x007b_5400,
     0x007b_5520,
     0x007b_6fb0,
@@ -295,9 +313,6 @@ const CALLEES: &[u32] = &[
     0x007c_b7d0,
     0x007c_e7a0,
     0x007d_86c0,
-    0x007d_a2c0,
-    0x007d_cc80,
-    0x007d_df00,
     0x007e_41f0,
     0x007e_47a0,
     0x007e_5890,
@@ -320,9 +335,11 @@ const CALLEES: &[u32] = &[
     0x0086_4980,
     0x0086_49a0,
     0x0086_5e50,
+    0x0086_7a20,
     0x0087_f4c0,
     0x0087_f6c0,
     0x0087_f9f0,
+    0x0088_c650,
     0x008c_7aa0,
     0x0090_5330,
     0x0090_5820,
@@ -340,10 +357,14 @@ const CALLEES: &[u32] = &[
     0x00a0_1290,
     0x00a0_12d0,
     0x00a0_1350,
+    0x00a0_1530,
     0x00a0_1860,
+    0x00a0_1b00,
     0x00a0_3c90,
     0x00a0_3da0,
     0x00a0_3eb0,
+    0x00a0_40a0,
+    0x00a0_4150,
     0x00a0_4200,
     0x00a0_4640,
     0x00a0_7530,
@@ -356,15 +377,19 @@ const CALLEES: &[u32] = &[
     0x00a0_9200,
     0x00a0_9410,
     0x00a0_a270,
+    0x00a0_b110,
     0x00a0_d9e0,
     0x00a0_f8b0,
     0x00a1_c520,
+    0x00a1_ca20,
     0x00a1_d910,
     0x00a1_db20,
+    0x00a1_dc20,
     0x00a1_dc70,
     0x00a1_ddb0,
     0x00a1_eff0,
     0x00a2_3010,
+    0x00a2_3390,
     0x00a5_d2c0,
     0x00a6_faf0,
     0x00a6_fb90,
@@ -1266,17 +1291,15 @@ fn fn_00704be0_diff() {
         .assert_same();
 }
 
+/// `StatsMenu::UpdateAll` runs for real here: the stats menu's world, whose `.rdata` doubles (the
+/// face image's 5.0) are the exe's and whose fade object the native code builds in place.
 #[test]
 fn interface_set_stats_menu_visible_diff() {
     Diff::new(engine_core::entry!(
         0x0070_4c10,
         interface::interface_cpp::interface_set_stats_menu_visible(u8, u8)
     ))
-    .in_arena(
-        &[Arg::Byte, Arg::Byte],
-        CALLEES,
-        &[0x0070_27b0, 0x0070_4be0, 0x0070_2680],
-    )
+    .in_stats_third_with(&[Arg::Byte, Arg::Byte], 6000, &[0x0070_4be0])
     .run()
     .assert_same();
 }
@@ -5402,6 +5425,8 @@ fn no_member_of_a_family_on_by_default_holds_a_seam() {
         (0x0041_d0f6, "extra_data"),
         (0x0041_d212, "extra_data"),
         (0x0041_d25a, "extra_data"),
+        (0x0042_7f30, "extra_data"),
+        (0x0042_c328, "extra_data"),
         (0x0048_3669, "forms"),
         (0x0048_449a, "forms"),
         (0x0048_4e03, "forms"),
@@ -5441,7 +5466,9 @@ fn no_member_of_a_family_on_by_default_holds_a_seam() {
     }
     let mut found = Vec::new();
     for site in engine_core::extend::all_sites() {
-        let holder = (0..0x4000u32)
+        // Back as far as the longest member holding a seam reaches (`LoadGame_ov2`, `00428150`, holds
+        // JIP's `0x42C328` 0x41d8 bytes in).
+        let holder = (0..0x8000u32)
             .map(|back| site.addr.wrapping_sub(back))
             .find(|&start| e.is_translated(start));
         if let Some(start) = holder.filter(|start| members.contains_key(start)) {
@@ -6086,6 +6113,14 @@ fn put_stats_menu(e: &mut Engine, variant: u32) {
         if variant == 0 || variant == 3 { 0xa } else { 3 },
     );
     e.mem.set_u8(object(106) + 0x10, u8::from(variant == 0));
+    // The effect's item (object 247: actor value 0x14) and its setting (object 248: the flag
+    // 0x2000, archetype 0), a real pair: on the arena's words alone the setting's flag test
+    // (`0058cba0`, `+0x58`) met a word near the top of memory, which the translation can't add to.
+    e.mem.set_u32(object(106) + 0xc, object(247));
+    e.mem.set_u32(object(247) + 0x10, 0x14);
+    e.mem.set_u32(object(247) + 0x14, object(248));
+    e.mem.set_u32(object(248) + 0x58, 0x2000);
+    e.mem.set_u32(object(248) + 0x98, 0);
     e.mem
         .set_u8(0x011a_0ae1, u8::from(variant == 0 || variant == 3));
     e.mem
@@ -6094,6 +6129,16 @@ fn put_stats_menu(e: &mut Engine, variant: u32) {
         for i in 0..60 {
             e.mem.set_u32(menu + 0x90 + 4 * i, object(110 + i % 40));
         }
+    }
+    // No stage effects and an empty status effect list (`+0x74` to `+0x80`, `+0x84`): the arena's
+    // words there would make status effects of small numbers, whose clean-up calls through them.
+    for slot in [0x74u32, 0x78, 0x7c, 0x80, 0x88, 0x8c] {
+        e.mem.set_u32(menu + slot, 0);
+    }
+    // The effects and reputation list boxes (`+0x240`, `+0x270`, past the menu's first object) with
+    // a vtable of stand-ins: an arena word there would make their virtual `RemoveAll` a small number.
+    for list in [0x240u32, 0x270] {
+        e.mem.set_u32(menu + list, VTABLES + 0x800);
     }
     e.mem.set_u8(menu + 0x2a0, u8::from(variant == 0));
     e.mem.set_u8(menu + 0x2a1, u8::from(variant == 3));
@@ -6491,6 +6536,7 @@ fn stats_menu_update_all_actor_values_diff() {
         interface::stats_menu::stats_menu_update_all_actor_values(Ptr)
     ))
     .in_stats(&[Arg::Object])
+    .max_calls(2000)
     .run()
     .assert_same();
 }
@@ -7283,6 +7329,494 @@ fn stats_menu_fn_007e16d0_diff() {
         interface::stats_menu::fn_007e16d0(Ptr, u32, u32, u32, u32) -> u32
     ))
     .in_item_list(&[Arg::Ptr, Arg::Word, Arg::Ptr, Arg::Code, Arg::Ptr], 48)
+    .run()
+    .assert_same();
+}
+
+// ---- The stats menu, its third part --------------------------------------------------------------
+
+/// A page of fresh blocks (`HEAP`, its first word the next free one) that `FormHeap_Allocate`
+/// (`00401000`) hands out in 16-byte steps, zeroed, null once spent. The arena's stand-in answers
+/// one of the world's objects (the player's effects, their items), which a new entry or stage
+/// effect then overwrites while the code still reads it.
+const HEAP: u32 = 0x0600_0000;
+const HEAP_SIZE: u32 = 0x4_0000;
+
+fn put_heap(e: &mut Engine) {
+    e.map(HEAP, HEAP_SIZE);
+    e.mem.set_u32(HEAP, HEAP + 0x10);
+    e.register_double(0x0040_1000, |e, words| {
+        let next = e.mem.u32(HEAP);
+        let size = (words[0].wrapping_add(15) & !15).max(0x10);
+        let eax = if size <= HEAP + HEAP_SIZE - next {
+            e.mem.set_u32(HEAP, next + size);
+            next
+        } else {
+            0
+        };
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    });
+}
+
+/// [`put_stats_menu`]'s world with what the third part's functions read: in the variants 0 and 3
+/// the reputations (`011c3f2c`, object 250; its list at `+0x90` holds objects 251, 253 and 255:
+/// the first value above 0.0, only the second above 0.0, neither and a NaN) and the reputation
+/// page's tile (`+0x148`); the second healing option's tile `pTiles[6]` (object 116) with an
+/// inventory entry (object 220: extra lists object 221, count 2, form object 222), but not in the
+/// variant 2. `Create`: the menu read is object 3 (none in the variant 2), whose class (any
+/// vtable's slot `+0x34`) is the stats menu's but in the variant 1; three actor values a section
+/// (their index), the second hidden (the flag 0x2000 at `+0x44` of its info). The active effects:
+/// in the variant 0 every cast answers object 226, which is also every stage's world space, and the
+/// radiation stage is object 227, so the stage effects are made and filled.
+fn put_stats_third(e: &mut Engine, variant: u32) {
+    use arena::{object, CODE};
+    put_stats_menu(e, variant);
+    put_heap(e);
+    let menu = object(3);
+    if variant == 0 || variant == 3 {
+        e.mem.set_u32(0x011c_3f2c, object(250));
+        for (k, (first, second)) in [(1.0f32, 0.0f32), (0.0, 2.0), (-1.0, f32::NAN)]
+            .into_iter()
+            .enumerate()
+        {
+            let k = k as u32;
+            let node = if k == 0 {
+                object(250) + 0x90
+            } else {
+                object(250 + 2 * k)
+            };
+            let reputation = object(251 + 2 * k);
+            e.mem.set_u32(node, reputation);
+            e.mem
+                .set_u32(node + 4, if k < 2 { object(252 + 2 * k) } else { 0 });
+            e.mem.set_f32(reputation + 0x44, first);
+            e.mem.set_f32(reputation + 0x48, second);
+        }
+        e.mem.set_u32(menu + 0x148, object(108));
+    }
+    if variant != 2 {
+        e.mem.set_u32(menu + 0x3c, object(116));
+        e.mem.set_u32(menu + 0x40, object(220));
+        e.mem.set_u32(object(220), object(221));
+        e.mem.set_u32(object(220) + 4, 2);
+        e.mem.set_u32(object(220) + 8, object(222));
+    }
+    e.register_double(0x00a0_3c90, move |_, _| Ret {
+        eax: if variant == 2 { 0 } else { arena::object(3) },
+        ..Ret::default()
+    });
+    if variant != 1 {
+        e.register_double(CODE + 0x34, |_, _| Ret {
+            eax: 0x3eb,
+            ..Ret::default()
+        });
+    }
+    e.register_double(0x0066_ecf0, |_, _| Ret {
+        eax: 3,
+        ..Ret::default()
+    });
+    e.register_double(0x0066_ec10, |_, words| Ret {
+        eax: words[1],
+        ..Ret::default()
+    });
+    for k in 0..3u32 {
+        e.mem.set_u32(0x011d_61c8 + 4 * k, object(224 + k));
+        e.mem
+            .set_u32(object(224 + k) + 0x44, if k == 1 { 0x2000 } else { 0 });
+    }
+    if variant == 0 {
+        for (at, answer) in [
+            (0x00ec_43fbu32, object(226)),
+            (0x0044_1110, object(226)),
+            (0x0059_2220, object(227)),
+        ] {
+            e.register_double(at, move |_, _| Ret {
+                eax: answer,
+                ..Ret::default()
+            });
+        }
+    }
+}
+
+/// The third part's worlds, as settings of a Diff.
+trait StatsThirdWorlds {
+    /// In [`put_stats_third`]'s world with `args`, `calls` calls at most a run.
+    fn in_stats_third(self, args: &'static [Arg], calls: usize) -> Diff;
+    /// [`StatsThirdWorlds::in_stats_third`] with more of the translation's plain calls, `plain`.
+    fn in_stats_third_with(self, args: &'static [Arg], calls: usize, plain: &[u32]) -> Diff;
+}
+
+impl StatsThirdWorlds for Diff {
+    fn in_stats_third(self, args: &'static [Arg], calls: usize) -> Diff {
+        self.in_stats_third_with(args, calls, &[])
+    }
+
+    fn in_stats_third_with(self, args: &'static [Arg], calls: usize, plain: &[u32]) -> Diff {
+        let mut all = vec![0x0071_f9f0, 0x0071_f570, 0x0070_27b0, 0x0070_2680];
+        all.extend_from_slice(plain);
+        self.in_arena_without_and(
+            args,
+            CALLEES,
+            &all,
+            &[0x00ec_782f],
+            &STATS_VARIANTS,
+            put_stats_third,
+        )
+        .max_calls(calls)
+    }
+}
+
+#[test]
+fn stats_menu_create_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_a2c0,
+        interface::stats_menu::stats_menu_create() -> u32
+    ))
+    .in_stats_third(&[], 6000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_do_click_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_b380,
+        interface::stats_menu::stats_menu_do_click(Ptr, i32, u32)
+    ))
+    .in_stats_third(&[Arg::Object, Arg::ClickId, Arg::StatsTile], 6000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_do_gamepad_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_b680,
+        interface::stats_menu::stats_menu_do_gamepad(Ptr, u32, f32) -> bool
+    ))
+    .in_stats_third(&[Arg::Object, Arg::Key, Arg::F32], 2000)
+    .run()
+    .assert_same();
+}
+
+/// `DoGamepad`'s page steps, each from the first page, a middle one and the last: the stats menu
+/// on top of the enter stack, every case.
+#[test]
+fn stats_menu_do_gamepad_page_steps_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_b680,
+        interface::stats_menu::stats_menu_do_gamepad(Ptr, u32, f32) -> bool
+    ))
+    .in_arena_without_and(
+        &[Arg::Object, Arg::PageKey, Arg::F32],
+        CALLEES,
+        &[0x0071_f9f0, 0x0071_f570, 0x0070_27b0, 0x0070_2680],
+        &[0x00ec_782f],
+        &[0, 2, 4],
+        put_stats_page,
+    )
+    .max_cases(120)
+    .max_calls(2000)
+    .run()
+    .assert_same();
+}
+
+/// [`put_stats_third`]'s variant 3 (the Pip-Boy up, no limb mode) with the stats menu (0x3eb) on
+/// top of a ready manager's enter stack and every tile's page (`Tile::GetValueFloat` of `0x1004`)
+/// `page`, every other float 1.0.
+fn put_stats_page(e: &mut Engine, page: u32) {
+    put_stats_third(e, 3);
+    let manager = e.mem.u32(0x011d_8a80);
+    if manager != 0 {
+        let mut top = 0;
+        while top < 9 && e.mem.u32(manager + 0x118 + 4 * top) != 0 {
+            top += 1;
+        }
+        e.mem.set_u32(manager + 0x114 + 4 * top, 0x3eb);
+    }
+    e.register_double(0x00a0_11b0, move |_, words| Ret {
+        st0: if words[1] == 0x1004 {
+            f64::from(page)
+        } else {
+            1.0
+        },
+        ..Ret::default()
+    });
+}
+
+#[test]
+fn stats_menu_do_enter_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_c1b0,
+        interface::stats_menu::stats_menu_do_enter(Ptr, i32, u32)
+    ))
+    .in_stats_third(&[Arg::Object, Arg::ClickId, Arg::StatsTile], 2000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_update_all_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_cc80,
+        interface::stats_menu::stats_menu_update_all(Ptr)
+    ))
+    .in_stats_third(&[Arg::Object], 6000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_fn_007dd8c0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_d8c0,
+        interface::stats_menu::fn_007dd8c0(Ptr)
+    ))
+    .in_stats_third(&[Arg::Object], 2000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stats_menu_update_active_effects_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_df00,
+        interface::stats_menu::stats_menu_update_active_effects(Ptr)
+    ))
+    .in_stats_third(&[Arg::Object], 6000)
+    .run()
+    .assert_same();
+}
+
+/// `DoGamepad`'s worlds (limb mode, the page, the sub page, the stick's axis, its magnitude above
+/// the dead zone, the scroll's repeat time passed, the effects list visible, the manager's state
+/// test): each a variant of [`put_stats_pad`].
+const STATS_PAD: [(bool, u32, u32, i32, bool, bool, bool, bool); 8] = [
+    (false, 0, 0, 5, true, true, true, true),
+    (true, 0, 0, 0, false, false, false, true),
+    (false, 2, 1, -5, true, false, true, true),
+    (true, 2, 2, 5, false, true, false, true),
+    (false, 4, 0, 0, true, true, false, false),
+    (true, 4, 1, -5, true, true, true, true),
+    (false, 2, 2, 5, true, false, true, true),
+    (true, 0, 1, -5, true, false, true, false),
+];
+const STATS_PAD_VARIANTS: [u32; 8] = [0, 5, 2, 3, 4, 1, 6, 7];
+
+/// [`put_stats_third`] in limb mode (its variant 0) or not (3), with the stats menu on top of a ready
+/// manager's enter stack (as [`put_stats_page`]); `Tile::GetValueFloat` answers `0x1004` with the
+/// sub page for the skill page's tile (`+0xa4`) and the page for any other, every other float 1.0;
+/// the stick (`00a23390`) at -5, 0 or 5, its magnitude (`00408820`) 1.0 or 0.25 against the dead
+/// zone 0.5 (the double at `010745f8`), the time (`00457fe0`) 500 or 50 against the repeat time 100
+/// (`011dad5c`), the effects list's visibility (`00a040a0`) and the manager's state test
+/// (`004b71d0`, which `00709d40` asks) by the variant.
+fn put_stats_pad(e: &mut Engine, variant: u32) {
+    let (limb, page, sub, axis, above, passed, visible, ready) = STATS_PAD[variant as usize];
+    put_stats_third(e, if limb { 0 } else { 3 });
+    let manager = e.mem.u32(0x011d_8a80);
+    if manager != 0 {
+        let mut top = 0;
+        while top < 9 && e.mem.u32(manager + 0x118 + 4 * top) != 0 {
+            top += 1;
+        }
+        e.mem.set_u32(manager + 0x114 + 4 * top, 0x3eb);
+    }
+    let menu = arena::object(3);
+    e.register_double(0x00a0_11b0, move |e, words| Ret {
+        st0: if words[1] != 0x1004 {
+            1.0
+        } else if words[0] == e.mem.u32(menu + 0xa4) {
+            f64::from(sub)
+        } else {
+            f64::from(page)
+        },
+        ..Ret::default()
+    });
+    e.register_double(0x00a2_3390, move |_, _| Ret {
+        eax: axis as u32,
+        ..Ret::default()
+    });
+    e.mem.set_u64(0x0107_45f8, 0.5f64.to_bits());
+    e.register_double(0x0040_8820, move |_, _| Ret {
+        st0: if above { 1.0 } else { 0.25 },
+        ..Ret::default()
+    });
+    e.mem.set_u32(0x011d_ad5c, 100);
+    e.register_double(0x0045_7fe0, move |_, _| Ret {
+        eax: if passed { 500 } else { 50 },
+        ..Ret::default()
+    });
+    e.register_double(0x00a0_40a0, move |_, _| Ret {
+        eax: u32::from(visible),
+        ..Ret::default()
+    });
+    e.register_double(0x004b_71d0, move |_, _| Ret {
+        eax: u32::from(ready),
+        ..Ret::default()
+    });
+}
+
+/// `DoGamepad` past the top-menu check with every key: the limb picks, the page and sub page steps
+/// with the knob, the map and the inventory, keys 9, 0xb and 0xc, the stick's scroll. (The map's
+/// and the inventory's `Interface::` translations call `00704140` and `007048c0` plainly.)
+#[test]
+fn stats_menu_do_gamepad_every_key_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_b680,
+        interface::stats_menu::stats_menu_do_gamepad(Ptr, u32, f32) -> bool
+    ))
+    .in_arena_without_and(
+        &[Arg::Object, Arg::Key, Arg::F32],
+        CALLEES,
+        &[
+            0x0071_f9f0,
+            0x0071_f570,
+            0x0070_27b0,
+            0x0070_2680,
+            0x0070_4140,
+            0x0070_48c0,
+        ],
+        &[0x00ec_782f],
+        &STATS_PAD_VARIANTS,
+        put_stats_pad,
+    )
+    .max_cases(200)
+    .max_calls(2000)
+    .run()
+    .assert_same();
+}
+
+/// [`put_stats_page`] with page `page` (0 to 4) and the clicked tile (`pTiles[6]`, object 116) the
+/// only item of each page's list (SPECIAL, skills, perks, general, reputations): `007242f0` finds it
+/// and not the other tile; the reputation item's data the first reputation (object 251).
+fn put_stats_enter(e: &mut Engine, page: u32) {
+    use arena::object;
+    put_stats_page(e, page);
+    let menu = object(3);
+    for (k, list) in [0x180u32, 0x1b0, 0x1e0, 0x210, 0x270]
+        .into_iter()
+        .enumerate()
+    {
+        let item = object(230 + k as u32);
+        e.mem.set_u32(item, object(116));
+        e.mem.set_u32(
+            item + 4,
+            if list == 0x270 {
+                object(251)
+            } else {
+                k as u32 + 1
+            },
+        );
+        e.mem.set_u8(item + 8, 0);
+        e.mem.set_u32(menu + list + 4, item);
+        e.mem.set_u32(menu + list + 8, 0);
+    }
+}
+
+/// `DoEnter` on each page, the clicked tile in the page's list or not.
+#[test]
+fn stats_menu_do_enter_every_page_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_c1b0,
+        interface::stats_menu::stats_menu_do_enter(Ptr, i32, u32)
+    ))
+    .in_arena_without_and(
+        &[Arg::Object, Arg::ClickId, Arg::StatsTile],
+        CALLEES,
+        &[0x0071_f9f0, 0x0071_f570, 0x0070_27b0, 0x0070_2680],
+        &[0x00ec_782f],
+        &[2, 3, 4, 0, 1],
+        put_stats_enter,
+    )
+    .max_cases(100)
+    .max_calls(2000)
+    .run()
+    .assert_same();
+}
+
+/// [`put_stats_third`]'s variant 0 with the depth trait's test (`0xfa7` through
+/// `Tile::GetValueFloat`) answering 6006.0, 102.0 or a NaN by the variant, every other float 1.0.
+fn put_stats_depth(e: &mut Engine, variant: u32) {
+    put_stats_third(e, 0);
+    let depth = [6006.0f64, 102.0, f64::NAN][variant as usize];
+    e.register_double(0x00a0_11b0, move |_, words| Ret {
+        st0: if words[1] == 0xfa7 { depth } else { 1.0 },
+        ..Ret::default()
+    });
+}
+
+/// `Create`'s depth step: both equal arms and the NaN.
+#[test]
+fn stats_menu_create_depth_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_a2c0,
+        interface::stats_menu::stats_menu_create() -> u32
+    ))
+    .in_arena_without_and(
+        &[],
+        CALLEES,
+        &[0x0071_f9f0, 0x0071_f570, 0x0070_27b0, 0x0070_2680],
+        &[0x00ec_782f],
+        &[0, 1, 2],
+        put_stats_depth,
+    )
+    .max_calls(6000)
+    .run()
+    .assert_same();
+}
+
+/// [`put_stats_third`]'s variant 0 (an active effect, every cast answering object 226) with one of
+/// `UpdateActiveEffects`' rarer branches by the variant: the item's form kind 0xd (the name from the
+/// setting), no full name (the cast to `TESFullName`, `01183158`, answering 0: the virtual name), the
+/// usage monitor's word (`011c33f4`) the effect's setting (object 248); the setting's archetype (0)
+/// without `007df1b0`'s flag 0x40 and the setting without 0x2000 (kept), the archetype with the flag
+/// and the setting without 0x2000 (skipped), the archetype with the flag and the setting with 0x2000
+/// (kept).
+fn put_stats_effects(e: &mut Engine, variant: u32) {
+    use arena::object;
+    put_stats_third(e, 0);
+    match variant {
+        0 => e.mem.set_u32(object(226) + 0xa0, 0xd),
+        1 => e.register_double(0x00ec_43fb, |_, words| Ret {
+            eax: if words[3] == 0x0118_3158 {
+                0
+            } else {
+                object(226)
+            },
+            ..Ret::default()
+        }),
+        2 => e.mem.set_u32(0x011c_33f4, object(248)),
+        3 => {
+            e.mem.set_u32(0x0118_3328, 0);
+            e.mem.set_u32(object(248) + 0x58, 0);
+        }
+        4 => {
+            e.mem.set_u32(0x0118_3328, 0x40);
+            e.mem.set_u32(object(248) + 0x58, 0);
+        }
+        _ => e.mem.set_u32(0x0118_3328, 0x40),
+    }
+}
+
+/// `UpdateActiveEffects`' kind-0xd name, its virtual name and its two skips of an active effect.
+#[test]
+fn stats_menu_update_active_effects_branches_diff() {
+    Diff::new(engine_core::entry!(
+        0x007d_df00,
+        interface::stats_menu::stats_menu_update_active_effects(Ptr)
+    ))
+    .in_arena_without_and(
+        &[Arg::Object],
+        CALLEES,
+        &[0x0071_f9f0, 0x0071_f570, 0x0070_27b0, 0x0070_2680],
+        &[0x00ec_782f],
+        &[0, 1, 2, 3, 4, 5],
+        put_stats_effects,
+    )
+    .max_calls(6000)
     .run()
     .assert_same();
 }

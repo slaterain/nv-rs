@@ -27,6 +27,7 @@ pub mod frame_log;
 pub mod full_screen;
 pub mod game_file;
 pub mod game_ini;
+pub mod grid_shift_wait;
 pub mod half_loaded_move;
 pub mod hitch_log;
 pub mod launcher;

@@ -94,7 +94,8 @@ const ACTOR_CAUSE_HANDLE_RELEASE: u32 = 0x0042_f760;
 /// (`thiscall(string, source)`).
 const STRING_INIT: u32 = 0x0040_37b0;
 const STRING_DROP: u32 = 0x0040_37d0;
-const STRING_ASSIGN: u32 = 0x0040_47f0;
+/// `BSString`'s copy constructor (`thiscall(new string, source)`).
+const STRING_COPY_NEW: u32 = 0x0040_47f0;
 /// The `float` the three-word record starts with (-1.0), the word `0042ce00` answers.
 const RECORD_FLOAT: u32 = 0x0101_2054;
 const GIVEN_WORD: u32 = 0x011c_6444;
@@ -159,17 +160,17 @@ pub fn byte_at_c(e: &mut Engine, this: u32) -> u8 {
 }
 
 // Typed from 00428070
-/// The string at +0xc of the extra data it is called on assigned to the string `out` (`004047f0`).
-/// Answers `out`.
+/// The string at +0xc of the extra data it is called on copied into the new string `out` (`004047f0`,
+/// `BSString`'s copy constructor: the string is returned by value). Answers `out`.
 pub fn first_string_to(e: &mut Engine, this: u32, out: u32) -> u32 {
-    e.call(STRING_ASSIGN, &args![out, this.wrapping_add(0x0c)]);
+    e.call(STRING_COPY_NEW, &args![out, this.wrapping_add(0x0c)]);
     out
 }
 
 // Typed from 004280b0
 /// As [`first_string_to`] for the string at +0x14.
 pub fn second_string_to(e: &mut Engine, this: u32, out: u32) -> u32 {
-    e.call(STRING_ASSIGN, &args![out, this.wrapping_add(0x14)]);
+    e.call(STRING_COPY_NEW, &args![out, this.wrapping_add(0x14)]);
     out
 }
 

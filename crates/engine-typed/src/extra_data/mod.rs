@@ -11,9 +11,9 @@
 //! ([`rooms`]), and from its part 4 file the next run of getters and setters with the followers,
 //! the friend hits, the refraction property and the saved animation and havok data ([`followers`])
 //! and the constructors and destructors of the small classes with the save buffer's accessors
-//! ([`classes`]). The part 4 file's save size (`00422c40`), its save writers and loaders of both
-//! formats, the buffered load's fix-up (`0042ceb0`), `FinishLoadGame` and the clean-up after a load
-//! (`0042dae0`) stay translated for now and reach these by address. The list's own operations (its
+//! ([`classes`]), the save size, `SaveGame` and `LoadGame` of the old save format ([`save_game`]),
+//! and `SaveGame_ov2`, `LoadGame_ov2`, the buffered load's fix-up, `FinishLoadGame` and the clean-up
+//! after a load of the buffered format ([`buffered`]). The list's own operations (its
 //! constructors, `AddExtra`, `RemoveExtra`, the type bitmap, the thread's cache) are the cell
 //! references family's (`cell_refs::extra_list`), the lookup `GetExtraData` (`00410220`) the
 //! dispatch family's. Every caller reaches these functions by address; the unit's translation that
@@ -41,16 +41,20 @@
 //! rooms (`009707f0`, `00420ba0`), the enable state parent's flag leaves and the constructors of
 //! the file's own classes, and for part 4 the radius and radiation constructors (`004222f0`,
 //! `00422420`) where their setters build one, the data handler's `bClearingData` (`004226e0`, whose
-//! answer the follower removal never uses) and a one-word local's store (`008c71b0`). Each type,
+//! answer the follower removal never uses) and a one-word local's store (`008c71b0`), and for the
+//! save and load functions the save-load object's and the buffers' accessors, an array's count and
+//! element, a reference's parent cell, a list node's item store and a created form's id (each file's
+//! header lists them). Each type,
 //! next or word is read once where the exe reads it again with nothing in between that could change
 //! it. A virtual call (an extra data's slot 0 delete, its slot 4 `Compare`, the type 0x92 copy's
 //! slot 0xc, a primitive's slot 0) stays a call through the slot: each class has its own body. The
 //! constructors, destructors and setters of other units, `operator new` and `operator delete` are
 //! called by address.
 //!
-//! **Extenders.** JIP LN NVSE has seven sites here, each kept where the translation has it:
-//! `AddExtraCopy`'s arm for its keyed data's type 0x27 (`0x411978`) and that type's entries in the
-//! two default scans' tables (`0x41D0F6`, `0x41D212`, `0x41D25A`), while JIP is installed; the
+//! **Extenders.** JIP LN NVSE has nine sites here, each kept where the translation has it:
+//! `AddExtraCopy`'s arm for its keyed data's type 0x27 (`0x411978`), that type's entries in the
+//! two default scans' tables (`0x41D0F6`, `0x41D212`, `0x41D25A`) and in the buffered save's and
+//! load's jump tables (`0x427F30`, `0x42C328`), while JIP is installed; the
 //! hotkey copy of `CopyListForReference` (`0x412675`), the owner test of `CompareListForContainer`
 //! (`0x41271E`) and the reference pointer setter's persistence test (`0x41C833`), with its fixes
 //! on. JIP wraps `GetCanNotWear` (`00418b10`), which stays translated, and xNVSE `0041af70` (the
@@ -66,6 +70,7 @@
 //! stores, and the sine and cosine, the x87's `FSINCOS` as `engine_core::x87` has it.
 
 pub mod access;
+pub mod buffered;
 pub mod cell_data;
 pub mod classes;
 pub mod copy;
@@ -77,6 +82,7 @@ pub mod packages;
 pub mod records;
 pub mod rooms;
 pub mod save;
+pub mod save_game;
 pub mod setters;
 
 use crate::{cell_refs, crt, dispatch};
@@ -519,12 +525,17 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0042_2b90, followers::saved_havok_data(u32) -> u32),
         entry!(0x0042_2bc0, followers::restore_saved_havok_data(u32, u32) -> bool),
         entry!(0x0042_2c20, followers::remove_saved_havok_data(u32)),
+        entry!(0x0042_2c40, save_game::save_size(u32, u32, u32) -> u16),
+        entry!(0x0042_35e0, save_game::save_game(u32, u32, u32)),
         entry!(0x0042_4940, classes::byte_at_c(u32) -> u8),
+        entry!(0x0042_4960, save_game::load_game(u32, u32, u32, u32)),
+        entry!(0x0042_6a30, buffered::save_game_buffered(u32, u32)),
         entry!(0x0042_8070, classes::first_string_to(u32, u32) -> u32),
         entry!(0x0042_80b0, classes::second_string_to(u32, u32) -> u32),
         entry!(0x0042_80f0, classes::has_any(u32, u32) -> bool),
         entry!(0x0042_8110, classes::save_kind_to(u32, u32) -> u32),
         entry!(0x0042_8130, classes::set_save_kind(u32, u32)),
+        entry!(0x0042_8150, buffered::load_game_buffered(u32, u32)),
         entry!(0x0042_c470, classes::flags_record_new(u32) -> u32),
         entry!(0x0042_c4b0, classes::lock_extra_new(u32) -> u32),
         entry!(0x0042_c550, classes::lock_extra_delete(u32, u32) -> u32),
@@ -572,6 +583,9 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0042_ce30, classes::buffer_flags_to(u32, u32) -> u32),
         entry!(0x0042_ce50, classes::set_flag_8_of_28(u32, u8)),
         entry!(0x0042_ce90, classes::flag_8_of_28(u32) -> bool),
+        entry!(0x0042_ceb0, buffered::fix_up_loaded(u32, u32, u32)),
+        entry!(0x0042_d9e0, buffered::finish_load_game(u32, u32)),
+        entry!(0x0042_dae0, buffered::clean_up_loaded(u32, u32)),
         entry!(0x0042_dd70, classes::copy_byte_d_to_c(u32)),
     ]
 }

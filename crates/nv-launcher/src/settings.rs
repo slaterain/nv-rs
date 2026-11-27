@@ -184,7 +184,7 @@ impl List {
 /// notes are for readers of Fallout.ini): the key, the name ([`LABEL_MAX`] with any
 /// [`EXPERIMENTAL`] mark), the text ([`ABOUT_MAX`]). No key names, values or engine words; a
 /// row with none here gets [`plain_of`] its note.
-const PLAIN: [(&str, &str, &str); 44] = [
+const PLAIN: [(&str, &str, &str); 45] = [
     ("bAmbientOcclusion", "Ambient occlusion", "A soft shade in corners, creases and where things meet the ground. Costs a little speed."),
     ("fAmbientOcclusionStrength", "Ambient occlusion strength", "How strong the ambient occlusion's shade is, from 0.1 (faint) to 1.0 (all of it)."),
     ("bSunShadows", "Sun shadows", "Objects cast shadows on the ground and on each other from the sun, and faintly from the moon at night, out to about 140 m. Costs about 1 ms a frame."),
@@ -206,6 +206,7 @@ const PLAIN: [(&str, &str, &str); 44] = [
     ("bThreadHeap", "Faster memory handling", "The game gets memory for its objects and texts faster: the pause menu opens sooner with mods and fights stutter less."),
     ("bHalfLoadedMove", "Fast running crash fix", "Running fast across areas no longer crashes the game when a character there changes how the game runs it while it is still loading."),
     ("bPlayerHighProcess", "Very fast movement crash fix", "Moving very fast across areas no longer crashes the game when you reach an area that is still being set up."),
+    ("bGridShiftWait", "Very fast movement freeze fix", "Moving very fast across areas no longer freezes the game when an area finishes loading just as you cross into the next."),
     ("bTextureReadFirst", "Textures read ahead of drawing", "Texture files are read and unpacked first, so drawing does not wait for them."),
     ("bCellEntryWait", "No pause entering new areas", "Entering a new outdoor area no longer pauses for the areas loaded ahead; they load in the background afterwards."),
     ("bCellOffsets", "Faster area loads with mods", "Areas from mods (and from YUP or TTW) are found through a table made as the game loads, not by searching the file each time."),

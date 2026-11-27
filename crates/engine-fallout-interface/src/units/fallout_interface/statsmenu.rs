@@ -2650,7 +2650,7 @@ pub fn stats_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
             }
             e.call(0x007d_f230, &args![this, index]);
             e.mem.set_u8(base + 0x2a1, 0);
-            stats_menu_update_active_effects(e, this);
+            e.call(0x007d_df00, &args![this]);
             index = 4;
         }
         index += 1;
@@ -3212,7 +3212,7 @@ const UPDATE_ALL_CHILDREN: [(u32, u32, bool); 7] = [
 pub fn stats_menu_update_all(e: &mut Engine, this: Ptr) {
     e.call(0x007d_cfc0, &args![this]);
     e.call(0x007d_daa0, &args![this]);
-    fn_007dd8c0(e, this);
+    e.call(0x007d_d8c0, &args![this]);
     e.call(0x007d_f230, &args![this, 4]);
     e.call(0x007d_f920, &args![this]);
     let setting = setting_string(e, SETTING_011C3CB4);
