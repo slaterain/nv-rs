@@ -26,7 +26,6 @@ const KIND_ENABLE_STATE_PARENT: u8 = 0x37;
 const JIP_KEYED_DATA_TYPE: u8 = 0x27;
 
 /// The constructors (other units') the setters build their extra data with (`thiscall(block, ...)`).
-const EXTRA_PACKAGE_INIT: u32 = 0x0043_2870;
 const EXTRA_TRESPASS_PACKAGE_INIT: u32 = 0x0043_28d0;
 const EXTRA_PLAYER_CRIME_LIST_INIT: u32 = 0x0043_2aa0;
 const EXTRA_LEVELED_ITEM_INIT: u32 = 0x0043_2be0;
@@ -158,19 +157,20 @@ pub fn set_package(
         }
     } else if extra == 0 {
         let created = new_object(e, 0x1c, |e, block| {
-            e.call(
-                EXTRA_PACKAGE_INIT,
-                &args![
+            typed_call!(
+                FAMILY,
+                0x0043_2870,
+                super::objects::package_new_with(
+                    e,
                     block,
                     package,
                     index as u32,
                     target,
-                    u32::from(action_complete),
-                    u32::from(activated),
-                    u32::from(done_once)
-                ],
+                    action_complete,
+                    activated,
+                    done_once
+                )
             )
-            .u32()
         });
         list_add(e, this, created);
     } else {

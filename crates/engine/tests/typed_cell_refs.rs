@@ -4090,6 +4090,15 @@ const XD_IN_PLACE: &[u32] = &[
     0x006e_6da0,
     0x0040_1020,
     0x00ec_7230,
+    // The objects unit's (an array's element, a form's process, the guards' word compare, a
+    // reference's angles) and the empty list's and world location's constructors, which the whole
+    // family does in place.
+    0x006a_7ad0,
+    0x008d_8520,
+    0x009a_3830,
+    0x0043_0830,
+    0x0096_a2d0,
+    0x006d_5320,
 ];
 
 /// The families an extra data function reaches (the extra list's with its lock, type getter,
@@ -4219,20 +4228,13 @@ fn xd_stand_ins(e: &mut Engine) {
         ($($addr:expr => $kind:expr),* $(,)?) => { $( e.register($addr, built::<$kind>); )* };
     }
     constructors! {
-        0x0043_0780 => 0x0f, 0x0043_0c70 => 0x2a, 0x0043_1230 => 0x2b,
-        0x0043_1360 => 0x2c, 0x0043_14c0 => 0x90, 0x0043_1620 => 0x91, 0x0043_1780 => 0x0e,
-        0x0043_1830 => 0x15, 0x0043_1950 => 0x20, 0x0043_1a40 => 0x21, 0x0043_1ae0 => 0x22,
-        0x0043_1b80 => 0x23, 0x0043_1c20 => 0x24, 0x0043_1d10 => 0x25, 0x0043_1e20 => 0x26,
-        0x0043_1ec0 => 0x27, 0x0043_1f60 => 0x28, 0x0043_2000 => 0x0d, 0x0043_2220 => 0x30,
         0x0043_5150 => 0x3f, 0x0043_5ec0 => 0x46, 0x0043_61e0 => 0x7d, 0x0043_6300 => 0x8a,
         0x0043_6420 => 0x83, 0x0043_6540 => 0x86, 0x0043_5fa0 => 0x4c, 0x0043_38b0 => 0x53,
         0x0043_3ca0 => 0x57,
-        0x0043_22c0 => 0x1f, 0x0043_22f0 => 0x16, 0x0043_2320 => 0x17, 0x0043_2350 => 0x3e,
-        0x0043_25b0 => 0x31, 0x0043_26c0 => 0x18, 0x0043_08c0 => 0x49, 0x0043_60c0 => 0x4f,
+        0x0043_60c0 => 0x4f,
         0x0043_6660 => 0x87, 0x0040_eda0 => 0x01, 0x0040_ec00 => 0x02, 0x0040_ef00 => 0x04,
         0x0040_ef30 => 0x07, 0x0040_efd0 => 0x81, 0x0040_f070 => 0x08, 0x0040_f110 => 0x59,
-        0x0040_f1b0 => 0x8c, 0x0040_f440 => 0x0a, 0x0043_27e0 => 0x1c, 0x0043_2870 => 0x19,
-        0x0043_28d0 => 0x1a, 0x0043_2aa0 => 0x35, 0x0043_2be0 => 0x2f, 0x0043_2c20 => 0x0c,
+        0x0040_f1b0 => 0x8c, 0x0040_f440 => 0x0a,
         0x0043_2cb0 => 0x14, 0x0043_3010 => 0x1b, 0x0043_3260 => 0x13, 0x0043_3300 => 0x37,
         0x0043_5920 => 0x39, 0x0040_f370 => 0x03, 0x0043_34b0 => 0x3b, 0x0043_36c0 => 0x89,
         0x0043_3640 => 0x51,
@@ -4241,6 +4243,7 @@ fn xd_stand_ins(e: &mut Engine) {
     xp_stand_ins(e);
     xq_stand_ins(e);
     xt_stand_ins(e);
+    xo_shared_stand_ins(e);
 }
 
 /// The extra list's world (`extra_world`) for the family: page 0 mapped (a failed allocation's
@@ -4972,7 +4975,16 @@ fn xd_set_anim_ptr() {
 #[test]
 fn xd_starting_position() {
     Diff::new(entry!(0x0041_8d50, extra_data::access::starting_position(u32, u32) -> u32))
-        .xd_setter(0x0f, XD_VALUES)
+        .extra_data_case()
+        .max_cases(EXTRA_SEEDS.len() * 2)
+        .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            // The reference a new starting position is built from: an object whose slot 0x1f4
+            // answers its position (the constructor, `00430780`, runs as itself).
+            let w = xd_world(e, case.word(0));
+            place_kind(e, &w, case.word(0), 0x0f);
+            vec![w.list, xo_object(e, 0x40, 0x0f + case.word(1))]
+        })
         .run()
         .assert_same();
 }
@@ -6258,7 +6270,6 @@ const XF_NOTED: &[u32] = &[
     0x0069_dfd0,
     0x0043_2f30,
     0x0067_dd20,
-    0x0043_0a90,
     0x004a_4e90,
     0x0048_4e60,
     0x0046_1630,
@@ -7035,7 +7046,8 @@ impl XeShapes for Diff {
                 let w = xd_world(e, case.word(0));
                 place_kind(e, &w, case.word(0), 0x0f);
                 let out = junk(e, 0x10);
-                let position = xd_block(e, 0x10, 0x0f);
+                // The reference a new starting position is built from (its slot 0x1f4 answers).
+                let position = xo_object(e, 0x40, 0x0f);
                 let mut words = vec![w.list, out, position];
                 if setter {
                     let k = case.word(1) as usize;
@@ -8420,8 +8432,6 @@ const XP_SEARCHES_MAX: u32 = 64;
 const XP_NOTED: &[u32] = &[
     0x0043_4480,
     0x0043_48a0,
-    0x0043_10d0,
-    0x0043_1120,
     0x0067_c670,
     0x0046_ffb0,
     0x0040_47f0,
@@ -8527,7 +8537,6 @@ fn xp_stand_ins(e: &mut Engine) {
     e.register(0x0043_5950, built_list::<0x3a>);
     e.register(0x0043_3530, built_list::<0x52>);
     e.register(0x0043_3790, built_list::<0x54>);
-    e.register(0x0043_0f30, built_list::<0x7c>);
     e.register(0x0043_5820, built_list::<0x78>);
     e.register(0x0043_58a0, built_list::<0x79>);
     e.register(0x0043_3a00, xp_activate_find);
@@ -10483,9 +10492,37 @@ fn xp_remove_actor_package_data() {
 #[test]
 fn xp_add_guard() {
     Diff::new(entry!(0x0042_1310, extra_data::rooms::add_guard(u32, u32)))
-        .xd_setter(0x7c, XD_VALUES)
+        .extra_data_case()
+        .max_cases(EXTRA_SEEDS.len() * 3)
+        .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(&[0, 1, 2])])
+        .setup(|e, case| {
+            let w = xd_world(e, case.word(0));
+            xp_guards(e, &w, case.word(0));
+            // No guard, or a reference whose id the guards hold or not.
+            let guard = match case.word(1) {
+                0 => 0,
+                n => {
+                    let reference = xo_object(e, 0x40, 0x13);
+                    e.mem.set_u32(reference + 0xc, [0, 0x22, 0x55][n as usize]);
+                    reference
+                }
+            };
+            vec![w.list, guard]
+        })
         .run()
         .assert_same();
+}
+
+/// The guards' extra data placed for some seeds (and the one the cache holds): its array of three ids
+/// (`xo_form` makes actors with and without a process of the odd ones) with room for one more.
+fn xp_guards(e: &mut Engine, w: &ExtraWorld, seed: u32) {
+    let placed = place_kind(e, w, seed, 0x7c);
+    let cached = xe_cached(e, 0x7c);
+    for extra in [placed, cached] {
+        if extra != 0 {
+            xo_array_at(e, extra + 0xc, &[0x0f, 0x22, 0x07], 1);
+        }
+    }
 }
 
 #[test]
@@ -10494,7 +10531,14 @@ fn xp_guard_two_words() {
         0x0042_13c0,
         extra_data::rooms::guard_two_words(u32, u32, u32)
     ))
-    .xe_pair(&[0x7c], XD_VALUES, XD_VALUES)
+    .extra_data_case()
+    .max_cases(EXTRA_SEEDS.len() * 2)
+    .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(&[0, 0x8000_0001])])
+    .setup(|e, case| {
+        let w = xd_world(e, case.word(0));
+        xp_guards(e, &w, case.word(0));
+        vec![w.list, case.word(1), 0x1234_5678]
+    })
     .run()
     .assert_same();
 }
@@ -10512,10 +10556,6 @@ const XQ_NOTED: &[u32] = &[
     0x0043_5c10,
     0x0086_4b00,
     0x0086_4d80,
-    0x0043_0ca0,
-    0x0043_1260,
-    0x0043_2040,
-    0x0043_2900,
     0x0043_5ef0,
 ];
 
@@ -11550,7 +11590,24 @@ fn xq_trespass_package_extra_delete() {
     Diff::new(
         entry!(0x0042_c890, extra_data::classes::trespass_package_extra_delete(u32, u32) -> u32),
     )
-    .xd_data_delete()
+    .extra_data_case()
+    .inputs(&[Input::Of(&[0, 1]), Input::Of(&[0, 1, 2, 3])])
+    .setup(|e, case| {
+        // No package, or one (its slot 0x10 deletes); the save-load object's global mapped (the
+        // translation reads it for its test that always answers false).
+        xd_stand_ins(e);
+        e.map(0x011d_e000, 0x1000);
+        e.register(0x0040_1030, nothing);
+        e.register(0x0067_4d70, noted);
+        let this = junk(e, 0x10);
+        let package = if case.word(0) == 0 {
+            0
+        } else {
+            xo_object(e, 0x40, 0x1a)
+        };
+        e.mem.set_u32(this + 0xc, package);
+        vec![this, case.word(1)]
+    })
     .run()
     .assert_same();
 }
@@ -11910,6 +11967,39 @@ fn xs_hits(e: &Engine) -> Vec<u32> {
         .collect()
 }
 
+/// The arrays' allocate (slot 4): room past what was asked (the shrinking removal moves the size less
+/// one past its index, as the exe does).
+fn xt_allocate_fn(e: &mut Engine, a: &[u32]) -> Ret {
+    let block = e.mem.alloc(4 * (a[1].clamp(1, 0x40) + 8));
+    for i in 0..a[1].clamp(1, 0x40) {
+        e.mem.set_u32(block + 4 * i, 0x5a5a_5a5a);
+    }
+    ret(block)
+}
+
+/// The arrays' reallocate (slot 0xc): a new block with what fits of the old one.
+fn xt_reallocate_fn(e: &mut Engine, a: &[u32]) -> Ret {
+    let n = a[2].clamp(1, 0x40);
+    let block = e.mem.alloc(4 * n);
+    let keep = e.mem.block_size(a[1]).unwrap_or(0).min(4 * n);
+    for i in (0..keep).step_by(4) {
+        let w = e.mem.u32(a[1] + i);
+        e.mem.set_u32(block + i, w);
+    }
+    ret(block)
+}
+
+/// [`xt_allocate_fn`] and [`xt_reallocate_fn`] marked, for the reach test.
+fn xt_allocate_marked(e: &mut Engine, a: &[u32]) -> Ret {
+    xs_mark(e, XT_ALLOCATE_FN);
+    xt_allocate_fn(e, a)
+}
+
+fn xt_reallocate_marked(e: &mut Engine, a: &[u32]) -> Ret {
+    xs_mark(e, XT_REALLOCATE_FN);
+    xt_reallocate_fn(e, a)
+}
+
 /// A callee of another unit: marked, counted, its first word answered.
 fn xs_hit<const A: u32>(e: &mut Engine, a: &[u32]) -> Ret {
     xs_mark(e, A);
@@ -11990,6 +12080,17 @@ fn jip_load_seam(e: &mut Engine, a: &[u32]) -> Option<u32> {
 /// The reach test's stand-ins over the part 5 file's functions the arms call (the Diffs run them as
 /// they are): marked, each as it stood in before them.
 fn xs_reach_stand_ins(e: &mut Engine) {
+    // The objects unit's constructors and the limbs' compare (native in the extra data family, so the
+    // Diffs run them): this test, on the translation alone, keeps the world's stand-ins for them.
+    e.register(0x0043_0660, xs_coin::<0x0043_0660>);
+    macro_rules! extras {
+        ($($a:expr => $k:expr),* $(,)?) => { $( e.register($a, xs_extra::<$a, $k>); )* };
+    }
+    extras! {
+        0x0043_2650 => 0x18, 0x0043_2810 => 0x19, 0x0043_0dd0 => 0x1d, 0x0043_11f0 => 0x2e,
+        0x0043_29d0 => 0x35, 0x0043_08c0 => 0x49, 0x0043_24a0 => 0x4d, 0x0043_0f30 => 0x7c,
+        0x0043_0200 => 0x5f,
+    }
     e.register(0x0042_f5f0, xs_resize::<0x0042_f5f0>);
     e.register(0x0042_f780, xs_store::<0x0042_f780>);
     e.register(0x0042_dee0, xs_hit::<0x0042_dee0>);
@@ -12271,7 +12372,7 @@ fn xs_stand_ins(e: &mut Engine) {
         0x004d_1440, 0x004d_1610, 0x004d_1960, 0x0067_77b0, 0x009e_b9c0, 0x0093_6a20, 0x0047_e340,
         0x0047_cdb0,
     );
-    with!(xs_coin: 0x0042_5fd0, 0x0056_53d0, 0x0043_0660);
+    with!(xs_coin: 0x0042_5fd0, 0x0056_53d0);
     with!(xs_pick: 0x0085_a240, 0x0047_7bc0, 0x0097_24e0, 0x0066_e330, 0x004b_f220);
     with!(xs_object: 0x008c_6ca0, 0x0067_0b90, 0x0047_d130);
     with!(xs_built: 0x0043_a160, 0x0083_da50, 0x0043_7c10, 0x0060_1170, 0x005f_7230);
@@ -12279,12 +12380,12 @@ fn xs_stand_ins(e: &mut Engine) {
         ($($a:expr => $k:expr),* $(,)?) => { $( e.register($a, xs_extra::<$a, $k>); )* };
     }
     extras! {
-        0x0043_2650 => 0x18, 0x0043_2810 => 0x19, 0x0043_3010 => 0x1b, 0x0043_0dd0 => 0x1d,
-        0x0043_5040 => 0x1e, 0x0043_11f0 => 0x2e, 0x0082_5a10 => 0x32, 0x0082_5ea0 => 0x33,
-        0x0043_29d0 => 0x35, 0x0043_5920 => 0x39, 0x0043_4fc0 => 0x3c,
-        0x0043_08c0 => 0x49, 0x0043_24a0 => 0x4d, 0x0043_6ac0 => 0x55, 0x0043_6cb0 => 0x5e,
-        0x0043_7440 => 0x73, 0x0043_2e60 => 0x74, 0x0043_7690 => 0x75, 0x0043_0f30 => 0x7c,
-        0x0043_36c0 => 0x89, 0x0043_7c40 => 0x8b, 0x0043_0200 => 0x5f,
+        0x0043_3010 => 0x1b,
+        0x0043_5040 => 0x1e, 0x0082_5a10 => 0x32, 0x0082_5ea0 => 0x33,
+        0x0043_5920 => 0x39, 0x0043_4fc0 => 0x3c,
+        0x0043_6ac0 => 0x55, 0x0043_6cb0 => 0x5e,
+        0x0043_7440 => 0x73, 0x0043_2e60 => 0x74, 0x0043_7690 => 0x75,
+        0x0043_36c0 => 0x89, 0x0043_7c40 => 0x8b,
     }
     e.register(0x0043_51d0, xs_sequence_new);
     e.register(0x0043_5c40, xs_friend_hits_new);
@@ -13061,8 +13162,9 @@ const XT_NOTED: &[u32] = &[
 ];
 
 /// The range's typed calls into the pathing family (an array's buffer freed, the bound object
-/// array's body, the shrink test), which the extra data Diffs do not name: they go by address, to the translations.
-const XT_BY_ADDRESS: &[u32] = &[0x006a_8500, 0x006b_3eb0, 0x006f_3170];
+/// array's body, the shrink test) and the forms family's lookup by id, which the extra data Diffs do
+/// not name: they go by address, to the translations or the stand-ins.
+const XT_BY_ADDRESS: &[u32] = &[0x006a_8500, 0x006b_3eb0, 0x006f_3170, XO_FORM_BY_ID];
 
 /// The world's array vtable's slots (allocate, free, reallocate) and its counted objects' reference
 /// vtable's delete; the world's map vtable's hash and key compare.
@@ -13088,8 +13190,8 @@ fn xt_stand_ins(e: &mut Engine) {
         ($($addr:expr => $kind:expr),* $(,)?) => { $( e.register($addr, built::<$kind>); )* };
     }
     constructors! {
-        0x0043_2380 => 0x4a, 0x0043_2470 => 0x4d, 0x0043_6b20 => 0x55, 0x0043_6cb0 => 0x5e,
-        0x0043_0200 => 0x5f, 0x0043_76e0 => 0x75, 0x0043_7690 => 0x75, 0x0043_7510 => 0x73,
+        0x0043_6b20 => 0x55, 0x0043_6cb0 => 0x5e,
+        0x0043_76e0 => 0x75, 0x0043_7690 => 0x75, 0x0043_7510 => 0x73,
         0x0043_7750 => 0x7e, 0x0043_7970 => 0x80, 0x0043_79a0 => 0x88, 0x0043_7c40 => 0x8b,
     }
     e.register(0x005a_e380, |e, a| ret(e.mem.u32(a[0]) & 1));
@@ -13116,25 +13218,8 @@ fn xt_stand_ins(e: &mut Engine) {
         noted(e, a);
         ret(junk(e, a[2].max(4)))
     });
-    e.register(XT_ALLOCATE_FN, |e, a| {
-        // Room past what was asked: the shrinking removal moves the size less one past its index,
-        // as the exe does.
-        let block = e.mem.alloc(4 * (a[1].clamp(1, 0x40) + 8));
-        for i in 0..a[1].clamp(1, 0x40) {
-            e.mem.set_u32(block + 4 * i, 0x5a5a_5a5a);
-        }
-        ret(block)
-    });
-    e.register(XT_REALLOCATE_FN, |e, a| {
-        let n = a[2].clamp(1, 0x40);
-        let block = e.mem.alloc(4 * n);
-        let keep = e.mem.block_size(a[1]).unwrap_or(0).min(4 * n);
-        for i in (0..keep).step_by(4) {
-            let w = e.mem.u32(a[1] + i);
-            e.mem.set_u32(block + i, w);
-        }
-        ret(block)
-    });
+    e.register(XT_ALLOCATE_FN, xt_allocate_fn);
+    e.register(XT_REALLOCATE_FN, xt_reallocate_fn);
     e.register(XT_HASH_FN, |_, a| ret(a[1] % 4));
     e.register(XT_EQUAL_FN, |_, a| ret(u32::from(a[1] == a[2])));
 }
@@ -13701,6 +13786,24 @@ impl XtShapes for Diff {
 /// with a highest zone or none; its lookup's key found or not; an array grown from no buffer, from a
 /// buffer, shrunk with and without moving its buffer, set to its size; an element removed with and
 /// without a shrink; pointers holding the same object, others, none.
+/// The array calls the reach test marks: the vtable's allocate, reallocate and free, the elements'
+/// destroy and construct.
+const XT_ARRAY_CALLS: [(u32, &str); 5] = [
+    (XT_ALLOCATE_FN, "allocates"),
+    (XT_REALLOCATE_FN, "reallocates"),
+    (XT_FREE_FN, "frees"),
+    (0x0072_ba80, "destroys elements"),
+    (0x0043_0000, "constructs elements"),
+];
+
+fn xt_mark_array_calls(e: &mut Engine) {
+    e.register(XT_ALLOCATE_FN, xt_allocate_marked);
+    e.register(XT_REALLOCATE_FN, xt_reallocate_marked);
+    e.register(XT_FREE_FN, xs_hit::<XT_FREE_FN>);
+    e.register(0x0072_ba80, xs_hit::<0x0072_ba80>);
+    e.register(0x0043_0000, xs_hit::<0x0043_0000>);
+}
+
 #[test]
 fn the_part_5_worlds_reach_every_branch() {
     let mut reached = std::collections::BTreeSet::<String>::new();
@@ -13720,13 +13823,32 @@ fn the_part_5_worlds_reach_every_branch() {
                 reached.insert(format!("type {kind:#x} missing, new fails {fails}"));
             }
         }
-        reached.insert(format!(
-            "topic {}",
-            ["none", "empty", "not empty"][(seed % 3) as usize]
-        ));
+        // Observed: the topic getter run on its Diff's world, and whether it forwards (`0083df80`).
+        let mut e = Engine::new_untyped_for_test();
+        let w = xd_world(&mut e, seed);
+        e.register(0x0083_df80, xs_hit::<0x0083_df80>);
+        let placed = place_kind(&mut e, &w, seed, 0x4d);
+        let topic = match seed % 3 {
+            0 => 0,
+            n => xt_topic(&mut e, n - 1),
+        };
+        xe_hold(&mut e, placed, 0x4d, topic);
+        e.call(0x0042_df90, &args![w.list, 0x1234_5678u32]);
+        let forwarded = xs_hits(&e).contains(&0x0083_df80);
+        reached.insert(format!("topic forwarded {forwarded}"));
         for zone in 0..4u32 {
             for flag in 0..2u32 {
-                reached.insert(format!("water map empty {}", (zone ^ flag) & 1 == 0));
+                // Observed: the update run on its Diff's world, and whether the water extra data is
+                // gone after it.
+                let mut e = Engine::new_untyped_for_test();
+                let w = xd_world(&mut e, seed);
+                place_kind(&mut e, &w, seed, 0x7e);
+                let before = e.call(0x0041_0220, &args![w.list, 0x7eu32]).u32() != 0;
+                e.call(0x0042_f030, &args![w.list, zone, flag]);
+                let after = e.call(0x0041_0220, &args![w.list, 0x7eu32]).u32() != 0;
+                if before {
+                    reached.insert(format!("water extra removed by the update {}", !after));
+                }
                 if (zone ^ flag) & 1 != 0 {
                     reached.insert(format!("highest zone {}", zone & 2 != 0));
                 }
@@ -13739,40 +13861,34 @@ fn the_part_5_worlds_reach_every_branch() {
     for key in [1u32, 5, 0x1000, 2] {
         reached.insert(format!("water key held {}", [1, 5, 0x1000].contains(&key)));
     }
+    // Observed: the set size's and the removal's calls, each run on its Diff's world.
     for &size in XT_SIZES {
         for &room in XT_ROOMS {
-            let capacity = size + room;
             for &new_size in XT_NEW_SIZES {
-                for shrink in [false, true] {
-                    let fact = if new_size == 0 {
-                        "cleared"
-                    } else if new_size > capacity {
-                        if capacity == 0 {
-                            "grown from no buffer"
-                        } else {
-                            "grown from a buffer"
-                        }
-                    } else if new_size < size {
-                        if shrink && new_size <= capacity >> 2 {
-                            "shrunk, buffer moved"
-                        } else {
-                            "shrunk, buffer kept"
-                        }
-                    } else {
-                        "set within the capacity"
-                    };
-                    reached.insert(fact.into());
+                for shrink in [0u32, 1] {
+                    let mut e = Engine::new_untyped_for_test();
+                    let (array, _) = xt_array(&mut e, size * 5 + room, size, room);
+                    xt_mark_array_calls(&mut e);
+                    e.call(0x0042_f5f0, &args![array, new_size, shrink]);
+                    let hits = xs_hits(&e);
+                    for (at, name) in XT_ARRAY_CALLS {
+                        reached.insert(format!("set size {name} {}", hits.contains(&at)));
+                    }
                 }
             }
         }
     }
     for size in [1u32, 2, 4] {
         for &room in XT_REMOVE_ROOMS {
-            let capacity = size + room;
-            let shrinks = size <= capacity >> 2;
-            reached.insert(format!("remove can shrink {shrinks}"));
-            if shrinks && size > 1 {
-                reached.insert("remove shrinks at a later index".into());
+            for index in 1..size {
+                for flag in [0u32, 1] {
+                    let mut e = Engine::new_untyped_for_test();
+                    let (array, _) = xt_array(&mut e, size * 3 + room, size, room);
+                    xt_mark_array_calls(&mut e);
+                    e.call(0x0042_f8a0, &args![array, index, flag]);
+                    let frees = xs_hits(&e).contains(&XT_FREE_FN);
+                    reached.insert(format!("a removal past index 0 frees {frees}"));
+                }
             }
         }
     }
@@ -13794,26 +13910,24 @@ fn the_part_5_worlds_reach_every_branch() {
         }
     }
     for fact in [
-        "topic none",
-        "topic empty",
-        "topic not empty",
-        "water map empty true",
-        "water map empty false",
+        "topic forwarded true",
+        "topic forwarded false",
+        "water extra removed by the update true",
+        "water extra removed by the update false",
         "highest zone true",
         "highest zone false",
         "form bit 31 true",
         "form bit 31 false",
         "water key held true",
         "water key held false",
-        "cleared",
-        "grown from no buffer",
-        "grown from a buffer",
-        "shrunk, buffer moved",
-        "shrunk, buffer kept",
-        "set within the capacity",
-        "remove can shrink true",
-        "remove can shrink false",
-        "remove shrinks at a later index",
+        "set size allocates true",
+        "set size allocates false",
+        "set size reallocates true",
+        "set size frees true",
+        "set size destroys elements true",
+        "set size constructs elements true",
+        "a removal past index 0 frees true",
+        "a removal past index 0 frees false",
         "pointers hold the same",
         "a pointer holds none",
         "pointers hold others",
@@ -14849,6 +14963,39 @@ fn xt_navmesh_ptr_assign() {
     .assert_same();
 }
 
+/// The delete of an object the assignment releases (its count 1) when the source lives inside it:
+/// the source (the object's +0x10) cleared, as a deleted object's memory may be.
+fn xt_inside_delete(e: &mut Engine, a: &[u32]) -> Ret {
+    // `a[0]` is the object's `NiRefObject` (+0x1c).
+    e.mem.set_u32(a[0] - 0x0c, 0);
+    noted(e, a)
+}
+
+/// The assignment from a source inside the object it holds: with the object's last reference the
+/// release deletes it and the source changes, so the source read again after the release (the exe's
+/// `0042fdeb`) stores none where a read before it would store the other object and take a reference.
+#[test]
+fn xt_navmesh_ptr_assign_from_inside() {
+    Diff::new(entry!(
+        0x0042_fdc0,
+        extra_data::arrays::navmesh_ptr_assign(u32, u32) -> u32
+    ))
+    .extra_data_case_but(0x0042_fdc0)
+    .inputs(&[Input::Of(&[1, 2])])
+    .setup(|e, case| {
+        let (_, objects) = xt_array(e, 2, 0, 0);
+        e.register(XT_REF_DELETE_FN, xt_inside_delete);
+        let which = case.word(0) as usize;
+        let held = objects.0[which];
+        e.mem.set_u32(held + 0x10, objects.0[3 - which]);
+        let this = e.mem.alloc(4);
+        e.mem.set_u32(this, held);
+        vec![this, held + 0x10]
+    })
+    .run()
+    .assert_same();
+}
+
 #[test]
 fn xt_refr_map_base_init() {
     Diff::new(entry!(
@@ -14974,6 +15121,1939 @@ fn xt_lock_data_at_44() {
         extra_data::more_setters::lock_data_at_44(u32) -> u32
     ))
     .xt_holder(0x44, 0x2a)
+    .run()
+    .assert_same();
+}
+
+// ---- The extra data family's objects unit, part 1 (`004300f0` to `00432c90`) --------------------
+
+/// The forms family's lookup by id, which the guards' notice calls: stood in (the worlds have no
+/// form map), by address in the extra data Diffs.
+const XO_FORM_BY_ID: u32 = 0x0048_39c0;
+/// The world's control words: whether the dynamic cast fails, the levels the two level getters
+/// answer, the leveled lock setting's float, the perk entry's answer.
+const XO_CAST_FAILS: u32 = CONTROL + 0xa00;
+const XO_PLAYER_LEVEL: u32 = CONTROL + 0xa04;
+const XO_CALC_LEVEL: u32 = CONTROL + 0xa08;
+const XO_LOCK_SCALE: u32 = CONTROL + 0xa0c;
+const XO_PERK: u32 = CONTROL + 0xa10;
+/// The objects' vtable (its slots answer by the stand-ins below) and the stand-ins' addresses.
+const XO_VT: u32 = CONTROL + 0xb00;
+const XO_FN_POINT: u32 = 0x00ff_ca00;
+const XO_FN_TRUE: u32 = 0x00ff_ca04;
+const XO_FN_FALSE: u32 = 0x00ff_ca08;
+/// The other units' functions the objects call by address, each a counting stand-in answering its
+/// first word (none of them was reached by the family's worlds before: their callers were stood in).
+const XO_NOTED: &[u32] = &[
+    0x0041_8f10,
+    0x004b_f150,
+    0x0043_85a0,
+    0x0043_8690,
+    0x0069_2710,
+    0x0060_5fc0,
+    0x0041_af70,
+];
+/// Words, floats, bytes and halves a constructor or `Compare` is given.
+const XO_WORDS: &[u32] = &[0, 1, 0x8000_0000];
+const XO_FLOATS: &[u32] = &[0x3f80_0000, 0x7fa0_0001, 0x8000_0000, 0, 0x7fc0_0000];
+const XO_BYTES: &[u32] = &[0, 1, 0x80, 0x1ff];
+const XO_HALVES: &[u32] = &[0, 1, 0x8000, 0x1_ffff];
+/// Which other a `Compare` gets: none, one the cast refuses, one of another type, one of the type.
+const XO_WHICH: &[u32] = &[0, 1, 2, 3];
+/// The five lock level settings' tops (very easy to very hard) and the levels drawn against them.
+const XO_TOPS: [u32; 5] = [0, 25, 50, 75, 100];
+const XO_LOCK_SETTINGS: [u32; 6] = [
+    0x011c_3a4c,
+    0x011c_3a30,
+    0x011c_3a00,
+    0x011c_3ab0,
+    0x011c_399c,
+    0x011c_3a24,
+];
+
+fn xo_cast(e: &mut Engine, a: &[u32]) -> Ret {
+    let n = e.mem.u32(XD_NOTES);
+    e.mem.set_u32(XD_NOTES, n.wrapping_add(1));
+    ret(if e.mem.u32(XO_CAST_FAILS) != 0 {
+        0
+    } else {
+        a[0]
+    })
+}
+
+/// An array's constructor: an empty array (no buffer, no items, no room). Answers it.
+fn xo_array_new(e: &mut Engine, a: &[u32]) -> Ret {
+    for at in [4, 8, 0xc] {
+        e.mem.set_u32(a[0] + at, 0);
+    }
+    noted(e, a)
+}
+
+/// A data compare: whether the two objects' first words differ in their low bit.
+fn xo_data_compare(e: &mut Engine, a: &[u32]) -> Ret {
+    ret((e.mem.u32(a[0]) ^ e.mem.u32(a[1])) & 1)
+}
+
+/// The pointer array's add: the word at the address given appended when there is room; the index.
+fn xo_array_add(e: &mut Engine, a: &[u32]) -> Ret {
+    let (array, at) = (a[0], a[1]);
+    let count = e.mem.u32(array + 8);
+    if count < e.mem.u32(array + 0xc) {
+        let buffer = e.mem.u32(array + 4);
+        let word = e.mem.u32(at);
+        e.mem.set_u32(buffer + 4 * count, word);
+        e.mem.set_u32(array + 8, count + 1);
+    }
+    ret(count)
+}
+
+/// The arrays' buffer compare: the same when their counts are.
+fn xo_same_buffer(e: &mut Engine, a: &[u32]) -> Ret {
+    ret(u32::from(e.mem.u32(a[0] + 8) == e.mem.u32(a[1] + 8)))
+}
+
+/// The form lookup: an actor-like object for an odd id (its slots 0xf0 and 0x100 by its id's bits 1
+/// and 2, its process at +0x68 by bit 3), none for an even one.
+fn xo_form(e: &mut Engine, a: &[u32]) -> Ret {
+    let id = a[0];
+    if id & 1 == 0 {
+        return ret(0);
+    }
+    let form = xo_object(e, 0x80, id);
+    let vt = e.mem.alloc(0x800);
+    for slot in (0..0x800).step_by(4) {
+        e.mem.set_u32(vt + slot, XO_FN_TRUE);
+    }
+    e.mem.set_u32(
+        vt + 0xf0,
+        if id & 2 != 0 { XO_FN_TRUE } else { XO_FN_FALSE },
+    );
+    e.mem.set_u32(
+        vt + 0x100,
+        if id & 4 != 0 { XO_FN_TRUE } else { XO_FN_FALSE },
+    );
+    e.mem.set_u32(form, vt);
+    let process = if id & 8 != 0 {
+        let process = xo_object(e, 0x20, 0x77);
+        e.mem.set_u32(process, vt);
+        process
+    } else {
+        0
+    };
+    e.mem.set_u32(form + 0x68, process);
+    ret(form)
+}
+
+/// The perk entry: the world's answer stored at the result.
+fn xo_perk(e: &mut Engine, a: &[u32]) -> Ret {
+    let value = e.mem.u32(XO_PERK);
+    e.mem.set_u32(a[2], value);
+    ret(0)
+}
+
+/// The stand-ins every family world has for what the objects call (no world reached them before):
+/// the noted ones, the data compares, the array add and buffer compare, the level getters, the float
+/// setting, the perk entry and the objects' vtable.
+fn xo_shared_stand_ins(e: &mut Engine) {
+    for &addr in XO_NOTED {
+        e.register(addr, noted);
+    }
+    // The limbs' and the guards' array constructors: an empty array.
+    for addr in [0x0043_8570, 0x0043_8660] {
+        e.register(addr, xo_array_new);
+    }
+    e.register(XO_FORM_BY_ID, xo_form);
+    for addr in [0x0043_a860, 0x0043_8e40, 0x0058_97c0] {
+        e.register(addr, xo_data_compare);
+    }
+    // The buoy data's compare: 1, as its body answers.
+    e.register(0x0040_1290, |_, _| ret(1));
+    e.register(0x007c_b2e0, xo_array_add);
+    e.register(0x0043_87b0, xo_same_buffer);
+    e.register(0x0087_f9f0, |e, _| ret(e.mem.u32(XO_PLAYER_LEVEL)));
+    e.register(0x0056_7e10, |e, _| ret(e.mem.u32(XO_CALC_LEVEL)));
+    e.register(0x0040_3e20, |_, _| ret(XO_LOCK_SCALE));
+    e.register(0x005e_58f0, xo_perk);
+    e.register(XO_FN_POINT, |_, a| ret(a[0] + 0x30));
+    e.register(XO_FN_TRUE, |_, _| ret(1));
+    e.register(XO_FN_FALSE, |_, _| ret(0));
+    for slot in (0..0x400).step_by(4) {
+        e.mem.set_u32(XO_VT + slot, XO_FN_POINT);
+    }
+}
+
+/// The objects' own world's stand-ins besides: the dynamic cast that fails when the world says, the
+/// form lookup, and counting stand-ins where other worlds have their own.
+fn xo_stand_ins(e: &mut Engine) {
+    for addr in [
+        0x0047_02f0,
+        0x0042_5ff0,
+        0x0083_da50,
+        0x0067_4d70,
+        0x005a_e3d0,
+        0x0040_1030,
+    ] {
+        e.register(addr, noted);
+    }
+    e.register(0x00ec_43fb, xo_cast);
+}
+
+/// [`xd_world`] with the objects' stand-ins, the lock level settings' tops, the levels, the lock
+/// scale (2.5) and the perk's answer (0.0).
+fn xo_world(e: &mut Engine, seed: u32) -> ExtraWorld {
+    let w = xd_world(e, seed);
+    xo_stand_ins(e);
+    for (i, &setting) in XO_LOCK_SETTINGS.iter().enumerate() {
+        e.mem
+            .set_u32(setting + 4, XO_TOPS.get(i).copied().unwrap_or(0x7fff_ffff));
+    }
+    e.mem.set_u32(XO_PLAYER_LEVEL, 0x0001_000c);
+    e.mem.set_u32(XO_CALC_LEVEL, 30);
+    e.mem.set_u32(XO_LOCK_SCALE, 2.5f32.to_bits());
+    w
+}
+
+/// An object of `n` bytes of a pattern with the objects' vtable at +0.
+fn xo_object(e: &mut Engine, n: u32, salt: u32) -> u32 {
+    let x = xd_block(e, n.max(0x40), salt);
+    e.mem.set_u32(x, XO_VT);
+    x
+}
+
+/// An array (+4 its buffer of `room` slots, +8 the count, +0xc the room) holding `items`.
+fn xo_array_at(e: &mut Engine, array: u32, items: &[u32], room: u32) {
+    let room = room.max(items.len() as u32);
+    let buffer = if room == 0 { 0 } else { e.mem.alloc(4 * room) };
+    for (i, &item) in items.iter().enumerate() {
+        e.mem.set_u32(buffer + 4 * i as u32, item);
+    }
+    e.mem.set_u32(array + 4, buffer);
+    e.mem.set_u32(array + 8, items.len() as u32);
+    e.mem.set_u32(array + 0xc, room);
+}
+
+/// A limb record (0x14 bytes): its limb, exploded, identical and removed bytes, its object array
+/// (+4) with no buffer and a count of `objects`.
+fn xo_record(e: &mut Engine, flags: [u8; 4], objects: u32) -> u32 {
+    let r = e.mem.alloc(0x14);
+    for (i, &b) in flags.iter().enumerate() {
+        e.mem.set_u8(r + i as u32, b);
+    }
+    e.mem.set_u32(r + 0xc, objects);
+    r
+}
+
+/// The limbs extra data: the limbs word and an array of records (a null one where `flags` is
+/// none) with `room` free slots.
+fn xo_limbs(e: &mut Engine, limbs: u16, records: &[Option<[u8; 4]>], room: u32) -> u32 {
+    let this = xo_object(e, 0x40, 0x5f);
+    e.mem.set_u8(this + 4, 0x5f);
+    e.mem.set_u16(this + 0xc, limbs);
+    let items: Vec<u32> = records
+        .iter()
+        .enumerate()
+        .map(|(i, r)| r.map_or(0, |flags| xo_record(e, flags, i as u32 % 2)))
+        .collect();
+    xo_array_at(e, this + 0x20, &items, items.len() as u32 + room);
+    this
+}
+
+/// The records a limbs world draws from: by `which`, none, one, several with a null one, several
+/// with identical and removed ones.
+fn xo_records(which: u32) -> Vec<Option<[u8; 4]>> {
+    match which % 4 {
+        0 => vec![],
+        1 => vec![Some([2, 0, 0, 0])],
+        2 => vec![Some([1, 0, 0, 0]), None, Some([2, 1, 0, 1])],
+        _ => vec![
+            Some([3, 0, 0, 0]),
+            Some([2, 0, 1, 0]),
+            Some([2, 0, 1, 1]),
+            Some([5, 1, 1, 0]),
+        ],
+    }
+}
+
+/// The objects' test shapes.
+trait XoShapes {
+    fn xo_case(self, own: u32) -> Diff;
+    fn xo_new(self, own: u32, n: u32, args: &'static [&'static [u32]]) -> Diff;
+    fn xo_drop(self, own: u32, n: u32, owned: &'static [u32], flags: bool) -> Diff;
+    fn xo_compare(self, own: u32, kind: u32, width: u32, values: &'static [u32]) -> Diff;
+}
+
+impl XoShapes for Diff {
+    /// The families an objects function reaches, with what it does in place (but its own address).
+    fn xo_case(self, own: u32) -> Diff {
+        self.extra_data_case_but(own)
+            .family(&engine_typed::multibound::MULTIBOUND)
+    }
+
+    /// A constructor: a block of `n` bytes of a pattern, the words of `args` after it, in worlds whose
+    /// `operator new` fails in some seeds.
+    fn xo_new(self, own: u32, n: u32, args: &'static [&'static [u32]]) -> Diff {
+        let seeds: &'static [u32] = if args.is_empty() {
+            &EXTRA_SEEDS[..12]
+        } else {
+            &EXTRA_SEEDS[..2]
+        };
+        let mut inputs = vec![Input::Of(seeds)];
+        inputs.extend(args.iter().map(|&a| Input::Of(a)));
+        self.xo_case(own)
+            .max_cases(64)
+            .inputs(&inputs)
+            .setup(move |e, case| {
+                xo_world(e, case.word(0));
+                let mut words = vec![xd_block(e, n, 0x5a)];
+                words.extend((1..=args.len()).map(|i| case.word(i)));
+                words
+            })
+    }
+
+    /// A destructor (`flags`: its scalar deleting one, with each flag): the class's object, the words
+    /// at `owned` null or an object of their own.
+    fn xo_drop(self, own: u32, n: u32, owned: &'static [u32], flags: bool) -> Diff {
+        let mut inputs = vec![Input::Of(&[0, 1])];
+        if flags {
+            inputs.push(Input::Of(&[0, 1, 2, 3]));
+        }
+        self.xo_case(own).inputs(&inputs).setup(move |e, case| {
+            xo_world(e, 3);
+            let this = xo_object(e, n, 0x11);
+            for &at in owned {
+                let object = if case.word(0) == 0 {
+                    0
+                } else {
+                    xo_object(e, 0x40, at)
+                };
+                e.mem.set_u32(this + at, object);
+            }
+            let mut words = vec![this];
+            if flags {
+                words.push(case.word(1));
+            }
+            words
+        })
+    }
+
+    /// A `Compare` of the field at +0xc, `width` bytes (1, 2 or 4) from `values` on each side; a
+    /// `width` of 0 compares objects (`values` 0 none, 1 and 2 two objects), one of 0x10 or more
+    /// compares that many bytes (`values` 0 the same, else one byte different at a drawn offset).
+    fn xo_compare(self, own: u32, kind: u32, width: u32, values: &'static [u32]) -> Diff {
+        self.xo_case(own)
+            .max_cases(XO_WHICH.len() * values.len() * values.len())
+            .inputs(&[Input::Of(XO_WHICH), Input::Of(values), Input::Of(values)])
+            .setup(move |e, case| {
+                xo_world(e, 5);
+                let (which, a, b) = (case.word(0), case.word(1), case.word(2));
+                let this = xo_object(e, 0x40, 0x21);
+                let other = xo_object(e, 0x40, 0x21);
+                e.mem.set_u8(this + 4, kind as u8);
+                e.mem.set_u8(
+                    other + 4,
+                    if which == 2 {
+                        kind as u8 ^ 1
+                    } else {
+                        kind as u8
+                    },
+                );
+                e.mem.set_u32(XO_CAST_FAILS, u32::from(which == 1));
+                match width {
+                    1 => {
+                        e.mem.set_u8(this + 0xc, a as u8);
+                        e.mem.set_u8(other + 0xc, b as u8);
+                    }
+                    2 => {
+                        e.mem.set_u16(this + 0xc, a as u16);
+                        e.mem.set_u16(other + 0xc, b as u16);
+                    }
+                    4 => {
+                        e.mem.set_u32(this + 0xc, a);
+                        e.mem.set_u32(other + 0xc, b);
+                    }
+                    0 => {
+                        let objects = [0, xo_object(e, 0x40, 0), xo_object(e, 0x40, 0)];
+                        e.mem.set_u32(objects[1], 0);
+                        e.mem.set_u32(objects[2], 1);
+                        e.mem.set_u32(this + 0xc, objects[a as usize % 3]);
+                        e.mem.set_u32(other + 0xc, objects[b as usize % 3]);
+                    }
+                    n => {
+                        if b != 0 {
+                            let at = other + 0xc + a % n;
+                            let byte = e.mem.u8(at);
+                            e.mem.set_u8(at, byte ^ 0x10);
+                        }
+                    }
+                }
+                vec![this, if which == 0 { 0 } else { other }]
+            })
+    }
+}
+
+#[test]
+fn xo_sequence_word() {
+    Diff::new(entry!(
+        0x0043_01b0,
+        extra_data::objects::sequence_word(u32, i32) -> u16
+    ))
+    .xo_case(0x0043_01b0)
+    .inputs(&[Input::Of(&[0, 1, 4, 0x13, 0x14, 0x15, 0x16, u32::MAX])])
+    .setup(|e, case| {
+        xo_world(e, 3);
+        vec![xd_block(e, 0x80, 0x33), case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The limbs' destructor and lock level shapes, as methods of the Diff.
+trait XoMore {
+    fn xo_limbs_drop(self, own: u32, flags: bool) -> Diff;
+    fn xo_lock_levels(self, own: u32) -> Diff;
+}
+
+impl XoMore for Diff {
+    fn xo_limbs_drop(self, own: u32, flags: bool) -> Diff {
+        xo_limbs_drop_shape(self, own, flags)
+    }
+
+    fn xo_lock_levels(self, own: u32) -> Diff {
+        xo_lock_levels_shape(self, own)
+    }
+}
+
+/// The limbs' destructors: records drawn by [`xo_records`] (`flags`: the scalar deleting one, with
+/// each flag).
+fn xo_limbs_drop_shape(diff: Diff, own: u32, flags: bool) -> Diff {
+    let mut inputs = vec![Input::Of(&[0, 1, 2, 3])];
+    if flags {
+        inputs.push(Input::Of(&[0, 1, 2, 3]));
+    }
+    diff.xo_case(own).inputs(&inputs).setup(move |e, case| {
+        xo_world(e, 3);
+        let this = xo_limbs(e, 0x24, &xo_records(case.word(0)), 1);
+        let mut words = vec![this];
+        if flags {
+            words.push(case.word(1));
+        }
+        words
+    })
+}
+
+#[test]
+fn xo_limbs_delete() {
+    Diff::new(entry!(
+        0x0043_02a0,
+        extra_data::objects::limbs_delete(u32, u32) -> u32
+    ))
+    .xo_limbs_drop(0x0043_02a0, true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_limbs_drop_body() {
+    Diff::new(entry!(0x0043_02d0, extra_data::objects::limbs_drop(u32)))
+        .xo_limbs_drop(0x0043_02d0, false)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xo_limb_delete() {
+    Diff::new(entry!(
+        0x0043_0390,
+        extra_data::objects::limb_delete(u32, u32) -> u32
+    ))
+    .xo_case(0x0043_0390)
+    .inputs(&[Input::Of(&[0, 1]), Input::Of(&[0, 1, 2, 3])])
+    .setup(|e, case| {
+        xo_world(e, 3);
+        vec![xo_record(e, [2, 1, 0, 1], case.word(0)), case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_limb_drop() {
+    Diff::new(entry!(0x0043_03c0, extra_data::objects::limb_drop(u32)))
+        .xo_case(0x0043_03c0)
+        .inputs(&[Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            xo_world(e, 3);
+            vec![xo_record(e, [2, 1, 0, 1], case.word(0))]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xo_limbs_dismembered() {
+    Diff::new(entry!(
+        0x0043_03e0,
+        extra_data::objects::limbs_dismembered(u32, u8) -> bool
+    ))
+    .xo_case(0x0043_03e0)
+    .inputs(&[
+        Input::Of(&[0, 1, 0x8000, 0xffff, 0x5a5a]),
+        Input::Of(&[0, 1, 15, 16, 31, 32, 0x1ff]),
+    ])
+    .setup(|e, case| {
+        xo_world(e, 3);
+        let this = xo_object(e, 0x30, 0x5f);
+        e.mem.set_u16(this + 0xc, case.word(0) as u16);
+        vec![this, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The actor `Dismember` is given: by `which`, one whose slots 0x100 and 0x218 say yes, one each
+/// says no to, the player.
+fn xo_actor(e: &mut Engine, which: u32) -> u32 {
+    let actor = xo_object(e, 0x80, 0x42);
+    let vt = e.mem.alloc(0x400);
+    for slot in (0..0x400).step_by(4) {
+        e.mem.set_u32(vt + slot, XO_FN_POINT);
+    }
+    e.mem.set_u32(
+        vt + 0x100,
+        if which == 1 { XO_FN_FALSE } else { XO_FN_TRUE },
+    );
+    e.mem.set_u32(
+        vt + 0x218,
+        if which == 2 { XO_FN_FALSE } else { XO_FN_TRUE },
+    );
+    e.mem.set_u32(actor, vt);
+    if which == 3 {
+        e.mem.set_u32(0x011d_ea3c, actor);
+    }
+    actor
+}
+
+#[test]
+fn xo_limbs_dismember() {
+    Diff::new(entry!(
+        0x0043_0410,
+        extra_data::objects::limbs_dismember(u32, u32, u8, u8)
+    ))
+    .xo_case(0x0043_0410)
+    .max_cases(4 * 4 * 3 * 2 * 2)
+    .inputs(&[
+        Input::Of(&EXTRA_SEEDS[..4]),
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&[0, 2, 0x22]),
+        Input::Of(&[0, 1]),
+        Input::Of(&[0, 1]),
+    ])
+    .setup(|e, case| {
+        let seed = case.word(0);
+        xo_world(e, seed);
+        // The limbs word has limb 2 off already in half the seeds; the array has room for one
+        // more, and its records are drawn so the newest unmarked one has as many objects or not.
+        let limbs = if seed % 2 == 0 { 0x0004 } else { 0x0101 };
+        let this = xo_limbs(e, limbs, &xo_records(case.word(4) * 2 + 1 + seed / 2), 1);
+        let actor = xo_actor(e, case.word(1));
+        vec![this, actor, case.word(2), case.word(3)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_limbs_set_removed() {
+    Diff::new(entry!(
+        0x0043_05f0,
+        extra_data::objects::limbs_set_removed(u32, u32, u8)
+    ))
+    .xo_case(0x0043_05f0)
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&[1, 2, 0x102]),
+        Input::Of(&[0, 1]),
+    ])
+    .setup(|e, case| {
+        xo_world(e, 3);
+        let this = xo_limbs(e, 0x24, &xo_records(case.word(0)), 0);
+        vec![this, case.word(1), case.word(2)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_limbs_identical() {
+    Diff::new(entry!(
+        0x0043_0660,
+        extra_data::objects::limbs_identical(u32, u32) -> bool
+    ))
+    .xo_case(0x0043_0660)
+    .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5, 6])])
+    .setup(|e, case| {
+        xo_world(e, 3);
+        // The same limbs and records, or the limbs word, the count, one flag, one object count
+        // different, or both with no records.
+        let which = case.word(0);
+        let mine = xo_records(3);
+        let mut theirs = mine.clone();
+        let mut limbs = 0x24;
+        match which {
+            1 => limbs = 0x25,
+            2 => theirs.truncate(3),
+            3 => theirs[2] = Some([2, 0, 1, 0]),
+            4 => theirs[1] = Some([2, 1, 1, 0]),
+            _ => {}
+        }
+        let (mine, theirs) = if which == 6 {
+            (vec![], vec![])
+        } else {
+            (mine, theirs)
+        };
+        let this = xo_limbs(e, 0x24, &mine, 0);
+        let other = xo_limbs(e, limbs, &theirs, 0);
+        if which == 5 {
+            // One record's object array with another count (the buffer compare says different).
+            let record = e.mem.u32(e.mem.u32(other + 0x24) + 4);
+            e.mem.set_u32(record + 0xc, 7);
+        }
+        vec![this, other]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_starting_position_new() {
+    Diff::new(entry!(
+        0x0043_0780,
+        extra_data::objects::starting_position_new(u32, u32) -> u32
+    ))
+    .xo_case(0x0043_0780)
+    .inputs(&[Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        xo_world(e, 3);
+        let reference = xo_object(e, 0x80, 0x19 + case.word(0));
+        vec![xd_block(e, 0x24, 0x5a), reference]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_angles_of() {
+    Diff::new(entry!(
+        0x0043_0830,
+        extra_data::objects::angles_of(u32) -> u32
+    ))
+    .xo_case(0x0043_0830)
+    .inputs(&[Input::Of(XD_VALUES)])
+    .setup(|e, case| {
+        xo_world(e, 3);
+        vec![case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// A lock record: its base level, key, flags, tries and times unlocked.
+fn xo_lock_record(e: &mut Engine, level: u32, key: u32, flags: u32, tries: u32, times: u32) -> u32 {
+    let lock = e.mem.alloc(0x14);
+    e.mem.set_u32(lock, 0xa5a5_a500 | (level & 0xff));
+    e.mem.set_u32(lock + 4, key);
+    e.mem.set_u32(lock + 8, 0xa5a5_a500 | (flags & 0xff));
+    e.mem.set_u32(lock + 0xc, tries);
+    e.mem.set_u32(lock + 0x10, times);
+    lock
+}
+
+/// The lock level getters: (lock record, reference): the base level, leveled or not (flag 4 among
+/// others), a reference or none, the scale's float drawn.
+fn xo_lock_levels_shape(diff: Diff, own: u32) -> Diff {
+    diff.xo_case(own)
+        .max_cases(5 * 4 * 2 * 3)
+        .inputs(&[
+            Input::Of(&[0, 24, 26, 99, 0xff]),
+            Input::Of(&[0, 1, 4, 0xfd]),
+            Input::Of(&[0, 1]),
+            Input::Of(&[0x4020_0000, 0x7fa0_0001, 0xc0a0_0000]),
+        ])
+        .setup(|e, case| {
+            xo_world(e, 3);
+            e.mem.set_u32(XO_LOCK_SCALE, case.word(3));
+            let lock = xo_lock_record(e, case.word(0), 0, case.word(1), 0, 0);
+            let reference = if case.word(2) == 0 {
+                0
+            } else {
+                xo_object(e, 0x40, 0x31)
+            };
+            vec![lock, reference]
+        })
+}
+
+#[test]
+fn xo_lock_level() {
+    Diff::new(entry!(
+        0x0043_09e0,
+        extra_data::objects::lock_level(u32, u32) -> i32
+    ))
+    .xo_lock_levels(0x0043_09e0)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_lock_base_level() {
+    Diff::new(entry!(
+        0x0043_0a10,
+        extra_data::objects::lock_base_level(u32, u32) -> i32
+    ))
+    .xo_lock_levels(0x0043_0a10)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_lock_set_locked() {
+    Diff::new(entry!(
+        0x0043_0a90,
+        extra_data::objects::lock_set_locked(u32, bool)
+    ))
+    .xo_case(0x0043_0a90)
+    .inputs(&[Input::Of(&[0, 1, 4, 0xff]), Input::Of(&[0, 1, 2])])
+    .setup(|e, case| {
+        xo_world(e, 3);
+        vec![xo_lock_record(e, 5, 0, case.word(0), 3, 1), case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_lock_is_broken() {
+    Diff::new(entry!(
+        0x0043_0ae0,
+        extra_data::objects::lock_is_broken(u32) -> bool
+    ))
+    .xo_case(0x0043_0ae0)
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&[0, 0x3f80_0000, 0x8000_0000, 0x7fc0_0000]),
+    ])
+    .setup(|e, case| {
+        xo_world(e, 3);
+        e.mem.set_u32(XO_PERK, case.word(1));
+        vec![xo_lock_record(e, 5, 0, 1, case.word(0), 0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_lock_bracket() {
+    Diff::new(entry!(
+        0x0043_0b40,
+        extra_data::objects::lock_bracket(i32) -> i32
+    ))
+    .xo_case(0x0043_0b40)
+    .inputs(&[Input::Of(&[
+        u32::MAX,
+        0,
+        1,
+        25,
+        26,
+        50,
+        75,
+        100,
+        101,
+        0x8000_0000,
+    ])])
+    .setup(|e, case| {
+        xo_world(e, 3);
+        vec![case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_lock_bracket_value() {
+    Diff::new(entry!(
+        0x0043_0bc0,
+        extra_data::objects::lock_bracket_value(u32) -> i32
+    ))
+    .xo_case(0x0043_0bc0)
+    .inputs(&[Input::Of(&[0, 1, 4, 5, 6, u32::MAX])])
+    .setup(|e, case| {
+        xo_world(e, 3);
+        vec![case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_lock_compare() {
+    Diff::new(entry!(
+        0x0043_0ce0,
+        extra_data::objects::lock_compare(u32, u32) -> bool
+    ))
+    .xo_case(0x0043_0ce0)
+    .inputs(&[Input::Of(XO_WHICH), Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7])])
+    .setup(|e, case| {
+        xo_world(e, 3);
+        let (which, field) = (case.word(0), case.word(1));
+        e.mem.set_u32(XO_CAST_FAILS, u32::from(which == 1));
+        // The two records the same, or one field different: the flags, the key, the level within
+        // its bracket, the level in another bracket, the tries, the times unlocked, all.
+        let mine = xo_lock_record(e, 30, 0x1234, 1, 2, 3);
+        let theirs = match field {
+            1 => xo_lock_record(e, 30, 0x1234, 5, 2, 3),
+            2 => xo_lock_record(e, 30, 0x1235, 1, 2, 3),
+            3 => xo_lock_record(e, 40, 0x1234, 1, 2, 3),
+            4 => xo_lock_record(e, 60, 0x1234, 1, 2, 3),
+            5 => xo_lock_record(e, 30, 0x1234, 1, 9, 3),
+            6 => xo_lock_record(e, 30, 0x1234, 1, 2, 9),
+            7 => xo_lock_record(e, 99, 0, 0, 0, 0),
+            _ => xo_lock_record(e, 30, 0x1234, 1, 2, 3),
+        };
+        let this = xo_object(e, 0x10, 0x2a);
+        let other = xo_object(e, 0x10, 0x2a);
+        e.mem.set_u8(this + 4, 0x2a);
+        e.mem
+            .set_u8(other + 4, if which == 2 { 0x2b } else { 0x2a });
+        e.mem.set_u32(this + 0xc, mine);
+        e.mem.set_u32(other + 0xc, theirs);
+        vec![this, if which == 0 { 0 } else { other }]
+    })
+    .run()
+    .assert_same();
+}
+
+/// A guarded reference data extra data whose guards are `ids`.
+fn xo_guarded(e: &mut Engine, ids: &[u32], room: u32) -> u32 {
+    let this = xo_object(e, 0x1c, 0x7c);
+    e.mem.set_u8(this + 4, 0x7c);
+    xo_array_at(e, this + 0xc, ids, ids.len() as u32 + room);
+    this
+}
+
+#[test]
+fn xo_guarded_compare() {
+    Diff::new(entry!(
+        0x0043_1030,
+        extra_data::objects::guarded_compare(u32, u32) -> bool
+    ))
+    .xo_case(0x0043_1030)
+    .inputs(&[Input::Of(&[0, 1, 2]), Input::Of(&[0, 1, 2, 3, 4])])
+    .setup(|e, case| {
+        xo_world(e, 3);
+        // The base compare says the same type (the exe's early true), another type, or no other;
+        // the guards the same, reordered, one missing, another count, none on both.
+        let mine: &[u32] = if case.word(1) == 4 {
+            &[]
+        } else {
+            &[0x11, 0x22, 0x33]
+        };
+        let theirs: &[u32] = match case.word(1) {
+            1 => &[0x33, 0x11, 0x22],
+            2 => &[0x11, 0x22, 0x44],
+            3 => &[0x11, 0x22],
+            4 => &[],
+            _ => &[0x11, 0x22, 0x33],
+        };
+        let this = xo_guarded(e, mine, 0);
+        let other = xo_guarded(e, theirs, 0);
+        if case.word(0) == 1 {
+            e.mem.set_u8(other + 4, 0x7d);
+        }
+        vec![this, if case.word(0) == 2 { 0 } else { other }]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_guarded_add_guard() {
+    Diff::new(entry!(
+        0x0043_10d0,
+        extra_data::objects::guarded_add_guard(u32, u32)
+    ))
+    .xo_case(0x0043_10d0)
+    .inputs(&[Input::Of(&[0x11, 0x33, 0x55]), Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        xo_world(e, 3);
+        let this = xo_guarded(e, &[0x11, 0x22, 0x33], case.word(1));
+        let reference = xo_object(e, 0x40, 0x13);
+        e.mem.set_u32(reference + 0xc, case.word(0));
+        vec![this, reference]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_guarded_notify() {
+    Diff::new(entry!(
+        0x0043_1120,
+        extra_data::objects::guarded_notify(u32, u32, u32)
+    ))
+    .xo_case(0x0043_1120)
+    .inputs(&[Input::Of(&[0, 1, 2]), Input::Of(XO_WORDS)])
+    .setup(|e, case| {
+        xo_world(e, 3);
+        // Ids for no form, a form that is no actor, an actor without a process, and actors with one.
+        let ids: &[u32] = match case.word(0) {
+            0 => &[],
+            1 => &[0x10, 0x01, 0x03, 0x05],
+            _ => &[0x0f, 0x07, 0x0b, 0x0f, 0x02],
+        };
+        let this = xo_guarded(e, ids, 0);
+        vec![this, case.word(1), 0x5678]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_start_location_at() {
+    Diff::new(entry!(
+        0x0043_26c0,
+        extra_data::objects::start_location_at(u32, u32, u32, u32, u32) -> u32
+    ))
+    .xo_case(0x0043_26c0)
+    .inputs(&[
+        Input::Of(&[0, 0x1234]),
+        Input::Of(&[0, 0x5678]),
+        Input::Of(XO_FLOATS),
+    ])
+    .setup(|e, case| {
+        xo_world(e, 3);
+        let position = e.mem.alloc(0xc);
+        for (i, w) in [0x3f80_0000, 0x7fa0_0001, 0x8000_0000].iter().enumerate() {
+            e.mem.set_u32(position + 4 * i as u32, *w);
+        }
+        vec![
+            xd_block(e, 0x20, 0x5a),
+            case.word(0),
+            case.word(1),
+            position,
+            case.word(2),
+        ]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_anim_delete() {
+    Diff::new(entry!(
+        0x0043_00f0,
+        extra_data::objects::anim_delete(u32, u32) -> u32
+    ))
+    .xo_drop(0x0043_00f0, 0x10, &[0xc], true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_anim_drop() {
+    Diff::new(entry!(0x0043_0120, extra_data::objects::anim_drop(u32)))
+        .xo_drop(0x0043_0120, 0x10, &[0xc], false)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xo_limbs_new() {
+    Diff::new(entry!(
+        0x0043_0200,
+        extra_data::objects::limbs_new(u32) -> u32
+    ))
+    .xo_new(0x0043_0200, 0x30, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_starting_position_compare() {
+    Diff::new(entry!(
+        0x0043_0850,
+        extra_data::objects::starting_position_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_0850, 0x0f, 0x18, &[0, 5, 0x17])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_type_49_new() {
+    Diff::new(entry!(
+        0x0043_08c0,
+        extra_data::objects::type_49_new(u32) -> u32
+    ))
+    .xo_new(0x0043_08c0, 0x10, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_light_new() {
+    Diff::new(entry!(
+        0x0043_08f0,
+        extra_data::objects::light_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_08f0, 0x10, &[XD_VALUES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_light_delete() {
+    Diff::new(entry!(
+        0x0043_0920,
+        extra_data::objects::light_delete(u32, u32) -> u32
+    ))
+    .xo_drop(0x0043_0920, 0x10, &[0xc], true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_light_drop() {
+    Diff::new(entry!(0x0043_0950, extra_data::objects::light_drop(u32)))
+        .xo_drop(0x0043_0950, 0x10, &[0xc], false)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xo_lock_new() {
+    Diff::new(entry!(
+        0x0043_0c70,
+        extra_data::objects::lock_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_0c70, 0x10, &[XD_VALUES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_lock_drop() {
+    Diff::new(entry!(0x0043_0ca0, extra_data::objects::lock_drop(u32)))
+        .xo_drop(0x0043_0ca0, 0x10, &[0xc], false)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xo_follower_new() {
+    Diff::new(entry!(
+        0x0043_0dd0,
+        extra_data::objects::follower_new(u32) -> u32
+    ))
+    .xo_new(0x0043_0dd0, 0x10, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_follower_delete() {
+    Diff::new(entry!(
+        0x0043_0e70,
+        extra_data::objects::follower_delete(u32, u32) -> u32
+    ))
+    .xo_drop(0x0043_0e70, 0x10, &[0xc], true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_follower_drop() {
+    Diff::new(entry!(0x0043_0ea0, extra_data::objects::follower_drop(u32)))
+        .xo_drop(0x0043_0ea0, 0x10, &[0xc], false)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xo_guarded_new() {
+    Diff::new(entry!(
+        0x0043_0f30,
+        extra_data::objects::guarded_new(u32) -> u32
+    ))
+    .xo_new(0x0043_0f30, 0x1c, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_guarded_delete() {
+    Diff::new(entry!(
+        0x0043_0fa0,
+        extra_data::objects::guarded_delete(u32, u32) -> u32
+    ))
+    .xo_drop(0x0043_0fa0, 0x1c, &[], true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_guarded_drop() {
+    Diff::new(entry!(0x0043_0fd0, extra_data::objects::guarded_drop(u32)))
+        .xo_drop(0x0043_0fd0, 0x1c, &[], false)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xo_type_2e_new() {
+    Diff::new(entry!(
+        0x0043_11f0,
+        extra_data::objects::type_2e_new(u32) -> u32
+    ))
+    .xo_new(0x0043_11f0, 0x14, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_teleport_new() {
+    Diff::new(entry!(
+        0x0043_1230,
+        extra_data::objects::teleport_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_1230, 0x10, &[XD_VALUES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_teleport_drop() {
+    Diff::new(entry!(0x0043_1260, extra_data::objects::teleport_drop(u32)))
+        .xo_drop(0x0043_1260, 0x10, &[0xc], false)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xo_teleport_compare() {
+    Diff::new(entry!(
+        0x0043_12f0,
+        extra_data::objects::teleport_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_12f0, 0x2b, 0, &[0, 1, 2])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_map_marker_new() {
+    Diff::new(entry!(
+        0x0043_1360,
+        extra_data::objects::map_marker_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_1360, 0x10, &[XD_VALUES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_map_marker_delete() {
+    Diff::new(entry!(
+        0x0043_1390,
+        extra_data::objects::map_marker_delete(u32, u32) -> u32
+    ))
+    .xo_drop(0x0043_1390, 0x10, &[0xc], true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_map_marker_drop() {
+    Diff::new(entry!(
+        0x0043_13c0,
+        extra_data::objects::map_marker_drop(u32)
+    ))
+    .xo_drop(0x0043_13c0, 0x10, &[0xc], false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_map_marker_compare() {
+    Diff::new(entry!(
+        0x0043_1450,
+        extra_data::objects::map_marker_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_1450, 0x2c, 0, &[0, 1, 2])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_audio_marker_new() {
+    Diff::new(entry!(
+        0x0043_14c0,
+        extra_data::objects::audio_marker_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_14c0, 0x10, &[XD_VALUES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_audio_marker_delete() {
+    Diff::new(entry!(
+        0x0043_14f0,
+        extra_data::objects::audio_marker_delete(u32, u32) -> u32
+    ))
+    .xo_drop(0x0043_14f0, 0x10, &[0xc], true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_audio_marker_drop() {
+    Diff::new(entry!(
+        0x0043_1520,
+        extra_data::objects::audio_marker_drop(u32)
+    ))
+    .xo_drop(0x0043_1520, 0x10, &[0xc], false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_audio_marker_compare() {
+    Diff::new(entry!(
+        0x0043_15b0,
+        extra_data::objects::audio_marker_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_15b0, 0x90, 0, &[0, 1, 2])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_audio_buoy_new() {
+    Diff::new(entry!(
+        0x0043_1620,
+        extra_data::objects::audio_buoy_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_1620, 0x10, &[XD_VALUES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_audio_buoy_delete() {
+    Diff::new(entry!(
+        0x0043_1650,
+        extra_data::objects::audio_buoy_delete(u32, u32) -> u32
+    ))
+    .xo_drop(0x0043_1650, 0x10, &[0xc], true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_audio_buoy_drop() {
+    Diff::new(entry!(
+        0x0043_1680,
+        extra_data::objects::audio_buoy_drop(u32)
+    ))
+    .xo_drop(0x0043_1680, 0x10, &[0xc], false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_audio_buoy_compare() {
+    Diff::new(entry!(
+        0x0043_1710,
+        extra_data::objects::audio_buoy_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_1710, 0x91, 0, &[0, 1, 2])
+    .ignore_calls(&[0x0040_1290])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_action_new() {
+    Diff::new(entry!(
+        0x0043_1780,
+        extra_data::objects::action_new(u32) -> u32
+    ))
+    .xo_new(0x0043_1780, 0x14, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_action_compare() {
+    Diff::new(entry!(
+        0x0043_17c0,
+        extra_data::objects::action_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_17c0, 0x0e, 1, XO_BYTES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_container_changes_new() {
+    Diff::new(entry!(
+        0x0043_1830,
+        extra_data::objects::container_changes_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_1830, 0x10, &[XD_VALUES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_container_changes_delete() {
+    Diff::new(entry!(
+        0x0043_1860,
+        extra_data::objects::container_changes_delete(u32, u32) -> u32
+    ))
+    .xo_drop(0x0043_1860, 0x10, &[0xc], true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_container_changes_drop() {
+    Diff::new(entry!(
+        0x0043_1890,
+        extra_data::objects::container_changes_drop(u32)
+    ))
+    .xo_drop(0x0043_1890, 0x10, &[0xc], false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_inventory_changes_delete() {
+    Diff::new(entry!(
+        0x0043_1920,
+        extra_data::objects::inventory_changes_delete(u32, u32) -> u32
+    ))
+    .xo_drop(0x0043_1920, 0x20, &[], true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_original_reference_new() {
+    Diff::new(entry!(
+        0x0043_1950,
+        extra_data::objects::original_reference_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_1950, 0x10, &[XD_VALUES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_original_reference_delete() {
+    Diff::new(entry!(
+        0x0043_1980,
+        extra_data::objects::original_reference_delete(u32, u32) -> u32
+    ))
+    .xo_drop(0x0043_1980, 0x10, &[], true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_original_reference_drop() {
+    Diff::new(entry!(
+        0x0043_19b0,
+        extra_data::objects::original_reference_drop(u32)
+    ))
+    .xo_drop(0x0043_19b0, 0x10, &[], false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_original_reference_compare() {
+    Diff::new(entry!(
+        0x0043_19d0,
+        extra_data::objects::original_reference_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_19d0, 0x20, 4, XO_WORDS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_ownership_new() {
+    Diff::new(entry!(
+        0x0043_1a40,
+        extra_data::objects::ownership_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_1a40, 0x10, &[XD_VALUES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_ownership_compare() {
+    Diff::new(entry!(
+        0x0043_1a70,
+        extra_data::objects::ownership_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_1a70, 0x21, 4, XO_WORDS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_global_new() {
+    Diff::new(entry!(
+        0x0043_1ae0,
+        extra_data::objects::global_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_1ae0, 0x10, &[XD_VALUES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_global_compare() {
+    Diff::new(entry!(
+        0x0043_1b10,
+        extra_data::objects::global_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_1b10, 0x22, 4, XO_WORDS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_rank_new() {
+    Diff::new(entry!(
+        0x0043_1b80,
+        extra_data::objects::rank_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_1b80, 0x10, &[XD_VALUES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_rank_compare() {
+    Diff::new(entry!(
+        0x0043_1bb0,
+        extra_data::objects::rank_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_1bb0, 0x23, 4, XO_WORDS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_count_new() {
+    Diff::new(entry!(
+        0x0043_1c20,
+        extra_data::objects::count_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_1c20, 0x10, &[XO_HALVES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_count_compare() {
+    Diff::new(entry!(
+        0x0043_1c50,
+        extra_data::objects::count_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_1c50, 0x24, 2, XO_HALVES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_leveled_item_compare() {
+    Diff::new(entry!(
+        0x0043_1cc0,
+        extra_data::objects::leveled_item_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_1cc0, 0x2f, 4, XO_WORDS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_health_new() {
+    Diff::new(entry!(
+        0x0043_1d10,
+        extra_data::objects::health_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_1d10, 0x10, &[XD_FLOATS])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_health_compare() {
+    Diff::new(entry!(
+        0x0043_1d40,
+        extra_data::objects::health_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_1d40, 0x25, 4, XO_FLOATS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_health_perc_compare() {
+    Diff::new(entry!(
+        0x0043_1db0,
+        extra_data::objects::health_perc_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_1db0, 0x56, 4, XO_FLOATS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_uses_new() {
+    Diff::new(entry!(
+        0x0043_1e20,
+        extra_data::objects::uses_new(u32, u8) -> u32
+    ))
+    .xo_new(0x0043_1e20, 0x10, &[XO_BYTES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_uses_compare() {
+    Diff::new(entry!(
+        0x0043_1e50,
+        extra_data::objects::uses_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_1e50, 0x26, 1, XO_BYTES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_time_left_new() {
+    Diff::new(entry!(
+        0x0043_1ec0,
+        extra_data::objects::time_left_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_1ec0, 0x10, &[XD_FLOATS])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_time_left_compare() {
+    Diff::new(entry!(
+        0x0043_1ef0,
+        extra_data::objects::time_left_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_1ef0, 0x27, 4, XO_FLOATS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_charge_new() {
+    Diff::new(entry!(
+        0x0043_1f60,
+        extra_data::objects::charge_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_1f60, 0x10, &[XD_FLOATS])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_charge_compare() {
+    Diff::new(entry!(
+        0x0043_1f90,
+        extra_data::objects::charge_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_1f90, 0x28, 4, XO_FLOATS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_script_new() {
+    Diff::new(entry!(
+        0x0043_2000,
+        extra_data::objects::script_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_2000, 0x14, &[XD_VALUES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_script_drop() {
+    Diff::new(entry!(0x0043_2040, extra_data::objects::script_drop(u32)))
+        .xo_drop(0x0043_2040, 0x14, &[0x10], false)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xo_script_compare() {
+    Diff::new(entry!(
+        0x0043_20d0,
+        extra_data::objects::script_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_20d0, 0x0d, 4, XO_WORDS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_weapon_mod_flags_compare() {
+    Diff::new(entry!(
+        0x0043_2140,
+        extra_data::objects::weapon_mod_flags_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_2140, 0x8d, 1, XO_BYTES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_modding_item_compare() {
+    Diff::new(entry!(
+        0x0043_21b0,
+        extra_data::objects::modding_item_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_21b0, 0x8e, 1, XO_BYTES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_scale_new() {
+    Diff::new(entry!(
+        0x0043_2220,
+        extra_data::objects::scale_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_2220, 0x10, &[XD_FLOATS])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_scale_compare() {
+    Diff::new(entry!(
+        0x0043_2250,
+        extra_data::objects::scale_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_2250, 0x30, 4, XO_FLOATS)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_ghost_new() {
+    Diff::new(entry!(
+        0x0043_22c0,
+        extra_data::objects::ghost_new(u32) -> u32
+    ))
+    .xo_new(0x0043_22c0, 0x0c, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_worn_new() {
+    Diff::new(entry!(
+        0x0043_22f0,
+        extra_data::objects::worn_new(u32) -> u32
+    ))
+    .xo_new(0x0043_22f0, 0x0c, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_worn_left_new() {
+    Diff::new(entry!(
+        0x0043_2320,
+        extra_data::objects::worn_left_new(u32) -> u32
+    ))
+    .xo_new(0x0043_2320, 0x0c, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_cannot_wear_new() {
+    Diff::new(entry!(
+        0x0043_2350,
+        extra_data::objects::cannot_wear_new(u32) -> u32
+    ))
+    .xo_new(0x0043_2350, 0x0c, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_hot_key_new() {
+    Diff::new(entry!(
+        0x0043_2380,
+        extra_data::objects::hot_key_new(u32, u8) -> u32
+    ))
+    .xo_new(0x0043_2380, 0x10, &[XO_BYTES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_topic_drop() {
+    Diff::new(entry!(0x0043_23b0, extra_data::objects::topic_drop(u32)))
+        .xo_drop(0x0043_23b0, 0x10, &[0xc], false)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xo_topic_delete() {
+    Diff::new(entry!(
+        0x0043_2440,
+        extra_data::objects::topic_delete(u32, u32) -> u32
+    ))
+    .xo_drop(0x0043_2440, 0x10, &[0xc], true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_topic_new() {
+    Diff::new(entry!(
+        0x0043_2470,
+        extra_data::objects::topic_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_2470, 0x10, &[XD_VALUES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_topic_new_empty() {
+    Diff::new(entry!(
+        0x0043_24a0,
+        extra_data::objects::topic_new_empty(u32) -> u32
+    ))
+    .xo_new(0x0043_24a0, 0x10, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_hot_key_compare() {
+    Diff::new(entry!(
+        0x0043_2540,
+        extra_data::objects::hot_key_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_2540, 0x4a, 1, XO_BYTES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_seed_new() {
+    Diff::new(entry!(
+        0x0043_25b0,
+        extra_data::objects::seed_new(u32, u8) -> u32
+    ))
+    .xo_new(0x0043_25b0, 0x10, &[XO_BYTES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_seed_compare() {
+    Diff::new(entry!(
+        0x0043_25e0,
+        extra_data::objects::seed_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_25e0, 0x31, 1, XO_BYTES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_start_location_new() {
+    Diff::new(entry!(
+        0x0043_2650,
+        extra_data::objects::start_location_new(u32) -> u32
+    ))
+    .xo_new(0x0043_2650, 0x20, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_start_location_compare() {
+    Diff::new(entry!(
+        0x0043_2770,
+        extra_data::objects::start_location_compare(u32, u32) -> bool
+    ))
+    .xo_compare(0x0043_2770, 0x18, 0x14, &[0, 5, 0x13])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_reference_pointer_new() {
+    Diff::new(entry!(
+        0x0043_27e0,
+        extra_data::objects::reference_pointer_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_27e0, 0x10, &[XD_VALUES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_package_new() {
+    Diff::new(entry!(
+        0x0043_2810,
+        extra_data::objects::package_new(u32) -> u32
+    ))
+    .xo_new(0x0043_2810, 0x1c, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_package_new_with() {
+    Diff::new(entry!(
+        0x0043_2870,
+        extra_data::objects::package_new_with(u32, u32, u32, u32, u8, u8, u8) -> u32
+    ))
+    .xo_new(
+        0x0043_2870,
+        0x1c,
+        &[XO_WORDS, XO_WORDS, XO_WORDS, XO_BYTES, XO_BYTES, XO_BYTES],
+    )
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_trespass_new() {
+    Diff::new(entry!(
+        0x0043_28d0,
+        extra_data::objects::trespass_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_28d0, 0x10, &[XD_VALUES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_trespass_drop() {
+    Diff::new(entry!(0x0043_2900, extra_data::objects::trespass_drop(u32)))
+        .xo_drop(0x0043_2900, 0x10, &[0xc], false)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn xo_crime_list_new() {
+    Diff::new(entry!(
+        0x0043_29d0,
+        extra_data::objects::crime_list_new(u32) -> u32
+    ))
+    .xo_new(0x0043_29d0, 0x10, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_crime_list_delete() {
+    Diff::new(entry!(
+        0x0043_2a70,
+        extra_data::objects::crime_list_delete(u32, u32) -> u32
+    ))
+    .xo_drop(0x0043_2a70, 0x10, &[0xc], true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_crime_list_new_with() {
+    Diff::new(entry!(
+        0x0043_2aa0,
+        extra_data::objects::crime_list_new_with(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_2aa0, 0x10, &[XD_VALUES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_crime_list_drop() {
+    Diff::new(entry!(
+        0x0043_2b50,
+        extra_data::objects::crime_list_drop(u32)
+    ))
+    .xo_drop(0x0043_2b50, 0x10, &[0xc], false)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_leveled_item_new() {
+    Diff::new(entry!(
+        0x0043_2be0,
+        extra_data::objects::leveled_item_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_2be0, 0x14, &[XD_VALUES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_persistent_cell_new() {
+    Diff::new(entry!(
+        0x0043_2c20,
+        extra_data::objects::persistent_cell_new(u32, u32) -> u32
+    ))
+    .xo_new(0x0043_2c20, 0x10, &[XD_VALUES])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_persistent_cell_delete() {
+    Diff::new(entry!(
+        0x0043_2c60,
+        extra_data::objects::persistent_cell_delete(u32, u32) -> u32
+    ))
+    .xo_drop(0x0043_2c60, 0x10, &[], true)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn xo_persistent_cell_drop() {
+    Diff::new(entry!(
+        0x0043_2c90,
+        extra_data::objects::persistent_cell_drop(u32)
+    ))
+    .xo_drop(0x0043_2c90, 0x10, &[], false)
     .run()
     .assert_same();
 }

@@ -80,7 +80,9 @@ const ACTIVATE_DELAY: u32 = 4;
 /// null when the allocation failed.
 #[inline]
 pub(super) fn new_by(e: &mut Engine, size: u32, construct: u32) -> u32 {
-    new_object(e, size, |e, block| e.call(construct, &args![block]).u32())
+    new_object(e, size, |e, block| {
+        super::objects::construct_at(e, construct, block, &[])
+    })
 }
 
 /// Whether the list whose head node is `node` holds `item`: `005f65d0` in place (the nodes walked

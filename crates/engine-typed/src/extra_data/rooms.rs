@@ -49,13 +49,10 @@ const EXTRA_PORTAL_INIT: u32 = 0x0043_5820;
 const EXTRA_ROOM_INIT: u32 = 0x0043_58a0;
 const GUARDED_REF_DATA_INIT: u32 = 0x0043_0f30;
 /// The decal list's add (`thiscall(extra, reference, intersection, normal)`), the reflect lists'
-/// remove (`thiscall(extra, reference)`) and flag set (`thiscall(extra, reference, flags)`), the
-/// guards' add (`thiscall(extra, guard)`) and their two-word method.
+/// remove (`thiscall(extra, reference)`) and flag set (`thiscall(extra, reference, flags)`).
 const DECAL_REFS_ADD: u32 = 0x0043_4480;
 const REFLECT_REFS_REMOVE: u32 = 0x0043_4800;
 const REFLECT_REFS_SET_FLAGS: u32 = 0x0043_48a0;
-const GUARDED_REF_DATA_ADD_GUARD: u32 = 0x0043_10d0;
-const GUARDED_REF_DATA_TWO_WORDS: u32 = 0x0043_1120;
 /// `PatrolRefData::Compare` (`thiscall(data, other)`: true when they differ) and its destructor's
 /// body (`thiscall(data)`).
 const PATROL_DATA_COMPARE: u32 = 0x0067_c720;
@@ -1132,7 +1129,11 @@ pub fn add_guard(e: &mut Engine, this: u32, guard: u32) {
         extra = new_by(e, 0x1c, GUARDED_REF_DATA_INIT);
         list_add(e, this, extra);
     }
-    e.call(GUARDED_REF_DATA_ADD_GUARD, &args![extra, guard]);
+    typed_call!(
+        FAMILY,
+        0x0043_10d0,
+        super::objects::guarded_add_guard(e, extra, guard)
+    );
 }
 
 // Typed from 004213c0
@@ -1140,6 +1141,10 @@ pub fn add_guard(e: &mut Engine, this: u32, guard: u32) {
 pub fn guard_two_words(e: &mut Engine, this: u32, first: u32, second: u32) {
     let extra = first_of_kind(e, this, KIND_GUARDED_REF_DATA);
     if extra != 0 {
-        e.call(GUARDED_REF_DATA_TWO_WORDS, &args![extra, first, second]);
+        typed_call!(
+            FAMILY,
+            0x0043_1120,
+            super::objects::guarded_notify(e, extra, first, second)
+        );
     }
 }

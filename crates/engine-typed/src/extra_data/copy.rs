@@ -32,9 +32,7 @@ const NAME_COMPARE_LIST_FOR_CONTAINER: u32 = 0x0101_455c;
 const NAME_COMPARE_LIST: u32 = 0x0101_4588;
 /// The thread's word at +0x294 of the TLS block whose bit 2 `RemoveNonPersistentCellData` tests.
 const THREAD_FLAGS: u32 = 0x294;
-/// `ExtraScript`'s constructor (`thiscall(block, script)`) and `Script`'s compiled result
-/// (`thiscall(script)`).
-const EXTRA_SCRIPT_INIT: u32 = 0x0043_2000;
+/// `Script`'s compiled result (`thiscall(script)`).
 const SCRIPT_GET_RESULT: u32 = 0x005a_bf60;
 /// JIP LN NVSE's keyed data (`ExtraJIP`), whose arm JIP writes into the jump table.
 const JIP_KEYED_DATA_TYPE: u8 = 0x27;
@@ -412,7 +410,9 @@ fn add_extra_copy_from(e: &mut Engine, list: u32, extra: u32, caller: u32, calle
     }
     if let Some((size, construct, copy)) = new_object_copy(kind) {
         let word = word_at(e, extra, EXTRA_PAYLOAD);
-        let object = new_object(e, size, |e, block| e.call(construct, &args![block]).u32());
+        let object = new_object(e, size, |e, block| {
+            super::objects::construct_at(e, construct, block, &[])
+        });
         // The audio buoy marker's copy is the dispatch family's empty body (`004534f0`, `RET 8`),
         // done in place: nothing.
         if copy != NOTHING_2 {
@@ -1082,7 +1082,11 @@ pub fn copy_list_for_reference(e: &mut Engine, this: u32, source: u32, moved: bo
                 let created = if block == 0 {
                     0
                 } else {
-                    e.call(EXTRA_SCRIPT_INIT, &args![block, script]).u32()
+                    typed_call!(
+                        FAMILY,
+                        0x0043_2000,
+                        super::objects::script_new(e, block, script)
+                    )
                 };
                 super::list_add(e, this, created);
                 let script = typed_call!(FAMILY, 0x0041_8800, access::script(e, source));

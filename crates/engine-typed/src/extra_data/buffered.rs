@@ -120,8 +120,6 @@ const PACKAGE_NEW: u32 = 0x0067_0b90;
 const REGISTER_OBJECT: u32 = 0x0084_aa30;
 const HANDLE_OF_ID: u32 = 0x0066_e330;
 const RECORD_8B_NEW: u32 = 0x0043_7c10;
-const LIMBS_NEW: u32 = 0x0043_0200;
-const LIMBS_COMPARE: u32 = 0x0043_0660;
 const OWNER_CHANGE_BEGIN: u32 = 0x008b_6820;
 const OWNER_CHANGE_END: u32 = 0x008b_6ae0;
 const OWNER_REFRESH: u32 = 0x008a_dc50;
@@ -845,7 +843,7 @@ fn construct(e: &mut Engine, kind: u8, block: u32) -> u32 {
                 .iter()
                 .find(|entry| entry.0 == kind)
                 .unwrap_or_else(|| panic!("no constructor for the extra data type {kind:#x}"));
-            e.call(constructor, &args![block]).u32()
+            super::objects::construct_at(e, constructor, block, &[])
         }
     }
 }
@@ -1437,7 +1435,9 @@ fn load_limbs(e: &mut Engine, this: u32, buffer: u32, owner: u32, marks: &[u8; 0
     } else if flags_allow(e, buffer, 0x2_0000) && e.vcall(owner, 0x1d0, &args![]).u32() != 0 {
         e.call(OWNER_CHANGE_BEGIN, &args![owner]);
     }
-    let extra = new_object(e, 0x30, |e, block| e.call(LIMBS_NEW, &args![block]).u32());
+    let extra = new_object(e, 0x30, |e, block| {
+        typed_call!(FAMILY, 0x0043_0200, super::objects::limbs_new(e, block))
+    });
     load(e, buffer, extra.wrapping_add(0x0c), 2);
     load(e, buffer, extra.wrapping_add(0x10), 4);
     load(e, buffer, extra.wrapping_add(0x18), 4);
@@ -1482,7 +1482,11 @@ fn load_limbs(e: &mut Engine, this: u32, buffer: u32, owner: u32, marks: &[u8; 0
     }
     let mut same = false;
     if existing != 0 {
-        if e.call(LIMBS_COMPARE, &args![existing, extra]).bool() {
+        if typed_call!(
+            FAMILY,
+            0x0043_0660,
+            super::objects::limbs_identical(e, existing, extra)
+        ) {
             same = true;
         } else {
             e.call(OWNER_CHANGE_BEGIN, &args![owner]);

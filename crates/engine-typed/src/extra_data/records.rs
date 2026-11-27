@@ -3,7 +3,7 @@
 //! rotation, setters and links, a primitive's colour and radii, the portal and radio records, the
 //! navmesh portal extra data, the rotation matrix of an angle about an axis and its `sincos`.
 
-use super::{copy_words, extra_init, EXTRA_PAYLOAD, SIMPLE_LIST_NEW};
+use super::{copy_words, extra_init, simple_list_init, EXTRA_PAYLOAD};
 use crate::anim_keys::narrow;
 use crate::crt::low_half;
 use engine_core::x87::{x87_fsincos32, x87_load32, x87_quiet_bits, x87_store32};
@@ -272,11 +272,11 @@ pub fn radio_data_new(e: &mut Engine, this: u32) -> u32 {
 }
 
 // Typed from 00416b80
-/// `RoomLinkedRefData`'s constructor: its two lists' heads at +0 and +8 (`0096a2d0`). Answers
+/// `RoomLinkedRefData`'s constructor: its two lists' heads at +0 and +8 (`0096a2d0`, in place). Answers
 /// `this`.
 pub fn room_links_new(e: &mut Engine, this: u32) -> u32 {
-    e.call(SIMPLE_LIST_NEW, &args![this]);
-    e.call(SIMPLE_LIST_NEW, &args![this.wrapping_add(8)]);
+    simple_list_init(e, this);
+    simple_list_init(e, this.wrapping_add(8));
     this
 }
 

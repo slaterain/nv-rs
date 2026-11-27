@@ -9,11 +9,11 @@
 
 use super::{
     access, cell_data, first_of_kind, followers, links, list_add, list_remove, more_setters,
-    new_object, packages, records, rooms, setters, word_at, zero_bytes, EXTRA_PAYLOAD, FAMILY,
-    OPERATOR_DELETE, OPERATOR_NEW, SIMPLE_LIST_NEW,
+    new_object, packages, records, rooms, setters, simple_list_init, word_at, zero_bytes,
+    EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE, OPERATOR_NEW,
 };
 use crate::crt::{low_byte, low_half, signed};
-use crate::{cell_refs, forms, pathing};
+use crate::{cell_refs, forms};
 use engine_core::x87::x87_quiet_bits;
 use engine_core::{args, typed_call, Engine};
 
@@ -43,7 +43,6 @@ const LOD_DEFAULT: u32 = 0x0101_45a8;
 const LIST_ADD_HEAD: u32 = 0x005a_e3d0;
 /// Other units' constructors.
 const ACTIVATE_REF_INIT: u32 = 0x0043_38b0;
-const EXTRA_LOCK_INIT: u32 = 0x0043_0c70;
 const EXTRA_RAGDOLL_DATA_INIT: u32 = 0x0043_2cb0;
 const RAGDOLL_DATA_INIT: u32 = 0x004d_9330;
 const DOOR_TELEPORT_DATA_INIT: u32 = 0x0043_a160;
@@ -67,7 +66,6 @@ const MULTIBOUND_MARKER_DATA_LOAD: u32 = 0x0043_8fc0;
 const NAVMESH_PORTAL_LOAD: u32 = 0x0069_dfd0;
 const NAVMESH_PORTAL_EXTRA_DESTROY: u32 = 0x0043_2f30;
 const PACKAGE_EVENT_ACTION_LOAD: u32 = 0x0067_dd20;
-const REFR_LOCK_SET_LOCKED: u32 = 0x0043_0a90;
 const REGION_LIST_FIND: u32 = 0x004f_66c0;
 const REGION_LIST_ADD: u32 = 0x004f_6600;
 const PRIMITIVE_CREATE: u32 = 0x004a_4e90;
@@ -250,7 +248,9 @@ fn member_or_new(
 ) -> u32 {
     let mut member = get(e, list);
     if member == 0 {
-        member = new_object(e, size, |e, block| e.call(construct, &args![block]).u32());
+        member = new_object(e, size, |e, block| {
+            super::objects::construct_at(e, construct, block, &[])
+        });
         set(e, list, member);
     }
     member
@@ -534,12 +534,8 @@ pub fn load_chunk(e: &mut Engine, this: u32, file: u32, buffer: u32) {
         }
         T_XCLR => load_regions(e, this, file),
         // EXTRA_PACKAGESTARTLOC: a WORLD_LOCATION (0x14 bytes).
+        // Its constructor (`006d5320`) stores nothing: in place.
         T_XPSL => e.with_stack(0x14, |e, record| {
-            typed_call!(
-                pathing::FAMILY,
-                0x006d_5320,
-                pathing::location::world_location_new(e, record)
-            );
             let at = record.addr();
             zero_bytes(e, at, 0x14);
             file_bytes(e, file, at, 0x14);
@@ -812,7 +808,11 @@ fn load_lock(e: &mut Engine, this: u32, file: u32) {
             )
         });
         let created = new_object(e, 0x10, |e, block| {
-            e.call(EXTRA_LOCK_INIT, &args![block, made]).u32()
+            typed_call!(
+                FAMILY,
+                0x0043_0c70,
+                super::objects::lock_new(e, block, made)
+            )
         });
         list_add(e, this, created);
         made
@@ -823,7 +823,11 @@ fn load_lock(e: &mut Engine, this: u32, file: u32) {
     if file_swaps(e, file) {
         e.call(SWAP_WORD_AT_4, &args![lock_data]);
     }
-    e.call(REFR_LOCK_SET_LOCKED, &args![lock_data, 1u32]);
+    typed_call!(
+        FAMILY,
+        0x0043_0a90,
+        super::objects::lock_set_locked(e, lock_data, true)
+    );
 }
 
 /// `XCLR`: the region form ids, each looked up in the data handler's region list (`004169d0`) and
@@ -945,7 +949,7 @@ fn load_old_portal(e: &mut Engine, this: u32, file: u32) {
 fn load_reflector(e: &mut Engine, this: u32, file: u32) {
     e.with_stack(8, |e, record| {
         let at = record.addr();
-        e.call(SIMPLE_LIST_NEW, &args![at]);
+        simple_list_init(e, at);
         zero_bytes(e, at, 8);
         file_bytes(e, file, at, 8);
         if file_swaps(e, file) {

@@ -1173,7 +1173,7 @@ pub fn extra_anim_scalar_deleting_destructor(
     this: Ptr<ExtraAnim>,
     flags: u32,
 ) -> Ptr<ExtraAnim> {
-    fn_00430120(e, this);
+    e.call(0x0043_0120, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -1241,7 +1241,7 @@ pub fn extra_dismembered_limbs_scalar_deleting_destructor(
     this: Ptr<ExtraDismemberedLimbs>,
     flags: u32,
 ) -> Ptr<ExtraDismemberedLimbs> {
-    fn_004302d0(e, this);
+    e.call(0x0043_02d0, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -1258,7 +1258,7 @@ pub fn fn_004302d0(e: &mut Engine, this: Ptr<ExtraDismemberedLimbs>) {
     while index < array_size(e, array) {
         let limb: Ptr<DismemberedLimb> = array_pointer_at(e, array, index);
         if !limb.is_null() {
-            fn_00430390(e, limb, 1);
+            e.call(0x0043_0390, &args![limb, 1u32]);
         }
         index += 1;
     }
@@ -1271,7 +1271,7 @@ pub fn fn_004302d0(e: &mut Engine, this: Ptr<ExtraDismemberedLimbs>) {
 /// name): the destructor, then `operator delete` when `flags & 1`. Returns
 /// `this`.
 pub fn fn_00430390(e: &mut Engine, this: Ptr<DismemberedLimb>, flags: u32) -> Ptr<DismemberedLimb> {
-    fn_004303c0(e, this);
+    e.call(0x0043_03c0, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -1315,7 +1315,7 @@ pub fn extra_dismembered_limbs_dismember(
     limb: u8,
     exploded: u8,
 ) {
-    if extra_dismembered_limbs_dismembered(e, this, limb) {
+    if e.call(0x0043_03e0, &args![this, limb]).bool() {
         return;
     }
     let limbs = e.get(this, ExtraDismemberedLimbs::sLimbs) as u32;
@@ -1475,7 +1475,7 @@ pub fn fn_00430780(
     let position = e.vcall(reference.addr(), 0x1f4, &[]).u32();
     let target = start.at(FilePosRot::pos).addr();
     copy_words(e, position, target);
-    let rotation = fn_00430830(e, reference);
+    let rotation: Ptr = e.call(0x0043_0830, &args![reference]).ptr();
     let target = start.at(FilePosRot::rot).addr();
     copy_words(e, rotation.addr(), target);
     this
@@ -1556,7 +1556,7 @@ pub fn extra_light_scalar_deleting_destructor(
     this: Ptr<ExtraLight>,
     flags: u32,
 ) -> Ptr<ExtraLight> {
-    fn_00430950(e, this);
+    e.call(0x0043_0950, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -1578,8 +1578,8 @@ pub fn fn_00430950(e: &mut Engine, this: Ptr<ExtraLight>) {
 /// `REFR_LOCK::GetLockLevel` (Xbox PDB): the difficulty bracket (0 very easy
 /// to 4 very hard, 5 key only) of the lock's level for `reference`.
 pub fn refr_lock_get_lock_level(e: &mut Engine, this: Ptr<RefrLock>, reference: Ptr) -> i32 {
-    let level = refr_lock_get_level(e, this, reference);
-    refr_lock_numeric_value_to_enum(e, level)
+    let level = e.call(0x0043_0a10, &args![this, reference]).i32();
+    e.call(0x0043_0b40, &args![level as u32]).i32()
 }
 
 // Translated from 00430a10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1720,9 +1720,10 @@ pub fn extra_lock_compare(e: &mut Engine, this: Ptr<ExtraLock>, other: Ptr) -> b
     if e.get(mine, RefrLock::pKey) != e.get(theirs, RefrLock::pKey) {
         return true;
     }
-    let my_bracket = refr_lock_numeric_value_to_enum(e, e.get(mine, RefrLock::cBaseLevel) as i32);
-    let their_bracket =
-        refr_lock_numeric_value_to_enum(e, e.get(theirs, RefrLock::cBaseLevel) as i32);
+    let my_level = e.get(mine, RefrLock::cBaseLevel) as i32 as u32;
+    let my_bracket = e.call(0x0043_0b40, &args![my_level]).i32();
+    let their_level = e.get(theirs, RefrLock::cBaseLevel) as i32 as u32;
+    let their_bracket = e.call(0x0043_0b40, &args![their_level]).i32();
     if my_bracket != their_bracket {
         return true;
     }
@@ -1759,7 +1760,7 @@ pub fn extra_follower_scalar_deleting_destructor(
     this: Ptr<ExtraFollower>,
     flags: u32,
 ) -> Ptr<ExtraFollower> {
-    fn_00430ea0(e, this);
+    e.call(0x0043_0ea0, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -1807,7 +1808,7 @@ pub fn extra_guarded_ref_data_scalar_deleting_destructor(
     this: Ptr<ExtraGuardedRefData>,
     flags: u32,
 ) -> Ptr<ExtraGuardedRefData> {
-    fn_00430fd0(e, this);
+    e.call(0x0043_0fd0, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -1972,7 +1973,7 @@ pub fn extra_map_marker_scalar_deleting_destructor(
     this: Ptr<ExtraMapMarker>,
     flags: u32,
 ) -> Ptr<ExtraMapMarker> {
-    fn_004313c0(e, this);
+    e.call(0x0043_13c0, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -2027,7 +2028,7 @@ pub fn extra_audio_marker_scalar_deleting_destructor(
     this: Ptr<ExtraAudioMarker>,
     flags: u32,
 ) -> Ptr<ExtraAudioMarker> {
-    fn_00431520(e, this);
+    e.call(0x0043_1520, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -2089,7 +2090,7 @@ pub fn extra_audio_buoy_marker_scalar_deleting_destructor(
     this: Ptr<ExtraAudioBuoyMarker>,
     flags: u32,
 ) -> Ptr<ExtraAudioBuoyMarker> {
-    fn_00431680(e, this);
+    e.call(0x0043_1680, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -2177,7 +2178,7 @@ pub fn extra_container_changes_scalar_deleting_destructor(
     this: Ptr<ExtraContainerChanges>,
     flags: u32,
 ) -> Ptr<ExtraContainerChanges> {
-    fn_00431890(e, this);
+    e.call(0x0043_1890, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -2191,7 +2192,7 @@ pub fn fn_00431890(e: &mut Engine, this: Ptr<ExtraContainerChanges>) {
     e.mem.set_u32(this.addr(), EXTRA_CONTAINER_CHANGES_VTABLE);
     let changes = e.get(this, ExtraContainerChanges::pChanges);
     if !changes.is_null() {
-        fn_00431920(e, changes, 1);
+        e.call(0x0043_1920, &args![changes, 1u32]);
     }
     e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
 }
@@ -2235,7 +2236,7 @@ pub fn fn_00431980(
     this: Ptr<ExtraOriginalReference>,
     flags: u32,
 ) -> Ptr<ExtraOriginalReference> {
-    fn_004319b0(e, this);
+    e.call(0x0043_19b0, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -2419,10 +2420,15 @@ pub fn extra_uses_compare(e: &mut Engine, this: Ptr<ExtraUses>, other: Ptr) -> b
 // Translated from 00431ec0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ExtraTimeLeft`'s constructor (the engine map has no name for it; the class
 /// is the one whose vtable `010158fc` it stores): extra-data type 0x27,
-/// storing `time`. Returns `this`.
+/// storing `time` through x87 FLD/FSTP (signaling NaNs become quiet). Returns
+/// `this`.
 pub fn fn_00431ec0(e: &mut Engine, this: Ptr<ExtraTimeLeft>, time: f32) -> Ptr<ExtraTimeLeft> {
     construct_base(e, this.cast(), TYPE_TIME_LEFT, EXTRA_TIME_LEFT_VTABLE);
-    e.set(this, ExtraTimeLeft::fTime, time);
+    e.set(
+        this,
+        ExtraTimeLeft::fTime,
+        f32::from_bits(x87_quiet_bits(time.to_bits())),
+    );
     this
 }
 
@@ -2441,10 +2447,14 @@ pub fn extra_time_left_compare(e: &mut Engine, this: Ptr<ExtraTimeLeft>, other: 
 // Translated from 00431f60 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ExtraCharge`'s constructor (the engine map has no name for it; the class is
 /// the one whose vtable `01015908` it stores): extra-data type 0x28, storing
-/// `charge`. Returns `this`.
+/// `charge` through x87 FLD/FSTP (signaling NaNs become quiet). Returns `this`.
 pub fn fn_00431f60(e: &mut Engine, this: Ptr<ExtraCharge>, charge: f32) -> Ptr<ExtraCharge> {
     construct_base(e, this.cast(), TYPE_CHARGE, EXTRA_CHARGE_VTABLE);
-    e.set(this, ExtraCharge::fCharge, charge);
+    e.set(
+        this,
+        ExtraCharge::fCharge,
+        f32::from_bits(x87_quiet_bits(charge.to_bits())),
+    );
     this
 }
 
@@ -2533,10 +2543,14 @@ pub fn extra_modding_item_compare(e: &mut Engine, this: Ptr<ExtraModdingItem>, o
 // Translated from 00432220 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ExtraScale`'s constructor (the engine map has no name for it; the class is
 /// the one whose vtable `01015920` it stores): extra-data type 0x30, storing
-/// `scale`. Returns `this`.
+/// `scale` through x87 FLD/FSTP (signaling NaNs become quiet). Returns `this`.
 pub fn fn_00432220(e: &mut Engine, this: Ptr<ExtraScale>, scale: f32) -> Ptr<ExtraScale> {
     construct_base(e, this.cast(), TYPE_SCALE, EXTRA_SCALE_VTABLE);
-    e.set(this, ExtraScale::fScale, scale);
+    e.set(
+        this,
+        ExtraScale::fScale,
+        f32::from_bits(x87_quiet_bits(scale.to_bits())),
+    );
     this
 }
 
@@ -2623,7 +2637,7 @@ pub fn extra_info_general_topic_scalar_deleting_destructor(
     this: Ptr<ExtraInfoGeneralTopic>,
     flags: u32,
 ) -> Ptr<ExtraInfoGeneralTopic> {
-    extra_info_general_topic_destructor(e, this);
+    e.call(0x0043_23b0, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -2724,7 +2738,8 @@ pub fn fn_00432650(
 /// `ExtraPackageStartLocation`'s constructor from a place (the engine map has
 /// no name for it): the default construction, then `pLocationForm` is `form`
 /// (or `fallback_form` when `form` is null), `locPt` is a copy of the
-/// `NiPoint3` at `position` and `fZRot` is `z_rot`. Returns `this`. The
+/// `NiPoint3` at `position` and `fZRot` is `z_rot` (through x87 FLD/FSTP:
+/// signaling NaNs become quiet). Returns `this`. The
 /// exception-unwinding frame is not translated.
 pub fn fn_004326c0(
     e: &mut Engine,
@@ -2734,7 +2749,7 @@ pub fn fn_004326c0(
     position: Ptr<NiPoint3>,
     z_rot: f32,
 ) -> Ptr<ExtraPackageStartLocation> {
-    fn_00432650(e, this);
+    e.call(0x0043_2650, &args![this]);
     let location = this.at(ExtraPackageStartLocation::worldLoc);
     let chosen = if form.is_null() { fallback_form } else { form };
     e.set(location, WorldLocation::pLocationForm, chosen);
@@ -2745,7 +2760,11 @@ pub fn fn_004326c0(
     e.set(point, NiPoint3::x, x);
     e.set(point, NiPoint3::y, y);
     e.set(point, NiPoint3::z, z);
-    e.set(location, WorldLocation::fZRot, z_rot);
+    e.set(
+        location,
+        WorldLocation::fZRot,
+        f32::from_bits(x87_quiet_bits(z_rot.to_bits())),
+    );
     this
 }
 
@@ -2917,7 +2936,7 @@ pub fn extra_player_crime_list_scalar_deleting_destructor(
     this: Ptr<ExtraPlayerCrimeList>,
     flags: u32,
 ) -> Ptr<ExtraPlayerCrimeList> {
-    fn_00432b50(e, this);
+    e.call(0x0043_2b50, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -2998,7 +3017,7 @@ pub fn fn_00432c60(
     this: Ptr<ExtraPersistentCell>,
     flags: u32,
 ) -> Ptr<ExtraPersistentCell> {
-    fn_00432c90(e, this);
+    e.call(0x0043_2c90, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }

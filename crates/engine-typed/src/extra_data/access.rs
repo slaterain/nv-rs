@@ -167,8 +167,8 @@ pub(super) fn add_new(
     value: Option<u32>,
 ) -> u32 {
     let extra = new_object(e, size, |e, block| match value {
-        Some(value) => e.call(construct, &args![block, value]).u32(),
-        None => e.call(construct, &args![block]).u32(),
+        Some(value) => super::objects::construct_at(e, construct, block, &[value]),
+        None => super::objects::construct_at(e, construct, block, &[]),
     });
     list_add(e, list, extra);
     extra

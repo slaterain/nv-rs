@@ -17,7 +17,9 @@
 //! run of getters and setters with the saved state's drop and the two getters over a list held in
 //! an object ([`more_setters`]) and the small templates the compiler placed there: the navmesh
 //! array and its counted pointer, the shared array's set size, the actor cause's handle, the
-//! reference map and the bound object array ([`arrays`]). The list's own operations (its
+//! reference map and the bound object array ([`arrays`]), and from the extra data objects unit
+//! (`extradataobjects.rs`) its first 116 functions, the constructors, destructors and `Compare`s of
+//! the small extra data classes and the lock record ([`objects`]). The list's own operations (its
 //! constructors, `AddExtra`, `RemoveExtra`, the type bitmap, the thread's cache) are the cell
 //! references family's (`cell_refs::extra_list`), the lookup `GetExtraData` (`00410220`) the
 //! dispatch family's. Every caller reaches these functions by address; the unit's translation that
@@ -51,11 +53,15 @@
 //! file's header lists them), and for part 5 a form's flags word and its bit test, the byte at +0xc
 //! of an extra data, the say-to topic info's topic store, the water zone map's counts, placement
 //! `new`, the compare of two counted pointers, a 4-byte `memmove`, the memory manager's address and
-//! a list held at +0x28 of its object. Each type, next or word is read once where the exe reads it
-//! again with nothing in between that could change it. A virtual call (an extra data's slot 0
-//! delete, its slot 4 `Compare`, the type 0x92 copy's slot 0xc, a primitive's slot 0) stays a call
-//! through the slot: each class has its own body. The constructors, destructors and setters of
-//! other units, `operator new` and `operator delete` are called by address.
+//! a list held at +0x28 of its object, and for the objects unit an array's element (`006a7ad0`), a
+//! form's process (`008d8520`), the guards' word compare (`009a3830`) and a reference's angles
+//! (`00430830`); the empty simple list's constructor (`0096a2d0`) and the world location's
+//! (`006d5320`, which stores nothing) are done in place by the whole family. Each type, next or
+//! word is read once where the exe reads it again with nothing in between that could change it. A
+//! virtual call (an extra data's slot 0 delete, its slot 4 `Compare`, the type 0x92 copy's slot
+//! 0xc, a primitive's slot 0) stays a call through the slot: each class has its own body. The
+//! constructors, destructors and setters of other units, `operator new` and `operator delete` are
+//! called by address.
 //!
 //! **Extenders.** JIP LN NVSE has nine sites here, each kept where the translation has it:
 //! `AddExtraCopy`'s arm for its keyed data's type 0x27 (`0x411978`), that type's entries in the two
@@ -86,6 +92,7 @@ pub mod init_item;
 pub mod links;
 pub mod load;
 pub mod more_setters;
+pub mod objects;
 pub mod packages;
 pub mod records;
 pub mod rooms;
@@ -698,6 +705,122 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0042_ffa0, arrays::navmesh_ptr_delete(u32, u32) -> u32),
         entry!(0x0042_ffd0, arrays::refr_map_base_delete(u32, u32) -> u32),
         entry!(0x0043_00c0, more_setters::anim_new(u32, u32) -> u32),
+        entry!(0x0043_00f0, objects::anim_delete(u32, u32) -> u32),
+        entry!(0x0043_0120, objects::anim_drop(u32)),
+        entry!(0x0043_01b0, objects::sequence_word(u32, i32) -> u16),
+        entry!(0x0043_0200, objects::limbs_new(u32) -> u32),
+        entry!(0x0043_02a0, objects::limbs_delete(u32, u32) -> u32),
+        entry!(0x0043_02d0, objects::limbs_drop(u32)),
+        entry!(0x0043_0390, objects::limb_delete(u32, u32) -> u32),
+        entry!(0x0043_03c0, objects::limb_drop(u32)),
+        entry!(0x0043_03e0, objects::limbs_dismembered(u32, u8) -> bool),
+        entry!(0x0043_0410, objects::limbs_dismember(u32, u32, u8, u8)),
+        entry!(0x0043_05f0, objects::limbs_set_removed(u32, u32, u8)),
+        entry!(0x0043_0660, objects::limbs_identical(u32, u32) -> bool),
+        entry!(0x0043_0780, objects::starting_position_new(u32, u32) -> u32),
+        entry!(0x0043_0830, objects::angles_of(u32) -> u32),
+        entry!(0x0043_0850, objects::starting_position_compare(u32, u32) -> bool),
+        entry!(0x0043_08c0, objects::type_49_new(u32) -> u32),
+        entry!(0x0043_08f0, objects::light_new(u32, u32) -> u32),
+        entry!(0x0043_0920, objects::light_delete(u32, u32) -> u32),
+        entry!(0x0043_0950, objects::light_drop(u32)),
+        entry!(0x0043_09e0, objects::lock_level(u32, u32) -> i32),
+        entry!(0x0043_0a10, objects::lock_base_level(u32, u32) -> i32),
+        entry!(0x0043_0a90, objects::lock_set_locked(u32, bool)),
+        entry!(0x0043_0ae0, objects::lock_is_broken(u32) -> bool),
+        entry!(0x0043_0b40, objects::lock_bracket(i32) -> i32),
+        entry!(0x0043_0bc0, objects::lock_bracket_value(u32) -> i32),
+        entry!(0x0043_0c70, objects::lock_new(u32, u32) -> u32),
+        entry!(0x0043_0ca0, objects::lock_drop(u32)),
+        entry!(0x0043_0ce0, objects::lock_compare(u32, u32) -> bool),
+        entry!(0x0043_0dd0, objects::follower_new(u32) -> u32),
+        entry!(0x0043_0e70, objects::follower_delete(u32, u32) -> u32),
+        entry!(0x0043_0ea0, objects::follower_drop(u32)),
+        entry!(0x0043_0f30, objects::guarded_new(u32) -> u32),
+        entry!(0x0043_0fa0, objects::guarded_delete(u32, u32) -> u32),
+        entry!(0x0043_0fd0, objects::guarded_drop(u32)),
+        entry!(0x0043_1030, objects::guarded_compare(u32, u32) -> bool),
+        entry!(0x0043_10d0, objects::guarded_add_guard(u32, u32)),
+        entry!(0x0043_1120, objects::guarded_notify(u32, u32, u32)),
+        entry!(0x0043_11f0, objects::type_2e_new(u32) -> u32),
+        entry!(0x0043_1230, objects::teleport_new(u32, u32) -> u32),
+        entry!(0x0043_1260, objects::teleport_drop(u32)),
+        entry!(0x0043_12f0, objects::teleport_compare(u32, u32) -> bool),
+        entry!(0x0043_1360, objects::map_marker_new(u32, u32) -> u32),
+        entry!(0x0043_1390, objects::map_marker_delete(u32, u32) -> u32),
+        entry!(0x0043_13c0, objects::map_marker_drop(u32)),
+        entry!(0x0043_1450, objects::map_marker_compare(u32, u32) -> bool),
+        entry!(0x0043_14c0, objects::audio_marker_new(u32, u32) -> u32),
+        entry!(0x0043_14f0, objects::audio_marker_delete(u32, u32) -> u32),
+        entry!(0x0043_1520, objects::audio_marker_drop(u32)),
+        entry!(0x0043_15b0, objects::audio_marker_compare(u32, u32) -> bool),
+        entry!(0x0043_1620, objects::audio_buoy_new(u32, u32) -> u32),
+        entry!(0x0043_1650, objects::audio_buoy_delete(u32, u32) -> u32),
+        entry!(0x0043_1680, objects::audio_buoy_drop(u32)),
+        entry!(0x0043_1710, objects::audio_buoy_compare(u32, u32) -> bool),
+        entry!(0x0043_1780, objects::action_new(u32) -> u32),
+        entry!(0x0043_17c0, objects::action_compare(u32, u32) -> bool),
+        entry!(0x0043_1830, objects::container_changes_new(u32, u32) -> u32),
+        entry!(0x0043_1860, objects::container_changes_delete(u32, u32) -> u32),
+        entry!(0x0043_1890, objects::container_changes_drop(u32)),
+        entry!(0x0043_1920, objects::inventory_changes_delete(u32, u32) -> u32),
+        entry!(0x0043_1950, objects::original_reference_new(u32, u32) -> u32),
+        entry!(0x0043_1980, objects::original_reference_delete(u32, u32) -> u32),
+        entry!(0x0043_19b0, objects::original_reference_drop(u32)),
+        entry!(0x0043_19d0, objects::original_reference_compare(u32, u32) -> bool),
+        entry!(0x0043_1a40, objects::ownership_new(u32, u32) -> u32),
+        entry!(0x0043_1a70, objects::ownership_compare(u32, u32) -> bool),
+        entry!(0x0043_1ae0, objects::global_new(u32, u32) -> u32),
+        entry!(0x0043_1b10, objects::global_compare(u32, u32) -> bool),
+        entry!(0x0043_1b80, objects::rank_new(u32, u32) -> u32),
+        entry!(0x0043_1bb0, objects::rank_compare(u32, u32) -> bool),
+        entry!(0x0043_1c20, objects::count_new(u32, u32) -> u32),
+        entry!(0x0043_1c50, objects::count_compare(u32, u32) -> bool),
+        entry!(0x0043_1cc0, objects::leveled_item_compare(u32, u32) -> bool),
+        entry!(0x0043_1d10, objects::health_new(u32, u32) -> u32),
+        entry!(0x0043_1d40, objects::health_compare(u32, u32) -> bool),
+        entry!(0x0043_1db0, objects::health_perc_compare(u32, u32) -> bool),
+        entry!(0x0043_1e20, objects::uses_new(u32, u8) -> u32),
+        entry!(0x0043_1e50, objects::uses_compare(u32, u32) -> bool),
+        entry!(0x0043_1ec0, objects::time_left_new(u32, u32) -> u32),
+        entry!(0x0043_1ef0, objects::time_left_compare(u32, u32) -> bool),
+        entry!(0x0043_1f60, objects::charge_new(u32, u32) -> u32),
+        entry!(0x0043_1f90, objects::charge_compare(u32, u32) -> bool),
+        entry!(0x0043_2000, objects::script_new(u32, u32) -> u32),
+        entry!(0x0043_2040, objects::script_drop(u32)),
+        entry!(0x0043_20d0, objects::script_compare(u32, u32) -> bool),
+        entry!(0x0043_2140, objects::weapon_mod_flags_compare(u32, u32) -> bool),
+        entry!(0x0043_21b0, objects::modding_item_compare(u32, u32) -> bool),
+        entry!(0x0043_2220, objects::scale_new(u32, u32) -> u32),
+        entry!(0x0043_2250, objects::scale_compare(u32, u32) -> bool),
+        entry!(0x0043_22c0, objects::ghost_new(u32) -> u32),
+        entry!(0x0043_22f0, objects::worn_new(u32) -> u32),
+        entry!(0x0043_2320, objects::worn_left_new(u32) -> u32),
+        entry!(0x0043_2350, objects::cannot_wear_new(u32) -> u32),
+        entry!(0x0043_2380, objects::hot_key_new(u32, u8) -> u32),
+        entry!(0x0043_23b0, objects::topic_drop(u32)),
+        entry!(0x0043_2440, objects::topic_delete(u32, u32) -> u32),
+        entry!(0x0043_2470, objects::topic_new(u32, u32) -> u32),
+        entry!(0x0043_24a0, objects::topic_new_empty(u32) -> u32),
+        entry!(0x0043_2540, objects::hot_key_compare(u32, u32) -> bool),
+        entry!(0x0043_25b0, objects::seed_new(u32, u8) -> u32),
+        entry!(0x0043_25e0, objects::seed_compare(u32, u32) -> bool),
+        entry!(0x0043_2650, objects::start_location_new(u32) -> u32),
+        entry!(0x0043_26c0, objects::start_location_at(u32, u32, u32, u32, u32) -> u32),
+        entry!(0x0043_2770, objects::start_location_compare(u32, u32) -> bool),
+        entry!(0x0043_27e0, objects::reference_pointer_new(u32, u32) -> u32),
+        entry!(0x0043_2810, objects::package_new(u32) -> u32),
+        entry!(0x0043_2870, objects::package_new_with(u32, u32, u32, u32, u8, u8, u8) -> u32),
+        entry!(0x0043_28d0, objects::trespass_new(u32, u32) -> u32),
+        entry!(0x0043_2900, objects::trespass_drop(u32)),
+        entry!(0x0043_29d0, objects::crime_list_new(u32) -> u32),
+        entry!(0x0043_2a70, objects::crime_list_delete(u32, u32) -> u32),
+        entry!(0x0043_2aa0, objects::crime_list_new_with(u32, u32) -> u32),
+        entry!(0x0043_2b50, objects::crime_list_drop(u32)),
+        entry!(0x0043_2be0, objects::leveled_item_new(u32, u32) -> u32),
+        entry!(0x0043_2c20, objects::persistent_cell_new(u32, u32) -> u32),
+        entry!(0x0043_2c60, objects::persistent_cell_delete(u32, u32) -> u32),
+        entry!(0x0043_2c90, objects::persistent_cell_drop(u32)),
         entry!(0x0055_5bc0, more_setters::seen_data_at_28(u32) -> u32),
         entry!(0x0056_9140, more_setters::lock_data_at_44(u32) -> u32),
     ]
@@ -720,8 +843,12 @@ const VTABLE_BS_EXTRA_DATA: u32 = 0x0101_4210;
 /// `operator new` (`cdecl(size)`) and `operator delete` (`cdecl(block)`).
 const OPERATOR_NEW: u32 = 0x0040_1000;
 const OPERATOR_DELETE: u32 = 0x0040_1030;
-/// The constructor of an empty `BSSimpleList` (two null words, `thiscall(list)`).
-const SIMPLE_LIST_NEW: u32 = 0x0096_a2d0;
+/// An empty `BSSimpleList` made at `at`: its constructor (`0096a2d0`) in place, two null words.
+#[inline]
+fn simple_list_init(e: &mut Engine, at: u32) {
+    e.mem.set_u32(at, 0);
+    e.mem.set_u32(at.wrapping_add(4), 0);
+}
 
 /// The extra data lock taken (`0040fbf0`) under `name`.
 #[inline]
