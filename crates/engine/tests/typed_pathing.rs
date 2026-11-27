@@ -2636,6 +2636,55 @@ fn construct_12s() {
         .assert_same();
 }
 
+fn node_array_storage(e: &mut Engine, case: &Case, stride: u32) -> Vec<u32> {
+    stand_ins(e);
+    let data = e.mem.alloc(stride * 3);
+    for offset in (0..stride * 3).step_by(4) {
+        e.mem.set_u32(data + offset, 0x7575_7575);
+    }
+    let count = case.word(0);
+    if case.word(1) == 0 {
+        return vec![0, data, count];
+    }
+    // Wrap the requested address through zero on the second placement. Construct the
+    // others in real storage so the comparison checks both the address and the writes.
+    e.mem.set_u32(LOG + 0x2000, data);
+    e.register(0x006e_6da0, |e, args| {
+        if args[1] == 0 {
+            return ret(0);
+        }
+        let slot = if args[1] == args[0] { 2 } else { 0 };
+        ret(e.mem.u32(LOG + 0x2000) + slot * args[0])
+    });
+    vec![0, 0u32.wrapping_sub(stride), count]
+}
+
+#[test]
+fn construct_virtual_nodes() {
+    Diff::new(entry!(
+        0x006e_95d0,
+        search::construct_virtual_nodes(Ptr, u32, u32)
+    ))
+    .common()
+    .inputs(&[Input::Of(&[0, 1, 3]), Input::Flag])
+    .setup(|e, case| node_array_storage(e, case, 0x30))
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn construct_current_nodes() {
+    Diff::new(entry!(
+        0x006e_9700,
+        search::construct_current_nodes(Ptr, u32, u32)
+    ))
+    .common()
+    .inputs(&[Input::Of(&[0, 1, 3]), Input::Flag])
+    .setup(|e, case| node_array_storage(e, case, 0x3c))
+    .run()
+    .assert_same();
+}
+
 #[test]
 fn construct_32s() {
     Diff::new(entry!(0x006b_40f0, search::construct_32s(Ptr, u32, u32)))

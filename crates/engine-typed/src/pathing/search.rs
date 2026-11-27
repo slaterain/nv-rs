@@ -472,17 +472,32 @@ pub fn construct_12s(e: &mut Engine, _this: Ptr, elements: u32, count: u32) {
     construct_each(e, elements, count, 0xc);
 }
 
+/// Construct each non-null placement, including when placement returns a different address.
+fn construct_elements(e: &mut Engine, elements: u32, count: u32, stride: u32, constructor: u32) {
+    for index in 0..count {
+        let at = elements.wrapping_add(index.wrapping_mul(stride));
+        let placed = e.call(PLACEMENT_NEW, &args![stride, at]).u32();
+        if placed != 0 {
+            e.call(constructor, &args![placed]);
+        }
+    }
+}
+
 // Typed from 006b40f0
 /// Constructs `count` 0x20-byte path-smoother edges (`thiscall(array, elements, count)`): each
 /// placement that isn't null runs the constructor `006aeb70`.
 pub fn construct_32s(e: &mut Engine, _this: Ptr, elements: u32, count: u32) {
-    for i in 0..count {
-        let at = (i << 5).wrapping_add(elements);
-        let p = e.call(PLACEMENT_NEW, &args![0x20u32, at]).u32();
-        if p != 0 {
-            e.call(SMOOTHER_EDGE_NEW, &args![p]);
-        }
-    }
+    construct_elements(e, elements, count, 0x20, SMOOTHER_EDGE_NEW);
+}
+
+// Typed from 006e95d0
+pub fn construct_virtual_nodes(e: &mut Engine, _array: Ptr, elements: u32, count: u32) {
+    construct_elements(e, elements, count, 0x30, 0x006f_4cd0);
+}
+
+// Typed from 006e9700
+pub fn construct_current_nodes(e: &mut Engine, _array: Ptr, elements: u32, count: u32) {
+    construct_elements(e, elements, count, 0x3c, 0x006e_2210);
 }
 
 // Typed from 006b3de0
