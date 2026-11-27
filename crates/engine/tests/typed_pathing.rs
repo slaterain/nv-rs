@@ -2709,6 +2709,34 @@ fn search_new() {
 }
 
 #[test]
+fn segment_point() {
+    Diff::new(entry!(0x006e_9ab0, search::segment_point(Ptr, Ptr, f32) -> Ptr))
+        .common()
+        .plain(0x006e_9ab0)
+        .inputs(&[Input::Word, Input::Word, Input::F32])
+        .setup(|e, case| {
+            stand_ins(e);
+            // The curve weights' doubles: -2 at `0106d4c8`, 3 at `01021928`, 1 at `01012070`.
+            e.map(0x0106_d000, 0x1000);
+            e.map(0x0102_1000, 0x1000);
+            e.mem.set_u64(0x0106_d4c8, (-2.0f64).to_bits());
+            e.mem.set_u64(0x0102_1928, 3.0f64.to_bits());
+            e.mem.set_u64(0x0101_2070, 1.0f64.to_bits());
+            let segment = e.mem.alloc(0x44);
+            for i in 0..0x11 {
+                e.mem.set_u32(segment + 4 * i, 0x6b6b_6b6b);
+            }
+            let out = e.mem.alloc(0xc);
+            for i in 0..3 {
+                e.mem.set_u32(out + 4 * i, 0x6b6b_6b6b);
+            }
+            vec![segment, out, bits(case, 2)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
 fn at_5c() {
     Diff::new(entry!(0x006c_9900, search::at_5c(u32) -> u32))
         .common()
