@@ -2555,7 +2555,9 @@ bSunShadowsCharacters=0
     /// goes under the name the program reads (`engine-platform` machine_table::PROFILE_VARIABLE).
     #[test]
     fn play_sh_variables_make_a_play_run_on_vulkan() {
-        use engine_platform::machine_table::{profile_from, PROFILE_VARIABLE};
+        use engine_platform::machine_table::{
+            profile_from, MANAGER_APPDATA_VARIABLE, PROFILE_VARIABLE,
+        };
         let exported = play_sh_exports(PLAY_SH).unwrap();
         let mut names: Vec<&str> = exported.iter().map(|&(n, _)| n).collect();
         names.sort_unstable();
@@ -2566,6 +2568,7 @@ bSunShadowsCharacters=0
                 "NV_PREFS_OUT",
                 "NV_REPORT_DIR",
                 "NV_REPORT_LOG",
+                MANAGER_APPDATA_VARIABLE,
                 PROFILE_VARIABLE,
                 "NV_SAVE_OUT",
                 "NV_SETTINGS",
