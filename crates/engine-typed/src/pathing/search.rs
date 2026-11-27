@@ -54,6 +54,7 @@ const TAG_INIT: u32 = 0x0044_e010;
 /// The vtables the arrays' constructors and destructors install.
 const INDEX_ARRAY_VTABLE: u32 = 0x0106_abe4;
 const EDGE_ARRAY_VTABLE: u32 = 0x0106_b1e0;
+const CELL_ARRAY_BASE_VTABLE: u32 = 0x0106_c708;
 const SEARCH_VTABLE: u32 = 0x0106_b650;
 /// An array's vtable slots: allocate a buffer, free one.
 const SLOT_ALLOCATE: u32 = 0x4;
@@ -450,6 +451,15 @@ pub fn edge_array_new(e: &mut Engine, this: Ptr<SimpleArray>) -> Ptr<SimpleArray
 pub fn edge_array_drop(e: &mut Engine, this: Ptr<SimpleArray>) {
     e.set(this, SimpleArray::vtable, EDGE_ARRAY_VTABLE);
     e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Typed from 006c7530
+/// The cell array base's constructor (`thiscall(array) -> this`): the vtable `0106c708`, then
+/// empty ([`init_vertices`] with nothing reserved, none sized).
+pub fn cell_array_base_new(e: &mut Engine, this: Ptr<SimpleArray>) -> Ptr<SimpleArray> {
+    e.set(this, SimpleArray::vtable, CELL_ARRAY_BASE_VTABLE);
+    typed_call!(FAMILY, 0x006b_3eb0, init_vertices(e, this, 0, 0));
+    this
 }
 
 /// `count` placements of `size` bytes from `elements` on (`006e6da0`).
