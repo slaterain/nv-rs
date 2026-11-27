@@ -55,6 +55,10 @@ const TAG_INIT: u32 = 0x0044_e010;
 const INDEX_ARRAY_VTABLE: u32 = 0x0106_abe4;
 const EDGE_ARRAY_VTABLE: u32 = 0x0106_b1e0;
 const SEARCH_VTABLE: u32 = 0x0106_b650;
+/// `NavMeshSearch`'s vtable (`0106b63c`; RTTI `.?AVNavMeshSearch@@`).
+const NAV_SEARCH_VTABLE: u32 = 0x0106_b63c;
+/// The constructor of the six-word member a navmesh search keeps at +0x208c.
+const SIX_WORD_MEMBER_CTOR: u32 = 0x0050_1cd0;
 /// An array's vtable slots: allocate a buffer, free one.
 const SLOT_ALLOCATE: u32 = 0x4;
 const SLOT_FREE: u32 = 0x8;
@@ -518,6 +522,21 @@ pub fn search_new(e: &mut Engine, this: Ptr<AStarSearch>) -> Ptr<AStarSearch> {
     e.set(this, AStarSearch::unknown_204c, 0);
     e.set(this, AStarSearch::unknown_2050, 0);
     e.set(this, AStarSearch::done, 0);
+    this
+}
+
+// Typed from 006a6a40
+/// The `NavMeshSearch` constructor (`thiscall(this) -> this`): the `AStarSearch` base (`006a7b10`),
+/// the `NavMeshSearch` vtable, the six-word member at +0x208c constructed, and the words at
+/// +0x2058, +0x2084 and +0x2088 cleared. Returns `this`.
+pub fn nav_search_new(e: &mut Engine, this: Ptr<AStarSearch>) -> Ptr<AStarSearch> {
+    let base = this.addr();
+    typed_call!(FAMILY, 0x006a_7b10, search_new(e, this));
+    e.set(this, AStarSearch::vtable, NAV_SEARCH_VTABLE);
+    e.call(SIX_WORD_MEMBER_CTOR, &args![base + 0x208c]);
+    e.mem.set_u32(base + 0x2058, 0);
+    e.mem.set_u32(base + 0x2084, 0);
+    e.mem.set_u32(base + 0x2088, 0);
     this
 }
 

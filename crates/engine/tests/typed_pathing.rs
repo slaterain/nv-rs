@@ -651,6 +651,7 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x006a_0660, &[0x0069_85f0, 0x006a_06f0]),
     (0x006a_79c0, &[0x006a_6eb0]),
     (0x006a_7b10, &[0x006a_8380]),
+    (0x006a_6a40, &[0x006a_8380]),
     (0x006b_40f0, &[0x006a_eb70]),
     (0x006b_77e0, &[0x006b_7850, 0x006b_78b0]),
     (0x006b_9b10, &[0x0040_19d0]),
@@ -2706,6 +2707,27 @@ fn search_new() {
         })
         .run()
         .assert_same();
+}
+
+#[test]
+fn nav_search_new() {
+    Diff::new(entry!(
+        0x006a_6a40,
+        search::nav_search_new(Ptr<_>) -> Ptr<_>
+    ))
+    .common()
+    .plain(0x006a_6a40)
+    .inputs(&[Input::Flag])
+    .setup(|e, _| {
+        stand_ins(e);
+        let s = e.mem.alloc(0x2100);
+        for i in 0..0x840 {
+            e.mem.set_u32(s + 4 * i, 0x6b6b_6b6b);
+        }
+        vec![s]
+    })
+    .run()
+    .assert_same();
 }
 
 #[test]
