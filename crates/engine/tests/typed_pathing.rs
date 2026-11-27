@@ -4366,3 +4366,37 @@ fn crossed_edge_rounding_main_thread() {
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
 }
+
+fn queue_storage(e: &mut Engine, _: &Case) -> Vec<u32> {
+    let queue = e.mem.alloc(12);
+    for offset in [0, 4, 8] {
+        e.mem.set_u32(queue + offset, 0xabab_abab);
+    }
+    vec![queue]
+}
+
+#[test]
+fn linked_queue_new() {
+    Diff::new(entry!(
+        0x006e_cb40,
+        pathing::queue::linked_queue_new(Ptr<_>) -> Ptr<_>
+    ))
+    .family(&pathing::PATHING)
+    .inputs(&FIXED)
+    .setup(queue_storage)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn static_queue_new() {
+    Diff::new(entry!(
+        0x006e_cb70,
+        pathing::queue::static_queue_new(Ptr<_>) -> Ptr<_>
+    ))
+    .family(&pathing::PATHING)
+    .inputs(&FIXED)
+    .setup(queue_storage)
+    .run()
+    .assert_same();
+}
