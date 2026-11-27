@@ -16,6 +16,7 @@
 //! of the last finished sequence and the save buffers' loaders are called by address.
 
 use super::links::{add_unless_held, holds, new_by, remove_item};
+use super::object_refs;
 use super::setters::remove_kind;
 use super::{
     access, cell_refs, extra_init, first_of_kind, has_kind, list_add, list_remove, new_object,
@@ -48,12 +49,12 @@ const KIND_EMITTANCE_SOURCE: u8 = 0x67;
 const KIND_OCCLUSION_PLANE: u8 = 0x71;
 const KIND_ENCOUNTER_ZONE: u8 = 0x74;
 
-/// Other units' constructors (`thiscall(block)`, or with the stated stack words): the merchant
-/// container, the leveled creature modifier, the no-rumors flag (with its byte), the leveled
-/// creature (0x14 bytes), the seen data, the X target, the encounter zone, the emittance source,
-/// the multibound reference, data and bound, the occlusion plane, the follower list, the friend
-/// hits (0x1c bytes), the refraction property (with its `float`), the last finished sequence (with
-/// its name), the saved animation and havok data.
+/// The constructors (`thiscall(block)`, or with the stated stack words; the objects unit's reach
+/// the family's own through `objects::construct_at`): the merchant container, the leveled creature
+/// modifier, the no-rumors flag (with its byte), the leveled creature (0x14 bytes), the seen data,
+/// the X target, the encounter zone, the emittance source, the multibound reference, data and
+/// bound, the occlusion plane, the follower list, the friend hits (0x1c bytes), the refraction
+/// property (with its `float`), the saved animation and havok data.
 const MERCHANT_CONTAINER_INIT: u32 = 0x0043_4fc0;
 const LEV_CREA_MOD_INIT: u32 = 0x0043_5040;
 const NO_RUMORS_INIT: u32 = 0x0043_6090;
@@ -69,14 +70,10 @@ const OCCLUSION_PLANE_INIT: u32 = 0x0043_57a0;
 const FOLLOWER_INIT: u32 = 0x0043_0dd0;
 const FRIEND_HITS_INIT: u32 = 0x0043_5c40;
 const REFRACTION_PROPERTY_INIT: u32 = 0x0043_5f20;
-const LAST_FINISHED_SEQUENCE_INIT: u32 = 0x0043_51d0;
 const SAVED_ANIMATION_INIT: u32 = 0x0043_5a60;
 const SAVED_HAVOK_DATA_INIT: u32 = 0x0043_5b50;
 
-/// The leveled creature modifier's `float` (ST0) and word (`thiscall(extra)`), the friend hits'
-/// `AddHit` and `GetHitCount` (`thiscall(extra)`).
-const LEV_CREA_MOD_FLOAT: u32 = 0x0043_50c0;
-const LEV_CREA_MOD_WORD: u32 = 0x0043_5100;
+/// The friend hits' `AddHit` and `GetHitCount` (`thiscall(extra)`).
 const FRIEND_HITS_ADD_HIT: u32 = 0x0043_5d40;
 const FRIEND_HITS_HIT_COUNT: u32 = 0x0043_5e20;
 /// `NiPointer<T>::operator=(T*)` (`thiscall(at, object)`).
@@ -117,8 +114,8 @@ fn stored(value: f32) -> u32 {
 }
 
 /// The word setters: `value == none` deletes the extra data of `kind` by type; otherwise the one
-/// there has `release_old` run on it (its old word) and then holds `value`, or a new one
-/// (0x10 bytes, built by `build`) is given `value` and added.
+/// there has `release_old` run on it (its old word) and then holds `value`, or a new one (0x10
+/// bytes, built by `build`) is given `value` and added.
 fn set_word_unless(
     e: &mut Engine,
     list: u32,
@@ -303,10 +300,14 @@ pub fn lev_crea_modifier(e: &mut Engine, this: u32, out_float: u32, out_word: u3
     e.mem.set_u32(out_word, 0);
     let extra = first_of_kind(e, this, KIND_LEV_CREA_MOD);
     if extra != 0 {
-        let scale = e.call(LEV_CREA_MOD_FLOAT, &args![extra]).f32();
+        let scale = typed_call!(
+            FAMILY,
+            0x0043_50c0,
+            object_refs::lev_crea_multiplier(e, extra)
+        );
         e.mem.set_f32(out_float, scale);
-        let word = e.call(LEV_CREA_MOD_WORD, &args![extra]).u32();
-        e.mem.set_u32(out_word, word);
+        let word = typed_call!(FAMILY, 0x0043_5100, object_refs::lev_crea_sign(e, extra));
+        e.mem.set_u32(out_word, word as u32);
     }
 }
 
@@ -753,8 +754,11 @@ pub fn set_last_finished_sequence(e: &mut Engine, this: u32, name: u32) {
     typed_call!(FAMILY, 0x0042_2920, remove_last_finished_sequence(e, this));
     if name != 0 {
         let extra = new_object(e, 0x10, |e, block| {
-            e.call(LAST_FINISHED_SEQUENCE_INIT, &args![block, name])
-                .u32()
+            typed_call!(
+                FAMILY,
+                0x0043_51d0,
+                object_refs::last_sequence_new(e, block, name)
+            )
         });
         list_add(e, this, extra);
     }

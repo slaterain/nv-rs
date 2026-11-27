@@ -19,16 +19,18 @@
 //! array and its counted pointer, the shared array's set size, the actor cause's handle, the
 //! reference map and the bound object array ([`arrays`]), and from the extra data objects unit
 //! (`extradataobjects.rs`) its first 116 functions, the constructors, destructors and `Compare`s of
-//! the small extra data classes and the lock record ([`objects`]). The list's own operations (its
-//! constructors, `AddExtra`, `RemoveExtra`, the type bitmap, the thread's cache) are the cell
-//! references family's (`cell_refs::extra_list`), the lookup `GetExtraData` (`00410220`) the
-//! dispatch family's. Every caller reaches these functions by address; the unit's translation that
-//! stays (`GetCanNotWear` `00418b10`) and the unit's other part files call the native functions by
-//! address too. Four functions of the part 2 and 3 ranges are other families': `ScriptLocals`'
-//! scalar deleting destructor `0041af70` (native in the script lines family, the one that holds
-//! xNVSE's wraps), a package's type `0041ca90` (the AI queries', read in place here),
-//! `GetPackageExtraTarget` `0041cb70` and `GetActorPackageData` `004212b0` (the dispatch family's),
-//! and one of part 4's: the followers' getter `00422700` (the dispatch family's).
+//! the small extra data classes and the lock record ([`objects`]), and its last 86, those of the
+//! classes that hold a reference, a list or a name with their `Copy`s and the three `InitItem`s
+//! ([`object_refs`]). The list's own operations (its constructors, `AddExtra`, `RemoveExtra`, the
+//! type bitmap, the thread's cache) are the cell references family's (`cell_refs::extra_list`), the
+//! lookup `GetExtraData` (`00410220`) the dispatch family's. Every caller reaches these functions
+//! by address; the unit's translation that stays (`GetCanNotWear` `00418b10`) and the unit's other
+//! part files call the native functions by address too. Four functions of the part 2 and 3 ranges
+//! are other families': `ScriptLocals`' scalar deleting destructor `0041af70` (native in the script
+//! lines family, the one that holds xNVSE's wraps), a package's type `0041ca90` (the AI queries',
+//! read in place here), `GetPackageExtraTarget` `0041cb70` and `GetActorPackageData` `004212b0`
+//! (the dispatch family's), and one of part 4's: the followers' getter `00422700` (the dispatch
+//! family's).
 //!
 //! **Native.** The exe's order of work. The lookup (`00410220`), the lock (`0040fbf0`, `0040fba0`),
 //! `AddExtra`, both `RemoveExtra`s, `ItemsInList` and the cache's clear are typed calls into their
@@ -55,13 +57,14 @@
 //! `new`, the compare of two counted pointers, a 4-byte `memmove`, the memory manager's address and
 //! a list held at +0x28 of its object, and for the objects unit an array's element (`006a7ad0`), a
 //! form's process (`008d8520`), the guards' word compare (`009a3830`) and a reference's angles
-//! (`00430830`); the empty simple list's constructor (`0096a2d0`) and the world location's
-//! (`006d5320`, which stores nothing) are done in place by the whole family. Each type, next or
-//! word is read once where the exe reads it again with nothing in between that could change it. A
-//! virtual call (an extra data's slot 0 delete, its slot 4 `Compare`, the type 0x92 copy's slot
-//! 0xc, a primitive's slot 0) stays a call through the slot: each class has its own body. The
-//! constructors, destructors and setters of other units, `operator new` and `operator delete` are
-//! called by address.
+//! (`00430830`), and for its last 86 the two record constructors the copies call (`00414010`,
+//! `0055a400`) and `NiPoint3`'s (`00416870`); the empty simple list's constructor (`0096a2d0`) and
+//! the world location's (`006d5320`, which stores nothing) are done in place by the whole family.
+//! Each type, next or word is read once where the exe reads it again with nothing in between that
+//! could change it. A virtual call (an extra data's slot 0 delete, its slot 4 `Compare`, the type
+//! 0x92 copy's slot 0xc, a primitive's slot 0) stays a call through the slot: each class has its
+//! own body. The constructors, destructors and setters of other units, `operator new` and `operator
+//! delete` are called by address.
 //!
 //! **Extenders.** JIP LN NVSE has nine sites here, each kept where the translation has it:
 //! `AddExtraCopy`'s arm for its keyed data's type 0x27 (`0x411978`), that type's entries in the two
@@ -92,6 +95,7 @@ pub mod init_item;
 pub mod links;
 pub mod load;
 pub mod more_setters;
+pub mod object_refs;
 pub mod objects;
 pub mod packages;
 pub mod records;
@@ -821,6 +825,92 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0043_2c20, objects::persistent_cell_new(u32, u32) -> u32),
         entry!(0x0043_2c60, objects::persistent_cell_delete(u32, u32) -> u32),
         entry!(0x0043_2c90, objects::persistent_cell_drop(u32)),
+        entry!(0x0043_2cb0, object_refs::rag_doll_new(u32) -> u32),
+        entry!(0x0043_2ce0, object_refs::rag_doll_delete(u32, u32) -> u32),
+        entry!(0x0043_2d10, object_refs::rag_doll_drop(u32)),
+        entry!(0x0043_2da0, object_refs::rag_doll_data_delete(u32, u32) -> u32),
+        entry!(0x0043_2dd0, object_refs::rag_doll_compare(u32, u32) -> bool),
+        entry!(0x0043_2e60, object_refs::encounter_zone_new(u32) -> u32),
+        entry!(0x0043_2e90, object_refs::encounter_zone_compare(u32, u32) -> bool),
+        entry!(0x0043_2f00, object_refs::used_markers_new(u32) -> u32),
+        entry!(0x0043_2f30, object_refs::base_only_drop(u32)),
+        entry!(0x0043_2f50, object_refs::reserved_markers_new(u32) -> u32),
+        entry!(0x0043_2f80, object_refs::marker_used(u32, u32) -> bool),
+        entry!(0x0043_2fc0, object_refs::set_marker_used(u32, u32, u8)),
+        entry!(0x0043_3010, object_refs::run_once_new(u32) -> u32),
+        entry!(0x0043_30b0, object_refs::run_once_delete(u32, u32) -> u32),
+        entry!(0x0043_30e0, object_refs::run_once_drop(u32)),
+        entry!(0x0043_31c0, object_refs::run_once_set(u32, u32, u8)),
+        entry!(0x0043_3260, object_refs::distant_data_new(u32) -> u32),
+        entry!(0x0043_3300, object_refs::enable_parent_new(u32) -> u32),
+        entry!(0x0043_3340, object_refs::enable_parent_compare(u32, u32) -> bool),
+        entry!(0x0043_33a0, object_refs::enable_children_new(u32) -> u32),
+        entry!(0x0043_3410, object_refs::enable_children_delete(u32, u32) -> u32),
+        entry!(0x0043_3440, object_refs::enable_children_drop(u32)),
+        entry!(0x0043_34b0, object_refs::random_teleport_new(u32) -> u32),
+        entry!(0x0043_34e0, object_refs::random_teleport_compare(u32, u32) -> bool),
+        entry!(0x0043_3530, object_refs::linked_children_new(u32) -> u32),
+        entry!(0x0043_35a0, object_refs::linked_children_delete(u32, u32) -> u32),
+        entry!(0x0043_35d0, object_refs::linked_children_drop(u32)),
+        entry!(0x0043_3640, object_refs::linked_ref_new(u32) -> u32),
+        entry!(0x0043_3670, object_refs::linked_ref_compare(u32, u32) -> bool),
+        entry!(0x0043_36c0, object_refs::ash_pile_new(u32) -> u32),
+        entry!(0x0043_36f0, object_refs::activate_data_find(u32, u32) -> u32),
+        entry!(0x0043_3750, object_refs::delete_entries(u32)),
+        entry!(0x0043_3790, object_refs::activate_children_new(u32) -> u32),
+        entry!(0x0043_3800, object_refs::activate_children_delete(u32, u32) -> u32),
+        entry!(0x0043_3830, object_refs::activate_children_drop(u32)),
+        entry!(0x0043_38b0, object_refs::activate_ref_new(u32) -> u32),
+        entry!(0x0043_3940, object_refs::activate_ref_delete(u32, u32) -> u32),
+        entry!(0x0043_3970, object_refs::activate_ref_drop(u32)),
+        entry!(0x0043_3a00, object_refs::activate_ref_find(u32, u32) -> u32),
+        entry!(0x0043_3a20, object_refs::activate_ref_compare(u32, u32) -> bool),
+        entry!(0x0043_3b70, object_refs::activate_ref_copy(u32, u32)),
+        entry!(0x0043_3ca0, object_refs::decal_new(u32) -> u32),
+        entry!(0x0043_3d10, object_refs::decal_delete(u32, u32) -> u32),
+        entry!(0x0043_3d40, object_refs::decal_drop(u32)),
+        entry!(0x0043_3db0, object_refs::decal_init_item(u32, u32)),
+        entry!(0x0043_3ed0, object_refs::reflector_init_item(u32, u32)),
+        entry!(0x0043_4050, object_refs::lit_water_init_item(u32, u32)),
+        entry!(0x0043_41e0, object_refs::decal_compare(u32, u32) -> bool),
+        entry!(0x0043_42b0, object_refs::decal_copy(u32, u32)),
+        entry!(0x0043_43c0, object_refs::decal_clear(u32)),
+        entry!(0x0043_4410, object_refs::decal_find(u32, u32) -> u32),
+        entry!(0x0043_4480, object_refs::decal_set(u32, u32, u32, u32)),
+        entry!(0x0043_4560, object_refs::reflected_drop(u32)),
+        entry!(0x0043_4620, object_refs::reflected_compare(u32, u32) -> bool),
+        entry!(0x0043_46f0, object_refs::reflected_copy(u32, u32)),
+        entry!(0x0043_4800, object_refs::reflected_remove(u32, u32)),
+        entry!(0x0043_48a0, object_refs::reflected_set(u32, u32, u32)),
+        entry!(0x0043_4950, object_refs::water_light_drop(u32)),
+        entry!(0x0043_49c0, object_refs::water_light_compare(u32, u32) -> bool),
+        entry!(0x0043_4a70, object_refs::water_light_copy(u32, u32)),
+        entry!(0x0043_4af0, object_refs::reflector_drop(u32)),
+        entry!(0x0043_4bb0, object_refs::reflector_compare(u32, u32) -> bool),
+        entry!(0x0043_4c80, object_refs::reflector_copy(u32, u32)),
+        entry!(0x0043_4d90, object_refs::clear_reference_data(u32)),
+        entry!(0x0043_4dc0, object_refs::lit_water_drop(u32)),
+        entry!(0x0043_4e30, object_refs::lit_water_compare(u32, u32) -> bool),
+        entry!(0x0043_4ee0, object_refs::lit_water_copy(u32, u32)),
+        entry!(0x0043_4f60, object_refs::water_add(u32, u32)),
+        entry!(0x0043_4fa0, object_refs::water_clear(u32)),
+        entry!(0x0043_4fc0, object_refs::merchant_new(u32) -> u32),
+        entry!(0x0043_4ff0, object_refs::merchant_compare(u32, u32) -> bool),
+        entry!(0x0043_5040, object_refs::lev_crea_new(u32) -> u32),
+        entry!(0x0043_5070, object_refs::lev_crea_compare(u32, u32) -> bool),
+        entry!(0x0043_50c0, object_refs::lev_crea_multiplier(u32) -> f32),
+        entry!(0x0043_5100, object_refs::lev_crea_sign(u32) -> i32),
+        entry!(0x0043_5150, object_refs::poison_new(u32, u32) -> u32),
+        entry!(0x0043_5180, object_refs::poison_compare(u32, u32) -> bool),
+        entry!(0x0043_51d0, object_refs::last_sequence_new(u32, u32) -> u32),
+        entry!(0x0043_5270, object_refs::last_sequence_delete(u32, u32) -> u32),
+        entry!(0x0043_52a0, object_refs::last_sequence_drop(u32)),
+        entry!(0x0043_5310, object_refs::last_sequence_compare(u32, u32) -> bool),
+        entry!(0x0043_5370, object_refs::x_target_new(u32) -> u32),
+        entry!(0x0043_53a0, object_refs::x_target_delete(u32, u32) -> u32),
+        entry!(0x0043_53d0, object_refs::x_target_drop(u32)),
+        entry!(0x0043_5ac0, object_refs::saved_animation_drop(u32)),
+        entry!(0x0043_5bb0, object_refs::saved_havok_drop(u32)),
         entry!(0x0055_5bc0, more_setters::seen_data_at_28(u32) -> u32),
         entry!(0x0056_9140, more_setters::lock_data_at_44(u32) -> u32),
     ]

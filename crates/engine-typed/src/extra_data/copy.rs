@@ -611,16 +611,16 @@ fn copy_by_arm(e: &mut Engine, list: u32, extra: u32, kind: u8) {
         }
         0x53 => {
             let existing = get_or_add(e, list, 0x53, 0x20, |e, block| {
-                e.call(0x0043_38b0, &args![block]).u32()
+                typed_call!(FAMILY, 0x0043_38b0, object_refs::activate_ref_new(e, block))
             });
-            e.call(0x0043_3b70, &args![existing, extra]);
+            typed_call!(FAMILY, 0x0043_3b70, object_refs::activate_ref_copy(e, existing, extra));
         }
         0x55 => {}
         0x57 => {
             let existing = get_or_add(e, list, 0x57, 0x14, |e, block| {
-                e.call(0x0043_3ca0, &args![block]).u32()
+                typed_call!(FAMILY, 0x0043_3ca0, object_refs::decal_new(e, block))
             });
-            e.call(0x0043_42b0, &args![existing, extra]);
+            typed_call!(FAMILY, 0x0043_42b0, object_refs::decal_copy(e, existing, extra));
         }
         0x5a => {
             typed_call!(
@@ -664,7 +664,7 @@ fn copy_by_arm(e: &mut Engine, list: u32, extra: u32, kind: u8) {
                     cell_refs::extra_list::reflected_refs_new(e, block)
                 )
             });
-            e.call(0x0043_46f0, &args![existing, extra]);
+            typed_call!(FAMILY, 0x0043_46f0, object_refs::reflected_copy(e, existing, extra));
         }
         0x66 => {
             let existing = get_or_add(e, list, 0x66, 0x14, |e, block| {
@@ -674,7 +674,7 @@ fn copy_by_arm(e: &mut Engine, list: u32, extra: u32, kind: u8) {
                     cell_refs::extra_list::reflector_refs_new(e, block)
                 )
             });
-            e.call(0x0043_4c80, &args![existing, extra]);
+            typed_call!(FAMILY, 0x0043_4c80, object_refs::reflector_copy(e, existing, extra));
         }
         0x6b => {
             let word = word_at(e, extra, 0x0c);
@@ -777,7 +777,7 @@ fn copy_by_arm(e: &mut Engine, list: u32, extra: u32, kind: u8) {
                     cell_refs::extra_list::water_light_refs_new(e, block)
                 )
             });
-            e.call(0x0043_4a70, &args![existing, extra]);
+            typed_call!(FAMILY, 0x0043_4a70, object_refs::water_light_copy(e, existing, extra));
         }
         0x85 => {
             let existing = get_or_add(e, list, 0x85, 0x14, |e, block| {
@@ -787,7 +787,7 @@ fn copy_by_arm(e: &mut Engine, list: u32, extra: u32, kind: u8) {
                     cell_refs::extra_list::lit_water_refs_new(e, block)
                 )
             });
-            e.call(0x0043_4ee0, &args![existing, extra]);
+            typed_call!(FAMILY, 0x0043_4ee0, object_refs::lit_water_copy(e, existing, extra));
         }
         0x8b => {
             // The get-or-create (`0042f420`) adds the new extra data itself.

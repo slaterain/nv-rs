@@ -126,7 +126,7 @@ const VTABLE_PLAYER_CRIME_LIST: u32 = 0x0101_5c30;
 const VTABLE_PERSISTENT_CELL: u32 = 0x0101_5c3c;
 
 /// The RTTI type descriptors a `Compare` casts with: `BSExtraData`'s, then each class's.
-const TYPE_BS_EXTRA_DATA: u32 = 0x0118_3b2c;
+pub(super) const TYPE_BS_EXTRA_DATA: u32 = 0x0118_3b2c;
 const TYPE_STARTING_POSITION: u32 = 0x0118_4b10;
 const TYPE_LOCK: u32 = 0x0118_4754;
 const TYPE_TELEPORT: u32 = 0x0118_4430;
@@ -156,7 +156,7 @@ const TYPE_PACKAGE_START_LOCATION: u32 = 0x0118_448c;
 // ---- What the functions call ----------------------------------------------------------------
 
 /// `__RTDynamicCast(object, offset, from, to, is_reference)` (the C runtime's, `cdecl`).
-const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+pub(super) const DYNAMIC_CAST: u32 = 0x00ec_43fb;
 /// Other units' deletes of what a class owns (`thiscall(object, flags)`): the animation, the light,
 /// the actor list, the audio buoy data, `ScriptLocals` (xNVSE wraps it), the menu topic.
 const ANIMATION_DELETE: u32 = 0x0041_8d20;
@@ -221,7 +221,7 @@ const ZERO_DOUBLE: u32 = 0x0101_2060;
 
 /// `BSExtraData`'s destructor (`0040ecb0`, the cell references family's).
 #[inline]
-fn extra_drop(e: &mut Engine, this: u32) {
+pub(super) fn extra_drop(e: &mut Engine, this: u32) {
     typed_call!(
         cell_refs::FAMILY,
         0x0040_ecb0,
@@ -231,7 +231,7 @@ fn extra_drop(e: &mut Engine, this: u32) {
 
 /// A constructor's start with one word of payload at +0xc. Answers `this`.
 #[inline]
-fn with_word(e: &mut Engine, this: u32, kind: u8, vtable: u32, word: u32) -> u32 {
+pub(super) fn with_word(e: &mut Engine, this: u32, kind: u8, vtable: u32, word: u32) -> u32 {
     extra_with_vtable(e, this, kind, vtable);
     e.mem.set_u32(this.wrapping_add(EXTRA_PAYLOAD), word);
     this
@@ -247,7 +247,7 @@ fn with_byte(e: &mut Engine, this: u32, kind: u8, vtable: u32, byte: u8) -> u32 
 
 /// A destructor that owns nothing: the vtable back, then `BSExtraData`'s.
 #[inline]
-fn drop_plain(e: &mut Engine, this: u32, vtable: u32) {
+pub(super) fn drop_plain(e: &mut Engine, this: u32, vtable: u32) {
     e.mem.set_u32(this, vtable);
     extra_drop(e, this);
 }
@@ -267,7 +267,7 @@ fn drop_owner(e: &mut Engine, this: u32, vtable: u32, delete: u32) {
 /// A `Compare`'s start: `other` cast to the class of `target` (null: the two differ), then
 /// `BSExtraData::Compare`. `None` when the answer is already "they differ", else the cast.
 #[inline]
-fn compare_start(e: &mut Engine, this: u32, other: u32, target: u32) -> Option<u32> {
+pub(super) fn compare_start(e: &mut Engine, this: u32, other: u32, target: u32) -> Option<u32> {
     let cast = e
         .call(
             DYNAMIC_CAST,
@@ -292,7 +292,7 @@ fn base_compare(e: &mut Engine, this: u32, other: u32) -> bool {
 
 /// A `Compare` of the word at +0xc.
 #[inline]
-fn compare_word(e: &mut Engine, this: u32, other: u32, target: u32) -> bool {
+pub(super) fn compare_word(e: &mut Engine, this: u32, other: u32, target: u32) -> bool {
     match compare_start(e, this, other, target) {
         None => true,
         Some(cast) => word_at(e, this, EXTRA_PAYLOAD) != word_at(e, cast, EXTRA_PAYLOAD),
@@ -354,7 +354,7 @@ fn compare_bytes(e: &mut Engine, this: u32, other: u32, target: u32, n: u32) -> 
 
 /// `memcmp` (`00ec4835`, the C runtime family's).
 #[inline]
-fn memcmp(e: &mut Engine, a: u32, b: u32, n: u32) -> i32 {
+pub(super) fn memcmp(e: &mut Engine, a: u32, b: u32, n: u32) -> i32 {
     typed_call!(crt::FAMILY, 0x00ec_4835, crt::mem::memcmp(e, a, b, n))
 }
 
@@ -382,7 +382,7 @@ fn slot_of(e: &Engine, array: u32, index: u32) -> u32 {
 /// An empty actor list (`0096a2d0` in place: two null words) in an 8-byte block from `operator new`,
 /// or null when the allocation failed.
 #[inline]
-fn new_actor_list(e: &mut Engine) -> u32 {
+pub(super) fn new_actor_list(e: &mut Engine) -> u32 {
     let block = e.call(OPERATOR_NEW, &args![8u32]).u32();
     if block != 0 {
         super::simple_list_init(e, block);
