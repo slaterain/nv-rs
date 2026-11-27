@@ -117,9 +117,12 @@ fn vtable_name(vtable: u32) -> &'static str {
     }
 }
 
-/// The rings, by (kernel, actor): run-wide state keyed on the kernel, as real threads need.
-fn rings() -> std::sync::MutexGuard<'static, HashMap<(usize, u32), VecDeque<Note>>> {
-    static RINGS: OnceLock<Mutex<HashMap<(usize, u32), VecDeque<Note>>>> = OnceLock::new();
+/// Each actor's noted level changes, by (kernel, actor).
+type Rings = HashMap<(usize, u32), VecDeque<Note>>;
+
+/// The rings: run-wide state keyed on the kernel, as real threads need.
+fn rings() -> std::sync::MutexGuard<'static, Rings> {
+    static RINGS: OnceLock<Mutex<Rings>> = OnceLock::new();
     RINGS
         .get_or_init(Default::default)
         .lock()
