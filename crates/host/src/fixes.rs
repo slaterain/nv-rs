@@ -60,6 +60,7 @@ pub static FIXES: &[Fix] = &[
     DEAD_LIGHTS,
     THREAD_HEAP,
     crate::half_loaded_move::FIX,
+    crate::player_high_process::FIX,
     TEXTURE_READ_FIRST,
     crate::cell_entry_wait::FIX,
     crate::cell_offsets::FIX,
