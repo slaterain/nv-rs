@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, navmesh, obstacle_listener_ctors, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -659,6 +659,7 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x006d_b4f0, &[0x006d_bbb0]),
     (0x006d_cf20, &[0x0069_0830, 0x006d_cfe0]),
     (0x006e_78b0, &[0x006e_8f40]),
+    (0x006c_0230, &[0x006c_0260]),
 ];
 
 trait Common {
@@ -4364,4 +4365,96 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+#[test]
+fn deactivation_listener_new() {
+    Diff::new(entry!(
+        0x006c_00b0,
+        obstacle_listener_ctors::deactivation_listener_new(Ptr) -> Ptr
+    ))
+    .common()
+    .plain(0x006c_00b0)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x006c_0100, |e, a| {
+            log(e, 0x006c_0100, a[0]);
+            ret(a[0])
+        });
+        let o = e.mem.alloc(0x10);
+        e.mem.set_u32(o, case.word(0));
+        vec![o]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn removal_listener_new() {
+    Diff::new(entry!(
+        0x006c_0210,
+        obstacle_listener_ctors::removal_listener_new(Ptr) -> Ptr
+    ))
+    .common()
+    .plain(0x006c_0210)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x0061_f580, |e, a| {
+            log(e, 0x0061_f580, a[0]);
+            ret(a[0])
+        });
+        let o = e.mem.alloc(0x10);
+        e.mem.set_u32(o, case.word(0));
+        vec![o]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn removal_listener_drop() {
+    Diff::new(entry!(
+        0x006c_0260,
+        obstacle_listener_ctors::removal_listener_drop(Ptr)
+    ))
+    .common()
+    .plain(0x006c_0260)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x0055_4650, |e, a| {
+            log(e, 0x0055_4650, a[0]);
+            ret(0)
+        });
+        let o = e.mem.alloc(0x10);
+        e.mem.set_u32(o, case.word(0));
+        vec![o]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn removal_listener_scalar_delete() {
+    Diff::new(entry!(
+        0x006c_0230,
+        obstacle_listener_ctors::removal_listener_scalar_delete(Ptr, u32) -> Ptr
+    ))
+    .common()
+    .plain(0x006c_0230)
+    .inputs(&[Input::Word, Input::Of(&[0, 1, 2, 0xffff_fffe])])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x0055_4650, |e, a| {
+            log(e, 0x0055_4650, a[0]);
+            ret(0)
+        });
+        let o = e.mem.alloc(0x10);
+        e.mem.set_u32(o, case.word(0));
+        vec![o, case.word(1)]
+    })
+    .run()
+    .assert_same();
 }

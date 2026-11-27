@@ -39,6 +39,7 @@ use layout::{
 pub mod layout;
 pub mod location;
 pub mod navmesh;
+pub mod obstacle_listener_ctors;
 pub mod point;
 pub mod pov;
 pub mod search;
@@ -267,5 +268,10 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The obstacle listeners' constructors and destructors.
+        entry!(0x006c_00b0, obstacle_listener_ctors::deactivation_listener_new(Ptr) -> Ptr),
+        entry!(0x006c_0210, obstacle_listener_ctors::removal_listener_new(Ptr) -> Ptr),
+        entry!(0x006c_0260, obstacle_listener_ctors::removal_listener_drop(Ptr)),
+        entry!(0x006c_0230, obstacle_listener_ctors::removal_listener_scalar_delete(Ptr, u32) -> Ptr),
     ]
 }
