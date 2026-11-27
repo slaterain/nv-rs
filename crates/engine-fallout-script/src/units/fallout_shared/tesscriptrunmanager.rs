@@ -91,16 +91,13 @@ pub fn runner_run(
             return e.mem.u8(this.addr() + 0xa1) != 0;
         }
         if !e.get(this, ScriptRunner::m_scriptRunning).is_null() {
-            // 005e0dd1: JIP LN NVSE's G24 jumps over the two names and the log.
-            if !jip_skips_nested_log(e) {
-                let requested_name = e.vcall(script.addr(), 0x130, &args![]).u32();
-                let running = e.get(this, ScriptRunner::m_scriptRunning);
-                let running_name = e.vcall(running.addr(), 0x130, &args![]).u32();
-                e.call(
-                    0x005b_5e40,
-                    &args![NESTED_RUN_MESSAGE, running_name, requested_name],
-                );
-            }
+            let requested_name = e.vcall(script.addr(), 0x130, &args![]).u32();
+            let running = e.get(this, ScriptRunner::m_scriptRunning);
+            let running_name = e.vcall(running.addr(), 0x130, &args![]).u32();
+            e.call(
+                0x005b_5e40,
+                &args![NESTED_RUN_MESSAGE, running_name, requested_name],
+            );
             return e.mem.u8(this.addr() + 0xa1) != 0;
         }
         e.set(this, ScriptRunner::m_scriptRunning, script);
@@ -173,11 +170,8 @@ pub fn runner_run(
                         )
                         .bool()
                     {
-                        // 005e0fbe: JIP LN NVSE's O7 seam jumps past the clear.
-                        if !jip_keeps_failed_script(e, 0x005e_0fbe) {
-                            let header = e.call(0x0050_0940, &args![script]).u32();
-                            e.mem.set_u32(header + 8, 0);
-                        }
+                        let header = e.call(0x0050_0940, &args![script]).u32();
+                        e.mem.set_u32(header + 8, 0);
                         break;
                     }
                     let remaining = e.mem.u32(skip.addr());
@@ -750,25 +744,6 @@ struct Line {
     parse_only: bool,
 }
 
-/// JIP LN NVSE's `bNoFailedScriptLocks` (O7, `SetOptionalPatch(7)`, step 3.9): its three
-/// `SafeWrite16` jumps (`0x5E0FBE` in `Run`, `0x5E1A23` and `0x5E1F0B` in `EvaluateLine`) skip the
-/// header read and the clear of the script's data length that a failed line does (with the
-/// length 0 the script never runs again). The switch's bit is tested first; true when JIP's
-/// handler at `site` takes the call.
-fn jip_keeps_failed_script(e: &mut Engine, site: u32) -> bool {
-    e.jip_patches() & engine_core::extend::jip_patches::NO_FAILED_SCRIPT_LOCKS != 0
-        && e.site(site, &[]).is_some()
-}
-
-/// JIP LN NVSE's G24 (`SafeWrite16(0x5E0DD1, 0x39EB)`, step 3.9): a busy runner's jump from
-/// `0x5E0DD1` to `0x5E0E0C`, over the two editor-id reads (vtable `+0x130` of the requested and
-/// the running script) and the script log's "Nested call to ScriptRunner::Run" (`005b5e40`). The
-/// fixes' bit is tested first; true when JIP's handler at `0x5E0DD1` takes the jump.
-fn jip_skips_nested_log(e: &mut Engine) -> bool {
-    e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
-        && e.site(0x005e_0dd1, &[]).is_some()
-}
-
 /// The address of if-stack level `depth` (runner +0x24, one word each).
 fn if_level(this: Ptr<ScriptRunner>, depth: u32) -> u32 {
     this.addr()
@@ -908,11 +883,8 @@ fn evaluate_set(e: &mut Engine, at: &Line) -> bool {
                     0x005b_5e40,
                     &args![0x0103_d770u32, name, at.line, error_name],
                 );
-                // 005e1a23: JIP LN NVSE's O7 seam jumps past the clear.
-                if !jip_keeps_failed_script(e, 0x005e_1a23) {
-                    let header = e.call(0x0050_0940, &args![at.script]).u32();
-                    e.mem.set_u32(header + 8, 0);
-                }
+                let header = e.call(0x0050_0940, &args![at.script]).u32();
+                e.mem.set_u32(header + 8, 0);
                 return false;
             }
             if at.parse_only {
@@ -1050,11 +1022,8 @@ fn evaluate_condition(e: &mut Engine, at: &Line) -> bool {
                 e.call(0x005e_24b0, &args![this, at.script, 6u32]);
                 let name = e.vcall(at.script.addr(), 0x130, &args![]).u32();
                 e.call(0x005b_5e40, &args![0x0103_d664u32, name, at.line]);
-                // 005e1f0b: JIP LN NVSE's O7 seam jumps past the clear.
-                if !jip_keeps_failed_script(e, 0x005e_1f0b) {
-                    let header = e.call(0x0050_0940, &args![at.script]).u32();
-                    e.mem.set_u32(header + 8, 0);
-                }
+                let header = e.call(0x0050_0940, &args![at.script]).u32();
+                e.mem.set_u32(header + 8, 0);
                 let code = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, expression));
                 e.mem.set_u32(this.addr() + 0x1c, code);
                 false
@@ -1964,61 +1933,10 @@ mod tests {
         assert_eq!(e.mem.u32(fixture.3.addr()), 3);
     }
 
-    thread_local! {
-        static O7_SEEN: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
-    }
-
-    fn o7_kept<const SITE: u32>(_: &mut Engine, _: &[u32]) -> Option<u32> {
-        O7_SEEN.with(|s| s.borrow_mut().push(SITE));
-        Some(1)
-    }
-
-    /// JIP's O7 handlers (test ones that note their seam and take the call) at the three seams,
-    /// the word set to `word`.
-    fn o7_handlers(e: &mut Engine, word: u32) {
-        O7_SEEN.with(|s| s.borrow_mut().clear());
-        e.set_jip_patches(word);
-        e.on_site_for_test(0x005e_0fbe, o7_kept::<0x005e_0fbe>);
-        e.on_site_for_test(0x005e_1a23, o7_kept::<0x005e_1a23>);
-        e.on_site_for_test(0x005e_1f0b, o7_kept::<0x005e_1f0b>);
-    }
-
-    fn o7_seen() -> Vec<u32> {
-        O7_SEEN.with(|s| s.borrow().clone())
-    }
-
-    /// The words of the three O7 cases: not installed, installed with the fixes but the switch
-    /// off, the switch on (JIP's default).
-    const O7_WORDS: [u32; 3] = [
-        0,
-        engine_core::extend::jip_patches::INSTALLED | engine_core::extend::jip_patches::FIXES,
-        engine_core::extend::jip_patches::INSTALLED
-            | engine_core::extend::jip_patches::FIXES
-            | engine_core::extend::jip_patches::NO_FAILED_SCRIPT_LOCKS,
-    ];
-
-    thread_local! {
-        static G24_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
-    }
-
-    fn g24_taken(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        G24_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
-        Some(1)
-    }
-
-    fn g24_none(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        G24_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
-        None
-    }
-
-    /// A busy runner asked to run a script, the word `word` and `handler` at G24's seam: (what
-    /// `Run` answered, the names read (vtable `+0x130` calls), the script log's calls, the seam's
-    /// asks). The runner's answer byte is set before and cleared on entry, as `Run` does.
-    fn busy_run_jip(
-        word: u32,
-        handler: fn(&mut Engine, &[u32]) -> Option<u32>,
-    ) -> (bool, usize, Vec<Vec<u32>>, Vec<Vec<u32>>) {
-        G24_ASKED.with(|s| s.borrow_mut().clear());
+    /// A busy runner asked to run a script: (what `Run` answered, the names read (vtable `+0x130`
+    /// calls), the script log's calls). The runner's answer byte is set before and cleared on
+    /// entry, as `Run` does.
+    fn busy_run() -> (bool, usize, Vec<Vec<u32>>) {
         let mut e = Engine::new();
         let (runner, script, _) = run_fixture(&mut e, &[0x11, 0, 0, 0], false);
         e.mem.set_u8(runner.addr() + 0xa1, 1);
@@ -2037,8 +1955,6 @@ mod tests {
         });
         e.register_double(0x005b5e40, |_, _| Ret::default());
         e.set(runner, ScriptRunner::m_scriptRunning, Ptr::new(running));
-        e.set_jip_patches(word);
-        e.on_site_for_test(0x005e_0dd1, handler);
         e.call_log = Some(Vec::new());
         let answer = e
             .call(
@@ -2054,114 +1970,58 @@ mod tests {
             .filter(|c| c.0 == 0x005b5e40)
             .map(|c| c.1.clone())
             .collect();
-        (
-            answer,
-            names,
-            logged,
-            G24_ASKED.with(|s| s.borrow().clone()),
-        )
+        (answer, names, logged)
     }
 
-    /// G24 (`0x5E0DD1`): JIP not installed, or installed with the row off, the busy runner reads
-    /// both names and logs the nested run, the seam not asked; with the row, a taken answer skips
-    /// the names and the log (no words asked); no answer keeps them. `Run` answers the cleared
-    /// byte either way and runs nothing.
+    /// `0x5E0DD1`: the busy runner reads both names and logs the nested run. `Run` answers the
+    /// cleared byte and runs nothing.
     #[test]
-    fn jip_g24_skips_the_nested_run_names_and_log() {
-        use engine_core::extend::jip_patches;
-        let log = vec![vec![0x0103d498, 0x3333, 0x2222]];
-        for word in [0, jip_patches::INSTALLED] {
-            assert_eq!(
-                busy_run_jip(word, g24_taken),
-                (false, 2, log.clone(), vec![])
-            );
-        }
-        let on = jip_patches::INSTALLED | jip_patches::FIXES;
+    fn busy_run_reads_both_names_and_logs_the_nested_run() {
         assert_eq!(
-            busy_run_jip(on, g24_taken),
-            (false, 0, vec![], vec![vec![]])
+            busy_run(),
+            (false, 2, vec![vec![0x0103d498, 0x3333, 0x2222]])
         );
-        assert_eq!(busy_run_jip(on, g24_none), (false, 2, log, vec![vec![]]));
     }
 
-    /// `Run`'s failed line (`0x5E0FBE`): with JIP's `bNoFailedScriptLocks` the data length stays
-    /// (the script runs again next time); otherwise it is cleared, the seam not asked.
+    /// `Run`'s failed line (`0x5E0FBE`): the script's data length is cleared (the script never
+    /// runs again).
     #[test]
-    fn jip_o7_run_failure_keeps_the_script() {
-        for word in O7_WORDS {
-            let on = word & engine_core::extend::jip_patches::NO_FAILED_SCRIPT_LOCKS != 0;
-            let mut e = Engine::new();
-            let (runner, script, header) = run_fixture(&mut e, &[0x11, 0, 0, 0], false);
-            o7_handlers(&mut e, word);
-            e.register_double(0x005e13a0, |_, _| 0u32.into_ret());
-            assert!(!e
-                .call(
-                    0x005e0d20,
-                    &args![runner, script, 0u32, 0x5555u32, 0u32, false, 0u8, 0u8, 0.0f32]
-                )
-                .bool());
-            assert_eq!(e.mem.u32(header + 8), if on { 4 } else { 0 }, "{word:x}");
-            assert_eq!(o7_seen(), if on { vec![0x005e_0fbe] } else { vec![] });
-        }
+    fn run_failure_clears_the_script_data_length() {
+        let mut e = Engine::new();
+        let (runner, script, header) = run_fixture(&mut e, &[0x11, 0, 0, 0], false);
+        e.register_double(0x005e13a0, |_, _| 0u32.into_ret());
+        assert_eq!(e.mem.u32(header + 8), 4);
+        assert!(!e
+            .call(
+                0x005e0d20,
+                &args![runner, script, 0u32, 0x5555u32, 0u32, false, 0u8, 0u8, 0.0f32]
+            )
+            .bool());
+        assert_eq!(e.mem.u32(header + 8), 0);
     }
 
-    /// `EvaluateLine`'s set with an expression error (`0x5E1A23`): the error is still reported and
-    /// the line fails; only the data length's clear goes with the switch.
+    /// `EvaluateLine`'s set with an expression error (`0x5E1A23`): the error is reported, the line
+    /// fails and the script's data length is cleared.
     #[test]
-    fn jip_o7_set_expression_error_keeps_the_script() {
-        for word in O7_WORDS {
-            let on = word & engine_core::extend::jip_patches::NO_FAILED_SCRIPT_LOCKS != 0;
-            let mut e = Engine::new();
-            let fixture = line_fixture(&mut e, &[b'f', 1, 0, 1, 0, b'1'], vec![Err(4)]);
-            o7_handlers(&mut e, word);
-            e.map(EXPRESSION_ERROR_NAMES, 0x18);
-            e.mem.set_u32(EXPRESSION_ERROR_NAMES + 16, 0xabcd);
-            e.register_double(0x005b5e40, |_, _| Ret::default());
-            let header = e.call(0x00500940, &[fixture.1.addr()]).u32();
-            let length = e.mem.u32(header + 8);
-            assert_ne!(length, 0);
-            e.call_log = Some(Vec::new());
-            assert!(!evaluate(&mut e, fixture, 0x15, 0, false));
-            let reports = e
-                .call_log
-                .take()
-                .unwrap()
-                .iter()
-                .filter(|c| c.0 == 0x005b5e40)
-                .count();
-            assert_eq!(reports, 1, "{word:x}");
-            assert_eq!(
-                e.mem.u32(header + 8),
-                if on { length } else { 0 },
-                "{word:x}"
-            );
-            assert_eq!(o7_seen(), if on { vec![0x005e_1a23] } else { vec![] });
-        }
-    }
-
-    /// `EvaluateLine`'s if with an expression error (`0x5E1F0B`): the error code and the skip
-    /// stay; only the data length's clear goes with the switch.
-    #[test]
-    fn jip_o7_condition_error_keeps_the_script() {
-        for word in O7_WORDS {
-            let on = word & engine_core::extend::jip_patches::NO_FAILED_SCRIPT_LOCKS != 0;
-            let mut e = Engine::new();
-            let fixture = line_fixture(&mut e, &[3, 0, 1, 0, b'1'], vec![Err(5)]);
-            o7_handlers(&mut e, word);
-            e.register_double(0x005b5e40, |_, _| Ret::default());
-            let header = e.call(0x00500940, &[fixture.1.addr()]).u32();
-            let length = e.mem.u32(header + 8);
-            assert_ne!(length, 0);
-            assert!(!evaluate(&mut e, fixture, 0x16, 0x3333, false));
-            assert_eq!(e.mem.u32(fixture.0.addr() + 0x1c), 5, "{word:x}");
-            assert_eq!(e.mem.u32(fixture.3.addr()), 3, "{word:x}");
-            assert_eq!(
-                e.mem.u32(header + 8),
-                if on { length } else { 0 },
-                "{word:x}"
-            );
-            assert_eq!(o7_seen(), if on { vec![0x005e_1f0b] } else { vec![] });
-        }
+    fn set_expression_error_clears_the_script_data_length() {
+        let mut e = Engine::new();
+        let fixture = line_fixture(&mut e, &[b'f', 1, 0, 1, 0, b'1'], vec![Err(4)]);
+        e.map(EXPRESSION_ERROR_NAMES, 0x18);
+        e.mem.set_u32(EXPRESSION_ERROR_NAMES + 16, 0xabcd);
+        e.register_double(0x005b5e40, |_, _| Ret::default());
+        let header = e.call(0x00500940, &[fixture.1.addr()]).u32();
+        assert_ne!(e.mem.u32(header + 8), 0);
+        e.call_log = Some(Vec::new());
+        assert!(!evaluate(&mut e, fixture, 0x15, 0, false));
+        let reports = e
+            .call_log
+            .take()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == 0x005b5e40)
+            .count();
+        assert_eq!(reports, 1);
+        assert_eq!(e.mem.u32(header + 8), 0);
     }
 
     /// A command definition at its table address with the given handler.
@@ -2527,78 +2387,6 @@ mod tests {
         );
         assert!(log.iter().any(|c| c.0 == 0x00500940), "the header is read");
         assert!(log.iter().any(|c| c.0 == 0x005e1550), "the run goes on");
-    }
-
-    thread_local! {
-        /// The lines of the marker command that ran (its data offset).
-        static MARKS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
-    }
-
-    /// JIP LN NVSE's ScriptWait end to end (`0x005E0EC9` and `0x005E1716`, JIP's real handlers
-    /// and its real `ScriptWait` command, called by the translated `EvaluateLine` from the
-    /// translated `Run`, with xNVSE's line records): an object script
-    /// `Begin GameMode / Mark / ScriptWait 2 / Mark / End` on a reference. Its first run marks
-    /// the first line, waits and jumps to the block's end (the second mark does not run); the
-    /// next run skips the block, counting one pass; the run after resumes right after
-    /// `ScriptWait` (only the second mark runs); the next one runs the block from its start.
-    #[test]
-    fn run_waits_and_resumes_with_jip_script_wait() {
-        use jip::world_hooks::SCRIPT_WAIT;
-        // `scn` (0x1D, no data); Begin (0x10, 6 bytes: type 0 GameMode, the block's span 23 to
-        // the end of its End); the marker (0x1021, no data) at 14; ScriptWait (7 bytes: one
-        // argument, `n` 2) at 18; the marker at 29; End (0x11) at 33.
-        const MARK: u16 = 0x1021;
-        let mut bytes = vec![0x1d, 0, 0, 0, 0x10, 0, 6, 0, 0, 0];
-        bytes.extend(23u32.to_le_bytes());
-        bytes.extend(MARK.to_le_bytes());
-        bytes.extend([0, 0]);
-        bytes.extend((SCRIPT_WAIT as u16).to_le_bytes());
-        bytes.extend([7, 0, 1, 0, b'n']);
-        bytes.extend(2u32.to_le_bytes());
-        bytes.extend(MARK.to_le_bytes());
-        bytes.extend([0, 0, 0x11, 0, 0, 0]);
-        assert_eq!(bytes.len(), 37);
-        let mut e = Engine::new();
-        jip::test_support::install_into(&mut e);
-        nvse::context::install(&mut e);
-        let (runner, script, _) = run_fixture(&mut e, &bytes, false);
-        // The script: an object script with an id.
-        e.mem.set_u32(script.addr() + 0xc, 0x0100_0100);
-        // The reference running it (its id; JIP's wait flag in byte `+5`).
-        let reference = e.mem.alloc(0x100);
-        e.mem.set_u32(reference + 0xc, 0x0100_0001);
-        // GameMode's block handler (stand-in): the block applies (its result 1).
-        let entry = 0x0118_e300;
-        e.mem.set_u8(entry, 0);
-        e.mem.set_u32(entry + 4, 0);
-        e.mem.set_u32(entry + 8, 0x1234_0001);
-        e.register_double(0x1234_0001, |e, a| {
-            e.mem.set_f64(a[6], 1.0);
-            1u32.into_ret()
-        });
-        // The marker command (a vanilla record of xNVSE's table, stand-in handler): notes its
-        // line's data offset.
-        let record = nvse::table::record_of(&e, u32::from(MARK));
-        e.mem.set_u32(record + 0x18, 0x1234_0002);
-        e.register_double(0x1234_0002, |e, a| {
-            let at = e.mem.u32(a[7]);
-            MARKS.with(|m| m.borrow_mut().push(at));
-            1u32.into_ret()
-        });
-        let run = |e: &mut Engine| -> Vec<u32> {
-            e.call(
-                0x005e0d20,
-                &args![runner, script, reference, 0x5555u32, 0x4444u32, false, 0u8, 0u8, 0.0f32],
-            );
-            MARKS.with(|m| m.take())
-        };
-        assert_eq!(run(&mut e), vec![18], "the first mark, then the wait");
-        assert_eq!(e.hook_users(engine_core::extend::Hook::ScriptWait), 1);
-        assert_ne!(e.mem.u8(reference + 5) & 8, 0, "the reference waits");
-        assert_eq!(run(&mut e), vec![], "waiting: the block is skipped");
-        assert_eq!(run(&mut e), vec![33], "resumed after ScriptWait");
-        assert_eq!(e.mem.u8(reference + 5) & 8, 0, "no longer waiting");
-        assert_eq!(run(&mut e), vec![18], "the block from its start");
     }
 
     #[test]

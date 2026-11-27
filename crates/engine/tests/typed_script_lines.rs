@@ -1,8 +1,8 @@
 //! The differential test of every typed function of the script_lines family
 //! (`engine_typed::script_lines`) against its translation: the runner's line loop, the action
 //! list's run, `ParseLine` and `EvaluateLine` with its `BEGIN`, `set`, `if`, `elseif`, `else`,
-//! `endif` and command lines, in execute and parse mode, with JIP LN's kept failed scripts on and
-//! off. The expressions go through the scripts family (on in every run), so the lines reach the
+//! `endif` and command lines, in execute and parse mode, with the extenders' seams on and off.
+//! The expressions go through the scripts family (on in every run), so the lines reach the
 //! typed evaluator as in play.
 //!
 //! The script's header (`00500940`) is the scripts family's own getter. What stands in: the casts,
@@ -11,7 +11,7 @@
 //! reference's changed test and process, and the CRT's `atol` and `atof`.
 
 use engine as _;
-use engine_core::extend::{jip_patches, Hook};
+use engine_core::extend::Hook;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Diff, Input};
 use engine_core::typed::leaf;
@@ -362,23 +362,15 @@ fn script_world(e: &mut Engine, code: &[u8], magic_effect: bool) -> World {
 /// What the seams' handlers saw, so a word handed to one differently shows in memory.
 const SEEN: u32 = CONFIG + 0x80;
 
-/// The extenders' seams in these functions, when `on`: JIP LN's kept failed scripts (its three
-/// jumps), the seams before a block type's and a command's handler (xNVSE and JIP zero the
-/// result there), and JIP LN's script wait at the run's start and at a block's test (which here
-/// makes the test itself for block type 3, as a resumed wait does). xNVSE's wraps over the four
-/// functions themselves are not in these runs: a wrap goes over the typed base when the families
-/// are registered, which a setup can't do; every call into them stays by address (`e.call`), so a
-/// wrap is reached as before.
+/// The extenders' seams in these functions, when `on`: the seams before a block type's and a
+/// command's handler (xNVSE and JIP zero the result there), and JIP LN's script wait at the run's
+/// start and at a block's test (which here makes the test itself for block type 3, as a resumed
+/// wait does). xNVSE's wraps over the four functions themselves are not in these runs: a wrap goes
+/// over the typed base when the families are registered, which a setup can't do; every call into
+/// them stays by address (`e.call`), so a wrap is reached as before.
 fn extenders(e: &mut Engine, on: bool) {
     e.set_hook_users(Hook::ScriptWait, u32::from(on));
     if on {
-        e.set_jip_patches(
-            jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::NO_FAILED_SCRIPT_LOCKS,
-        );
-        // O7's three and G24's skip of a busy runner's names and log (`0x5E0DD1`).
-        for site in [0x005e_0fbe, 0x005e_1a23, 0x005e_1f0b, 0x005e_0dd1] {
-            e.on_site_for_test(site, |_, _| Some(1));
-        }
         for site in [0x005e_16c3, 0x005e_2329] {
             e.on_site_for_test(site, |e, w| {
                 e.mem.set_u32(SEEN, w[0] ^ w[1].rotate_left(8));

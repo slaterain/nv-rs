@@ -772,36 +772,6 @@ fn binary(
     }
 }
 
-/// JIP LN NVSE's `bDoublePrecision` (`SetOptionalPatch(8)`): its operator hook replaces the
-/// operator switch at `0x593FBC`. The switch's bit is tested first; then JIP's handler gets the
-/// operator's index (less 2), the left operand's type word and value words (low, high), the
-/// right's, and the current operand's address, and writes the result there. True when the handler
-/// took the operator.
-#[inline]
-fn jip_double_precision(
-    e: &mut Engine,
-    operator: u32,
-    left: Operand,
-    right: Operand,
-    current: u32,
-) -> bool {
-    e.jip_patches() & engine_core::extend::jip_patches::DOUBLE_PRECISION != 0
-        && e.site(
-            0x0059_3fbc,
-            &[
-                operator.wrapping_sub(2),
-                left.0[0],
-                left.0[2],
-                left.0[3],
-                right.0[0],
-                right.0[2],
-                right.0[3],
-                current,
-            ],
-        )
-        .is_some()
-}
-
 // Typed from 00593db0
 /// `CExpression::Eval`: evaluates `length` bytes of a compiled (postfix) expression and answers
 /// its value, 0 after an error (the code is in the expression). Nothing runs when `length` is 0 or
@@ -888,30 +858,25 @@ pub fn eval(
                         return 0.0;
                     }
                     let left = pop_operand(e, operands);
-                    if jip_double_precision(e, operator as u32, left, right, current) {
-                        // JIP's operator wrote the current operand's type byte and value.
-                        result = Operand::read(e, current);
-                    } else {
-                        match binary(
-                            e,
-                            base,
-                            operator as u32,
-                            left,
-                            right,
-                            parse,
-                            token,
-                            precision,
-                        ) {
-                            Some(Value::Int(v)) => {
-                                result.set_type(false);
-                                result.set_int(v);
-                            }
-                            Some(Value::Float(v)) => {
-                                result.set_type(true);
-                                result.set_float(v);
-                            }
-                            None => return 0.0,
+                    match binary(
+                        e,
+                        base,
+                        operator as u32,
+                        left,
+                        right,
+                        parse,
+                        token,
+                        precision,
+                    ) {
+                        Some(Value::Int(v)) => {
+                            result.set_type(false);
+                            result.set_int(v);
                         }
+                        Some(Value::Float(v)) => {
+                            result.set_type(true);
+                            result.set_float(v);
+                        }
+                        None => return 0.0,
                     }
                 }
                 result.write(e, current);
