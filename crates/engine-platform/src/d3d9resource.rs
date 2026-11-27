@@ -2382,3 +2382,205 @@ pub(super) fn end_if_unheld(e: &mut Engine, object: u32) -> bool {
     }
     true
 }
+
+/// One device's bindings and this module's objects, for a bulk update of the model
+/// (`super::d3d9device::bulk_update`): binding commands as the stream carries them, each checked
+/// first ([`Bulk::check`]), then taken as the per-call path takes it ([`Bulk::take`]), with no
+/// command sent.
+pub(super) struct Bulk<'a> {
+    objects: &'a mut engine_core::AddrMap<u32, Object>,
+    /// Main's bindings (the bulk update is refused while a cut is open), the device's made at its
+    /// first binding taken, as the per-call path makes them.
+    list: &'a mut Vec<(u32, Bindings)>,
+    device: u32,
+}
+
+/// [`Bulk`] for `device`.
+pub(super) fn bulk_in(r: &mut Resources, device: u32) -> Bulk<'_> {
+    Bulk {
+        objects: &mut r.objects,
+        list: &mut r.bindings,
+        device,
+    }
+}
+
+impl Bulk<'_> {
+    /// Whether `cmd` is a binding the per-call path takes for the device as the command gives it:
+    /// the declaration, FVF, a shader, a stream source (streams 0 to 15) or the indices, each object
+    /// none or one of this module of the kind the call binds, or constant registers within their
+    /// kind's with the bytes of that many registers. False for any other command.
+    pub(super) fn check(&self, cmd: &d3d9_stream::Cmd<d3d9_stream::Data<'_>>) -> bool {
+        use d3d9_stream::Cmd;
+        let of = |object: u32, code: u32| {
+            object == 0 || self.objects.get(&object).is_some_and(|o| o.code == code)
+        };
+        let (on, ok) = match *cmd {
+            Cmd::SetVertexDeclaration {
+                device,
+                declaration,
+            } => (device, of(declaration, DECLARATION_CODE)),
+            Cmd::SetFvf { device, .. } => (device, true),
+            Cmd::SetShader {
+                device,
+                pixel,
+                shader,
+            } => {
+                let code = if pixel {
+                    PIXEL_SHADER_CODE
+                } else {
+                    VERTEX_SHADER_CODE
+                };
+                (device, of(shader, code))
+            }
+            Cmd::SetStreamSource {
+                device,
+                stream,
+                buffer,
+                ..
+            } => (device, stream < STREAMS && of(buffer, VERTEX_BUFFER_CODE)),
+            Cmd::SetIndices { device, buffer } => (device, of(buffer, INDEX_BUFFER_CODE)),
+            Cmd::SetConstants {
+                device,
+                kind,
+                start,
+                count,
+                data,
+            } => {
+                let size = if kind % 3 == 2 { 4 } else { 16 };
+                let ok = kind <= 5
+                    && u64::from(start) + u64::from(count) <= u64::from(registers(kind))
+                    && u64::from(data.len()) == size * u64::from(count);
+                (device, ok)
+            }
+            _ => return false,
+        };
+        ok && on == self.device
+    }
+
+    /// Takes `cmd`, a binding [`Bulk::check`] passed, into the model as the per-call path does:
+    /// the object bound counted, the one let go of released, a stream's empty stride forgotten, the
+    /// registers stored and marked set. An object neither the program nor the device holds any
+    /// more is put on `ending` (the caller ends it after the update, as [`end_if_unheld`]).
+    pub(super) fn take(
+        &mut self,
+        cmd: d3d9_stream::Cmd<d3d9_stream::Data<'_>>,
+        ending: &mut Vec<u32>,
+    ) {
+        use d3d9_stream::Cmd;
+        let b = bindings_in(self.list, self.device);
+        let objects = &mut *self.objects;
+        // As [`hold`]: the new object counted, the old one released (the same one changes nothing).
+        let mut hold = |old: u32, new: u32| {
+            if old == new {
+                return;
+            }
+            if new != 0 {
+                objects.get_mut(&new).expect("a checked object").bound += 1;
+            }
+            if old != 0 {
+                let o = objects.get_mut(&old).expect("a bound object lives");
+                o.bound -= 1;
+                if o.bound == 0 && o.references == 0 {
+                    ending.push(old);
+                }
+            }
+        };
+        match cmd {
+            Cmd::SetVertexDeclaration { declaration, .. } => {
+                hold(
+                    std::mem::replace(&mut b.declaration, declaration),
+                    declaration,
+                );
+            }
+            Cmd::SetFvf { fvf, .. } => b.fvf = fvf,
+            Cmd::SetShader { pixel, shader, .. } => {
+                let word = if pixel {
+                    &mut b.pixel_shader
+                } else {
+                    &mut b.vertex_shader
+                };
+                hold(std::mem::replace(word, shader), shader);
+            }
+            Cmd::SetIndices { buffer, .. } => {
+                hold(std::mem::replace(&mut b.indices, buffer), buffer);
+            }
+            Cmd::SetStreamSource {
+                stream,
+                buffer,
+                offset,
+                stride,
+                ..
+            } => {
+                if !b.empty_strides.is_empty() {
+                    b.empty_strides.remove(&stream);
+                }
+                let old = if buffer != 0 {
+                    b.streams.insert(stream, (buffer, offset, stride))
+                } else {
+                    b.streams.remove(&stream)
+                };
+                hold(old.map_or(0, |o| o.0), buffer);
+            }
+            Cmd::SetConstants {
+                kind,
+                start,
+                count,
+                data,
+                ..
+            } => {
+                if b.constants.is_empty() {
+                    b.constants = vec![[0; 4]; 6 * CONSTANT_SLOTS];
+                    b.constants_set = vec![0; 6 * CONSTANT_SLOTS / 64];
+                }
+                let bytes = data.bytes();
+                let word = |i: usize| {
+                    u32::from_le_bytes(bytes[4 * i..4 * i + 4].try_into().expect("4 bytes"))
+                };
+                let first = usize::from(kind) * CONSTANT_SLOTS + start as usize;
+                for i in 0..count as usize {
+                    b.constants[first + i] = if kind % 3 == 2 {
+                        [word(i), 0, 0, 0]
+                    } else {
+                        [
+                            word(4 * i),
+                            word(4 * i + 1),
+                            word(4 * i + 2),
+                            word(4 * i + 3),
+                        ]
+                    };
+                    let slot = first + i;
+                    b.constants_set[slot / 64] |= 1 << (slot % 64);
+                }
+            }
+            other => unreachable!("{} is no binding", other.name()),
+        }
+    }
+}
+
+/// Tests: `device`'s bindings in a fixed order (declaration, FVF, shaders, indices, the streams and
+/// empty strides by stream, whether it drew from memory, every constant register's words and set
+/// bits), and every object's address, references and bindings ([`held_for_tests`]); empty bindings
+/// for a device with none made.
+#[cfg(test)]
+pub(super) fn model_for_tests(e: &mut Engine, device: u32) -> Vec<u32> {
+    let mut out = held_for_tests(e);
+    let r = resources(e);
+    let Some((_, b)) = r.bindings.iter().find(|(d, _)| *d == device) else {
+        return out;
+    };
+    out.extend([
+        b.declaration,
+        b.fvf,
+        b.vertex_shader,
+        b.pixel_shader,
+        b.indices,
+    ]);
+    out.push(u32::from(b.drawn_from_memory));
+    out.extend(b.constants.iter().flatten());
+    out.extend(
+        b.constants_set
+            .iter()
+            .flat_map(|w| [*w as u32, (*w >> 32) as u32]),
+    );
+    out
+}

@@ -55,7 +55,9 @@ pub struct Counts {
     pub missing: u64,
     /// Items whose registers are not the size of their record's: nothing drawn.
     pub mismatched: u64,
-    /// Records given up before their draw (a `Present`, a reset, too many commands).
+    /// Records given up before their draw (a `Present`, a reset, too many commands), and kept states
+    /// not kept ([`Cmd::KeepStates`] for a record other than the one made last, more of them than a
+    /// record keeps, or cut short by a command that is no state).
     pub cut: u64,
 }
 

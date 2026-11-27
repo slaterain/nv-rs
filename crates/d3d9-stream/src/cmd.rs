@@ -483,7 +483,8 @@ commands! {
     /// `id` sets first when drawn as a [`Cmd::DrawPatched`]: what its set-up's setter calls leave,
     /// each sent whether or not the device held it already. Kept by [`crate::Kept`], never carried
     /// out (right after the record's draw the device holds them already). `id` must be the record
-    /// made last; otherwise they are dropped.
+    /// made last; otherwise they are taken and dropped. More than [`crate::kept::MOST_COMMANDS`]: none
+    /// is taken, and the sets that follow are carried out as ordinary ones.
     KeepStates { device: Handle, id: u32, count: u32 },
     /// Record `id` drawn with no command of its set-up: the states it keeps ([`Cmd::KeepStates`])
     /// set, its own commands carried out with their own registers, then `patches` set just before

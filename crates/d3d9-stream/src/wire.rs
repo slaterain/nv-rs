@@ -26,7 +26,7 @@ pub const OLDER_LIST_HASH: u64 = 0x2220_7750_95dd_ca44;
 
 /// The [`LIST_HASH`] of the list with the kept draw records' first three commands, before the patched
 /// items' (`KeepStates`, `DrawPatched`) were added at its end: such a file (a stage-1 run's) is read
-/// as ever too.
+/// as ever too. (The `LIST_HASH` of #1145's build: its tools hold it beside [`OLDER_LIST_HASH`].)
 pub const ITEMS_LIST_HASH: u64 = 0xb4a5_77bb_8c31_dff2;
 
 /// Whether a file written with the command list of hash `file` is read: this build's,
