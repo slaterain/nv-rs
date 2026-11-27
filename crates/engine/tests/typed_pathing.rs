@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, navmesh, pathfind, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -660,6 +660,7 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x006d_b4f0, &[0x006d_bbb0]),
     (0x006d_cf20, &[0x0069_0830, 0x006d_cfe0]),
     (0x006e_78b0, &[0x006e_8f40]),
+    (0x006d_1600, &[0x006d_1620]),
 ];
 
 trait Common {
@@ -4365,4 +4366,69 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- Pathfind random-angle helpers ----
+
+/// The random angle's data pages and doubles: the scale at `0101e5a0` (`2*pi/2^32`) and pi at
+/// `0101ff40`.
+fn random_angle_globals(e: &mut Engine) {
+    e.map(0x0101_f000, 0x1000);
+    e.mem.set_u64(
+        0x0101_e5a0,
+        (2.0 * std::f64::consts::PI / 4_294_967_296.0).to_bits(),
+    );
+    e.mem.set_u64(0x0101_ff40, std::f64::consts::PI.to_bits());
+}
+
+/// Stands in for the random generator: the object getter returns the `RNG` cell's object, the
+/// unsigned draw returns the object's first word.
+const RNG: u32 = 0x0300_2f28;
+
+fn random_stubs(e: &mut Engine) {
+    e.register(0x0047_6c00, |e, _a| {
+        log(e, 0x0047_6c00, 0);
+        ret(e.mem.u32(RNG))
+    });
+    e.register(0x0047_6be0, |e, a| {
+        log(e, 0x0047_6be0, a[0]);
+        ret(e.mem.u32(a[0]))
+    });
+}
+
+#[test]
+fn random_angle_on() {
+    Diff::new(entry!(0x006d_1620, pathfind::random_angle_on(Ptr) -> f32))
+        .common()
+        .plain(0x006d_1620)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            random_angle_globals(e);
+            random_stubs(e);
+            let rng = e.mem.alloc(4);
+            e.mem.set_u32(rng, case.word(0));
+            vec![rng]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn random_angle() {
+    Diff::new(entry!(0x006d_1600, pathfind::random_angle() -> f32))
+        .common()
+        .plain(0x006d_1600)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            random_angle_globals(e);
+            random_stubs(e);
+            let rng = e.mem.alloc(4);
+            e.mem.set_u32(rng, case.word(0));
+            e.mem.set_u32(RNG, rng);
+            vec![]
+        })
+        .run()
+        .assert_same();
 }
