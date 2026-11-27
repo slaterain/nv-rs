@@ -24,6 +24,13 @@ const ALLOCATOR_ALLOCATE: u32 = 0x0065_f7a0;
 const COPY_CHARS: u32 = 0x0044_ccd0;
 /// The cdecl helper `0044abd0` forwards to (two words).
 const FORWARD_TARGET: u32 = 0x0044_d670;
+/// This run's own members, called by address (the forms family types them): `_Eos`,
+/// `char_traits::assign`, `_Myptr`, `max_size` and `_Copy`.
+const STRING_EOS: u32 = 0x0044_a880;
+const CHAR_ASSIGN: u32 = 0x0044_a8c0;
+const STRING_MYPTR: u32 = 0x0044_a970;
+const STRING_MAX_SIZE: u32 = 0x0044_a9d0;
+const STRING_COPY: u32 = 0x0044_aa10;
 
 // Translated from 0044a880 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `basic_string::_Eos(newsize)`: stores the length and writes the
@@ -32,8 +39,11 @@ pub fn std_string_eos(e: &mut Engine, this: Ptr<DebugString>, new_size: u32) {
     e.set(this, DebugString::size, new_size);
     e.with_stack(4, |e, terminator| {
         e.mem.set_u8(terminator.addr(), 0);
-        let end = std_string_myptr(e, this).addr().wrapping_add(new_size);
-        char_traits_assign(e, Ptr::new(end), terminator);
+        let end = e
+            .call(STRING_MYPTR, &args![this])
+            .u32()
+            .wrapping_add(new_size);
+        e.call(CHAR_ASSIGN, &args![end, terminator]);
     });
 }
 
@@ -50,18 +60,18 @@ pub fn char_traits_assign(e: &mut Engine, left: Ptr, right: Ptr) {
 /// `trim` and a size under 16, returns to the inline buffer (`_Tidy`);
 /// an empty request just terminates the string. Returns `newsize > 0`.
 pub fn std_string_grow(e: &mut Engine, this: Ptr<DebugString>, new_size: u32, trim: bool) -> bool {
-    if std_string_max_size(e, this) < new_size {
+    if e.call(STRING_MAX_SIZE, &args![this]).u32() < new_size {
         e.call(STRING_TOO_LONG, &[]);
     }
     if e.get(this, DebugString::reserve) < new_size {
         let old_size = e.get(this, DebugString::size);
-        std_string_copy(e, this, new_size, old_size);
+        e.call(STRING_COPY, &args![this, new_size, old_size]);
     } else if trim && new_size < 0x10 {
         let size = e.get(this, DebugString::size);
         let keep = if new_size < size { new_size } else { size };
         e.call(STRING_TIDY, &args![this, 1u32, keep]);
     } else if new_size == 0 {
-        std_string_eos(e, this, 0);
+        e.call(STRING_EOS, &args![this, 0u32]);
     }
     new_size > 0
 }
@@ -98,11 +108,14 @@ pub fn std_string_max_size(e: &mut Engine, this: Ptr<DebugString>) -> u32 {
 // Translation incomplete: 0044aa10 - the try/catch around the allocation (FS:[0] frame; handler 0044aac8 retries with newsize + 1, else _Tidy(true, 0) and rethrows) is not translated
 pub fn std_string_copy(e: &mut Engine, this: Ptr<DebugString>, new_size: u32, old_length: u32) {
     let mut new_reserve = new_size | 0xf;
-    if std_string_max_size(e, this) < new_reserve {
+    if e.call(STRING_MAX_SIZE, &args![this]).u32() < new_reserve {
         new_reserve = new_size;
     } else if new_reserve / 3 < e.get(this, DebugString::reserve) >> 1 {
         let half = e.get(this, DebugString::reserve) >> 1;
-        let room = std_string_max_size(e, this).wrapping_sub(half);
+        let room = e
+            .call(STRING_MAX_SIZE, &args![this])
+            .u32()
+            .wrapping_sub(half);
         if e.get(this, DebugString::reserve) <= room {
             let reserve = e.get(this, DebugString::reserve);
             new_reserve = (reserve >> 1).wrapping_add(reserve);
@@ -115,7 +128,7 @@ pub fn std_string_copy(e: &mut Engine, this: Ptr<DebugString>, new_size: u32, ol
         )
         .u32();
     if old_length > 0 {
-        let source = std_string_myptr(e, this);
+        let source = e.call(STRING_MYPTR, &args![this]).u32();
         e.call(
             COPY_CHARS,
             &args![buffer, new_reserve.wrapping_add(1), source, old_length],
@@ -124,18 +137,19 @@ pub fn std_string_copy(e: &mut Engine, this: Ptr<DebugString>, new_size: u32, ol
     e.call(STRING_TIDY, &args![this, 1u32, 0u32]);
     e.set(this, DebugString::buffer_pointer, Ptr::new(buffer));
     e.set(this, DebugString::reserve, new_reserve);
-    std_string_eos(e, this, old_length);
+    e.call(STRING_EOS, &args![this, old_length]);
 }
 
 // Translated from 0044ab90 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `basic_string::_Inside(ptr)`: whether `text` points into the string's
 /// characters (`_Myptr() <= text < _Myptr() + size`); false for null.
 pub fn std_string_inside(e: &mut Engine, this: Ptr<DebugString>, text: Ptr) -> bool {
-    if text.is_null() || text.addr() < std_string_myptr(e, this).addr() {
+    if text.is_null() || text.addr() < e.call(STRING_MYPTR, &args![this]).u32() {
         return false;
     }
-    let end = std_string_myptr(e, this)
-        .addr()
+    let end = e
+        .call(STRING_MYPTR, &args![this])
+        .u32()
         .wrapping_add(e.get(this, DebugString::size));
     end > text.addr()
 }

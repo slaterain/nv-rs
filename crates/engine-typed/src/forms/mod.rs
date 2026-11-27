@@ -29,8 +29,17 @@
 //! - [`animation`]: `TESAnimation`'s functions (the component at +0xc4 of the actor base forms, in
 //!   the unit after `TESAIForm`'s): the constructor and destructor, the KF file names' list, its
 //!   chunk, its copy and compare.
-//! - [`debug_string`]: the debug-heap `std::string` members the linker placed in `TESObject`'s unit:
-//!   its constructors, destructor, `c_str`, the assigns, `erase`, `_Tidy` and the `strlen` wrapper.
+//! - [`debug_string`]: the debug-heap `std::string` members the linker placed in `TESObject`'s unit
+//!   and the run after it: its constructors, destructor, `c_str`, the assigns, `erase`, `_Tidy`, the
+//!   `strlen` wrapper, `_Eos`, `char_traits::assign`, `_Grow`, `_Myptr`, `max_size`, `_Copy` and
+//!   `_Inside`.
+//! - [`std_exceptions`]: `std::logic_error`'s, `std::length_error`'s and `std::bad_alloc`'s
+//!   constructors, copy constructors, `what()`, destructor bodies and scalar deleting destructors.
+//! - [`word_vector`]: the debug `std::vector<unsigned long>` before the string (constructor,
+//!   destructor, `clear`, `begin`, `erase`, `_Buy`, `max_size`) and its word allocator's
+//!   `allocate`, `max_size` and one-word copy.
+//! - [`queued_maps`]: the lock-free maps' scalar deleting destructors in the run after the string,
+//!   the queued task pointer's release and the map iterator's flag test.
 //! - [`object`]: every function of `TESObject`'s unit but `TESObject::IsMarker` (`0050f9e0`, which
 //!   JIP LN NVSE rewrites): `TESObject`'s and the bound objects' constructors and destructors, the
 //!   `OBND` box (its points, size, save and load), `Clone3D`, the model registration and the scaled
@@ -52,8 +61,8 @@
 //! translations that called one of them as a plain Rust function (in `tesform.rs`,
 //! `tesactorbasedata.rs`, `tesactorbase.rs`, `tesattributes.rs`, `run_004801e0.rs`, `tesaiform.rs`,
 //! `run_0047f940.rs`, `tesobject.rs`, `packagelist.rs`, `run_0067ad20.rs`, `run_0067c330.rs`,
-//! `run_0067ec40.rs` and `run_0067fcb0.rs` themselves) call it by address now, so the game reaches
-//! the typed function from there too.
+//! `run_0067ec40.rs`, `run_0067fcb0.rs`, `run_0044a880.rs` and `run_0044a170.rs` themselves) call
+//! it by address now, so the game reaches the typed function from there too.
 //!
 //! Native: the one-line bodies the exe calls (the form type, its flag tests, the byte swaps, the
 //! files' and save buffers' fields, the components' accessors) are done in place, the leaves', the
@@ -104,8 +113,11 @@ pub mod debug_string;
 pub mod object;
 pub mod package_data;
 pub mod package_list;
+pub mod queued_maps;
 pub mod schedule;
+pub mod std_exceptions;
 pub mod tesform;
+pub mod word_vector;
 
 /// This family's bit: what each `typed_call!` of it names. Id 45: past the families in main
 /// (0-35) and the interface lane's 44 in progress.
@@ -398,6 +410,43 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0044_a7b0, debug_string::construct_proxy(u32, u32) -> u32),
         entry!(0x0044_a7d0, debug_string::construct_proxy_from(u32, u32) -> u32),
         entry!(0x0044_a7f0, debug_string::assign_chars(u32, u32, u32) -> u32),
+        entry!(0x0044_a880, debug_string::end_string_at(u32, u32)),
+        entry!(0x0044_a8c0, debug_string::assign_char(u32, u32)),
+        entry!(0x0044_a8d0, debug_string::grow_storage(u32, u32, bool) -> bool),
+        entry!(0x0044_a970, debug_string::string_characters(u32) -> u32),
+        entry!(0x0044_a9d0, debug_string::string_max_size(u32) -> u32),
+        entry!(0x0044_aa10, debug_string::copy_to_new_storage(u32, u32, u32)),
+        entry!(0x0044_ab90, debug_string::string_holds(u32, u32) -> bool),
+        entry!(0x0044_a2e0, std_exceptions::length_error_construct(u32, u32) -> u32),
+        entry!(0x0044_a310, std_exceptions::logic_error_construct(u32, u32) -> u32),
+        entry!(0x0044_a380, std_exceptions::logic_error_what(u32) -> u32),
+        entry!(0x0044_a3a0, std_exceptions::logic_error_deleting_destructor(u32, u32) -> u32),
+        entry!(0x0044_a3d0, std_exceptions::logic_error_destruct(u32)),
+        entry!(0x0044_a400, std_exceptions::length_error_destruct(u32)),
+        entry!(0x0044_a420, std_exceptions::length_error_deleting_destructor(u32, u32) -> u32),
+        entry!(0x0044_a450, std_exceptions::logic_error_copy(u32, u32) -> u32),
+        entry!(0x0044_a9a0, std_exceptions::length_error_copy(u32, u32) -> u32),
+        entry!(0x0044_dd10, std_exceptions::bad_alloc_copy(u32, u32) -> u32),
+        entry!(0x0044_9fd0, word_vector::word_vector_construct(u32) -> u32),
+        entry!(0x0044_a040, word_vector::word_vector_destruct(u32)),
+        entry!(0x0044_a0a0, word_vector::word_vector_clear(u32) -> u32),
+        entry!(0x0044_a170, word_vector::word_vector_begin(u32, u32) -> u32),
+        entry!(0x0044_a1a0, word_vector::word_vector_erase(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x0044_a240, word_vector::word_vector_buy(u32, u32) -> bool),
+        entry!(0x0044_a2c0, word_vector::word_vector_max_size(u32) -> u32),
+        entry!(0x0044_abd0, word_vector::word_allocator_allocate(u32, u32) -> u32),
+        entry!(0x0044_abf0, word_vector::word_allocator_max_size(u32) -> u32),
+        entry!(0x0044_ac20, word_vector::copy_one_word(u32, u32)),
+        entry!(0x0044_d8c0, queued_maps::queued_reference_map_delete(u32, u32) -> u32),
+        entry!(0x0044_d980, queued_maps::anim_idle_map_delete(u32, u32) -> u32),
+        entry!(0x0044_da40, queued_maps::replacement_kf_list_map_delete(u32, u32) -> u32),
+        entry!(0x0044_db00, queued_maps::helmet_map_delete(u32, u32) -> u32),
+        entry!(0x0044_dbc0, queued_maps::model_map_delete(u32, u32) -> u32),
+        entry!(0x0044_dbf0, queued_maps::kf_model_map_delete(u32, u32) -> u32),
+        entry!(0x0044_dc20, queued_maps::texture_map_delete(u32, u32) -> u32),
+        entry!(0x0044_dce0, queued_maps::loaded_file_map_delete(u32, u32) -> u32),
+        entry!(0x0044_dd60, queued_maps::release_task(u32)),
+        entry!(0x0044_de20, queued_maps::iterator_flag_set(u32) -> bool),
         entry!(0x0050_e820, object::bound_object_construct(u32) -> u32),
         entry!(0x0050_e8b0, object::copy_box_point(u32, u32) -> u32),
         entry!(0x0050_e8f0, object::default_bound() -> u32),

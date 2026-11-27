@@ -1,5 +1,6 @@
-//! The debug-heap `std::basic_string<char>` members the linker placed in `TESObject`'s unit (the
-//! Xbox PDB's `tesobject` source unit, `0044a4c0` to `0044a7f0`: Visual Studio 2008's
+//! The debug-heap `std::basic_string<char>` members the linker placed in `TESObject`'s unit and the
+//! run after it (the Xbox PDB's `tesobject` source unit, `0044a4c0` to `0044a7f0`, and
+//! `0044a880` to `0044ab90`: Visual Studio 2008's
 //! `basic_string<char, char_traits<char>, _DebugHeapAllocator<char>>`), each as the exe does it.
 //!
 //! The string: the allocator proxy at +0, the storage at +4 (a 16-byte buffer, or the heap pointer
@@ -9,13 +10,19 @@
 //! **Native.** The one-line library members the exe calls are done in place, each the body it holds
 //! (checked in the exe): `_Myptr` (`0044a970`: the heap pointer or the buffer), the length getter
 //! (`00825c00`), `_Inside` (`0044ab90`), `_Eos` (`0044a880`: the length, then the terminator through
-//! `char_traits::assign`, `0044a8c0`) and the allocator's empty constructors (`006815c0`,
-//! `0065de30`: they answer `this` and store nothing, so the two proxy constructors here do nothing
-//! but answer `this`). A word the exe reads twice with no call between is read once. The `strlen`
-//! wrapper is the C runtime family's typed `strlen`, and this unit's members call each other as
-//! typed calls. What stays a call by address: `_Grow` (`0044a8d0`), the traits' `copy_s` and
-//! `move_s` (`0044ccd0`, `0044d580`), the allocator's deallocate (`0064df10`) and `_Xran`
-//! (`00ec30e8`, which throws).
+//! `char_traits::assign`, `0044a8c0`), `max_size` (`0044a9d0`: the allocator's `max_size`,
+//! `0065f7f0`, is the constant `0xffffffff`, so it answers `0xfffffffe`) and the allocator's empty
+//! constructors (`006815c0`, `0065de30`: they answer `this` and store nothing, so the two proxy
+//! constructors here do nothing but answer `this`). A word the exe reads twice with no call between
+//! is read once. The `strlen` wrapper is the C runtime family's typed `strlen`, and this unit's
+//! members call each other as typed calls (`_Grow`, `_Copy`, `_Tidy`, the assigns, `erase`). What
+//! stays a call by address: the traits' `copy_s` and `move_s` (`0044ccd0`, `0044d580`), the
+//! allocator's allocate and deallocate (`0065f7a0`, `0064df10`), `_Xran` and `_Xlen` (`00ec30e8`,
+//! `00ec30b0`, which throw).
+//!
+//! `_Copy`'s catch around the allocation (the exe retries once with the exact size, then frees the
+//! string and throws again) is left out as the translation leaves it: the allocator answers a block
+//! or stops the game, so nothing reaches it.
 //!
 //! No floats.
 
@@ -31,16 +38,20 @@ const RESERVE: u32 = 0x18;
 const HEAP_RESERVE: u32 = 0x10;
 /// The reserve of the inline buffer.
 const INLINE_RESERVE: u32 = 0xf;
+/// `max_size()`: the allocator's (`0065f7f0`, the constant `0xffffffff`) less one.
+const MAX_LENGTH: u32 = 0xffff_fffe;
 /// `std::string::npos` (`010173f0`, a read-only constant).
 const NPOS: u32 = u32::MAX;
 /// `_Xran`: throws `out_of_range`.
 const OUT_OF_RANGE: u32 = 0x00ec_30e8;
-/// `_Grow(newsize, trim)`.
-const GROW: u32 = 0x0044_a8d0;
+/// `_Xlen`: throws `length_error`.
+const TOO_LONG: u32 = 0x00ec_30b0;
 /// `_Traits_helper::copy_s(dest, destsize, src, count)` and `move_s` (cdecl; `move_s` reads the
 /// `ECX` it is entered with, the string, as its first word).
 const COPY_CHARS: u32 = 0x0044_ccd0;
 const MOVE_CHARS: u32 = 0x0044_d580;
+/// The allocator's `allocate(count)` (with the string as `ECX`).
+const ALLOCATE: u32 = 0x0065_f7a0;
 /// The allocator's `Deallocate(ptr, size)`, with the string as `ECX`.
 const FREE: u32 = 0x0064_df10;
 
@@ -79,7 +90,7 @@ fn holds(e: &Engine, this: u32, text: u32) -> bool {
 
 /// `_Grow(count, false)`: whether there is room for `count` characters (and `count` is not 0).
 fn grow(e: &mut Engine, this: u32, count: u32) -> bool {
-    e.call(GROW, &args![this, count, 0u32]).bool()
+    typed_call!(FAMILY, 0x0044_a8d0, grow_storage(e, this, count, false))
 }
 
 /// The length of `string`, after `_Xran` when it is shorter than `position` (the exe reads it again
@@ -232,4 +243,90 @@ pub fn assign_chars(e: &mut Engine, this: u32, text: u32, count: u32) -> u32 {
         set_length(e, this, count);
     }
     this
+}
+
+// Typed from 0044a880
+/// `_Eos(new_length)`: the length stored, then `'\0'` written at the characters plus it.
+pub fn end_string_at(e: &mut Engine, this: u32, new_length: u32) {
+    set_length(e, this, new_length);
+}
+
+// Typed from 0044a8c0
+/// `char_traits<char>::assign(left, right)` (cdecl): the byte at `right` stored at `left`.
+pub fn assign_char(e: &mut Engine, left: u32, right: u32) {
+    let value = e.mem.u8(right);
+    e.mem.set_u8(left, value);
+}
+
+// Typed from 0044a8d0
+/// `_Grow(new_length, trim)`: `_Xlen` when `new_length` is past `max_size()` (only
+/// `0xffffffff`); when the reserve is smaller, `_Copy(new_length, length)`; else with `trim` and
+/// fewer than 16, `_Tidy(true, the smaller of new_length and the length)`; else for 0 the string
+/// emptied (`_Eos(0)`). Whether `new_length` is not 0.
+pub fn grow_storage(e: &mut Engine, this: u32, new_length: u32, trim: bool) -> bool {
+    if MAX_LENGTH < new_length {
+        e.call(TOO_LONG, &[]);
+    }
+    if reserve(e, this) < new_length {
+        let old_length = length(e, this);
+        typed_call!(
+            FAMILY,
+            0x0044_aa10,
+            copy_to_new_storage(e, this, new_length, old_length)
+        );
+    } else if trim && new_length < HEAP_RESERVE {
+        let keep = new_length.min(length(e, this));
+        typed_call!(FAMILY, 0x0044_a730, tidy(e, this, true, keep));
+    } else if new_length == 0 {
+        set_length(e, this, 0);
+    }
+    new_length != 0
+}
+
+// Typed from 0044a970
+/// `_Myptr()`: the heap pointer once the reserve is 16 or more, else the buffer at +4.
+pub fn string_characters(e: &mut Engine, this: u32) -> u32 {
+    characters(e, this)
+}
+
+// Typed from 0044a9d0
+/// `max_size()`: the allocator's `max_size()` (`0065f7f0`, the constant `0xffffffff`) less one for
+/// the terminator, at least 1: `0xfffffffe`.
+pub fn string_max_size(_e: &mut Engine, _this: u32) -> u32 {
+    MAX_LENGTH
+}
+
+// Typed from 0044aa10
+/// `_Copy(new_length, old_length)`: the new reserve `new_length | 0xf`, or `new_length` itself when
+/// that is past `max_size()`, or half the old reserve again when that is more and still fits;
+/// `reserve + 1` bytes from the allocator, the first `old_length` characters copied in, the old
+/// storage freed (`_Tidy(true, 0)`), then the new block, its reserve and the length `old_length`.
+pub fn copy_to_new_storage(e: &mut Engine, this: u32, new_length: u32, old_length: u32) {
+    let mut new_reserve = new_length | INLINE_RESERVE;
+    if MAX_LENGTH < new_reserve {
+        new_reserve = new_length;
+    } else {
+        let old_reserve = reserve(e, this);
+        let half = old_reserve >> 1;
+        if new_reserve / 3 < half && old_reserve <= MAX_LENGTH.wrapping_sub(half) {
+            new_reserve = half.wrapping_add(old_reserve);
+        }
+    }
+    let size = new_reserve.wrapping_add(1);
+    let block = e.call(ALLOCATE, &args![this, size]).u32();
+    if old_length > 0 {
+        let source = characters(e, this);
+        e.call(COPY_CHARS, &args![block, size, source, old_length]);
+    }
+    typed_call!(FAMILY, 0x0044_a730, tidy(e, this, true, 0));
+    e.mem.set_u32(this.wrapping_add(BUFFER), block);
+    e.mem.set_u32(this.wrapping_add(RESERVE), new_reserve);
+    set_length(e, this, old_length);
+}
+
+// Typed from 0044ab90
+/// `_Inside(text)`: whether `text` points into the characters (`_Myptr() <= text < _Myptr() +
+/// length`); false for null.
+pub fn string_holds(e: &mut Engine, this: u32, text: u32) -> bool {
+    holds(e, this, text)
 }
