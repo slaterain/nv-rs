@@ -495,7 +495,8 @@ pub fn fn_0042e150(e: &mut Engine, this: Ptr<ExtraDataList>, model_swap: u32, sw
     let extra = find_extra(e, this, EXTRA_MODEL_SWAP);
     if extra.is_null() {
         let extra = Ptr::new(new_object(e, 0x14, |e, block| {
-            e.call(0x0042_e210, &args![block, model_swap, swap_form]).u32()
+            e.call(0x0042_e210, &args![block, model_swap, swap_form])
+                .u32()
         }));
         add_extra(e, this, extra);
     } else {
@@ -1510,7 +1511,10 @@ pub fn fn_0042fb00(e: &mut Engine, this: Ptr) -> Ptr {
 /// The array `this` is not used.
 pub fn fn_0042fb20(e: &mut Engine, _this: Ptr, address: u32, count: u32) {
     for index in 0..count {
-        e.call(0x0042_ffa0, &args![address.wrapping_add(index.wrapping_mul(4)), 0u32]);
+        e.call(
+            0x0042_ffa0,
+            &args![address.wrapping_add(index.wrapping_mul(4)), 0u32],
+        );
     }
 }
 
