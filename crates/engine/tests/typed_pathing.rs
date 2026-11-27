@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, navmesh, obstacle_data, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -660,6 +660,7 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x006d_b4f0, &[0x006d_bbb0]),
     (0x006d_cf20, &[0x0069_0830, 0x006d_cfe0]),
     (0x006e_78b0, &[0x006e_8f40]),
+    (0x006c_2490, &[0x006c_24d0]),
 ];
 
 trait Common {
@@ -4365,4 +4366,96 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+/// Stands in for the ObstacleData callees: each logs its first word.
+fn obstacle_data_stubs(e: &mut Engine) {
+    e.register(0x0049_68b0, |e, a| {
+        log(e, 0x0049_68b0, a[0]);
+        ret(0)
+    });
+    e.register(0x0063_3c90, |e, a| {
+        log(e, 0x0063_3c90, a[0]);
+        log(e, 0x0063_3c90 + 1, a[1]);
+        e.mem.set_u32(a[0], a[1]);
+        ret(0)
+    });
+    e.register(0x0069_aee0, |e, a| {
+        log(e, 0x0069_aee0, a[0]);
+        ret(0)
+    });
+    e.register(0x0045_cec0, |e, a| {
+        log(e, 0x0045_cec0, a[0]);
+        ret(0)
+    });
+    e.register(0x0069_af10, |e, a| {
+        log(e, 0x0069_af10, a[0]);
+        ret(0)
+    });
+    e.register(0x0049_6910, |e, a| {
+        log(e, 0x0049_6910, a[0]);
+        ret(0)
+    });
+    e.register(0x00aa_1460, |e, a| {
+        log(e, 0x00aa_1460, a[0]);
+        log(e, 0x00aa_1460 + 1, a[1]);
+        ret(0)
+    });
+}
+
+#[test]
+fn obstacle_data_new() {
+    Diff::new(entry!(
+        0x006c_23c0,
+        obstacle_data::obstacle_data_new(Ptr) -> Ptr
+    ))
+    .common()
+    .plain(0x006c_23c0)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        obstacle_data_stubs(e);
+        let o = e.mem.alloc(0x8c);
+        e.mem.set_u32(o, case.word(0));
+        vec![o]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn obstacle_data_drop() {
+    Diff::new(entry!(0x006c_24d0, obstacle_data::obstacle_data_drop(Ptr)))
+        .common()
+        .plain(0x006c_24d0)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            obstacle_data_stubs(e);
+            let o = e.mem.alloc(0x8c);
+            e.mem.set_u32(o, case.word(0));
+            vec![o]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn obstacle_data_scalar_delete() {
+    Diff::new(entry!(
+        0x006c_2490,
+        obstacle_data::obstacle_data_scalar_delete(Ptr, u32) -> Ptr
+    ))
+    .common()
+    .plain(0x006c_2490)
+    .inputs(&[Input::Word, Input::Of(&[0, 1, 2, 0xffff_fffe])])
+    .setup(|e, case| {
+        stand_ins(e);
+        obstacle_data_stubs(e);
+        let o = e.mem.alloc(0x8c);
+        e.mem.set_u32(o, case.word(0));
+        vec![o, case.word(1)]
+    })
+    .run()
+    .assert_same();
 }

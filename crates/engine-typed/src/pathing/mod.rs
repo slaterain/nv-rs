@@ -39,6 +39,7 @@ use layout::{
 pub mod layout;
 pub mod location;
 pub mod navmesh;
+pub mod obstacle_data;
 pub mod point;
 pub mod pov;
 pub mod search;
@@ -267,5 +268,9 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The ObstacleData record.
+        entry!(0x006c_23c0, obstacle_data::obstacle_data_new(Ptr) -> Ptr),
+        entry!(0x006c_24d0, obstacle_data::obstacle_data_drop(Ptr)),
+        entry!(0x006c_2490, obstacle_data::obstacle_data_scalar_delete(Ptr, u32) -> Ptr),
     ]
 }
