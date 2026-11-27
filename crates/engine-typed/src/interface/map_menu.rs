@@ -404,7 +404,7 @@ pub fn fn_007a3580(e: &mut Engine, this: Ptr, focus: u8) {
     let index = e.mem.f32(at.wrapping_add(SAVED_HIGHLIGHT_INDEX));
     // `0040ebd0` (in place): the last unless it is above the saved index; truncated by `FISTP qword`.
     let chosen = if last > index { index } else { last };
-    let chosen = super::low_dword(fistp_chop64(f64::from(chosen)) as u64);
+    let chosen = super::bits(super::low_dword_signed(fistp_chop64(f64::from(chosen))));
     let tile = e.vcall(at, TILE_AT_SLOT, &args![chosen, 0u32]).u32();
     let manager = in_place::manager(e);
     e.call(
