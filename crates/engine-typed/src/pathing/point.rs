@@ -200,3 +200,14 @@ pub fn on_circle(
     new_point(e, out, x, y, 0.0);
     out
 }
+
+// Typed from 006ab360
+pub fn member_b4(_e: &mut Engine, this: Ptr) -> Ptr {
+    this.byte_add(0xb4)
+}
+
+// Typed from 006ab380
+pub fn copy_member_point(e: &mut Engine, this: Ptr, out: Ptr<NiPoint3>) -> Ptr<NiPoint3> {
+    super::copy_point(e, this.byte_add(0x3c).cast(), out);
+    out
+}

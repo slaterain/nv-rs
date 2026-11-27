@@ -4366,3 +4366,30 @@ fn crossed_edge_rounding_main_thread() {
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
 }
+
+#[test]
+fn member_b4() {
+    Diff::new(entry!(0x006a_b360, point::member_b4(Ptr) -> Ptr))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Word])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn copy_member_point() {
+    Diff::new(entry!(
+        0x006a_b380,
+        point::copy_member_point(Ptr, Ptr<_>) -> Ptr<_>
+    ))
+    .family(&pathing::PATHING)
+    // Disjoint, self-copy, and partial overlaps in both directions.
+    .inputs(&[Input::Of(&[0x10, 0x3c, 0x38, 0x40])])
+    .setup(|e, case| {
+        let object = e.mem.alloc(0x50);
+        point_at(e, object + 0x3c, [0x8000_0000, 0x7f80_0001, 0xdead_beef]);
+        vec![object, object + case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
