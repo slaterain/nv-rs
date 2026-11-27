@@ -3530,7 +3530,7 @@ pub fn fn_006c45e0(e: &mut Engine, this: Ptr<NavMeshObstacleManager>) {
                 if fn_006c2550(e, node_3d, scratch) {
                     let rigid_body = pointer_get(e, scratch + ObstacleData::pRigidBody.off);
                     if e.vcall(rigid_body, RIGID_BODY_SLOT_0X94, &args![]).u32() != 0 {
-                        fn_006c1190(e, this, reference);
+                        e.call(0x006c_1190, &args![this, reference]);
                         e.call(ARRAY_ADD, &args![handled, reference_slot]);
                     }
                 }
@@ -3577,7 +3577,7 @@ pub fn fn_006c47e0(e: &mut Engine, this: Ptr<NavMeshObstacleManager>) {
                     index += 1;
                 }
             }
-            fn_006c1590(e, this, form_id);
+            e.call(0x006c_1590, &args![this, form_id]);
             pointer_release(e, array_slot);
         }
     });
@@ -3693,7 +3693,7 @@ pub fn fn_006c4ad0(e: &mut Engine, this: Ptr<NavMeshObstacleManager>) {
                     .u32();
                 let squared = e.call(POINT3_SQUARED_LENGTH, &args![difference]).f32();
                 if e.global::<f32>(OBSTACLE_MOVED_SQUARED_DISTANCE) < squared {
-                    fn_006c1760(e, this, obstacle);
+                    e.call(0x006c_1760, &args![this, obstacle]);
                 }
                 bs_simple_list_obstacle_data_remove(
                     e,
@@ -3734,7 +3734,7 @@ pub fn fn_006c4c30(e: &mut Engine, this: Ptr<NavMeshObstacleManager>) {
                 let obstacles = obstacles_of(e, array);
                 let element = array_at(e, obstacles, index);
                 pointer_copy(e, obstacle, element);
-                fn_006c1760(e, this, obstacle);
+                e.call(0x006c_1760, &args![this, obstacle]);
                 pointer_release(e, obstacle);
                 index += 1;
             }
@@ -3805,7 +3805,7 @@ pub fn fn_006c4d30(e: &mut Engine, this: Ptr<NavMeshObstacleManager>) {
                 let data = pointer_get(e, obstacle);
                 let last = e.mem.u32(data + ObstacleData::iLastUpdateTime.off);
                 if now.wrapping_sub(last) >= delay {
-                    fn_006c1760(e, this, obstacle);
+                    e.call(0x006c_1760, &args![this, obstacle]);
                 }
             }
             pointer_release(e, obstacle);

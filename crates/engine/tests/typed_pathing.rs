@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, navmesh, obstacle_manager, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -660,6 +660,17 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x006d_b4f0, &[0x006d_bbb0]),
     (0x006d_cf20, &[0x0069_0830, 0x006d_cfe0]),
     (0x006e_78b0, &[0x006e_8f40]),
+    (
+        0x006c_1190,
+        &[
+            0x006c_1480,
+            0x006c_1d60,
+            0x006c_1dd0,
+            0x006c_1da0,
+            0x006c_1c70,
+        ],
+    ),
+    (0x006c_1590, &[0x0063_1620]),
 ];
 
 trait Common {
@@ -4365,4 +4376,353 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- NavMeshObstacleManager queues and bookkeeping ----
+
+/// The case's cells the obstacle-manager stubs read.
+const OM_CELL_MAP: u32 = 0x0300_2ff0;
+const OM_CELL_ACTIVE: u32 = 0x0300_2ff4;
+const OM_CELL_OVERLAP: u32 = 0x0300_2ff8;
+const OM_CELL_PREPARED: u32 = 0x0300_2ffc;
+
+/// Stands in for the obstacle manager's direct callees: each logs its words; the map lookup, the
+/// rigid-body activity and the overlap query read the case's cells.
+fn obstacle_manager_stubs(e: &mut Engine) {
+    e.register(0x0063_3c90, |e, a| {
+        log(e, 0x0063_3c90, a[0]);
+        log(e, 0x0063_3c90 + 1, a[1]);
+        e.mem.set_u32(a[0], a[1]);
+        ret(0)
+    });
+    e.register(0x0045_cec0, |e, a| {
+        log(e, 0x0045_cec0, a[0]);
+        ret(0)
+    });
+    e.register(0x0055_9a40, |e, a| {
+        log(e, 0x0055_9a40, a[0]);
+        log(e, 0x0055_9a40 + 1, a[1]);
+        let value = e.mem.u32(a[1]);
+        e.mem.set_u32(a[0], value);
+        ret(0)
+    });
+    e.register(0x0066_b0d0, |e, a| {
+        log(e, 0x0066_b0d0, a[0]);
+        log(e, 0x0066_b0d0 + 1, a[1]);
+        e.mem.set_u32(a[0], a[1]);
+        ret(0)
+    });
+    e.register(0x005a_e3d0, |e, a| {
+        log(e, 0x005a_e3d0, a[0]);
+        log(e, 0x005a_e3d0 + 1, e.mem.u32(a[1]));
+        ret(0)
+    });
+    e.register(0x007c_b2e0, |e, a| {
+        log(e, 0x007c_b2e0, a[0]);
+        log(e, 0x007c_b2e0 + 1, e.mem.u32(a[1]));
+        ret(0)
+    });
+    e.register(0x006c_62d0, |e, a| {
+        log(e, 0x006c_62d0, a[0]);
+        log(e, 0x006c_62d0 + 1, a[1]);
+        log(e, 0x006c_62d0 + 2, a[2]);
+        if e.mem.u32(OM_CELL_MAP) != 0 {
+            let prepared = e.mem.u32(OM_CELL_PREPARED);
+            e.mem.set_u32(a[2], prepared);
+            ret(1)
+        } else {
+            ret(0)
+        }
+    });
+    e.register(0x006c_6920, |e, a| {
+        log(e, 0x006c_6920, a[0]);
+        log(e, 0x006c_6920 + 1, a[1]);
+        log(e, 0x006c_6920 + 2, a[2]);
+        ret(0)
+    });
+    e.register(0x0040_5430, |e, a| {
+        log(e, 0x0040_5430, a[0]);
+        log(e, 0x0040_5430 + 1, a[1]);
+        ret(0)
+    });
+    e.register(0x00aa_13e0, |e, a| {
+        log(e, 0x00aa_13e0, a[0]);
+        let memory = e.mem.alloc(a[0]);
+        ret(memory)
+    });
+    e.register(0x006c_34f0, |e, a| {
+        log(e, 0x006c_34f0, a[0]);
+        log(e, 0x006c_34f0 + 1, a[1]);
+        ret(0)
+    });
+    e.register(0x0056_09b0, |e, a| {
+        log(e, 0x0056_09b0, a[0]);
+        ret(e.mem.u32(OM_CELL_ACTIVE))
+    });
+    e.register(0x006c_3440, |e, a| {
+        log(e, 0x006c_3440, a[0]);
+        ret(0)
+    });
+    e.register(0x006c_2650, |e, a| {
+        log(e, 0x006c_2650, a[0]);
+        ret(0)
+    });
+    e.register(0x006c_5b20, |e, a| {
+        log(e, 0x006c_5b20, a[0]);
+        log(e, 0x006c_5b20 + 1, a[1]);
+        ret(0)
+    });
+    e.register(0x006c_5c50, |e, a| {
+        log(e, 0x006c_5c50, a[0]);
+        log(e, 0x006c_5c50 + 1, a[1]);
+        ret(0)
+    });
+    e.register(0x0076_b610, |e, a| {
+        log(e, 0x0076_b610, a[0]);
+        ret(u32::from(e.mem.u32(a[0] + 8) == 0))
+    });
+    e.register(0x006c_6c60, |e, a| {
+        log(e, 0x006c_6c60, a[0]);
+        e.mem.set_u32(a[0] + 4, 0);
+        e.mem.set_u32(a[0] + 8, 0);
+        e.mem.set_u32(a[0] + 0xc, 0);
+        ret(0)
+    });
+    e.register(0x006c_6ce0, |e, a| {
+        log(e, 0x006c_6ce0, a[0]);
+        ret(0)
+    });
+    e.register(0x006c_2050, |e, a| {
+        log(e, 0x006c_2050, a[0]);
+        log(e, 0x006c_2050 + 1, a[1]);
+        if e.mem.u32(OM_CELL_OVERLAP) != 0 {
+            let data = e.mem.alloc(4);
+            let navmesh = e.mem.alloc(0x108);
+            e.mem.set_u32(navmesh + 0x104, 0x777);
+            e.mem.set_u32(data, navmesh);
+            e.mem.set_u32(a[1] + 4, data);
+            e.mem.set_u32(a[1] + 8, 1);
+            e.mem.set_u32(a[1] + 0xc, 1);
+            ret(1)
+        } else {
+            ret(0)
+        }
+    });
+    e.register(0x006c_5ef0, |e, a| {
+        log(e, 0x006c_5ef0, a[0]);
+        log(e, 0x006c_5ef0 + 1, a[1]);
+        ret(0x9000)
+    });
+    e.register(0x006c_7a30, |e, a| {
+        log(e, 0x006c_7a30, a[0]);
+        log(e, 0x006c_7a30 + 1, a[1]);
+        log(e, 0x006c_7a30 + 2, a[2]);
+        ret(0)
+    });
+    // The callees the plain-listed functions reach.
+    e.register(0x004a_e750, |e, a| {
+        log(e, 0x004a_e750, a[0]);
+        ret(0)
+    });
+    e.register(0x006c_5ff0, |e, a| {
+        log(e, 0x006c_5ff0, a[0]);
+        log(e, 0x006c_5ff0 + 1, e.mem.u32(a[1]));
+        ret(0)
+    });
+    e.register(0x0049_68b0, |e, a| {
+        log(e, 0x0049_68b0, a[0]);
+        ret(0)
+    });
+    e.register(0x006c_6160, |e, a| {
+        log(e, 0x006c_6160, a[0]);
+        ret(0)
+    });
+    e.register(0x0082_2510, |e, a| {
+        log(e, 0x0082_2510, a[0]);
+        log(e, 0x0082_2510 + 1, a[1]);
+        ret(0)
+    });
+    e.register(0x004a_4460, |e, a| {
+        log(e, 0x004a_4460, a[0]);
+        ret(1)
+    });
+}
+
+/// A manager block of `0x1a4` bytes with the case's draw flag and fixed listener pointers.
+fn obstacle_manager(e: &mut Engine, draw: u8) -> u32 {
+    let m = e.mem.alloc(0x1a4);
+    e.mem.set_u8(m + 0x198, draw);
+    e.mem.set_u32(m + 0x120, 0x1111);
+    e.mem.set_u32(m + 0x124, 0x2222);
+    m
+}
+
+/// An `ObstacleData` block: a rigid-body cell holding `0x5000 + index`, the active flag and an
+/// empty `Navmeshes` array.
+fn obstacle_data_block(e: &mut Engine, index: u32, active: u8) -> u32 {
+    let o = e.mem.alloc(0x8c);
+    let rb = e.mem.alloc(4);
+    e.mem.set_u32(rb, 0x5000 + index);
+    e.mem.set_u32(o + 0x0c, rb);
+    e.mem.set_u8(o + 0x74, active);
+    let data = e.mem.alloc(4);
+    let navmeshes = array(e, data, 0, 1);
+    e.mem.set_u32(o + 0x78, navmeshes);
+    o
+}
+
+/// A prepared `ReferenceObstacleArray` of two obstacles in the map cell.
+fn prepared_obstacle_array(e: &mut Engine, active0: u8, active1: u8) -> u32 {
+    let data = e.mem.alloc(8);
+    for i in 0..2 {
+        let slot = e.mem.alloc(4);
+        let active = if i == 0 { active0 } else { active1 };
+        let o = obstacle_data_block(e, i, active);
+        e.mem.set_u32(slot, o);
+        e.mem.set_u32(data + 4 * i, slot);
+    }
+    let obstacles = array(e, data, 2, 2);
+    let parr = e.mem.alloc(0x1c);
+    e.mem.set_u32(parr + 0x0c, obstacles);
+    e.mem.set_u32(parr + 8, 0x44);
+    e.mem.set_u32(OM_CELL_PREPARED, parr);
+    parr
+}
+
+#[test]
+fn queue_navmesh_enable() {
+    Diff::new(entry!(
+        0x006c_1130,
+        obstacle_manager::queue_navmesh_enable(Ptr, u32)
+    ))
+    .common()
+    .plain(0x006c_1130)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x005a_e3d0, |e, a| {
+            log(e, 0x005a_e3d0, a[0]);
+            log(e, 0x005a_e3d0 + 1, e.mem.u32(a[1]));
+            ret(0)
+        });
+        vec![e.mem.alloc(0x1a4), case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn queue_navmesh_disable() {
+    Diff::new(entry!(
+        0x006c_1150,
+        obstacle_manager::queue_navmesh_disable(Ptr, u32)
+    ))
+    .common()
+    .plain(0x006c_1150)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x005a_e3d0, |e, a| {
+            log(e, 0x005a_e3d0, a[0]);
+            log(e, 0x005a_e3d0 + 1, e.mem.u32(a[1]));
+            ret(0)
+        });
+        vec![e.mem.alloc(0x1a4), case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn request_update_all() {
+    Diff::new(entry!(
+        0x006c_1170,
+        obstacle_manager::request_update_all(Ptr)
+    ))
+    .common()
+    .plain(0x006c_1170)
+    .inputs(&[Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        stand_ins(e);
+        let m = e.mem.alloc(0x1a4);
+        e.mem.set_u8(m + 0x18, case.word(0) as u8);
+        vec![m]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn add_reference_obstacles() {
+    Diff::new(entry!(
+        0x006c_1190,
+        obstacle_manager::add_reference_obstacles(Ptr, u32)
+    ))
+    .common()
+    .plain(0x006c_1190)
+    .inputs(&[
+        Input::Of(&[0, 1]),
+        Input::Of(&[0, 1]),
+        Input::Of(&[0, 1]),
+        Input::Of(&[0, 1]),
+    ])
+    .setup(|e, case| {
+        stand_ins(e);
+        obstacle_manager_stubs(e);
+        e.mem.set_u32(OM_CELL_MAP, case.word(0));
+        e.mem.set_u32(OM_CELL_ACTIVE, case.word(1));
+        e.mem.set_u32(OM_CELL_OVERLAP, case.word(2));
+        let manager = obstacle_manager(e, case.word(3) as u8);
+        prepared_obstacle_array(e, 1, 0);
+        let reference = e.mem.alloc(0x20);
+        e.mem.set_u32(reference + 0xc, 0x44);
+        vec![manager, reference]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn remove_reference_obstacles() {
+    Diff::new(entry!(
+        0x006c_1590,
+        obstacle_manager::remove_reference_obstacles(Ptr, u32)
+    ))
+    .common()
+    .plain(0x006c_1590)
+    .inputs(&[Input::Of(&[0, 1]), Input::Of(&[0, 1]), Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        stand_ins(e);
+        obstacle_manager_stubs(e);
+        e.mem.set_u32(OM_CELL_MAP, case.word(0));
+        e.mem.set_u32(OM_CELL_OVERLAP, case.word(1));
+        let manager = obstacle_manager(e, case.word(2) as u8);
+        prepared_obstacle_array(e, 1, 0);
+        vec![manager, 0x44]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn reregister_obstacle() {
+    Diff::new(entry!(
+        0x006c_1760,
+        obstacle_manager::reregister_obstacle(Ptr, u32)
+    ))
+    .common()
+    .plain(0x006c_1760)
+    .inputs(&[Input::Of(&[0, 1]), Input::Of(&[0, 1]), Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        stand_ins(e);
+        obstacle_manager_stubs(e);
+        e.mem.set_u32(OM_CELL_OVERLAP, case.word(1));
+        let manager = obstacle_manager(e, case.word(2) as u8);
+        let o = obstacle_data_block(e, 0, case.word(0) as u8);
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, o);
+        vec![manager, slot]
+    })
+    .run()
+    .assert_same();
 }
