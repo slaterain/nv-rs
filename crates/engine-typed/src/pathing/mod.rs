@@ -38,6 +38,7 @@ use layout::{
 
 pub mod layout;
 pub mod location;
+pub mod los_map;
 pub mod navmesh;
 pub mod point;
 pub mod pov;
@@ -267,5 +268,15 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The LOS map's folded NiTMap and its helpers.
+        entry!(0x006e_20e0, los_map::construct_base(Ptr, u32) -> Ptr),
+        entry!(0x006e_2080, los_map::construct(Ptr, u32) -> Ptr),
+        entry!(0x006e_20b0, los_map::ni_t_map_scalar_deleting_dtor(Ptr, u32) -> Ptr),
+        entry!(0x006e_2150, los_map::ni_t_map_dtor(Ptr)),
+        entry!(0x006e_21b0, los_map::ni_t_map_base_dtor(Ptr)),
+        entry!(0x006e_21e0, los_map::ni_t_map_base_scalar_deleting_dtor(Ptr, u32) -> Ptr),
+        entry!(0x006e_1f80, los_map::min_byte(i8, i8) -> i8),
+        entry!(0x006e_1fb0, los_map::max_byte(i8, i8) -> i8),
+        entry!(0x006e_1fe0, los_map::children_set_size(Ptr, u32)),
     ]
 }
