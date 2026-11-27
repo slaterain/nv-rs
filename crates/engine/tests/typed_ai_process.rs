@@ -343,6 +343,19 @@ static FEW: [u32; 8] = seeds();
 static MANY: [u32; 64] = seeds();
 static MOST: [u32; 192] = seeds();
 static ALL: [u32; 768] = seeds();
+/// `ALL` in two halves.
+static ALL_FIRST: [u32; 384] = seeds_from(1);
+static ALL_LAST: [u32; 384] = seeds_from(385);
+
+const fn seeds_from<const N: usize>(first: u32) -> [u32; N] {
+    let mut out = [0; N];
+    let mut i = 0;
+    while i < N {
+        out[i] = first + i as u32;
+        i += 1;
+    }
+    out
+}
 
 const fn seeds<const N: usize>() -> [u32; N] {
     let mut out = [0; N];
@@ -1370,16 +1383,6 @@ fn low_process_save_and_load() {
         .ignore_calls(LOW_IN_PLACE)
         .run()
         .assert_same();
-    // Every seed: a block's clean end needs a length from the byte reader that few seeds give.
-    Diff::new(entry!(
-        0x0090_fd80,
-        low_process::load_game(Ptr, u32, u32, u32)
-    ))
-    .in_world(&ALL, load_words)
-    .ignore_calls(LOW_IN_PLACE)
-    .allow_nan_payloads()
-    .run()
-    .assert_same();
     Diff::new(entry!(0x0091_0310, low_process::revert(Ptr, u32, u32)))
         .in_world(&MANY, revert_words)
         .ignore_calls(LOW_IN_PLACE)
@@ -1402,16 +1405,6 @@ fn low_process_save_and_load() {
     .ignore_calls(LOW_IN_PLACE)
     .run()
     .assert_same();
-    // Every seed, as LowProcess's load.
-    Diff::new(entry!(
-        0x0092_e730,
-        middle_low_process::load_game(Ptr, u32, u32, u32)
-    ))
-    .in_world(&ALL, load_words)
-    .ignore_calls(LOW_IN_PLACE)
-    .allow_nan_payloads()
-    .run()
-    .assert_same();
     Diff::new(entry!(
         0x0092_e9f0,
         middle_low_process::revert(Ptr, u32, u32)
@@ -1420,6 +1413,52 @@ fn low_process_save_and_load() {
     .ignore_calls(LOW_IN_PLACE)
     .run()
     .assert_same();
+}
+
+/// The loads on every seed (a block's clean end needs a length from the byte reader that few seeds
+/// give), each in two halves so they run as parallel tests.
+fn low_process_load(seeds: &'static [u32]) {
+    Diff::new(entry!(
+        0x0090_fd80,
+        low_process::load_game(Ptr, u32, u32, u32)
+    ))
+    .in_world(seeds, load_words)
+    .ignore_calls(LOW_IN_PLACE)
+    .allow_nan_payloads()
+    .run()
+    .assert_same();
+}
+
+fn middle_low_process_load(seeds: &'static [u32]) {
+    Diff::new(entry!(
+        0x0092_e730,
+        middle_low_process::load_game(Ptr, u32, u32, u32)
+    ))
+    .in_world(seeds, load_words)
+    .ignore_calls(LOW_IN_PLACE)
+    .allow_nan_payloads()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn low_process_load_first_seeds() {
+    low_process_load(&ALL_FIRST);
+}
+
+#[test]
+fn low_process_load_last_seeds() {
+    low_process_load(&ALL_LAST);
+}
+
+#[test]
+fn middle_low_process_load_first_seeds() {
+    middle_low_process_load(&ALL_FIRST);
+}
+
+#[test]
+fn middle_low_process_load_last_seeds() {
+    middle_low_process_load(&ALL_LAST);
 }
 
 #[test]
