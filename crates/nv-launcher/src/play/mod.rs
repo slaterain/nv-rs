@@ -1765,6 +1765,13 @@ pub fn run_play(raw: &[String]) -> i32 {
             if !package.writing.get() && why.code != STOP_LOCATION {
                 let _ = clear_for_writing(&package, None);
             }
+            // The window's lines kept until the first write (a stop of the launcher's window
+            // said before this Play, say), now that the log may be written.
+            if package.writing.get() {
+                for line in crate::place::take_held_lines() {
+                    package.log(&line);
+                }
+            }
             package.log(&format!("stopped ({}): {}", why.code, why.message));
             crate::session::set_stop_code(why.code);
             ui::error(&why.message);

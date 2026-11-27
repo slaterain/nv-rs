@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Sender};
-use std::sync::OnceLock;
+use std::sync::RwLock;
 
 /// What the work tells or asks the window.
 // Status, StatusDone, Message and Folder come from Play.exe's steps (Windows); on Linux and macOS
@@ -62,8 +62,12 @@ pub enum Tone {
     Question,
 }
 
-/// The window's end of the channel: set once, when the window is made.
-static WINDOW: OnceLock<Box<dyn Fn(Event) -> bool + Send + Sync>> = OnceLock::new();
+/// Where events go ([`connect`]).
+type Deliver = Box<dyn Fn(Event) -> bool + Send + Sync>;
+
+/// The window's end of the channel: set when the window is made, and on Windows replaced by
+/// Windows' own message boxes when the window stops while Play runs (`app::after_panic`).
+static WINDOW: RwLock<Option<Deliver>> = RwLock::new(None);
 
 /// The stop code Play ends with once the question it asks now is answered (none: `i32::MIN`), so
 /// a window closed during that question ends the launcher with Play.exe's code.
@@ -81,14 +85,21 @@ pub fn stop_code() -> Option<i32> {
     (code != i32::MIN).then_some(code)
 }
 
-/// From now on events go to `deliver` (the window's event loop; false when it has gone).
+/// From now on events go to `deliver` (the window's event loop, false when it has gone; or
+/// Windows' message boxes), in place of where they went before.
 pub fn connect(deliver: impl Fn(Event) -> bool + Send + Sync + 'static) {
-    let _ = WINDOW.set(Box::new(deliver));
+    let mut window = WINDOW
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *window = Some(Box::new(deliver));
 }
 
 /// Sends `event` to the window; false when there is none (or it has gone).
 pub fn send(event: Event) -> bool {
-    WINDOW.get().is_some_and(|deliver| deliver(event))
+    let window = WINDOW
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    window.as_ref().is_some_and(|deliver| deliver(event))
 }
 
 /// Shows `text` with `entries` and waits for the player's choice: the entry's index. Without a
