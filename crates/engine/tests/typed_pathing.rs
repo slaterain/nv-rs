@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, manager_result, navmesh, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -4365,4 +4365,65 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- Path manager yield flag and completion result ----
+
+#[test]
+fn set_yield_flag() {
+    Diff::new(entry!(0x006e_a330, manager_result::set_yield_flag(Ptr)))
+        .common()
+        .plain(0x006e_a330)
+        .inputs(&[Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            stand_ins(e);
+            let m = e.mem.alloc(8);
+            e.mem.set_u8(m + 4, case.word(0) as u8);
+            vec![m]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn completion_init() {
+    Diff::new(entry!(
+        0x006e_a9d0,
+        manager_result::completion_init(Ptr) -> Ptr
+    ))
+    .common()
+    .plain(0x006e_a9d0)
+    .inputs(&[Input::Word, Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        let m = e.mem.alloc(8);
+        e.mem.set_u32(m, case.word(0));
+        e.mem.set_u32(m + 4, case.word(1));
+        vec![m]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn completion_copy() {
+    Diff::new(entry!(
+        0x006e_aa00,
+        manager_result::completion_copy(Ptr, Ptr) -> Ptr
+    ))
+    .common()
+    .plain(0x006e_aa00)
+    .inputs(&[Input::Word, Input::Word, Input::Word, Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        let dst = e.mem.alloc(8);
+        e.mem.set_u32(dst, case.word(0));
+        e.mem.set_u32(dst + 4, case.word(1));
+        let src = e.mem.alloc(8);
+        e.mem.set_u32(src, case.word(2));
+        e.mem.set_u32(src + 4, case.word(3));
+        vec![dst, src]
+    })
+    .run()
+    .assert_same();
 }

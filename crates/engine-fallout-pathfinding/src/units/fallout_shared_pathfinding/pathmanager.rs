@@ -177,7 +177,7 @@ pub fn pathing_task_data_process(e: &mut Engine, this: Ptr) {
 
         if was_signaled {
             if !fn_006ea490(e, this) {
-                fn_006ea330(e, this);
+                e.call(0x006e_a330, &args![this]);
             } else {
                 let allocation = e.call(0x00aa_13e0, &args![0x44u32]).u32();
                 let token = if allocation == 0 {
@@ -272,7 +272,7 @@ pub fn pathing_task_data_process(e: &mut Engine, this: Ptr) {
                     e.call(0x0048_3710, &args![message]);
                 });
             } else {
-                fn_006ea330(e, this);
+                e.call(0x006e_a330, &args![this]);
             }
         }
 
@@ -436,7 +436,9 @@ pub fn fn_006ea510(e: &mut Engine, this: Ptr, start: Ptr, goal: Ptr, result_out:
         );
         result = e.mem.u32(e.mem.u32(path_slot) + 4) as i32;
         match result {
-            0 => fn_006ea330(e, this),
+            0 => {
+                e.call(0x006e_a330, &args![this]);
+            }
             1 => {
                 let result_slot = typed_call!(
                     leaf::FAMILY,
@@ -544,7 +546,9 @@ pub fn fn_006ea780(
         );
         result = e.mem.u32(e.mem.u32(path_slot) + 4) as i32;
         match result {
-            0 => fn_006ea330(e, this),
+            0 => {
+                e.call(0x006e_a330, &args![this]);
+            }
             1 => {
                 let result_slot = typed_call!(
                     leaf::FAMILY,
@@ -793,7 +797,7 @@ pub fn fn_006eae40(e: &mut Engine, this: Ptr) {
                 }
             }
         }
-        fn_006ea9d0(e, Ptr::new(completion));
+        e.call(0x006e_a9d0, &args![completion]);
         while e
             .vcall(this.addr() + 0x0c10, 0x10, &args![completion])
             .bool()
@@ -1006,7 +1010,7 @@ pub fn fn_006eb440(e: &mut Engine, this: Ptr) {
     fn_006eb670(e, this, 0);
     e.with_stack(0x70, |e, locals| {
         let completion = locals.addr();
-        fn_006ea9d0(e, Ptr::new(completion));
+        e.call(0x006e_a9d0, &args![completion]);
         loop {
             if !e
                 .vcall(this.addr() + 0x0c10, 0x10, &args![completion])
@@ -1477,7 +1481,7 @@ pub fn fn_006ec090(e: &mut Engine, this: Ptr, pool: u32) -> Ptr {
 pub fn fn_006ec130(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), 0x0106_d678);
     e.with_stack(8, |e, message| {
-        fn_006ea9d0(e, message);
+        e.call(0x006e_a9d0, &args![message]);
         while e.call(0x006e_c390, &args![this, message]).bool() {}
         e.call(0x0048_3710, &args![message]);
     });
@@ -1529,7 +1533,7 @@ pub fn fn_006ec2e0(e: &mut Engine, this: Ptr, output: Ptr) -> bool {
         let source = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, head))
             .into_ret()
             .ptr::<()>();
-        fn_006eaa00(e, output, source);
+        e.call(0x006e_aa00, &args![output, source]);
         e.mem.set_u32(this.addr() + 12, e.mem.u32(head + 8));
         let pool = e.mem.u32(this.addr() + 8);
         e.call(0x006e_cb10, &args![pool, node]);
