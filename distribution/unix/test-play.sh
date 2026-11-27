@@ -437,6 +437,7 @@ local29="$T/pfx29/drive_c/users/steamuser/AppData/Local"
 mkdir -p "$game29/Data/NVSE/Plugins" "$local29/FalloutNV"
 echo x >"$game29/Data/FalloutNV.esm"
 echo x >"$game29/FalloutNV.exe"
+mkdir "$game29/Data/NVSE/Plugins/Backup.dll"
 echo x >"$game29/Data/NVSE/Plugins/kNVSE.dll"
 echo x >"$game29/Data/NVSE/Plugins/jip_nvse.dll"
 echo x >"$game29/Data/NVSE/Plugins/jip_nvse.ini"
@@ -452,6 +453,7 @@ check "29 plays the game's own folder" 'printf "%s" "$out" | grep -qxF "program 
 check "29 no mods build" '! printf "%s" "$out" | grep -q "^built:" && [ ! -e "$own29/modgame" ]'
 check "29 manager profile saves" 'printf "%s" "$out" | grep -qF "NV_SAVE_OUT=$own29/manager/Documents/My Games/FalloutNV/Saves"'
 check "29 a plugin that can't load, named once in the log" '[ "$(cat "$own29"/logs/game-*.log | grep -c "plugin kNVSE.dll can")" = 1 ]'
+check "29 a directory with a DLL suffix is ignored" '! cat "$own29"/logs/game-*.log | grep -q "Backup.dll"'
 check "29 a built-in plugin not named" '! cat "$own29"/logs/game-*.log | grep -q "jip_nvse"'
 check "29 nothing written in the game's folder or the prefix" '[ "$(outside29)" = "$before29" ]'
 out=$(env FAKE_FIND="$T/find29.txt" NV_RS_GAME="$game29" $SH "$pkg/play.sh" --mods --mod-manager </dev/null 2>&1); st=$?
