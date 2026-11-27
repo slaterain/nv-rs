@@ -2844,7 +2844,9 @@ fn dump_from_env() -> bool {
 /// `NV_HANG_DUMP=SECS` (a diagnostic, off unless set; `0` or `off` is off, a value that is no number 10 s): the
 /// records of `NV_REAL_DUMP` are kept, and a watchdog thread ([`watch_for_hangs`]) prints [`dump_threads`] when main
 /// has begun no frame for SECS seconds, and once more SECS later if still none: a freeze then says where every game
-/// thread is, what it waits for and who holds it. Read once.
+/// thread is, what it waits for and who holds it. Read once. Keeping those records makes the game
+/// much slower and can change when a freeze shows; it is deliberately no test variable (a play run
+/// keeps the player's settings). Its dumps share the run's limit of three with the stop dumps.
 fn hang_dump_secs() -> Option<u64> {
     static SECS: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
     *SECS.get_or_init(|| hang_secs(std::env::var("NV_HANG_DUMP").ok().as_deref()))

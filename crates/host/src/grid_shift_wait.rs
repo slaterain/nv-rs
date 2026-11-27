@@ -11,8 +11,9 @@
 //! tasks again. For each it waits in `005289b0`, a Sleep(0) loop while the task's state is 3 or 5,
 //! then post-processes it if its state is 5 (`005287e0`). A loader thread moves a task it runs from
 //! 3 (the load, the task's slot 4 through `00c3fc80`) to 4 (handing it to the post-process queue,
-//! `00c3fca0`) to 5; nothing but main moves a finished task on (its post-process is main's, in the
-//! walk itself or in `IOManager`'s queue, `00c3dbf0`), and main is the thread waiting. So a task
+//! `00c3fca0`) to 5; nothing moves a task out of 5 but main cancelling it (its post-process, main's,
+//! in the walk itself or in `IOManager`'s queue, `00c3dbf0`, leaves the state at 5), and main is
+//! the thread waiting. So a task
 //! that reaches 5 before the wait looks at it, or between two of its looks, is waited on for good:
 //! main spins in `005289b0` and the game freezes with every other thread idle. That needs a cell
 //! load still running at a grid shift, which takes moving across cells faster than the loader
@@ -29,7 +30,10 @@
 //! straight to the walk's own post-process, as one that finished during the wait does in the
 //! original; a task still loading is waited for as before, now until it has finished, and then
 //! post-processed there too (the exe's wait ended at 4 and left it to `IOManager`'s queue on a
-//! later frame, where it is post-processed the same way). `005282d0` has no other caller.
+//! later frame, where it is post-processed the same way). `IOManager`'s queue still holds such a
+//! task and runs its post-process a second time later: that pass attaches nothing and only takes
+//! the task off the loader's list again, as the original already does for every task `00528110`
+//! post-processes. `005282d0` has no other caller.
 
 use crate::fixes::Fix;
 use engine::prelude::*;
