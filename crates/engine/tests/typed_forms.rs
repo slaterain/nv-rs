@@ -23,7 +23,8 @@ use engine_core::typed::diff::{Diff, Input};
 use engine_typed::crt::CRT;
 use engine_typed::forms::{
     actor_base, actor_base_data, ai_form, animation, attributes, conditions, debug_string, object,
-    package_data, package_list, queued_maps, schedule, std_exceptions, tesform, word_vector, FORMS,
+    package, package_data, package_flags, package_list, queued_maps, schedule, std_exceptions,
+    tesform, word_vector, FORMS,
 };
 use engine_typed::pathing::PATHING;
 
@@ -9554,108 +9555,6 @@ fn wv_copy_word() {
         .assert_same();
 }
 
-/// The lock-free maps' destructor bodies the deleting destructors run (the lock-free family's:
-/// doubles here, each storing the interfaced base's vtable as the real ones end).
-const QM_BODIES: [u32; 8] = [
-    0x0044_d8f0,
-    0x0044_d9b0,
-    0x0044_da70,
-    0x0044_db30,
-    0x0044_c1e0,
-    0x0044_c3f0,
-    0x0044_dc50,
-    0x0044_cae0,
-];
-
-trait QmCases {
-    fn qm_delete(self, body: u32) -> Diff;
-}
-
-impl QmCases for Diff {
-    /// A deleting destructor whose body is `body`: a map with a vtable, and the flags.
-    fn qm_delete(self, body: u32) -> Diff {
-        self.forms()
-            .goes_by_address(&[body])
-            .inputs(&[Input::Of(WORDS)])
-            .setup(|e, case| {
-                world(e);
-                for body in QM_BODIES {
-                    e.register(body, |e, a| {
-                        e.mem.set_u32(a[0], 0x0101_7458);
-                        ret(0)
-                    });
-                }
-                let map = e.mem.alloc(0x30);
-                e.mem.set_u32(map, 0x0101_747c);
-                vec![map, case.word(0)]
-            })
-    }
-}
-
-#[test]
-fn qm_queued_reference_map_delete() {
-    Diff::new(entry!(0x0044_d8c0, queued_maps::queued_reference_map_delete(u32, u32) -> u32))
-        .qm_delete(0x0044_d8f0)
-        .run()
-        .assert_same();
-}
-
-#[test]
-fn qm_anim_idle_map_delete() {
-    Diff::new(entry!(0x0044_d980, queued_maps::anim_idle_map_delete(u32, u32) -> u32))
-        .qm_delete(0x0044_d9b0)
-        .run()
-        .assert_same();
-}
-
-#[test]
-fn qm_replacement_kf_list_map_delete() {
-    Diff::new(entry!(0x0044_da40, queued_maps::replacement_kf_list_map_delete(u32, u32) -> u32))
-        .qm_delete(0x0044_da70)
-        .run()
-        .assert_same();
-}
-
-#[test]
-fn qm_helmet_map_delete() {
-    Diff::new(entry!(0x0044_db00, queued_maps::helmet_map_delete(u32, u32) -> u32))
-        .qm_delete(0x0044_db30)
-        .run()
-        .assert_same();
-}
-
-#[test]
-fn qm_model_map_delete() {
-    Diff::new(entry!(0x0044_dbc0, queued_maps::model_map_delete(u32, u32) -> u32))
-        .qm_delete(0x0044_c1e0)
-        .run()
-        .assert_same();
-}
-
-#[test]
-fn qm_kf_model_map_delete() {
-    Diff::new(entry!(0x0044_dbf0, queued_maps::kf_model_map_delete(u32, u32) -> u32))
-        .qm_delete(0x0044_c3f0)
-        .run()
-        .assert_same();
-}
-
-#[test]
-fn qm_texture_map_delete() {
-    Diff::new(entry!(0x0044_dc20, queued_maps::texture_map_delete(u32, u32) -> u32))
-        .qm_delete(0x0044_dc50)
-        .run()
-        .assert_same();
-}
-
-#[test]
-fn qm_loaded_file_map_delete() {
-    Diff::new(entry!(0x0044_dce0, queued_maps::loaded_file_map_delete(u32, u32) -> u32))
-        .qm_delete(0x0044_cae0)
-        .run()
-        .assert_same();
-}
-
 #[test]
 fn qm_release_task() {
     Diff::new(entry!(0x0044_dd60, queued_maps::release_task(u32)))
@@ -9691,6 +9590,1366 @@ fn qm_iterator_flag_set() {
             let iterator = e.mem.alloc(0x10);
             e.mem.set_u8(iterator + 0xc, case.word(0) as u8);
             vec![iterator]
+        })
+        .run()
+        .assert_same();
+}
+
+// A package's flag accessors (`run_0067a1b0`) and `TESPackage`'s first functions (`package.rs`).
+
+/// The flag words the package tests pick: the flags (+0x1c) and, turned, the behaviour and specific
+/// flags (+0x22, +0x24).
+const PF_WORDS: &[u32] = &[
+    0,
+    0xffff_ffff,
+    0x0f0f_0f0f,
+    0xf0f0_f0f0,
+    0x1cfe_3000,
+    0xe301_cfff,
+];
+/// A setter's word: the setters read its low byte.
+const PF_BYTES: &[u32] = &[0, 1, 0x80, 0xff, 0x100];
+/// The package types: none, the plain ones, the data types, the dialogue and use weapon types.
+const PF_TYPES: &[u32] = &[
+    0xff, 0, 1, 2, 3, 4, 7, 8, 9, 0xc, 0xd, 0xe, 0xf, 0x10, 0x11, 0x1c,
+];
+const PF_SEEDS: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7];
+/// The data objects' vtable (slot 0 their deleting destructor's double) and that double.
+const PF_DATA_VTABLE: u32 = 0x0300_7c00;
+const PF_FN: u32 = 0x00ff_9000;
+/// Where a package keeps the count the double of `00676280` answers (its last word).
+const PF_COUNT_AT: u32 = 0x7c;
+/// The subclasses' constructors `CreatePackage` calls by address.
+const PF_SUBCLASSES: [u32; 7] = [
+    0x009e_dbc0,
+    0x0097_d3a0,
+    0x009e_c5d0,
+    0x009f_0e00,
+    0x009f_91b0,
+    0x009f_72f0,
+    0x009e_d030,
+];
+
+/// The one-line bodies of other classes the package functions do in place (see their module
+/// comments): left out of the translations' calls, with no double.
+const PF_IN_PLACE: &[u32] = &[
+    0x0041_ca90, // a package's type
+    0x0055_b980, // its location
+    0x0067_1d10, // its target
+    0x0096_11e0, // its procedure type
+    0x0084_e3a0, // the form's id
+    0x0046_9860, // the created-id test
+    0x0051_9b00, // a target's type
+    0x0044_ddc0, // its value
+    0x0067_ff70, // its constructor
+    0x0067_8ca0, // a location's type
+    0x0067_f030, // its constructor
+    0x0044_1b00, // the flag 0x0020_0000's getter
+    0x0067_33e0, // the word at +0x48's getter
+    0x0067_3400, // and setter
+    0x0040_13e0, // a form's flag 8 test
+    0x0087_eaa0, // a package's conditions
+    0x005f_36f0, // its idle collection
+    0x0041_fd00, // an event action's kind setter
+    0x0068_0020, // a target's reference
+    0x0084_d030, // its radius (a float)
+    0x0067_ad20, // `TESPackageData`'s constructor (the family's, done in place by the data
+                 // classes' constructors, whose translations call it)
+];
+/// The family's own bodies its callers do in place (one-line flag tests and setters, the second
+/// location's read): listed only in the callers' tests.
+const PF_OWN_IN_PLACE: &[u32] = &[
+    0x0067_4d20,
+    0x0067_1a20,
+    0x0067_1a70,
+    0x0067_1ad0,
+    0x0067_1b30,
+    0x0067_1b90,
+    0x0067_1bf0,
+    0x0067_1c50,
+    0x0067_1cb0,
+    0x0067_2dd0,
+];
+
+/// The flag accessors the copy (`0067a1b0`) does in place: listed only in its test.
+const PF_ACCESSORS: &[u32] = &[
+    0x0067_a380,
+    0x0067_a3a0,
+    0x0067_a3f0,
+    0x0067_a410,
+    0x0067_a460,
+    0x0067_a480,
+    0x0067_a4a0,
+    0x0067_a4f0,
+    0x0067_a510,
+    0x0067_a560,
+    0x0067_a580,
+    0x0067_a5d0,
+    0x0067_a5f0,
+    0x0067_a640,
+    0x0067_a690,
+    0x0067_a6b0,
+    0x0067_a700,
+    0x0067_a720,
+    0x0067_a770,
+    0x0067_a790,
+    0x0067_a7e0,
+    0x0067_a800,
+    0x0067_a850,
+    0x0067_a870,
+    0x0067_a8d0,
+    0x0067_a8f0,
+    0x0067_a950,
+    0x0067_a970,
+    0x0067_a9d0,
+    0x0067_a9f0,
+    0x0067_aa50,
+    0x0067_aa70,
+    0x0067_aad0,
+    0x0067_aaf0,
+    0x0067_ab50,
+    0x0067_ab70,
+    0x0067_abd0,
+    0x0067_abf0,
+    0x0067_ac50,
+    0x0067_ac70,
+];
+
+/// The package functions' callees by address, as doubles that leave a mark: the type table, the
+/// data objects' deleting destructor, the schedule's setter, the location's and target's deleting
+/// destructors, copies and type setter, the use weapon data's and the subclasses' constructors, the
+/// assert and the count `GetAcquireRadius` takes.
+fn pf_doubles(e: &mut Engine) {
+    e.map(0x0119_b000, 0x1000);
+    // The dialogue data's starting `fFov` (100.0), which its constructor reads.
+    e.map(0x0101_6000, 0x1000);
+    e.mem.set_u32(0x0101_6410, 0x42c8_0000);
+    for k in 0..0x400 {
+        e.mem.set_u32(0x0119_b000 + 4 * k, 0x0101_0000 + k);
+    }
+    e.mem.set_u32(PF_DATA_VTABLE, PF_FN);
+    e.register(PF_FN, |e, a| {
+        e.mem.set_u32(a[0], 0x0dea_d000 | a[1]);
+        ret(a[0])
+    });
+    e.register(0x0067_3180, |e, a| {
+        e.mem.set_u32(a[0] + 0x38, 0x5c00_0000 | a[1]);
+        ret(0)
+    });
+    e.register(0x0067_0b30, |e, a| {
+        e.mem.set_u32(a[0] + 8, 0xdead_0000 | a[1]);
+        ret(a[0])
+    });
+    e.register(0x0067_f4d0, |e, a| {
+        for k in 0..3 {
+            let w = e.mem.u32(a[1] + 4 * k);
+            e.mem.set_u32(a[0] + 4 * k, w ^ a[2] ^ 0x0101);
+        }
+        ret(a[0])
+    });
+    e.register(0x007b_3fa0, |e, a| {
+        e.mem.set_u32(a[0] + 0xc, 0xdead_0000 | a[1]);
+        ret(a[0])
+    });
+    e.register(0x0068_01a0, |e, a| {
+        for k in 0..4 {
+            let w = e.mem.u32(a[1] + 4 * k);
+            e.mem.set_u32(a[0] + 4 * k, w ^ 0x0202);
+        }
+        ret(a[0])
+    });
+    e.register(0x0068_00b0, |e, a| {
+        e.mem.set_u8(a[0], a[1] as u8);
+        e.mem.set_u32(a[0] + 4, 0x7777);
+        ret(0)
+    });
+    e.register(0x0067_caa0, |e, a| {
+        e.mem.set_u32(a[0], PF_DATA_VTABLE);
+        e.mem.set_u32(a[0] + 8, 0);
+        ret(a[0])
+    });
+    for constructor in PF_SUBCLASSES {
+        e.register(constructor, |e, a| {
+            e.mem.set_u32(a[0], VTABLE);
+            e.mem.set_u8(a[0] + 0x20, 0xff);
+            for at in [0x24, 0x28, 0x2c, 0x30] {
+                e.mem.set_u32(a[0] + at, 0);
+            }
+            ret(a[0])
+        });
+    }
+    e.register(0x00aa_fb90, |_, _| ret(0));
+    e.register(
+        0x0067_6280,
+        |e, a| ret(e.mem.u32(a[0] + PF_COUNT_AT) ^ a[1]),
+    );
+}
+
+fn pf_world(e: &mut Engine) {
+    world(e);
+    // The exe's 0.0 the acquire radius is compared with.
+    e.map(0x0101_2000, 0x1000);
+    e.mem.set_f64(0x0101_2060, 0.0);
+    pf_doubles(e);
+}
+
+/// A location (`PackageLocation`, 0xc bytes): its type byte from `seed`.
+fn pf_location(e: &mut Engine, seed: u32) -> u32 {
+    let l = e.mem.alloc(0xc);
+    e.mem.set_u32(l, pick(seed, 20, &[0u32, 3, 7, 0xff]));
+    e.mem.set_u32(l + 4, mix(seed, 21));
+    e.mem.set_u32(l + 8, mix(seed, 22));
+    l
+}
+
+/// A target (`PackageTarget`, 0x10 bytes): its type byte, value and radius from `seed`.
+fn pf_target(e: &mut Engine, seed: u32) -> u32 {
+    let t = e.mem.alloc(0x10);
+    e.mem.set_u32(t, pick(seed, 23, &[0u32, 1, 2, 3]));
+    e.mem.set_u32(t + 4, mix(seed, 24));
+    e.mem.set_u32(
+        t + 8,
+        pick(seed, 25, &[0, 5, 0xffff_ffff, 0x8000_0000, 0x7fff_ffff]),
+    );
+    e.mem.set_u32(
+        t + 0xc,
+        pick(
+            seed,
+            26,
+            &[
+                0,
+                0x4020_0000,
+                0xbf80_0000,
+                0x7f80_0001,
+                0x7fc0_0000,
+                0x8000_0000,
+                1,
+            ],
+        ),
+    );
+    t
+}
+
+/// A package of type `kind`, the rest from `seed`: its id (created or not), procedure type, flag
+/// words, a data object (each of its three location words a location or none, its bytes), a
+/// location, a target and the count `00676280`'s double answers.
+fn pf_package(e: &mut Engine, kind: u32, seed: u32) -> u32 {
+    let p = e.mem.alloc(0x80);
+    e.mem.set_u32(p, VTABLE);
+    e.mem.set_u8(p + 4, PACKAGE_FORM_TYPE);
+    e.mem.set_u32(
+        p + 0xc,
+        pick(
+            seed,
+            1,
+            &[0x0001_2345, 0xff00_0000, 0xfeff_ffff, 0xff12_3456],
+        ),
+    );
+    e.mem.set_u32(
+        p + PK_PROCEDURE,
+        pick(seed, 2, &[0xffff_ffff, 0x1c, 2, 3, 0x1a, 5]),
+    );
+    e.mem.set_u32(p + PK_FLAGS, pick(seed, 3, PF_WORDS));
+    e.mem
+        .set_u32(p + 0x22, pick(seed, 4, PF_WORDS).rotate_left(5));
+    e.mem.set_u8(p + 0x20, kind as u8);
+    if pick(seed, 5, &[0, 1, 1]) != 0 {
+        let data = e.mem.alloc(0x24);
+        e.mem.set_u32(data, PF_DATA_VTABLE);
+        for (k, at) in [(6, 4), (7, 8), (8, 0xc)] {
+            let location = if pick(seed, k, &[0, 1, 1]) != 0 {
+                pf_location(e, seed ^ k)
+            } else {
+                0
+            };
+            e.mem.set_u32(data + at, location);
+        }
+        e.mem.set_u32(data + 0x10, mix(seed, 9));
+        e.mem.set_u32(data + 0x18, mix(seed, 10));
+        e.mem.set_u32(p + 0x28, data);
+    }
+    if pick(seed, 11, &[0, 1, 1]) != 0 {
+        let location = pf_location(e, seed ^ 0x11);
+        e.mem.set_u32(p + 0x2c, location);
+    }
+    if pick(seed, 12, &[0, 1, 1]) != 0 {
+        let target = pf_target(e, seed);
+        e.mem.set_u32(p + PK_TARGET_AT, target);
+    }
+    e.mem.set_u32(
+        p + PF_COUNT_AT,
+        pick(seed, 13, &[0, 7, 0x0100_0001, 0xffff_ffff, 0x8000_0001]),
+    );
+    p
+}
+
+/// A package holding only flag words: the flags `word`, the behaviour and specific flags turned.
+fn pf_flags(e: &mut Engine, word: u32) -> u32 {
+    let p = e.mem.alloc(0x80);
+    e.mem.set_u32(p + PK_FLAGS, word);
+    e.mem.set_u32(p + 0x22, word.rotate_left(5));
+    p
+}
+
+/// The package functions' shared cases, as steps of the `Diff` chain.
+trait PfCases {
+    fn pf(self) -> Diff;
+    fn pf_caller(self) -> Diff;
+    fn pf_getter(self) -> Diff;
+    fn pf_setter(self) -> Diff;
+    fn pf_packages(self) -> Diff;
+    fn pf_packages_and(self, words: &'static [u32]) -> Diff;
+    fn pf_packages_and_location(self) -> Diff;
+}
+
+impl PfCases for Diff {
+    fn pf(self) -> Diff {
+        self.forms().ignore_calls(PF_IN_PLACE)
+    }
+    fn pf_caller(self) -> Diff {
+        self.pf().ignore_calls(PF_OWN_IN_PLACE)
+    }
+    /// A flag getter: each flag word.
+    fn pf_getter(self) -> Diff {
+        self.pf().inputs(&[Input::Of(PF_WORDS)]).setup(|e, case| {
+            world(e);
+            vec![pf_flags(e, case.word(0))]
+        })
+    }
+    /// A flag setter: each flag word and byte.
+    fn pf_setter(self) -> Diff {
+        self.pf()
+            .inputs(&[Input::Of(PF_WORDS), Input::Of(PF_BYTES)])
+            .setup(|e, case| {
+                world(e);
+                vec![pf_flags(e, case.word(0)), case.word(1)]
+            })
+    }
+    /// A package of each type.
+    fn pf_packages(self) -> Diff {
+        self.pf()
+            .inputs(&[Input::Of(PF_TYPES), Input::Of(PF_SEEDS)])
+            .setup(|e, case| {
+                pf_world(e);
+                vec![pf_package(e, case.word(0), case.word(1))]
+            })
+    }
+    /// A package of each type and one of `words`.
+    fn pf_packages_and(self, words: &'static [u32]) -> Diff {
+        self.pf()
+            .max_cases(1024)
+            .inputs(&[Input::Of(PF_TYPES), Input::Of(PF_SEEDS), Input::Of(words)])
+            .setup(|e, case| {
+                pf_world(e);
+                vec![pf_package(e, case.word(0), case.word(1)), case.word(2)]
+            })
+    }
+    /// A package of each type and a location or target to set (none, or a new one).
+    fn pf_packages_and_location(self) -> Diff {
+        self.pf()
+            .inputs(&[Input::Of(PF_TYPES), Input::Of(PF_SEEDS), Input::Flag])
+            .setup(|e, case| {
+                pf_world(e);
+                let p = pf_package(e, case.word(0), case.word(1));
+                let source = if case.word(2) != 0 {
+                    pf_target(e, case.word(1) ^ 0x55)
+                } else {
+                    0
+                };
+                vec![p, source]
+            })
+    }
+}
+
+#[test]
+fn pf_copy_flags_from() {
+    Diff::new(entry!(
+        0x0067_a1b0,
+        package_flags::copy_flags_from(u32, u32)
+    ))
+    .pf_caller()
+    .ignore_calls(PF_ACCESSORS)
+    .inputs(&[Input::Of(PF_WORDS), Input::Of(PF_WORDS), Input::Flag])
+    .setup(|e, case| {
+        world(e);
+        let this = pf_flags(e, case.word(0));
+        e.mem.set_u32(this + 0x48, 0x1111_2222);
+        let source = if case.word(2) != 0 {
+            this
+        } else {
+            let source = pf_flags(e, case.word(1));
+            e.mem.set_u32(source + 0x48, 0x3333_4444);
+            source
+        };
+        vec![this, source]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_pack_flag_1000() {
+    Diff::new(entry!(0x0067_a380, package_flags::pack_flag_1000(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_pack_flag_1000() {
+    Diff::new(entry!(
+        0x0067_a3a0,
+        package_flags::set_pack_flag_1000(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_pack_flag_400000() {
+    Diff::new(entry!(0x0067_a3f0, package_flags::pack_flag_400000(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_pack_flag_400000() {
+    Diff::new(entry!(
+        0x0067_a410,
+        package_flags::set_pack_flag_400000(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_pack_flag_800000() {
+    Diff::new(entry!(0x0067_a460, package_flags::pack_flag_800000(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_pack_flag_2000() {
+    Diff::new(entry!(0x0067_a480, package_flags::pack_flag_2000(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_pack_flag_2000() {
+    Diff::new(entry!(
+        0x0067_a4a0,
+        package_flags::set_pack_flag_2000(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_pack_flag_20000() {
+    Diff::new(entry!(0x0067_a4f0, package_flags::pack_flag_20000(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_pack_flag_20000() {
+    Diff::new(entry!(
+        0x0067_a510,
+        package_flags::set_pack_flag_20000(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_pack_flag_40000() {
+    Diff::new(entry!(0x0067_a560, package_flags::pack_flag_40000(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_pack_flag_40000() {
+    Diff::new(entry!(
+        0x0067_a580,
+        package_flags::set_pack_flag_40000(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_pack_flag_80000() {
+    Diff::new(entry!(0x0067_a5d0, package_flags::pack_flag_80000(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_pack_flag_80000() {
+    Diff::new(entry!(
+        0x0067_a5f0,
+        package_flags::set_pack_flag_80000(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_set_pack_flag_200000() {
+    Diff::new(entry!(
+        0x0067_a640,
+        package_flags::set_pack_flag_200000(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_pack_flag_100000() {
+    Diff::new(entry!(0x0067_a690, package_flags::pack_flag_100000(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_pack_flag_100000() {
+    Diff::new(entry!(
+        0x0067_a6b0,
+        package_flags::set_pack_flag_100000(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_pack_flag_4000000() {
+    Diff::new(entry!(0x0067_a700, package_flags::pack_flag_4000000(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_pack_flag_4000000() {
+    Diff::new(entry!(
+        0x0067_a720,
+        package_flags::set_pack_flag_4000000(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_pack_flag_8000000_clear() {
+    Diff::new(entry!(0x0067_a770, package_flags::pack_flag_8000000_clear(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_pack_flag_8000000_clear() {
+    Diff::new(entry!(
+        0x0067_a790,
+        package_flags::set_pack_flag_8000000_clear(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_pack_flag_10000000_clear() {
+    Diff::new(entry!(0x0067_a7e0, package_flags::pack_flag_10000000_clear(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_pack_flag_10000000_clear() {
+    Diff::new(entry!(
+        0x0067_a800,
+        package_flags::set_pack_flag_10000000_clear(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_behavior_flag_1() {
+    Diff::new(entry!(0x0067_a850, package_flags::behavior_flag_1(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_behavior_flag_1() {
+    Diff::new(entry!(
+        0x0067_a870,
+        package_flags::set_behavior_flag_1(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_behavior_flag_2() {
+    Diff::new(entry!(0x0067_a8d0, package_flags::behavior_flag_2(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_behavior_flag_2() {
+    Diff::new(entry!(
+        0x0067_a8f0,
+        package_flags::set_behavior_flag_2(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_behavior_flag_4() {
+    Diff::new(entry!(0x0067_a950, package_flags::behavior_flag_4(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_behavior_flag_4() {
+    Diff::new(entry!(
+        0x0067_a970,
+        package_flags::set_behavior_flag_4(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_behavior_flag_8() {
+    Diff::new(entry!(0x0067_a9d0, package_flags::behavior_flag_8(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_behavior_flag_8() {
+    Diff::new(entry!(
+        0x0067_a9f0,
+        package_flags::set_behavior_flag_8(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_behavior_flag_10() {
+    Diff::new(entry!(0x0067_aa50, package_flags::behavior_flag_10(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_behavior_flag_10() {
+    Diff::new(entry!(
+        0x0067_aa70,
+        package_flags::set_behavior_flag_10(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_behavior_flag_20() {
+    Diff::new(entry!(0x0067_aad0, package_flags::behavior_flag_20(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_behavior_flag_20() {
+    Diff::new(entry!(
+        0x0067_aaf0,
+        package_flags::set_behavior_flag_20(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_behavior_flag_40() {
+    Diff::new(entry!(0x0067_ab50, package_flags::behavior_flag_40(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_behavior_flag_40() {
+    Diff::new(entry!(
+        0x0067_ab70,
+        package_flags::set_behavior_flag_40(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_behavior_flag_80() {
+    Diff::new(entry!(0x0067_abd0, package_flags::behavior_flag_80(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_behavior_flag_80() {
+    Diff::new(entry!(
+        0x0067_abf0,
+        package_flags::set_behavior_flag_80(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_behavior_flag_100() {
+    Diff::new(entry!(0x0067_ac50, package_flags::behavior_flag_100(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_behavior_flag_100() {
+    Diff::new(entry!(
+        0x0067_ac70,
+        package_flags::set_behavior_flag_100(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_type_table_entry() {
+    Diff::new(entry!(0x0067_acd0, package_flags::type_table_entry(u32) -> u32))
+        .pf()
+        .inputs(&[Input::Of(&[0, 1, 2, 0x7f, 0x80, 0xff])])
+        .setup(|e, case| {
+            pf_world(e);
+            let p = pf_flags(e, 0);
+            e.mem.set_u8(p + 0x20, case.word(0) as u8);
+            vec![p]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_construct() {
+    Diff::new(entry!(0x0067_07c0, package::construct(u32) -> u32))
+        .pf()
+        .inputs(&[Input::Of(&[0, 5])])
+        .setup(|e, case| {
+            ob_world(e);
+            pf_doubles(e);
+            e.mem.set_u32(FORM_COUNT, case.word(0));
+            e.mem.set_u8(0x011c_54b8, 1);
+            vec![ob_garbage(e, 0x80)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_reset() {
+    Diff::new(entry!(0x0067_09d0, package::reset(u32)))
+        .pf_packages()
+        .run()
+        .assert_same();
+}
+
+/// The types `CreatePackage` is given: each arm, the ones that build nothing, and one past them.
+const PF_CREATED_TYPES: &[u32] = &[
+    0xffff_ffff,
+    0,
+    1,
+    3,
+    9,
+    0xc,
+    0xf,
+    0x10,
+    0x11,
+    0x12,
+    0x15,
+    0x16,
+    0x17,
+    0x18,
+    0x1c,
+    0x27,
+    0x28,
+    0x7f,
+];
+
+#[test]
+fn pf_create_package() {
+    Diff::new(entry!(0x0067_0b90, package::create_package(i32) -> u32))
+        .pf_caller()
+        .inputs(&[Input::Of(PF_CREATED_TYPES), Input::Flag])
+        .setup(|e, case| {
+            ob_world(e);
+            pf_doubles(e);
+            e.mem.set_u32(FORM_COUNT, 5);
+            e.mem.set_u8(0x011c_54b8, 1);
+            e.mem.set_u32(NEW_FAILS, case.word(1));
+            vec![case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_pack_flag_40() {
+    Diff::new(entry!(0x0067_0ed0, package::pack_flag_40(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_pack_flag_10() {
+    Diff::new(entry!(0x0067_0ef0, package::pack_flag_10(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_pack_flag_80() {
+    Diff::new(entry!(0x0067_0f10, package::pack_flag_80(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_pack_flag_20() {
+    Diff::new(entry!(0x0067_0f40, package::pack_flag_20(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_pack_flag_100() {
+    Diff::new(entry!(0x0067_0f60, package::pack_flag_100(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_once_per_day() {
+    Diff::new(entry!(0x0067_0f90, package::once_per_day(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+/// The new types `SetPackType` is given: each table's arms, 0x11 (counted as 0) and one past them.
+const PF_NEW_TYPES: &[u32] = &[
+    0, 1, 2, 3, 4, 7, 8, 9, 0xc, 0xd, 0xe, 0xf, 0x10, 0x11, 0x1c, 0x20,
+];
+
+#[test]
+fn pf_set_pack_type() {
+    Diff::new(entry!(0x0067_0fc0, package::set_pack_type(u32, i32)))
+        .pf_caller()
+        .max_cases(2048)
+        .inputs(&[
+            Input::Of(PF_TYPES),
+            Input::Of(PF_SEEDS),
+            Input::Of(PF_NEW_TYPES),
+        ])
+        .setup(|e, case| {
+            pf_world(e);
+            vec![pf_package(e, case.word(0), case.word(1)), case.word(2)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_pack_type_without_memory() {
+    Diff::new(entry!(0x0067_0fc0, package::set_pack_type(u32, i32)))
+        .pf_caller()
+        .inputs(&[Input::Of(&[1, 2, 8, 0xd, 0xf, 0x10])])
+        .setup(|e, case| {
+            pf_world(e);
+            let p = pf_package(e, 0xff, 3);
+            e.mem.set_u32(p + 0x28, 0);
+            e.mem.set_u32(NEW_FAILS, 1);
+            vec![p, case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_pack_flag_800000() {
+    Diff::new(entry!(0x0067_1a20, package::set_pack_flag_800000(u32, u8)))
+        .pf_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_specific_flag_40() {
+    Diff::new(entry!(0x0067_1a70, package::set_specific_flag_40(u32, u8)))
+        .pf_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_specific_flag_1_clear() {
+    Diff::new(entry!(
+        0x0067_1ad0,
+        package::set_specific_flag_1_clear(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_set_specific_flag_2_clear() {
+    Diff::new(entry!(
+        0x0067_1b30,
+        package::set_specific_flag_2_clear(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_set_specific_flag_4_clear() {
+    Diff::new(entry!(
+        0x0067_1b90,
+        package::set_specific_flag_4_clear(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_set_specific_flag_8_clear() {
+    Diff::new(entry!(
+        0x0067_1bf0,
+        package::set_specific_flag_8_clear(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_set_specific_flag_10_clear() {
+    Diff::new(entry!(
+        0x0067_1c50,
+        package::set_specific_flag_10_clear(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_set_specific_flag_20_clear() {
+    Diff::new(entry!(
+        0x0067_1cb0,
+        package::set_specific_flag_20_clear(u32, u8)
+    ))
+    .pf_setter()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_set_location() {
+    Diff::new(entry!(0x0067_1d30, package::set_location(u32, u32)))
+        .pf_packages_and_location()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_second_location() {
+    Diff::new(entry!(0x0067_1e10, package::set_second_location(u32, u32)))
+        .pf_packages_and_location()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_dialogue_say_to() {
+    Diff::new(entry!(0x0067_2710, package::dialogue_say_to(u32) -> u8))
+        .pf_packages()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_dialogue_topic() {
+    Diff::new(entry!(0x0067_2760, package::dialogue_topic(u32) -> u32))
+        .pf_packages()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_dialogue_do_not_control_target() {
+    Diff::new(entry!(0x0067_27b0, package::dialogue_do_not_control_target(u32) -> u8))
+        .pf_packages()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_dialogue_no_headtrack() {
+    Diff::new(entry!(0x0067_2800, package::dialogue_no_headtrack(u32) -> u8))
+        .pf_packages()
+        .run()
+        .assert_same();
+}
+
+/// The `fFov` words the dialogue tests pick: 1.5, -0.0, a signalling and a quiet NaN.
+const PF_FOVS: &[u32] = &[0x3fc0_0000, 0x8000_0000, 0x7f80_0001, 0x7fc0_0000];
+
+#[test]
+fn pf_dialogue_fov() {
+    Diff::new(entry!(0x0067_2850, package::dialogue_fov(u32) -> f32))
+        .pf_packages_and(PF_FOVS)
+        .setup(|e, case| {
+            pf_world(e);
+            let p = pf_package(e, case.word(0), case.word(1));
+            let data = e.mem.u32(p + 0x28);
+            if data != 0 {
+                e.mem.set_u32(data + 4, case.word(2));
+            }
+            vec![p]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The arguments `GetAcquireRadius`'s type 0xc count is turned by.
+const PF_ARGUMENTS: &[u32] = &[0, 1, 0x8000_0000];
+
+#[test]
+fn pf_acquire_radius() {
+    Diff::new(entry!(0x0067_28a0, package::acquire_radius(u32, u32, u32) -> bool))
+        .pf_packages_and(PF_ARGUMENTS)
+        .setup(|e, case| {
+            pf_world(e);
+            let p = pf_package(e, case.word(0), case.word(1));
+            let radius = e.mem.alloc(4);
+            e.mem.set_u32(radius, 0xcccc_cccc);
+            vec![p, case.word(2), radius]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_initial_target_count() {
+    Diff::new(entry!(0x0067_2930, package::initial_target_count(u32) -> i32))
+        .pf_packages()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_dialogue_topic() {
+    Diff::new(entry!(0x0067_29d0, package::set_dialogue_topic(u32, u32)))
+        .pf_packages_and(&[0, 0x0101_0d00])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_dialogue_do_not_control_target() {
+    Diff::new(entry!(
+        0x0067_2aa0,
+        package::set_dialogue_do_not_control_target(u32, u8)
+    ))
+    .pf_packages_and(PF_BYTES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_set_dialogue_no_headtrack() {
+    Diff::new(entry!(
+        0x0067_2b70,
+        package::set_dialogue_no_headtrack(u32, u8)
+    ))
+    .pf_packages_and(PF_BYTES)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pf_set_dialogue_fov() {
+    Diff::new(entry!(0x0067_2c40, package::set_dialogue_fov(u32, f32)))
+        .pf_packages_and(PF_FOVS)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_use_weapon_data() {
+    Diff::new(entry!(0x0067_2d10, package::use_weapon_data(u32) -> u32))
+        .pf_packages()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_second_location() {
+    Diff::new(entry!(0x0067_2dd0, package::second_location(u32) -> u32))
+        .pf_packages()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_search_location() {
+    Diff::new(entry!(0x0067_2f20, package::search_location(u32) -> u32))
+        .pf_caller()
+        .inputs(&[Input::Of(PF_TYPES), Input::Of(PF_SEEDS)])
+        .setup(|e, case| {
+            pf_world(e);
+            vec![pf_package(e, case.word(0), case.word(1))]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_target() {
+    Diff::new(entry!(0x0067_2fc0, package::set_target(u32, u32)))
+        .pf_packages_and_location()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_specific_flag_2() {
+    Diff::new(entry!(0x0067_4d20, package::specific_flag_2(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_is_created() {
+    Diff::new(entry!(0x0067_4d40, package::is_created(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_is_created() {
+    Diff::new(entry!(0x0067_4d70, package::set_is_created(u32, u8)))
+        .pf_packages_and(PF_BYTES)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_type_9_data_construct() {
+    Diff::new(entry!(0x0067_acf0, package::type_9_data_construct(u32) -> u32))
+        .pf_caller()
+        .setup(|e, _| {
+            world(e);
+            vec![ob_garbage(e, 8)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_is_script_package() {
+    Diff::new(entry!(0x0067_4dd0, package::is_script_package(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_script_package() {
+    Diff::new(entry!(0x0067_4e00, package::set_script_package(u32, u8)))
+        .pf_setter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_is_never_to_run() {
+    Diff::new(entry!(0x0067_4e40, package::is_never_to_run(u32) -> bool))
+        .pf_getter()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pf_set_never_run() {
+    Diff::new(entry!(0x0067_4e70, package::set_never_run(u32, u32, u8)))
+        .pf()
+        .ignore_calls(&[0x0068_0020])
+        .inputs(&[
+            Input::Of(&[0, 1, 2, 3]),
+            Input::Of(PF_SEEDS),
+            Input::Of(PF_BYTES),
+            Input::Flag,
+        ])
+        .setup(|e, case| {
+            pf_world(e);
+            let p = pf_package(e, 0, case.word(1));
+            let target = e.mem.u32(p + PK_TARGET_AT);
+            if target != 0 {
+                e.mem.set_u8(target, case.word(0) as u8);
+            }
+            // The target's reference, or another.
+            let reference = if case.word(3) != 0 && target != 0 {
+                e.mem.u32(target + 4)
+            } else {
+                0x0101_0e00
+            };
+            vec![p, reference, case.word(2)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// `InitItem`'s world: the warning count (stepping by the case's word at each read), the
+/// `InitItem`s and the location's type setter marking what they reach, the type 0xc test answering
+/// the package's byte at +0x21.
+fn pf_init_world(e: &mut Engine, step: u32) {
+    pf_world(e);
+    e.mem.set_u32(PF_WARNINGS + 4, step);
+    e.register(0x0046_e8a0, |e, _| {
+        let count = e.mem.u32(PF_WARNINGS);
+        let step = e.mem.u32(PF_WARNINGS + 4);
+        e.mem.set_u32(PF_WARNINGS, count.wrapping_add(step));
+        ret(count)
+    });
+    e.register(0x0067_f760, pf_mark::<0x0001_0000>);
+    e.register(0x0068_03b0, pf_mark::<0x0002_0000>);
+    e.register(0x0068_0a20, pf_mark::<0x0003_0000>);
+    e.register(0x0047_9b00, pf_mark::<0x0004_0000>);
+    e.register(0x0067_e190, pf_mark::<0x0005_0000>);
+    e.register(PF_FN + 0x10, pf_mark::<0x0006_0000>);
+    e.mem.set_u32(PF_DATA_VTABLE + 0x10, PF_FN + 0x10);
+    e.register(0x0067_f140, |e, a| {
+        if a[0] != 0 {
+            e.mem.set_u8(a[0], a[1] as u8);
+        }
+        ret(0)
+    });
+    e.register(0x0067_3890, |e, a| ret(u32::from(e.mem.u8(a[0] + 0x21))));
+}
+
+/// An `InitItem` double: the word at +4 of the object it is called on marked with `M` and the
+/// package's low bits.
+fn pf_mark<const M: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+    let seen = e.mem.u32(a[0] + 4);
+    e.mem.set_u32(a[0] + 4, seen ^ M ^ (a[1] & 0xfff));
+    ret(0)
+}
+
+/// Where `InitItem`'s warning count double keeps its count and step.
+const PF_WARNINGS: u32 = 0x0300_7c40;
+
+/// The types `InitItem` sets up on their own, and two that it doesn't.
+const PF_INIT_TYPES: &[u32] = &[0, 3, 9, 0xc, 0xd, 0xe];
+
+#[test]
+fn pf_init_item() {
+    Diff::new(entry!(0x0067_4930, package::init_item(u32)))
+        .pf_caller()
+        .local_at(0x0048_5d50, 0, 4)
+        .max_cases(1024)
+        .inputs(&[
+            Input::Of(PF_INIT_TYPES),
+            Input::Of(PF_SEEDS),
+            Input::Of(&[0, 1]),
+            Input::Flag,
+        ])
+        .setup(|e, case| {
+            pf_init_world(e, case.word(2));
+            let seed = case.word(1);
+            let p = pf_package(e, case.word(0), seed);
+            e.mem
+                .set_u32(p + 8, pick(seed, 30, &[0, 0x10, 8, 0xffff_fff7]));
+            e.mem
+                .set_u32(p + 0x48, pick(seed, 31, &[0, 0x0000_0123, 0x0100_0456]));
+            e.mem.set_u8(p + 0x21, pick(seed, 32, &[0u8, 1]));
+            if pick(seed, 33, &[0, 1]) != 0 {
+                let idles = e.mem.alloc(8);
+                e.mem.set_u32(p + 0x34, idles);
+            }
+            // The type 0xd reads its data object's byte at +5: give it one.
+            if case.word(0) == 0xd && e.mem.u32(p + 0x28) == 0 {
+                let data = e.mem.alloc(0x24);
+                e.mem.set_u32(data, PF_DATA_VTABLE);
+                e.mem.set_u32(p + 0x28, data);
+            }
+            // The cast's answer: none, or a combat style.
+            let style = if case.word(3) != 0 { 0x0101_0f00 } else { 0 };
+            e.mem.set_u32(CASTS + 0x27c, style);
+            vec![p]
         })
         .run()
         .assert_same();

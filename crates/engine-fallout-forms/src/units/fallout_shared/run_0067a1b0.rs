@@ -32,52 +32,52 @@ const PACK_TYPE_TABLE: u32 = 0x0119_bcb0;
 // Translated from 0067a1b0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Copies every flag accessor's value from `source` to `this`, in the exe's
 /// order: the `iPackFlags` bits, the `iFOBehaviorFlags` bits, and the word at
-/// +0x48. Getters and setters outside this file are called by address.
+/// +0x48. Every getter and setter is called by address.
 pub fn fn_0067a1b0(e: &mut Engine, this: Ptr<TESPackage>, source: Ptr<TESPackage>) {
-    let v = fn_0067a380(e, source);
-    fn_0067a3a0(e, this, v as u8);
-    let v = fn_0067a850(e, source);
-    fn_0067a870(e, this, v as u8);
-    let v = fn_0067a8d0(e, source);
-    fn_0067a8f0(e, this, v as u8);
-    let v = fn_0067a950(e, source);
-    fn_0067a970(e, this, v as u8);
-    let v = fn_0067a9d0(e, source);
-    fn_0067a9f0(e, this, v as u8);
-    let v = fn_0067aa50(e, source);
-    fn_0067aa70(e, this, v as u8);
-    let v = fn_0067aad0(e, source);
-    fn_0067aaf0(e, this, v as u8);
-    let v = fn_0067ab50(e, source);
-    fn_0067ab70(e, this, v as u8);
-    let v = fn_0067abd0(e, source);
-    fn_0067abf0(e, this, v as u8);
-    let v = fn_0067ac50(e, source);
-    fn_0067ac70(e, this, v as u8);
-    let v = fn_0067a460(e, source);
-    e.call(SET_FLAG_00671A20, &args![this, v as u32]);
-    let v = fn_0067a690(e, source);
-    fn_0067a6b0(e, this, v as u8);
+    let v = e.call(0x0067_a380, &args![source]).bool();
+    e.call(0x0067_a3a0, &args![this, u32::from(v)]);
+    let v = e.call(0x0067_a850, &args![source]).bool();
+    e.call(0x0067_a870, &args![this, u32::from(v)]);
+    let v = e.call(0x0067_a8d0, &args![source]).bool();
+    e.call(0x0067_a8f0, &args![this, u32::from(v)]);
+    let v = e.call(0x0067_a950, &args![source]).bool();
+    e.call(0x0067_a970, &args![this, u32::from(v)]);
+    let v = e.call(0x0067_a9d0, &args![source]).bool();
+    e.call(0x0067_a9f0, &args![this, u32::from(v)]);
+    let v = e.call(0x0067_aa50, &args![source]).bool();
+    e.call(0x0067_aa70, &args![this, u32::from(v)]);
+    let v = e.call(0x0067_aad0, &args![source]).bool();
+    e.call(0x0067_aaf0, &args![this, u32::from(v)]);
+    let v = e.call(0x0067_ab50, &args![source]).bool();
+    e.call(0x0067_ab70, &args![this, u32::from(v)]);
+    let v = e.call(0x0067_abd0, &args![source]).bool();
+    e.call(0x0067_abf0, &args![this, u32::from(v)]);
+    let v = e.call(0x0067_ac50, &args![source]).bool();
+    e.call(0x0067_ac70, &args![this, u32::from(v)]);
+    let v = e.call(0x0067_a460, &args![source]).bool();
+    e.call(SET_FLAG_00671A20, &args![this, u32::from(v)]);
+    let v = e.call(0x0067_a690, &args![source]).bool();
+    e.call(0x0067_a6b0, &args![this, u32::from(v)]);
     let v = e.call(GET_FLAG_00441B00, &args![source]).u8();
-    fn_0067a640(e, this, v);
-    let v = fn_0067a480(e, source);
-    fn_0067a4a0(e, this, v as u8);
-    let v = fn_0067a4f0(e, source);
-    fn_0067a510(e, this, v as u8);
-    let v = fn_0067a770(e, source);
-    fn_0067a790(e, this, v as u8);
+    e.call(0x0067_a640, &args![this, u32::from(v)]);
+    let v = e.call(0x0067_a480, &args![source]).bool();
+    e.call(0x0067_a4a0, &args![this, u32::from(v)]);
+    let v = e.call(0x0067_a4f0, &args![source]).bool();
+    e.call(0x0067_a510, &args![this, u32::from(v)]);
+    let v = e.call(0x0067_a770, &args![source]).bool();
+    e.call(0x0067_a790, &args![this, u32::from(v)]);
     let v = e.call(GET_SECOND_GENERIC_LOCATION, &args![source]).u32();
     e.call(SET_SECOND_GENERIC_LOCATION, &args![this, v]);
-    let v = fn_0067a700(e, source);
-    fn_0067a720(e, this, v as u8);
-    let v = fn_0067a3f0(e, source);
-    fn_0067a410(e, this, v as u8);
-    let v = fn_0067a5d0(e, source);
-    fn_0067a5f0(e, this, v as u8);
-    let v = fn_0067a560(e, source);
-    fn_0067a580(e, this, v as u8);
-    let v = fn_0067a7e0(e, source);
-    fn_0067a800(e, this, v as u8);
+    let v = e.call(0x0067_a700, &args![source]).bool();
+    e.call(0x0067_a720, &args![this, u32::from(v)]);
+    let v = e.call(0x0067_a3f0, &args![source]).bool();
+    e.call(0x0067_a410, &args![this, u32::from(v)]);
+    let v = e.call(0x0067_a5d0, &args![source]).bool();
+    e.call(0x0067_a5f0, &args![this, u32::from(v)]);
+    let v = e.call(0x0067_a560, &args![source]).bool();
+    e.call(0x0067_a580, &args![this, u32::from(v)]);
+    let v = e.call(0x0067_a7e0, &args![source]).bool();
+    e.call(0x0067_a800, &args![this, u32::from(v)]);
 }
 
 // Translated from 0067a380 (decompiled, FalloutNV.exe 1.4.0.525)
