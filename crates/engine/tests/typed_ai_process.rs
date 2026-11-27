@@ -59,6 +59,12 @@ const EXTRA: u32 = CONTROL + 0x1800;
 const EXTRA_2: u32 = CONTROL + 0x1804;
 /// The save buffer the positions point into.
 const BUFFER: u32 = 0x0400_0000;
+/// The save buffer past the first stream's: the blocks of three process levels (`MiddleLowProcess`'s
+/// save after `LowProcess`'s and `BaseProcess`'s), each with numeric ids or lists that move the
+/// position on by up to 0x10000, end far out, where the last block's length is stored. Mapped only
+/// where a block is written that far (every mapped page is hashed at each call a Diff compares).
+const FAR_BUFFER: u32 = BUFFER + 0x2_0000;
+const FAR_SIZE: u32 = 0x6_0000;
 
 /// The slots the code calls, each a stand-in unless the seed gives the exe's body.
 const SLOTS: [u32; 21] = [
@@ -676,9 +682,6 @@ impl World {
         e.map(0x0102_2000, 0x1000);
         e.mem.set_u32(0x0101_6410, 0x42c8_0000);
         e.mem.set_u32(0x0102_2958, 0x461c_4000);
-        // The save buffer past the first stream's: the blocks of three process levels, each with
-        // numeric ids or lists that move the position on by up to 0x10000, end far out.
-        e.map(BUFFER + 0x2_0000, 0x6_0000);
         // A buffer of its own: the other process's vtable (its slot 0 answers a version), its change
         // flags (+0x17) and revert flags (+0x2c) with the modifiers' flag or without.
         let buffer = e.mem.alloc(0x40);
@@ -810,9 +813,19 @@ impl World {
 /// call's words from `words`, and the callees done in place ignored.
 trait InWorld {
     fn in_world(self, seeds: &'static [u32], words: fn(&mut World) -> Vec<u32>) -> Diff;
+    /// [`InWorld::in_world`] with the far save buffer mapped too ([`FAR_BUFFER`]).
+    fn in_far_world(self, seeds: &'static [u32], words: fn(&mut World) -> Vec<u32>) -> Diff;
 }
 
 impl InWorld for Diff {
+    fn in_far_world(self, seeds: &'static [u32], words: fn(&mut World) -> Vec<u32>) -> Diff {
+        self.in_world(seeds, words).setup(move |e, case| {
+            let mut w = World::new(e, case.word(0));
+            e.map(FAR_BUFFER, FAR_SIZE);
+            words(&mut w)
+        })
+    }
+
     fn in_world(self, seeds: &'static [u32], words: fn(&mut World) -> Vec<u32>) -> Diff {
         self.family(&AI)
             .family(&leaf::LEAVES)
@@ -1328,7 +1341,7 @@ fn low_process_save_and_load() {
         0x0092_e560,
         middle_low_process::save_game(Ptr, u32, u32)
     ))
-    .in_world(&MOST, save_words)
+    .in_far_world(&MOST, save_words)
     .ignore_calls(LOW_IN_PLACE)
     .run()
     .assert_same();
@@ -1539,6 +1552,7 @@ fn reaches(
         let mut e = Engine::new_untyped_for_test();
         let mut w = World::new(&mut e, seed);
         log_warnings(&mut e);
+        e.map(FAR_BUFFER, FAR_SIZE);
         let args = words(&mut w);
         // Before the call: the receiver's first eight words, the player's running package and the
         // save/load game's position.
