@@ -2062,11 +2062,7 @@ const MENU_VATS: i32 = 0x420;
 /// Menu ids `00705000` and `00705020` test for existence.
 const MENU_435: i32 = 0x435;
 const MENU_41D: i32 = 0x41d;
-/// `StatsMenu::Create` (Xbox PDB), `StatsMenu::UpdateAll` (on the menu),
-/// `StatsMenu::Create`, `StatsMenu::UpdateAll` (on the menu) and
-/// `StatsMenu::SetKnobPosition` (`cdecl`, one word).
-const STATS_MENU_CREATE: u32 = 0x007d_a2c0;
-const STATS_UPDATE_ALL: u32 = 0x007d_cc80;
+/// `StatsMenu::SetKnobPosition` (`cdecl`, one word), which the Pip-Boy's query calls by address.
 const STATS_SET_KNOB_POSITION: u32 = 0x007d_fc90;
 /// The actor value that updates the whole stats screen (`0x4d`).
 const ACTOR_VALUE_ALL: u32 = 0x4d;
@@ -2166,7 +2162,11 @@ pub fn fn_00704bc0(e: &mut Engine) {
 /// `StatsMenu::Create` when the manager is ready, else 0.
 pub fn fn_00704be0(e: &mut Engine) -> u32 {
     match ready_manager(e) {
-        Some(_) => e.call(STATS_MENU_CREATE, &[]).u32(),
+        Some(_) => typed_call!(
+            super::FAMILY,
+            0x007d_a2c0,
+            super::stats_menu::stats_menu_create(e)
+        ),
         None => 0,
     }
 }
@@ -2210,7 +2210,11 @@ pub fn interface_set_stats_menu_visible(e: &mut Engine, show: u8, check_state: u
         if stats != 0 {
             set_current_menu(e, manager, MENU_STATS);
             let menu = e.call(TILE_GET_MENU, &args![stats]).u32();
-            e.call(STATS_UPDATE_ALL, &args![menu]);
+            typed_call!(
+                super::FAMILY,
+                0x007d_cc80,
+                super::stats_menu::stats_menu_update_all(e, Ptr::new(menu))
+            );
             menu_fade_in(e, stats);
         }
     } else if show == 0 && visible && stats != 0 {
