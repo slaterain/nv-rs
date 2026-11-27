@@ -304,6 +304,20 @@ fn patched(e: &mut Engine, id: u32) -> bool {
 /// refused.
 fn patched_from(e: &mut Engine, device: u32, id: u32, d: &Deferred) -> bool {
     let n = d.len();
+    let timed = LINE.with(|l| {
+        let mut l = l.borrow_mut();
+        l.offered += 1;
+        l.offered % 64 == 32
+    });
+    let mut at = timed.then(std::time::Instant::now);
+    let mut parts = [0u64; 4];
+    let mut lap = |part: usize| {
+        if let Some(start) = at.as_mut() {
+            let now = std::time::Instant::now();
+            parts[part] = u64::try_from((now - *start).as_nanos()).unwrap_or(u64::MAX);
+            *start = now;
+        }
+    };
     let carried = d.calls().enumerate().all(|(i, (c, bytes))| {
         c.this == device
             && command(c, bytes).is_some_and(|cmd| {
@@ -316,6 +330,7 @@ fn patched_from(e: &mut Engine, device: u32, id: u32, d: &Deferred) -> bool {
     if n == 0 || !carried {
         return false;
     }
+    lap(0);
     let mark = d.mark();
     let constant = |c: &DeferredCall| constant_kind(c.slot).is_some();
     let sets = d.calls().take(n - 1).enumerate();
@@ -330,7 +345,9 @@ fn patched_from(e: &mut Engine, device: u32, id: u32, d: &Deferred) -> bool {
         command(c, bytes).expect("checked above")
     }
     let list = ordinary.clone().chain(own).chain(uploads.clone()).map(cmd);
-    let Ok(ending) = super::d3d9device::bulk_update(e, device, list) else {
+    let update = super::d3d9device::bulk_update(e, device, list);
+    lap(1);
+    let Ok(ending) = update else {
         return false;
     };
     PATCHES.with(|p| {
@@ -344,9 +361,12 @@ fn patched_from(e: &mut Engine, device: u32, id: u32, d: &Deferred) -> bool {
             }
             p.extend_from_slice(bytes);
         }
+        let bytes = p.len();
         let mut s = super::d3d9real::sink_of(e).expect("checked by the caller");
+        let mut sent = 1;
         for c in ordinary.map(cmd) {
             s.submit_now(c);
+            sent += 1;
         }
         s.submit_now(Cmd::DrawPatched {
             device,
@@ -354,9 +374,70 @@ fn patched_from(e: &mut Engine, device: u32, id: u32, d: &Deferred) -> bool {
             check: 0,
             patches: Data::Bytes(&p),
         });
+        LINE.with(|l| {
+            let mut l = l.borrow_mut();
+            l.calls += n as u64;
+            l.sent += sent;
+            l.bytes += bytes as u64;
+        });
     });
+    lap(2);
     super::d3d9device::end_after_bulk(e, ending);
+    lap(3);
+    LINE.with(|l| {
+        let mut l = l.borrow_mut();
+        l.drawn += 1;
+        if timed {
+            l.timed += 1;
+            for (all, n) in l.parts.iter_mut().zip(parts) {
+                *all += n;
+            }
+        }
+        if l.drawn % LINE_EVERY == 0 {
+            eprintln!("{}", l.line());
+        }
+    });
     true
+}
+
+/// The patched items' counters on this side (`NV_DRAW_ITEMS platform: ...` every [`LINE_EVERY`] items drawn): the
+/// items offered and drawn, their calls, the commands and patch bytes sent, and of one in 64 offered the time in
+/// the checks of the calls, the model's update, the patches and the sends, and the ends.
+#[derive(Default)]
+struct Line {
+    offered: u64,
+    drawn: u64,
+    calls: u64,
+    sent: u64,
+    bytes: u64,
+    timed: u64,
+    parts: [u64; 4],
+}
+
+impl Line {
+    fn line(&self) -> String {
+        let per = |n: u64| n as f64 / self.drawn.max(1) as f64;
+        let each = |ns: u64| ns as f64 / 1000.0 / self.timed.max(1) as f64;
+        format!(
+            "NV_DRAW_ITEMS platform: {} patched items drawn of {} offered; {:.1} calls, {:.1} commands sent, {:.0} patch bytes an item; microseconds each ({} timed): the calls checked {:.2}, the model's update {:.2}, the patches and the sends {:.2}, the ends {:.2}",
+            self.drawn,
+            self.offered,
+            per(self.calls),
+            per(self.sent),
+            per(self.bytes),
+            self.timed,
+            each(self.parts[0]),
+            each(self.parts[1]),
+            each(self.parts[2]),
+            each(self.parts[3]),
+        )
+    }
+}
+
+const LINE_EVERY: u64 = 1_000_000;
+
+thread_local! {
+    static LINE: RefCell<Line> = RefCell::new(Line::default());
 }
 
 /// The run held goes out as it came; holding goes on.
