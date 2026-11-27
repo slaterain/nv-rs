@@ -2254,6 +2254,23 @@ fn location_center() {
 }
 
 #[test]
+fn first_element() {
+    Diff::new(entry!(0x006d_f160, search::first_element(Ptr<_>) -> u32))
+        .family(&pathing::PATHING)
+        .family(&leaf::LEAVES)
+        .inputs(&[Input::Of(&[0, 1, 2])])
+        .setup(|e, case| {
+            let block = e.mem.alloc(8);
+            e.mem.set_u32(block, 0x7654_3210);
+            let (data, size, capacity) =
+                [(0, 0, 0), (block, 0, 2), (block, 1, 2)][case.word(0) as usize];
+            vec![array(e, data, size, capacity)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
 fn element() {
     Diff::new(entry!(0x006a_7ad0, search::element(Ptr, u32) -> u32))
         .common()

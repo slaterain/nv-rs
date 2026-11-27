@@ -191,6 +191,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006a_79c0, search::is_goal(Ptr<AStarSearch>, Ptr) -> bool),
         entry!(0x006b_8c20, search::info_is_goal(Ptr, Ptr) -> u32),
         entry!(0x006a_6eb0, search::location_center(Ptr<SearchLocation>, Ptr<NiPoint3>) -> Ptr<NiPoint3>),
+        entry!(0x006d_f160, search::first_element(Ptr<SimpleArray>) -> u32),
         entry!(0x006a_7ad0, search::element(Ptr, u32) -> u32),
         entry!(0x0069_dec0, search::list_element(Ptr, u32) -> u32),
         entry!(0x0069_50d0, search::entry_8(Ptr<SimpleArray>, u32) -> u32),

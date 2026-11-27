@@ -247,6 +247,16 @@ pub fn location_center(
     out
 }
 
+// Typed from 006df160
+/// Address of slot zero in the location's candidate array.
+pub fn first_element(e: &mut Engine, array: Ptr<SimpleArray>) -> u32 {
+    typed_call!(
+        leaf::FAMILY,
+        0x0087_7a30,
+        leaf::array_element(e, array, 0u32)
+    )
+}
+
 // Typed from 006a7ad0
 /// `BSSimpleArray::operator[]` (`thiscall(array, index)`, `00877a30`).
 pub fn element(e: &mut Engine, this: Ptr, index: u32) -> u32 {
