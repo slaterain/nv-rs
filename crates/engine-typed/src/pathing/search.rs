@@ -5,6 +5,7 @@ use super::layout::{
     AStarQueue, AStarSearch, Counter, InfoNode, InfoSearch, MeshEdge, NodeSlots, PathingRequest,
     Scale, SearchLocation, SimpleArray, SmootherNode, SortNode,
 };
+use super::location;
 use super::point::{length_xy_squared, subtract};
 use super::{double_global, float_global, low_word, real, FAMILY};
 use crate::culling::layout::NiPoint3;
@@ -470,6 +471,23 @@ pub fn construct_20s(e: &mut Engine, _this: Ptr, elements: u32, count: u32) {
 /// Constructs `count` 0xc-byte elements (`thiscall(array, elements, count)`).
 pub fn construct_12s(e: &mut Engine, _this: Ptr, elements: u32, count: u32) {
     construct_each(e, elements, count, 0xc);
+}
+
+// Typed from 006dbcf0
+/// Constructs `count` 0x10-byte elements (`thiscall(array, first, count)`): each placement that
+/// isn't null runs the element constructor [`location::world_location_new`] (`006d5320`).
+pub fn construct_16s(e: &mut Engine, _this: Ptr, first: u32, count: u32) {
+    for i in 0..count {
+        let at = (i << 4).wrapping_add(first);
+        let p = e.call(PLACEMENT_NEW, &args![0x10u32, at]).u32();
+        if p != 0 {
+            typed_call!(
+                FAMILY,
+                0x006d_5320,
+                location::world_location_new(e, Ptr::new(p))
+            );
+        }
+    }
 }
 
 // Typed from 006b40f0

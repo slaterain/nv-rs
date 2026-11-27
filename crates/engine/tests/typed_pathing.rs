@@ -4366,3 +4366,18 @@ fn crossed_edge_rounding_main_thread() {
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
 }
+
+#[test]
+fn construct_16s() {
+    Diff::new(entry!(0x006d_bcf0, search::construct_16s(Ptr, u32, u32)))
+        .common()
+        .plain(0x006d_bcf0)
+        .inputs(&[Input::Of(SIZES)])
+        .setup(|e, case| {
+            stand_ins(e);
+            let block = e.mem.alloc(0x80);
+            vec![0x1000, block, case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
