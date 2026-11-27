@@ -1007,7 +1007,7 @@ pub fn map_menu_do_click(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32)
             }
         }
         0x15 => {
-            let quests = Ptr::new(base + 0x130);
+            let quests = base + 0x130;
             if e.call(0x007a_1910, &args![quests]).u32() != 0 {
                 let quest = e.call(0x007a_1910, &args![quests]).u32();
                 if !e.call(QUEST_FLAG_0059E400, &args![quest]).bool() {
@@ -1040,8 +1040,6 @@ pub fn map_menu_do_click(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32)
                 let turn_on = !selected;
                 fn_0079c090(e, this);
                 e.call(
-                    LIST_BOX_COLLECTION_ADD,
-                    LIST_BOX_COLLECTION_REMOVE,
                     LIST_BOX_FILTER_007314C0,
                     &args![radio, RADIO_FILTER_CALLBACK, 0u32, 0x7fff_ffffu32],
                 );
@@ -4584,10 +4582,12 @@ pub fn map_menu_do_enter(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32)
                 }
             }
         }
-        15 => e.call(0x007a_30e0, &args![base + 0x160, 0]),
+        15 => {
+            e.call(0x007a_30e0, &args![base + 0x160, 0u32]);
+        }
         16 => {
-            e.call(0x007a_2350, &args![base + 0x130, 0]);
-            e.call(0x007a_4c50, &args![base + 0x1c0, 1]);
+            e.call(0x007a_2350, &args![base + 0x130, 0u32]);
+            e.call(0x007a_4c50, &args![base + 0x1c0, 1u32]);
         }
         0x18 => {
             if tile != 0 {
@@ -4975,10 +4975,12 @@ pub fn map_menu_do_leave(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32)
                 }
             }
         }
-        15 => e.call(0x007a_30e0, &args![base + 0x160, 1]),
+        15 => {
+            e.call(0x007a_30e0, &args![base + 0x160, 1u32]);
+        }
         16 => {
-            e.call(0x007a_2350, &args![base + 0x130, 1]);
-            e.call(0x007a_4c50, &args![base + 0x1c0, 0]);
+            e.call(0x007a_2350, &args![base + 0x130, 1u32]);
+            e.call(0x007a_4c50, &args![base + 0x1c0, 0u32]);
         }
         0x19 => {
             if e.call(FLAG_004B71D0, &args![]).bool() || e.get(this, MapMenu::pSelectedNote) == 0 {
@@ -5718,8 +5720,8 @@ pub fn fn_007a1b10(e: &mut Engine, this: Ptr<BSSimpleArray>, index: u32, shrink:
 /// focuses the tile at that index and calls the list's vtable +0x10.
 pub fn map_menu_update_current_page(e: &mut Engine, this: Ptr<MapMenu>) {
     let base = this.addr();
-    e.call(0x007a_2350, &args![base + 0x130, 0]);
-    e.call(0x007a_4c50, &args![base + 0x1c0, 0]);
+    e.call(0x007a_2350, &args![base + 0x130, 0u32]);
+    e.call(0x007a_4c50, &args![base + 0x1c0, 0u32]);
     e.call(0x007a_30e0, &args![base + 0x160, 0]);
     e.call(0x007a_5a30, &args![base + 0x160, 0]);
     e.call(0x007a_59a0, &args![base + 0x1f0, 0]);
@@ -6209,7 +6211,7 @@ pub fn map_menu_update_quests(e: &mut Engine, this: Ptr<MapMenu>) {
     });
     e.vcall(base + 0x1c0, 0x20, &args![QUESTS_SORT_CALLBACK_0079BC90]);
     e.vcall(base + 0x130, 0x20, &args![QUESTS_SORT_CALLBACK_0079BC90]);
-    e.call(0x007a_2350, &args![base + 0x130, 1]);
+    e.call(0x007a_2350, &args![base + 0x130, 1u32]);
     let player = e.mem.u32(PLAYER_011DEA3C);
     if e.call(PLAYER_QUEST_005CBB50, &args![player]).u32() == 0 {
         list_box_bgs_quest_objective_filter(
