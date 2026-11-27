@@ -218,7 +218,7 @@ pub fn pathing_task_data_process(e: &mut Engine, this: Ptr) {
                                 0x0055_9450,
                                 leaf::word_at_0(e, category)
                             );
-                            fn_006eb7f0(e, Ptr::new(queue), queued);
+                            e.call(0x006e_b7f0, &args![queue, queued]);
                             e.call(0x0048_3710, &args![message]);
                         });
                     } else {
@@ -240,7 +240,7 @@ pub fn pathing_task_data_process(e: &mut Engine, this: Ptr) {
                                 0x0055_9450,
                                 leaf::word_at_0(e, category)
                             );
-                            fn_006eb7f0(e, Ptr::new(queue), queued);
+                            e.call(0x006e_b7f0, &args![queue, queued]);
                             e.call(0x0048_3710, &args![message]);
                         });
                     }
@@ -248,11 +248,11 @@ pub fn pathing_task_data_process(e: &mut Engine, this: Ptr) {
             }
             let category = e.call(0x0047_d0b0, &args![]).u32();
             let category = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, category));
-            fn_006eb7b0(e, Ptr::new(category));
+            e.call(0x006e_b7b0, &args![category]);
         } else {
             let category = e.call(0x0047_d0b0, &args![]).u32();
             let category = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, category));
-            if fn_006eb7d0(e, Ptr::new(category)) != 0 {
+            if e.call(0x006e_b7d0, &args![category]).u8() != 0 {
                 let queue = typed_call!(
                     leaf::FAMILY,
                     0x0055_9450,
@@ -268,7 +268,7 @@ pub fn pathing_task_data_process(e: &mut Engine, this: Ptr) {
                     let category = e.call(0x0047_d0b0, &args![]).u32();
                     let queue =
                         typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, category));
-                    fn_006eb7f0(e, Ptr::new(queue), queued);
+                    e.call(0x006e_b7f0, &args![queue, queued]);
                     e.call(0x0048_3710, &args![message]);
                 });
             } else {

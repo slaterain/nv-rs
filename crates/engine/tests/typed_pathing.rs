@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, manager_messages, navmesh, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -4365,4 +4365,116 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+#[test]
+fn reset_pause_event() {
+    Diff::new(entry!(
+        0x006e_b7b0,
+        manager_messages::reset_pause_event(Ptr)
+    ))
+    .common()
+    .plain(0x006e_b7b0)
+    .inputs(&[Input::Flag])
+    .setup(|e, _| {
+        stand_ins(e);
+        e.register(0x00aa_62c0, |e, a| {
+            log(e, 0x00aa_62c0, a[0]);
+            ret(0)
+        });
+        vec![e.mem.alloc(0xc40)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn cancel_flag() {
+    Diff::new(entry!(
+        0x006e_b7d0,
+        manager_messages::cancel_flag(Ptr) -> u8
+    ))
+    .common()
+    .plain(0x006e_b7d0)
+    .inputs(&[Input::Of(&[0, 1, 0xff])])
+    .setup(|e, case| {
+        stand_ins(e);
+        let m = e.mem.alloc(0xc40);
+        e.mem.set_u8(m + 0x0c34, case.word(0) as u8);
+        vec![m]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn enqueue_message() {
+    Diff::new(entry!(
+        0x006e_b7f0,
+        manager_messages::enqueue_message(Ptr, u32)
+    ))
+    .common()
+    .plain(0x006e_b7f0)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x00ff_3000, |e, a| {
+            log(e, 0x3000, a[0]);
+            ret(0)
+        });
+        let m = e.mem.alloc(0xc40);
+        let queue = m + 0x0c10;
+        let vt = vtable(e);
+        e.mem.set_u32(vt + 4, 0x00ff_3000);
+        e.mem.set_u32(queue, vt);
+        vec![m, case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn build_path_message_new() {
+    Diff::new(entry!(
+        0x006e_b820,
+        manager_messages::build_path_message_new(Ptr) -> Ptr
+    ))
+    .common()
+    .plain(0x006e_b820)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x0045_d260, |e, a| {
+            log(e, 0x0045_d260, a[1]);
+            log(e, 0x0045_d260 + 1, a[2]);
+            ret(0)
+        });
+        let m = e.mem.alloc(8);
+        e.mem.set_u32(m, case.word(0));
+        vec![m]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stop_task() {
+    Diff::new(entry!(0x006e_b850, manager_messages::stop_task(Ptr)))
+        .common()
+        .plain(0x006e_b850)
+        .inputs(&[Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            stand_ins(e);
+            e.register(0x006e_b890, |e, a| {
+                log(e, 0x006e_b890, a[0]);
+                log(e, 0x006e_b890 + 1, a[1]);
+                ret(a[0])
+            });
+            let m = e.mem.alloc(4);
+            let task = if case.word(0) == 0 { 0 } else { e.mem.alloc(4) };
+            e.mem.set_u32(m, task);
+            vec![m]
+        })
+        .run()
+        .assert_same();
 }
