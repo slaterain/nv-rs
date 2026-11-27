@@ -210,6 +210,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0069_18a0, search::copy_indices(Ptr<SimpleArray>, u32, u32) -> u32),
         entry!(0x0069_1870, search::allocate_indices(Ptr<SimpleArray>, u32) -> u32),
         entry!(0x0069_af80, search::allocate_entries(Ptr<SimpleArray>, u32) -> u32),
+        entry!(0x006a_64b0, search::mesh_node_map_drop(Ptr<Counter>)),
+        entry!(0x006a_65b0, search::cell_node_map_drop(Ptr<Counter>)),
         entry!(0x006d_b090, search::free_block(Ptr<SimpleArray>, u32)),
         entry!(0x0069_17d0, search::index_array_new(Ptr<SimpleArray>) -> Ptr<SimpleArray>),
         entry!(0x0069_1800, search::index_array_drop(Ptr<SimpleArray>)),
