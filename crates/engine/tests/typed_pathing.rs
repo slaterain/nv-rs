@@ -4366,3 +4366,43 @@ fn crossed_edge_rounding_main_thread() {
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
 }
+
+/// The destructor-body object of `run_006919a0`: a vtable word, the bucket count zero (the
+/// clean-up walks no buckets) and the block word `0x7000` (released through a logged stand-in).
+fn dtor_body_object(e: &mut Engine) -> u32 {
+    e.register(0x00aa_10f0, |_, a| ret(a[0]));
+    let a = e.mem.alloc(0x10);
+    e.mem.set_u32(a, 0x6b6b_6b6b);
+    e.mem.set_u32(a + 4, 0);
+    e.mem.set_u32(a + 8, 0x7000);
+    e.mem.set_u32(a + 0xc, 0x6b6b_6b6b);
+    a
+}
+
+#[test]
+fn array_dtor() {
+    Diff::new(entry!(0x0069_19a0, search::array_dtor(Ptr)))
+        .common()
+        .plain(0x0069_19a0)
+        .inputs(&[Input::Flag])
+        .setup(|e, _| {
+            stand_ins(e);
+            vec![dtor_body_object(e)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn array_dtor_body() {
+    Diff::new(entry!(0x0069_1a00, search::array_dtor_body(Ptr)))
+        .common()
+        .plain(0x0069_1a00)
+        .inputs(&[Input::Flag])
+        .setup(|e, _| {
+            stand_ins(e);
+            vec![dtor_body_object(e)]
+        })
+        .run()
+        .assert_same();
+}
