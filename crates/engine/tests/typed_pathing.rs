@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, los, navmesh, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -4365,4 +4365,92 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- The LOS search's small functions ----
+
+#[test]
+fn los_flag_byte() {
+    Diff::new(entry!(0x006a_abf0, los::flag_byte(Ptr) -> u8))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            let this = e.mem.alloc(0x40);
+            e.mem.set_u8(this + 0x39, case.word(0) as u8);
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_location_position() {
+    Diff::new(entry!(0x006a_abd0, los::location_position(Ptr, Ptr) -> Ptr))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Word, Input::Word, Input::Word])
+        .setup(|e, case| {
+            // The location's position into `out`: three words copied.
+            e.register(0x005c_3420, |e, a| {
+                for i in 0..3u32 {
+                    let w = e.mem.u32(a[0] + 4 * i);
+                    e.mem.set_u32(a[1] + 4 * i, w);
+                }
+                a[1].into_ret()
+            });
+            let this = e.mem.alloc(0x40);
+            point_at(e, this + 0x1c, [case.word(0), case.word(1), case.word(2)]);
+            let out = e.mem.alloc(0x10);
+            vec![this, out]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_copy_member_c8() {
+    Diff::new(entry!(0x006a_b150, los::copy_member_c8(Ptr, Ptr) -> Ptr))
+        .family(&pathing::PATHING)
+        // Disjoint, self-copy, and partial overlaps in both directions.
+        .inputs(&[Input::Of(&[0, 0xc4, 0xc8, 0xcc])])
+        .setup(|e, case| {
+            let object = e.mem.alloc(0xe0);
+            point_at(e, object + 0xc8, [0x8000_0000, 0x7f80_0001, 0xdead_beef]);
+            vec![object, object + case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_score() {
+    Diff::new(entry!(0x006a_b3b0, los::los_score(Ptr, u32, u32) -> u8))
+        .family(&pathing::PATHING)
+        .inputs(&[
+            Input::Of(&[7, 8, 0xdead]),
+            Input::Of(&[0, 1, 5, 0x1_0003, 0xffff]),
+            Input::Word,
+            Input::Word,
+        ])
+        .setup(|e, case| {
+            // The map lookup: found unless the key is 0xdead; the value is the word at map+0x34.
+            e.register(0x0085_3130, |e, a| {
+                if a[1] == 0xdead {
+                    return Ret::default();
+                }
+                let base = e.mem.u32(a[0] + 0x34);
+                e.mem.set_u32(a[2], base);
+                1u32.into_ret()
+            });
+            let this = e.mem.alloc(0x40);
+            let buffer = e.mem.alloc(0x40);
+            for i in 0..0x40u32 {
+                e.mem.set_u8(buffer + i, case.word(2).wrapping_add(i) as u8);
+            }
+            e.mem.set_u32(this + 0x18, buffer);
+            e.mem.set_u32(this + 0x2c, 0x20);
+            e.mem.set_u32(this + 0x3c, case.word(3) & 3);
+            vec![this, case.word(0), case.word(1)]
+        })
+        .run()
+        .assert_same();
 }
