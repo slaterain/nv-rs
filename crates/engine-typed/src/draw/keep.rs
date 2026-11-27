@@ -522,7 +522,8 @@ fn make_spans(
             // Adjacent or overlapping, and the shared bytes alike (read at another moment of the build, they could
             // differ only if another thread wrote them: then both stay, and the record breaks next time).
             if u64::from(at) <= last_end {
-                let shared = (last_end - u64::from(at)).min(bytes.len() as u64) as usize;
+                let gap = usize::try_from(last_end - u64::from(at)).unwrap_or(usize::MAX);
+                let shared = gap.min(bytes.len());
                 let tail = out.bytes.len() - shared;
                 if out.bytes[tail..] == bytes[..shared] || shared == 0 {
                     if end > last_end {
@@ -1215,7 +1216,7 @@ fn assemble(
             let end = start + last.len() as u64;
             let from = u64::from(at);
             if (start..=end).contains(&from) {
-                let off = (from - start) as usize;
+                let off = usize::try_from(from - start).unwrap_or(last.len());
                 let over = (last.len() - off).min(bytes.len());
                 last[off..off + over].copy_from_slice(&bytes[..over]);
                 last.extend_from_slice(&bytes[over..]);
