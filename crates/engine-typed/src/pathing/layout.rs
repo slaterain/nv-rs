@@ -205,6 +205,24 @@ image! {
         0x68 radius: f32,
     }
 
+    /// `PathingRequestCover` (Xbox PDB), 0xEC bytes: a `PathingRequest` (0xB0 bytes) and the
+    /// cover search's parameters, as far as this family reads them.
+    pub struct PathingRequestCover / PathingRequestCoverImage: 0xe0 {
+        0x00 head: [u32; 0x2c],
+        0xb0 threat: Inline<NiPoint3> = NiPoint3Image,
+        0xbc fMaxCoverDistance: f32,
+        0xc0 fActorCrouchHeight: f32,
+        0xc4 fMaxHeightChange: f32,
+        0xc8 iMaxResults: u32,
+        0xcc bCanCrouch: u8,
+        0xcd bFindBothSides: u8,
+        0xce bFindBehindTarget: u8,
+        0xcf bSortFarthestFirst: u8,
+        0xd0 bSortDistanceFromTarget: u8,
+        0xd1 bHideCover: u8,
+        0xd4 distance_projection_vector: Inline<NiPoint3> = NiPoint3Image,
+    }
+
     /// A path smoother node, as far as its flag byte.
     pub struct SmootherNode / SmootherNodeImage: 0x44 {
         0x00 head: [u32; 16],

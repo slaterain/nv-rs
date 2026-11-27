@@ -32,10 +32,11 @@ use crate::native::Real;
 use engine_core::ptr::{Field, Ptr};
 use layout::{
     AStarQueue, AStarSearch, Arc, Counter, EdgeLocation, EdgePair, MeshEdge, NavMesh, NavMeshGrid,
-    NavMeshInfo, NavMeshTriangle, PathingLocation, Point2, SearchLocation, SimpleArray, SortNode,
-    Sphere,
+    NavMeshInfo, NavMeshTriangle, PathingLocation, PathingRequestCover, Point2, SearchLocation,
+    SimpleArray, SortNode, Sphere,
 };
 
+pub mod cover_request;
 pub mod layout;
 pub mod location;
 pub mod navmesh;
@@ -254,6 +255,16 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006b_9cf0, pov::height_in(Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr, f32, f32) -> bool),
         entry!(0x006b_ab00, pov::segment_within(Ptr<NiPoint3>, f32, Ptr<NiPoint3>, Ptr<NiPoint3>) -> bool),
         entry!(0x006b_b570, pov::sphere_tangents(Ptr<Sphere>, Ptr<Sphere>, u32, Ptr) -> u32),
+        // The cover request's destructor and setters.
+        entry!(0x006e_41e0, cover_request::scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x006e_4320, cover_request::set_max_cover_distance(Ptr<PathingRequestCover>, f32)),
+        entry!(0x006e_4340, cover_request::set_max_height_change(Ptr<PathingRequestCover>, f32)),
+        entry!(0x006e_4360, cover_request::set_find_both_sides(Ptr<PathingRequestCover>, u8)),
+        entry!(0x006e_4380, cover_request::set_find_behind_target(Ptr<PathingRequestCover>, u8)),
+        entry!(0x006e_43a0, cover_request::set_sort_farthest_first(Ptr<PathingRequestCover>, u8)),
+        entry!(0x006e_43c0, cover_request::set_sort_distance_from_target(Ptr<PathingRequestCover>, u8)),
+        entry!(0x006e_43e0, cover_request::set_hide_cover(Ptr<PathingRequestCover>, u8)),
+        entry!(0x006e_4400, cover_request::set_projection_vector(Ptr<PathingRequestCover>, u32)),
         // Pathing locations.
         entry!(0x0044_1110, location::world_space(Ptr<PathingLocation>) -> u32),
         entry!(0x006a_9520, location::is_valid(Ptr<PathingLocation>) -> bool),
