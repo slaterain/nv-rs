@@ -221,6 +221,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006b_3de0, search::slots_new(Ptr) -> Ptr),
         entry!(0x006b_9470, search::queue_new(Ptr<AStarQueue>) -> Ptr<AStarQueue>),
         entry!(0x006a_7b10, search::search_new(Ptr<AStarSearch>) -> Ptr<AStarSearch>),
+        entry!(0x006a_9cb0, search::hide_search_new(Ptr) -> Ptr),
         entry!(0x006c_9900, search::at_5c(u32) -> u32),
         entry!(0x006a_9540, search::at_34(Ptr) -> u32),
         entry!(0x006b_05d0, search::byte_at_40(Ptr) -> u8),

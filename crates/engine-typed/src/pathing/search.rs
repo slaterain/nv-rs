@@ -45,6 +45,7 @@ const PLACEMENT_NEW: u32 = 0x006e_6da0;
 const SMOOTHER_EDGE_NEW: u32 = 0x006a_eb70;
 const MEMSET: u32 = 0x0040_3d30;
 const OPEN_LIST_NEW: u32 = 0x006a_8380;
+const SEARCH_BASE_CONSTRUCT: u32 = 0x006a_6a40;
 const NEXT_EDGE_SLOT: u32 = 0x0097_8bc0;
 const CONSTRUCT_EDGES: u32 = 0x0069_b9d0;
 const EDGE_ASSIGN: u32 = 0x006d_bbb0;
@@ -55,6 +56,7 @@ const TAG_INIT: u32 = 0x0044_e010;
 const INDEX_ARRAY_VTABLE: u32 = 0x0106_abe4;
 const EDGE_ARRAY_VTABLE: u32 = 0x0106_b1e0;
 const SEARCH_VTABLE: u32 = 0x0106_b650;
+const HIDE_SEARCH_VTABLE: u32 = 0x0106_b7dc;
 /// An array's vtable slots: allocate a buffer, free one.
 const SLOT_ALLOCATE: u32 = 0x4;
 const SLOT_FREE: u32 = 0x8;
@@ -518,6 +520,20 @@ pub fn search_new(e: &mut Engine, this: Ptr<AStarSearch>) -> Ptr<AStarSearch> {
     e.set(this, AStarSearch::unknown_204c, 0);
     e.set(this, AStarSearch::unknown_2050, 0);
     e.set(this, AStarSearch::done, 0);
+    this
+}
+
+// Typed from 006a9cb0
+/// `NavMeshSearchHide::NavMeshSearchHide` (Xbox PDB, `thiscall(this) -> this`): the base part's
+/// constructor (`006a6a40`), the vtable `0106b7dc`, `006815c0` on the members at +0x20bc and
+/// +0x20cc, the word at +0x20a4 cleared.
+pub fn hide_search_new(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(SEARCH_BASE_CONSTRUCT, &args![this]);
+    e.mem.set_u32(base, HIDE_SEARCH_VTABLE);
+    typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, base + 0x20bc));
+    typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, base + 0x20cc));
+    e.mem.set_u32(base + 0x20a4, 0);
     this
 }
 
