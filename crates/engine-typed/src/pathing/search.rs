@@ -11,7 +11,7 @@ use crate::culling::layout::NiPoint3;
 use crate::native::{float_precision, Real};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
-use engine_core::x87::fistp_chop64;
+use engine_core::x87::{fistp_chop64, x87_quiet_bits};
 use engine_core::{args, typed_call, Engine};
 
 /// The `double` 19 the scaled cost multiplies by (`010356e8`).
@@ -55,6 +55,12 @@ const TAG_INIT: u32 = 0x0044_e010;
 const INDEX_ARRAY_VTABLE: u32 = 0x0106_abe4;
 const EDGE_ARRAY_VTABLE: u32 = 0x0106_b1e0;
 const SEARCH_VTABLE: u32 = 0x0106_b650;
+/// `NavMeshSearchLOS`'s vtable (`0106b830`; RTTI `.?AVNavMeshSearchLOS@@`).
+const LOS_SEARCH_VTABLE: u32 = 0x0106_b830;
+/// The smart-pointer constructor run on the goal at +0x2070.
+const SMART_PTR_CTOR: u32 = 0x0063_3c90;
+/// The exe data word holding the initial distance (`FLT_MAX`) copied to +0x209c.
+const INITIAL_DISTANCE: u32 = 0x0106_b7f0;
 /// An array's vtable slots: allocate a buffer, free one.
 const SLOT_ALLOCATE: u32 = 0x4;
 const SLOT_FREE: u32 = 0x8;
@@ -518,6 +524,28 @@ pub fn search_new(e: &mut Engine, this: Ptr<AStarSearch>) -> Ptr<AStarSearch> {
     e.set(this, AStarSearch::unknown_204c, 0);
     e.set(this, AStarSearch::unknown_2050, 0);
     e.set(this, AStarSearch::done, 0);
+    this
+}
+
+// Typed from 006aa620
+/// The `NavMeshSearchLOS` constructor (`thiscall(this) -> this`): the `AStarSearch` base
+/// (`006a7b10`), the `NavMeshSearchLOS` vtable, the smart pointer at +0x2070 set to null
+/// (`00633c90`), then the word at +0x2058, the byte at +0x208c (`0xFD`), the byte at +0x2074 and
+/// the words at +0x2090, +0x2094, +0x2098 cleared, and the `float` at +0x209c loaded from the
+/// exe's data (`FLD`/`FSTP` copy). Returns `this`.
+pub fn los_search_new(e: &mut Engine, this: Ptr<AStarSearch>) -> Ptr<AStarSearch> {
+    let base = this.addr();
+    typed_call!(FAMILY, 0x006a_7b10, search_new(e, this));
+    e.set(this, AStarSearch::vtable, LOS_SEARCH_VTABLE);
+    e.call(SMART_PTR_CTOR, &args![base + 0x2070, 0u32]);
+    e.mem.set_u32(base + 0x2058, 0);
+    e.mem.set_u8(base + 0x208c, 0xfd);
+    e.mem.set_u8(base + 0x2074, 0);
+    e.mem.set_u32(base + 0x2090, 0);
+    e.mem.set_u32(base + 0x2094, 0);
+    e.mem.set_u32(base + 0x2098, 0);
+    let distance = x87_quiet_bits(e.global::<u32>(INITIAL_DISTANCE));
+    e.mem.set_u32(base + 0x209c, distance);
     this
 }
 

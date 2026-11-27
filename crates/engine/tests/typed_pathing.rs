@@ -651,6 +651,7 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x006a_0660, &[0x0069_85f0, 0x006a_06f0]),
     (0x006a_79c0, &[0x006a_6eb0]),
     (0x006a_7b10, &[0x006a_8380]),
+    (0x006a_a620, &[0x006a_8380]),
     (0x006b_40f0, &[0x006a_eb70]),
     (0x006b_77e0, &[0x006b_7850, 0x006b_78b0]),
     (0x006b_9b10, &[0x0040_19d0]),
@@ -2706,6 +2707,29 @@ fn search_new() {
         })
         .run()
         .assert_same();
+}
+
+#[test]
+fn los_search_new() {
+    Diff::new(entry!(
+        0x006a_a620,
+        search::los_search_new(Ptr<_>) -> Ptr<_>
+    ))
+    .common()
+    .plain(0x006a_a620)
+    .inputs(&[Input::Flag])
+    .setup(|e, _| {
+        stand_ins(e);
+        // The initial distance the constructor copies lives at `0106b7f0`.
+        e.mem.set_u32(0x0106_b7f0, 0x7f7f_ffff);
+        let s = e.mem.alloc(0x20a0);
+        for i in 0..0x828 {
+            e.mem.set_u32(s + 4 * i, 0x6b6b_6b6b);
+        }
+        vec![s]
+    })
+    .run()
+    .assert_same();
 }
 
 #[test]
