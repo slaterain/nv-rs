@@ -48,7 +48,8 @@
 //!   the destructor, clear, append, copy and compare, `InitItem`, the schedule window,
 //!   `FindCurrentPackage` and the missed packages' walk and sort, and the missable flag's test.
 //! - [`schedule`]: a package's schedule (`PSDT`): its order, getters and setters, constructor,
-//!   assignment and compare, its chunk, and the three-word swap of its unit.
+//!   assignment and compare, its chunk, the three-word swap of its unit, and the package's day test
+//!   against the calendar's day of the week.
 //! - [`package_data`]: the package data classes' constructors, destructors and save game loads
 //!   (`TESPackageData` and its dialogue, eat, escort, follow, patrol and use item data), their
 //!   chunk swaps, and the package event action's constructor, clear and copy.
@@ -66,9 +67,12 @@
 //!   space, cell, position, radius and reference for an actor, `ComputeInitialTarget`, the two "is
 //!   the subject at the location" tests, `IsActorAtRefTarget`, `IsTargetAtLocation`,
 //!   `IsTargetAtSecondLocation`, the follow target's search and its callback, the two radius
-//!   functions and `IsTargetAnActor`.
+//!   functions, `IsTargetAnActor`, the missed packages' per-actor test and
+//!   `CalculateProcedureType`.
 //! - [`package_save`]: `TESPackage`'s save game functions: the save size, the old save and load,
 //!   the step after a load, the form flags' hooks, the buffered save, load and init-load.
+//! - [`package_target`]: `PackageTarget`'s unit: its getters and setters, constructor, assignment,
+//!   copy and compare, its chunk, `InitItem`, and its old and buffered save, load and init-load.
 //! - [`package_flags`]: a package's flag accessors (the unit after `TESPackage`'s): the getters and
 //!   setters of the bits of its flags and behaviour flags, their copy from another package, and the
 //!   package type's entry in the table at `0119bcb0`.
@@ -137,6 +141,7 @@ pub mod package_flags;
 pub mod package_list;
 pub mod package_place;
 pub mod package_save;
+pub mod package_target;
 pub mod queued_maps;
 pub mod schedule;
 pub mod std_exceptions;
@@ -647,6 +652,9 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0067_8670, package_place::radius_actor_to_location(u32, u32, u8) -> f32),
         entry!(0x0067_87e0, package_place::radius_actor_to_ref_target(u32, u32, u8) -> f32),
         entry!(0x0067_8ec0, package_place::target_is_actor(u32, u32) -> bool),
+        entry!(0x0067_7760, package_place::actor_process_allows(u32, u32) -> u8),
+        entry!(0x0067_77b0, package_place::calculate_procedure_type(u32, u32)),
+        entry!(0x0067_8d40, schedule::day_fits(u32, u8) -> bool),
         entry!(0x0067_8fd0, package_save::save_size(u32) -> u16),
         entry!(0x0067_9120, package_save::save_old(u32)),
         entry!(0x0067_9340, package_save::load_old(u32)),
@@ -657,6 +665,27 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0067_98c0, package_save::load_game(u32, u32)),
         entry!(0x0067_9a90, package_save::init_load_game(u32, u32)),
         entry!(0x0067_9b10, package_save::clear_loaded_flags(u32, u32)),
+        entry!(0x0051_9b00, package_target::targ_type(u32) -> u8),
+        entry!(0x0067_ff70, package_target::construct(u32) -> u32),
+        entry!(0x0067_ffa0, package_target::assign(u32, u32) -> u32),
+        entry!(0x0068_0020, package_target::targ_reference(u32) -> u32),
+        entry!(0x0068_0050, package_target::targ_object(u32) -> u32),
+        entry!(0x0068_0080, package_target::targ_object_type(u32) -> u32),
+        entry!(0x0068_00b0, package_target::set_targ_type(u32, u32)),
+        entry!(0x0068_0110, package_target::set_targ_reference(u32, u32)),
+        entry!(0x0068_0140, package_target::set_targ_object(u32, u32)),
+        entry!(0x0068_0170, package_target::set_targ_object_type(u32, u32)),
+        entry!(0x0068_01a0, package_target::copy(u32, u32)),
+        entry!(0x0068_0220, package_target::compare(u32, u32) -> u8),
+        entry!(0x0068_02f0, package_target::save(u32, u32)),
+        entry!(0x0068_03b0, package_target::init_item(u32, u32)),
+        entry!(0x0068_0520, package_target::save_size(u32) -> u16),
+        entry!(0x0068_0590, package_target::save_old(u32)),
+        entry!(0x0068_0640, package_target::load_old(u32)),
+        entry!(0x0068_06e0, package_target::after_load(u32)),
+        entry!(0x0068_0720, package_target::save_game(u32, u32)),
+        entry!(0x0068_07b0, package_target::load_game(u32, u32)),
+        entry!(0x0068_0830, package_target::init_load_game(u32, u32)),
         entry!(0x0067_a1b0, package_flags::copy_flags_from(u32, u32)),
         entry!(0x0067_a380, package_flags::pack_flag_1000(u32) -> bool),
         entry!(0x0067_a3a0, package_flags::set_pack_flag_1000(u32, u8)),

@@ -3,7 +3,8 @@
 //! and search locations for an actor, the per-type data getters' neighbour `ComputeInitialTarget`,
 //! the two "is the subject at the location" tests, `IsActorAtRefTarget`, `IsTargetAtLocation`,
 //! `IsTargetAtSecondLocation`, the follow target's search and its callback, the two radius
-//! functions and `IsTargetAnActor`.
+//! functions, `IsTargetAnActor`, the per-actor test the missed packages ask (the actor's process's
+//! slot 0x11c) and `CalculateProcedureType`.
 //!
 //! A location (`PackageLocation`, 0xc bytes) has its type as a signed byte at +0, its radius at +4
 //! and its reference, cell, object or object type at +8; a target (`PackageTarget`, 0x10 bytes) its
@@ -40,8 +41,9 @@
 //! position (`0054cee0`, `00544c30`, `00544c60`), the location's resolved reference and own test
 //! (`0067f2a0`, `0067f220`), the model bound's size (`00571600`), the linked door's test and
 //! position, the eye level, the data handler's walk of nearby references, the followers' calls,
-//! `sprintf`, the loader's warning and the on-screen message (both of which a fix or an extender
-//! may replace); every slot of a reference, an actor and a process is called through its slot.
+//! the text copy (`00464f30`), `sprintf`, the loader's warning and the on-screen message (both of
+//! which a fix or an extender may replace); every slot of a reference, an actor and a process is
+//! called through its slot.
 //!
 //! Floats: a position is moved as its three words; the height difference is the exe's x87
 //! subtract stored as a float; an integer radius becomes the nearest float (`FILD`, `FSTP` under the round-to-nearest
@@ -165,6 +167,12 @@ const SLOT_PROCESS_POINT: u32 = 0x4d4;
 const SLOT_PROCESS_4C8: u32 = 0x4c8;
 const SLOT_PROCESS_52C: u32 = 0x52c;
 const SLOT_PROCESS_REFUSE: u32 = 0x288;
+/// The process's slot 0x11c: the per-actor test the missed packages ask of a package.
+const SLOT_PROCESS_11C: u32 = 0x11c;
+/// The text copy (`00464f30`: the text, 0) and the invalid package message, with its line's size.
+const TEXT_COPY: u32 = 0x0046_4f30;
+const TEXT_INVALID_PACKAGE: u32 = 0x0106_8780;
+const INVALID_LINE_SIZE: u32 = 264;
 /// The form's name slot.
 const SLOT_FORM_NAME: u32 = 0x130;
 
@@ -1106,8 +1114,12 @@ fn second_location_test(
         && is_furniture(e, reference)
         && process_has_point(e, subject)
     {
-        // The exe works the flat distance out and does not use it.
-        flat_distance_from(e, point, subject);
+        // The exe works the difference to the subject's position out and does not use it (no
+        // flat length).
+        let subject_at = e.vcall(subject, SLOT_POSITION, &args![]).u32();
+        e.with_stack(12, |e, buffer| {
+            difference(e, point, buffer.addr(), subject_at);
+        });
         if subject_actor == 0 {
             return false;
         }
@@ -1630,6 +1642,196 @@ pub fn target_is_actor(e: &mut Engine, this: u32, actor: u32) -> bool {
     }
 }
 
+// Typed from 00677760
+/// The per-actor test the missed packages ask of a package (`this` unused): the actor's process's
+/// slot 0x11c, false for no actor or an actor without a process.
+pub fn actor_process_allows(e: &mut Engine, _this: u32, actor: u32) -> u8 {
+    if actor == 0 {
+        return 0;
+    }
+    match process_of(e, actor) {
+        0 => 0,
+        process => e.vcall(process, SLOT_PROCESS_11C, &args![]).u8(),
+    }
+}
+
+/// What a target makes of package type 0: a "ground" target (procedure type 2), procedure type
+/// 0x16 or 0x1a at once, or none of them (3).
+enum Verdict {
+    Ground,
+    Procedure16,
+    Procedure1a,
+    Other,
+}
+
+/// The table for the form type of a target reference's base form: the others are none of them.
+fn reference_verdict(kind: u32) -> Verdict {
+    match kind {
+        0x15 | 0x1b | 0x1c | 0x20 | 0x21 | 0x25 | 0x26 | 0x27 | 0x2b => Verdict::Ground,
+        0x2a => Verdict::Procedure16,
+        _ => Verdict::Other,
+    }
+}
+
+/// The table for the form type of a target object (0x1b is not ground here): the others answer
+/// 0x1a.
+fn object_verdict(kind: u32) -> Verdict {
+    match kind {
+        0x15 | 0x1c | 0x20 | 0x21 | 0x25 | 0x26 | 0x27 | 0x2b => Verdict::Ground,
+        0x2a => Verdict::Procedure16,
+        _ => Verdict::Procedure1a,
+    }
+}
+
+/// The table for a target's object type: the others answer 0x1a.
+fn object_type_verdict(kind: u32) -> Verdict {
+    match kind {
+        1 | 6 | 10 | 0xb | 0xf => Verdict::Ground,
+        0xe => Verdict::Procedure16,
+        _ => Verdict::Procedure1a,
+    }
+}
+
+/// Package type 0: without a target 1 when the own location has a radius (`00454b70`, its word
+/// at +4), else 0; `None` (the procedure type left as it is) for a target holding no reference,
+/// object or object type, a type 3 target among them (the getters answer none for it, so the
+/// exe's case for it is never reached); else what the target's table makes of it.
+fn type_0_procedure(e: &Engine, this: u32) -> Option<i32> {
+    let target = target_of(e, this);
+    if target == 0 {
+        let location = e.mem.u32(at(this, LOCATION));
+        return Some(i32::from(location != 0 && e.mem.u32(at(location, 4)) != 0));
+    }
+    let held = e.mem.u32(at(target, 4));
+    let verdict = match target_type(e, target) {
+        0 if held != 0 => reference_verdict(form_type(e, base_form(e, held))),
+        1 if held != 0 => object_verdict(form_type(e, held)),
+        2 if held != 0 => object_type_verdict(held),
+        _ => return None,
+    };
+    Some(match verdict {
+        Verdict::Ground => 2,
+        Verdict::Procedure16 => 0x16,
+        Verdict::Procedure1a => 0x1a,
+        Verdict::Other => 3,
+    })
+}
+
+/// Package type 1: -1 without a target; 7 when the second location is of type 6, or of type 0, 4
+/// or 5 holding a reference, object or object type; else 0x2d.
+fn type_1_procedure(e: &Engine, this: u32) -> i32 {
+    if target_of(e, this) == 0 {
+        return -1;
+    }
+    let location = held_second_location(e, this);
+    if location == 0 {
+        return 0x2d;
+    }
+    match location_type(e, location) {
+        6 => 7,
+        0 | 4 | 5 if e.mem.u32(at(location, 8)) != 0 => 7,
+        _ => 0x2d,
+    }
+}
+
+/// Whether a base form is of the actor form types 0x2a or 0x2b (none is not).
+fn is_actor_base(e: &Engine, base: u32) -> bool {
+    base != 0 && matches!(form_type(e, base), 0x2a | 0x2b)
+}
+
+/// Package type 2: -1 without a target; 8 when the target stands for an actor form (type 0 a
+/// reference with such a base form, type 1 an object of form type 0x2a or 0x2b, which the exe
+/// reads even for none, type 2 the object types 0xe and 0xf, type 3 `reference` with such a base
+/// form); else 9.
+fn type_2_procedure(e: &Engine, this: u32, reference: u32) -> i32 {
+    let target = target_of(e, this);
+    if target == 0 {
+        return -1;
+    }
+    let held = e.mem.u32(at(target, 4));
+    let actor = match target_type(e, target) {
+        0 => held != 0 && is_actor_base(e, base_form(e, held)),
+        1 => matches!(form_type(e, held), 0x2a | 0x2b),
+        2 => matches!(held, 0xe | 0xf),
+        3 => reference != 0 && is_actor_base(e, base_form(e, reference)),
+        _ => false,
+    };
+    if actor {
+        8
+    } else {
+        9
+    }
+}
+
+/// The procedure type of the package types that have one fixed: -1 for the types the exe's table
+/// does not know (0xb, 0x11, 0x13, 0x19, any below 0 or past 0x24).
+fn fixed_procedure(kind: i32) -> i32 {
+    match kind {
+        3 => 5,
+        4 => 4,
+        5 => 1,
+        6 => 0,
+        7 => 0x1b,
+        8 => 0x1c,
+        9 => 0x1e,
+        10 => 0x20,
+        0xc => 0x25,
+        0xd => 0x26,
+        0xe => 0x29,
+        0xf | 0x1c => 10,
+        0x10 => 0x2c,
+        0x12 => 0xc,
+        0x14 => 0xd,
+        0x15 => 0xb,
+        0x16 => 0x13,
+        0x17 => 0x14,
+        0x18 => 0xf,
+        0x1a => 0x15,
+        0x1b => 0x19,
+        0x1d => 0x1f,
+        0x1e => 0x21,
+        0x1f => 0x24,
+        0x20 => 0x27,
+        0x21 => 0x28,
+        0x22 => 0x2a,
+        0x23 => 0x2b,
+        0x24 => 0x2e,
+        _ => -1,
+    }
+}
+
+// Typed from 006777b0
+/// `TESPackage::CalculateProcedureType` (Xbox PDB): the procedure type from the package type
+/// (types 0, 1 and 2 by their target and locations, the others fixed; `reference` stands for a
+/// type 3 target of type 2). A procedure type of -1 (also one type 0 leaves as it is) formats the
+/// invalid package message into a line that is dropped, then becomes 0 and the package type 6
+/// (`SetPackType`). Not done: the stack cookie check.
+pub fn calculate_procedure_type(e: &mut Engine, this: u32, reference: u32) {
+    let procedure = match pack_type(e, this) {
+        0 => type_0_procedure(e, this),
+        1 => Some(type_1_procedure(e, this)),
+        2 => Some(type_2_procedure(e, this, reference)),
+        kind => Some(fixed_procedure(kind)),
+    };
+    let procedure = match procedure {
+        Some(procedure) => {
+            e.mem.set_i32(at(this, PROCEDURE), procedure);
+            procedure
+        }
+        None => e.mem.i32(at(this, PROCEDURE)),
+    };
+    if procedure != -1 {
+        return;
+    }
+    let name = e.vcall(this, SLOT_FORM_NAME, &args![]).u32();
+    let text = e.call(TEXT_COPY, &args![name, 0u32]).u32();
+    e.with_stack(INVALID_LINE_SIZE, |e, line| {
+        e.call(SPRINTF, &args![line, TEXT_INVALID_PACKAGE, text]);
+    });
+    e.mem.set_u32(at(this, PROCEDURE), 0);
+    typed_call!(FAMILY, 0x0067_0fc0, package::set_pack_type(e, this, 6));
+}
+
 /// The persistent reference of a reference with the form flag 0x20: the extra data list's pointer
 /// extra (the list's address, `005d43c0`, is never null for a reference).
 fn refine_reference(e: &mut Engine, reference: u32) -> u32 {
@@ -1683,8 +1885,9 @@ fn find_close_reference(e: &mut Engine, actor: u32, context: u32) -> u32 {
 /// reference as the actor's follower, the player unless its process's 0x52c reference is the player,
 /// the player's follower test holds or its count is over the limit setting (then the actor's
 /// process is told and the message setting shown); a type 2 package adds the actor as a follower
-/// of a reference other than the player. The callback's context for type 2 (and for type 1 without
-/// an object) has its first word unwritten, as in the exe.
+/// of a reference other than the player. The callback's context for type 2 leaves its first word
+/// (the form) unwritten, as in the exe; type 1 without an object writes 0 there (the exe leaves it
+/// unwritten on that path too).
 pub fn follow_target(e: &mut Engine, this: u32, actor: u32, flag: u8) -> u32 {
     let target = target_of(e, this);
     if target == 0 {

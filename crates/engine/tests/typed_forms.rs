@@ -23,8 +23,8 @@ use engine_core::typed::diff::{Diff, Input};
 use engine_typed::crt::CRT;
 use engine_typed::forms::{
     actor_base, actor_base_data, ai_form, animation, attributes, conditions, debug_string, object,
-    package, package_data, package_flags, package_list, package_place, package_save, queued_maps,
-    schedule, std_exceptions, tesform, word_vector, FORMS,
+    package, package_data, package_flags, package_list, package_place, package_save,
+    package_target, queued_maps, schedule, std_exceptions, tesform, word_vector, FORMS,
 };
 use engine_typed::pathing::PATHING;
 
@@ -7719,7 +7719,7 @@ fn ob_scaled_model_file_name() {
 // (`package_data`) and the condition lists (`conditions`) ----
 
 /// The package world's calendar and answers: the calendar's month, day, day of the week and hour
-/// (`f32` bits), the days in a month, the interface's target and a package target's reference.
+/// (`f32` bits), the days in a month and the interface's target.
 const PK_STATE: u32 = 0x0300_7300;
 const PK_MONTH: u32 = PK_STATE;
 const PK_DAY: u32 = PK_STATE + 4;
@@ -7727,7 +7727,6 @@ const PK_DAY_OF_WEEK: u32 = PK_STATE + 8;
 const PK_HOUR: u32 = PK_STATE + 0xc;
 const PK_DAYS: u32 = PK_STATE + 0x10;
 const PK_TARGET: u32 = PK_STATE + 0x14;
-const PK_TARGET_REFERENCE: u32 = PK_STATE + 0x18;
 /// The forms the form map's lookup finds, by an id's low three bits (0: none found).
 const PK_FORMS: u32 = PK_STATE + 0x40;
 /// The packages' and the processes' vtables; each slot's stand-in sits at `PK_FN + slot`.
@@ -7737,23 +7736,23 @@ const PK_FN: u32 = 0x00ff_8000;
 const TYPE_TES_PACKAGE: u32 = 0x0118_46a0;
 const TYPE_ACTOR: u32 = 0x0118_46d4;
 const PACKAGE_FORM_TYPE: u8 = 0x49;
-/// A package's fields (the exe's), then the answers the test keeps in it: whether it may run for a
-/// reference (its slot 0x138), its conditions' answer, the per-actor test's, the flag test's bits
-/// (bit n answering the test with n), its type and the run-once-a-day list's answer.
+/// A package's fields (the exe's: procedure type, flags, type, target, schedule), then the answers
+/// the test keeps in it for callees it doubles: whether it may run for a reference (its slot
+/// 0x138), its conditions' answer and the run-once-a-day list's.
 const PK_PROCEDURE: u32 = 0x18;
 const PK_FLAGS: u32 = 0x1c;
+const PK_PACK_TYPE: u32 = 0x20;
 const PK_TARGET_AT: u32 = 0x30;
 const PK_SCHEDULE: u32 = 0x38;
 const PK_MAY_RUN: u32 = 0x60;
 const PK_HOLDS: u32 = 0x61;
-const PK_ACTOR_TEST: u32 = 0x62;
-const PK_FLAG_TESTS: u32 = 0x63;
-const PK_TYPE: u32 = 0x64;
 const PK_RUN_ONCE: u32 = 0x68;
 /// A reference's process (the exe's), then the test's current package and procedure value.
 const REF_PROCESS: u32 = 0x68;
 const REF_CURRENT: u32 = 0x70;
 const REF_VALUE: u32 = 0x74;
+/// The byte a process's slot 0x11c answers (the missed packages' per-actor test).
+const PROCESS_ALLOWS: u32 = 0x20;
 
 /// The one-line bodies of other classes the package functions do in place (see their module
 /// comments): left out of the translations' calls, with no double, as [`IN_PLACE`] (which has the
@@ -7783,6 +7782,16 @@ const PK_IN_PLACE: &[u32] = &[
     0x0040_3550, // its setter
     0x0084_e3a0, // its word at +0xc
     0x0041_fd00, // its setter
+    0x0041_ca90, // a package's type (the procedure type's calculation)
+    0x0051_9b00, // a target's type
+    0x0068_0020, // its reference
+    0x0068_0050, // object
+    0x0068_0080, // object type
+    0x007a_f430, // a reference's base form
+    0x0045_4b70, // a location's radius test
+    0x0067_f390, // its reference
+    0x0067_f430, // object
+    0x0067_f480, // object type
 ];
 /// The family's own one-line bodies its callers do in place: listed only in the callers' tests.
 const PK_OWN_IN_PLACE: &[u32] = &[
@@ -7794,17 +7803,12 @@ const PK_OWN_IN_PLACE: &[u32] = &[
     0x0067_ad20, // TESPackageData's constructor
     0x0067_ad70, // its destructor
     0x0067_c490, // the patrol data's destructor
+    0x0067_2dd0, // a package's second location
 ];
 /// The typed calls into families these tests don't name, doubles on both sides: a reference's
-/// current package and a package's type (`ai_queries`), the run-once-a-day test (`extra_data`), the
+/// current package (`ai_queries`), the run-once-a-day test (`extra_data`), the
 /// calendar's day (`ai`) and the interface's target (`interface`).
-const PK_BY_ADDRESS: &[u32] = &[
-    0x0093_44a0,
-    0x0041_ca90,
-    0x0041_d8c0,
-    0x0086_7d60,
-    0x0070_3180,
-];
+const PK_BY_ADDRESS: &[u32] = &[0x0093_44a0, 0x0041_d8c0, 0x0086_7d60, 0x0070_3180];
 
 /// The world plus what the package functions reach: the form map, the packages' and processes'
 /// slots, an owner's name slot, and the doubles of their callees by address.
@@ -7826,7 +7830,7 @@ fn package_world(e: &mut Engine) {
     for slot in [0x10, 0x130, 0x138] {
         e.mem.set_u32(PK_VTABLE + slot, PK_FN + slot);
     }
-    for slot in [0x30, 0x34, 0x38, 0x128, 0x59c, 0x5a8] {
+    for slot in [0x30, 0x34, 0x38, 0x11c, 0x128, 0x59c, 0x5a8] {
         e.mem.set_u32(PROCESS_VTABLE + slot, PK_FN + slot);
     }
     e.register(PK_FN + 0x10, |_, _| ret(0));
@@ -7838,6 +7842,9 @@ fn package_world(e: &mut Engine) {
     e.register(PK_FN + 0x34, |e, a| ret(e.mem.u32(a[0] + 0x14)));
     e.register(PK_FN + 0x38, |e, a| ret(e.mem.u32(a[0] + 0x18)));
     e.register(PK_FN + 0x128, |e, a| ret(e.mem.u32(a[0] + 0x1c)));
+    e.register(PK_FN + 0x11c, |e, a| {
+        ret(u32::from(e.mem.u8(a[0] + PROCESS_ALLOWS)))
+    });
     e.register(PK_FN + 0x59c, |_, _| ret(0));
     e.register(PK_FN + 0x5a8, |_, _| ret(0));
     // The owner's name: a text of its own into the string handed.
@@ -7845,9 +7852,6 @@ fn package_world(e: &mut Engine) {
     e.register(VT_FN + 0x90, |e, a| {
         e.mem.set_u32(a[1], 0x0101_0090);
         ret(0)
-    });
-    e.register(0x0067_8d40, |e, a| {
-        ret(u32::from(e.mem.u8(a[0] + PK_FLAG_TESTS) >> (a[1] & 7) & 1))
     });
     e.register(0x0086_7d20, |e, _| ret(e.mem.u32(PK_MONTH)));
     e.register(0x0086_7d60, |e, _| ret(e.mem.u32(PK_DAY)));
@@ -7861,11 +7865,13 @@ fn package_world(e: &mut Engine) {
         }
     });
     e.register(0x0093_44a0, |e, a| ret(e.mem.u32(a[0] + REF_CURRENT)));
-    e.register(0x0041_ca90, |e, a| ret(e.mem.u32(a[0] + PK_TYPE)));
+    // A package's type: its signed byte, as the procedure type's calculation reads it in place.
+    e.register(0x0041_ca90, |e, a| {
+        ret(i32::from(e.mem.i8(a[0] + PK_PACK_TYPE)) as u32)
+    });
     e.register(0x0041_d8c0, |e, a| {
         ret(u32::from(e.mem.u8(a[1] + PK_RUN_ONCE)))
     });
-    e.register(0x0068_0020, |e, _| ret(e.mem.u32(PK_TARGET_REFERENCE)));
     e.register(0x0068_0c30, |e, a| {
         ret(u32::from(e.mem.u8(a[0] - 0x40 + PK_HOLDS)))
     });
@@ -7878,9 +7884,6 @@ fn package_world(e: &mut Engine) {
         } else {
             e.mem.u32(a[0] + REF_VALUE)
         })
-    });
-    e.register(0x0067_7760, |e, a| {
-        ret(u32::from(e.mem.u8(a[0] + PK_ACTOR_TEST)))
     });
     // The output list's test: whether a node holds the package the word points at.
     e.register(0x005f_65d0, |e, a| {
@@ -7895,11 +7898,6 @@ fn package_world(e: &mut Engine) {
         ret(0)
     });
     e.register(0x004b_10d0, |e, _| ret(e.mem.u32(PK_DAYS)));
-    // The procedure type's calculation stores the value it is given.
-    e.register(0x0067_77b0, |e, a| {
-        e.mem.set_u32(a[0] + PK_PROCEDURE, a[1]);
-        ret(0)
-    });
     for addr in [
         0x005a_c750,
         0x0042_2690,
@@ -7977,8 +7975,10 @@ fn pick<T: Copy>(seed: u32, k: u32, from: &[T]) -> T {
 /// "any" or a value, and a duration.
 fn set_schedule(e: &mut Engine, schedule: u32, seed: u32) {
     e.mem.set_u8(schedule, pick(seed, 1, &[0xff, 0, 4, 11]));
-    e.mem
-        .set_u8(schedule + 1, pick(seed, 2, &[0xff, 0, 3, 4, 6]));
+    e.mem.set_u8(
+        schedule + 1,
+        pick(seed, 2, &[0xff, 0, 3, 4, 6, 7, 8, 9, 10]),
+    );
     e.mem
         .set_u8(schedule + 2, pick(seed, 3, &[0, 1, 14, 15, 30, 0xff]));
     e.mem.set_u8(schedule + 3, pick(seed, 4, &[0xff, 0, 7, 22]));
@@ -8002,20 +8002,38 @@ fn package(e: &mut Engine, seed: u32) -> u32 {
     let flags = pick(seed, 7, &[0, 4, 0x400, 0x8000, 0x404, 0x8004, 0xffff_ffff]);
     e.mem.set_u32(p + PK_FLAGS, flags);
     set_schedule(e, p + PK_SCHEDULE, seed);
-    e.mem
-        .set_u32(p + PK_TARGET_AT, pick(seed, 8, &[0, 0x0101_0300]));
-    for (k, at) in [
-        (9, PK_MAY_RUN),
-        (10, PK_HOLDS),
-        (11, PK_ACTOR_TEST),
-        (12, PK_RUN_ONCE),
-    ] {
+    let kind = pick(seed, 14, &[0u8, 1, 2]);
+    e.mem.set_u8(p + PK_PACK_TYPE, kind);
+    // Types 1 and 2 always have a target (without one their procedure type would be -1).
+    let target = if kind == 0 && pick(seed, 8, &[true, false]) {
+        0
+    } else {
+        pk_target(e, seed)
+    };
+    e.mem.set_u32(p + PK_TARGET_AT, target);
+    for (k, at) in [(9, PK_MAY_RUN), (10, PK_HOLDS), (12, PK_RUN_ONCE)] {
         e.mem.set_u8(p + at, pick(seed, k, &[0u8, 1, 1]));
     }
-    e.mem
-        .set_u8(p + PK_FLAG_TESTS, pick(seed, 13, &[0u8, 1, 2, 3]));
-    e.mem.set_u32(p + PK_TYPE, pick(seed, 14, &[0u32, 1, 2]));
     p
+}
+
+/// A package's target from `seed` (`PackageTarget`, 0x10 bytes): type 0 holding a reference of its
+/// own whose base form is of type 0x15, 0x2a or 0x30, or type 2 holding an object type (0xe, 6,
+/// 0x10 or 0xf), which the procedure type's calculation reads.
+fn pk_target(e: &mut Engine, seed: u32) -> u32 {
+    let t = e.mem.alloc(0x10);
+    if pick(seed, 15, &[true, false, false]) {
+        let base = e.mem.alloc(0x40);
+        e.mem
+            .set_u8(base + 4, pick(seed, 16, &[0x15u8, 0x2a, 0x30]));
+        let reference = e.mem.alloc(0x80);
+        e.mem.set_u32(reference + 0x20, base);
+        e.mem.set_u32(t + 4, reference);
+    } else {
+        e.mem.set_u8(t, 2);
+        e.mem.set_u32(t + 4, pick(seed, 16, &[0xe, 6, 0x10, 0xf]));
+    }
+    t
 }
 
 /// A package that may run at any time: any month, day and hour, its conditions holding.
@@ -8027,7 +8045,6 @@ fn package_any_time(e: &mut Engine, seed: u32) -> u32 {
     }
     e.mem.set_u8(p + PK_MAY_RUN, 1);
     e.mem.set_u8(p + PK_HOLDS, 1);
-    e.mem.set_u8(p + PK_ACTOR_TEST, 1);
     p
 }
 
@@ -8058,6 +8075,7 @@ fn process(e: &mut Engine, day: u32, month: u32, object: u32) -> u32 {
     e.mem.set_u32(p + 0x14, month);
     e.mem.set_u32(p + 0x18, 2281);
     e.mem.set_u32(p + 0x1c, object);
+    e.mem.set_u8(p + PROCESS_ALLOWS, 1);
     p
 }
 
@@ -8376,7 +8394,7 @@ fn pk_find_current_package() {
             2 => pk_reference(e, items.first().copied().unwrap_or(0), 3, 4),
             _ => {
                 let other = package(e, 99);
-                e.mem.set_u32(other + PK_TYPE, 1);
+                e.mem.set_u8(other + PK_PACK_TYPE, 1);
                 pk_reference(e, other, 3, 4)
             }
         };
@@ -8389,7 +8407,6 @@ fn pk_find_current_package() {
             },
         );
         set_cast(e, TYPE_ACTOR, if case.word(6) != 0 { reference } else { 0 });
-        e.mem.set_u32(PK_TARGET_REFERENCE, 0x0101_0c00);
         vec![list, reference]
     })
     .run()
@@ -8445,7 +8462,6 @@ fn pk_missed_packages() {
                 e.mem.set_u8(first + PK_SCHEDULE + at as u32, byte);
             }
             e.mem.set_u32(first + PK_FLAGS, 4);
-            e.mem.set_u8(first + PK_ACTOR_TEST, 1);
         }
         let list = new_list(e, &items);
         let (day, month, calendar_month, calendar_day, hour) = PK_WALKS[case.word(2) as usize];
@@ -8460,6 +8476,10 @@ fn pk_missed_packages() {
             0
         };
         let actor = pk_reference(e, current, day, month);
+        // The actor's process passes the per-actor test, but for list 3.
+        let process = e.mem.u32(actor + REF_PROCESS);
+        e.mem
+            .set_u8(process + PROCESS_ALLOWS, u8::from(case.word(0) != 3));
         let first = items.first().copied().unwrap_or(0);
         let seeded = [first];
         let out = new_list(e, if case.word(3) != 0 { &seeded[..] } else { &[] });
@@ -8479,6 +8499,28 @@ fn pk_is_missable() {
             let p = package(e, 3);
             e.mem.set_u32(p + PK_FLAGS, case.word(0));
             vec![p]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The package's day test: each schedule day selector (0 to 10, some past them, "any") on each day
+/// of the week, for today and the day before.
+#[test]
+fn pk_day_fits() {
+    Diff::new(entry!(0x0067_8d40, schedule::day_fits(u32, u8) -> bool))
+        .pk_caller()
+        .inputs(&[
+            Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0x7f, 0x80, 0xff]),
+            Input::Of(&[0, 1, 2, 3, 4, 5, 6]),
+            Input::Of(&[0, 1, 0x80]),
+        ])
+        .setup(|e, case| {
+            package_world(e);
+            let p = package(e, 1);
+            e.mem.set_u8(p + PK_SCHEDULE + 1, case.word(0) as u8);
+            e.mem.set_u32(PK_DAY_OF_WEEK, case.word(1));
+            vec![p, case.word(2)]
         })
         .run()
         .assert_same();
@@ -9757,18 +9799,6 @@ fn pf_doubles(e: &mut Engine) {
         e.mem.set_u32(a[0] + 0xc, 0xdead_0000 | a[1]);
         ret(a[0])
     });
-    e.register(0x0068_01a0, |e, a| {
-        for k in 0..4 {
-            let w = e.mem.u32(a[1] + 4 * k);
-            e.mem.set_u32(a[0] + 4 * k, w ^ 0x0202);
-        }
-        ret(a[0])
-    });
-    e.register(0x0068_00b0, |e, a| {
-        e.mem.set_u8(a[0], a[1] as u8);
-        e.mem.set_u32(a[0] + 4, 0x7777);
-        ret(0)
-    });
     e.register(0x0067_caa0, |e, a| {
         e.mem.set_u32(a[0], PF_DATA_VTABLE);
         e.mem.set_u32(a[0] + 8, 0);
@@ -9915,7 +9945,10 @@ trait PfCases {
 
 impl PfCases for Diff {
     fn pf(self) -> Diff {
-        self.forms().ignore_calls(PF_IN_PLACE)
+        self.forms()
+            .ignore_calls(PF_IN_PLACE)
+            .ignore_calls(TG_IN_PLACE)
+            .ignore_calls(TG_OWN_IN_PLACE)
     }
     fn pf_caller(self) -> Diff {
         self.pf().ignore_calls(PF_OWN_IN_PLACE)
@@ -10909,7 +10942,6 @@ fn pf_init_world(e: &mut Engine, step: u32) {
         ret(count)
     });
     e.register(0x0067_f760, pf_mark::<0x0001_0000>);
-    e.register(0x0068_03b0, pf_mark::<0x0002_0000>);
     e.register(0x0068_0a20, pf_mark::<0x0003_0000>);
     e.register(0x0047_9b00, pf_mark::<0x0004_0000>);
     e.register(0x0067_e190, pf_mark::<0x0005_0000>);
@@ -11137,7 +11169,7 @@ fn pl_doubles(e: &mut Engine) {
     });
     e.register(PL_FN + 0x130, |_, _| ret(0x0101_0130));
     // A process's slots.
-    for slot in [0x27cu32, 0x514, 0x51c, 0x4d4, 0x4c8, 0x52c, 0x288] {
+    for slot in [0x27cu32, 0x514, 0x51c, 0x4d4, 0x4c8, 0x52c, 0x288, 0x11c] {
         e.mem.set_u32(PL_PROC_VT + slot, PL_PFN + slot);
     }
     e.register(PL_PFN + 0x27c, |e, a| ret(pl_word(e, a[0] + 0x20)));
@@ -11151,6 +11183,8 @@ fn pl_doubles(e: &mut Engine) {
         })
     });
     e.register(PL_PFN + 0x4c8, |e, a| ret(pl_word(e, a[0] + 0x30)));
+    // The per-actor test the missed packages ask: a byte of the process.
+    e.register(PL_PFN + 0x11c, |e, a| ret(u32::from(e.mem.u8(a[0] + 0x1d))));
     e.register(PL_PFN + 0x52c, |e, a| ret(pl_word(e, a[0] + 0x34)));
     e.register(PL_PFN + 0x288, |e, a| {
         e.mem.set_u32(a[0] + 0x38, a[1]);
@@ -11214,8 +11248,9 @@ fn pl_doubles(e: &mut Engine) {
     // The walk of the references near a point: the cell's references in their chain, each given
     // to the callback until it takes one.
     e.register(0x0046_f280, |e, a| {
-        // No walk for a context without a form: the exe leaves that word unwritten (a type 2 target
-        // or a type 1 target without an object), and the callback asks the form's slot.
+        // No walk for a context without a form: a type 2 target leaves that word unwritten (as the
+        // exe does), a type 1 target without an object writes 0 there (the exe leaves it unwritten),
+        // and the callback asks the form's slot.
         let walks = a[1] != 0 && pl_word(e, a[7]) != 0;
         let mut reference = if walks { pl_word(e, a[1] + 0x30) } else { 0 };
         for _ in 0..6 {
@@ -11404,6 +11439,7 @@ fn pl_pool(e: &mut Engine, seed: u32) -> PlPool {
                 e.mem.set_u32(p + 0x10 + 4 * i, pl_coord(s, 39 + i));
             }
             e.mem.set_u8(p + 0x1c, pick(s, 42, &[0u8, 1]));
+            e.mem.set_u8(p + 0x1d, pick(s, 50, &[0u8, 1, 2]));
             e.mem.set_u32(p + 0x24, pick(s, 43, &[0, refs[3], refs[4]]));
             e.mem.set_u32(p + 0x28, pick(s, 44, &[0, 1]));
             e.mem.set_u32(p + 0x2c, pick(s, 45, &[0, refs[2], refs[5]]));
@@ -12014,12 +12050,169 @@ fn pl_radius_actor_to_ref_target() {
     .assert_same();
 }
 
+/// The reach adjustment's eye line where the thread's precision decides: the actor's z 1.0, its eye
+/// level 2^-24 and reach -2^-25, the target's z 1.0 and the actor's extent 2.0. Rounded to 24 bits
+/// at each step (the main thread's word) the eye line is 1.0, not above the target; at 53 bits it
+/// is stored as 1 + 2^-23, and half the extent is added. The second case has an eye level of 0
+/// (1.0 either way). Run under both words, so plain double maths on either side shows.
+#[test]
+fn pl_reach_adjustment_precision() {
+    Diff::new(entry!(
+        0x0067_87e0,
+        package_place::radius_actor_to_ref_target(u32, u32, u8) -> f32
+    ))
+    .pl_caller()
+    .inputs(&[Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        let (pool, package, _) = pl_case_actor(e, 0, 3, true);
+        let actor = pool.refs[0];
+        let target = pool.refs[3];
+        e.mem.set_u32(package + 0x30, 0);
+        e.mem.set_u8(actor + 0x48, 1);
+        e.mem.set_u32(actor + 0x58, target);
+        e.mem.set_u8(target + 0x48, 0);
+        e.mem.set_u32(target + 0x20, pool.bases[2]);
+        e.mem.set_f32(target + 0x80, 10.0);
+        e.mem.set_f32(actor + 0x38, 1.0);
+        e.mem.set_f32(target + 0x38, 1.0);
+        let eye = if case.word(0) == 0 {
+            (2.0f32).powi(-24)
+        } else {
+            0.0
+        };
+        e.mem.set_f32(actor + 0x84, eye);
+        e.mem.set_f32(actor + 0x7c, -(2.0f32).powi(-25));
+        e.mem.set_f32(actor + 0xb0, 2.0);
+        vec![package, actor, 0]
+    })
+    .run()
+    .assert_same();
+}
+
 #[test]
 fn pl_target_is_actor() {
     Diff::new(entry!(0x0067_8ec0, package_place::target_is_actor(u32, u32) -> bool))
         .pl_actor()
         .run()
         .assert_same();
+}
+
+#[test]
+fn pl_actor_process_allows() {
+    Diff::new(entry!(
+        0x0067_7760,
+        package_place::actor_process_allows(u32, u32) -> u8
+    ))
+    .pl_actor()
+    .run()
+    .assert_same();
+}
+
+/// `CalculateProcedureType`'s cases: the place world's, with the line it formats and drops for an
+/// invalid package (264 bytes), `SetPackType`'s own one-line bodies and the location's radius test
+/// (`00454b70`).
+trait PtCases {
+    fn pt(self) -> Diff;
+}
+
+impl PtCases for Diff {
+    fn pt(self) -> Diff {
+        self.pl_caller()
+            .ignore_calls(PF_OWN_IN_PLACE)
+            .ignore_calls(&[0x0045_4b70])
+            .local_at(0x00ec_623a, 0, 0x108)
+    }
+}
+
+/// `CalculateProcedureType` for the package types 0, 1 and 2 (their target, own location and
+/// second location from the pool) with no reference, an actor or another reference.
+#[test]
+fn pl_calculate_procedure_type() {
+    Diff::new(entry!(
+        0x0067_77b0,
+        package_place::calculate_procedure_type(u32, u32)
+    ))
+    .pt()
+    .inputs(&[
+        Input::Of(&[0, 1, 2]),
+        Input::Of(PL_SEEDS),
+        Input::Of(&[0, 1, 2]),
+    ])
+    .setup(|e, case| {
+        let (pool, package, _) = pl_case(e, case.word(0), case.word(1));
+        let reference = [0, pool.refs[0], pool.refs[3]][case.word(2) as usize];
+        vec![package, reference]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The package types past 2: every one of the exe's table, the ones it does not know (0xb, 0x11,
+/// 0x13, 0x19) and types past 0x24 and below 0.
+const PT_FIXED_TYPES: &[u32] = &[
+    3, 4, 5, 6, 7, 8, 9, 10, 0xb, 0xc, 0xd, 0xe, 0xf, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+    0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x30,
+    0x7f, 0x80, 0xff,
+];
+
+#[test]
+fn pl_calculate_procedure_type_fixed() {
+    Diff::new(entry!(
+        0x0067_77b0,
+        package_place::calculate_procedure_type(u32, u32)
+    ))
+    .pt()
+    .inputs(&[Input::Of(PT_FIXED_TYPES), Input::Of(&[0, 1, 2, 3])])
+    .setup(|e, case| {
+        let (_, package, _) = pl_case(e, 3, case.word(1));
+        e.mem.set_u8(package + 0x20, case.word(0) as u8);
+        vec![package, 0]
+    })
+    .run()
+    .assert_same();
+}
+
+/// Form types in, beside and out of the procedure type's tables, and the object types 0 to 0x10.
+const PT_TABLE_VALUES: &[u32] = &[
+    0, 1, 5, 6, 9, 10, 0xb, 0xc, 0xd, 0xe, 0xf, 0x10, 0x14, 0x15, 0x16, 0x1b, 0x1c, 0x1d, 0x20,
+    0x21, 0x22, 0x25, 0x26, 0x27, 0x28, 0x2a, 0x2b, 0x2c, 0x49,
+];
+
+/// `CalculateProcedureType`'s tables: the package types 0 and 2 with a target of each type standing
+/// for each value (a reference's base form of that type, an object of that type, that object
+/// type, or for type 3 the reference handed in, whose base form is of that type).
+#[test]
+fn pl_procedure_type_tables() {
+    Diff::new(entry!(
+        0x0067_77b0,
+        package_place::calculate_procedure_type(u32, u32)
+    ))
+    .pt()
+    .inputs(&[
+        Input::Of(&[0, 2]),
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(PT_TABLE_VALUES),
+    ])
+    .setup(|e, case| {
+        let (pool, package, _) = pl_case(e, case.word(0), 5);
+        let value = case.word(2);
+        let reference = pool.refs[0];
+        let base = e.mem.u32(reference + 0x20);
+        e.mem.set_u8(base + 4, value as u8);
+        let target = e.mem.alloc(0x10);
+        e.mem.set_u8(target, case.word(1) as u8);
+        let held = match case.word(1) {
+            0 => reference,
+            1 => base,
+            2 => value,
+            _ => 0,
+        };
+        e.mem.set_u32(target + 4, held);
+        e.mem.set_u32(package + 0x30, target);
+        vec![package, reference]
+    })
+    .run()
+    .assert_same();
 }
 
 #[test]
@@ -12307,14 +12500,33 @@ fn ps_world(e: &mut Engine, seed: u32) {
     e.register(0x0067_fb60, ps_part::<3>);
     e.register(0x0067_fbe0, ps_part::<4>);
     e.register(0x0067_fc50, ps_part::<5>);
-    e.register(0x0068_0590, ps_part::<6>);
-    e.register(0x0068_0640, ps_part::<7>);
-    e.register(0x0068_06e0, ps_part::<8>);
-    e.register(0x0068_0720, ps_part::<9>);
-    e.register(0x0068_07b0, ps_part::<10>);
-    e.register(0x0068_0830, ps_part::<11>);
+    // The target's save functions run for real: the old save's numeric id writer and reader move
+    // the stream like the raw ones; the save buffer's form id and the load buffer's form id reader.
+    e.register(0x0085_7a10, |e, a| {
+        let p = e.mem.u32(a[0] + 0x14);
+        e.mem.set_u32(a[0] + 0x14, p.wrapping_add(a[2]));
+        e.mem
+            .set_u32(a[0] + 0x28, e.mem.u32(a[0] + 0x28) ^ e.mem.u32(a[1]));
+        ret(0)
+    });
+    e.register(0x0085_7aa0, |e, a| {
+        let p = e.mem.u32(a[0] + 0x14);
+        e.mem.set_u32(a[1], p.wrapping_mul(0x9e37_79b9) >> 4);
+        e.mem.set_u32(a[0] + 0x14, p.wrapping_add(a[2]));
+        ret(1)
+    });
+    e.register(0x0086_5df0, |e, a| {
+        e.mem.set_u32(a[0] + 4, e.mem.u32(a[0] + 4).wrapping_add(4));
+        e.mem.set_u32(a[0] + 0xc, e.mem.u32(a[0] + 0xc) ^ a[1]);
+        ret(0)
+    });
+    e.register(0x0086_48e0, |e, a| {
+        let p = e.mem.u32(a[0] + 4);
+        e.mem.set_u32(a[1], p.wrapping_mul(0x85eb_ca6b) >> 3);
+        e.mem.set_u32(a[0] + 4, p.wrapping_add(4));
+        ret(0)
+    });
     e.register(0x0067_f990, |e, a| ret(u32::from(e.mem.u8(a[0])) + 9));
-    e.register(0x0068_0520, |e, a| ret(u32::from(e.mem.u8(a[0])) + 0x11));
     for slot in [0x14u32, 0x18, 0x1c] {
         e.mem.set_u32(PS_DATA_VT + slot, PS_FN + slot);
     }
@@ -12323,7 +12535,7 @@ fn ps_world(e: &mut Engine, seed: u32) {
     e.register(PS_FN + 0x1c, ps_slot::<0x1c>);
 }
 
-/// The location's and target's `K`th save function: a mark in the object, the stream moved on.
+/// The location's `K`th save function: a mark in the object, the stream moved on.
 fn ps_part<const K: u32>(e: &mut Engine, a: &[u32]) -> Ret {
     let buffer = a.get(1).copied().unwrap_or(0);
     e.mem
@@ -12385,14 +12597,18 @@ trait PsCases {
 impl PsCases for Diff {
     /// A package and the save/load object from each seed.
     fn ps(self) -> Diff {
-        self.pl().inputs(&[Input::Of(PS_SEEDS)]).setup(|e, case| {
-            ps_world(e, case.word(0));
-            vec![ps_package(e, case.word(0))]
-        })
+        self.pl()
+            .goes_by_address(&[0x0086_5df0])
+            .inputs(&[Input::Of(PS_SEEDS)])
+            .setup(|e, case| {
+                ps_world(e, case.word(0));
+                vec![ps_package(e, case.word(0))]
+            })
     }
     /// A package and a save buffer (its position, save kind at +0x17 and flags at +0x2c).
     fn ps_buffer(self) -> Diff {
         self.pl()
+            .goes_by_address(&[0x0086_5df0])
             .inputs(&[Input::Of(PS_SEEDS), Input::Of(PF_WORDS)])
             .setup(|e, case| {
                 ps_world(e, case.word(0));
@@ -12506,6 +12722,391 @@ fn ps_clear_loaded_flags() {
         package_save::clear_loaded_flags(u32, u32)
     ))
     .ps_buffer()
+    .run()
+    .assert_same();
+}
+
+// ---- `PackageTarget` (`package_target`) ----
+
+/// Others' one-line bodies the target's functions do in place: the value's getter and setter, the
+/// radius's, a form's id and the chunk's zeroing (`memset`'s wrapper).
+const TG_IN_PLACE: &[u32] = &[
+    0x0044_ddc0,
+    0x0040_3550,
+    0x0084_d030,
+    0x0063_f790,
+    0x0084_e3a0,
+    0x0040_3d30,
+];
+/// The target's own one-line bodies its callers do in place (its type, getters and setters):
+/// listed only in callers' tests.
+const TG_OWN_IN_PLACE: &[u32] = &[
+    0x0051_9b00,
+    0x0068_0020,
+    0x0068_0050,
+    0x0068_0080,
+    0x0068_0110,
+    0x0068_0140,
+    0x0068_0170,
+];
+const TG_SEEDS: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+/// The words the type setter and the word setters take: the types, ones whose low byte is a type,
+/// a form.
+const TG_WORDS: &[u32] = &[0, 1, 2, 3, 4, 0xff, 0x100, 0x102, 0xffff_ffff, 0x0101_0e00];
+
+/// A target from `seed`: type 0 to 3 (or 0xff), for types 0 and 1 a form of its own (id from the
+/// seed) or none, for type 2 an object type, else a word; a value and a radius (a signalling NaN,
+/// a quiet one, -0.0 among them).
+fn tg_target(e: &mut Engine, seed: u32) -> u32 {
+    let t = e.mem.alloc(0x10);
+    let kind = pick(seed, 40, &[0u8, 1, 2, 3, 0, 1, 0xff]);
+    e.mem.set_u8(t, kind);
+    let held = match kind {
+        0 | 1 if pick(seed, 41, &[true, true, false]) => {
+            let form = e.mem.alloc(0x20);
+            e.mem.set_u32(form, VTABLE);
+            e.mem.set_u32(form + 0xc, mix(seed, 42) | 0x0100_0000);
+            form
+        }
+        0 | 1 => 0,
+        2 => pick(seed, 43, &[0, 0xe, 0xf, 0x10]),
+        _ => mix(seed, 44),
+    };
+    e.mem.set_u32(t + 4, held);
+    e.mem
+        .set_u32(t + 8, pick(seed, 45, &[0, 5, 0xffff_ffff, 0x8000_0000]));
+    e.mem.set_u32(
+        t + 0xc,
+        pick(
+            seed,
+            46,
+            &[
+                0,
+                0x4020_0000,
+                0xbf80_0000,
+                0x7f80_0001,
+                0x7fc0_0000,
+                0x8000_0000,
+            ],
+        ),
+    );
+    t
+}
+
+trait TgCases {
+    fn tg(self) -> Diff;
+    fn tg_caller(self) -> Diff;
+    fn tg_one(self) -> Diff;
+    fn tg_word(self) -> Diff;
+    fn tg_pair(self) -> Diff;
+    fn tg_saved(self) -> Diff;
+}
+
+impl TgCases for Diff {
+    /// The getters and setters: the type byte's getter (`00519b00`) in place.
+    fn tg(self) -> Diff {
+        self.forms()
+            .ignore_calls(TG_IN_PLACE)
+            .ignore_calls(&[0x0051_9b00])
+    }
+    /// The functions that do the target's own getters and word setters in place.
+    fn tg_caller(self) -> Diff {
+        self.tg().ignore_calls(TG_OWN_IN_PLACE)
+    }
+    /// A target from each seed.
+    fn tg_one(self) -> Diff {
+        self.inputs(&[Input::Of(TG_SEEDS)]).setup(|e, case| {
+            world(e);
+            vec![tg_target(e, case.word(0))]
+        })
+    }
+    /// A target from each seed and one of [`TG_WORDS`].
+    fn tg_word(self) -> Diff {
+        self.inputs(&[Input::Of(TG_SEEDS), Input::Of(TG_WORDS)])
+            .setup(|e, case| {
+                world(e);
+                vec![tg_target(e, case.word(0)), case.word(1)]
+            })
+    }
+    /// A target and another: none, a copy of it, the copy with one field changed (the type, the
+    /// word, the value, the radius to its other zero or to a NaN), or one from another seed.
+    fn tg_pair(self) -> Diff {
+        self.inputs(&[Input::Of(TG_SEEDS), Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7])])
+            .setup(|e, case| {
+                world(e);
+                let a = tg_target(e, case.word(0));
+                let b = match case.word(1) {
+                    0 => 0,
+                    7 => tg_target(e, case.word(0) ^ 0x35),
+                    change => {
+                        let b = e.mem.alloc(0x10);
+                        for k in 0..4 {
+                            let w = e.mem.u32(a + 4 * k);
+                            e.mem.set_u32(b + 4 * k, w);
+                        }
+                        match change {
+                            2 => e.mem.set_u8(b, e.mem.u8(a) ^ 1),
+                            3 => e.mem.set_u32(b + 4, e.mem.u32(a + 4) ^ 0x40),
+                            4 => e.mem.set_u32(b + 8, e.mem.u32(a + 8) ^ 1),
+                            5 => e.mem.set_u32(b + 0xc, e.mem.u32(a + 0xc) ^ 0x8000_0000),
+                            6 => e.mem.set_u32(b + 0xc, 0x7fc0_0000),
+                            _ => {}
+                        }
+                        b
+                    }
+                };
+                vec![a, b]
+            })
+    }
+    /// A target from each seed and the save world (the old save object and the buffers).
+    fn tg_saved(self) -> Diff {
+        self.goes_by_address(&[0x0086_5df0])
+            .inputs(&[Input::Of(TG_SEEDS)])
+            .setup(|e, case| {
+                ps_world(e, case.word(0));
+                let buffer = e.mem.alloc(0x40);
+                vec![tg_target(e, case.word(0)), buffer]
+            })
+    }
+}
+
+#[test]
+fn tg_target_type() {
+    Diff::new(entry!(0x0051_9b00, package_target::targ_type(u32) -> u8))
+        .forms()
+        .ignore_calls(TG_IN_PLACE)
+        .tg_one()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn tg_construct() {
+    Diff::new(entry!(0x0067_ff70, package_target::construct(u32) -> u32))
+        .tg()
+        .tg_one()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn tg_assign() {
+    Diff::new(entry!(0x0067_ffa0, package_target::assign(u32, u32) -> u32))
+        .tg_caller()
+        .inputs(&[Input::Of(TG_SEEDS), Input::Of(TG_SEEDS)])
+        .setup(|e, case| {
+            world(e);
+            let a = tg_target(e, case.word(0));
+            let b = tg_target(e, case.word(1) ^ 0x77);
+            vec![a, b]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn tg_reference() {
+    Diff::new(entry!(0x0068_0020, package_target::targ_reference(u32) -> u32))
+        .tg()
+        .tg_one()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn tg_object() {
+    Diff::new(entry!(0x0068_0050, package_target::targ_object(u32) -> u32))
+        .tg()
+        .tg_one()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn tg_object_type() {
+    Diff::new(entry!(0x0068_0080, package_target::targ_object_type(u32) -> u32))
+        .tg()
+        .tg_one()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn tg_set_type() {
+    Diff::new(entry!(0x0068_00b0, package_target::set_targ_type(u32, u32)))
+        .tg()
+        .tg_word()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn tg_set_reference() {
+    Diff::new(entry!(
+        0x0068_0110,
+        package_target::set_targ_reference(u32, u32)
+    ))
+    .tg()
+    .tg_word()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn tg_set_object() {
+    Diff::new(entry!(
+        0x0068_0140,
+        package_target::set_targ_object(u32, u32)
+    ))
+    .tg()
+    .tg_word()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn tg_set_object_type() {
+    Diff::new(entry!(
+        0x0068_0170,
+        package_target::set_targ_object_type(u32, u32)
+    ))
+    .tg()
+    .tg_word()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn tg_copy() {
+    Diff::new(entry!(0x0068_01a0, package_target::copy(u32, u32)))
+        .tg_caller()
+        .tg_pair()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn tg_compare() {
+    Diff::new(entry!(0x0068_0220, package_target::compare(u32, u32) -> u8))
+        .tg_caller()
+        .tg_pair()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn tg_save() {
+    Diff::new(entry!(0x0068_02f0, package_target::save(u32, u32)))
+        .tg_caller()
+        .local_at(0x0048_5990, 1, 0x10)
+        .local_at(0x0067_ff10, 0, 0x10)
+        .inputs(&[Input::Of(TG_SEEDS), Input::Flag])
+        .setup(|e, case| {
+            world(e);
+            record_buffer(e);
+            e.mem.set_u8(BIG_ENDIAN, case.word(1) as u8);
+            vec![tg_target(e, case.word(0)), 0x5444_5450]
+        })
+        .run()
+        .assert_same();
+}
+
+/// `InitItem` for each target, with an owner named or not (the package always hands itself), the lookup finding a form or
+/// not and the cast answering a reference or none.
+#[test]
+fn tg_init_item() {
+    Diff::new(entry!(0x0068_03b0, package_target::init_item(u32, u32)))
+        .tg_caller()
+        .local_at(0x0048_5d50, 0, 4)
+        .inputs(&[
+            Input::Of(TG_SEEDS),
+            Input::Of(&[1, 2]),
+            Input::Flag,
+            Input::Flag,
+        ])
+        .setup(|e, case| {
+            ps_world(e, case.word(0));
+            set_found(e, case.word(2) != 0);
+            set_cast(
+                e,
+                0x0118_41cc,
+                if case.word(3) != 0 { 0x0101_0e40 } else { 0 },
+            );
+            let target = tg_target(e, case.word(0));
+            // The word at +4 is the form id the record held.
+            e.mem.set_u32(target + 4, mix(case.word(0), 47));
+            let owner = pf_package(e, 0, case.word(0));
+            e.mem.set_u32(owner + 0x30, u32::from(case.word(1) == 2));
+            vec![target, owner]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn tg_save_size() {
+    Diff::new(entry!(0x0068_0520, package_target::save_size(u32) -> u16))
+        .tg()
+        .tg_one()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn tg_save_old() {
+    Diff::new(entry!(0x0068_0590, package_target::save_old(u32)))
+        .tg()
+        .local_at(0x0085_7a10, 1, 4)
+        .tg_saved()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn tg_load_old() {
+    Diff::new(entry!(0x0068_0640, package_target::load_old(u32)))
+        .tg()
+        .local_at(0x0085_7aa0, 1, 4)
+        .tg_saved()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn tg_after_load() {
+    Diff::new(entry!(0x0068_06e0, package_target::after_load(u32)))
+        .tg()
+        .tg_saved()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn tg_save_game() {
+    Diff::new(entry!(0x0068_0720, package_target::save_game(u32, u32)))
+        .tg()
+        .tg_saved()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn tg_load_game() {
+    Diff::new(entry!(0x0068_07b0, package_target::load_game(u32, u32)))
+        .tg()
+        .tg_saved()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn tg_init_load_game() {
+    Diff::new(entry!(
+        0x0068_0830,
+        package_target::init_load_game(u32, u32)
+    ))
+    .tg()
+    .tg_saved()
     .run()
     .assert_same();
 }

@@ -1,6 +1,7 @@
 //! A package's schedule (`PSDT`, the 8 bytes at +0x38 of `TESPackage`) and the functions of the
 //! units around it that read and write one (`run_00678a80`, `run_00678cc0`, `run_0067fcb0`), each
-//! as the exe does it, with the three-word swap that sits in the same unit.
+//! as the exe does it, with the three-word swap that sits in the same unit and the package's day
+//! test (`00678d40`, in `fallout shared/package`).
 //!
 //! The schedule is the month (+0, a signed byte, -1 for any), the day of the week (+1, -1 for
 //! any), the date (+2, 0 for any), the hour (+3, -1 for any) and the duration in hours (the word
@@ -12,14 +13,14 @@
 //! date), its setters (`005407b0` the month, this unit's own for the other three bytes, and
 //! `006ecd40` the word at +4), the duration (`00726070`, the word at +4), the big-endian byte
 //! (`00401500`, `011c54ba`) and the word swaps (`0060ce80` on the word at +4, `00401080`, over the
-//! runtime's `_byteswap_ulong`). The chunk's write is this family's typed call. Every byte the
-//! exe compares through `MOVSX` is compared as the signed byte it is.
+//! runtime's `_byteswap_ulong`). The chunk's write is this family's typed call; the calendar's day
+//! of the week (`00867ef0`, the misc unit's) is called by address. Every byte the exe compares
+//! through `MOVSX` is compared as the signed byte it is.
 //!
 //! No floats.
 
 use super::{tesform, FAMILY};
-use engine_core::typed_call;
-use engine_core::Engine;
+use engine_core::{args, typed_call, Engine};
 
 /// A package's schedule.
 const SCHEDULE: u32 = 0x38;
@@ -33,6 +34,10 @@ const BIG_ENDIAN: u32 = 0x011c_54ba;
 /// The chunk ("PSDT") and its size.
 const CHUNK_SCHEDULE: u32 = 0x5444_5350;
 const SCHEDULE_SIZE: u32 = 8;
+/// The calendar (`011de7b8`) and its day of the week (`00867ef0`, the misc unit's: the days passed
+/// modulo 7), called by address.
+const CALENDAR: u32 = 0x011d_e7b8;
+const CALENDAR_DAY_OF_WEEK: u32 = 0x0086_7ef0;
 
 fn at(this: u32, offset: u32) -> u32 {
     this.wrapping_add(offset)
@@ -79,6 +84,32 @@ pub fn day_of_week(e: &mut Engine, this: u32) -> i8 {
 /// The schedule's date (+2).
 pub fn date(e: &mut Engine, this: u32) -> u8 {
     e.mem.u8(at(this, DATE))
+}
+
+// Typed from 00678d40
+/// Whether today, or with `previous` the day before (day 0's being day 6), fits the package's
+/// schedule's day of the week: 0 to 6 that day, 7 the weekdays (not 0 or 6), 8 days 0 and 6, 9 days
+/// 1, 3 and 5, 10 days 2 and 4, any other ("any", -1, among them) never. The calendar's day of the
+/// week is read first, then the schedule's.
+pub fn day_fits(e: &mut Engine, this: u32, previous: u8) -> bool {
+    let answer = e.call(CALENDAR_DAY_OF_WEEK, &args![CALENDAR]).u8();
+    let mut day = i8::from_le_bytes([answer]);
+    if previous != 0 {
+        day = day.wrapping_sub(1);
+        if day < 0 {
+            day = 6;
+        }
+    }
+    let day = i32::from(day);
+    let selector = i32::from(field(e, at(this, SCHEDULE), DAY_OF_WEEK));
+    match selector {
+        0..=6 => day == selector,
+        7 => day != 0 && day != 6,
+        8 => day == 0 || day == 6,
+        9 => matches!(day, 1 | 3 | 5),
+        10 => matches!(day, 2 | 4),
+        _ => false,
+    }
 }
 
 // Typed from 0067fcb0
