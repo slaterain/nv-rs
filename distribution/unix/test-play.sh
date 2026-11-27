@@ -441,6 +441,8 @@ mkdir "$game29/Data/NVSE/Plugins/Backup.dll"
 echo x >"$game29/Data/NVSE/Plugins/kNVSE.dll"
 echo x >"$game29/Data/NVSE/Plugins/jip_nvse.dll"
 echo x >"$game29/Data/NVSE/Plugins/jip_nvse.ini"
+echo x >"$game29/Data/NVSE/Plugins/Example.dll"
+echo x >"$game29/Data/NVSE/Plugins/example.DLL"
 printf 'FalloutNV.esm\nMod One.esp\n' >"$local29/FalloutNV/plugins.txt"
 printf 'own%s%s\ngame%sSteam%s%s\nappdata%s%s\n' "$tab" "$own29" "$tab" "$tab" "$game29" "$tab" "$local29" >"$T/find29.txt"
 outside29() { (cd "$T" && find game29 pfx29 | sort && cksum "$local29/FalloutNV/plugins.txt"); }
@@ -455,6 +457,7 @@ check "29 manager profile saves" 'printf "%s" "$out" | grep -qF "NV_SAVE_OUT=$ow
 check "29 a plugin that can't load, named once in the log" '[ "$(cat "$own29"/logs/game-*.log | grep -c "plugin kNVSE.dll can")" = 1 ]'
 check "29 a directory with a DLL suffix is ignored" '! cat "$own29"/logs/game-*.log | grep -q "Backup.dll"'
 check "29 a built-in plugin not named" '! cat "$own29"/logs/game-*.log | grep -q "jip_nvse"'
+check "29 case variants of one plugin produce one warning" '[ "$(grep -ic "plugin example[.]dll can" "$own29"/logs/game-*.log)" = 1 ]'
 check "29 nothing written in the game's folder or the prefix" '[ "$(outside29)" = "$before29" ]'
 out=$(env FAKE_FIND="$T/find29.txt" NV_RS_GAME="$game29" $SH "$pkg/play.sh" --mods --mod-manager </dev/null 2>&1); st=$?
 check "29 --mods with it refused" '[ $st = 1 ] && printf "%s" "$out" | grep -qF "choose one"'

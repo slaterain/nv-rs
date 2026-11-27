@@ -144,7 +144,7 @@ nvse_not_built_in() {
                 esac
             done
         done
-    done | sort -u | while IFS= read -r nv_name; do
+    done | LC_ALL=C sort -fu | while IFS= read -r nv_name; do
         say "nv-rs: the script extender plugin $nv_name can't load in nv-rs (xNVSE, JIP LN, UI Organizer and JohnnyGuitar NVSE are built in): mods that need it may not work"
     done
 }
