@@ -2547,7 +2547,8 @@ bSunShadowsCharacters=0
 
     /// What Linux's and macOS's play.sh exports makes the same play run as Play.exe's plain one
     /// (only `NV_SETTINGS`: Vulkan, play's threads and render thread; review of #687: without
-    /// NV_SETTINGS nothing drew), the whole choice alike, in both profiles. The variables are read
+    /// NV_SETTINGS nothing drew), the whole choice alike, in each profile (`--mod-manager`'s too,
+    /// which adds `NV_RS_MANAGER_APPDATA`, #1122). The variables are read
     /// from play.sh itself with the values it gives them, and must be exactly the ones listed here,
     /// so an export added later is looked at in this test: none may be a test's or a fix's
     /// variable (#763: play.sh exported `NV_PROFILE`, the profiler's switch, and every start ran as
@@ -2587,7 +2588,7 @@ bSunShadowsCharacters=0
         assert_eq!(plain.renderer, Some(Renderer::Vulkan));
         assert_eq!(plain.threads, PLAY_THREADS);
         assert_eq!(plain.render_thread, PLAY_RENDER_THREAD);
-        for profile in ["game", "mods"] {
+        for profile in ["game", "mods", "manager"] {
             let env = |name: &str| {
                 exported
                     .iter()
