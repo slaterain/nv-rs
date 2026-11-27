@@ -2,7 +2,7 @@
 //! triangle under a point and the height on it, the grid of triangle lists, and the navmesh infos.
 
 use super::layout::{
-    link_field, vertex_field, EdgeInfo, MeshEdge, NavMesh, NavMeshGrid, NavMeshInfo,
+    link_field, vertex_field, CutterEdge, EdgeInfo, MeshEdge, NavMesh, NavMeshGrid, NavMeshInfo,
     NavMeshTriangle, Point2, SimpleArray,
 };
 use super::point::{abs, length_squared, subtract};
@@ -156,6 +156,20 @@ pub fn entry_12_of(e: &mut Engine, this: Ptr<SimpleArray>, index: u32) -> u32 {
 /// `NavMeshTriangle::GetFlag` (`thiscall(triangle, mask)`): whether any bit of `mask` is set.
 pub fn has_flags(e: &mut Engine, this: Ptr<NavMeshTriangle>, mask: u32) -> bool {
     mask & e.get(this, NavMeshTriangle::flags) != 0
+}
+
+// Typed from 006bcfe0
+/// Record the triangle and its side in the first unoccupied slot.
+pub fn add_edge_triangle(e: &mut Engine, edge: Ptr<CutterEdge>, triangle: u16, side: u16) {
+    let (triangle_field, side_field) = if e.get(edge, CutterEdge::triangle_0) == u16::MAX {
+        (CutterEdge::triangle_0, CutterEdge::side_0)
+    } else if e.get(edge, CutterEdge::triangle_1) == u16::MAX {
+        (CutterEdge::triangle_1, CutterEdge::side_1)
+    } else {
+        return;
+    };
+    e.set(edge, triangle_field, triangle);
+    e.set(edge, side_field, side);
 }
 
 // Typed from 0068f1d0

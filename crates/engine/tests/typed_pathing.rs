@@ -1231,6 +1231,28 @@ fn has_flags() {
 }
 
 #[test]
+fn add_edge_triangle() {
+    Diff::new(entry!(
+        0x006b_cfe0,
+        navmesh::add_edge_triangle(Ptr<_>, u16, u16)
+    ))
+    .family(&pathing::PATHING)
+    .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(&[0, 0x8001, 0xffff])])
+    .setup(|e, case| {
+        let edge = e.mem.alloc(0x10);
+        let occupied = case.word(0);
+        e.mem
+            .set_u16(edge + 8, if occupied & 1 == 0 { 0xffff } else { 7 });
+        e.mem
+            .set_u16(edge + 10, if occupied & 2 == 0 { 0xffff } else { 13 });
+        e.mem.set_u32(edge + 12, 0x4321_abcd);
+        vec![edge, case.word(1), 0x9002]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
 fn edge_flag() {
     Diff::new(entry!(0x0068_f1d0, navmesh::edge_flag(Ptr<_>, u32) -> bool))
         .common()
