@@ -47,9 +47,7 @@ use super::map_menu;
 use super::map_menu_p2;
 use super::menu_manager_p2::{child_by_name, ftol2, trait_by_name, ADD_USER_TRAIT};
 use super::stats_menu;
-use crate::{
-    crt, dispatch, draw_f, extra_data, forms, hud, multibound, pathing, scene,
-};
+use crate::{crt, dispatch, draw_f, extra_data, forms, hud, multibound, pathing, scene};
 use engine_core::prelude::*;
 use engine_core::typed_call;
 use engine_core::x87::{
@@ -867,7 +865,10 @@ fn idle_show_position(e: &mut Engine, at: u32) {
         let controls = in_place::controls(e);
         if e.call(CONTROLS_TEST_A, &args![controls, 1u32, 1u32]).u32() != 0 {
             let controls = in_place::controls(e);
-            if e.call(CONTROLS_TEST_B, &args![controls, 0xeu32, 1u32]).u32() == 0 {
+            if e.call(CONTROLS_TEST_B, &args![controls, 0xeu32, 1u32])
+                .u32()
+                == 0
+            {
                 e.vcall(at, MENU_GAMEPAD_SLOT, &args![0xcu32, 0u32]);
             }
         }
@@ -1447,10 +1448,7 @@ fn set_text_scrollbar(e: &mut Engine, data_text: u32, scrollbar: u32, delta: u32
             draw_f::helpers::float_max(e, 0.0, f32::from_bits(overflow))
         );
         let overflow = x87_store32(f64::from(overflow));
-        let steps = x87_quiet_bits(x87_store32(x87_div(
-            x87_load32(overflow),
-            x87_m32(delta),
-        )));
+        let steps = x87_quiet_bits(x87_store32(x87_div(x87_load32(overflow), x87_m32(delta))));
         let rounded = e.call(ROUND_FLOAT, &args![steps]).f64();
         let one: f64 = e.global(ONE_DOUBLE);
         let items = x87_quiet_bits(x87_store32(x87_add(rounded, one)));
@@ -1579,10 +1577,7 @@ pub fn fn_00799dc0(e: &mut Engine, this: Ptr) {
         let x = x87_store32(x87_sub(x87_m32(e.mem.u32(cursor)), map_x));
         e.mem.set_u32(cursor, x);
         let map_y = get_float64(e, field(e, at, MAP_TILE), 0xfa2);
-        let y = x87_store32(x87_sub(
-            x87_m32(e.mem.u32(cursor.wrapping_add(4))),
-            map_y,
-        ));
+        let y = x87_store32(x87_sub(x87_m32(e.mem.u32(cursor.wrapping_add(4))), map_y));
         e.mem.set_u32(cursor.wrapping_add(4), y);
         while e.mem.u32(node) != 0 {
             // The list walk's step (`0057cbe0`, in place): the node's +8, the next its first word.
@@ -1789,7 +1784,10 @@ fn load_playing_sounds(e: &mut Engine, this: Ptr) {
         e.call(AUDIO_SET_RADIO_VOLUME, &args![audio, volume]);
     } else if all_ready {
         e.mem.set_u8(at.wrapping_add(SOUNDS_LOADING), 0);
-        let length = count.wrapping_sub(1).wrapping_mul(0x1f4).wrapping_add(total);
+        let length = count
+            .wrapping_sub(1)
+            .wrapping_mul(0x1f4)
+            .wrapping_add(total);
         e.mem.set_u32(
             at.wrapping_add(SOUNDS_LENGTH),
             x87_store32(f64::from(length as i32)),
@@ -1813,10 +1811,7 @@ fn show_play_time(e: &mut Engine, at: u32) {
         f32::from_bits(length),
     );
     let played = x87_quiet_bits(if b > a { a } else { b }.to_bits());
-    let remaining = x87_sub(
-        x87_load32(field(e, at, SOUNDS_LENGTH)),
-        x87_m32(played),
-    );
+    let remaining = x87_sub(x87_load32(field(e, at, SOUNDS_LENGTH)), x87_m32(played));
     let remaining = ftol2(e, remaining);
     let label = in_place::setting_text(e, AUDIO_LABEL);
     let tenths = (remaining % 1000) / 100;
@@ -2046,7 +2041,8 @@ pub fn map_menu_zoom_map(e: &mut Engine, this: Ptr, zoom_in: u8, factor: f32) {
     if field(e, at, MAP_TILE) == 0 {
         return;
     }
-    if page(e, at) == LOCAL_PAGE && typed_call!(super::FAMILY, 0x007a_1750, map_menu_p2::fn_007a1750(e))
+    if page(e, at) == LOCAL_PAGE
+        && typed_call!(super::FAMILY, 0x007a_1750, map_menu_p2::fn_007a1750(e))
     {
         return;
     }
@@ -2084,21 +2080,12 @@ pub fn map_menu_zoom_map(e: &mut Engine, this: Ptr, zoom_in: u8, factor: f32) {
         let ratio = x87_quiet_bits(x87_store32(x87_div(size, width)));
         e.call(POINT2_SCALE, &args![point, ratio]);
         let id = static_id(e, TRAIT_MAGNIFICATION);
-        set_float(
-            e,
-            field(e, at, MAP_TILE),
-            id,
-            x87_quiet_bits(magnification),
-        );
+        set_float(e, field(e, at, MAP_TILE), id, x87_quiet_bits(magnification));
         if page(e, at) == LOCAL_PAGE {
             let map = field(e, at, MAP_TILE);
             zoom_cell_grid(e, map, magnification);
         }
-        (
-            changed,
-            e.mem.u32(point),
-            e.mem.u32(point.wrapping_add(4)),
-        )
+        (changed, e.mem.u32(point), e.mem.u32(point.wrapping_add(4)))
     });
     for (size_id, along, offset_id, target) in [
         (0xfb1, point_x, 0xfee, 0xfa1),
@@ -2282,7 +2269,8 @@ fn add_world_map_marker(e: &mut Engine, at: u32, marker: u32) {
         space = world_parent(e, space);
     }
     let data = marker_data(e, marker);
-    if !e.call(MARKER_GET_VISIBLE, &args![data]).bool() || e.mem.u32(marker.wrapping_add(8)) & 0x800 != 0
+    if !e.call(MARKER_GET_VISIBLE, &args![data]).bool()
+        || e.mem.u32(marker.wrapping_add(8)) & 0x800 != 0
     {
         return;
     }
@@ -2343,9 +2331,7 @@ fn add_world_map_marker(e: &mut Engine, at: u32, marker: u32) {
     if e.call(MARKER_GET_TRAVEL_LOC, &args![data]).bool() {
         let data = marker_data(e, marker);
         let kind = e.call(MARKER_ICON_KIND, &args![data]).u32();
-        let icon = e
-            .mem
-            .u32(MARKER_ICONS.wrapping_add(kind.wrapping_mul(4)));
+        let icon = e.mem.u32(MARKER_ICONS.wrapping_add(kind.wrapping_mul(4)));
         set_string(e, tile, 0xfcc, icon);
     } else {
         set_string(e, tile, 0xfcc, UNDISCOVERED_ICON_PATH);
@@ -2386,9 +2372,7 @@ fn local_grid_side(e: &Engine) -> i32 {
 /// The grid cell of a coordinate: `(00406d90(value) - offset) >> 12` less half the grid side
 /// (arithmetic shifts).
 fn local_grid_cell(e: &mut Engine, value: u32, offset: i32) -> i32 {
-    let whole = e
-        .call(FLOAT_TO_INT, &args![x87_quiet_bits(value)])
-        .i32();
+    let whole = e.call(FLOAT_TO_INT, &args![x87_quiet_bits(value)]).i32();
     (whole.wrapping_sub(offset) >> 0xc).wrapping_sub(local_grid_side(e) >> 1)
 }
 
@@ -2407,9 +2391,7 @@ pub fn map_menu_update_local_map(e: &mut Engine, this: Ptr) {
     let cell = cell_of(e, e.mem.u32(PLAYER));
     let player = e.mem.u32(PLAYER);
     let position = position(e, player);
-    let interior = e
-        .call(REFR_GET_INTERIOR, &args![e.mem.u32(PLAYER)])
-        .bool();
+    let interior = e.call(REFR_GET_INTERIOR, &args![e.mem.u32(PLAYER)]).bool();
     e.mem
         .set_u32(at.wrapping_add(NORTH_CELL), if interior { cell } else { 0 });
     let one_cell: f64 = e.global(CELL_SIZE_DOUBLE);
@@ -2445,9 +2427,17 @@ pub fn map_menu_update_local_map(e: &mut Engine, this: Ptr) {
         let column = local_grid_cell(e, position[0], 0);
         let row = local_grid_cell(e, position[1], 0);
         let side = local_grid_side(e);
-        let top = set_point(e, column << 0xc, row.wrapping_add(side).wrapping_sub(1) << 0xc);
+        let top = set_point(
+            e,
+            column << 0xc,
+            row.wrapping_add(side).wrapping_sub(1) << 0xc,
+        );
         let side = local_grid_side(e);
-        let bottom = set_point(e, column.wrapping_add(side).wrapping_sub(1) << 0xc, row << 0xc);
+        let bottom = set_point(
+            e,
+            column.wrapping_add(side).wrapping_sub(1) << 0xc,
+            row << 0xc,
+        );
         (top, bottom)
     };
     let y = x87_quiet_bits(x87_store32(x87_add(x87_load32(first[1]), one_cell)));
@@ -2522,10 +2512,7 @@ fn add_door_marker(e: &mut Engine, at: u32, reference: u32) {
         if e.mem.u8(at.wrapping_add(FOG_OF_WAR)) != 0 {
             let seen = e.call(CELL_GET_SEEN_VALUE, &args![point]).i32();
             let divisor: f64 = e.global(FOG_DIVISOR_DOUBLE);
-            alpha = x87_store32(x87_mul(
-                x87_div(f64::from(seen), divisor),
-                x87_m32(alpha),
-            ));
+            alpha = x87_store32(x87_mul(x87_div(f64::from(seen), divisor), x87_m32(alpha)));
         }
         let zero: f64 = e.global(ZERO_DOUBLE);
         let one: f64 = e.global(ONE_DOUBLE);
@@ -2707,9 +2694,7 @@ pub fn map_menu_add_quest_markers(e: &mut Engine, this: Ptr) {
     remove_map_children(e, at, 0x1b);
     remove_map_children(e, at, 0x1d);
     let player = e.mem.u32(PLAYER);
-    let mut node = e
-        .call(PLAYER_GET_CURRENT_TARGET_LIST, &args![player])
-        .u32();
+    let mut node = e.call(PLAYER_GET_CURRENT_TARGET_LIST, &args![player]).u32();
     while e.mem.u8(setting_value(QUEST_MARKERS_SETTING)) != 0 && node != 0 && item(e, node) != 0 {
         let target = item(e, node);
         let reference = e
@@ -2955,11 +2940,7 @@ fn player_map_marker(e: &mut Engine, player: u32) -> u32 {
 /// The player's teleport path (`0079f620`, this file's).
 #[inline]
 fn player_path(e: &mut Engine, player: u32) -> u32 {
-    typed_call!(
-        super::FAMILY,
-        0x0079_f620,
-        fn_0079f620(e, Ptr::new(player))
-    )
+    typed_call!(super::FAMILY, 0x0079_f620, fn_0079f620(e, Ptr::new(player)))
 }
 
 // Typed from 0079f360
@@ -3335,16 +3316,12 @@ fn join_waypoints(e: &mut Engine, list: u32, id: u32, scale: (u32, u32)) {
             x87_sub(x87_load32(bx), x87_m32(ax)),
             x87_m32(scale.0),
         ));
-        let square_x = e
-            .call(FLOAT_POWER, &args![x87_quiet_bits(dx), 2u32])
-            .f64();
+        let square_x = e.call(FLOAT_POWER, &args![x87_quiet_bits(dx), 2u32]).f64();
         let dy = x87_store32(x87_mul(
             x87_sub(x87_load32(by), x87_m32(ay)),
             x87_m32(scale.1),
         ));
-        let square_y = e
-            .call(FLOAT_POWER, &args![x87_quiet_bits(dy), 2u32])
-            .f64();
+        let square_y = e.call(FLOAT_POWER, &args![x87_quiet_bits(dy), 2u32]).f64();
         let sum = x87_quiet_bits(x87_store32(x87_add(square_y, square_x)));
         let length = typed_call!(
             pathing::FAMILY,
@@ -3780,10 +3757,7 @@ fn make_shape(e: &mut Engine, position: u32, cell_size: i32, uv_scale: u32) -> u
         for down in 0..SIDE {
             let normal = point_words(e, 0, one, 0);
             set_point_at(e, normals.wrapping_add(index * 0xc), normal);
-            let u = x87_store32(x87_sub(
-                1.0,
-                x87_div(f64::from(across), f64::from(SIDE)),
-            ));
+            let u = x87_store32(x87_sub(1.0, x87_div(f64::from(across), f64::from(SIDE))));
             let v = x87_store32(x87_div(f64::from(down), f64::from(SIDE)));
             let (first, second) = map_corner_bits(e, v, u);
             e.mem.set_u32(uvs.wrapping_add(index * 8), first);
@@ -3819,10 +3793,8 @@ fn make_shape(e: &mut Engine, position: u32, cell_size: i32, uv_scale: u32) -> u
                 [0u32, 4, 8, 0xc].map(|k| e.mem.u32(made.wrapping_add(k)))
             });
             for (k, word) in made.into_iter().enumerate() {
-                e.mem.set_u32(
-                    colors.wrapping_add(index * 0x10 + 4 * super::word(k)),
-                    word,
-                );
+                e.mem
+                    .set_u32(colors.wrapping_add(index * 0x10 + 4 * super::word(k)), word);
             }
             index = index.wrapping_add(1);
         }
@@ -3855,8 +3827,10 @@ fn make_shape(e: &mut Engine, position: u32, cell_size: i32, uv_scale: u32) -> u
             for value in corners {
                 // The index's low 16 bits.
                 let [low, high, ..] = value.to_le_bytes();
-                e.mem
-                    .set_u16(indices.wrapping_add(index * 2), u16::from_le_bytes([low, high]));
+                e.mem.set_u16(
+                    indices.wrapping_add(index * 2),
+                    u16::from_le_bytes([low, high]),
+                );
                 index = index.wrapping_add(1);
             }
         }
@@ -4063,7 +4037,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0079_f640, map_menu_set_player_marker()),
         entry!(0x0079_f6f0, map_menu_delete_player_marker(Ptr)),
         entry!(0x0079_f7e0, map_menu_get_world_map_tracking_ref(Ptr, u32, u32) -> u32),
-        entry!(0x0079_f8d0, map_menu_create_waypoint_path(Ptr, u32, u32, u32, u32)),
+        entry!(
+            0x0079_f8d0,
+            map_menu_create_waypoint_path(Ptr, u32, u32, u32, u32)
+        ),
         entry!(0x0079_ffb0, fn_0079ffb0(u8)),
         entry!(0x007a_19a0, fn_007a19a0(Ptr, u32)),
     ]

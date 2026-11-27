@@ -5129,7 +5129,10 @@ fn gamepad_sticks(e: &mut Engine, this: Ptr<MapMenu>) -> bool {
             let factor: f64 = e.global(ZOOM_FACTOR_DOUBLE);
             let amount = x87_add(x87_mul(x87_load32(amount), factor), 1.0);
             let amount = x87_quiet_bits(x87_store32(amount));
-            e.call(0x0079_c5a0, &args![this, u8::from(zoom > 0), f32::from_bits(amount)]);
+            e.call(
+                0x0079_c5a0,
+                &args![this, u8::from(zoom > 0), f32::from_bits(amount)],
+            );
             handled = true;
         }
     }
@@ -5279,7 +5282,10 @@ pub fn map_menu_do_gamepad(
                 || e.get(this, MapMenu::iCurrentPage) == 0x21
             {
                 let step = float_constant(e, ZOOM_STEP_FLOAT);
-                e.call(0x0079_c5a0, &args![this, u8::from(button == 0x10), f32::from_bits(step)]);
+                e.call(
+                    0x0079_c5a0,
+                    &args![this, u8::from(button == 0x10), f32::from_bits(step)],
+                );
                 handled = true;
             }
         }
@@ -6605,7 +6611,10 @@ pub fn map_menu_do_wheel_move(e: &mut Engine, this: Ptr<MapMenu>, _unused_0: u32
     let zero: f64 = e.global(ZERO_DOUBLE);
     let zoom_in = above(f64::from(steps), zero);
     let factor = float_constant(e, WHEEL_ZOOM_FLOAT);
-    e.call(0x0079_c5a0, &args![this, u8::from(zoom_in), f32::from_bits(factor)]);
+    e.call(
+        0x0079_c5a0,
+        &args![this, u8::from(zoom_in), f32::from_bits(factor)],
+    );
 }
 
 /// The settings `ZoomMap` reads (each a float through `00403e20`): the
@@ -7565,7 +7574,9 @@ pub fn map_menu_add_map_icons(e: &mut Engine, this: Ptr<MapMenu>) {
             let x = e.mem.u32(world);
             let y = e.mem.u32(world + 4);
             let z = e.mem.u32(world + 8);
-            let made = e.call(0x0079_c380, &args![this, result, x, y, z, space]).u32();
+            let made = e
+                .call(0x0079_c380, &args![this, result, x, y, z, space])
+                .u32();
             [e.mem.u32(made), e.mem.u32(made + 4), e.mem.u32(made + 8)]
         });
         e.call(TILE_SET_INT, &args![icon, 0xfa3u32, 1u32]);
@@ -7700,7 +7711,9 @@ fn tracked_map_position(e: &mut Engine, this: Ptr<MapMenu>, reference: u32) -> (
         let x = e.mem.u32(world);
         let y = e.mem.u32(world + 4);
         let z = e.mem.u32(world + 8);
-        let made = e.call(0x0079_c380, &args![this, result, x, y, z, space]).u32();
+        let made = e
+            .call(0x0079_c380, &args![this, result, x, y, z, space])
+            .u32();
         (e.mem.u32(made), e.mem.u32(made + 4))
     })
 }
@@ -7890,12 +7903,18 @@ fn companion_positions(e: &mut Engine, this: Ptr<MapMenu>, tracked: u32) -> [u32
         let x = e.mem.u32(world);
         let y = e.mem.u32(world + 4);
         let z = e.mem.u32(world + 8);
-        let made = e.call(0x0079_c380, &args![this, marker, x, y, z, space]).u32();
+        let made = e
+            .call(0x0079_c380, &args![this, marker, x, y, z, space])
+            .u32();
         let marker_x = e.mem.u32(made);
         let marker_y = e.mem.u32(made + 4);
         let space = e.call(REFR_GET_WORLD_SPACE, &args![tracked]).u32();
-        let made =
-            e.call(0x0079_c380, &args![this, label, position[0], label_y, position[2], space]).u32();
+        let made = e
+            .call(
+                0x0079_c380,
+                &args![this, label, position[0], label_y, position[2], space],
+            )
+            .u32();
         [marker_x, marker_y, e.mem.u32(made), e.mem.u32(made + 4)]
     })
 }
@@ -8471,7 +8490,9 @@ fn reference_map_point(e: &mut Engine, this: Ptr<MapMenu>, reference: u32) -> (u
     let y = e.mem.u32(position + 4);
     let z = e.mem.u32(position + 8);
     e.with_stack(0xc, |e, result| {
-        let made = e.call(0x0079_c380, &args![this, result.addr(), x, y, z, space]).u32();
+        let made = e
+            .call(0x0079_c380, &args![this, result.addr(), x, y, z, space])
+            .u32();
         (e.mem.u32(made), e.mem.u32(made + 4))
     })
 }

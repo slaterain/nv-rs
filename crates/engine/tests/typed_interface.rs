@@ -9940,17 +9940,20 @@ fn put_map_world(e: &mut Engine, variant: u32) {
     for (k, value) in [1000.0f32, 2000.0, 50.0].into_iter().enumerate() {
         e.mem.set_f32(object(201) + 4 * k as u32, value);
     }
-    for (offset, value) in [(0xe8u32, 0.0f32), (0xec, 0.0), (0xf0, 4096.0), (0xf4, 4096.0)] {
+    for (offset, value) in [
+        (0xe8u32, 0.0f32),
+        (0xec, 0.0),
+        (0xf0, 4096.0),
+        (0xf4, 4096.0),
+    ] {
         e.mem.set_f32(menu + offset, value);
     }
     e.mem
         .set_u32(menu + 0x10c, if variant == 1 { object(206) } else { 0 });
     e.mem.set_u8(menu + 0x110, 0);
     e.mem.set_u32(menu + 0x114, object(207));
-    e.mem.set_u32(
-        menu + 0x118,
-        if variant % 2 == 1 { object(208) } else { 0 },
-    );
+    e.mem
+        .set_u32(menu + 0x118, if variant % 2 == 1 { object(208) } else { 0 });
     e.mem
         .set_u32(menu + 0x11c, if variant == 7 { object(209) } else { 0 });
     e.mem.set_u32(menu + 0x128, 0);
@@ -10316,7 +10319,14 @@ fn map_menu_world_to_map_coord_diff() {
         interface::map_menu_p3::map_menu_world_to_map_coord(Ptr, u32, u32, u32, u32, u32) -> u32
     ))
     .in_map_world(
-        &[Arg::MapMenu, Arg::Object, Arg::F32, Arg::F32, Arg::Byte, Arg::Ptr],
+        &[
+            Arg::MapMenu,
+            Arg::Object,
+            Arg::F32,
+            Arg::F32,
+            Arg::Byte,
+            Arg::Ptr,
+        ],
         &[0, 1],
         200,
     )
@@ -10332,7 +10342,14 @@ fn map_menu_map_to_world_coord_diff() {
         interface::map_menu_p3::map_menu_map_to_world_coord(Ptr, u32, u32, u32, u32, u32) -> u32
     ))
     .in_map_world(
-        &[Arg::MapMenu, Arg::Object, Arg::F32, Arg::F32, Arg::Byte, Arg::Ptr],
+        &[
+            Arg::MapMenu,
+            Arg::Object,
+            Arg::F32,
+            Arg::F32,
+            Arg::Byte,
+            Arg::Ptr,
+        ],
         &[0, 1],
         200,
     )
