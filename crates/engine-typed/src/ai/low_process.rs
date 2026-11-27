@@ -9,8 +9,10 @@
 //! resolves and the package's save to and load from the extra data, the actor values, the destructors
 //! and the process block's save, load and revert (part 4), and the current destination's reference,
 //! point and radius, the location callback, the object test and the combat, alarm, follow, escort
-//! follow, acquire list, acquire, ambush and guard procedures (part 5), each as its translation in
-//! `engine-fallout-ai` does it.
+//! follow, acquire list, acquire, ambush and guard procedures (part 5), and the followers' update, the
+//! package's location as a reference, the patrol's travel step, the guard's travel, the escort, the
+//! activate procedure, the acquire callback and the missed packages (part 6), each as its translation
+//! in `engine-fallout-ai` does it.
 //!
 //! The fields read here (Xbox PDB names, checked against the PC code): the embedded current package
 //! (+4; its start hour the float at +0x10 of it), `iDateLastProcessed` (+0x24), `m_uFlags` (the
@@ -45,9 +47,9 @@ use super::base_process::{
     use_save_game_blocks,
 };
 use super::middle_low_process::{
-    bad_header, calendar_hour, check_block_end, current_package, loaded, package_kind, procedure,
-    procedure_index_running, process_flag, report_part, set_procedure_index_running,
-    set_process_flag, truncate, value_has_flag,
+    bad_header, calendar_day, calendar_hour, check_block_end, current_package, loaded,
+    package_kind, procedure, procedure_index_running, process_flag, report_part,
+    set_procedure_index_running, set_process_flag, truncate, value_has_flag,
 };
 use super::{actor_package, base_process, FAMILY};
 use crate::native::to_float;
@@ -1036,7 +1038,6 @@ const COMBAT_UPDATE_PACKAGE_DATA: u32 = 0x0098_0ae0;
 const DELETE_EMPTY_DESTRUCTOR: u32 = 0x007b_3fa0;
 const LIST_REMOVE_ITEM: u32 = 0x0090_5330;
 const LIST_CLEAR: u32 = 0x0047_0470;
-const PATROL_TRAVEL_STEP: u32 = 0x0091_25b0;
 const EXTRA_PATROL_WAIT: u32 = 0x0041_fe90;
 const POINT_SUBTRACT: u32 = 0x0045_78c0;
 const PLAYER_IS_SLEEPING_OR_RESTING: u32 = 0x0094_df60;
@@ -1421,12 +1422,10 @@ pub fn process_patrol(e: &mut Engine, this: Ptr, actor: Ptr) {
                     0.0
                 }
             }
-            1 => to_float(
-                e.call(
-                    PATROL_TRAVEL_STEP,
-                    &args![process, actor_word, data, time.to_bits()],
-                )
-                .f64(),
+            1 => typed_call!(
+                FAMILY,
+                0x0091_25b0,
+                patrol_travel_step(e, this, actor, data_ptr, time)
             ),
             2 => typed_call!(
                 FAMILY,
@@ -1817,6 +1816,11 @@ fn clear_locations_if(e: &mut Engine, process: u32, matches: impl Fn(&Engine, u3
             e.call(LIST_REMOVE_HEAD, &args![node]);
         }
     }
+}
+
+/// Whether the list at `list` is empty (`008256d0` in place: its words at +4 and +0 both 0).
+fn list_empty(e: &Engine, list: u32) -> bool {
+    e.mem.u32(list.wrapping_add(4)) == 0 && e.mem.u32(list) == 0
 }
 
 /// Every record on the list at `list` taken off (`00905330` with a stack word holding the head's)
@@ -3875,35 +3879,7 @@ pub(super) fn follow_slot(e: &mut Engine, process: u32, actor: u32, words: [u32;
 /// The process's slot 0x33c with `first`, `second`, nine zeros, 1 and 0 ([`enter_combat`] on the
 /// low processes: the first's slot 0x424).
 fn enter_combat_slot(e: &mut Engine, process: u32, first: u32, second: u32) {
-    if slot_target(e, process, 0x33c) == ENTER_COMBAT_BODY {
-        typed_call!(
-            FAMILY,
-            0x0090_dc10,
-            enter_combat(
-                e,
-                Ptr::new(process),
-                first,
-                second,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                1,
-                0
-            )
-        );
-    } else {
-        e.vcall(
-            process,
-            0x33c,
-            &args![first, second, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 1u32, 0u32],
-        );
-    }
+    enter_combat_words(e, process, [first, second, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
 }
 
 /// A process's slot 0x28 (`ComputeLastTimeProcessed`, the dispatch family's `00907650`, on every
@@ -4319,7 +4295,6 @@ pub fn create_follow_for_escort(e: &mut Engine, this: Ptr, actor: u32, escort: u
 /// (`00672930`) and 3600.0 (`float`), the time `ProcessActivateOneHour` gets.
 const TYPE_LIGHT: u32 = 0x0118_3938;
 const LIGHT_FLAGS: u32 = 0xa8;
-const PACKAGE_INITIAL_TARGET_COUNT: u32 = 0x0067_2930;
 const ONE_HOUR_SECONDS: u32 = 0x0108_4838;
 /// A package's flag 4 (`0067efd0`, `IsMissable`) and its member at +0x38 (`0041d8a0`), a list node.
 const PACKAGE_MISSABLE: u32 = 4;
@@ -4409,7 +4384,7 @@ pub fn process_acquire(e: &mut Engine, this: Ptr, actor: Ptr) {
     let package = current_package(e, process);
     let count = if package_target(e, package) != 0 {
         let package = current_package(e, process);
-        e.call(PACKAGE_INITIAL_TARGET_COUNT, &args![package]).u32()
+        initial_target_count(e, package)
     } else {
         1
     };
@@ -4432,13 +4407,13 @@ pub fn process_acquire(e: &mut Engine, this: Ptr, actor: Ptr) {
         }
         let package = current_package(e, process);
         if procedure(e, package) == 2 {
-            e.vcall(process, 0x7b4, &args![actor]);
+            escort_slot(e, process, actor);
         }
     } else if process_level(e, actor) < 2 {
         let hour = x87_quiet_bits(e.mem.u32(ONE_HOUR_SECONDS));
         e.vcall(process, 0x74, &args![actor, hour]);
     } else {
-        e.vcall(process, 0x7c8, &args![actor, 1u32]);
+        activate_slot(e, process, actor, 1);
     }
 }
 
@@ -4589,7 +4564,7 @@ pub fn process_guard(e: &mut Engine, this: Ptr, actor: Ptr) {
     if (e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool() && !near)
         || e.call(ACTOR_MOVER_TEST, &args![actor]).bool()
     {
-        e.vcall(process, 0x7f8, &args![actor, data]);
+        guard_travel_slot(e, process, actor, data);
     }
 }
 
@@ -4813,4 +4788,1589 @@ pub fn evaluate_order_acquire_list(e: &mut Engine, this: Ptr, actor: u32) {
         node = e.mem.u32(node.wrapping_add(4));
     }
     e.call(LIST_CLEAR, &args![process.wrapping_add(TEMP_OBJECT_LIST)]);
+}
+
+// ---- Part 6: the followers' update, the package's location as a reference, the patrol's travel
+// step, the guard's travel, the escort, the activate procedure, the acquire callback and the
+// missed packages ----
+
+/// The new list's allocation (`00401000`, `cdecl`, one word: the size) and constructor
+/// (`0096a2d0`), and the list's deleting destructor (`004702f0`, one stack word: 1).
+const ALLOCATE: u32 = 0x0040_1000;
+const LIST_CONSTRUCT: u32 = 0x0096_a2d0;
+const LIST_DELETE: u32 = 0x0047_02f0;
+/// `Actor::GetPackageSetAsPcurrent` (`00881510`) and `TESObjectREFR::RunScript` (`00565870`).
+const ACTOR_PACKAGE_SET_AS_CURRENT: u32 = 0x0088_1510;
+const REFERENCE_RUN_SCRIPT: u32 = 0x0056_5870;
+/// The follower list's word in the followers extra (+0xc).
+const FOLLOWER_LIST: u32 = 0xc;
+/// The actor's linked reference (`00569b80`: `ExtraDataList::GetLinkedRef` of its extra list).
+const ACTOR_LINKED_REFERENCE: u32 = 0x0056_9b80;
+/// `TESDataHandler::EnumReferencesCloseToPoint` (`0046f280`, `thiscall` on the data handler, seven
+/// stack words), the data handler, the acquire radius setting (`011cdebc`: its value at +4, read
+/// through `00403e20`) and [`location_callback`]'s address.
+const ENUM_REFERENCES_CLOSE_TO_POINT: u32 = 0x0046_f280;
+const DATA_HANDLER: u32 = 0x011c_3f2c;
+const ACQUIRE_RADIUS_SETTING: u32 = 0x011c_debc;
+const LOCATION_CALLBACK: u32 = 0x0090_e660;
+/// The patrol's walk limit (`float` 64.0), the actor's speed (`008a0b10`, in ST0), the pathing
+/// location's constructor from a reference (`006dcd70`) and destructor (`004ff7e0`) on 0x28 bytes,
+/// the door path length (`006d4eb0`, `cdecl`, five words, in ST0) with its limit (`float` 4096.0)
+/// and the actor's move to a reference (`008ad910`, three stack words).
+const PATROL_WALK_DISTANCE: u32 = 0x0101_e6ec;
+const ACTOR_CURRENT_SPEED: u32 = 0x008a_0b10;
+const PATHING_LOCATION_CONSTRUCT: u32 = 0x006d_cd70;
+const PATHING_LOCATION_DESTRUCT: u32 = 0x004f_f7e0;
+const PATHING_LOCATION_SIZE: u32 = 0x28;
+const TELEPORT_DOOR_PATH_LENGTH: u32 = 0x006d_4eb0;
+const DOOR_PATH_LIMIT: u32 = 0x0101_7a3c;
+const ACTOR_MOVE_TO: u32 = 0x008a_d910;
+/// `BaseProcess::CalculateMoveMode`, the low processes' slot 0x34c: it answers 0x101.
+const CALCULATE_MOVE_MODE_BODY: u32 = 0x008d_0540;
+const WALK_MODE: u32 = 0x101;
+/// The guard's radius factor (`double` 0.5) and its least radius (`float` 15.0).
+const GUARD_RADIUS_FACTOR: u32 = 0x0101_1588;
+const GUARD_RADIUS_MINIMUM: u32 = 0x0101_e580;
+/// The escorted item (`008a2d40`), the actor's test of a numeric id (`00575450`, one stack word;
+/// its `AL`), `TESObjectREFR::GetInventoryItem` (`00576260`, two stack words), the hand-over to a
+/// container (`00892e90`, five stack words) and `Pathing::ComputeLowPathDistance` (`006d6200`,
+/// `cdecl`: from, to and the address of the `float` distance).
+const ACTOR_ESCORT_ITEM: u32 = 0x008a_2d40;
+const ACTOR_KNOWS_ID: u32 = 0x0057_5450;
+const REFERENCE_INVENTORY_ITEM: u32 = 0x0057_6260;
+const ACTOR_GIVE_ITEM: u32 = 0x0089_2e90;
+const COMPUTE_LOW_PATH_DISTANCE: u32 = 0x006d_6200;
+/// The furniture marker forms (globals): the angled one is [`ANGLED_FORM`].
+const ACTIVATE_DONE_FORM: u32 = 0x011c_a244;
+/// The wait the activate package's slot 0x13c gets (`float` 300.0) and `TESObjectREFR::Activate`
+/// (`00573170`, five stack words).
+const ACTIVATE_WAIT: u32 = 0x0101_3dc0;
+const REFERENCE_ACTIVATE: u32 = 0x0057_3170;
+/// The furniture form type.
+const FURNITURE_FORM_TYPE: u8 = 0x27;
+/// `pFactiontoAcquire` (+0x90), the acquire record's count (+0xc) and extra list (+0x14).
+const FACTION_TO_ACQUIRE: u32 = 0x90;
+const ACQUIRE_COUNT: u32 = 0xc;
+const ACQUIRE_EXTRA: u32 = 0x14;
+/// `Actor::IsInFaction` (`008b8e90`, one stack word), the book's test (`0073b460`), the
+/// reference's value (`00568ad0`, in ST0), `InventoryChanges::GetInventoryItem` (`004d0650`, two
+/// stack words), `TESObjectREFR::GetSpace` (`00575ca0`), `InventoryChanges::GetInventoryChanges`
+/// (`004bf220`, `cdecl`) and `GetObjectCount` (`004c8f30`, one stack word).
+const ACTOR_IS_IN_FACTION: u32 = 0x008b_8e90;
+const BOOK_TEST: u32 = 0x0073_b460;
+const REFERENCE_VALUE: u32 = 0x0056_8ad0;
+const CHANGES_INVENTORY_ITEM: u32 = 0x004d_0650;
+const REFERENCE_SPACE: u32 = 0x0057_5ca0;
+const INVENTORY_CHANGES: u32 = 0x004b_f220;
+const CHANGES_OBJECT_COUNT: u32 = 0x004c_8f30;
+/// The book and light form types and the type whose references may be worth nothing.
+const BOOK_FORM_TYPE: u8 = 0x19;
+const LIGHT_FORM_TYPE: u8 = 0x1e;
+const VALUED_FORM_TYPE: u8 = 0x28;
+/// `Actor::GetMissedPacks` (`00881470`, two stack words), `TESPackage::GetConditions`
+/// (`0087eaa0`), `TESCondition::IsTrue` (`00680c30`, two stack words; its `AL`), the actor's doors
+/// step (`008a6a40`), `TESObjectREFR::SetLocationOnReference` (`00575830`) and `SetAngleOnReference`
+/// (`00575770`, one `float`).
+const ACTOR_MISSED_PACKS: u32 = 0x0088_1470;
+const PACKAGE_CONDITIONS: u32 = 0x0087_eaa0;
+const CONDITION_IS_TRUE: u32 = 0x0068_0c30;
+const ACTOR_UNLOCK_LOCK_DOORS: u32 = 0x008a_6a40;
+const REFERENCE_SET_LOCATION: u32 = 0x0057_5830;
+const REFERENCE_SET_ANGLE: u32 = 0x0057_5770;
+/// The door search radius and `FLT_MAX` as a `float` (the angle a placed actor gets), the door
+/// callbacks ([`lock_doors_callback`], [`unlock_doors_callback`]) and the calendar.
+const DOOR_SEARCH_RADIUS: u32 = 0x0103_0020;
+const FLOAT_MAX_32: u32 = 0x0101_6970;
+const LOCK_DOORS_CALLBACK: u32 = 0x0090_d480;
+const UNLOCK_DOORS_CALLBACK: u32 = 0x0090_d570;
+const CALENDAR: u32 = 0x011d_e7b8;
+/// The low processes' bodies of the slots 0x7b4 (`ProcessEscort`), 0x7c8 (`ProcessActivate`),
+/// 0x7f4 (`ProcessGuard`) and 0x7f8 (`ProcessGuardStartTravelToLocation`).
+const ESCORT_BODY: u32 = 0x0090_9430;
+const ACTIVATE_BODY: u32 = 0x0090_d620;
+const GUARD_BODY: u32 = 0x0091_2b00;
+const GUARD_TRAVEL_BODY: u32 = 0x0091_2db0;
+
+/// A package location's kind (`PackageLocation::GetLocType`, `00678ca0`: its signed byte at +0).
+#[inline]
+fn location_kind(e: &Engine, location: u32) -> i32 {
+    i32::from(e.mem.i8(location))
+}
+
+/// A reference's form flags (its word at +8): 0x20 (`00440d80`), 0x800 (`00440da0`).
+#[inline]
+fn form_flags(e: &Engine, reference: u32) -> u32 {
+    e.mem.u32(reference.wrapping_add(8))
+}
+
+/// The reference's parent cell (`008d6f30`: its word at +0x40).
+#[inline]
+fn parent_cell(e: &Engine, reference: u32) -> u32 {
+    e.mem.u32(reference.wrapping_add(PARENT_CELL))
+}
+
+/// A new 8-byte list (`00401000`, `0096a2d0`), 0 when the allocation fails.
+fn new_list(e: &mut Engine) -> u32 {
+    let block = e.call(ALLOCATE, &args![8u32]).u32();
+    if block != 0 {
+        e.call(LIST_CONSTRUCT, &args![block]).u32()
+    } else {
+        0
+    }
+}
+
+/// Empties a list (`00470470`, even a null one) and deletes it when set.
+fn delete_list(e: &mut Engine, list: u32) {
+    e.call(LIST_CLEAR, &args![list]);
+    if list != 0 {
+        e.call(LIST_DELETE, &args![list, 1u32]);
+    }
+}
+
+/// The package that counts for an actor: its current one (`Actor::GetPackageSetAsPcurrent`), or
+/// its extra package (`ExtraDataList::GetPackageExtra`) when it has one and the current one is
+/// missing or an interrupt package.
+fn counted_package(e: &mut Engine, actor: u32) -> u32 {
+    let package = e.call(ACTOR_PACKAGE_SET_AS_CURRENT, &args![actor]).u32();
+    let extra = typed_call!(
+        extra_data::FAMILY,
+        0x0041_cb10,
+        extra_data::packages::package(e, actor.wrapping_add(EXTRA_LIST))
+    );
+    if (package == 0 || is_interrupt_package(e, package)) && extra != 0 {
+        extra
+    } else {
+        package
+    }
+}
+
+// Typed from 00911b00
+/// `LowProcess::UpdateFollowers` (engine map; the process unread): with the actor's followers
+/// extra, its follower list is copied; a follower of a dead actor (its slot 0x22c, or its form
+/// flag 0x800) drops; any other follower but the player keeps following while the actor's counted
+/// package has procedure 2 or the follower's has 1 or 7, and then, unless its process level is 0,
+/// gets its slot 0x25c with the time and runs its script; the others drop. The dropped followers
+/// are removed from the extra, both lists emptied and deleted, and an emptied follower list
+/// removes the extra.
+pub fn update_followers(e: &mut Engine, _this: Ptr, actor: u32, time: f32) {
+    let dead = e.vcall(actor, 0x22c, &args![0u32]).bool() || form_flags(e, actor) & 0x800 != 0;
+    let extra = actor.wrapping_add(EXTRA_LIST);
+    let followers = typed_call!(
+        dispatch::FAMILY,
+        0x0042_2700,
+        dispatch::extra::followers(e, Ptr::new(extra))
+    )
+    .addr();
+    if followers == 0 {
+        return;
+    }
+    let removed = new_list(e);
+    let copy = new_list(e);
+    let mut node = e.mem.u32(followers.wrapping_add(FOLLOWER_LIST));
+    while node != 0 && e.mem.u32(node) != 0 {
+        e.call(OBJECT_LIST_ADD, &args![copy, node]);
+        node = e.mem.u32(node.wrapping_add(4));
+    }
+    let player = e.mem.u32(PLAYER);
+    e.with_stack(4, |e, local| {
+        let mut node = copy;
+        while node != 0 && e.mem.u32(node) != 0 {
+            let follower = e.mem.u32(node);
+            e.mem.set_u32(local.addr(), follower);
+            // Both packages are asked before either is tested, as the exe asks them.
+            let follows = !dead && follower != 0 && follower != player && {
+                let guarded = counted_package(e, actor);
+                let followed = counted_package(e, follower);
+                (guarded != 0 && procedure(e, guarded) == 2)
+                    || (followed != 0 && matches!(procedure(e, followed), 1 | 7))
+            };
+            if follows {
+                if process_level(e, follower) != 0 {
+                    e.vcall(follower, 0x25c, &args![x87_quiet_bits(time.to_bits())]);
+                    e.call(REFERENCE_RUN_SCRIPT, &args![follower]);
+                }
+            } else if dead || (follower != 0 && follower != player) {
+                e.call(LIST_ADD_ITEM, &args![removed, local]);
+            }
+            node = e.mem.u32(node.wrapping_add(4));
+        }
+    });
+    let mut node = removed;
+    while node != 0 && e.mem.u32(node) != 0 {
+        let follower = e.mem.u32(node);
+        typed_call!(
+            extra_data::FAMILY,
+            0x0042_2690,
+            extra_data::followers::remove_follower(e, extra, follower)
+        );
+        node = e.mem.u32(node.wrapping_add(4));
+    }
+    delete_list(e, copy);
+    delete_list(e, removed);
+    let list = e.mem.u32(followers.wrapping_add(FOLLOWER_LIST));
+    if list_empty(e, list) {
+        typed_call!(
+            extra_data::FAMILY,
+            0x0042_2720,
+            extra_data::followers::remove_follower_extra(e, extra)
+        );
+    }
+}
+
+// Typed from 009089c0
+/// `LowProcess::GetLocationForPackage` (Xbox PDB): the package's location (its second one with
+/// `second`, `00672dd0`) as a reference: a location of kind 0 gives its reference; kind 6 the
+/// actor's linked reference at once. For a generic location (kind above 3) of a missable package:
+/// with `GenericLocationsList` empty the candidates are collected first (the object or object type
+/// the search looks for, kinds 4 and 5, into +0x88 and +0x8c; the references around the actor
+/// through [`location_callback`], with the package's acquire radius, else the setting's; then
+/// +0x88 and +0x8c cleared and every `TempLocList` item moved over), and the first one is taken off
+/// the list and answered.
+pub fn get_location_for_package(
+    e: &mut Engine,
+    this: Ptr,
+    actor: Ptr,
+    package: Ptr,
+    second: u8,
+) -> u32 {
+    let process = this.addr();
+    let (actor, package) = (actor.addr(), package.addr());
+    let location = if second != 0 {
+        typed_call!(
+            forms::FAMILY,
+            0x0067_2dd0,
+            forms::package::second_location(e, package)
+        )
+    } else {
+        package_location(e, package)
+    };
+    if location == 0 {
+        return 0;
+    }
+    let kind = location_kind(e, location);
+    let mut found = if kind == 0 {
+        e.mem.u32(location.wrapping_add(8))
+    } else {
+        0
+    };
+    if kind == 6 {
+        return e.call(ACTOR_LINKED_REFERENCE, &args![actor]).u32();
+    }
+    // Generic (kind above 3) and the package's flag 4 (`0067efd0`).
+    if kind <= 3 || e.mem.u32(package.wrapping_add(PACKAGE_FLAGS)) & PACKAGE_MISSABLE == 0 {
+        return found;
+    }
+    let locations = process.wrapping_add(GENERIC_LOCATIONS_LIST);
+    if list_empty(e, locations) {
+        let cell = parent_cell(e, actor);
+        let position = e.vcall(actor, 0x1f4, &[]).u32();
+        e.with_stack(16, |e, frame| {
+            let point = frame.addr();
+            let radius = point + 12;
+            for offset in [0u32, 4, 8] {
+                let word = e.mem.u32(position.wrapping_add(offset));
+                e.mem.set_u32(point + offset, word);
+            }
+            // Kind 4 looks for its object (`0067f430`), kind 5 for its object type (`0067f480`): the
+            // location's word at +8.
+            let word = e.mem.u32(location.wrapping_add(8));
+            let search = match kind {
+                4 => Some((word, 0)),
+                5 => Some((0, word)),
+                _ => None,
+            };
+            if let Some((object, form_type)) = search {
+                e.mem
+                    .set_u32(process.wrapping_add(OBJECT_FOR_LOCATION), object);
+                e.mem
+                    .set_u32(process.wrapping_add(FORM_TYPE_FOR_LOCATION), form_type);
+            }
+            e.mem.set_u32(radius, 0);
+            if package == 0
+                || !typed_call!(
+                    forms::FAMILY,
+                    0x0067_28a0,
+                    forms::package::acquire_radius(e, package, actor, radius)
+                )
+            {
+                let setting = x87_quiet_bits(e.mem.u32(ACQUIRE_RADIUS_SETTING.wrapping_add(4)));
+                e.mem.set_u32(radius, setting);
+            }
+            let radius = x87_quiet_bits(e.mem.u32(radius));
+            let position = e.vcall(actor, 0x1f4, &[]).u32();
+            let handler = e.mem.u32(DATA_HANDLER);
+            e.call(
+                ENUM_REFERENCES_CLOSE_TO_POINT,
+                &args![
+                    handler,
+                    cell,
+                    point,
+                    radius,
+                    position,
+                    radius,
+                    LOCATION_CALLBACK,
+                    actor
+                ],
+            );
+        });
+        e.mem
+            .set_u32(process.wrapping_add(FORM_TYPE_FOR_LOCATION), 0);
+        e.mem.set_u32(process.wrapping_add(OBJECT_FOR_LOCATION), 0);
+        let temp = process.wrapping_add(TEMP_LOCATIONS_LIST);
+        while e.mem.u32(temp) != 0 {
+            e.call(LIST_ADD_ITEM, &args![locations, temp]);
+            e.call(LIST_REMOVE_HEAD, &args![temp]);
+        }
+    }
+    if !list_empty(e, locations) {
+        found = e.mem.u32(locations);
+        e.call(LIST_REMOVE_HEAD, &args![locations]);
+    }
+    found
+}
+
+// Typed from 009125b0
+/// The patrol's travel step (no map name; `ProcessPatrol`'s state 1): answers the time left of
+/// `time`. Without a current patrol reference the running index becomes -1 and it answers 0.0. The
+/// travel is "fast" when the player sleeps or rests or neither cell is loaded. When not fast and
+/// the actor's mover test (`008b3b90`) holds, the travel restarts
+/// ([`process_patrol_start_travel_to_next_ref`]) and all the time is left. Otherwise the move mode
+/// is 0x101, or for a package of flag 0x2000 with the reference farther than 64.0 the process's
+/// slot 0x34c (0x101 in place when it holds `008d0540`) with the distance, the package's radius
+/// and twice it; the slot 0x350 sets the animation. When fast the actor arrives: the distance
+/// (straight when both share a cell, else the door path's length up to 4096.0) over the speed (at
+/// least 1.0) is taken off the time, the actor is placed at the reference and
+/// [`process_patrol_start_at_ref_behavior`] runs; when not fast that runs once pathing is complete,
+/// else no time is left.
+pub fn patrol_travel_step(e: &mut Engine, this: Ptr, actor: Ptr, data: Ptr, time: f32) -> f32 {
+    let process = this.addr();
+    let actor_word = actor.addr();
+    let reference = e.call(PATROL_CURRENT_REFERENCE, &args![data.addr()]).u32();
+    if reference == 0 {
+        set_procedure_index_running(e, process, u32::MAX);
+        return 0.0;
+    }
+    let mut left = x87_quiet_bits(time.to_bits());
+    let actor_cell = parent_cell(e, actor_word);
+    let reference_cell = parent_cell(e, reference);
+    let same_cell = actor_cell != 0 && actor_cell == reference_cell;
+    let player = e.mem.u32(PLAYER);
+    let fast = e.call(PLAYER_IS_SLEEPING_OR_RESTING, &args![player]).bool()
+        || cells_unloaded(e, actor_cell, reference_cell);
+    if !fast && e.call(ACTOR_MOVER_TEST, &args![actor_word]).bool() {
+        typed_call!(
+            FAMILY,
+            0x0091_2340,
+            process_patrol_start_travel_to_next_ref(e, this, actor, data)
+        );
+        return f32::from_bits(left);
+    }
+    let package = running_package(e, process);
+    let mut mode = WALK_MODE;
+    let mut farther = false;
+    if typed_call!(
+        forms::FAMILY,
+        0x0067_a480,
+        forms::package_flags::pack_flag_2000(e, package)
+    ) {
+        let distance = e
+            .call(
+                REFERENCE_DISTANCE,
+                &args![actor_word, reference, 0u32, 0u32],
+            )
+            .st0;
+        let distance = x87_store32(distance);
+        let limit = x87_quiet_bits(e.mem.u32(PATROL_WALK_DISTANCE));
+        farther = x87_load32(limit) < x87_load32(distance);
+        if farther {
+            let radius = e
+                .call(
+                    PACKAGE_RADIUS_TO_LOCATION,
+                    &args![package, actor_word, 0u32],
+                )
+                .st0;
+            let radius = x87_store32(radius);
+            let twice = x87_store32(x87_add(x87_load32(radius), x87_load32(radius)));
+            mode = if slot_target(e, process, 0x34c) == CALCULATE_MOVE_MODE_BODY {
+                WALK_MODE
+            } else {
+                e.vcall(
+                    process,
+                    0x34c,
+                    &args![
+                        actor_word,
+                        distance,
+                        x87_quiet_bits(radius),
+                        x87_quiet_bits(twice),
+                        0u32,
+                        0u32
+                    ],
+                )
+                .u32()
+            };
+        }
+    }
+    e.vcall(process, 0x350, &args![actor_word, mode, u32::from(farther)]);
+    if fast {
+        let speed = x87_store32(e.call(ACTOR_CURRENT_SPEED, &args![actor_word]).st0);
+        let speed = typed_call!(
+            draw_f::FAMILY,
+            0x0040_4010,
+            draw_f::helpers::float_max(e, f32::from_bits(speed), 1.0)
+        );
+        let speed = x87_store32(f64::from(speed));
+        let distance = if same_cell {
+            let position = e.vcall(reference, 0x1f4, &[]).u32();
+            e.with_stack(12, |e, point| {
+                for offset in [0u32, 4, 8] {
+                    let word = e.mem.u32(position.wrapping_add(offset));
+                    e.mem.set_u32(point.addr() + offset, word);
+                }
+                let other = e.vcall(actor_word, 0x1f4, &[]).u32();
+                e.call(POINT_SUBTRACT, &args![point, other]);
+                let length = typed_call!(
+                    pathing::FAMILY,
+                    0x0045_7990,
+                    pathing::point::length(e, Ptr::new(point.addr()))
+                );
+                x87_store32(f64::from(length))
+            })
+        } else {
+            e.with_stack(2 * PATHING_LOCATION_SIZE, |e, locations| {
+                let from = locations.addr();
+                let to = from + PATHING_LOCATION_SIZE;
+                e.call(PATHING_LOCATION_CONSTRUCT, &args![from, actor_word]);
+                e.call(PATHING_LOCATION_CONSTRUCT, &args![to, reference]);
+                let limit = x87_quiet_bits(e.mem.u32(DOOR_PATH_LIMIT));
+                let length = e
+                    .call(
+                        TELEPORT_DOOR_PATH_LENGTH,
+                        &args![from, to, limit, 0u32, 0u32],
+                    )
+                    .st0;
+                let length = x87_store32(length);
+                e.call(PATHING_LOCATION_DESTRUCT, &args![to]);
+                e.call(PATHING_LOCATION_DESTRUCT, &args![from]);
+                length
+            })
+        };
+        let spent = x87_div(x87_load32(distance), x87_m32(speed));
+        left = x87_store32(x87_sub(x87_m32(left), spent));
+        e.call(ACTOR_MOVE_TO, &args![actor_word, reference, 1u32, 0u32]);
+        typed_call!(
+            FAMILY,
+            0x0091_2960,
+            process_patrol_start_at_ref_behavior(e, this, actor_word, data)
+        );
+    } else if e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor_word]).bool() {
+        typed_call!(
+            FAMILY,
+            0x0091_2960,
+            process_patrol_start_at_ref_behavior(e, this, actor_word, data)
+        );
+    } else {
+        left = 0;
+    }
+    f32::from_bits(left)
+}
+
+/// Builds a pathing request to the goal (made after the request's constructor) with the radius,
+/// its byte at +0x9c cleared (`008e7c50(0)`, in place), sets it as the actor's goal, marks the data
+/// (`006ecd40(1)`) and destroys the request.
+fn start_guard_travel(
+    e: &mut Engine,
+    actor: u32,
+    data: u32,
+    goal: impl FnOnce(&mut Engine) -> (u32, u32, u32),
+    radius: u32,
+) {
+    e.with_stack(PATHING_REQUEST_SIZE, |e, request| {
+        let request = request.addr();
+        e.call(PATHING_REQUEST_CONSTRUCT, &args![request]);
+        let (point, first, second) = goal(e);
+        e.call(
+            ACTOR_BUILD_REQUEST,
+            &args![
+                actor,
+                request,
+                point,
+                first,
+                second,
+                x87_quiet_bits(radius),
+                0u32
+            ],
+        );
+        e.mem.set_u8(request.wrapping_add(0x9c), 0);
+        e.call(ACTOR_SET_PATHFINDING_GOAL, &args![actor, request]);
+        e.call(SET_INSTANCE_DATA, &args![data, 1u32]);
+        e.call(PATHING_REQUEST_DESTRUCT, &args![request]);
+    });
+}
+
+// Typed from 00912db0
+/// `LowProcess::ProcessGuardStartTravelToLocation` (engine map): from the running package's
+/// location by its kind: 3 takes a point (the actor's slot 0x29c) and the actor's slots 0x298 and
+/// 0x294; 2 the actor as the reference; 6 the actor's linked reference; others the location's
+/// reference, else (without a run-once package, slot 0x20c) `pGenericLocation`. Without a
+/// reference (and not kind 3) the target (slot 0x128). The radius is the package's count
+/// (`00676280`) with a location, else the package target's integer, else 30.0; then the larger of
+/// half of it and 15.0. A reference gets a pathing request to its position, cell and world space;
+/// else the point with the two slots' answers when either is set.
+pub fn process_guard_start_travel_to_location(e: &mut Engine, this: Ptr, actor: u32, data: u32) {
+    let process = this.addr();
+    e.with_stack(0x18, |e, locals| {
+        let point = locals.addr();
+        let temp = point + 0xc;
+        let mut reference = 0;
+        let (mut first, mut second) = (0, 0);
+        let running = running_package(e, process);
+        let location = package_location(e, running);
+        let target = package_target(e, running);
+        let mut use_target = true;
+        if location != 0 {
+            match location_kind(e, location) {
+                3 => {
+                    let at = e.vcall(actor, 0x29c, &args![temp]).u32();
+                    for offset in [0u32, 4, 8] {
+                        let word = e.mem.u32(at.wrapping_add(offset));
+                        e.mem.set_u32(point + offset, word);
+                    }
+                    first = e.vcall(actor, 0x298, &[]).u32();
+                    second = e.vcall(actor, 0x294, &[]).u32();
+                    use_target = false;
+                }
+                2 => reference = actor,
+                6 => reference = e.call(ACTOR_LINKED_REFERENCE, &args![actor]).u32(),
+                _ => {
+                    reference = location_reference(e, location);
+                    if reference == 0 && zero_slot(e, process, 0x20c) == 0 {
+                        reference = e.mem.u32(process.wrapping_add(GENERIC_LOCATION));
+                    }
+                }
+            }
+        }
+        if reference == 0 && use_target {
+            reference = target_slot(e, process);
+        }
+        let radius = if location != 0 {
+            let count = e.call(PACKAGE_COUNT_FOR, &args![running, actor]).u32();
+            x87_store32(f64::from(count))
+        } else if target != 0 {
+            x87_store32(f64::from(e.mem.i32(target.wrapping_add(8))))
+        } else {
+            x87_quiet_bits(e.mem.u32(DEFAULT_TARGET_RADIUS))
+        };
+        let half = x87_store32(x87_mul(x87_load32(radius), e.mem.f64(GUARD_RADIUS_FACTOR)));
+        let minimum = x87_quiet_bits(e.mem.u32(GUARD_RADIUS_MINIMUM));
+        let radius = typed_call!(
+            draw_f::FAMILY,
+            0x0040_4010,
+            draw_f::helpers::float_max(e, f32::from_bits(half), f32::from_bits(minimum))
+        );
+        let radius = x87_store32(f64::from(radius));
+        if reference != 0 {
+            let goal = move |e: &mut Engine| {
+                let world_space = e.call(REFERENCE_WORLD_SPACE, &args![reference]).u32();
+                let cell = parent_cell(e, reference);
+                let position = e.vcall(reference, 0x1f4, &[]).u32();
+                (position, cell, world_space)
+            };
+            start_guard_travel(e, actor, data, goal, radius);
+        } else if first != 0 || second != 0 {
+            start_guard_travel(e, actor, data, move |_| (point, first, second), radius);
+        }
+    });
+}
+
+/// Whether the target (`pTarget`) is set and is an actor (its slot 0x100).
+fn target_is_actor(e: &mut Engine, process: u32) -> bool {
+    let target = e.mem.u32(process.wrapping_add(TARGET));
+    target != 0 && e.vcall(target, 0x100, &[]).bool()
+}
+
+/// Whether the target is set and is an actor, or the actor knows its numeric id (`00575450`).
+fn target_is_actor_or_known(e: &mut Engine, process: u32, actor: u32) -> bool {
+    if e.mem.u32(process.wrapping_add(TARGET)) == 0 {
+        return false;
+    }
+    if target_is_actor(e, process) {
+        return true;
+    }
+    let target = e.mem.u32(process.wrapping_add(TARGET));
+    let id = e.mem.u32(target.wrapping_add(0xc));
+    e.call(ACTOR_KNOWS_ID, &args![actor, id]).bool()
+}
+
+/// The first word of the item's extra list (its word at +0, `00559450`), `fallback` without one.
+fn item_extra(e: &Engine, item: u32, fallback: u32) -> u32 {
+    match e.mem.u32(item) {
+        0 => fallback,
+        list => e.mem.u32(list),
+    }
+}
+
+/// The two path distances of the escort: from the actor and from the target to the package
+/// location (`GetLocationCoord`, `GetLocationCell`, `GetLocationWorld`), through pathing locations
+/// and `Pathing::ComputeLowPathDistance`.
+fn escort_path_distances(e: &mut Engine, process: u32, actor: u32, running: u32) -> (u32, u32) {
+    let size = 0xc + 3 * PATHING_LOCATION_SIZE + 8;
+    e.with_stack(size, |e, locals| {
+        let point = locals.addr();
+        let from_actor = point + 0xc;
+        let to_location = from_actor + PATHING_LOCATION_SIZE;
+        let from_target = to_location + PATHING_LOCATION_SIZE;
+        let distances = from_target + PATHING_LOCATION_SIZE;
+        let zero = x87_store32(0.0);
+        e.mem.set_u32(distances, zero);
+        e.mem.set_u32(distances + 4, zero);
+        e.call(GET_LOCATION_COORD, &args![running, point, actor]);
+        let cell = e.call(PACKAGE_LOCATION_CELL, &args![running, actor]).u32();
+        let world = e
+            .call(PACKAGE_LOCATION_WORLD_SPACE, &args![running, actor])
+            .u32();
+        e.call(PATHING_LOCATION_CONSTRUCT, &args![from_actor, actor]);
+        typed_call!(
+            pathing::FAMILY,
+            0x006d_cee0,
+            pathing::location::new_at(e, Ptr::new(to_location), point, cell, world)
+        );
+        e.call(
+            COMPUTE_LOW_PATH_DISTANCE,
+            &args![from_actor, to_location, distances],
+        );
+        let target = e.mem.u32(process.wrapping_add(TARGET));
+        e.call(PATHING_LOCATION_CONSTRUCT, &args![from_target, target]);
+        e.call(
+            COMPUTE_LOW_PATH_DISTANCE,
+            &args![from_target, to_location, distances + 4],
+        );
+        e.call(PATHING_LOCATION_DESTRUCT, &args![from_target]);
+        e.call(PATHING_LOCATION_DESTRUCT, &args![to_location]);
+        e.call(PATHING_LOCATION_DESTRUCT, &args![from_actor]);
+        (e.mem.u32(distances), e.mem.u32(distances + 4))
+    })
+}
+
+/// The package's initial target count (`TESPackage::GetInitialTargetCount`).
+fn initial_target_count(e: &mut Engine, package: u32) -> u32 {
+    typed_call!(
+        forms::FAMILY,
+        0x0067_2930,
+        forms::package::initial_target_count(e, package)
+    ) as u32
+}
+
+/// The escort's hand-over of the escorted item when the package's slot 0x13c holds for a target
+/// that is not an actor: to the destination's container (`00892e90`, with the reference pointer's
+/// numeric id), else through the actor's slot 0x3cc (at a furniture marker's position).
+fn escort_give_item(e: &mut Engine, process: u32, actor: u32, running: u32, item: u32) {
+    let mut extra = item_extra(e, item, 0);
+    let mut id = 0;
+    if extra != 0 {
+        let pointer = |e: &mut Engine| {
+            typed_call!(
+                extra_data::FAMILY,
+                0x0041_c8d0,
+                extra_data::cell_data::reference_pointer(e, extra)
+            )
+        };
+        if pointer(e) != 0 {
+            let pointer = pointer(e);
+            id = e.mem.u32(pointer.wrapping_add(0xc));
+        }
+    }
+    let location = package_location(e, running);
+    let mut destination = location_reference(e, location);
+    if destination == 0 {
+        destination = e.mem.u32(process.wrapping_add(GENERIC_LOCATION));
+    }
+    if destination != 0
+        && typed_call!(
+            cell_refs::FAMILY,
+            0x0055_d310,
+            cell_refs::script::has_container(e, destination)
+        ) != 0
+    {
+        let count = initial_target_count(e, running);
+        let object = e.mem.u32(item.wrapping_add(8));
+        e.call(
+            ACTOR_GIVE_ITEM,
+            &args![actor, object, extra, destination, count, id],
+        );
+        return;
+    }
+    extra = item_extra(e, item, extra);
+    let mut position = 0;
+    let location = package_location(e, running);
+    let target = package_target(e, running);
+    if location != 0 {
+        let mut reference = location_reference(e, location);
+        if reference == 0 {
+            reference = e.mem.u32(process.wrapping_add(GENERIC_LOCATION));
+        }
+        if reference != 0 {
+            let base_form = e.mem.u32(reference.wrapping_add(BASE_FORM));
+            if base_form == e.mem.u32(ACTIVATE_DONE_FORM) || base_form == e.mem.u32(ANGLED_FORM) {
+                position = e.vcall(reference, 0x1f4, &[]).u32();
+            }
+        }
+    }
+    let count = if target_reference(e, target) == 0 {
+        initial_target_count(e, running)
+    } else {
+        1
+    };
+    let object = e.mem.u32(item.wrapping_add(8));
+    e.vcall(actor, 0x3cc, &args![object, extra, count, position, 0u32]);
+}
+
+// Typed from 00909430
+/// `LowProcess::ProcessEscort` (engine map): without a target the package's (slot 0x8c). Without
+/// an escorted item and with no actor or known target (after the package's target again) the
+/// procedure moves on; an acquire object the actor holds gives the item. With the package
+/// target's count, a target neither an actor nor known for which the object test (slot 0x80c)
+/// fails moves the procedure on. Otherwise (after [`get_time_delta`]): when the current package's
+/// slot 0x13c holds for the actor, an actor target moves on once it holds for the target too, any
+/// other target gets the item and moves on; when it fails, the actor walks to the package location
+/// once its pathing is complete, unless an actor target is within the package's radius (as an
+/// integer) and no nearer the location along the path than the actor. The item is deleted at the
+/// end.
+pub fn process_escort(e: &mut Engine, this: Ptr, actor: u32) {
+    let process = this.addr();
+    let running = running_package(e, process);
+    if e.mem.u32(process.wrapping_add(TARGET)) == 0 {
+        set_target_for_package_slot(e, process, actor);
+    }
+    let mut item = e.call(ACTOR_ESCORT_ITEM, &args![actor]).u32();
+    if item == 0 && !target_is_actor_or_known(e, process, actor) {
+        set_target_for_package_slot(e, process, actor);
+        if !target_is_actor_or_known(e, process, actor) {
+            add_to_procedure_index_running_slot(e, process, actor, 1);
+            return;
+        }
+    }
+    if item == 0 {
+        let acquire = e.mem.u32(process.wrapping_add(ACQUIRE_OBJECT));
+        if acquire != 0 && e.mem.u32(acquire) == actor {
+            let object = e.mem.u32(acquire.wrapping_add(4));
+            item = e
+                .call(REFERENCE_INVENTORY_ITEM, &args![actor, object, 0u32])
+                .u32();
+        }
+    }
+    let mut count = 0;
+    let package = current_package(e, process);
+    if package_target(e, package) != 0 {
+        let package = current_package(e, process);
+        count = initial_target_count(e, package);
+    }
+    if !target_is_actor_or_known(e, process, actor)
+        && !check_if_has_object_slot(e, process, actor, count)
+    {
+        add_to_procedure_index_running_slot(e, process, actor, 1);
+        if item != 0 {
+            e.call(ITEM_DELETE, &args![item, 1u32]);
+        }
+        return;
+    }
+    typed_call!(FAMILY, 0x0090_7260, get_time_delta(e, this, actor));
+    let package = current_package(e, process);
+    let minus = minus_one(e);
+    if e.vcall(package, 0x13c, &args![actor, 0u32, minus, 0u32])
+        .bool()
+    {
+        if !target_is_actor(e, process) {
+            if item != 0 {
+                escort_give_item(e, process, actor, running, item);
+            }
+            add_to_procedure_index_running_slot(e, process, actor, 1);
+        } else {
+            let package = current_package(e, process);
+            let minus = minus_one(e);
+            let target = e.mem.u32(process.wrapping_add(TARGET));
+            if e.vcall(package, 0x13c, &args![target, 0u32, minus, 0u32])
+                .bool()
+            {
+                add_to_procedure_index_running_slot(e, process, actor, 1);
+            }
+        }
+    } else {
+        let package = current_package(e, process);
+        let radius = e
+            .call(PACKAGE_RADIUS_TO_TARGET, &args![package, actor, 0u32])
+            .st0;
+        let radius = truncate(e, radius) as i32;
+        let zero = x87_store32(0.0);
+        let (from_actor, from_target) = if target_is_actor(e, process) {
+            escort_path_distances(e, process, actor, running)
+        } else {
+            (zero, zero)
+        };
+        let mut walks = true;
+        if target_is_actor(e, process) {
+            let target = e.mem.u32(process.wrapping_add(TARGET));
+            let distance = e
+                .call(REFERENCE_DISTANCE, &args![actor, target, 0u32, 0u32])
+                .st0;
+            // No nearer than the radius (or a NaN distance): only a target nearer the location along
+            // the path walks.
+            if f64::from(radius) <= distance || distance.is_nan() {
+                walks = x87_load32(from_target) < x87_load32(from_actor);
+            }
+        }
+        if walks && e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool() {
+            e.with_stack(0xc, |e, coord| {
+                let minus = minus_one(e);
+                let package = current_package(e, process);
+                let world = e
+                    .call(PACKAGE_LOCATION_WORLD_SPACE, &args![package, actor])
+                    .u32();
+                let package = current_package(e, process);
+                let cell = e.call(PACKAGE_LOCATION_CELL, &args![package, actor]).u32();
+                let package = current_package(e, process);
+                let point = e
+                    .call(GET_LOCATION_COORD, &args![package, coord, actor])
+                    .u32();
+                e.call(
+                    ACTOR_SET_PATHFINDING_GOAL_TO_LOCATION,
+                    &args![actor, point, cell, world, minus, 0u32],
+                );
+            });
+        }
+    }
+    if item != 0 {
+        e.call(ITEM_DELETE, &args![item, 1u32]);
+    }
+}
+
+/// Whether the reference is the player, who sleeps or rests with the byte at +0x20c clear.
+fn player_resting(e: &mut Engine, reference: u32) -> bool {
+    let player = e.mem.u32(PLAYER);
+    reference == player
+        && e.call(PLAYER_IS_SLEEPING_OR_RESTING, &args![player]).bool()
+        && e.mem.u8(e.mem.u32(PLAYER).wrapping_add(PLAYER_BYTE_20C)) == 0
+}
+
+/// Wakes the player (`005c1a00(0, byte)` in place: the word at +0x654 and the byte at +0x658).
+fn wake_player(e: &mut Engine, byte: u8) {
+    let player = e.mem.u32(PLAYER);
+    e.mem.set_u32(player.wrapping_add(PLAYER_WAKE_WORD), 0);
+    e.mem.set_u8(player.wrapping_add(PLAYER_WAKE_BYTE), byte);
+}
+
+/// Frees the acquire object (`007b3fa0` with 1) and clears it and the target (slot 0x12c).
+fn drop_acquire_object(e: &mut Engine, process: u32) {
+    let object = e.mem.u32(process.wrapping_add(ACQUIRE_OBJECT));
+    if object != 0 {
+        e.call(DELETE_EMPTY_DESTRUCTOR, &args![object, 1u32]);
+    }
+    e.mem.set_u32(process.wrapping_add(ACQUIRE_OBJECT), 0);
+    set_target_slot(e, process, 0);
+}
+
+// Typed from 0090d620
+/// `LowProcess::ProcessActivate` (Xbox PDB; `acquire` set for an acquire step): finds a target
+/// (slot 0x8c) when there is none or it has the form flag 0x20; without one the index moves by 2
+/// (with `acquire`) and it answers false. A package target of kind 0 or 3 clears the items left
+/// to activate. A furniture location reference with the target's base form a furniture marker
+/// answers true. A package of procedure 9 whose slot 0x13c (300.0) fails moves the index by -2.
+/// After [`get_time_delta`], the actor paths to a target farther than the package's radius once
+/// pathing is complete (false when that fails, true when its process level changed). Then the
+/// package's slot 0x144 says whether the activation happens. With `acquire`: the acquire object's
+/// count is taken off the items to activate (unless its reference is alive and its slot 0x218
+/// holds), the step ends when none are left; a non-actor target (or a dead acquire reference) is
+/// activated with the object's amount and count and the object dropped; an actor target makes a
+/// resting player wake (false), enters combat for an object of byte +9 or is activated for byte +8
+/// (the object dropped); without an object a target other than the player moves the index by 2
+/// and answers false. Without `acquire`: a non-actor target is activated, a package of procedure 2
+/// moves the actor's process's index by 2, a resting player wakes (false), else true. A finished
+/// activation runs the target's script and answers true.
+pub fn process_activate(e: &mut Engine, this: Ptr, actor: Ptr, acquire: u8) -> bool {
+    let process = this.addr();
+    let actor = actor.addr();
+    let target = |e: &Engine| e.mem.u32(process.wrapping_add(TARGET));
+    let package = current_package(e, process);
+    if target(e) == 0 || form_flags(e, target(e)) & 0x20 != 0 {
+        set_target_for_package_slot(e, process, actor);
+    }
+    if target(e) == 0 {
+        if acquire != 0 {
+            add_to_procedure_index_running_slot(e, process, actor, 2);
+        }
+        return false;
+    }
+    if matches!(target_kind(e, package_target(e, package)), 0 | 3) {
+        e.mem
+            .set_u32(process.wrapping_add(NUMBER_ITEMS_ACTIVATE), 0);
+    }
+    let location = e
+        .call(PACKAGE_LOCATION_REFERENCE, &args![package, actor])
+        .u32();
+    if location != 0 {
+        // `00568680`: a base form of the furniture type.
+        let base_form = e.mem.u32(location.wrapping_add(BASE_FORM));
+        if base_form != 0 && e.mem.u8(base_form.wrapping_add(4)) == FURNITURE_FORM_TYPE {
+            let target_form = e.mem.u32(target(e).wrapping_add(BASE_FORM));
+            if target_form == e.mem.u32(ANGLED_FORM) || target_form == e.mem.u32(ACTIVATE_DONE_FORM)
+            {
+                return true;
+            }
+        }
+    }
+    if procedure(e, package) == 9 {
+        let wait = x87_quiet_bits(e.mem.u32(ACTIVATE_WAIT));
+        if !e
+            .vcall(package, 0x13c, &args![actor, 0u32, wait, 0u32])
+            .bool()
+        {
+            add_to_procedure_index_running_slot(e, process, actor, 0xffff_fffe);
+        }
+    }
+    typed_call!(FAMILY, 0x0090_7260, get_time_delta(e, this, actor));
+    let current = current_package(e, process);
+    let radius = e
+        .call(PACKAGE_RADIUS_TO_TARGET, &args![current, actor, 0u32])
+        .st0;
+    let radius = x87_store32(radius);
+    if target(e) != 0 {
+        let distance = e
+            .call(REFERENCE_DISTANCE, &args![actor, target(e), 0u32, 0u32])
+            .st0;
+        if x87_load32(radius) < distance && e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool()
+        {
+            let level = process_level(e, actor);
+            let minus = minus_one(e);
+            if !e
+                .call(
+                    ACTOR_SET_PATHFINDING_GOAL_TO_REFERENCE,
+                    &args![actor, target(e), minus, 0u32],
+                )
+                .bool()
+            {
+                return false;
+            }
+            if process_level(e, actor) != level {
+                return true;
+            }
+        }
+    }
+    if !e.vcall(package, 0x144, &args![actor, 0u32]).bool() {
+        return false;
+    }
+    let activated = target(e);
+    if acquire != 0 {
+        let (mut amount, mut count) = (0, 1);
+        let mut dead_object = false;
+        let object = e.mem.u32(process.wrapping_add(ACQUIRE_OBJECT));
+        if object != 0 {
+            let reference = e.mem.u32(object);
+            let kept = reference != 0
+                && !e.vcall(reference, 0x22c, &args![0u32]).bool()
+                && e.vcall(reference, 0x218, &[]).bool();
+            if !kept {
+                amount = e.mem.u32(object.wrapping_add(4));
+                count = e.mem.u32(object.wrapping_add(ACQUIRE_COUNT));
+                let left_at = process.wrapping_add(NUMBER_ITEMS_ACTIVATE);
+                let left = e.mem.u32(left_at);
+                e.mem.set_u32(left_at, left.wrapping_sub(count));
+                dead_object = e.vcall(reference, 0x22c, &args![0u32]).bool();
+            }
+            if e.mem.i32(process.wrapping_add(NUMBER_ITEMS_ACTIVATE)) <= 0 {
+                add_to_procedure_index_running_slot(e, process, actor, 2);
+            }
+        }
+        if !e.vcall(target(e), 0x100, &[]).bool() || dead_object {
+            e.call(
+                REFERENCE_ACTIVATE,
+                &args![target(e), actor, 1u32, amount, count],
+            );
+            drop_acquire_object(e, process);
+            add_to_procedure_index_running_slot(e, process, actor, 2);
+        } else if e.vcall(target(e), 0x100, &[]).bool() {
+            if player_resting(e, target(e)) {
+                wake_player(e, 0);
+                return false;
+            }
+            let object = e.mem.u32(process.wrapping_add(ACQUIRE_OBJECT));
+            if object != 0 {
+                if e.mem.u8(object.wrapping_add(9)) != 0 {
+                    enter_combat_words(
+                        e,
+                        process,
+                        [actor, target(e), 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0],
+                    );
+                } else if e.mem.u8(object.wrapping_add(8)) != 0 {
+                    let amount = e.mem.u32(object.wrapping_add(4));
+                    e.call(
+                        REFERENCE_ACTIVATE,
+                        &args![target(e), actor, 1u32, amount, count],
+                    );
+                    drop_acquire_object(e, process);
+                }
+            } else if target(e) != e.mem.u32(PLAYER) {
+                add_to_procedure_index_running_slot(e, process, actor, 2);
+                return false;
+            }
+        }
+    } else if !e.vcall(target(e), 0x100, &[]).bool() {
+        e.call(
+            REFERENCE_ACTIVATE,
+            &args![target(e), actor, 0u32, 0u32, 1u32],
+        );
+    } else if procedure(e, package) == 2 {
+        let other = e.mem.u32(actor.wrapping_add(0x68));
+        add_to_procedure_index_running_slot(e, other, actor, 2);
+    } else if player_resting(e, target(e)) {
+        wake_player(e, 1);
+        return false;
+    } else {
+        return true;
+    }
+    if activated != 0 {
+        e.call(REFERENCE_RUN_SCRIPT, &args![activated]);
+    }
+    true
+}
+
+/// Whether `form` is what the process's acquire settings want: of the type `eFormType` (+0x8c),
+/// `pObjecttoAcquire` (+0x84) itself, or anything when neither is set.
+fn acquire_settings_match(e: &mut Engine, process: u32, form: u32) -> bool {
+    let wanted = |e: &Engine| e.mem.u32(process.wrapping_add(FORM_TYPE_FOR_LOCATION));
+    let object = |e: &Engine| e.mem.u32(process.wrapping_add(OBJECT_TO_ACQUIRE));
+    (wanted(e) != 0 && matches_object_type(e, form, wanted(e)))
+        || (object(e) != 0 && object(e) == form)
+        || (wanted(e) == 0 && object(e) == 0)
+}
+
+/// A new acquire record (`00401000(0x1c)` and [`objects_to_acquire_construct`]; 0 when the
+/// allocation fails).
+fn new_acquire_entry(e: &mut Engine) -> u32 {
+    let block = e.call(ALLOCATE, &args![0x1cu32]).u32();
+    if block == 0 {
+        return 0;
+    }
+    typed_call!(
+        FAMILY,
+        0x0090_e600,
+        objects_to_acquire_construct(e, Ptr::new(block))
+    )
+    .addr()
+}
+
+/// A record for an inventory object of the reference: state 1 and the count (`GetObjectCount` of
+/// its inventory changes when it has a container, else 1).
+fn new_inventory_entry(e: &mut Engine, reference: u32, object: u32) -> u32 {
+    let entry = new_acquire_entry(e);
+    e.mem.set_u32(entry.wrapping_add(ACQUIRE_FORM), object);
+    e.mem.set_u32(entry, reference);
+    e.mem.set_u32(entry.wrapping_add(ACQUIRE_STATE), 1);
+    if typed_call!(
+        cell_refs::FAMILY,
+        0x0055_d310,
+        cell_refs::script::has_container(e, reference)
+    ) != 0
+    {
+        let changes = e.call(INVENTORY_CHANGES, &args![reference]).u32();
+        if changes != 0 {
+            let object = e.mem.u32(entry.wrapping_add(ACQUIRE_FORM));
+            let count = e.call(CHANGES_OBJECT_COUNT, &args![changes, object]).u32();
+            e.mem.set_u32(entry.wrapping_add(ACQUIRE_COUNT), count);
+        }
+    } else {
+        e.mem.set_u32(entry.wrapping_add(ACQUIRE_COUNT), 1);
+    }
+    entry
+}
+
+/// Whether the acquire callback searches the inventories for `eFormType` (the exe's byte map
+/// `0090e5e0`).
+fn acquire_searches_type(kind: u32) -> bool {
+    matches!(
+        kind,
+        0 | 2 | 3 | 4 | 7 | 8 | 9 | 10 | 12 | 13 | 16 | 17 | 18 | 19 | 20 | 22 | 23
+    )
+}
+
+/// Whether both references are in the same space (`TESObjectREFR::GetSpace`).
+fn same_space(e: &mut Engine, reference: u32, actor: u32) -> bool {
+    e.call(REFERENCE_SPACE, &args![reference]).u32() == e.call(REFERENCE_SPACE, &args![actor]).u32()
+}
+
+// Typed from 0090dd80
+/// The reference callback the acquire search hands to `EnumReferencesCloseToPoint` (no map name;
+/// answers false to go on, true only without an actor or a process in acquire states 0 to 3).
+/// Skips null, the actor's own and form flag 0x20, 0x4000 or 0x800 references. The reference is
+/// wanted when its base form matches `eFormType` (and, for an actor with `pFactiontoAcquire`, it
+/// is in that faction), is `pObjecttoAcquire` (for an actor also its levelled original base), or
+/// neither is set; not a book the book test holds for, nor a light without its flag 2, nor (type
+/// 0x28 while the actor's byte at +0x104 is set) one worth at most 0.0. A wanted reference becomes
+/// a new acquire record in `TempObjectList` (state 0, its count and extra list). For a searched
+/// type on an actor other than the player, or a container, the container changes' objects not in
+/// the inventory and the unworn inventory items that match the settings, in the actor's space,
+/// become records of state 1 too; the walked inventory items are deleted.
+pub fn acquire_callback(e: &mut Engine, reference: u32, actor: u32) -> bool {
+    if reference == 0
+        || reference == actor
+        || form_flags(e, reference) & (0x20 | FORM_FLAG_4000 | 0x800) != 0
+    {
+        return false;
+    }
+    if actor == 0 {
+        return true;
+    }
+    let is_actor = e.vcall(reference, 0x100, &[]).bool();
+    let base_form = e.mem.u32(reference.wrapping_add(BASE_FORM));
+    let form_type = e.mem.u8(base_form.wrapping_add(4));
+    // The actor's process in acquire states 0 to 3 (its word at +0x28).
+    let process = match e.mem.u32(actor.wrapping_add(0x68)) {
+        0 => 0,
+        process if (0..=3).contains(&e.mem.i32(process.wrapping_add(0x28))) => process,
+        _ => 0,
+    };
+    if process == 0 {
+        return true;
+    }
+    let wanted_type = e.mem.u32(process.wrapping_add(FORM_TYPE_FOR_LOCATION));
+    let object = |e: &Engine| e.mem.u32(process.wrapping_add(OBJECT_TO_ACQUIRE));
+    let mut wanted = if wanted_type != 0 && matches_object_type(e, base_form, wanted_type) {
+        let faction = e.mem.u32(process.wrapping_add(FACTION_TO_ACQUIRE));
+        faction == 0
+            || !is_actor
+            || e.call(ACTOR_IS_IN_FACTION, &args![reference, faction])
+                .bool()
+    } else if object(e) != 0 {
+        object(e) == base_form
+            || (is_actor
+                && typed_call!(
+                    extra_data::FAMILY,
+                    0x0042_16f0,
+                    extra_data::followers::lev_crea_original_base(
+                        e,
+                        reference.wrapping_add(EXTRA_LIST)
+                    )
+                ) == object(e))
+    } else {
+        e.mem.u32(process.wrapping_add(FORM_TYPE_FOR_LOCATION)) == 0
+    };
+    match form_type {
+        BOOK_FORM_TYPE if e.call(BOOK_TEST, &args![base_form]).bool() => wanted = false,
+        LIGHT_FORM_TYPE if e.mem.u32(base_form.wrapping_add(LIGHT_FLAGS)) & 2 == 0 => {
+            wanted = false;
+        }
+        _ => {}
+    }
+    if form_type == VALUED_FORM_TYPE {
+        // `00493bb0`: the actor's byte at +0x104.
+        let busy = e.mem.u8(actor.wrapping_add(0x104)) != 0;
+        if base_form != 0 {
+            let value = e.call(REFERENCE_VALUE, &args![reference]).st0;
+            if value <= e.mem.f64(ZERO_DOUBLE) && busy {
+                wanted = false;
+            }
+        }
+    }
+    let records = process.wrapping_add(TEMP_OBJECT_LIST);
+    if wanted {
+        let entry = new_acquire_entry(e);
+        let base_form = e.mem.u32(reference.wrapping_add(BASE_FORM));
+        e.mem.set_u32(entry.wrapping_add(ACQUIRE_FORM), base_form);
+        e.mem.set_u32(entry, reference);
+        let extra = reference.wrapping_add(EXTRA_LIST);
+        let count = typed_call!(
+            extra_data::FAMILY,
+            0x0041_8770,
+            extra_data::access::count(e, extra)
+        ) as i16;
+        e.mem
+            .set_i32(entry.wrapping_add(ACQUIRE_COUNT), i32::from(count));
+        e.mem.set_u32(entry.wrapping_add(ACQUIRE_STATE), 0);
+        e.mem.set_u32(entry.wrapping_add(ACQUIRE_EXTRA), extra);
+        list_add(e, records, entry);
+    }
+    let searched = acquire_searches_type(e.mem.u32(process.wrapping_add(FORM_TYPE_FOR_LOCATION)))
+        && is_actor
+        && reference != e.mem.u32(PLAYER);
+    if !searched && form_type != CONTAINER_FORM_TYPE {
+        return false;
+    }
+    let changes = typed_call!(
+        extra_data::FAMILY,
+        0x0041_8520,
+        extra_data::access::container_changes(e, reference.wrapping_add(EXTRA_LIST))
+    );
+    if changes != 0 {
+        let first = |e: &mut Engine| {
+            typed_call!(
+                dispatch::FAMILY,
+                0x004b_ffb0,
+                dispatch::refs::container_of(e, Ptr::new(changes))
+            )
+        };
+        // The list's first node (`00717e50`: the list + 4).
+        let mut node = if first(e) != 0 {
+            first(e).wrapping_add(4)
+        } else {
+            0
+        };
+        while node != 0 && e.mem.u32(node) != 0 {
+            let change = e.mem.u32(node);
+            let object = e.mem.u32(change.wrapping_add(4));
+            let held = e
+                .call(CHANGES_INVENTORY_ITEM, &args![changes, object, 0u32])
+                .u32();
+            if held == 0 {
+                let object = e.mem.u32(change.wrapping_add(4));
+                if acquire_settings_match(e, process, object) && same_space(e, reference, actor) {
+                    let object = e.mem.u32(change.wrapping_add(4));
+                    let entry = new_inventory_entry(e, reference, object);
+                    list_add(e, records, entry);
+                }
+            } else {
+                e.call(ITEM_DELETE, &args![held, 1u32]);
+            }
+            node = e.mem.u32(node.wrapping_add(4));
+        }
+    }
+    let count = e
+        .call(REFERENCE_ITEM_COUNT, &args![reference, 0u32, 1u32])
+        .i32();
+    for index in 0..count.max(0) {
+        let item = e
+            .call(REFERENCE_ITEM_AT, &args![reference, index as u32, 0u32])
+            .u32();
+        if item == 0 {
+            continue;
+        }
+        if !e.call(ITEM_WORN, &args![item, 0u32]).bool() {
+            let object = e.mem.u32(item.wrapping_add(8));
+            if acquire_settings_match(e, process, object) && same_space(e, reference, actor) {
+                let object = e.mem.u32(item.wrapping_add(8));
+                let entry = new_inventory_entry(e, reference, object);
+                list_add(e, records, entry);
+                let list = e.mem.u32(item);
+                if list != 0 {
+                    let first = e.mem.u32(list);
+                    e.mem.set_u32(entry.wrapping_add(ACQUIRE_EXTRA), first);
+                }
+            }
+        }
+        e.call(ITEM_DELETE, &args![item, 1u32]);
+    }
+    false
+}
+
+/// Moves the actor to the package location's point (`GetLocationCoord`, `SetLocationOnReference`)
+/// and answers its cell and world space.
+fn move_to_package_location(e: &mut Engine, actor: u32, package: u32) -> (u32, u32) {
+    e.with_stack(12, |e, temp| {
+        let point = e
+            .call(GET_LOCATION_COORD, &args![package, temp, actor])
+            .u32();
+        e.call(REFERENCE_SET_LOCATION, &args![actor, point]);
+    });
+    let cell = e.call(PACKAGE_LOCATION_CELL, &args![package, actor]).u32();
+    let space = e
+        .call(PACKAGE_LOCATION_WORLD_SPACE, &args![package, actor])
+        .u32();
+    (cell, space)
+}
+
+/// The references around the actor within the door search radius through a door callback (the
+/// actor's position asked twice, the second answer first, as the exe pushes them).
+fn enumerate_doors(e: &mut Engine, actor: u32, callback: u32) {
+    let radius = x87_quiet_bits(e.mem.u32(DOOR_SEARCH_RADIUS));
+    let first = e.vcall(actor, 0x1f4, &[]).u32();
+    let second = e.vcall(actor, 0x1f4, &[]).u32();
+    let cell = parent_cell(e, actor);
+    let handler = e.mem.u32(DATA_HANDLER);
+    e.call(
+        ENUM_REFERENCES_CLOSE_TO_POINT,
+        &args![handler, cell, second, radius, first, radius, callback, actor],
+    );
+}
+
+/// Places the actor at a reference's position (`SetLocationOnReference`) and answers its cell and
+/// world space.
+fn place_at(e: &mut Engine, actor: u32, reference: u32) -> (u32, u32) {
+    let position = e.vcall(reference, 0x1f4, &[]).u32();
+    e.call(REFERENCE_SET_LOCATION, &args![actor, position]);
+    (
+        parent_cell(e, reference),
+        e.call(REFERENCE_WORLD_SPACE, &args![reference]).u32(),
+    )
+}
+
+/// The process's slot 0x7f4 ([`process_guard`] on the low processes).
+fn guard_slot(e: &mut Engine, process: u32, actor: u32) {
+    if slot_target(e, process, 0x7f4) == GUARD_BODY {
+        typed_call!(
+            FAMILY,
+            0x0091_2b00,
+            process_guard(e, Ptr::new(process), Ptr::new(actor))
+        );
+    } else {
+        e.vcall(process, 0x7f4, &args![actor]);
+    }
+}
+
+/// The process's slot 0x230 (`BaseProcess::SetCurrentPackage` on every process class).
+fn set_current_package_slot(e: &mut Engine, process: u32, package: u32, actor: u32) {
+    if slot_target(e, process, 0x230) == 0x008d_08b0 {
+        typed_call!(
+            FAMILY,
+            0x008d_08b0,
+            base_process::set_current_package(e, Ptr::new(process), package, actor)
+        );
+    } else {
+        e.vcall(process, 0x230, &args![package, actor]);
+    }
+}
+
+// Typed from 0090c3e0
+/// `LowProcess::UpdateMissedPackages` (Xbox PDB): plays out the packages the actor missed
+/// (`Actor::GetMissedPacks` into a new list, from the date last processed), unless a current
+/// package is missable, a script package or of flag 2. Each missed package whose conditions hold
+/// (with its target reference) becomes current: with `flag` the script action flags 0x200 (the
+/// missed package) and 0x400 (the current one) are set; `SetCurrentPackage` (slot 0x230), the
+/// doors step, `SetLocationForPackage(0)`; by procedure the actor is placed at the package
+/// location or its target (0, 1, 3, 4, 5, 6; a target reference may be activated) or the guard
+/// runs (0xe); the doors step again, the once-a-day mark (the actor's slot 0x28c with the
+/// calendar's day) and the door callbacks for lock and unlock packages. Then the list is emptied
+/// and deleted; with a cell or world space found the actor's angle is set when asked, it moves
+/// there and the current package and data are cleared. Last the actor's process's locked location
+/// is cleared (slot 0x1c0 with 0).
+pub fn update_missed_packages(e: &mut Engine, this: Ptr, mobile: Ptr, flag: u8) {
+    let process = this.addr();
+    let actor = base_process::runtime_cast(e, mobile.addr(), MOBILE_OBJECT_TYPE, ACTOR_TYPE);
+    let package = current_package(e, process);
+    let skip = (actor == 0 || package != 0)
+        && (e.mem.u32(package.wrapping_add(PACKAGE_FLAGS)) & PACKAGE_MISSABLE != 0
+            || typed_call!(
+                forms::FAMILY,
+                0x0067_4dd0,
+                forms::package::is_script_package(e, package)
+            )
+            // `008b1ff0`: the package's flag 2.
+            || e.mem.u32(package.wrapping_add(PACKAGE_FLAGS)) & 2 != 0);
+    if !skip {
+        let list = new_list(e);
+        let date = x87_store32(f64::from(
+            e.mem.u32(process.wrapping_add(DATE_LAST_PROCESSED)),
+        ));
+        e.call(ACTOR_MISSED_PACKS, &args![actor, list, date]);
+        let mut node = list;
+        let (mut cell, mut space) = (0, 0);
+        let mut set_angle = false;
+        if !list_empty(e, node) {
+            while node != 0 && !list_empty(e, node) {
+                let missed = e.mem.u32(node);
+                let missed_target = package_target(e, missed);
+                let target = if missed_target != 0 {
+                    target_reference(e, missed_target)
+                } else {
+                    0
+                };
+                e.vcall(process, 0x1c0, &args![0u32]);
+                let conditions = e.call(PACKAGE_CONDITIONS, &args![missed]).u32();
+                if e.call(CONDITION_IS_TRUE, &args![conditions, actor, target])
+                    .bool()
+                {
+                    let extra = actor.wrapping_add(EXTRA_LIST);
+                    if flag != 0 {
+                        e.call(SET_ACTION_FLAG, &args![missed, extra, 0x200u32]);
+                        let current = current_package(e, process);
+                        e.call(SET_ACTION_FLAG, &args![current, extra, 0x400u32]);
+                    }
+                    set_current_package_slot(e, process, missed, actor);
+                    e.call(ACTOR_UNLOCK_LOCK_DOORS, &args![actor]);
+                    set_location_for_package_slot(e, process, actor);
+                    match procedure(e, missed) {
+                        5 | 6 => {
+                            (cell, space) = move_to_package_location(e, actor, missed);
+                            let location = package_location(e, missed);
+                            set_angle = location != 0 && location_kind(e, location) == 1;
+                        }
+                        0 => {
+                            let reference = match package_target(e, missed) {
+                                0 => 0,
+                                missed_target => target_reference(e, missed_target),
+                            };
+                            if reference != 0 && form_flags(e, reference) & 0x20 == 0 {
+                                let position = e.vcall(reference, 0x1f4, &[]).u32();
+                                e.call(REFERENCE_SET_LOCATION, &args![actor, position]);
+                                set_angle = true;
+                                if !e.vcall(reference, 0x100, &[]).bool()
+                                    && form_flags(e, reference) & (0x800 | 0x20) == 0
+                                {
+                                    e.call(
+                                        REFERENCE_ACTIVATE,
+                                        &args![reference, actor, 0u32, 0u32, 1u32],
+                                    );
+                                }
+                                cell = parent_cell(e, reference);
+                                space = e.call(REFERENCE_WORLD_SPACE, &args![reference]).u32();
+                            } else {
+                                (cell, space) = move_to_package_location(e, actor, missed);
+                                set_angle = false;
+                            }
+                        }
+                        3 | 4 => {
+                            (cell, space) = move_to_package_location(e, actor, missed);
+                            let location = package_location(e, missed);
+                            set_angle = location != 0 && location_reference(e, location) != 0;
+                        }
+                        1 => {
+                            let missed_target = package_target(e, missed);
+                            let known = missed_target != 0
+                                && (target_reference(e, missed_target) != 0
+                                    || target_word_of(e, missed_target, 1) != 0
+                                    || target_word_of(e, missed_target, 2) != 0);
+                            if known {
+                                let reference = target_reference(e, missed_target);
+                                if reference != 0
+                                    && form_flags(e, reference) & 0x20 == 0
+                                    && reference != e.mem.u32(PLAYER)
+                                {
+                                    (cell, space) = place_at(e, actor, reference);
+                                    set_angle = false;
+                                }
+                            }
+                        }
+                        0xe => guard_slot(e, process, actor),
+                        _ => {}
+                    }
+                    e.call(ACTOR_UNLOCK_LOCK_DOORS, &args![actor]);
+                    if typed_call!(
+                        forms::FAMILY,
+                        0x0067_0f90,
+                        forms::package::once_per_day(e, missed)
+                    ) {
+                        let day = low_byte(typed_call!(
+                            FAMILY,
+                            0x0086_7d60,
+                            calendar_day(e, Ptr::new(CALENDAR))
+                        ));
+                        e.vcall(actor, 0x28c, &args![missed, u32::from(day)]);
+                    }
+                    if typed_call!(
+                        forms::FAMILY,
+                        0x0067_0ef0,
+                        forms::package::pack_flag_10(e, missed)
+                    ) {
+                        enumerate_doors(e, actor, LOCK_DOORS_CALLBACK);
+                    } else if typed_call!(
+                        forms::FAMILY,
+                        0x0067_0f10,
+                        forms::package::pack_flag_80(e, missed)
+                    ) {
+                        enumerate_doors(e, actor, UNLOCK_DOORS_CALLBACK);
+                    }
+                }
+                node = e.mem.u32(node.wrapping_add(4));
+            }
+            if list != 0 {
+                e.call(LIST_CLEAR, &args![list]);
+                e.call(LIST_DELETE, &args![list, 1u32]);
+            }
+            if cell != 0 || space != 0 {
+                if set_angle {
+                    let angle = x87_quiet_bits(e.mem.u32(FLOAT_MAX_32));
+                    e.call(REFERENCE_SET_ANGLE, &args![actor, angle]);
+                }
+                e.call(REFERENCE_MOVE_TO_NEW_SPACE, &args![actor, cell, space]);
+                clear_current_package_slot(e, process);
+                clear_current_data_slot(e, process, actor);
+            }
+        }
+        if node != 0 {
+            e.call(LIST_DELETE, &args![node, 1u32]);
+        }
+    }
+    let other = e.mem.u32(actor.wrapping_add(0x68));
+    e.vcall(other, 0x1c0, &args![0u32]);
+}
+
+/// A package target's object (kind 1, `00680050`) or object type (kind 2, `00680080`): its word at
+/// +4 for that kind, else 0.
+#[inline]
+fn target_word_of(e: &Engine, target: u32, kind: u8) -> u32 {
+    if target_kind(e, target) == kind {
+        e.mem.u32(target.wrapping_add(4))
+    } else {
+        0
+    }
+}
+
+/// A word's low byte (a byte argument or answer).
+#[allow(clippy::cast_possible_truncation)]
+fn low_byte(word: u32) -> u8 {
+    word as u8
+}
+
+/// The process's slot 0x33c with thirteen words ([`enter_combat`] on the low processes).
+fn enter_combat_words(e: &mut Engine, process: u32, w: [u32; 13]) {
+    if slot_target(e, process, 0x33c) == ENTER_COMBAT_BODY {
+        typed_call!(
+            FAMILY,
+            0x0090_dc10,
+            enter_combat(
+                e,
+                Ptr::new(process),
+                w[0],
+                w[1],
+                w[2],
+                w[3],
+                w[4],
+                low_byte(w[5]),
+                w[6],
+                low_byte(w[7]),
+                w[8],
+                low_byte(w[9]),
+                w[10],
+                low_byte(w[11]),
+                w[12]
+            )
+        );
+    } else {
+        e.vcall(process, 0x33c, &w);
+    }
+}
+
+/// The process's slot 0x7b4 ([`process_escort`] on the low processes).
+fn escort_slot(e: &mut Engine, process: u32, actor: u32) {
+    if slot_target(e, process, 0x7b4) == ESCORT_BODY {
+        typed_call!(
+            FAMILY,
+            0x0090_9430,
+            process_escort(e, Ptr::new(process), actor)
+        );
+    } else {
+        e.vcall(process, 0x7b4, &args![actor]);
+    }
+}
+
+/// The process's slot 0x7c8 ([`process_activate`] on the low processes); its answer unread.
+fn activate_slot(e: &mut Engine, process: u32, actor: u32, acquire: u8) {
+    if slot_target(e, process, 0x7c8) == ACTIVATE_BODY {
+        typed_call!(
+            FAMILY,
+            0x0090_d620,
+            process_activate(e, Ptr::new(process), Ptr::new(actor), acquire)
+        );
+    } else {
+        e.vcall(process, 0x7c8, &args![actor, u32::from(acquire)]);
+    }
+}
+
+/// The process's slot 0x7f8 ([`process_guard_start_travel_to_location`] on the low processes).
+fn guard_travel_slot(e: &mut Engine, process: u32, actor: u32, data: u32) {
+    if slot_target(e, process, 0x7f8) == GUARD_TRAVEL_BODY {
+        typed_call!(
+            FAMILY,
+            0x0091_2db0,
+            process_guard_start_travel_to_location(e, Ptr::new(process), actor, data)
+        );
+    } else {
+        e.vcall(process, 0x7f8, &args![actor, data]);
+    }
 }

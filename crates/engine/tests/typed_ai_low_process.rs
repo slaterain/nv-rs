@@ -261,7 +261,22 @@ const DOUBLES_4: &[(u32, &[u32])] = &[
 /// typed version does not.
 const QUIET: u32 = 0x0048_39c0;
 /// The fourth part's functions whose doubles the second part's world had (drawn, not registered).
-const TYPED_NOW_2: &[u32] = &[0x0090_7260];
+const TYPED_NOW_2: &[u32] = &[0x0090_7260, 0x0091_25b0];
+/// The patrol travel step's (`009125b0`, typed since) callees that no earlier part's world doubled,
+/// now that the step runs as itself under `ProcessPatrol`: fixed answers (none drawn, so every
+/// stream stays), each counting its calls at `STEP_COUNTS + 4 * k`.
+const STEP_COUNTS: u32 = CONTROL + 0x4f00;
+const STEP_DOUBLES: &[(u32, u32)] = &[
+    (0x008b_3b90, 0),           // the actor's mover test: no
+    (0x0067_a480, 0),           // the package's flag 0x2000: off
+    (0x0067_8670, 0),           // its radius to its location
+    (0x008a_0b10, 0x3f80_0000), // the actor's speed: 1.0
+    (0x0045_7990, 0),           // NiPoint3::Length
+    (0x006d_cd70, 0),           // a pathing location from a reference
+    (0x006d_4eb0, 0x4120_0000), // the door path's length: 10.0
+    (0x004f_f7e0, 0),           // the pathing location's destructor
+    (0x008a_d910, 0),           // the actor's move to a reference
+];
 /// The slots the fourth part's functions call, stand-ins unless the seed gives the exe's body.
 const SLOTS_4: &[u32] = &[
     0x48, 0x64, 0x100, 0x11c, 0x128, 0x1e8, 0x234, 0x2a8, 0x304, 0x4e8, 0x524,
@@ -325,7 +340,7 @@ const DOUBLES_5: &[(u32, &[u32])] = &[
     (0x0090_7650, UNREAD),                // ComputeLastTimeProcessed (the dispatch family's)
 ];
 /// The fifth part's typed callees of families its tests do not run.
-const BY_ADDRESS_5: &[u32] = &[0x0041_c8d0, 0x0042_1310, 0x0090_7650];
+const BY_ADDRESS_5: &[u32] = &[0x0041_c8d0, 0x0042_1310, 0x0090_7650, 0x0067_2930];
 /// The slots the fifth part's functions call that the world had none of, stand-ins unless the seed
 /// gives the exe's body.
 const SLOTS_5: &[u32] = &[
@@ -394,6 +409,136 @@ const TARGET_RADIUS: u32 = 0x0101_8f5c;
 const ONE_HOUR: u32 = 0x0108_4838;
 const KEY_FORM: u32 = 0x011c_a268;
 
+/// The sixth part's doubles' blocks: double `k` at `CONTROL_6 + 0x40 * k` (a page the sixth part's
+/// worlds map).
+const CONTROL_6: u32 = CONTROL + 0x6000;
+/// The callees the sixth part's functions call by address and the worlds had no double for, with
+/// the words each may answer (drawn from the sixth stream; registered only in the sixth part's
+/// worlds, which are the fifth part's with the sixth made over them).
+const DOUBLES_6: &[(u32, &[u32])] = &[
+    (0x0040_1000, &[0, BLOCK_6, BLOCK_6_B, BLOCK_6_B]), // the allocation
+    (0x0096_a2d0, &[LIST_6, LIST_6, LIST_6_EMPTY]),     // the list's constructor
+    (0x0047_02f0, UNREAD),                              // the list's deleting destructor
+    (0x0088_1510, &[0, PACKAGE, PACKAGE_B]),            // Actor::GetPackageSetAsPcurrent
+    (0x0056_5870, UNREAD),                              // TESObjectREFR::RunScript
+    (0x0042_2700, &[0, FOLLOWERS_6, FOLLOWERS_6]),      // the followers extra
+    (0x0042_2690, UNREAD),                              // ExtraDataList::RemoveFollower
+    (0x0042_2720, UNREAD),                              // its RemoveFollowerExtra
+    (0x0056_9b80, &[0, TARGET, ACTOR]),                 // the actor's linked reference
+    (0x0067_28a0, &[1, 1, 0, 0xff]),                    // TESPackage::GetAcquireRadius
+    (0x0046_f280, UNREAD),                              // EnumReferencesCloseToPoint
+    (0x0067_a480, &[1, 1, 0xff, 0]),                    // the package's flag 0x2000
+    (0x008a_0b10, FLOATS),                              // the actor's speed
+    (0x0045_7990, FLOATS),                              // NiPoint3::Length
+    (0x006d_cd70, UNREAD),                              // PathingLocation from a reference
+    (0x006d_4eb0, FLOATS),                              // the door path's length
+    (0x004f_f7e0, UNREAD),                              // the pathing location's destructor
+    (0x008a_d910, UNREAD),                              // the actor's move to a reference
+    (0x008a_2d40, &[0, 0, ITEM_6]),                     // the escorted item
+    (0x0057_5450, BOOLS),                               // the actor's test of a numeric id
+    (0x0057_6260, &[0, ITEM_6]),                        // TESObjectREFR::GetInventoryItem
+    (0x006d_cee0, UNREAD),                              // PathingLocation at a point
+    (0x006d_6200, UNREAD),                              // Pathing::ComputeLowPathDistance
+    (0x0055_d310, &[0, 0, 1]),                          // TESObjectREFR::HasContainer
+    (0x0089_2e90, UNREAD),                              // the hand-over to a container
+    (0x0057_3170, UNREAD),                              // TESObjectREFR::Activate
+    (0x008b_8e90, BOOLS),                               // Actor::IsInFaction
+    (0x0042_16f0, &[0, FORM, RECORD]),                  // the levelled original base
+    (0x0073_b460, BOOLS),                               // the book's test
+    (0x0056_8ad0, FLOATS),                              // the reference's value
+    (0x0041_8770, &[0, 2, 0xffff]),                     // ExtraDataList::GetCount
+    (0x0041_8520, &[0, CHANGES_6]),                     // ExtraDataList::GetContainerChanges
+    (0x004b_ffb0, &[0, CHANGES_LIST_6]),                // the changes' list
+    (0x004d_0650, &[0, 0, ITEM_6]),                     // InventoryChanges::GetInventoryItem
+    (0x0057_5ca0, &[0, FORM, FORM]),                    // TESObjectREFR::GetSpace
+    (0x004b_f220, &[0, CHANGES_6]),                     // GetInventoryChanges
+    (0x004c_8f30, &[0, 4]),                             // GetObjectCount
+    (0x0067_4dd0, BOOLS),                               // TESPackage::IsScriptPackage
+    (0x0088_1470, UNREAD),                              // Actor::GetMissedPacks
+    (0x0087_eaa0, &[0, FORM]),                          // TESPackage::GetConditions
+    (0x0068_0c30, BOOLS),                               // TESCondition::IsTrue
+    (0x008a_6a40, UNREAD),                              // the actor's doors step
+    (0x0057_5830, UNREAD),                              // SetLocationOnReference
+    (0x0067_0f90, BOOLS),                               // the package's once a day
+    (0x0067_0ef0, BOOLS),                               // its lock flag
+    (0x0067_0f10, BOOLS),                               // its unlock flag
+    (0x0057_5770, UNREAD),                              // SetAngleOnReference
+    (0x005a_e3d0, UNREAD),                              // the list's add
+    (0x0067_2dd0, &[0, LOCATION_2, LOCATION_2]),        // TESPackage::GetSecondLocation
+];
+/// The sixth part's typed callees of families its tests do not run.
+const BY_ADDRESS_6: &[u32] = &[
+    0x0042_2700,
+    0x0042_2690,
+    0x0042_2720,
+    0x0067_28a0,
+    0x0067_a480,
+    0x0045_7990,
+    0x0067_2930,
+    0x006d_cee0,
+    0x0055_d310,
+    0x0042_16f0,
+    0x0041_8770,
+    0x0041_8520,
+    0x004b_ffb0,
+    0x0067_4dd0,
+    0x0067_0f90,
+    0x0067_0ef0,
+    0x0067_0f10,
+];
+/// The slots the sixth part's functions call that the worlds had none of, stand-ins unless the
+/// seed gives the exe's body.
+const SLOTS_6: &[u32] = &[0x1c0, 0x28c, 0x294, 0x34c, 0x350, 0x3cc, 0x7f4];
+/// The exe's bodies the processes' slots may hold instead, from the sixth stream.
+const REAL_SLOTS_6: &[(u32, u32)] = &[
+    (0x34c, 0x008d_0540),
+    (0x7f4, 0x0091_2b00),
+    (0x7b4, 0x0090_9430),
+    (0x7c8, 0x0090_d620),
+    (0x7f8, 0x0091_2db0),
+];
+/// The callees the sixth part's translations call and its typed code does in place.
+const IN_PLACE_6: &[u32] = &[
+    0x0067_8ca0, // the package location's kind, its generic test, object and object type
+    0x0067_f970,
+    0x0067_f430,
+    0x0067_f480,
+    0x008b_1ff0, // the package's flag 2
+    0x0056_8680, // the furniture test
+    0x008d_0540, // the slot 0x34c's body (0x101)
+    0x0055_9450, // the item's extra list
+];
+/// The blocks the allocation gives, the list the list constructor gives (and an empty one) with
+/// its second node, the followers extra and its list, an inventory item, the inventory changes
+/// and their list, and a point (the actor's slot 0x29c).
+const BLOCK_6: u32 = BUFFER + 0xb000;
+const BLOCK_6_B: u32 = BUFFER + 0xb040;
+const LIST_6: u32 = BUFFER + 0xb080;
+const LIST_6_EMPTY: u32 = BUFFER + 0xb090;
+const NODE_6: u32 = BUFFER + 0xb0a0;
+const FOLLOWERS_6: u32 = BUFFER + 0xb100;
+const FOLLOWER_NODE_6: u32 = BUFFER + 0xb140;
+const FOLLOWER_NODE_6_B: u32 = BUFFER + 0xb150;
+const ITEM_6: u32 = BUFFER + 0xb200;
+const ITEM_LIST_6: u32 = BUFFER + 0xb240;
+const CHANGES_6: u32 = BUFFER + 0xb300;
+const CHANGES_LIST_6: u32 = BUFFER + 0xb340;
+const CHANGE_6: u32 = BUFFER + 0xb380;
+const POINT_6: u32 = BUFFER + 0xb400;
+/// The sixth part's globals: the guard's radius factor (`double` 0.5) and least radius (15.0),
+/// the patrol's walk limit (64.0), the door path's limit (4096.0), the activate wait (300.0), the
+/// door search radius, `FLT_MAX` as a float, the data handler and the acquire radius setting.
+const GUARD_RADIUS_FACTOR: u32 = 0x0101_1588;
+const GUARD_RADIUS_MINIMUM: u32 = 0x0101_e580;
+const PATROL_WALK_DISTANCE: u32 = 0x0101_e6ec;
+const DOOR_PATH_LIMIT: u32 = 0x0101_7a3c;
+const ACTIVATE_WAIT: u32 = 0x0101_3dc0;
+const DOOR_SEARCH_RADIUS: u32 = 0x0103_0020;
+const FLOAT_MAX_32: u32 = 0x0101_6970;
+const DATA_HANDLER: u32 = 0x011c_3f2c;
+const ACQUIRE_RADIUS_SETTING: u32 = 0x011c_debc;
+const ACTIVATE_DONE_FORM: u32 = 0x011c_a244;
+
 /// The acquire records, the list nodes and the cached values the fourth part seeds.
 const ACQUIRE_A: u32 = BUFFER + 0x9000;
 const ACQUIRE_B: u32 = BUFFER + 0x9010;
@@ -444,6 +589,8 @@ const BY_ADDRESS: &[u32] = &[
     0x0041_cc60,
     0x0042_11d0,
     0x0042_12e0,
+    0x0067_a480, // the travel step's flag test and length (forms, pathing)
+    0x0045_7990,
 ];
 
 /// The callees the translations call and the typed code does in place (one load, store or test
@@ -593,6 +740,15 @@ fn double_index(addr: u32) -> usize {
     }
 }
 
+/// How many times the travel step's fixed double at `addr` was called.
+fn step_calls(e: &Engine, addr: u32) -> u32 {
+    let k = STEP_DOUBLES
+        .iter()
+        .position(|(a, _)| *a == addr)
+        .expect("a travel step double");
+    e.mem.u32(STEP_COUNTS + 4 * k as u32)
+}
+
 /// The answer the double at `addr` gave last.
 fn last_answer(e: &Engine, addr: u32) -> u32 {
     let k = double_index(addr);
@@ -626,6 +782,8 @@ struct World {
     rng4: u64,
     /// The fifth part's stream (its own tests' worlds only).
     rng5: u64,
+    /// The sixth part's stream (its own tests' worlds only).
+    rng6: u64,
 }
 
 impl World {
@@ -637,6 +795,7 @@ impl World {
             rng3: (u64::from(seed) ^ 0x2545_f491_4f6c_dd1d).wrapping_mul(0xd6e8_feb8_6659_fd93) | 1,
             rng4: (u64::from(seed) ^ 0x6a09_e667_f3bc_c909).wrapping_mul(0xbb67_ae85_84ca_a73b) | 1,
             rng5: (u64::from(seed) ^ 0x3c6e_f372_fe94_f82b).wrapping_mul(0xa54f_f53a_5f1d_36f1) | 1,
+            rng6: (u64::from(seed) ^ 0x510e_527f_ade6_82d1).wrapping_mul(0x9b05_688c_2b3e_6c1f) | 1,
         };
         e.map(0, 0x1000);
         e.map(CONTROL, 0x5000);
@@ -721,6 +880,26 @@ impl World {
         w.seed_part_2(e);
         w.seed_part_3(e);
         w.seed_part_4(e);
+        for (k, &(addr, answer)) in STEP_DOUBLES.iter().enumerate() {
+            let count = STEP_COUNTS + 4 * k as u32;
+            e.register_double(addr, move |e, _| {
+                let n = e.mem.u32(count);
+                e.mem.set_u32(count, n + 1);
+                ret(answer)
+            });
+        }
+        // The step's process slot 0x350 (the actor's animation): a stand-in answering 0 on every
+        // vtable (the sixth part's worlds make their own).
+        e.register_double(VT_FN + 0x350, |e, _| {
+            let n = e.mem.u32(SLOT_COUNTS + 0x350);
+            e.mem.set_u32(SLOT_COUNTS + 0x350, n + 1);
+            ret(0)
+        });
+        for i in (0..WITH_VTABLE).chain([COUNT]) {
+            let o = if i < COUNT { w.objects[i] } else { 0 };
+            let vt = e.mem.u32(o);
+            e.mem.set_u32(vt + 0x350, VT_FN + 0x350);
+        }
         w
     }
 
@@ -886,7 +1065,7 @@ impl World {
             });
         }
         // Each round of the patrol's answers ends with a failure (or no time left), so its loop ends.
-        for addr in [0x009f_2ba0, 0x009f_2ea0, 0x0091_25b0] {
+        for addr in [0x009f_2ba0, 0x009f_2ea0, 0x0091_25b0, 0x009f_3390] {
             e.mem.set_u32(block(double_index(addr)) + 4 + 4 * 7, 0);
         }
         for &slot in SLOTS_2 {
@@ -1446,11 +1625,37 @@ impl World {
     /// The alarm package's list in place (`006130e0`: its first node at +0x80 of the package): the
     /// cast's answers (the actor and the target) get the alarm list's first node, for the alarm's tests
     /// only (elsewhere their +0x84 is a location search's field).
-    fn seed_alarm_list(&self, e: &mut Engine) {
+    fn seed_alarm_list(&mut self, e: &mut Engine) {
         let (item, next) = (e.mem.u32(NODE_5), e.mem.u32(NODE_5 + 4));
         for o in [self.objects[1], self.objects[2]] {
             e.mem.set_u32(o + 0x80, item);
             e.mem.set_u32(o + 0x84, next);
+        }
+    }
+
+    /// The guard's run-once branch, made for about a third of the seeds (from the sixth stream, so
+    /// the fifth stays as it was): the process's slot 0x20c answers a package of procedure 0xe and
+    /// its slot 0x270 holds the null answer's body.
+    fn seed_guard_run_once(&mut self, e: &mut Engine) {
+        if self.pick6(&[0, 0, 1]) == 0 {
+            return;
+        }
+        let vt = e.mem.u32(self.objects[0]);
+        let package = self.one_of6(&[PACKAGE, PACKAGE_B]);
+        e.mem.set_u32(vt + 0x20c, VT_FN + 0x20c);
+        e.mem.set_u32(vt + ANSWERS + 0x20c, package);
+        e.mem.set_u8(package + 0x20, 0xe);
+        e.mem.set_u32(vt + 0x270, 0x00ac_bb70);
+    }
+
+    /// The escort follow's package save through the exe's body, made for about half of the seeds
+    /// (from the sixth stream): both processes' slot 0x710 holds `009130f0`.
+    fn seed_escort_save(&mut self, e: &mut Engine) {
+        if self.flag6() {
+            for o in [self.objects[0], self.objects[5]] {
+                let vt = e.mem.u32(o);
+                e.mem.set_u32(vt + 0x710, 0x0091_30f0);
+            }
         }
     }
 
@@ -1471,6 +1676,207 @@ impl World {
 
     fn one_of5(&mut self, from: &[u32]) -> u32 {
         let word = self.pick5(from);
+        self.resolve(word)
+    }
+
+    /// The sixth part's doubles, slots and fields, from the sixth stream, made only in its own
+    /// tests' worlds (over the fifth part's), so the other parts' worlds stay as they were.
+    fn seed_part_6(&mut self, e: &mut Engine) {
+        for page in [
+            CONTROL_6,
+            0x0101_1000,
+            0x0101_3000,
+            0x0103_0000,
+            0x0101_7000,
+            0x011c_3000,
+        ] {
+            if !e.mem.is_mapped(page) {
+                e.map(page, 0x1000);
+            }
+        }
+        for (k, (addr, answers)) in DOUBLES_6.iter().enumerate() {
+            let block = block_6(k);
+            for i in 0..8 {
+                let answer = self.pick6(answers);
+                let answer = self.resolve(answer);
+                e.mem.set_u32(block + 4 + 4 * i, answer);
+            }
+            e.register_double(*addr, move |e, a| {
+                let n = e.mem.u32(block);
+                e.mem.set_u32(block, n + 1);
+                e.mem.set_u32(block + 0x24, a.first().copied().unwrap_or(0));
+                e.mem.set_u32(block + 0x28, a.get(1).copied().unwrap_or(0));
+                ret(e.mem.u32(block + 4 + 4 * (n % 8)))
+            });
+        }
+        for &slot in SLOTS_6 {
+            e.register_double(VT_FN + slot, move |e, a| {
+                let n = e.mem.u32(SLOT_COUNTS + slot);
+                let third = a.get(2).copied().unwrap_or(0);
+                e.mem.set_u32(SLOT_LAST + slot, third);
+                e.mem.set_u32(SLOT_COUNTS + slot, n + 1);
+                let vt = e.mem.u32(a[0]);
+                ret(e.mem.u32(vt + ANSWERS + slot))
+            });
+        }
+        for i in 0..=COUNT {
+            if (WITH_VTABLE..COUNT).contains(&i) {
+                continue;
+            }
+            let o = if i < COUNT { self.objects[i] } else { 0 };
+            let vt = e.mem.u32(o);
+            for &slot in SLOTS_6 {
+                e.mem.set_u32(vt + slot, VT_FN + slot);
+                let answers: &[u32] = match slot {
+                    0x34c => &[0x101, 0x100, 0x102],
+                    0x294 => &[0, FORM, TARGET],
+                    _ => UNREAD,
+                };
+                let answer = self.pick6(answers);
+                e.mem.set_u32(vt + ANSWERS + slot, self.resolve(answer));
+            }
+            // The references: the point (slot 0x29c) and the goal's words (slot 0x298), their
+            // tests (0x100 an actor, 0x218, 0x22c dead).
+            if i == 1 || i == 2 || i == 6 {
+                e.mem.set_u32(vt + ANSWERS + 0x29c, POINT_6);
+                let first = self.one_of6(&[0, LOCATION, TARGET]);
+                e.mem.set_u32(vt + ANSWERS + 0x298, first);
+                for (slot, answers) in [(0x100, BOOLS), (0x218, BOOLS), (0x22c, &[0, 0, 1][..])] {
+                    let answer = self.pick6(answers);
+                    e.mem.set_u32(vt + ANSWERS + slot, answer);
+                }
+            }
+            if i == 0 || i == 5 {
+                for &(slot, body) in REAL_SLOTS_6 {
+                    if self.flag6() {
+                        e.mem.set_u32(vt + slot, body);
+                    }
+                }
+            }
+        }
+        // The globals.
+        e.mem.set_f64(GUARD_RADIUS_FACTOR, 0.5);
+        e.mem.set_u32(GUARD_RADIUS_MINIMUM, 15.0f32.to_bits());
+        let limit = self.pick6(&[0, 0, 0x4280_0000, 0x7f80_0001]);
+        e.mem.set_u32(PATROL_WALK_DISTANCE, limit);
+        e.mem.set_u32(DOOR_PATH_LIMIT, 4096.0f32.to_bits());
+        e.mem.set_u32(ACTIVATE_WAIT, 300.0f32.to_bits());
+        e.mem.set_u32(DOOR_SEARCH_RADIUS, 1000.0f32.to_bits());
+        e.mem.set_u32(FLOAT_MAX_32, f32::MAX.to_bits());
+        let handler = self.one_of6(&[OTHER, FORM]);
+        e.mem.set_u32(DATA_HANDLER, handler);
+        let radius = self.pick6(&FLOATS[..4]);
+        e.mem.set_u32(ACQUIRE_RADIUS_SETTING + 4, radius);
+        let marker = self.one_of6(&[0, FORM, RECORD]);
+        e.mem.set_u32(ACTIVATE_DONE_FORM, marker);
+        // The lists the list constructor gives: one or two packages, or the empty one.
+        let first = self.one_of6(&[PACKAGE, PACKAGE_B, PACKAGE]);
+        e.mem.set_u32(LIST_6, first);
+        let next = self.pick6(&[0, NODE_6, NODE_6]);
+        e.mem.set_u32(LIST_6 + 4, next);
+        let second = self.one_of6(&[PACKAGE_B, PACKAGE]);
+        e.mem.set_u32(NODE_6, second);
+        e.mem.set_u32(NODE_6 + 4, 0);
+        e.mem.set_u32(LIST_6_EMPTY, 0);
+        e.mem.set_u32(LIST_6_EMPTY + 4, 0);
+        // The followers extra's list (its word at +0xc): one or two followers, or none.
+        let list = self.pick6(&[0, FOLLOWER_NODE_6, FOLLOWER_NODE_6]);
+        e.mem.set_u32(FOLLOWERS_6 + 0xc, list);
+        let follower = self.one_of6(&[ACTOR, TARGET, PACKAGE, 0]);
+        e.mem.set_u32(FOLLOWER_NODE_6, follower);
+        let next = self.pick6(&[0, FOLLOWER_NODE_6_B]);
+        e.mem.set_u32(FOLLOWER_NODE_6 + 4, next);
+        let follower = self.one_of6(&[TARGET, ACTOR, OTHER]);
+        e.mem.set_u32(FOLLOWER_NODE_6_B, follower);
+        e.mem.set_u32(FOLLOWER_NODE_6_B + 4, 0);
+        // The inventory item (its extra list, object), the changes and their list, the point.
+        let extra = self.pick6(&[0, ITEM_LIST_6]);
+        e.mem.set_u32(ITEM_6, extra);
+        let object = self.one_of6(&[FORM, RECORD]);
+        e.mem.set_u32(ITEM_6 + 8, object);
+        let first = self.one_of6(&[0, TARGET]);
+        e.mem.set_u32(ITEM_LIST_6, first);
+        // The changes' list's first node is at +4 of it (`00717e50`).
+        e.mem.set_u32(CHANGES_LIST_6 + 4, CHANGE_6);
+        e.mem.set_u32(CHANGES_LIST_6 + 8, 0);
+        let object = self.one_of6(&[FORM, RECORD, 0]);
+        e.mem.set_u32(CHANGE_6 + 4, object);
+        for at in 0..3 {
+            let word = self.pick6(&FLOATS[..5]);
+            e.mem.set_u32(POINT_6 + 4 * at, word);
+        }
+        // The package location (generic kinds too) and the processes' generic locations.
+        let kind = self.pick6(&[0, 2, 3, 4, 4, 5, 5, 6]);
+        e.mem.set_u8(LOCATION_2, kind as u8);
+        for o in [self.objects[0], self.objects[5]] {
+            let head = self.one_of6(&[0, 0, TARGET]);
+            e.mem.set_u32(o + 0x6c, head);
+            e.mem.set_u32(o + 0x70, 0);
+            let temp = self.one_of6(&[0, ACTOR]);
+            e.mem.set_u32(o + 0x7c, temp);
+            e.mem.set_u32(o + 0x80, 0);
+            let date = self.pick6(&[0, 3, 0x8000_0001]);
+            e.mem.set_u32(o + 0x24, date);
+            let left = self.pick6(&[0, 1, 5]);
+            e.mem.set_u32(o + 0x58, left);
+        }
+        // The acquire object: its reference, amount, count and bytes +8 and +9.
+        for o in [self.objects[0], self.objects[5]] {
+            let object = self.pick6(&[0, ENTRY_5, ENTRY_5_B]);
+            e.mem.set_u32(o + 0x64, object);
+        }
+        for entry in [ENTRY_5, ENTRY_5_B] {
+            let amount = self.pick6(&[0, 1, 2]);
+            e.mem.set_u32(entry + 4, amount);
+            let bytes = self.pick6(&[0, 1, 0x100, 0x101]);
+            e.mem.set_u16(entry + 8, bytes as u16);
+            let count = self.pick6(&[1, 2, 5]);
+            e.mem.set_u32(entry + 0xc, count);
+        }
+        // The processes' levels (+0x28: the acquire states 0 to 3 count).
+        for o in [self.objects[0], self.objects[5]] {
+            let state = self.pick6(&[0, 2, 3, 4, 0xffff_ffff]);
+            e.mem.set_u32(o + 0x28, state);
+        }
+        // The process's acquire settings (+0x84 the object, +0x8c the type, +0x90 the faction).
+        for o in [self.objects[0], self.objects[5]] {
+            let object = self.one_of6(&[0, 0, FORM, RECORD]);
+            e.mem.set_u32(o + 0x84, object);
+            let kind = self.pick6(&[0, 0, 2, 0x1b, 0x1e, 5]);
+            e.mem.set_u32(o + 0x8c, kind);
+            let faction = self.one_of6(&[0, FORM]);
+            e.mem.set_u32(o + 0x90, faction);
+        }
+        // The packages' word at +0x68 (a process, as a reference's, when a list hands a package over
+        // as a follower).
+        for o in [self.objects[3], self.objects[4]] {
+            let process = self.one_of6(&[0, OTHER]);
+            e.mem.set_u32(o + 0x68, process);
+        }
+        // The base forms' types (a book, a light, a valued one, a container, other).
+        for o in [self.objects[6], self.objects[7]] {
+            let kind = self.pick6(&[0x19, 0x1b, 0x1e, 0x27, 0x28, 0x2a]);
+            e.mem.set_u8(o + 4, kind as u8);
+        }
+    }
+
+    fn next6(&mut self) -> u64 {
+        self.rng6 ^= self.rng6 << 13;
+        self.rng6 ^= self.rng6 >> 7;
+        self.rng6 ^= self.rng6 << 17;
+        self.rng6
+    }
+
+    fn pick6(&mut self, from: &[u32]) -> u32 {
+        from[(self.next6() % from.len() as u64) as usize]
+    }
+
+    fn flag6(&mut self) -> bool {
+        self.next6() & 1 != 0
+    }
+
+    fn one_of6(&mut self, from: &[u32]) -> u32 {
+        let word = self.pick6(from);
         self.resolve(word)
     }
 
@@ -2504,7 +2910,7 @@ fn the_seeds_reach_every_branch() {
                 e.mem.u32(seen[1] + 8) == 0 && slot_calls(e, 0x418) == 0,
                 slot_calls(e, 0x418) > 0,
                 calls(e, 0x009f_2ba0) > 0,
-                calls(e, 0x0091_25b0) > 0,
+                step_calls(e, 0x0067_a480) > 0,
                 calls(e, 0x0041_fe90) > 0,
             ]
         },
@@ -2853,6 +3259,13 @@ fn process_actor_flag(w: &mut World) -> Vec<u32> {
     vec![w.process(), actor, flag]
 }
 
+/// The escort follow's words: the process, an actor (or the target) and an escort package.
+fn escort_follow_words(w: &mut World) -> Vec<u32> {
+    let actor = w.one_of5(&[ACTOR, TARGET]);
+    let escort = w.one_of5(&[PACKAGE, PACKAGE_B]);
+    vec![w.process(), actor, escort, 0]
+}
+
 /// The process and an actor (or another reference).
 fn process_actor_5(w: &mut World) -> Vec<u32> {
     let actor = w.one_of5(&[ACTOR, ACTOR, TARGET]);
@@ -2949,10 +3362,12 @@ fn combat_alarm_and_follow() {
         0x0090_8cd0,
         low_process::create_follow_for_escort(Ptr, u32, u32, u32)
     ))
-    .in_world_5(&MANY, |w| {
-        let actor = w.one_of5(&[ACTOR, TARGET]);
-        let escort = w.one_of5(&[PACKAGE, PACKAGE_B]);
-        vec![w.process(), actor, escort, 0]
+    .in_world_5(&MANY, escort_follow_words)
+    .setup(|e, case| {
+        let mut w = World::new(e, case.word(0));
+        w.seed_part_5(e);
+        w.seed_escort_save(e);
+        escort_follow_words(&mut w)
     })
     .run()
     .assert_same();
@@ -2981,6 +3396,12 @@ fn acquire_ambush_and_guard() {
     .assert_same();
     Diff::new(entry!(0x0091_2b00, low_process::process_guard(Ptr, Ptr)))
         .in_world_5(&MOST, process_actor_5)
+        .setup(|e, case| {
+            let mut w = World::new(e, case.word(0));
+            w.seed_part_5(e);
+            w.seed_guard_run_once(e);
+            process_actor_5(&mut w)
+        })
         .run()
         .assert_same();
 }
@@ -3000,7 +3421,7 @@ fn reaches_5(
 fn reaches_5_in(
     addr: u32,
     seeds: &[u32],
-    more: fn(&World, &mut Engine),
+    more: fn(&mut World, &mut Engine),
     words: fn(&mut World) -> Vec<u32>,
     branches: &[&str],
     check: fn(&Engine, &[u32]) -> Vec<bool>,
@@ -3010,7 +3431,7 @@ fn reaches_5_in(
         let mut e = Engine::new_untyped_for_test();
         let mut w = World::new(&mut e, seed);
         w.seed_part_5(&mut e);
-        more(&w, &mut e);
+        more(&mut w, &mut e);
         let args = words(&mut w);
         let answer = e.call(addr, &args).eax;
         let mut seen = vec![answer];
@@ -3188,14 +3609,11 @@ fn the_fifth_part_reaches_every_branch() {
             ]
         },
     );
-    reaches_5(
+    reaches_5_in(
         0x0090_8cd0,
         &MANY,
-        |w| {
-            let actor = w.one_of5(&[ACTOR, TARGET]);
-            let escort = w.one_of5(&[PACKAGE, PACKAGE_B]);
-            vec![w.process(), actor, escort, 0]
-        },
+        World::seed_escort_save,
+        escort_follow_words,
         &["a follow package"],
         |e, _| vec![calls_5(e, 0x008b_c790) > 0],
     );
@@ -3251,9 +3669,10 @@ fn the_fifth_part_reaches_every_branch() {
             ]
         },
     );
-    reaches_5(
+    reaches_5_in(
         0x0091_2b00,
         &MOST,
+        World::seed_guard_run_once,
         process_actor_5,
         &["no data", "a new guard", "the actor's state", "travels"],
         |e, _| {
@@ -3318,9 +3737,10 @@ fn the_fifth_part_reaches_the_exe_bodies() {
             ]
         },
     );
-    reaches_5(
+    reaches_5_in(
         0x0091_2b00,
         &MOST,
+        World::seed_guard_run_once,
         process_actor_5,
         &["slot 0x20c's body", "slot 0x35c's body"],
         |e, seen| {
@@ -3332,9 +3752,10 @@ fn the_fifth_part_reaches_the_exe_bodies() {
     );
     // The guard's run-once data: slot 0x20c answers a package of procedure 0xe while slot 0x270
     // holds the null answer's body.
-    reaches_5(
+    reaches_5_in(
         0x0091_2b00,
-        &WIDE,
+        &MOST,
+        World::seed_guard_run_once,
         process_actor_5,
         &["slot 0x270's body"],
         |e, seen| {
@@ -3369,14 +3790,11 @@ fn the_fifth_part_reaches_the_exe_bodies() {
         },
     );
     // The escort's follow saves the target's package through its process's slot 0x710 body.
-    reaches_5(
+    reaches_5_in(
         0x0090_8cd0,
-        &MOST,
-        |w| {
-            let actor = w.one_of5(&[ACTOR, TARGET]);
-            let escort = w.one_of5(&[PACKAGE, PACKAGE_B]);
-            vec![w.process(), actor, escort, 0]
-        },
+        &MANY,
+        World::seed_escort_save,
+        escort_follow_words,
         &["slot 0x710's body"],
         |e, _| {
             let target = last_second_5(e, 0x008b_c790);
@@ -3416,4 +3834,497 @@ fn procedure_30_takes_the_target_radius_and_31_the_default() {
         "procedure 30 never asks for the target radius"
     );
     assert_eq!(asked[1], 0, "procedure 31 asks for the target radius");
+}
+
+/// A sixth part's double's block.
+fn block_6(k: usize) -> u32 {
+    CONTROL_6 + 0x40 * k as u32
+}
+
+/// How many times the sixth part's double at `addr` was called.
+fn calls_6(e: &Engine, addr: u32) -> u32 {
+    let k = DOUBLES_6
+        .iter()
+        .position(|(a, _)| *a == addr)
+        .expect("a sixth part's double");
+    e.mem.u32(block_6(k))
+}
+
+/// What the sixth part's double at `addr` answered last (after at least one call).
+fn last_answer_6(e: &Engine, addr: u32) -> u32 {
+    let k = DOUBLES_6
+        .iter()
+        .position(|(a, _)| *a == addr)
+        .expect("a sixth part's double");
+    let n = e.mem.u32(block_6(k));
+    e.mem.u32(block_6(k) + 4 + 4 * ((n + 7) % 8))
+}
+
+/// The sixth part's tests: [`InWorld5::in_world_5`] with the sixth part's world made over it and
+/// its callees done in place ignored.
+trait InWorld6 {
+    fn in_world_6(self, seeds: &'static [u32], words: fn(&mut World) -> Vec<u32>) -> Diff;
+}
+
+impl InWorld6 for Diff {
+    fn in_world_6(self, seeds: &'static [u32], words: fn(&mut World) -> Vec<u32>) -> Diff {
+        self.family(&AI)
+            .family(&leaf::LEAVES)
+            .family(&AI_QUERIES)
+            .family(&CRT)
+            .ignore_calls(IN_PLACE)
+            .ignore_calls(IN_PLACE_5)
+            .ignore_calls(IN_PLACE_6)
+            .goes_by_address(BY_ADDRESS)
+            .goes_by_address(BY_ADDRESS_5)
+            .goes_by_address(BY_ADDRESS_6)
+            .inputs(&[Input::Of(seeds)])
+            .setup(move |e, case| {
+                let mut w = World::new(e, case.word(0));
+                w.seed_part_5(e);
+                w.seed_part_6(e);
+                words(&mut w)
+            })
+    }
+}
+
+/// The process and an actor (or another reference, or none).
+fn process_actor_6(w: &mut World) -> Vec<u32> {
+    let actor = w.one_of6(&[ACTOR, ACTOR, TARGET, 0]);
+    vec![w.process(), actor]
+}
+
+/// The process, an actor, a float time.
+fn process_actor_time(w: &mut World) -> Vec<u32> {
+    let mut words = process_actor_6(w);
+    let time = w.pick6(&[0x4140_0000, 0x3f80_0000, 0, 0x7f80_0001]);
+    words.push(time);
+    words
+}
+
+#[test]
+fn followers_locations_and_travels() {
+    Diff::new(entry!(
+        0x0091_1b00,
+        low_process::update_followers(Ptr, u32, f32)
+    ))
+    .in_world_6(&MOST, process_actor_time)
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0090_89c0,
+        low_process::get_location_for_package(Ptr, Ptr, Ptr, u8) -> u32
+    ))
+    .in_world_6(&MOST, |w| {
+        let mut words = process_actor_6(w);
+        let package = w.one_of6(&[PACKAGE, PACKAGE_B, PACKAGE, 0]);
+        let second = w.pick6(&[0, 0, 1, 0x100]);
+        words.extend([package, second]);
+        words
+    })
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0091_25b0,
+        low_process::patrol_travel_step(Ptr, Ptr, Ptr, f32) -> f32
+    ))
+    .in_world_6(&MOST, |w| {
+        let mut words = process_actor_6(w);
+        let time = w.pick6(&[0x4140_0000, 0x3f80_0000, 0x7f80_0001]);
+        words.extend([w.objects[7], time]);
+        words
+    })
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0091_2db0,
+        low_process::process_guard_start_travel_to_location(Ptr, u32, u32)
+    ))
+    .in_world_6(&MOST, |w| {
+        let mut words = process_actor_6(w);
+        words.push(w.objects[7]);
+        words
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn escort_activate_acquire_and_missed_packages() {
+    Diff::new(entry!(0x0090_9430, low_process::process_escort(Ptr, u32)))
+        .in_world_6(&MOST, process_actor_6)
+        .run()
+        .assert_same();
+    Diff::new(entry!(
+        0x0090_d620,
+        low_process::process_activate(Ptr, Ptr, u8) -> bool
+    ))
+    // `WIDE`: the combat branch needs a reached actor target, a living acquire object and its byte 9
+    // at once.
+    .in_world_6(&WIDE, |w| {
+        let mut words = process_actor_6(w);
+        let acquire = w.pick6(&[0, 1, 1, 0x100]);
+        words.push(acquire);
+        words
+    })
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0090_dd80,
+        low_process::acquire_callback(u32, u32) -> bool
+    ))
+    // `WIDE`: an inventory record needs a searched reference, its changes or items and the same space.
+    .in_world_6(&WIDE, |w| {
+        let reference = w.one_of6(&[0, TARGET, ACTOR, FORM, FORM]);
+        let actor = w.one_of6(&[0, ACTOR, ACTOR, TARGET]);
+        vec![reference, actor]
+    })
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0090_c3e0,
+        low_process::update_missed_packages(Ptr, Ptr, u8)
+    ))
+    .in_world_6(&MOST, |w| {
+        let mut words = process_actor_6(w);
+        let flag = w.pick6(&[0, 1, 0x100]);
+        words.push(flag);
+        words
+    })
+    .run()
+    .assert_same();
+}
+
+/// The fifth part's acquire and guard in the sixth part's world, whose processes' slots 0x7b4,
+/// 0x7c8 and 0x7f8 may hold the escort's, the activate's and the guard travel's bodies.
+#[test]
+fn acquire_and_guard_reach_the_sixth_part() {
+    Diff::new(entry!(0x0090_8f70, low_process::process_acquire(Ptr, Ptr)))
+        .in_world_6(&MOST, process_actor_6)
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x0091_2b00, low_process::process_guard(Ptr, Ptr)))
+        .in_world_6(&MOST, process_actor_6)
+        .run()
+        .assert_same();
+}
+
+/// [`reaches`] in the sixth part's world. `seen` is the answer, then the call's words.
+fn reaches_6(
+    addr: u32,
+    seeds: &[u32],
+    words: fn(&mut World) -> Vec<u32>,
+    branches: &[&str],
+    check: fn(&Engine, &[u32]) -> Vec<bool>,
+) {
+    let mut taken = vec![0u32; branches.len()];
+    for &seed in seeds {
+        let mut e = Engine::new_untyped_for_test();
+        let mut w = World::new(&mut e, seed);
+        w.seed_part_5(&mut e);
+        w.seed_part_6(&mut e);
+        let args = words(&mut w);
+        let answer = e.call(addr, &args).eax;
+        let mut seen = vec![answer];
+        seen.extend_from_slice(&args);
+        for (n, hit) in taken.iter_mut().zip(check(&e, &seen)) {
+            *n += u32::from(hit);
+        }
+    }
+    for (name, n) in branches.iter().zip(&taken) {
+        assert!(*n > 0, "{addr:08x}: no seed reaches \"{name}\": {taken:?}");
+    }
+}
+
+/// The sixth part's deep branches, on the translations.
+#[test]
+fn the_sixth_part_reaches_every_branch() {
+    reaches_6(
+        0x0091_1b00,
+        &MOST,
+        process_actor_time,
+        &[
+            "no followers extra",
+            "a script run",
+            "a follower dropped",
+            "the extra removed",
+        ],
+        |e, _| {
+            vec![
+                calls_6(e, 0x0042_2700) > 0 && calls_6(e, 0x0096_a2d0) == 0,
+                calls_6(e, 0x0056_5870) > 0,
+                calls_6(e, 0x0042_2690) > 0,
+                calls_6(e, 0x0042_2720) > 0,
+            ]
+        },
+    );
+    reaches_6(
+        0x0090_89c0,
+        &MOST,
+        |w| {
+            let mut words = process_actor_6(w);
+            let package = w.one_of6(&[PACKAGE, PACKAGE_B, PACKAGE, 0]);
+            let second = w.pick6(&[0, 0, 1, 0x100]);
+            words.extend([package, second]);
+            words
+        },
+        &[
+            "the location's reference",
+            "the linked reference",
+            "collected with the package's radius",
+            "collected with the setting's",
+            "one taken off the list",
+        ],
+        |e, seen| {
+            let collected = calls_6(e, 0x0046_f280) > 0;
+            vec![
+                seen[0] != 0 && !collected && calls(e, 0x0063_f7b0) == 0,
+                calls_6(e, 0x0056_9b80) > 0,
+                // The package's radius when it answers it (its `AL`), else the setting's.
+                collected
+                    && calls_6(e, 0x0067_28a0) > 0
+                    && last_answer_6(e, 0x0067_28a0) & 0xff != 0,
+                collected
+                    && (calls_6(e, 0x0067_28a0) == 0 || last_answer_6(e, 0x0067_28a0) & 0xff == 0),
+                calls(e, 0x0063_f7b0) > 0 && seen[0] != 0,
+            ]
+        },
+    );
+    reaches_6(
+        0x0091_25b0,
+        &MOST,
+        |w| {
+            let mut words = process_actor_6(w);
+            let time = w.pick6(&[0x4140_0000, 0x3f80_0000, 0x7f80_0001]);
+            words.extend([w.objects[7], time]);
+            words
+        },
+        &[
+            "no reference",
+            "farther: the move mode",
+            "fast in one cell",
+            "fast through the doors",
+            "arrived after pathing",
+            "pathing not done",
+        ],
+        |e, seen| {
+            let animated = slot_calls(e, 0x350) > 0;
+            vec![
+                calls(e, 0x009f_3390) > 0 && !animated && calls(e, 0x0094_df60) == 0,
+                calls_5(e, 0x0067_8670) > 0,
+                calls_6(e, 0x0045_7990) > 0,
+                calls_6(e, 0x006d_4eb0) > 0,
+                // `ProcessPatrolStartAtRefBehavior` sets the data's state (+4) to 2.
+                calls(e, 0x008b_3bb0) > 0 && e.mem.u32(seen[3] + 4) == 2,
+                calls(e, 0x008b_3bb0) > 0 && e.mem.u32(seen[3] + 4) != 2,
+            ]
+        },
+    );
+    reaches_6(
+        0x0091_2db0,
+        &MOST,
+        |w| {
+            let mut words = process_actor_6(w);
+            words.push(w.objects[7]);
+            words
+        },
+        &[
+            "a point",
+            "the linked reference",
+            "a reference's travel",
+            "the target",
+            "no travel",
+        ],
+        |e, _| {
+            let travels = calls(e, 0x006e_2420) > 0;
+            vec![
+                slot_calls(e, 0x294) > 0 && travels,
+                calls_6(e, 0x0056_9b80) > 0,
+                calls(e, 0x0057_5d70) > 0,
+                slot_calls(e, 0x128) > 0,
+                !travels,
+            ]
+        },
+    );
+    reaches_6(
+        0x0090_9430,
+        &MOST,
+        process_actor_6,
+        &[
+            "the item from the acquire object",
+            "handed to a container",
+            "handed through slot 0x3cc",
+            "the path distances",
+            "walks to the location",
+            "moved on before the package's test",
+        ],
+        |e, _| {
+            vec![
+                calls_6(e, 0x0057_6260) > 0,
+                calls_6(e, 0x0089_2e90) > 0,
+                slot_calls(e, 0x3cc) > 0,
+                calls_6(e, 0x006d_6200) > 0,
+                calls_5(e, 0x008b_3690) > 0,
+                slot_calls(e, 0x288) > 0 && slot_calls(e, 0x13c) == 0,
+            ]
+        },
+    );
+    reaches_6(
+        0x0090_d620,
+        &WIDE,
+        |w| {
+            let mut words = process_actor_6(w);
+            let acquire = w.pick6(&[0, 1, 1, 0x100]);
+            words.push(acquire);
+            words
+        },
+        &[
+            "paths to the target",
+            "activated for the acquire",
+            "activated without it",
+            "combat for the acquire object",
+            "a script run",
+        ],
+        |e, seen| {
+            let activated = calls_6(e, 0x0057_3170) > 0;
+            vec![
+                calls(e, 0x008b_36f0) > 0,
+                activated && seen[3] & 0xff != 0,
+                activated && seen[3] & 0xff == 0,
+                // The slot itself, or the exe's body in it (the actor's slot 0x424).
+                (slot_calls(e, 0x33c) > 0 || slot_calls(e, 0x424) > 0) && seen[3] & 0xff != 0,
+                calls_6(e, 0x0056_5870) > 0,
+            ]
+        },
+    );
+    reaches_6(
+        0x0090_dd80,
+        &WIDE,
+        |w| {
+            let reference = w.one_of6(&[0, TARGET, ACTOR, FORM, FORM]);
+            let actor = w.one_of6(&[0, ACTOR, ACTOR, TARGET]);
+            vec![reference, actor]
+        },
+        &[
+            "a record",
+            "the faction asked",
+            "the levelled base asked",
+            "the book test",
+            "the value asked",
+            "a change walked",
+            "an inventory record",
+        ],
+        |e, _| {
+            vec![
+                calls_6(e, 0x0040_1000) > 0,
+                calls_6(e, 0x008b_8e90) > 0,
+                calls_6(e, 0x0042_16f0) > 0,
+                calls_6(e, 0x0073_b460) > 0,
+                calls_6(e, 0x0056_8ad0) > 0,
+                calls_6(e, 0x004d_0650) > 0,
+                calls_6(e, 0x0055_d310) > 0,
+            ]
+        },
+    );
+    reaches_6(
+        0x0090_c3e0,
+        &MOST,
+        |w| {
+            let mut words = process_actor_6(w);
+            let flag = w.pick6(&[0, 1, 0x100]);
+            words.push(flag);
+            words
+        },
+        &[
+            "skipped",
+            "a package played",
+            "placed at the target",
+            "placed at the location",
+            "activated",
+            "once a day",
+            "doors",
+            "moved, the angle set",
+        ],
+        |e, _| {
+            vec![
+                calls_6(e, 0x0088_1470) == 0,
+                calls_6(e, 0x008a_6a40) > 0,
+                calls_6(e, 0x0057_5830) > 0 && slot_calls(e, 0x1f4) > 0,
+                calls(e, 0x0067_5de0) > 0,
+                calls_6(e, 0x0057_3170) > 0,
+                slot_calls(e, 0x28c) > 0,
+                calls_6(e, 0x0046_f280) > 0,
+                calls_6(e, 0x0057_5770) > 0 && calls(e, 0x0057_3800) > 0,
+            ]
+        },
+    );
+}
+
+/// The processes' slots holding the exe's bodies take their direct branches, on the translations.
+#[test]
+fn the_sixth_part_reaches_the_exe_bodies() {
+    reaches_6(
+        0x0091_25b0,
+        &MOST,
+        |w| {
+            let mut words = process_actor_6(w);
+            let time = w.pick6(&[0x4140_0000, 0x3f80_0000, 0x7f80_0001]);
+            words.extend([w.objects[7], time]);
+            words
+        },
+        &["slot 0x34c's body"],
+        |e, seen| {
+            vec![
+                holds(e, seen[1], 0x34c, 0x008d_0540)
+                    && calls_5(e, 0x0067_8670) > 0
+                    && slot_calls(e, 0x34c) == 0,
+            ]
+        },
+    );
+    reaches_6(
+        0x0090_c3e0,
+        &WIDE,
+        |w| {
+            let mut words = process_actor_6(w);
+            words.push(0);
+            words
+        },
+        &["slot 0x7f4's body"],
+        |e, seen| {
+            vec![
+                holds(e, seen[1], 0x7f4, 0x0091_2b00)
+                    && slot_calls(e, 0x7f4) == 0
+                    && calls(e, 0x0067_59e0) > 0,
+            ]
+        },
+    );
+    reaches_6(
+        0x0090_8f70,
+        &MOST,
+        process_actor_6,
+        &["slot 0x7c8's body", "slot 0x7b4's body"],
+        |e, seen| {
+            vec![
+                holds(e, seen[1], 0x7c8, 0x0090_d620)
+                    && slot_calls(e, 0x7c8) == 0
+                    && calls_5(e, 0x0067_6140) > 0,
+                holds(e, seen[1], 0x7b4, 0x0090_9430)
+                    && slot_calls(e, 0x7b4) == 0
+                    && calls_6(e, 0x008a_2d40) > 0,
+            ]
+        },
+    );
+    reaches_6(
+        0x0091_2b00,
+        &MOST,
+        process_actor_6,
+        &["slot 0x7f8's body"],
+        |e, seen| {
+            vec![
+                holds(e, seen[1], 0x7f8, 0x0091_2db0)
+                    && slot_calls(e, 0x7f8) == 0
+                    && calls(e, 0x0067_6280) > 0,
+            ]
+        },
+    );
 }
