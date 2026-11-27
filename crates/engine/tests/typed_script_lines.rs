@@ -779,6 +779,76 @@ fn script_lines_data_is_read_where_the_runner_says() {
     assert_eq!(e.mem.u32(w.script + 0x30), w.data);
 }
 
+/// A busy runner reads its running script's word once: here the asked script's name (the first of
+/// the log line's two) clears the word, as another thread finishing that script in the same runner
+/// did (a loading thread's action list beside main's run, the speed-20000 trip, 2026-11-26). The
+/// exe reads the word again and would read through 0; the log line names the script that was
+/// running, and nothing runs. Both the action list's build and the line loop.
+#[test]
+fn script_lines_busy_runner_reads_the_running_script_once() {
+    const RUNNER_OF_TEST: u32 = CONFIG + 0xc0;
+    const LOGGED: u32 = CONFIG + 0xc4;
+    const CLEARING_NAME_FN: u32 = 0x00ff_3050;
+    const ASKED_NAME: u32 = 0x0050_1000;
+    let mut e = Engine::new_untyped_for_test();
+    world(&mut e);
+    e.register(CLEARING_NAME_FN, |e, _| {
+        let runner = e.mem.u32(RUNNER_OF_TEST);
+        e.mem.set_u32(runner + 0x14, 0);
+        ret(ASKED_NAME)
+    });
+    e.register(0x005b_5e40, |e, a| {
+        e.mem.set_u32(LOGGED, a[1]);
+        e.mem.set_u32(LOGGED + 4, a[2]);
+        ret(0)
+    });
+    let w = script_world(&mut e, b"\x11\x00\x00\x00", false);
+    // The asked script's own vtable: the form vtable with the clearing name.
+    let vtable = e.mem.alloc(0x140);
+    for slot in (0..0x140).step_by(4) {
+        let f = e.mem.u32(FORM_VTABLE + slot);
+        e.mem.set_u32(vtable + slot, f);
+    }
+    e.mem.set_u32(vtable + 0x130, CLEARING_NAME_FN);
+    e.mem.set_u32(w.script, vtable);
+    let running = form(&mut e, 0x11);
+    e.mem.set_u32(RUNNER_OF_TEST, w.runner);
+    let busy = |e: &mut Engine| {
+        e.mem.set_u32(w.runner + 0x14, running);
+        e.mem.set_u32(LOGGED, 0);
+        e.mem.set_u32(LOGGED + 4, 0);
+    };
+
+    busy(&mut e);
+    assert!(!runner::build_action_list(
+        &mut e,
+        Ptr::new(w.runner),
+        Ptr::new(w.script),
+        Ptr::NULL,
+        Ptr::new(w.locals),
+    ));
+    assert_eq!(e.mem.u32(LOGGED), 0x0050_0000, "the running script's name");
+    assert_eq!(e.mem.u32(LOGGED + 4), ASKED_NAME);
+    assert_eq!(e.mem.u32(w.runner + 0x14), 0, "not taken");
+
+    busy(&mut e);
+    assert!(!runner::run_lines(
+        &mut e,
+        Ptr::new(w.runner),
+        Ptr::new(w.script),
+        Ptr::NULL,
+        Ptr::new(w.locals),
+        Ptr::new(0x0070_0000),
+        false,
+        1,
+        0,
+        0.5,
+    ));
+    assert_eq!(e.mem.u32(LOGGED), 0x0050_0000, "the running script's name");
+    assert_eq!(e.mem.u32(LOGGED + 4), ASKED_NAME);
+    assert_eq!(e.mem.u32(w.runner + 0x14), 0, "not taken");
+}
+
 // ---- The game's own compiled scripts (opt-in) ---------------------------------------------------
 
 /// The real scripts' world on top of [`world`]: every block type (0 to 0x25) with a handler that

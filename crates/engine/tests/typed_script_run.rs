@@ -363,6 +363,78 @@ fn scripts_run_manager() {
     .assert_same();
 }
 
+/// Off the main thread the action list is built in a temporary runner and the cached runner (the
+/// one main runs its scripts in) is not touched, even while it is free: a loading thread that
+/// shared it read a script main had meanwhile finished and stopped at address 0 (the speed-20000
+/// trip, 2026-11-26). On main the exe's path: the cached runner while it is free.
+#[test]
+fn scripts_init_action_list_off_main_uses_its_own_runner() {
+    const BUILT_IN: u32 = SEEN;
+    const BUSY_AT_BUILD: u32 = SEEN + 4;
+    const FREED: u32 = SEEN + 8;
+    const PASSED: u32 = SEEN + 0x20;
+    let mut e = Engine::new_untyped_for_test();
+    world(&mut e);
+    e.register(0x0040_1000, |e, a| ret(e.mem.alloc(a[0])));
+    e.register(0x0040_1030, |e, a| {
+        e.mem.set_u32(FREED, a[0]);
+        ret(0)
+    });
+    // The build (by address, as xNVSE wraps it): which runner, and whether it was busy then.
+    e.register(0x005e_1160, |e, a| {
+        e.mem.set_u32(BUILT_IN, a[0]);
+        let busy = e.mem.u32(a[0] + 0x14);
+        e.mem.set_u32(BUSY_AT_BUILD, busy);
+        for (i, word) in a[1..4].iter().enumerate() {
+            e.mem.set_u32(PASSED + 4 * i as u32, *word);
+        }
+        ret(1)
+    });
+    let cached = e.mem.alloc(0xa4);
+    e.mem.set_u32(cached + 4, 0x0077_0004);
+    e.mem.set_u32(cached + 8, 0x0077_0008);
+    e.mem.set_u32(MANAGER, cached);
+    let s = script(&mut e, 8, false, 0.0, 0);
+    let call = |e: &mut Engine| {
+        run::manager_init_action_list(
+            e,
+            Ptr::new(MANAGER),
+            Ptr::new(s),
+            Ptr::new(0x0072_0000),
+            Ptr::new(0x0073_0000),
+        )
+    };
+
+    engine_core::thread_host::create(&mut e, 0x77, 0, 0, true);
+    e.kernel.threads.current = 1;
+    assert!(call(&mut e));
+    let temporary = e.mem.u32(BUILT_IN);
+    assert_ne!(temporary, cached, "off main: not the cached runner");
+    assert_ne!(temporary, 0);
+    assert_eq!(e.mem.u32(BUSY_AT_BUILD), 0, "a fresh runner");
+    let passed: Vec<u32> = (0..3).map(|i| e.mem.u32(PASSED + 4 * i)).collect();
+    assert_eq!(
+        passed,
+        [s, 0x0072_0000, 0x0073_0000],
+        "off main: the script, the reference and its variables reach the build"
+    );
+    assert_eq!(e.mem.u32(FREED), temporary, "freed after the build");
+    assert_eq!(e.mem.u32(MANAGER), cached);
+    for (offset, word) in [(4, 0x0077_0004), (8, 0x0077_0008), (0x14, 0)] {
+        assert_eq!(
+            e.mem.u32(cached + offset),
+            word,
+            "the cached runner's +{offset:#x}"
+        );
+    }
+
+    e.kernel.threads.current = 0;
+    e.mem.set_u32(FREED, 0);
+    assert!(call(&mut e));
+    assert_eq!(e.mem.u32(BUILT_IN), cached, "on main: the cached runner");
+    assert_eq!(e.mem.u32(FREED), 0);
+}
+
 #[test]
 fn scripts_runner_construct_and_busy() {
     Diff::new(entry!(0x005e_0c60, run::construct_runner(Ptr<_>) -> Ptr<_>))
