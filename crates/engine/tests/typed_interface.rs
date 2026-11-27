@@ -7614,31 +7614,69 @@ fn stats_menu_update_active_effects_diff() {
     .assert_same();
 }
 
-/// `DoGamepad`'s worlds (limb mode, the page, the sub page, the stick's axis, its magnitude above
-/// the dead zone, the scroll's repeat time passed, the effects list visible, the manager's state
-/// test): each a variant of [`put_stats_pad`].
-const STATS_PAD: [(bool, u32, u32, i32, bool, bool, bool, bool); 8] = [
-    (false, 0, 0, 5, true, true, true, true),
-    (true, 0, 0, 0, false, false, false, true),
-    (false, 2, 1, -5, true, false, true, true),
-    (true, 2, 2, 5, false, true, false, true),
-    (false, 4, 0, 0, true, true, false, false),
-    (true, 4, 1, -5, true, true, true, true),
-    (false, 2, 2, 5, true, false, true, true),
-    (true, 0, 1, -5, true, false, true, false),
+/// One of `DoGamepad`'s worlds ([`put_stats_pad`]'s variant).
+struct Pad {
+    /// Limb mode.
+    limb: bool,
+    /// The page (`0x1004` of the menu's tile).
+    page: u32,
+    /// The sub page (`0x1004` of the skill page's tile).
+    sub: u32,
+    /// The right stick's axis.
+    axis: i32,
+    /// The stick's magnitude against the dead zone 0.5.
+    magnitude: f64,
+    /// The time against the scroll's repeat time.
+    time: u32,
+    /// The scroll's repeat time (`011dad5c`; 0 before the first press).
+    repeat: u32,
+    /// The effects list visible.
+    visible: bool,
+    /// The manager's state test.
+    ready: bool,
+    /// Every `Tile::IsTrue` (the healing button's, the description scroll's).
+    on: bool,
+    /// `Tile::SetFloat` keeps its value (`Tile::GetValueFloat` of that trait answers it after).
+    sticks: bool,
+}
+
+/// `DoGamepad`'s worlds: each a variant of [`put_stats_pad`]. Worlds 8 and 9 are the first page
+/// without limb mode on sub pages 1 and 2; the magnitude 0.5 (world 8) and the time 100 (world 9)
+/// sit on the dead zone and the repeat time.
+#[rustfmt::skip]
+const STATS_PAD: [Pad; 10] = [
+    Pad { limb: false, page: 0, sub: 0, axis: 5, magnitude: 1.0, time: 500, repeat: 100, visible: true, ready: true, on: true, sticks: true },
+    Pad { limb: true, page: 0, sub: 0, axis: 0, magnitude: 0.25, time: 50, repeat: 100, visible: false, ready: true, on: true, sticks: false },
+    Pad { limb: false, page: 2, sub: 1, axis: -5, magnitude: 1.0, time: 50, repeat: 100, visible: true, ready: true, on: false, sticks: false },
+    Pad { limb: true, page: 2, sub: 2, axis: 5, magnitude: 0.25, time: 500, repeat: 100, visible: false, ready: true, on: true, sticks: false },
+    Pad { limb: false, page: 4, sub: 0, axis: 0, magnitude: 1.0, time: 500, repeat: 100, visible: false, ready: false, on: false, sticks: false },
+    Pad { limb: true, page: 4, sub: 1, axis: -5, magnitude: 1.0, time: 500, repeat: 0, visible: true, ready: true, on: true, sticks: true },
+    Pad { limb: false, page: 2, sub: 2, axis: 5, magnitude: 1.0, time: 50, repeat: 100, visible: true, ready: true, on: false, sticks: false },
+    Pad { limb: true, page: 0, sub: 1, axis: -5, magnitude: 1.0, time: 50, repeat: 100, visible: true, ready: false, on: false, sticks: false },
+    Pad { limb: false, page: 0, sub: 1, axis: 5, magnitude: 0.5, time: 500, repeat: 0, visible: true, ready: true, on: true, sticks: true },
+    Pad { limb: false, page: 0, sub: 2, axis: -5, magnitude: 1.0, time: 100, repeat: 100, visible: false, ready: true, on: true, sticks: false },
 ];
-const STATS_PAD_VARIANTS: [u32; 8] = [0, 5, 2, 3, 4, 1, 6, 7];
+const STATS_PAD_VARIANTS: [u32; 10] = [0, 5, 2, 3, 4, 1, 6, 7, 8, 9];
 
 /// [`put_stats_third`] in limb mode (its variant 0) or not (3), with the stats menu on top of a ready
 /// manager's enter stack (as [`put_stats_page`]); `Tile::GetValueFloat` answers `0x1004` with the
-/// sub page for the skill page's tile (`+0xa4`) and the page for any other, every other float 1.0;
-/// the stick (`00a23390`) at -5, 0 or 5, its magnitude (`00408820`) 1.0 or 0.25 against the dead
-/// zone 0.5 (the double at `010745f8`), the time (`00457fe0`) 500 or 50 against the repeat time 100
-/// (`011dad5c`), the effects list's visibility (`00a040a0`) and the manager's state test
-/// (`004b71d0`, which `00709d40` asks) by the variant.
+/// sub page for the skill page's tile (`+0xa4`) and the page for any other, the trait of the last
+/// `Tile::SetFloat` with its value when the world's values stick, every other float 1.0; the stick
+/// (`00a23390`), its magnitude (`00408820`) against the dead zone 0.5 (the double at `010745f8`),
+/// the time (`00457fe0`) against the repeat time (`011dad5c`), the effects list's visibility
+/// (`00a040a0`), every `Tile::IsTrue` (`00a01230`) and the manager's state test (`004b71d0`, which
+/// `00709d40` asks) by the variant.
 fn put_stats_pad(e: &mut Engine, variant: u32) {
-    let (limb, page, sub, axis, above, passed, visible, ready) = STATS_PAD[variant as usize];
-    put_stats_third(e, if limb { 0 } else { 3 });
+    let world = &STATS_PAD[variant as usize];
+    let (page, sub, axis, magnitude, time) = (
+        world.page,
+        world.sub,
+        world.axis,
+        world.magnitude,
+        world.time,
+    );
+    let (visible, ready, on, sticks) = (world.visible, world.ready, world.on, world.sticks);
+    put_stats_third(e, if world.limb { 0 } else { 3 });
     let manager = e.mem.u32(0x011d_8a80);
     if manager != 0 {
         let mut top = 0;
@@ -7648,13 +7686,20 @@ fn put_stats_pad(e: &mut Engine, variant: u32) {
         e.mem.set_u32(manager + 0x114 + 4 * top, 0x3eb);
     }
     let menu = arena::object(3);
+    let stored = std::rc::Rc::new(std::cell::Cell::new(None::<(u32, f32)>));
+    let set = std::rc::Rc::clone(&stored);
+    e.register_double(0x00a0_12d0, move |_, words| {
+        if sticks {
+            set.set(Some((words[1], f32::from_bits(words[2]))));
+        }
+        Ret::default()
+    });
     e.register_double(0x00a0_11b0, move |e, words| Ret {
-        st0: if words[1] != 0x1004 {
-            1.0
-        } else if words[0] == e.mem.u32(menu + 0xa4) {
-            f64::from(sub)
-        } else {
-            f64::from(page)
+        st0: match stored.get() {
+            _ if words[1] == 0x1004 && words[0] == e.mem.u32(menu + 0xa4) => f64::from(sub),
+            _ if words[1] == 0x1004 => f64::from(page),
+            Some((id, value)) if id == words[1] => f64::from(value),
+            _ => 1.0,
         },
         ..Ret::default()
     });
@@ -7664,16 +7709,20 @@ fn put_stats_pad(e: &mut Engine, variant: u32) {
     });
     e.mem.set_u64(0x0107_45f8, 0.5f64.to_bits());
     e.register_double(0x0040_8820, move |_, _| Ret {
-        st0: if above { 1.0 } else { 0.25 },
+        st0: magnitude,
         ..Ret::default()
     });
-    e.mem.set_u32(0x011d_ad5c, 100);
+    e.mem.set_u32(0x011d_ad5c, world.repeat);
     e.register_double(0x0045_7fe0, move |_, _| Ret {
-        eax: if passed { 500 } else { 50 },
+        eax: time,
         ..Ret::default()
     });
     e.register_double(0x00a0_40a0, move |_, _| Ret {
         eax: u32::from(visible),
+        ..Ret::default()
+    });
+    e.register_double(0x00a0_1230, move |_, _| Ret {
+        eax: u32::from(on),
         ..Ret::default()
     });
     e.register_double(0x004b_71d0, move |_, _| Ret {
@@ -7706,7 +7755,7 @@ fn stats_menu_do_gamepad_every_key_diff() {
         &STATS_PAD_VARIANTS,
         put_stats_pad,
     )
-    .max_cases(200)
+    .max_cases(260)
     .max_calls(2000)
     .run()
     .assert_same();
@@ -7737,9 +7786,24 @@ fn put_stats_enter(e: &mut Engine, page: u32) {
         e.mem.set_u32(menu + list + 4, item);
         e.mem.set_u32(menu + list + 8, 0);
     }
+    // Page 0's fade-in: the record word of either healing mode (`+0x30`, `+0x60`) set, the manager's
+    // state test (`004b71d0`) false, and the fade object (`011dace4`, object 91) holding the clicked
+    // tile in its group 2 only.
+    e.mem.set_u32(menu + 0x30, object(106));
+    e.mem.set_u32(menu + 0x60, object(106));
+    e.register_double(0x004b_71d0, |_, _| Ret::default());
+    let fade = object(91);
+    e.mem.set_u32(0x011d_ace4, fade);
+    for group in 0..6u32 {
+        let list = fade + 4 + 8 * group;
+        e.mem
+            .set_u32(list, if group == 2 { object(116) } else { 0 });
+        e.mem.set_u32(list + 4, 0);
+    }
 }
 
-/// `DoEnter` on each page, the clicked tile in the page's list or not.
+/// `DoEnter` on each page, the clicked tile in the page's list or not; on page 0 the tile in a fade
+/// group (the fade-in, the limb sound and limb mode turned on).
 #[test]
 fn stats_menu_do_enter_every_page_diff() {
     Diff::new(engine_core::entry!(
