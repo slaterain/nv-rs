@@ -346,8 +346,11 @@ usable_games() {
 remember=0
 game=''
 if [ -n "$opt_game" ]; then
-    game=$(typed_folder "$opt_game")
-    has_game "$game" || fail "$(not_a_game "$game")"
+    game=$opt_game
+    if ! has_game "$game"; then
+        game=$(typed_folder "$opt_game")
+        has_game "$game" || fail "$(not_a_game "$game")"
+    fi
     remember=1
 elif [ -n "${NV_RS_GAME:-}" ]; then
     game=$NV_RS_GAME

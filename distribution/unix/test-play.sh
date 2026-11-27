@@ -211,6 +211,13 @@ check "7 stops" '[ $st = 1 ] && printf "%s" "$out" | grep -q -- "--game FOLDER"'
 # 8. --game: checked, remembered; a folder without the game refused.
 out=$(run --game "$T/elsewhere" </dev/null 2>&1); st=$?
 check "8 refused" '[ $st = 1 ] && printf "%s" "$out" | grep -q "no game in"'
+# Both spellings hold a game. The shell has already passed the exact folder as one argument.
+literal="$other "
+cp -R "$other" "$literal"
+out=$(run --game "$literal" </dev/null 2>&1); st=$?
+check "8 literal folder preferred" '[ $st = 0 ] && [ "$(cat "$own/game-folder.txt")" = "$literal" ]'
+out=$(run --game "'$other'" </dev/null 2>&1); st=$?
+check "8 pasted quoted folder accepted" '[ $st = 0 ] && [ "$(cat "$own/game-folder.txt")" = "$other" ]'
 out=$(run --game "$other/Data" </dev/null 2>&1); st=$?
 check "8 Data folder taken" '[ $st = 0 ] && [ "$(cat "$own/game-folder.txt")" = "$other/Data" ]'
 
