@@ -27,6 +27,19 @@
 //! the record (the counters name the first difference). The backend draws the old form; one recording of the run
 //! replayed as its items instead (`d3d9_stream::kept::Form`) gives the pictures and per-draw digests to compare.
 //!
+//! Check mode is not the pure old path: a draw with a record first replays it (its writes and setter calls stay in
+//! the game state) and then runs its set-up. When the record is stale, a write the set-up does not repeat stays, so
+//! from then on the check run's game state can differ from an off run's; the op compare counts each such record.
+//! The direct proof that `1` draws as off does is a stepped `1` recording against a stepped off recording of the
+//! same route (`record_compare --digests`, which expands items through `d3d9_stream::Kept`).
+//!
+//! Only the world draw is kept: the world pass's two halves (`00b6ba20`, `00b6b930`: [`world_draw`]); every other
+//! scene (first person, the water reflection, the extra scenes, 3D menus, the local map, extra cameras and the
+//! minimap: `00b6c0d0`, [`outside_world_draw`]) draws as always, so a record never holds another camera's values.
+//! A key whose record breaks [`BACK_OFF_AFTER`] times in a row is drawn plainly for its next [`REST_DRAWS`] draws
+//! (doubling while it keeps breaking, up to [`MOST_REST_DRAWS`]): a build costs several plain set-ups, and a moving
+//! object's record never replays.
+//!
 //! Not kept: pass types with their own set-ups (0xfc, 0xfd, 0x102, 0xca, 0xd1) and 4, 5, 0x250, 0x251, a shader
 //! other than the shadow light shader's set-ups, a skinned geometry, and everything while the drawing thread's
 //! packet is open (stage 1 of the records).
@@ -38,6 +51,8 @@ use engine_core::real_threads::{self as rt, DeviceCall};
 use engine_core::Engine;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Instant;
 
 /// `NV_DRAW_ITEMS` ([`engine_core::draw_items::Mode`]), with the engineers' audit.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -187,6 +202,9 @@ pub enum Leaf {
     },
     /// A constant map's defined constant (`super::defined::set_defined_constant`): its twelve words.
     Defined([u32; 12]),
+    /// The pixel entry 19 (`super::super::shader::geometry::pixel_entry_19`): the frame's clip plane, the eye and the
+    /// near and far distances.
+    Entry19,
 }
 
 /// What a set-up did, in its order.
@@ -222,6 +240,24 @@ struct Record {
     /// The backend's record of its draw's own commands (`engine_core::draw_items`): its number and their shape's
     /// hash; none when they could not be sent as a record (a setter's send between them, or no draw).
     item: Option<(u32, u64)>,
+    /// How many times in a row the key's record broke (built again with a record there), and how many of the key's
+    /// next draws run plainly ([`BACK_OFF_AFTER`]).
+    streak: u32,
+    rest: u32,
+}
+
+/// After this many breaks in a row a key rests: its next [`REST_DRAWS`] draws run plainly (no logs, no compare),
+/// doubled at each further break up to [`MOST_REST_DRAWS`]; a replay ends the streak.
+pub const BACK_OFF_AFTER: u32 = 4;
+pub const REST_DRAWS: u32 = 64;
+pub const MOST_REST_DRAWS: u32 = 4096;
+
+/// The draws a key rests after its `streak`th break in a row (0 below [`BACK_OFF_AFTER`]).
+fn rest_after(streak: u32) -> u32 {
+    if streak < BACK_OFF_AFTER {
+        return 0;
+    }
+    (REST_DRAWS << (streak - BACK_OFF_AFTER).min(16)).min(MOST_REST_DRAWS)
 }
 
 /// The counters (`NV_DRAW_ITEMS` reports them every [`REPORT_EVERY`] draws it saw).
@@ -258,6 +294,14 @@ struct Stats {
     check_items_dropped: u64,
     /// Every record dropped because the backend's were gone (a device made or reset).
     epochs: u64,
+    /// Draws run plainly while their key rested ([`BACK_OFF_AFTER`]), and the times a key began to rest.
+    rested: u64,
+    rests: u64,
+    /// The time spent in builds, replays and resting plain draws (each set-up and draw with its logs, look-ups and
+    /// compares), nanoseconds: a build's cost against a plain set-up's.
+    build_ns: u64,
+    replay_ns: u64,
+    rest_ns: u64,
 }
 
 const REPORT_EVERY: u64 = 1_000_000;
@@ -269,17 +313,60 @@ struct Keep {
     /// The setter calls of the record being built, and how deep in setters it is.
     leaves: Option<Vec<Leaf>>,
     leaf_depth: u32,
-    /// The next backend record's number (never 0), the backend's epoch the records are of, and the numbers of
-    /// backend records no record of this side holds any more, not yet sent to be dropped.
-    next_id: u32,
+    /// The backend's epoch the records are of, and the numbers of backend records no record of this side holds any
+    /// more, not yet sent to be dropped.
     epoch: u64,
     forgotten: Vec<u32>,
+}
+
+/// The next backend record's number: one counter for the run, since the backend keeps one table for every thread.
+static NEXT_ID: AtomicU32 = AtomicU32::new(1);
+
+/// A new backend record's number (never 0).
+fn next_id() -> u32 {
+    loop {
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        if id != 0 {
+            return id;
+        }
+    }
 }
 
 thread_local! {
     static KEEP: RefCell<Keep> = RefCell::new(Keep::default());
     /// True while this thread builds a record (the setters' one test).
     static BUILDING: Cell<bool> = const { Cell::new(false) };
+    /// How deep this thread is in the world pass's halves ([`world_draw`]); 0 in any other scene.
+    static WORLD: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Restores [`WORLD`] as it was, also when a stop unwinds.
+struct WorldScope(u32);
+
+impl Drop for WorldScope {
+    fn drop(&mut self) {
+        WORLD.with(|w| w.set(self.0));
+    }
+}
+
+/// `f` as the world pass's draw (the halves `00b6ba20` and `00b6b930` around the accumulator's slot): only there
+/// are draws kept.
+pub fn world_draw<R>(f: impl FnOnce() -> R) -> R {
+    let _scope = WorldScope(WORLD.with(|w| w.replace(w.get() + 1)));
+    f()
+}
+
+/// `f` as another scene's draw (`00b6c0d0`: water reflections, menus, the extra scenes, extra cameras), also when
+/// one is drawn from inside the world pass: nothing kept there.
+pub fn outside_world_draw<R>(f: impl FnOnce() -> R) -> R {
+    let _scope = WorldScope(WORLD.with(|w| w.replace(0)));
+    f()
+}
+
+/// Whether this thread draws the world pass now ([`world_draw`]).
+#[inline]
+fn in_world_draw() -> bool {
+    WORLD.with(Cell::get) != 0
 }
 
 /// Whether this thread is building a record: the leaf setters' one test.
@@ -308,9 +395,11 @@ pub fn leaf(e: &mut Engine, leaf: Leaf, body: impl FnOnce(&mut Engine)) {
         }
     });
     if outer {
-        // The run of the draw's own commands held so far ends here (`engine_core::draw_items`), as at the replay.
-        draw_items::interrupt(e);
+        // The logs paused first: the run's flush reaches the device's state outside a noted call, which the recorder
+        // would count as a call it cannot make again. Then the run of the draw's own commands held so far ends here
+        // (`engine_core::draw_items`), as at the replay.
         pause(e, true);
+        draw_items::interrupt(e);
     }
     body(e);
     if outer {
@@ -342,8 +431,12 @@ fn statics(e: &Engine, key: Key) -> Vec<u8> {
     out
 }
 
+/// The texture arrays of the shader property (`+0xac`, six arrays of `+0xa8`'s count of texture pointers) a record
+/// covers up to this many pointers each.
+const MOST_TEXTURES: u32 = 16;
+
 /// Where [`statics`] reads: (address, length).
-fn statics_ranges(e: &Engine, key: Key) -> [(u32, u32); 9] {
+fn statics_ranges(e: &Engine, key: Key) -> [(u32, u32); 16] {
     let (geometry, _, shader, state, _) = key;
     let word = |a: u32| {
         let mut b = [0u8; 4];
@@ -351,7 +444,38 @@ fn statics_ranges(e: &Engine, key: Key) -> [(u32, u32); 9] {
             .try_read(a, &mut b)
             .map_or(0, |()| u32::from_le_bytes(b))
     };
+    let property = word(state.wrapping_add(0xc));
+    let count = {
+        let mut b = [0u8; 2];
+        e.mem
+            .try_read(property.wrapping_add(0xa8), &mut b)
+            .map_or(0, |()| u32::from(u16::from_le_bytes(b)))
+    };
+    let array = |i: u32| {
+        (
+            word(property.wrapping_add(0xac + 4 * i)),
+            4 * count.min(MOST_TEXTURES),
+        )
+    };
+    let effect = word(property.wrapping_add(0xdc));
     [
+        // The texture pointers in the property's six arrays (the texture set-up stores them into the pass's stages,
+        // a write the record replays as it was): a texture replaced in an array (a retexture, a reload) breaks it.
+        array(0),
+        array(1),
+        array(2),
+        array(3),
+        array(4),
+        array(5),
+        // The texture effect's texture (`+0xdc`, its `+0x6c`), which the shadow pass types' stage gets.
+        (
+            if effect == 0 {
+                0
+            } else {
+                effect.wrapping_add(0x6c)
+            },
+            4,
+        ),
         (geometry, 0xc0),
         (state, 0x14),
         (word(state), 0x20),
@@ -378,17 +502,37 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
     // A test that set its own mode is alone on its thread: other tests' packets (open on other threads) do not
     // concern it.
     let packets = (capture::active() || capture::viewing(e)) && TEST_MODE.with(Cell::get).is_none();
-    if mode == Mode::Off || packets || building() {
+    if mode == Mode::Off || packets || building() || !in_world_draw() {
         body(e);
         return;
     }
     follow_epoch();
-    let snapshot = statics(e, key);
-    // What breaks a kept record, if anything: None reuses it.
-    let verdict = KEEP.with(|k| {
+    // A key that kept breaking rests: drawn plainly, its record (still compared when the rest ends) left alone.
+    let resting = KEEP.with(|k| {
         let mut k = k.borrow_mut();
         let k = &mut *k;
         k.stats.seen += 1;
+        match k.records.get_mut(&key) {
+            Some(r) if r.rest > 0 => {
+                r.rest -= 1;
+                k.stats.rested += 1;
+                true
+            }
+            _ => false,
+        }
+    });
+    if resting {
+        let start = Instant::now();
+        body(e);
+        count(|s| s.rest_ns += nanos(start));
+        report();
+        return;
+    }
+    let start = Instant::now();
+    let snapshot = statics(e, key);
+    // What breaks a kept record, if anything: None reuses it.
+    let verdict = KEEP.with(|k| {
+        let k = k.borrow();
         match k.records.get(&key) {
             None => Some(Break::New),
             Some(r) if !r.replayable => Some(Break::Unkeepable),
@@ -428,12 +572,14 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
             }
             KEEP.with(|k| {
                 let mut k = k.borrow_mut();
-                let seen = k.stats.seen;
+                let k = &mut *k;
                 if let Some(r) = k.records.get_mut(&key) {
-                    r.last_used = seen;
+                    r.last_used = k.stats.seen;
+                    r.streak = 0;
                 }
+                k.stats.replayed += 1;
+                k.stats.replay_ns += nanos(start);
             });
-            count(|s| s.replayed += 1);
         }
         None => {
             // Check: the item this draw would have been, made from the record's replay as `On` makes it; then the
@@ -478,6 +624,7 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
                         ..built
                     },
                 );
+                k.stats.build_ns += nanos(start);
             });
         }
         Some(why) => {
@@ -485,6 +632,13 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
             KEEP.with(|k| {
                 let mut k = k.borrow_mut();
                 let k = &mut *k;
+                // A record there broke: one more in the streak (a new key starts none).
+                let streak = match why {
+                    Break::New => 0,
+                    _ => k.records.get(&key).map_or(0, |r| r.streak) + 1,
+                };
+                let rest = rest_after(streak);
+                k.stats.rests += u64::from(rest != 0);
                 match why {
                     Break::New => k.stats.built_new += 1,
                     Break::Statics => k.stats.built_statics += 1,
@@ -502,9 +656,12 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
                         statics: snapshot,
                         last_used: k.stats.seen,
                         item: sent,
+                        streak,
+                        rest,
                         ..built
                     },
                 );
+                k.stats.build_ns += nanos(start);
             });
         }
     }
@@ -531,12 +688,7 @@ fn build_sent(
     old: Option<(u32, u64)>,
     beside: bool,
 ) -> (Record, Option<(u32, u64)>) {
-    let id = KEEP.with(|k| {
-        let mut k = k.borrow_mut();
-        let id = k.next_id.max(1);
-        k.next_id = id.wrapping_add(1);
-        id
-    });
+    let id = next_id();
     let forget = old.map_or(0, |(old, _)| old);
     let ask = Ask::Record {
         id,
@@ -597,25 +749,27 @@ const FORGET_BATCH: usize = 256;
 /// Above [`MAX_RECORDS`] records, the ones not used in the last [`STALE_AFTER`] draws are dropped (geometry freed, a cell
 /// unloaded, a game loaded: their keys are dead or about to be reused), their backend records with them.
 fn evict() {
-    KEEP.with(|k| {
-        let mut k = k.borrow_mut();
-        let k = &mut *k;
-        if k.records.len() > MAX_RECORDS {
-            let cutoff = k.stats.seen.saturating_sub(STALE_AFTER);
-            let forgotten = &mut k.forgotten;
-            k.records.retain(|_, r| {
-                let keep = r.last_used >= cutoff;
-                if !keep {
-                    forgotten.extend(r.item.map(|(id, _)| id));
-                }
-                keep
-            });
-            if k.records.len() > MAX_RECORDS {
-                forgotten.extend(k.records.values().filter_map(|r| r.item.map(|(id, _)| id)));
-                k.records.clear();
+    KEEP.with(|k| evict_from(&mut k.borrow_mut(), MAX_RECORDS, STALE_AFTER));
+}
+
+/// [`evict`] with its limits: above `most` records, those unused in the last `stale` draws go; if still above,
+/// all go.
+fn evict_from(k: &mut Keep, most: usize, stale: u64) {
+    if k.records.len() > most {
+        let cutoff = k.stats.seen.saturating_sub(stale);
+        let forgotten = &mut k.forgotten;
+        k.records.retain(|_, r| {
+            let keep = r.last_used >= cutoff;
+            if !keep {
+                forgotten.extend(r.item.map(|(id, _)| id));
             }
+            keep
+        });
+        if k.records.len() > most {
+            forgotten.extend(k.records.values().filter_map(|r| r.item.map(|(id, _)| id)));
+            k.records.clear();
         }
-    });
+    }
 }
 
 const MAX_RECORDS: usize = 40_000;
@@ -624,6 +778,11 @@ const STALE_AFTER: u64 = 2_000_000;
 /// A length or an index as a guest word (they are far below 4 G here).
 fn n32(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+/// Nanoseconds since `start`.
+fn nanos(start: Instant) -> u64 {
+    u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX)
 }
 
 /// Why a record was built again.
@@ -668,7 +827,7 @@ fn build(e: &mut Engine, key: Key, body: &mut impl FnMut(&mut Engine)) -> Record
     }
     e.mem.store_log_begin(low, top);
     rt::device_record_begin();
-    capture::keep_reads_begin();
+    capture::keep_reads_begin(low, top);
     KEEP.with(|k| k.borrow_mut().leaves = Some(Vec::new()));
     BUILDING.with(|b| b.set(true));
     body(e);
@@ -792,6 +951,8 @@ fn assemble(
             replayable: true,
             last_used: 0,
             item: None,
+            streak: 0,
+            rest: 0,
         },
         written,
     )
@@ -1006,6 +1167,11 @@ fn replay_leaf(e: &mut Engine, leaf: Leaf) {
                 )
             );
         }
+        Leaf::Entry19 => typed_call!(
+            SHADER,
+            0x00b7_9730,
+            crate::shader::geometry::pixel_entry_19(e)
+        ),
     }
 }
 
@@ -1094,15 +1260,19 @@ fn summary(s: &Stats, records: usize) -> String {
         .map(|(at, n)| format!("{at}: {n}"))
         .collect::<Vec<_>>()
         .join(", ");
+    let built = s.built_new + s.built_statics + s.built_inputs + s.built_unkeepable;
+    let each = |ns: u64, n: u64| ns as f64 / 1000.0 / n.max(1) as f64;
     format!(
-        "NV_DRAW_ITEMS: {} draws: {} replayed, {} built (new {}, own bytes changed {}, inputs changed {}, device reached outside the record {}); {} checked, {} differed{}; {records} records; inputs that broke records most: [{top}]; differed first at: [{differed}]{audit}; items: {} drawn, {} plain, {} not the record's; backend records: {} sent, {} plain; check items: {} beside their old form, {} dropped; records dropped for a new device: {}",
+        "NV_DRAW_ITEMS: {} draws: {} replayed, {} built (new {}, own bytes changed {}, inputs changed {}, device reached outside the record {}), {} plain while resting ({} rests); {} checked, {} differed{}; {records} records; inputs that broke records most: [{top}]; differed first at: [{differed}]{audit}; items: {} drawn, {} plain, {} not the record's; backend records: {} sent, {} plain; check items: {} beside their old form, {} dropped; records dropped for a new device: {}; microseconds each: build {:.2}, replay {:.2}, plain {:.2}",
         s.seen,
         s.replayed,
-        s.built_new + s.built_statics + s.built_inputs + s.built_unkeepable,
+        built,
         s.built_new,
         s.built_statics,
         s.built_inputs,
         s.built_unkeepable,
+        s.rested,
+        s.rests,
         s.checked,
         s.mismatched,
         s.first_mismatch.as_deref().map_or_else(String::new, |m| format!(" (first: {m})")),
@@ -1114,6 +1284,9 @@ fn summary(s: &Stats, records: usize) -> String {
         s.check_items,
         s.check_items_dropped,
         s.epochs,
+        each(s.build_ns, built + s.checked),
+        each(s.replay_ns, s.replayed),
+        each(s.rest_ns, s.rested),
     )
 }
 
@@ -1134,6 +1307,15 @@ pub fn reset_for_tests() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A key whose geometry and properties lie at unmapped addresses (its own bytes a constant fill).
+    const KEY: Key = (0x10, 1, 0x20, 0x30, 0);
+    const OTHER_KEY: Key = (0x14, 1, 0x20, 0x30, 0);
+
+    /// `f` drawn as the world pass draws ([`world_draw`]): only there are draws kept.
+    fn world<R>(f: impl FnOnce() -> R) -> R {
+        world_draw(f)
+    }
 
     /// A record from logs: writes and marks in order become the ops; a read of bytes written before it is not an
     /// input, a second read of an address neither; a read of untouched bytes is, with its bytes.
@@ -1211,12 +1393,11 @@ mod tests {
             let _ = capture::word(e, scratch, 0);
             e.mem.set_u32(out, value + 1 + extra.get());
         };
-        let key = (0x10, 1, 0x20, 0x30, 0);
-        draw(&mut e, key, body);
+        world(|| draw(&mut e, KEY, body));
         assert_eq!((runs.get(), e.mem.u32(out)), (1, 6));
         e.mem.set_u32(out, 0);
         e.mem.set_u32(scratch, 9);
-        draw(&mut e, key, body);
+        world(|| draw(&mut e, KEY, body));
         assert_eq!(runs.get(), 1, "replayed, not run: {}", summary_now());
         assert_eq!(
             (e.mem.u32(out), e.mem.u32(scratch)),
@@ -1224,7 +1405,7 @@ mod tests {
             "the writes replayed"
         );
         e.mem.set_u32(input, 7);
-        draw(&mut e, key, body);
+        world(|| draw(&mut e, KEY, body));
         assert_eq!(
             (runs.get(), e.mem.u32(out)),
             (2, 8),
@@ -1233,7 +1414,7 @@ mod tests {
         // Check: the body runs on a hit; a body that writes something else now is counted.
         set_mode_for_tests(Some(Mode::Check));
         extra.set(1);
-        draw(&mut e, key, body);
+        world(|| draw(&mut e, KEY, body));
         assert_eq!((runs.get(), e.mem.u32(out)), (3, 9));
         let s = summary_now();
         assert!(s.contains("1 replayed"), "{s}");
@@ -1241,6 +1422,226 @@ mod tests {
         assert!(s.contains("inputs changed 1"), "{s}");
         set_mode_for_tests(None);
         reset_for_tests();
+    }
+
+    /// The set-up's own stack locals are no inputs (review of #1108, the high finding): a body that makes a value
+    /// in a local and reads it back through the accessors (as `SetupGeometryConstants` does with the inverse world
+    /// matrix) is replayed although another key's set-up has since left other bytes in the same local.
+    #[test]
+    fn a_set_ups_own_stack_locals_are_no_inputs() {
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x100);
+        let (input_a, input_b, out) = (block, block + 4, block + 0x10);
+        e.mem.set_u32(input_a, 5);
+        e.mem.set_u32(input_b, 9);
+        reset_for_tests();
+        set_mode_for_tests(Some(Mode::On));
+        let runs = Cell::new(0u32);
+        let local_at = Cell::new(0u32);
+        let body = |input: u32| {
+            let (runs, local_at) = (&runs, &local_at);
+            move |e: &mut Engine| {
+                runs.set(runs.get() + 1);
+                let value = capture::word(e, input, 0);
+                e.with_stack(0x40, |e, local| {
+                    local_at.set(local.addr());
+                    e.mem.set_u32(local.addr(), value * 3);
+                    let back: u32 = capture::own_at(e, local.addr());
+                    e.mem.set_u32(out, back);
+                });
+            }
+        };
+        world(|| draw(&mut e, KEY, body(input_a)));
+        assert!(
+            e.in_locals(local_at.get()),
+            "the body's local is on the stack for locals"
+        );
+        world(|| draw(&mut e, OTHER_KEY, body(input_b)));
+        assert_eq!(e.mem.u32(local_at.get()), 27, "the other key's value");
+        assert_eq!((runs.get(), e.mem.u32(out)), (2, 27));
+        world(|| draw(&mut e, KEY, body(input_a)));
+        assert_eq!(runs.get(), 2, "replayed: {}", summary_now());
+        assert_eq!(e.mem.u32(out), 15, "the record's write");
+        let s = summary_now();
+        assert!(s.contains("1 replayed, 2 built (new 2,"), "{s}");
+        set_mode_for_tests(None);
+        reset_for_tests();
+    }
+
+    /// Only the world pass's draws are kept (review of #1108): outside [`world_draw`], and inside another scene's
+    /// draw within it ([`outside_world_draw`]), every draw runs as always and nothing is noted.
+    #[test]
+    fn only_the_world_draw_is_kept() {
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x10);
+        e.mem.set_u32(block, 5);
+        reset_for_tests();
+        set_mode_for_tests(Some(Mode::On));
+        let runs = Cell::new(0u32);
+        let body = |e: &mut Engine| {
+            runs.set(runs.get() + 1);
+            let value = capture::word(e, block, 0);
+            e.mem.set_u32(block + 4, value);
+        };
+        draw(&mut e, KEY, body);
+        draw(&mut e, KEY, body);
+        assert_eq!(runs.get(), 2);
+        assert!(summary_now().starts_with("NV_DRAW_ITEMS: 0 draws"));
+        world(|| {
+            draw(&mut e, KEY, body);
+            outside_world_draw(|| draw(&mut e, KEY, body));
+            draw(&mut e, KEY, body);
+        });
+        assert_eq!(runs.get(), 4, "built, plain in the other scene, replayed");
+        draw(&mut e, KEY, body);
+        assert_eq!(runs.get(), 5, "after the world draw: plain");
+        let s = summary_now();
+        assert!(
+            s.starts_with("NV_DRAW_ITEMS: 2 draws: 1 replayed, 1 built"),
+            "{s}"
+        );
+        set_mode_for_tests(None);
+        reset_for_tests();
+    }
+
+    /// A key whose record keeps breaking rests (review of #1108): after [`BACK_OFF_AFTER`] breaks in a row its next
+    /// [`REST_DRAWS`] draws run plainly, then it is compared and built again, resting twice as long; a replay ends
+    /// a streak.
+    #[test]
+    fn a_key_that_keeps_breaking_rests() {
+        assert_eq!(
+            [0, 1, 3, 4, 5, 6, 9, 30, 99].map(rest_after),
+            [0, 0, 0, 64, 128, 256, 2048, 4096, 4096]
+        );
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x10);
+        reset_for_tests();
+        set_mode_for_tests(Some(Mode::On));
+        let runs = Cell::new(0u32);
+        let body = |e: &mut Engine| {
+            runs.set(runs.get() + 1);
+            let value = capture::word(e, block, 0);
+            e.mem.set_u32(block + 4, value);
+        };
+        let moved = |e: &mut Engine| {
+            e.mem.set_u32(block, e.mem.u32(block) + 1);
+            world(|| draw(e, KEY, body));
+        };
+        // New, then four breaks: the fourth starts a rest.
+        for _ in 0..5 {
+            moved(&mut e);
+        }
+        let s = summary_now();
+        assert!(
+            s.contains("5 built (new 1, own bytes changed 0, inputs changed 4"),
+            "{s}"
+        );
+        for _ in 0..REST_DRAWS {
+            moved(&mut e);
+        }
+        assert_eq!(runs.get(), 5 + REST_DRAWS, "every draw ran its body");
+        let s = summary_now();
+        assert!(s.contains(" 5 built "), "{s}");
+        assert!(s.contains("64 plain while resting (1 rests)"), "{s}");
+        moved(&mut e);
+        let s = summary_now();
+        assert!(s.contains(" 6 built ") && s.contains("(2 rests)"), "{s}");
+        assert_eq!(KEEP.with(|k| k.borrow().records[&KEY].rest), 2 * REST_DRAWS);
+        // A replay ends the streak: four breaks would rest, but three, a replay and a break do not.
+        let steady = |e: &mut Engine, step: u32| {
+            e.mem.set_u32(block + 8, e.mem.u32(block + 8) + step);
+            world(|| {
+                draw(e, OTHER_KEY, |e: &mut Engine| {
+                    let value = capture::word(e, block, 8);
+                    e.mem.set_u32(block + 12, value);
+                });
+            });
+        };
+        for step in [1, 1, 1, 1, 0, 1] {
+            steady(&mut e, step);
+        }
+        assert_eq!(
+            KEEP.with(|k| {
+                let k = k.borrow();
+                (k.records[&OTHER_KEY].streak, k.records[&OTHER_KEY].rest)
+            }),
+            (1, 0)
+        );
+        set_mode_for_tests(None);
+        reset_for_tests();
+    }
+
+    /// What a record keeps of its geometry and properties (review of #1108): the ranges, each pinned, the property's
+    /// six texture arrays by its texture count (at most [`MOST_TEXTURES`] each) and its texture effect's texture; a
+    /// texture replaced in one of the arrays breaks the record.
+    #[test]
+    fn a_records_own_bytes_cover_the_propertys_textures() {
+        let mut e = Engine::new();
+        let geometry = e.mem.alloc(0x100);
+        let state = e.mem.alloc(0x20);
+        let [first, property, alpha, shader, data, render, arrays, effect] =
+            [0x40, 0x100, 0x40, 0x80, 0x40, 0x60, 0x180, 0x80].map(|n| e.mem.alloc(n));
+        e.mem.set_u32(state, first);
+        e.mem.set_u32(state + 0xc, property);
+        e.mem.set_u32(state + 0x10, alpha);
+        e.mem.set_u32(geometry + 0xb8, data);
+        e.mem.set_u32(data + 0x34, render);
+        e.mem.set_u16(property + 0xa8, 3);
+        for i in 0..6 {
+            e.mem.set_u32(property + 0xac + 4 * i, arrays + 0x40 * i);
+        }
+        e.mem.set_u32(property + 0xdc, effect);
+        let key = (geometry, 0x60, shader, state, 0);
+        let array = |i: u32, len: u32| (arrays + 0x40 * i, len);
+        let mut want = (0..6).map(|i| array(i, 12)).collect::<Vec<_>>();
+        want.push((effect + 0x6c, 4));
+        want.extend([
+            (geometry, 0xc0),
+            (state, 0x14),
+            (first, 0x20),
+            (property, 0x24),
+            (property + 0x38, 0xc8),
+            (alpha, 0x20),
+            (shader, 0x80),
+            (data, 0x40),
+            (render, 0x50),
+        ]);
+        assert_eq!(statics_ranges(&e, key).to_vec(), want);
+        e.mem.set_u16(property + 0xa8, 100);
+        e.mem.set_u32(property + 0xdc, 0);
+        assert_eq!(statics_ranges(&e, key)[2], array(2, 4 * MOST_TEXTURES));
+        assert_eq!(statics_ranges(&e, key)[6], (0, 4));
+        e.mem.set_u16(property + 0xa8, 3);
+        // A retexture in place breaks the record.
+        reset_for_tests();
+        set_mode_for_tests(Some(Mode::On));
+        let runs = Cell::new(0u32);
+        let body = |e: &mut Engine| {
+            runs.set(runs.get() + 1);
+            e.mem.set_u32(render + 0x58, 1);
+        };
+        world(|| draw(&mut e, key, body));
+        world(|| draw(&mut e, key, body));
+        assert_eq!(runs.get(), 1, "replayed");
+        e.mem.set_u32(arrays + 0x80 + 8, 0x1234);
+        world(|| draw(&mut e, key, body));
+        assert_eq!(runs.get(), 2, "built again");
+        assert!(summary_now().contains("own bytes changed 1"));
+        set_mode_for_tests(None);
+        reset_for_tests();
+    }
+
+    /// Record numbers are one counter for the run (review of #1108): two threads never get the same one.
+    #[test]
+    fn record_numbers_are_one_counter_for_the_run() {
+        let other = std::thread::spawn(|| (0..500).map(|_| next_id()).collect::<Vec<_>>());
+        let mut all: Vec<u32> = (0..500).map(|_| next_id()).collect();
+        all.extend(other.join().expect("the other thread"));
+        let n = all.len();
+        all.sort_unstable();
+        all.dedup();
+        assert_eq!(all.len(), n);
+        assert!(!all.contains(&0));
     }
 
     thread_local! {
@@ -1253,7 +1654,8 @@ mod tests {
     }
 
     /// TEST DATA: the platform layer's side as a log (a record answered `RECORDED`, an item drawn); other threads'
-    /// tests see their own empty log and plain answers, as without hooks.
+    /// tests see their own empty log and plain answers, as without hooks. Its interrupt reaches the device's state
+    /// as the platform's flush does.
     static TEST_HOOKS: draw_items::Hooks = draw_items::Hooks {
         begin: |_, ask| ASKS.with(|a| a.borrow_mut().push(ask)),
         end: |_| match ASKS.with(|a| a.borrow().last().copied()) {
@@ -1263,13 +1665,25 @@ mod tests {
             Some(Ask::Item { .. }) => Done::Drawn,
             None => Done::Plain,
         },
-        interrupt: |_| (),
+        interrupt: |_| rt::note_device_state(),
         forget: |_, ids| DROPPED.with(|d| d.borrow_mut().extend_from_slice(ids)),
         epoch: || EPOCH.with(Cell::get),
     };
 
     fn asks() -> Vec<Ask> {
         ASKS.with(|a| std::mem::take(&mut *a.borrow_mut()))
+    }
+
+    /// The one record asked in `asks`, dropping `forget` and of a check run or not: its new number.
+    fn recorded(asks: &[Ask], forget: u32, check: bool) -> u32 {
+        match *asks {
+            [Ask::Record {
+                id,
+                forget: f,
+                check: c,
+            }] if f == forget && c == check && id != forget && id != 0 => id,
+            _ => panic!("not one record dropping {forget} (check {check}): {asks:?}"),
+        }
     }
 
     /// With items: a build's own commands go to the backend as a record of a new number (the old one dropped with
@@ -1292,39 +1706,41 @@ mod tests {
             let value = capture::word(e, input, 0);
             e.mem.set_u32(out, value + 1);
         };
-        let key = (0x10, 1, 0x20, 0x30, 0);
-        let record = |id, forget, check| Ask::Record { id, forget, check };
         let item = |id, check| Ask::Item {
             id,
             hash: 77,
             check,
         };
-        draw(&mut e, key, body);
-        assert_eq!(asks(), [record(1, 0, false)]);
-        draw(&mut e, key, body);
-        assert_eq!((asks(), runs.get()), (vec![item(1, false)], 1));
+        world(|| draw(&mut e, KEY, body));
+        let first = recorded(&asks(), 0, false);
+        world(|| draw(&mut e, KEY, body));
+        assert_eq!((asks(), runs.get()), (vec![item(first, false)], 1));
         e.mem.set_u32(input, 6);
-        draw(&mut e, key, body);
-        assert_eq!((asks(), runs.get()), (vec![record(2, 1, false)], 2));
+        world(|| draw(&mut e, KEY, body));
+        let second = recorded(&asks(), first, false);
+        assert_eq!(runs.get(), 2);
         set_mode_for_tests(Some(Mode::Check));
-        draw(&mut e, key, body);
-        assert_eq!(asks(), [item(2, true), record(3, 2, true)]);
+        world(|| draw(&mut e, KEY, body));
+        let both = asks();
+        assert_eq!(both.first(), Some(&item(second, true)), "{both:?}");
+        let third = recorded(&both[1..], second, true);
         assert_eq!((runs.get(), e.mem.u32(out)), (3, 7), "the old form drew");
         // A record that could not be sent: its replays plain, its number dropped later.
         set_mode_for_tests(Some(Mode::On));
         RECORDED.with(|r| r.set(None));
         e.mem.set_u32(input, 8);
-        draw(&mut e, key, body);
-        assert_eq!(asks(), [record(4, 3, false)]);
-        draw(&mut e, key, body);
+        world(|| draw(&mut e, KEY, body));
+        recorded(&asks(), third, false);
+        world(|| draw(&mut e, KEY, body));
         assert_eq!(asks(), [], "replayed with its own commands");
         assert_eq!(runs.get(), 4);
-        assert_eq!(KEEP.with(|k| k.borrow().forgotten.clone()), [3]);
+        assert_eq!(KEEP.with(|k| k.borrow().forgotten.clone()), [third]);
         // A new device: every record built again.
         RECORDED.with(|r| r.set(Some(77)));
         EPOCH.with(|n| n.set(1));
-        draw(&mut e, key, body);
-        assert_eq!((asks(), runs.get()), (vec![record(5, 0, false)], 5));
+        world(|| draw(&mut e, KEY, body));
+        recorded(&asks(), 0, false);
+        assert_eq!(runs.get(), 5);
         let s = summary_now();
         assert!(s.contains("items: 1 drawn, 0 plain"), "{s}");
         assert!(s.contains("backend records: 4 sent, 1 plain"), "{s}");
@@ -1336,6 +1752,112 @@ mod tests {
         EPOCH.with(|n| n.set(0));
         set_mode_for_tests(None);
         reset_for_tests();
+    }
+
+    /// A set-up that reached the device outside the calls the recorder saw is never replayed; a held run's flush
+    /// at a setter call (the hooks' interrupt, which reaches the device's state) is no such reach (review of #1108).
+    #[test]
+    fn only_a_device_reach_the_recorder_missed_stops_a_record() {
+        draw_items::install(&TEST_HOOKS);
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x10);
+        reset_for_tests();
+        set_mode_for_tests(Some(Mode::On));
+        let runs = Cell::new(0u32);
+        let body = |unseen: bool| {
+            let runs = &runs;
+            move |e: &mut Engine| {
+                runs.set(runs.get() + 1);
+                let value = capture::word(e, block, 0);
+                draw_items::interrupt(e);
+                if unseen {
+                    rt::note_device_state();
+                }
+                e.mem.set_u32(block + 4, value);
+            }
+        };
+        world(|| draw(&mut e, KEY, body(false)));
+        world(|| draw(&mut e, KEY, body(false)));
+        assert_eq!(runs.get(), 1, "replayed: {}", summary_now());
+        world(|| draw(&mut e, OTHER_KEY, body(true)));
+        world(|| draw(&mut e, OTHER_KEY, body(true)));
+        assert_eq!(runs.get(), 3);
+        assert!(summary_now().contains("device reached outside the record 1"));
+        let _ = asks();
+        set_mode_for_tests(None);
+        reset_for_tests();
+    }
+
+    /// Backend records no record holds any more are sent to be dropped in batches of [`FORGET_BATCH`].
+    #[test]
+    fn forgotten_records_go_to_the_backend_in_batches() {
+        draw_items::install(&TEST_HOOKS);
+        let mut e = Engine::new();
+        reset_for_tests();
+        DROPPED.with(|d| d.borrow_mut().clear());
+        let batch = n32(FORGET_BATCH);
+        KEEP.with(|k| k.borrow_mut().forgotten = (1..batch).collect());
+        send_forgotten(&mut e);
+        assert!(DROPPED.with(|d| d.borrow().is_empty()));
+        KEEP.with(|k| k.borrow_mut().forgotten.push(batch));
+        send_forgotten(&mut e);
+        assert_eq!(
+            DROPPED.with(|d| std::mem::take(&mut *d.borrow_mut())),
+            (1..=batch).collect::<Vec<_>>()
+        );
+        assert!(KEEP.with(|k| k.borrow().forgotten.is_empty()));
+        reset_for_tests();
+    }
+
+    /// Above the most records, those unused for long go with their backend records; if still above, all go.
+    #[test]
+    fn records_unused_for_long_are_dropped_with_their_backend_records() {
+        let record = |last_used: u64, id: u32| Record {
+            statics: Vec::new(),
+            inputs: Vec::new(),
+            ops: Vec::new(),
+            replayable: true,
+            last_used,
+            item: Some((id, 0)),
+            streak: 0,
+            rest: 0,
+        };
+        let mut k = Keep::default();
+        k.stats.seen = 100;
+        for (i, used) in [(1u32, 10u64), (2, 95), (3, 90)] {
+            k.records.insert((i, 0, 0, 0, 0), record(used, 10 + i));
+        }
+        evict_from(&mut k, 3, 10);
+        assert_eq!((k.records.len(), k.forgotten.len()), (3, 0));
+        evict_from(&mut k, 2, 10);
+        assert_eq!(k.forgotten, [11], "unused since before draw 90");
+        assert_eq!(k.records.len(), 2);
+        evict_from(&mut k, 1, 10);
+        k.forgotten.sort_unstable();
+        assert_eq!((k.records.len(), k.forgotten), (0, vec![11, 12, 13]));
+    }
+
+    /// Every accessor notes what it reads while a record is built, but not in the set-up's own locals; no
+    /// accessor takes a build for an open packet (review of #1108).
+    #[test]
+    fn the_accessors_note_their_reads_for_a_build() {
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x40);
+        capture::keep_reads_begin(block + 0x30, block + 0x40);
+        assert!(!capture::active());
+        let _ = capture::word(&e, block, 0);
+        let _ = capture::span(&e, block, 8, 0x10);
+        capture::image(&mut e, block, 0x10, 0x18, |_, _| ());
+        let _: u32 = capture::own_at(&e, block + 0x20);
+        let _: u32 = capture::own_at(&e, block + 0x30);
+        let reads = capture::keep_reads_end();
+        assert_eq!(
+            reads
+                .iter()
+                .map(|(at, bytes, _)| (*at - block, bytes.len()))
+                .collect::<Vec<_>>(),
+            [(0, 4), (8, 8), (0x10, 8), (0x20, 4)]
+        );
     }
 
     /// The check mode's report names the first op that differs, or the lengths.

@@ -168,8 +168,16 @@ struct Pending {
 }
 
 /// The most commands one record keeps: a draw's own commands are a handful (streams, indices,
-/// constants, the draw); more means the draw never came, and the record is given up.
-const MOST_COMMANDS: usize = 256;
+/// constants, the draw); more means the draw never came, and the record is given up. The game's
+/// side holds no longer run (`engine_platform`'s `d3d9items` sends a longer one as it came).
+pub const MOST_COMMANDS: usize = 256;
+
+/// A reporting [`Kept`] ([`Kept::reporting`]) prints its counts every this many frames.
+const REPORT_PRESENTS: u64 = 1000;
+
+/// ... and, when an item found no record or the wrong registers, or a record was cut, at most
+/// this often (frames).
+const BAD_REPORT_GAP: u64 = 60;
 
 /// A backend that carries out [`Cmd::RecordNext`], [`Cmd::DrawItem`] and [`Cmd::ForgetRecords`]
 /// and hands every other command to `inner` ([`Form`] says which form of a check run it carries
@@ -181,6 +189,12 @@ pub struct Kept<B> {
     pending: Option<Pending>,
     counts: Counts,
     warned: bool,
+    /// The game's own run ([`Kept::reporting`]): its counts printed at `Present`s; the frames
+    /// seen, the bad counts last printed and the frame before which no bad count is printed.
+    report: bool,
+    presents: u64,
+    reported_bad: u64,
+    quiet_until: u64,
 }
 
 impl<B: Backend> Kept<B> {
@@ -197,7 +211,53 @@ impl<B: Backend> Kept<B> {
             pending: None,
             counts: Counts::default(),
             warned: false,
+            report: false,
+            presents: 0,
+            reported_bad: 0,
+            quiet_until: 0,
         }
+    }
+
+    /// The game's own run: the counts go to the log ([`Kept::summary`]) every [`REPORT_PRESENTS`]
+    /// frames, and soon after an item found no record or the wrong registers or a record was cut
+    /// (the game's side cannot learn of those: such an item draws nothing).
+    pub fn reporting(mut self) -> Kept<B> {
+        self.report = true;
+        self
+    }
+
+    /// The counts as the log line gives them.
+    pub fn summary(&self) -> String {
+        let c = self.counts;
+        format!(
+            "NV_DRAW_ITEMS backend: {} records kept ({} now), {} items drawn, {} of the other form; {} items of no record, {} with the wrong registers, {} records cut",
+            c.records,
+            self.records.len(),
+            c.items,
+            c.other_form,
+            c.missing,
+            c.mismatched,
+            c.cut
+        )
+    }
+
+    /// A frame presented: the line to print, if one is due ([`Kept::reporting`]).
+    pub(crate) fn presented(&mut self) -> Option<String> {
+        if !self.report {
+            return None;
+        }
+        self.presents += 1;
+        let bad = self.counts.missing + self.counts.mismatched + self.counts.cut;
+        let due = self.presents % REPORT_PRESENTS == 0
+            || (bad != self.reported_bad && self.presents >= self.quiet_until);
+        if !due {
+            return None;
+        }
+        if bad != self.reported_bad {
+            self.reported_bad = bad;
+            self.quiet_until = self.presents + BAD_REPORT_GAP;
+        }
+        Some(self.summary())
     }
 
     pub fn inner(&self) -> &B {
@@ -312,6 +372,11 @@ impl<B: Backend> Backend for Kept<B> {
                 self.inner.execute(cmd)
             }
             _ => {
+                if matches!(cmd, Cmd::Present { .. }) {
+                    if let Some(line) = self.presented() {
+                        eprintln!("{line}");
+                    }
+                }
                 let Some(p) = self.pending.as_mut() else {
                     return self.inner.execute(cmd);
                 };

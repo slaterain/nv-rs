@@ -10,6 +10,21 @@
 //! any other call ends a run, which goes out as it came, so nothing is ever reordered. The run that
 //! ends with the draw is sent as the [`Ask`] says. Without the platform's hooks (tests, scripts) nothing is held:
 //! [`end`] answers [`Done::Plain`].
+//!
+//! The engineers' switches (players see only `sDrawItems`, the `Fallout.ini` row of `NV_DRAW_ITEMS`):
+//! - `NV_DRAW_ITEMS=1` / `check` (off by default): the world pass's plain lit geometries (the shadow light shader's
+//!   standard set-up, unskinned) drawn from kept records while nothing their set-ups read changed; `check` draws
+//!   every one as always and beside it the item it would have been (both forms in one recording; the set-up's work
+//!   compared with the record's). Every million draws a line `NV_DRAW_ITEMS: ...` gives the draws replayed, built
+//!   and why, resting, checked and differed (with the first difference), the items, and the microseconds a build,
+//!   a replay and a plain draw took. The backend's side (`d3d9_stream::Kept`) prints `NV_DRAW_ITEMS backend: ...`
+//!   every 1,000 frames and whenever an item found no record, the wrong registers, or a record was cut: those three
+//!   must stay 0. Not used while the drawing thread runs. A check run keeps every state set again to its value
+//!   (as `NV_D3D9_REPEATS=keep`), so the old form after an item is complete.
+//! - `NV_DRAW_ITEMS_AUDIT=1` with `check` (stepped threads only, slow): every 64th build also lists the guest reads
+//!   none of its record's inputs, writes, device structures, own bytes or locals covers (`uncovered` in the line).
+//! - `NV_REPLAY_ITEMS=items` for `d3d9-replay`, `NV_DIGESTS_ITEMS=1` for `replay_digests`: a check recording
+//!   replayed as its items instead of its old form (`record_compare --items` compares the two).
 
 use crate::Engine;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -117,16 +132,33 @@ pub fn install(hooks: &'static Hooks) {
     let _ = HOOKS.set(hooks);
 }
 
+/// `f` with this thread's device call recorder paused: a hook reaches the device's state outside any noted call
+/// (it sends what it held), which is no call of the draw the recorder could have missed
+/// ([`crate::real_threads::note_device_state`]).
+fn recorder_paused<R>(f: impl FnOnce() -> R) -> R {
+    struct Resume;
+    impl Drop for Resume {
+        fn drop(&mut self) {
+            crate::real_threads::device_record_pause(false);
+        }
+    }
+    crate::real_threads::device_record_pause(true);
+    let _resume = Resume;
+    f()
+}
+
 /// The draw's own commands from here are held for `ask` ([`end`]).
 pub fn begin(e: &mut Engine, ask: Ask) {
     if let Some(h) = HOOKS.get() {
-        (h.begin)(e, ask);
+        recorder_paused(|| (h.begin)(e, ask));
     }
 }
 
 /// The draw is done: what came of its [`begin`].
 pub fn end(e: &mut Engine) -> Done {
-    HOOKS.get().map_or(Done::Plain, |h| (h.end)(e))
+    HOOKS
+        .get()
+        .map_or(Done::Plain, |h| recorder_paused(|| (h.end)(e)))
 }
 
 /// A setter call of the draw's set-up (at the build) or of its record's replay: the run of the draw's own commands
@@ -134,14 +166,14 @@ pub fn end(e: &mut Engine) -> Done {
 #[inline]
 pub fn interrupt(e: &mut Engine) {
     if let Some(h) = HOOKS.get() {
-        (h.interrupt)(e);
+        recorder_paused(|| (h.interrupt)(e));
     }
 }
 
 /// Records `ids` dropped in the backend.
 pub fn forget(e: &mut Engine, ids: &[u32]) {
     if let Some(h) = HOOKS.get() {
-        (h.forget)(e, ids);
+        recorder_paused(|| (h.forget)(e, ids));
     }
 }
 

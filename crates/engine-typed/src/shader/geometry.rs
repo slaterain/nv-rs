@@ -507,6 +507,16 @@ const RANGE: u32 = 0x011f_d8c4;
 /// `011fd8c4` becomes (0, 0, -1.0, 0) when both distances (`011f9618`, `011f9614`) are 0, else
 /// (far, far - near, 1.0, 1.0).
 pub fn pixel_entry_19(e: &mut Engine) {
+    if crate::draw::keep::building() {
+        // It follows the camera (the eye, the frame's plane and distances): a kept draw record makes the call again.
+        return crate::draw::keep::leaf(e, crate::draw::keep::Leaf::Entry19, entry_19_now);
+    }
+    entry_19_now(e);
+}
+
+/// [`pixel_entry_19`]'s work.
+#[inline(always)]
+fn entry_19_now(e: &mut Engine) {
     if !entry_enabled(e, PIXEL_ENTRIES + 4 * 19) {
         return;
     }

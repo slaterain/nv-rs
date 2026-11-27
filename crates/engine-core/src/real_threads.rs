@@ -7226,3 +7226,114 @@ mod direct_tests {
         assert!(world.kernel.held_here(), "the kernel lock taken back");
     }
 }
+
+/// The kept draw records' device recorder ([`device_record_begin`]; review of #1108).
+#[cfg(test)]
+mod recorder_tests {
+    use super::*;
+
+    thread_local! {
+        /// Where the test device's `SetTransform` copies the matrix it was given.
+        static SEEN: Cell<u32> = const { Cell::new(0) };
+    }
+
+    /// TEST DATA: a device's `SetTransform(state, matrix)` (`this` first): copies the 16 words at `matrix` to
+    /// [`SEEN`], and notes that it reached the device's state as the platform's functions do.
+    fn set_transform(e: &mut Engine, a: &[u32]) -> Ret {
+        note_device_state();
+        let matrix = a.last().copied().unwrap_or(0);
+        let seen = SEEN.with(Cell::get);
+        for i in 0..16 {
+            let w = e.mem.u32(matrix + 4 * i);
+            e.mem.set_u32(seen + 4 * i, w);
+        }
+        Ret::default()
+    }
+
+    /// A device whose vtable's `SetTransform` (slot 0xb0) is [`set_transform`]: (engine, device).
+    fn test_device() -> (Engine, u32) {
+        let mut e = Engine::new();
+        SEEN.with(|s| s.set(e.mem.alloc(0x40)));
+        e.register(0x0040_3000, set_transform);
+        let vtable = e.mem.alloc(0x200);
+        e.mem.set_u32(vtable + 0xb0, 0x0040_3000);
+        let device = e.mem.alloc(0x10);
+        e.mem.set_u32(device, vtable);
+        (e, device)
+    }
+
+    /// The structures a call passes by address, by slot: which word and how many bytes.
+    #[test]
+    fn a_calls_structure_is_named_by_its_slot() {
+        let args = [1, 0x5000, 3];
+        for (slot, want) in [
+            (0x178, Some((1, 48))),
+            (0x180, Some((1, 48))),
+            (0x1b4, Some((1, 48))),
+            (0x1bc, Some((1, 48))),
+            (0x188, Some((1, 12))),
+            (0x1c4, Some((1, 12))),
+            (0xb0, Some((1, 64))),
+            (0xdc, Some((1, 16))),
+            (0xbc, Some((0, 24))),
+            (0xc4, Some((0, 68))),
+            (0xcc, Some((1, 104))),
+            (0xe4, None),
+            (0x190, None),
+            (0x184, None),
+        ] {
+            assert_eq!(device_structure(slot, &args), want, "slot {slot:#x}");
+        }
+    }
+
+    /// A call with a structure on the stack for locals is noted with the structure's bytes; replayed, the
+    /// structure comes from those bytes (the local holds other bytes by then) and the call counts as the draw's
+    /// own ([`in_noted_call`]); the device's state reached outside a noted call is noted as unseen, inside one it
+    /// is not, and not while the recorder is paused.
+    #[test]
+    fn the_recorder_notes_a_calls_structure_and_replays_it_from_its_bytes() {
+        let (mut e, device) = test_device();
+        let matrix: [u32; 16] = std::array::from_fn(|i| 100 + i as u32);
+        device_record_begin();
+        e.with_stack(0x40, |e, local| {
+            for (i, w) in matrix.iter().enumerate() {
+                e.mem.set_u32(local.addr() + 4 * i as u32, *w);
+            }
+            device_vcall(e, device, 0xb0, &[256, local.addr()]);
+            for i in 0..16 {
+                e.mem.set_u32(local.addr() + 4 * i, 0xdead);
+            }
+        });
+        assert!(!device_record_unseen(), "inside the noted call");
+        device_record_pause(true);
+        note_device_state();
+        device_record_pause(false);
+        assert!(!device_record_unseen(), "paused");
+        let calls = device_record_end();
+        assert_eq!(calls.len(), 1);
+        let call = &calls[0];
+        assert_eq!(
+            (call.this, call.slot, call.data_arg),
+            (device, 0xb0, Some(1))
+        );
+        assert_eq!(call.data.len(), 64);
+        let seen = SEEN.with(Cell::get);
+        e.mem.set_u32(seen, 0);
+        e.with_stack(0x40, |e, local| {
+            for i in 0..16 {
+                e.mem.set_u32(local.addr() + 4 * i, 0xbeef);
+            }
+            device_replay(e, call);
+        });
+        assert_eq!(
+            std::array::from_fn::<u32, 16, _>(|i| e.mem.u32(seen + 4 * i as u32)),
+            matrix,
+            "the structure from the call's bytes"
+        );
+        assert!(!in_noted_call());
+        device_record_begin();
+        note_device_state();
+        assert!(device_record_unseen(), "outside any noted call");
+        device_record_end();
+    }
+}

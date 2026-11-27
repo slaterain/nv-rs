@@ -1139,7 +1139,8 @@ fn backend_of(
     if engine_core::draw_items::mode() == engine_core::draw_items::Mode::Off {
         backend
     } else {
-        Box::new(d3d9_stream::Kept::new(backend))
+        // Reporting: its counts in the log (an item it had no record for draws nothing).
+        Box::new(d3d9_stream::Kept::new(backend).reporting())
     }
 }
 

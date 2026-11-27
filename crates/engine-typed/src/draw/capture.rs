@@ -294,6 +294,8 @@ thread_local! {
     static KEEP_READS: RefCell<KeepReads> = const { RefCell::new(None) };
     /// Pauses of [`KEEP_READS`] in force ([`keep_reads_pause`]).
     static KEEP_READS_PAUSED: Cell<u32> = const { Cell::new(0) };
+    /// The set-up's own stack for locals, `[low, top)` ([`keep_reads_begin`]): reads there are not noted.
+    static KEEP_LOCALS: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
 }
 
 /// The kind of store log mark a noted read leaves (`engine_core`'s mark kinds: 0 a device call).
@@ -306,7 +308,11 @@ fn keep_reading() -> bool {
 }
 
 /// Starts noting this thread's reads through the accessors (a kept draw record's build, `super::keep`).
-pub fn keep_reads_begin() {
+/// `[low, top)` is where the set-up's own stack locals will lie (`Engine::locals_below`): what the set-up reads
+/// there it wrote there itself (the store log leaves its writes there out too), and the next draw's set-up leaves
+/// other bytes there, so such a read is no input of the record.
+pub fn keep_reads_begin(low: u32, top: u32) {
+    KEEP_LOCALS.with(|l| l.set((low, top)));
     KEEP_READS_PAUSED.with(|p| p.set(0));
     KEEP_READS.with(|r| *r.borrow_mut() = Some(Vec::new()));
     OPEN.fetch_add(KEEP_OPEN, Relaxed);
@@ -337,6 +343,10 @@ pub fn keep_reads_end() -> Vec<(u32, Vec<u8>, u32)> {
 #[inline]
 fn note_keep_read(e: &Engine, addr: u32, len: u32) {
     if OPEN.load(Relaxed) >= KEEP_OPEN && KEEP_READS_PAUSED.with(Cell::get) == 0 {
+        let (low, top) = KEEP_LOCALS.with(Cell::get);
+        if addr >= low && u64::from(addr) + u64::from(len) <= u64::from(top) {
+            return;
+        }
         KEEP_READS.with(|r| {
             if let Some(v) = r.borrow_mut().as_mut() {
                 let mut bytes = vec![0u8; len as usize];

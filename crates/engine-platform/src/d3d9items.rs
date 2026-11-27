@@ -9,7 +9,14 @@
 //! again (the same shape: every command but the registers the same; the registers come with the
 //! item). A replay's run of another shape goes out as it came. A check run's item (made from the
 //! record's replay before the old form that follows it) never sends its draw: its last run is the
-//! item or nothing, and its own commands after it are dropped, since the old form draws.
+//! item or nothing, and its own commands after it are dropped, since the old form draws. A run
+//! longer than the backend keeps (`d3d9_stream::kept::MOST_COMMANDS`) goes out as it came too, so
+//! the backend never holds a cut record the game's side thinks it has.
+//!
+//! The hooks run in the typed draw code between device calls, where with real threads the device
+//! lock may not be held (the world draw's hold is given up whenever another thread waits for it):
+//! each takes it (`engine_core::real_threads::device_guard`) before it reaches the platform's state
+//! or the stream, as every such hook of the port does.
 //!
 //! Off, nothing here runs: [`submit`] is reached only while [`HOLDING`] is set (one thread-local
 //! test in `d3d9real`'s sink), and the backend is not wrapped (`d3d9real::backend_of`).
@@ -58,6 +65,7 @@ fn epoch() -> u64 {
 }
 
 fn begin(e: &mut Engine, ask: Ask) {
+    let _device = engine_core::real_threads::device_guard(e);
     let device = super::d3d9real::first_device(e).unwrap_or(0);
     HELD.with(|h| {
         *h.borrow_mut() = Some(Held {
@@ -72,6 +80,7 @@ fn begin(e: &mut Engine, ask: Ask) {
 }
 
 fn end(e: &mut Engine) -> Done {
+    let _device = engine_core::real_threads::device_guard(e);
     HOLDING.with(|h| h.set(false));
     let Some(mut held) = HELD.with(|h| h.borrow_mut().take()) else {
         return Done::Plain;
@@ -96,6 +105,7 @@ fn interrupt(e: &mut Engine) {
         return;
     };
     if held.done.is_none() && !held.cmds.is_empty() {
+        let _device = engine_core::real_threads::device_guard(e);
         if let Some(mut s) = super::d3d9real::sink_of(e) {
             flush(&mut s, &mut held);
         }
@@ -104,6 +114,7 @@ fn interrupt(e: &mut Engine) {
 }
 
 fn forget(e: &mut Engine, ids: &[u32]) {
+    let _device = engine_core::real_threads::device_guard(e);
     let Some(device) = super::d3d9real::first_device(e) else {
         return;
     };
@@ -191,6 +202,10 @@ pub(super) fn submit(s: &mut Sink<'_>, cmd: Cmd<Data<'_>>) -> Reply {
             s.submit_now(cmd)
         }
     } else {
+        // A run the backend would cut goes out as it came, and a new one starts (a replay cuts at the same place).
+        if held.cmds.len() >= d3d9_stream::kept::MOST_COMMANDS {
+            flush(s, &mut held);
+        }
         held.cmds.keep(cmd);
         if let Cmd::SetConstants { data, .. } = cmd {
             held.registers.extend_from_slice(&data.bytes());
@@ -394,5 +409,171 @@ mod tests {
             ["SetStreamSource", "SetTexture"],
             "the check item's last run dropped"
         );
+    }
+
+    /// `cmd` (with its first word `word`) sent as one of the draw's own device calls sends it: inside the device
+    /// lock and a noted call.
+    fn own(e: &mut Engine, cmd: Cmd<()>, word: u32) {
+        let words = [word, 0, 0, 0];
+        let _device = engine_core::real_threads::device_guard(e);
+        engine_core::real_threads::as_noted_call_for_tests(|| {
+            let mut s = super::super::d3d9real::sink_of(e).expect("the test stream");
+            submit(&mut s, cmd.map(|()| Data::from_words(&words)));
+        });
+    }
+
+    /// The shape of `cmds` (each with its first word) as a held run's.
+    fn shape(cmds: &[(Cmd<()>, u32)]) -> u64 {
+        let mut c = Commands::default();
+        for &(cmd, word) in cmds {
+            let words = [word, 0, 0, 0];
+            c.keep(cmd.map(|()| Data::from_words(&words)));
+        }
+        c.shape()
+    }
+
+    /// A device made by the Direct3D 9 model with a kept records' stream (its log) and the hooks installed.
+    fn device_with_stream() -> (Engine, Arc<Mutex<Vec<String>>>) {
+        let (mut e, device) = super::super::d3d9device::tests::device_with("", 0x40);
+        let (stream, log) = kept_stream();
+        super::super::d3d9real::test_stream(&mut e, device, stream);
+        engine_core::draw_items::install(&HOOKS);
+        (e, log)
+    }
+
+    /// The real hooks with real threads and the device lock not held, as between the world draw's device calls
+    /// when another thread waits for the lock (review of #1108): each hook takes the lock itself (a debug build's
+    /// check stops the test otherwise) and gives it back; a run's flush at a setter call while a record is being
+    /// built is not counted as a device call the recorder missed; the record is the run after the setter.
+    #[test]
+    fn the_hooks_take_the_device_lock_and_leave_the_recorder_alone() {
+        use engine_core::draw_items as items;
+        use engine_core::real_threads as rt;
+        let (mut e, log) = device_with_stream();
+        rt::start(&mut e).expect("real threads on");
+        assert!(!rt::device_lock_held(&e));
+        let record = Ask::Record {
+            id: 3,
+            forget: 0,
+            check: false,
+        };
+        items::begin(&mut e, record);
+        assert!(HOLDING.with(Cell::get), "a device to hold for");
+        rt::device_record_begin();
+        own(&mut e, stream_source(), 0);
+        items::interrupt(&mut e);
+        own(&mut e, stream_source(), 0);
+        own(&mut e, constants(), 7);
+        own(&mut e, draw(), 0);
+        assert!(
+            !rt::device_record_unseen(),
+            "the flush is no device call the recorder missed"
+        );
+        rt::device_record_end();
+        let want = shape(&[(stream_source(), 0), (constants(), 7), (draw(), 0)]);
+        assert_eq!(items::end(&mut e), Done::Recorded(want));
+        items::forget(&mut e, &[3]);
+        assert!(!rt::device_lock_held(&e));
+        assert_eq!(
+            *log.lock().unwrap(),
+            [
+                "SetStreamSource",
+                "SetStreamSource",
+                "SetConstants 7",
+                "DrawPrimitive"
+            ]
+        );
+    }
+
+    /// A draw that never came: what was held goes out at the end, as it came.
+    #[test]
+    fn a_run_without_its_draw_goes_out_at_the_end() {
+        use engine_core::draw_items as items;
+        let (mut e, log) = device_with_stream();
+        let record = Ask::Record {
+            id: 5,
+            forget: 0,
+            check: false,
+        };
+        items::begin(&mut e, record);
+        own(&mut e, stream_source(), 0);
+        own(&mut e, constants(), 4);
+        assert!(log.lock().unwrap().is_empty(), "held");
+        assert_eq!(items::end(&mut e), Done::Plain);
+        assert_eq!(*log.lock().unwrap(), ["SetStreamSource", "SetConstants 4"]);
+        assert!(!HOLDING.with(Cell::get));
+    }
+
+    /// Without a device the backend has, nothing is held.
+    #[test]
+    fn nothing_is_held_without_a_device() {
+        let (mut e, _) = super::super::d3d9device::tests::device_with("", 0x40);
+        assert_eq!(super::super::d3d9real::first_device(&mut e), None);
+        engine_core::draw_items::install(&HOOKS);
+        let record = Ask::Record {
+            id: 1,
+            forget: 0,
+            check: false,
+        };
+        engine_core::draw_items::begin(&mut e, record);
+        assert!(!HOLDING.with(Cell::get));
+        assert_eq!(engine_core::draw_items::end(&mut e), Done::Plain);
+    }
+
+    /// A check run's item draws nothing of its own: its record's own commands after its draw are dropped too
+    /// (its old form sends them).
+    #[test]
+    fn a_check_items_own_commands_after_its_draw_are_dropped() {
+        let (mut stream, log) = kept_stream();
+        let record = Ask::Record {
+            id: 6,
+            forget: 0,
+            check: false,
+        };
+        let (_, done) = run(&mut stream, &log, record, &one_draw(7));
+        let Some(Done::Recorded(hash)) = done else {
+            panic!("{done:?}");
+        };
+        let item = Ask::Item {
+            id: 6,
+            hash,
+            check: true,
+        };
+        let mut cmds = one_draw(9).to_vec();
+        cmds.push((true, stream_source(), 0));
+        let (got, done) = run(&mut stream, &log, item, &cmds);
+        assert_eq!(done, Some(Done::Drawn));
+        assert_eq!(got, ["SetTexture"], "only the setter's send");
+    }
+
+    /// A run longer than the backend keeps goes out as it came when the next own command comes, and a new run
+    /// starts: the record is the run up to the draw after it (review of #1108).
+    #[test]
+    fn a_run_longer_than_the_backend_keeps_goes_out_as_it_came() {
+        let (mut stream, log) = kept_stream();
+        let most = d3d9_stream::kept::MOST_COMMANDS;
+        let mut cmds = vec![(true, constants(), 1); most + 3];
+        cmds.push((true, draw(), 0));
+        let record = Ask::Record {
+            id: 8,
+            forget: 0,
+            check: false,
+        };
+        let (got, done) = run(&mut stream, &log, record, &cmds);
+        assert_eq!(got.len(), most + 4, "every command went out once");
+        let mut last = vec![(constants(), 1); 3];
+        last.push((draw(), 0));
+        assert_eq!(done, Some(Done::Recorded(shape(&last))));
+    }
+
+    /// A check run keeps the states set again to their value (review of #1108), as `NV_D3D9_REPEATS=keep` does.
+    #[test]
+    fn a_check_run_keeps_repeated_sets() {
+        use super::super::d3d9device::repeats_kept;
+        use engine_core::draw_items::Mode;
+        assert!(repeats_kept(false, Mode::Check));
+        assert!(repeats_kept(true, Mode::Off));
+        assert!(!repeats_kept(false, Mode::Off));
+        assert!(!repeats_kept(false, Mode::On));
     }
 }
