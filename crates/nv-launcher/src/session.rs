@@ -10,8 +10,10 @@
 //! Yes), and no folder.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
-use std::sync::OnceLock;
+use std::sync::RwLock;
+use std::time::{Duration, Instant};
 
 /// What the work tells or asks the window.
 // Status, StatusDone, Message and Folder come from Play.exe's steps (Windows); on Linux and macOS
@@ -62,8 +64,102 @@ pub enum Tone {
     Question,
 }
 
-/// The window's end of the channel: set once, when the window is made.
-static WINDOW: OnceLock<Box<dyn Fn(Event) -> bool + Send + Sync>> = OnceLock::new();
+/// Where events go ([`connect`]).
+type Deliver = Box<dyn Fn(Event) -> bool + Send + Sync>;
+
+/// How long a question whose window went before it was answered waits for another to take it
+/// (Windows' message boxes, when the window stopped: `app::after_panic`), before it gets the
+/// answer it gets with no window.
+#[cfg_attr(not(windows), allow(dead_code))]
+const TAKEOVER_WAIT: Duration = Duration::from_secs(5);
+
+/// What became of an event.
+enum Sent {
+    Delivered,
+    /// There is no window (scripted tests): never was one.
+    NoWindow,
+    /// The window has gone.
+    Gone,
+}
+
+/// The window's end of the channel: set when the window is made, and on Windows replaced by
+/// Windows' own message boxes when the window stops while Play runs (`app::after_panic`); with
+/// how many times it was set.
+struct Channel {
+    window: RwLock<Option<Deliver>>,
+    connected: AtomicU64,
+}
+
+impl Channel {
+    const fn new() -> Channel {
+        Channel {
+            window: RwLock::new(None),
+            connected: AtomicU64::new(0),
+        }
+    }
+
+    fn connect(&self, deliver: Deliver) {
+        let mut window = self
+            .window
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *window = Some(deliver);
+        self.connected.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn deliver(&self, event: Event) -> Sent {
+        let window = self
+            .window
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match window.as_ref() {
+            None => Sent::NoWindow,
+            Some(deliver) if deliver(event) => Sent::Delivered,
+            Some(_) => Sent::Gone,
+        }
+    }
+
+    /// The question `make` makes with its reply's end, answered. When the window goes before it
+    /// answers (a panic took it), asked again where a new one sends it, if one takes over within
+    /// `wait`; `None` without a window, or with none taking over.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn ask<T>(&self, make: impl Fn(Sender<T>) -> Event, wait: Duration) -> Option<T> {
+        for _ in 0..3 {
+            let before = self.connected.load(Ordering::SeqCst);
+            let (reply, answer) = channel();
+            match self.deliver(make(reply)) {
+                Sent::NoWindow => return None,
+                Sent::Delivered => {
+                    if let Ok(chosen) = answer.recv() {
+                        return Some(chosen);
+                    }
+                }
+                Sent::Gone => {}
+            }
+            if !self.taken_over(before, wait) {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// Whether the channel is set again (after `before` settings) within `wait`.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn taken_over(&self, before: u64, wait: Duration) -> bool {
+        let until = Instant::now() + wait;
+        loop {
+            if self.connected.load(Ordering::SeqCst) != before {
+                return true;
+            }
+            if Instant::now() >= until {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+static WINDOW: Channel = Channel::new();
 
 /// The stop code Play ends with once the question it asks now is answered (none: `i32::MIN`), so
 /// a window closed during that question ends the launcher with Play.exe's code.
@@ -81,18 +177,20 @@ pub fn stop_code() -> Option<i32> {
     (code != i32::MIN).then_some(code)
 }
 
-/// From now on events go to `deliver` (the window's event loop; false when it has gone).
+/// From now on events go to `deliver` (the window's event loop, false when it has gone; or
+/// Windows' message boxes), in place of where they went before.
 pub fn connect(deliver: impl Fn(Event) -> bool + Send + Sync + 'static) {
-    let _ = WINDOW.set(Box::new(deliver));
+    WINDOW.connect(Box::new(deliver));
 }
 
 /// Sends `event` to the window; false when there is none (or it has gone).
 pub fn send(event: Event) -> bool {
-    WINDOW.get().is_some_and(|deliver| deliver(event))
+    matches!(WINDOW.deliver(event), Sent::Delivered)
 }
 
 /// Shows `text` with `entries` and waits for the player's choice: the entry's index. Without a
-/// window, or when it goes before the player chose, 0.
+/// window, or when it goes before the player chose and none takes over, 0; a window that stopped
+/// (a panic) and Windows' message boxes took over: asked again there.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn message(text: &str, entries: &[&str]) -> usize {
     message_as(Tone::Question, text, entries)
@@ -101,31 +199,24 @@ pub fn message(text: &str, entries: &[&str]) -> usize {
 /// [`message`] with its tone.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn message_as(tone: Tone, text: &str, entries: &[&str]) -> usize {
-    let (reply, answer) = channel();
-    let event = Event::Message {
+    let event = |reply| Event::Message {
         tone,
         text: text.to_string(),
         entries: entries.iter().map(|e| e.to_string()).collect(),
         reply,
     };
-    if !send(event) {
-        return 0;
-    }
-    answer.recv().unwrap_or(0)
+    WINDOW.ask(event, TAKEOVER_WAIT).unwrap_or(0)
 }
 
 /// Asks for a folder and waits: the folder typed or dropped, `None` for Back (and without a
-/// window).
+/// window); asked again where a new window takes over, as [`message`].
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn folder(text: &str) -> Option<PathBuf> {
-    let (reply, answer) = channel();
-    if !send(Event::Folder {
+    let event = |reply| Event::Folder {
         text: text.to_string(),
         reply,
-    }) {
-        return None;
-    }
-    answer.recv().ok().flatten()
+    };
+    WINDOW.ask(event, TAKEOVER_WAIT).flatten()
 }
 
 /// A folder as typed, pasted or dropped: spaces around it and quotes around it taken off, a
@@ -200,5 +291,58 @@ mod tests {
         assert_eq!(message("x", &["Yes", "No"]), 0);
         assert_eq!(folder("x"), None);
         assert!(!send(Event::StatusDone));
+    }
+
+    /// A question as `message_as` makes it.
+    fn question(reply: Sender<usize>) -> Event {
+        Event::Message {
+            tone: Tone::Question,
+            text: "Replace?".into(),
+            entries: vec!["Yes".into(), "No".into()],
+            reply,
+        }
+    }
+
+    /// Message boxes as `answer_in_boxes` connects them: every question answered (here, No).
+    fn boxes(event: Event) -> bool {
+        if let Event::Message { reply, .. } = event {
+            let _ = reply.send(1);
+        }
+        true
+    }
+
+    /// Connected again, events go to the new end only.
+    #[test]
+    fn connected_again_events_go_to_the_new_end() {
+        let window = Channel::new();
+        window.connect(Box::new(|_| false));
+        window.connect(Box::new(boxes));
+        assert_eq!(window.ask(question, Duration::ZERO), Some(1));
+        assert!(matches!(window.deliver(Event::StatusDone), Sent::Delivered));
+    }
+
+    /// A question whose window went (a panic took it, with the question on screen or before it
+    /// arrived) is asked again in the message boxes that take over; with none taking over it gets
+    /// the no-window answer, and with no window ever, at once.
+    #[test]
+    fn a_question_whose_window_went_is_asked_again_in_the_boxes() {
+        let window = std::sync::Arc::new(Channel::new());
+        // The window took the question, then went without answering it.
+        window.connect(Box::new(|event| {
+            drop(event);
+            true
+        }));
+        let asking = {
+            let window = window.clone();
+            std::thread::spawn(move || window.ask(question, Duration::from_secs(20)))
+        };
+        std::thread::sleep(Duration::from_millis(100));
+        window.connect(Box::new(boxes));
+        assert_eq!(asking.join().unwrap(), Some(1), "asked again in the boxes");
+        // A window that has gone (its loop ended), nothing taking over.
+        let gone = Channel::new();
+        gone.connect(Box::new(|_| false));
+        assert_eq!(gone.ask(question, Duration::from_millis(50)), None);
+        assert_eq!(Channel::new().ask(question, Duration::from_secs(20)), None);
     }
 }

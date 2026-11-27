@@ -15,6 +15,7 @@ use crate::session::{self, Event};
 use crate::settings;
 use crate::sound;
 use crate::sound_files::Cue;
+use crate::stopped;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -36,13 +37,16 @@ fn look_of(game: Option<&Path>, fallout_ini: &Path, plain: bool) -> Look {
         return Look::plain();
     };
     let Some(g) = crate::game::Game::at(folder) else {
-        eprintln!("look: no game at {}: the port's own look", folder.display());
+        stopped::note(&format!(
+            "look: no game at {}: the port's own look",
+            folder.display()
+        ));
         return Look::plain();
     };
     match Look::from_game(&g, &[fallout_ini.to_path_buf()]) {
         Ok(l) => l,
         Err(why) => {
-            eprintln!("look: {why}: the port's own look");
+            stopped::note(&format!("look: {why}: the port's own look"));
             Look::plain()
         }
     }
@@ -1482,27 +1486,48 @@ struct App {
     start_note: Option<String>,
 }
 
+/// Play's work running on its thread ([`start_work`]): a window that stops while it runs waits
+/// for its end ([`after_panic`]).
+static WORK: std::sync::Mutex<Option<std::thread::JoinHandle<i32>>> = std::sync::Mutex::new(None);
+
+/// The work still running, taken (a panic took the window while it ran).
+fn running_work() -> Option<std::thread::JoinHandle<i32>> {
+    WORK.lock().ok()?.take().filter(|work| !work.is_finished())
+}
+
 /// Starts Play's work on a thread of its own with `args` (Play.exe's, or play.sh's on Linux and
 /// macOS); it always sends `Ended` with its exit code ([`work_code`]: 101 after a panic).
 fn start_work(args: Vec<OsString>) {
-    std::thread::spawn(move || {
-        let code = work_code(move || {
-            #[cfg(windows)]
-            {
-                let args: Vec<String> = args
-                    .iter()
-                    .map(|a| a.to_string_lossy().into_owned())
-                    .collect();
-                crate::play::run_play(&args)
-            }
-            #[cfg(not(windows))]
-            match crate::play_unix::script() {
-                Some(script) => crate::play_unix::run(&script, &args),
-                None => 127,
-            }
-        });
-        session::send(Event::Ended(code));
+    start_work_with(move || {
+        #[cfg(windows)]
+        {
+            let args: Vec<String> = args
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            crate::play::run_play(&args)
+        }
+        #[cfg(not(windows))]
+        match crate::play_unix::script() {
+            Some(script) => crate::play_unix::run(&script, &args),
+            None => 127,
+        }
     });
+}
+
+/// [`start_work`] with the work `work`: marked as running ([`stopped::set_working`]: a crash
+/// meanwhile starts no second Play) from before it starts until it has ended.
+fn start_work_with(work: impl FnOnce() -> i32 + Send + 'static) {
+    stopped::set_working(true);
+    let work = std::thread::spawn(move || {
+        let code = work_code(work);
+        stopped::set_working(false);
+        session::send(Event::Ended(code));
+        code
+    });
+    if let Ok(mut running) = WORK.lock() {
+        *running = Some(work);
+    }
 }
 
 /// Play's arguments, the same for Play.exe's steps and play.sh: `--mods` for Play with mods, and
@@ -1857,7 +1882,9 @@ impl App {
         self.chosen_again
             .retain(|t| now.duration_since(*t) < CHOOSE_AGAIN_SPAN);
         self.chosen_again.push(now);
-        eprintln!("the launcher's drawing stopped ({why}): choosing its device again");
+        stopped::note(&format!(
+            "the launcher's drawing stopped ({why}): choosing its device again"
+        ));
         self.surface = None;
         self.config = None;
         self.gpu = None;
@@ -1869,7 +1896,7 @@ impl App {
         let size = window.inner_size();
         match gpu::choose(Some(window), (size.width, size.height)) {
             Ok(drawing) => {
-                eprintln!("drawing with {}", drawing.gpu.describe());
+                stopped::note(&format!("drawing with {}", drawing.gpu.describe()));
                 let Some((surface, config)) = drawing.surface else {
                     unreachable!("a window's drawing always has its surface");
                 };
@@ -1965,7 +1992,10 @@ impl App {
         match act {
             Act::EndIntro => self.end_intro(),
             Act::Play { mods, game } => self.play(mods, game),
-            Act::Exit => event_loop.exit(),
+            Act::Exit => {
+                stopped::leave();
+                event_loop.exit();
+            }
             Act::Mods => self.mods(),
             Act::ImportSaves => self.import_saves(),
             Act::Answer(i) => {
@@ -2456,11 +2486,11 @@ impl winit::application::ApplicationHandler<Event> for App {
                 return;
             }
         };
-        eprintln!(
+        stopped::note(&format!(
             "drawing with {}; look: {}",
             drawing.gpu.describe(),
             self.look.from
-        );
+        ));
         let Some((surface, config)) = drawing.surface else {
             unreachable!("a window's drawing always has its surface");
         };
@@ -2474,6 +2504,9 @@ impl winit::application::ApplicationHandler<Event> for App {
         session::connect(move |e| proxy.lock().is_ok_and(|p| p.send_event(e).is_ok()));
         // From here on a program the work runs takes the lines typed at the prompt.
         crate::piped::window_takes_lines(true);
+        // (After the window took the channel: message-box Play must take it over.)
+        #[cfg(debug_assertions)]
+        stopped::test_stop(false);
         // The game's card, from a process of its own.
         std::thread::spawn(|| {
             session::send(Event::Card(ask_game_card()));
@@ -2581,7 +2614,10 @@ impl winit::application::ApplicationHandler<Event> for App {
                     matches!(self.mode, Mode::Output(_)),
                 ) {
                     // Closed while the work ran, or Play's good end: the launcher ends.
-                    EndStep::Exit => event_loop.exit(),
+                    EndStep::Exit => {
+                        stopped::leave();
+                        event_loop.exit();
+                    }
                     // The installer's good end, or Play.exe's message shown and answered.
                     EndStep::Start => self.show_start(),
                     // The work's own lines say what went wrong; Back or Exit below them.
@@ -2635,6 +2671,7 @@ impl winit::application::ApplicationHandler<Event> for App {
             // too, play.sh's input is closed, and the launcher ends when Play ends, with its code.
             WindowEvent::CloseRequested => {
                 if !self.working {
+                    stopped::leave();
                     std::process::exit(session::stop_code().unwrap_or(self.exit_code));
                 }
                 self.close_while_working(event_loop);
@@ -2873,45 +2910,15 @@ fn cannot_draw(why: &str, place: &Place) {
     );
 }
 
-/// [`cannot_draw`] with `next` saying what happens next.
+/// [`cannot_draw`] with `next` saying what happens next (kept as a start-up line too, for a later
+/// stop's message).
 fn cannot_draw_then(why: &str, place: &Place, next: &str) {
-    let text = format!("nv-rs's launcher cannot draw its window: {why}.\n\n{next}");
-    eprintln!("{text}");
-    #[cfg(windows)]
-    {
-        let _ = place;
-        #[link(name = "user32")]
-        extern "system" {
-            fn MessageBoxW(
-                owner: *mut std::ffi::c_void,
-                text: *const u16,
-                title: *const u16,
-                kind: u32,
-            ) -> i32;
-        }
-        let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
-        let (t, title) = (wide(&text), wide("nv-rs"));
-        // SAFETY: both strings live through the call; no owner window. 0x30: MB_ICONWARNING.
-        unsafe { MessageBoxW(std::ptr::null_mut(), t.as_ptr(), title.as_ptr(), 0x30) };
-    }
-    #[cfg(not(windows))]
-    {
-        use std::io::IsTerminal;
-        if !std::io::stderr().is_terminal() && place.refused.is_none() {
-            let logs = place.own.join("logs");
-            let written = std::fs::create_dir_all(&logs).and_then(|()| {
-                use std::io::Write;
-                let mut f = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(logs.join("launcher.log"))?;
-                writeln!(f, "{text}")
-            });
-            if let Err(e) = written {
-                eprintln!("{}: {e}", logs.display());
-            }
-        }
-    }
+    stopped::keep_line(&format!("cannot draw its window: {why}"));
+    stopped::say(
+        &format!("nv-rs's launcher cannot draw its window: {why}.\n\n{next}"),
+        stopped::Icon::Warning,
+        place.refused.is_none().then_some(place.own.as_path()),
+    );
 }
 
 /// The keyboard library winit needs on Linux and cannot load, if one is missing (as
@@ -2930,13 +2937,20 @@ fn missing_keyboard_library() -> Option<&'static str> {
 }
 
 /// No window: Play goes on without it. Windows: Play's steps with Windows' own message boxes and
-/// folder picker, as Play.exe asked; Linux and macOS: play.sh in the terminal, with the same
-/// arguments.
+/// folder picker, as Play.exe asked (a panic in them said in a last box, not silently);
+/// Linux and macOS: play.sh in the terminal, with the same arguments.
 fn without_window(raw: &[String]) -> i32 {
     #[cfg(windows)]
     {
         crate::play::answer_in_boxes();
-        crate::play::run_play(raw)
+        caught(|| crate::play::run_play(raw)).unwrap_or_else(|line| {
+            let what = stopped::panic_what(&line);
+            let text = stopped::stopped_text(false, &what, &stopped::lines(), &stopped::report());
+            // In the log at once if this Play passed its first write.
+            stopped::hold_for_log(&text);
+            stopped::say(&text, stopped::Icon::Error, None);
+            101
+        })
     }
     #[cfg(not(windows))]
     {
@@ -2944,9 +2958,93 @@ fn without_window(raw: &[String]) -> i32 {
     }
 }
 
-/// The window, until the player leaves or the game ends well: the exit code.
+/// `run`'s result, or the line of the panic that ended it ([`stopped::panic_line`]).
+fn caught<T>(run: impl FnOnce() -> T) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(run))
+        .map_err(|payload| stopped::panic_line(&*payload))
+}
+
+/// How the window's run ended.
+enum Ran {
+    /// The player left, or the game ended: the exit code.
+    Ended(i32),
+    /// The window could not be made or drawn in ([`cannot_draw`] said why).
+    NoWindow,
+}
+
+/// The window, until the player leaves or the game ends well: the exit code. Never silent: a
+/// panic anywhere in the window's run (winit raises a callback's again from `run_app`) is said
+/// with its line ([`after_panic`]), and on Windows a crash in native code is said by
+/// [`stopped::watch_crashes`]'s filter.
 pub fn run(raw: Vec<String>) -> i32 {
+    let mut log = None;
+    match in_window(|| run_window(&raw, &mut log)) {
+        Ok(Ran::Ended(code)) => code,
+        Ok(Ran::NoWindow) => without_window(&raw),
+        Err(line) => after_panic(&raw, &line, log.as_deref()),
+    }
+}
+
+/// `run` [`caught`], with the window's run marked as going on ([`stopped::set_in_window`]: a
+/// crash in it starts Play.exe again) until it returns or panics.
+fn in_window<T>(run: impl FnOnce() -> T) -> Result<T, String> {
+    stopped::set_in_window(true);
+    let ran = caught(run);
+    stopped::set_in_window(false);
+    ran
+}
+
+/// The window's run ended in a panic (`line`). While the launcher was ending as asked
+/// ([`stopped::leave`]) it ends quietly, as before. Otherwise said with the start-up lines (and
+/// kept for the log, [`stopped::hold_for_log`]), then Play goes on without the window: with work
+/// running (Play's, the installer's, the import), to its end, its questions in Windows' own
+/// message boxes (elsewhere answered as Esc answers them); with none, Play as after
+/// [`cannot_draw`]. `log`: nv-rs's own folder when it may hold the log (Linux and macOS write it
+/// at once).
+fn after_panic(raw: &[String], line: &str, log: Option<&Path>) -> i32 {
+    let running = running_work();
+    let after = stopped::after_panic(stopped::leaving(), running.is_some());
+    if after == stopped::AfterPanic::Quiet {
+        return 101;
+    }
+    if running.is_some() {
+        // Before the message: a question the work asks meanwhile goes to the new answers.
+        #[cfg(windows)]
+        crate::play::answer_in_boxes();
+        crate::piped::close_input();
+    }
+    let next = if running.is_some() {
+        stopped::next_working()
+    } else {
+        stopped::next_play(false)
+    };
+    let what = stopped::panic_what(line);
+    let text = stopped::stopped_text(true, &what, &stopped::lines(), &next);
+    // Kept first: running work that ends while the message is up writes it.
+    stopped::hold_for_log(&text);
+    stopped::say(&text, stopped::Icon::Error, log);
+    match running {
+        Some(work) => work.join().unwrap_or(101),
+        None => without_window(raw),
+    }
+}
+
+/// Play.exe started again after a crash in native code in the launcher's window
+/// ([`stopped::crash_passed_on`]): the crash said (and held for the log), then Play in Windows'
+/// own message boxes as after [`cannot_draw`]. The window is not tried again.
+#[cfg(windows)]
+pub fn after_crash(raw: &[String], crash: &stopped::Crash) -> i32 {
+    let text = stopped::stopped_text(true, &crash.what, &crash.lines, &stopped::next_play(true));
+    stopped::hold_for_log(&text);
+    stopped::say(&text, stopped::Icon::Error, None);
+    without_window(raw)
+}
+
+/// [`run`]'s window: how it ended. `log` is set to nv-rs's own folder as soon as it is known
+/// and may hold the launcher's log.
+fn run_window(raw: &[String], log: &mut Option<PathBuf>) -> Ran {
     let place = place::place();
+    *log = place.refused.is_none().then(|| place.own.clone());
     let app_own = place.own.clone();
     #[cfg(all(not(windows), not(target_vendor = "apple")))]
     if let Some(library) = missing_keyboard_library() {
@@ -2954,13 +3052,13 @@ pub fn run(raw: Vec<String>) -> i32 {
             &format!("the keyboard library {library} is missing (install libxkbcommon)"),
             &place,
         );
-        return without_window(&raw);
+        return Ran::NoWindow;
     }
     let event_loop = match EventLoop::<Event>::with_user_event().build() {
         Ok(l) => l,
         Err(e) => {
             cannot_draw(&format!("no window system: {e}"), &place);
-            return without_window(&raw);
+            return Ran::NoWindow;
         }
     };
     let look = look_of(place.game.as_deref(), &place.fallout_ini, false);
@@ -3008,13 +3106,25 @@ pub fn run(raw: Vec<String>) -> i32 {
         start_note: None,
     };
     if let Err(e) = event_loop.run_app(&mut app) {
-        eprintln!("error: {e}");
-        return 1;
+        if app.no_window {
+            return Ran::NoWindow;
+        }
+        // No window was made: said as any other start without one, and Play goes on.
+        if app.window.is_none() {
+            cannot_draw(&format!("its window's loop could not run: {e}"), &app.place);
+            return Ran::NoWindow;
+        }
+        stopped::note(&format!("error: {e}"));
+        stopped::leave();
+        return Ran::Ended(1);
     }
     if app.no_window {
-        return without_window(&raw);
+        return Ran::NoWindow;
     }
-    app.exit_code
+    // Ending as asked (Exit and Play's good end said so already): before the drawing, the window
+    // and the sounds go, as `app` and `event_loop` are dropped on the way out.
+    stopped::leave();
+    Ran::Ended(app.exit_code)
 }
 
 /// The start screen (or the intro) drawn off screen and saved: nothing else is written.
@@ -3663,6 +3773,57 @@ mod tests {
         assert_eq!(work_code(|| 3), 3);
         // (The panic's own message is printed: the hook is the whole test run's.)
         assert_eq!(work_code(|| panic!("made-up failure")), 101);
+    }
+
+    /// A panic in the window's run is caught with its line (message and place) for the message;
+    /// a run that ends gives its result.
+    #[test]
+    fn a_panic_in_the_window_is_caught_with_its_line() {
+        stopped::watch_panics();
+        assert_eq!(caught(|| 3), Ok(3));
+        let line = caught(|| -> i32 { panic!("made-up window stop") }).unwrap_err();
+        assert!(line.starts_with("made-up window stop (at "), "{line}");
+        assert!(line.contains("app.rs:"), "{line}");
+    }
+
+    /// Work is marked as running (a crash then starts no second Play) from before it starts until
+    /// it has ended; still running, it is waited for after a panic, and once ended it is not.
+    #[test]
+    fn work_is_marked_running_and_only_running_work_is_waited_for() {
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        start_work_with(move || {
+            let _ = wait.recv();
+            5
+        });
+        assert!(stopped::working(), "marked before it runs");
+        let running = running_work().expect("still running");
+        assert!(WORK.lock().unwrap().is_none(), "taken");
+        assert!(stopped::working(), "still marked while it runs");
+        go.send(()).unwrap();
+        assert_eq!(running.join().unwrap(), 5);
+        assert!(!stopped::working(), "unmarked once it has ended");
+        start_work_with(|| 6);
+        let started = Instant::now();
+        while stopped::working() || !WORK.lock().unwrap().as_ref().unwrap().is_finished() {
+            assert!(started.elapsed() < Duration::from_secs(20));
+            std::thread::yield_now();
+        }
+        assert!(running_work().is_none(), "ended already");
+    }
+
+    /// The window's run is marked as going on (a crash in it starts Play.exe again) only while
+    /// it runs, also when it panics.
+    #[test]
+    fn the_window_is_marked_only_while_it_runs() {
+        assert!(!stopped::in_window());
+        assert_eq!(in_window(stopped::in_window), Ok(true));
+        assert!(!stopped::in_window());
+        stopped::watch_panics();
+        let stopped_run = in_window(|| -> bool { panic!("made-up stop in the window") });
+        assert!(stopped_run
+            .unwrap_err()
+            .starts_with("made-up stop in the window"));
+        assert!(!stopped::in_window());
     }
 
     /// Play's arguments: `--mods` for Play with mods, `--game FOLDER` for a typed or dropped
