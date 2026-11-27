@@ -38,6 +38,7 @@ use layout::{
 
 pub mod layout;
 pub mod location;
+pub mod mesh_util;
 pub mod navmesh;
 pub mod point;
 pub mod pov;
@@ -267,5 +268,12 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The navmesh utilities.
+        entry!(0x0069_57d0, mesh_util::has_packed_edge_bits(Ptr<NavMeshTriangle>) -> bool),
+        entry!(0x0069_8030, mesh_util::packed_edge_bits(Ptr<NavMeshTriangle>, u16) -> u32),
+        entry!(0x0069_9760, mesh_util::max_word(u32, u16) -> u32),
+        entry!(0x0069_9790, mesh_util::triangle_type(Ptr) -> u32),
+        entry!(0x0069_9590, mesh_util::undo_remove(Ptr, u32)),
+        entry!(0x0069_a7d0, mesh_util::drop_embedded_lists(Ptr)),
     ]
 }

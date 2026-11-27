@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, mesh_util, navmesh, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -4364,4 +4364,108 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- The navmesh utilities ----
+
+#[test]
+fn mesh_util_has_packed_edge_bits() {
+    Diff::new(entry!(
+        0x0069_57d0,
+        mesh_util::has_packed_edge_bits(Ptr<_>) -> bool
+    ))
+    .common()
+    .plain(0x0069_57d0)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        let tri = e.mem.alloc(0x10);
+        e.mem.set_u32(tri + 0xc, case.word(0));
+        vec![tri]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn mesh_util_packed_edge_bits() {
+    Diff::new(entry!(
+        0x0069_8030,
+        mesh_util::packed_edge_bits(Ptr<_>, u16) -> u32
+    ))
+    .common()
+    .plain(0x0069_8030)
+    .inputs(&[Input::Word, Input::Of(&[0, 1, 2, 3, 0xffff])])
+    .setup(|e, case| {
+        stand_ins(e);
+        let tri = e.mem.alloc(0x10);
+        e.mem.set_u32(tri + 0xc, case.word(0));
+        vec![tri, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn mesh_util_max_word() {
+    Diff::new(entry!(0x0069_9760, mesh_util::max_word(u32, u16) -> u32))
+        .common()
+        .plain(0x0069_9760)
+        .inputs(&[Input::Word, Input::Word])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn mesh_util_triangle_type() {
+    Diff::new(entry!(0x0069_9790, mesh_util::triangle_type(Ptr) -> u32))
+        .common()
+        .plain(0x0069_9790)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            let tri = e.mem.alloc(0x10);
+            e.mem.set_u32(tri + 0xc, case.word(0));
+            vec![tri]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn mesh_util_undo_remove() {
+    Diff::new(entry!(0x0069_9590, mesh_util::undo_remove(Ptr, u32)))
+        .common()
+        .plain(0x0069_9590)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            e.register(0x0069_b120, |e, a| {
+                log(e, 0xb120, a[0]);
+                log(e, 0xb121, a[1]);
+                log(e, 0xb122, a[2]);
+                ret(0)
+            });
+            let mesh = e.mem.alloc(0xd4);
+            vec![mesh, case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn mesh_util_drop_embedded_lists() {
+    Diff::new(entry!(0x0069_a7d0, mesh_util::drop_embedded_lists(Ptr)))
+        .common()
+        .plain(0x0069_a7d0)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            // `0069b2f0` is a family member (`search::edge_array_drop`) and runs for real.
+            let this = e.mem.alloc(0x1c);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
 }
