@@ -8432,14 +8432,19 @@ fn pk_missed_packages() {
         let items = packages(e, case.word(0), case.word(1), false);
         // List 5's first package: missable at 7:00 on any day, so the walks from 5:00 and 0:00 reach
         // its hour exactly (an equal hour has not passed it yet).
-        if case.word(0) == 5 {
-            if let Some(&first) = items.first() {
-                for (at, byte) in [(0, 0xff), (1, 0xff), (2, 0), (3, 7)] {
-                    e.mem.set_u8(first + PK_SCHEDULE + at, byte);
-                }
-                e.mem.set_u32(first + PK_FLAGS, 4);
-                e.mem.set_u8(first + PK_ACTOR_TEST, 1);
+        // List 4's: missable at any hour on day of the week 4, the calendar's (an equal day of the
+        // week passes).
+        let seeded_schedule = match case.word(0) {
+            4 => Some([0xff, 4, 0, 0xff]),
+            5 => Some([0xff, 0xff, 0, 7]),
+            _ => None,
+        };
+        if let (Some(bytes), Some(&first)) = (seeded_schedule, items.first()) {
+            for (at, byte) in bytes.into_iter().enumerate() {
+                e.mem.set_u8(first + PK_SCHEDULE + at as u32, byte);
             }
+            e.mem.set_u32(first + PK_FLAGS, 4);
+            e.mem.set_u8(first + PK_ACTOR_TEST, 1);
         }
         let list = new_list(e, &items);
         let (day, month, calendar_month, calendar_day, hour) = PK_WALKS[case.word(2) as usize];
