@@ -177,10 +177,15 @@ impl Keys {
                     keys.not_background.is_some()
                 }
                 _ => {
-                    let fix = FIXES.iter().find(|f| f.env == row.switch);
+                    // A fix row's key, or a part of the crash and leak fixes' own.
+                    let fix = FIXES
+                        .iter()
+                        .map(|f| f.env)
+                        .chain(crate::crash_fixes::PARTS.iter().map(|p| p.env))
+                        .find(|env| *env == row.switch);
                     match (fix, flag(raw)) {
-                        (Some(fix), Some(on)) => {
-                            keys.fixes.push((fix.env, on));
+                        (Some(env), Some(on)) => {
+                            keys.fixes.push((env, on));
                             true
                         }
                         _ => false,
@@ -317,7 +322,12 @@ mod tests {
             .filter(|r| r.section == FIXES_SECTION)
             .map(|r| r.switch)
             .collect();
-        let mut envs: Vec<&str> = FIXES.iter().map(|f| f.env).collect();
+        // The fix rows' and the crash and leak fixes' parts' (each part a key of its own).
+        let mut envs: Vec<&str> = FIXES
+            .iter()
+            .map(|f| f.env)
+            .chain(crate::crash_fixes::PARTS.iter().map(|p| p.env))
+            .collect();
         fixes.sort_unstable();
         envs.sort_unstable();
         assert_eq!(fixes, envs);

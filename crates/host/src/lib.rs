@@ -18,6 +18,7 @@
 
 pub mod cell_entry_wait;
 pub mod cell_offsets;
+pub mod crash_fixes;
 pub mod direct_files;
 pub mod draw_thread;
 pub mod first_profile;
