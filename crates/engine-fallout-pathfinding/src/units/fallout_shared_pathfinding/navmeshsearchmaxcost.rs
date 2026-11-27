@@ -48,7 +48,7 @@ pub fn fn_006abc30(e: &mut Engine, this: Ptr) {
 pub fn fn_006abc50(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), SCRAP_ARRAY_SEARCH_NODE_VTABLE);
     e.call(ARRAY_RELEASE_008454F0, &args![this, 1u32]);
-    fn_006abc30(e, this);
+    e.call(0x006a_bc30, &args![this]);
 }
 
 // Translated from 006abcb0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -234,7 +234,7 @@ pub fn navmesh_search_max_cost_scalar_deleting_destructor(
     this: Ptr,
     flags: u32,
 ) -> Ptr {
-    fn_006ab480(e, this);
+    e.call(0x006a_b480, &args![this]);
     delete_if(e, this, flags)
 }
 
@@ -324,7 +324,7 @@ pub fn bs_simple_array_navmesh_search_node_scalar_deleting_destructor(
     this: Ptr,
     flags: u32,
 ) -> Ptr {
-    fn_006abc30(e, this);
+    e.call(0x006a_bc30, &args![this]);
     delete_if(e, this, flags)
 }
 
@@ -348,7 +348,7 @@ pub fn bs_scrap_array_navmesh_search_node_scalar_deleting_destructor(
     this: Ptr,
     flags: u32,
 ) -> Ptr {
-    fn_006abc50(e, this);
+    e.call(0x006a_bc50, &args![this]);
     delete_if(e, this, flags)
 }
 
@@ -502,11 +502,11 @@ pub fn fn_006ab670(
         if found != 0 {
             copy_words(e, out.addr(), point.addr(), 3);
         } else {
-            let best = fn_006abb90(e, this);
+            let best = e.call(0x006a_bb90, &args![this]).u32();
             e.call(NODE_CENTER_006A6EB0, &args![best + 8, out]);
         }
         e.call(LINK_SCRAP_ARRAY_DTOR_006ABDE0, &args![link_array]);
-        fn_006abc50(e, Ptr::new(node_array));
+        e.call(0x006a_bc50, &args![node_array]);
         out
     })
 }

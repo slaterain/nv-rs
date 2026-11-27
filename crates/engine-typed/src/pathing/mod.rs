@@ -38,6 +38,7 @@ use layout::{
 
 pub mod layout;
 pub mod location;
+pub mod max_cost;
 pub mod navmesh;
 pub mod point;
 pub mod pov;
@@ -267,5 +268,12 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The max-cost search.
+        entry!(0x006a_b480, max_cost::ctor_body(Ptr)),
+        entry!(0x006a_bc30, max_cost::simple_array_dtor(Ptr)),
+        entry!(0x006a_bc50, max_cost::scrap_array_dtor(Ptr)),
+        entry!(0x006a_b450, max_cost::scalar_deleting_dtor(Ptr, u32) -> Ptr),
+        entry!(0x006a_bb60, max_cost::is_goal_node(Ptr, Ptr) -> bool),
+        entry!(0x006a_bb90, max_cost::best_node_so_far(Ptr) -> u32),
     ]
 }
