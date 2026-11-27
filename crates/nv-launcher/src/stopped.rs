@@ -97,10 +97,13 @@ pub fn set_working(yes: bool) {
 }
 
 /// Whether the window's run is going on, and whether Play's work is running.
+/// (Read by the Windows filter; elsewhere by the tests only.)
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn in_window() -> bool {
     IN_WINDOW.load(Ordering::SeqCst)
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn working() -> bool {
     WORKING.load(Ordering::SeqCst)
 }
