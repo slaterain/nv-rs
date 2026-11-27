@@ -330,7 +330,7 @@ pub fn navmesh_search_los_build_node_path(
             let float = x87_store32(float);
             let target = e.call(REQUEST_TARGET_00984230, &args![request]).u32();
             let object = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, target));
-            let position = fn_006aabd0(e, Ptr::new(object), Ptr::new(ebp - 0x78)).addr();
+            let position = e.call(0x006a_abd0, &args![object, ebp - 0x78]).u32();
             let x = e.mem.u32(position);
             let y = e.mem.u32(position + 4);
             let z = e.mem.u32(position + 8);
@@ -409,7 +409,7 @@ pub fn navmesh_search_los_build_node_path(
             0x0055_9450,
             leaf::word_at_0(e, base + LOS_MAP)
         );
-        let score = fn_006aabf0(e, Ptr::new(map)) as i8;
+        let score = e.call(0x006a_abf0, &args![map]).u8() as i8;
         let pick = e
             .call(
                 PICK_004A8F20,
@@ -529,7 +529,7 @@ fn los_connection(e: &mut Engine, this: u32, ebp: u32, node: u32, connections: u
     let zero: f64 = e.global(ZERO);
     if range != zero {
         let request = e.mem.u32(this + CURRENT_REQUEST);
-        let point = fn_006ab150(e, Ptr::new(request), Ptr::new(ebp - 0xac)).addr();
+        let point = e.call(0x006a_b150, &args![request, ebp - 0xac]).u32();
         let center = e
             .call(
                 GET_CENTER_00558220,
@@ -720,7 +720,7 @@ pub fn navmesh_search_los_is_goal_node(e: &mut Engine, this: Ptr, node: Ptr) -> 
             0x0055_9450,
             leaf::word_at_0(e, base + LOS_MAP)
         );
-        let score = fn_006ab3b0(e, Ptr::new(map), key, triangle);
+        let score = e.call(0x006a_b3b0, &args![map, key, triangle]).u8();
         e.mem.set_u8(ebp - 1, score);
         if (e.mem.u8(ebp - 1) as i8) < 0 {
             let request = e.mem.u32(base + CURRENT_REQUEST);

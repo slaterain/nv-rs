@@ -38,6 +38,7 @@ use layout::{
 
 pub mod layout;
 pub mod location;
+pub mod los;
 pub mod navmesh;
 pub mod point;
 pub mod pov;
@@ -254,6 +255,11 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006b_9cf0, pov::height_in(Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr, f32, f32) -> bool),
         entry!(0x006b_ab00, pov::segment_within(Ptr<NiPoint3>, f32, Ptr<NiPoint3>, Ptr<NiPoint3>) -> bool),
         entry!(0x006b_b570, pov::sphere_tangents(Ptr<Sphere>, Ptr<Sphere>, u32, Ptr) -> u32),
+        // The LOS search's small functions.
+        entry!(0x006a_abf0, los::flag_byte(Ptr) -> u8),
+        entry!(0x006a_abd0, los::location_position(Ptr, Ptr) -> Ptr),
+        entry!(0x006a_b150, los::copy_member_c8(Ptr, Ptr) -> Ptr),
+        entry!(0x006a_b3b0, los::los_score(Ptr, u32, u32) -> u8),
         // Pathing locations.
         entry!(0x0044_1110, location::world_space(Ptr<PathingLocation>) -> u32),
         entry!(0x006a_9520, location::is_valid(Ptr<PathingLocation>) -> bool),
