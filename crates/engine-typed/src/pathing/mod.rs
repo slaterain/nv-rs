@@ -39,6 +39,7 @@ use layout::{
 pub mod layout;
 pub mod location;
 pub mod navmesh;
+pub mod navmesh_records;
 pub mod point;
 pub mod pov;
 pub mod search;
@@ -267,5 +268,12 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The navmesh's record helpers.
+        entry!(0x0068_ef50, navmesh_records::get_save_parent_cell(Ptr) -> u32),
+        entry!(0x0069_0860, navmesh_records::info_get_mesh(Ptr, Ptr) -> bool),
+        entry!(0x0069_0fe0, navmesh_records::append_vertex(Ptr<NavMesh>, Ptr) -> u32),
+        entry!(0x0069_1000, navmesh_records::append_triangle(Ptr<NavMesh>, Ptr) -> u32),
+        entry!(0x0069_1020, navmesh_records::append_edge_info(Ptr<NavMesh>, Ptr) -> u32),
+        entry!(0x0069_0e90, navmesh_records::delete_extra_edge_info(Ptr<NavMesh>, u16)),
     ]
 }
