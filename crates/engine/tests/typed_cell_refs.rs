@@ -13250,6 +13250,9 @@ fn xt_pointer(e: &mut Engine, objects: &XtObjects, which: u32) -> u32 {
 /// The sizes, rooms (capacity past the size) and counts the array Diffs draw.
 const XT_SIZES: &[u32] = &[0, 1, 2, 4];
 const XT_ROOMS: &[u32] = &[0, 1, 3];
+/// The rooms the removal draws: as [`XT_ROOMS`], and enough for the shrink test (the size no more than a
+/// quarter of the capacity) with two and four elements, so a shrinking removal past index 0 runs.
+const XT_REMOVE_ROOMS: &[u32] = &[0, 1, 3, 6, 12];
 const XT_NEW_SIZES: &[u32] = &[0, 1, 2, 3, 5, 9];
 const XT_COUNTS: &[u32] = &[0, 1, 2, 3];
 /// Which object a counted pointer holds.
@@ -13545,10 +13548,10 @@ impl XtShapes for Diff {
     /// (array, index, shrink) over the array world: an index within the size (non-empty arrays).
     fn xt_remove_at(self) -> Diff {
         self.extra_data_case()
-            .max_cases(3 * XT_ROOMS.len() * 4 * 2)
+            .max_cases(3 * XT_REMOVE_ROOMS.len() * 4 * 2)
             .inputs(&[
                 Input::Of(&[1, 2, 4]),
-                Input::Of(XT_ROOMS),
+                Input::Of(XT_REMOVE_ROOMS),
                 Input::Of(&[0, 1, 2, 3]),
                 Input::Of(&[0, 1]),
             ])
@@ -13764,9 +13767,13 @@ fn the_part_5_worlds_reach_every_branch() {
         }
     }
     for size in [1u32, 2, 4] {
-        for &room in XT_ROOMS {
+        for &room in XT_REMOVE_ROOMS {
             let capacity = size + room;
-            reached.insert(format!("remove can shrink {}", size <= capacity >> 2));
+            let shrinks = size <= capacity >> 2;
+            reached.insert(format!("remove can shrink {shrinks}"));
+            if shrinks && size > 1 {
+                reached.insert("remove shrinks at a later index".into());
+            }
         }
     }
     for first in XT_WHICH {
@@ -13806,6 +13813,7 @@ fn the_part_5_worlds_reach_every_branch() {
         "set within the capacity",
         "remove can shrink true",
         "remove can shrink false",
+        "remove shrinks at a later index",
         "pointers hold the same",
         "a pointer holds none",
         "pointers hold others",
