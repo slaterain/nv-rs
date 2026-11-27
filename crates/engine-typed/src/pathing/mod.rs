@@ -166,6 +166,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006a_78d0, navmesh::referenced_triangle(Ptr<MeshEdge>) -> Ptr<NavMeshTriangle>),
         entry!(0x0069_ad00, navmesh::resolve(Ptr<NavMeshInfo>, Ptr) -> bool),
         entry!(0x0069_0890, navmesh::hold(Ptr, u32)),
+        entry!(0x006b_46a0, navmesh::info_new(Ptr<NavMeshInfo>) -> Ptr<NavMeshInfo>),
         entry!(0x0069_0830, navmesh::info_world_space(Ptr<NavMeshInfo>) -> u32),
         entry!(0x0069_0800, navmesh::parent_world_space(Ptr<NavMeshInfo>) -> u32),
         entry!(0x0069_dfb0, navmesh::is_loaded(Ptr<NavMeshInfo>) -> bool),

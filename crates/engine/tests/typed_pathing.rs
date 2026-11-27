@@ -4366,3 +4366,26 @@ fn crossed_edge_rounding_main_thread() {
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
 }
+
+#[test]
+fn info_new() {
+    Diff::new(entry!(0x006b_46a0, navmesh::info_new(Ptr<_>) -> Ptr<_>))
+        .common()
+        .plain(0x006b_46a0)
+        .inputs(&[Input::Flag])
+        .setup(|e, _| {
+            stand_ins(e);
+            // The zero point the constructor copies lives at `011f426c`.
+            e.map(0x011f_4000, 0x1000);
+            for i in 0..3 {
+                e.mem.set_u32(0x011f_426c + 4 * i, 0x1100 + i);
+            }
+            let info = e.mem.alloc(0x5c);
+            for i in 0..0x17 {
+                e.mem.set_u32(info + 4 * i, 0x6b6b_6b6b);
+            }
+            vec![info]
+        })
+        .run()
+        .assert_same();
+}

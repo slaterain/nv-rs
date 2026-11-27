@@ -43,6 +43,11 @@ const FLOOR: u32 = 0x0040_6ce0;
 const GRID_RANGE: u32 = 0x0069_6a10;
 const CROSS: u32 = 0x0053_d1a0;
 const IS_FORMLESS: u32 = 0x0068_f320;
+/// The constructors of a navmesh info's members: +0x24 and +0x34 (`0069aee0`), +0x44 (`005e04c0`),
+/// and the zero point in the exe's data copied to +0x10 (`011f426c`).
+const ORDER_ARRAY_CTOR: u32 = 0x0069_aee0;
+const REFERENCE_ARRAY_CTOR: u32 = 0x005e_04c0;
+const ZERO_POINT: u32 = 0x011f_426c;
 const CELL_WORLD_SPACE: u32 = 0x0048_39c0;
 const DYNAMIC_CAST: u32 = 0x00ec_43fb;
 const MAP_LOOKUP: u32 = 0x0085_3130;
@@ -1037,6 +1042,32 @@ pub fn hold(e: &mut Engine, holder: Ptr, mesh: u32) {
         e.call(HOLDER_ASSIGN, &args![holder, temporary]);
         e.call(HOLDER_RELEASE, &args![temporary]);
     });
+}
+
+// Typed from 006b46a0
+/// A navmesh info's constructor (`thiscall(this) -> this`): `006815c0` on the point at +0x10, the
+/// order arrays at +0x24 and +0x34 and the reference array at +0x44 constructed, then the vtable, cell
+/// id, +8 and world space cleared, `0xDEADDEAD` at +0xc, the zero point of `011f426c` copied to
+/// +0x10, +0x58 and +0x54 cleared, 0.0 at +0x20.
+pub fn info_new(e: &mut Engine, this: Ptr<NavMeshInfo>) -> Ptr<NavMeshInfo> {
+    let base = this.addr();
+    typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, base + 0x10));
+    e.call(ORDER_ARRAY_CTOR, &args![base + 0x24]);
+    e.call(ORDER_ARRAY_CTOR, &args![base + 0x34]);
+    e.call(REFERENCE_ARRAY_CTOR, &args![base + 0x44]);
+    e.set(this, NavMeshInfo::unknown_8, 0);
+    e.set(this, NavMeshInfo::vtable, 0);
+    e.set(this, NavMeshInfo::cell_id, 0);
+    e.set(this, NavMeshInfo::world_space, 0);
+    e.set(this, NavMeshInfo::cell_key, 0xdead_dead);
+    for i in 0..3 {
+        let word = e.global::<u32>(ZERO_POINT + 4 * i);
+        e.mem.set_u32(base + 0x10 + 4 * i, word);
+    }
+    e.mem.set_u32(base + 0x58, 0);
+    e.set(this, NavMeshInfo::navmesh, 0);
+    e.mem.set_u32(base + 0x20, 0.0f32.to_bits());
+    this
 }
 
 // Typed from 00690830
