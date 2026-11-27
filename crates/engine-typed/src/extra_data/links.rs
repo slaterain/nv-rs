@@ -189,7 +189,7 @@ fn set_bit_0(e: &mut Engine, at: u32, value: bool) {
 /// `ExtraOpenCloseActivateRef`'s constructor's body (`0041e750`): `BSExtraData`'s (`0040ec80`) with
 /// type 0x6c, the class's vtable, a null reference. Answers `this`.
 #[inline]
-fn open_close_init(e: &mut Engine, this: u32) -> u32 {
+pub(super) fn open_close_init(e: &mut Engine, this: u32) -> u32 {
     extra_init(e, this, KIND_OPEN_CLOSE_ACTIVATE_REF);
     e.mem.set_u32(this, VTABLE_EXTRA_OPEN_CLOSE_ACTIVATE_REF);
     e.mem.set_u32(this.wrapping_add(EXTRA_PAYLOAD), 0);
