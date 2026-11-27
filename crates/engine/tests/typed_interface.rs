@@ -5402,6 +5402,8 @@ fn no_member_of_a_family_on_by_default_holds_a_seam() {
         (0x0041_d0f6, "extra_data"),
         (0x0041_d212, "extra_data"),
         (0x0041_d25a, "extra_data"),
+        (0x0042_7f30, "extra_data"),
+        (0x0042_c328, "extra_data"),
         (0x0048_3669, "forms"),
         (0x0048_449a, "forms"),
         (0x0048_4e03, "forms"),
