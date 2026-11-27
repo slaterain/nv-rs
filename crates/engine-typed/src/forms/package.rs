@@ -4,7 +4,13 @@
 //! the location, second location and target setters, the dialogue data's getters and setters,
 //! `GetAcquireRadius`, `GetInitialTargetCount`, the use weapon data, the second and search
 //! locations, `InitItem`, `GetIsCreated` and `SetIsCreated`, the script and never-to-run flags and
-//! `SetNeverRun`.
+//! `SetNeverRun`; and the unit's other short functions: the flag 0x10000's setter (`00674f30`),
+//! the type data getters (`006758f0` to `006759b0`), `GetEscortFollowDistance`,
+//! `IsInterruptPackage`, `GetShouldReserveTarget`, `GetObjectTypeFromForm` and
+//! `FormMatchesPackageObjectType` (the type 0x28 form's two tests `006450c0` and `004c0c30`, the
+//! signed byte at +0xf4 from 0 to 2 and from 3 to 13, in place; the effect list's three tests and
+//! a form's `+0x3c` member's flag slot are calls). The place functions are in
+//! [`super::package_place`], the save game functions in [`super::package_save`].
 //!
 //! A package (0x80 bytes) has its procedure type at +0x18, its flags at +0x1c (a word), its type
 //! at +0x20 (a signed byte, 0xff when none), its behaviour flags at +0x22 and specific flags at
@@ -52,7 +58,7 @@
 //! rounded to an `f32`.
 
 use super::package_flags::{pack_flag, set_pack_flag, PACK_FLAGS, PACK_TYPE};
-use super::{conditions, package_data, schedule, tesform, FAMILY};
+use super::{conditions, package_data, package_place, schedule, tesform, FAMILY};
 use engine_core::x87::{x87_load32, x87_quiet_bits, x87_store32};
 use engine_core::{args, typed_call, Engine};
 
@@ -119,8 +125,6 @@ const TYPE_9_DATA_VTABLE: u32 = 0x0106_8860;
 const SLOT_DELETE: u32 = 0;
 /// The data handler's ids from here up are created ones.
 const CREATED_IDS: u32 = 0xff00_0000;
-/// The count `GetAcquireRadius` takes for type 0xc (`ECX` = the package: the argument).
-const TYPE_C_COUNT: u32 = 0x0067_6280;
 /// The exe's 0.0 the acquire radius is compared with.
 const ZERO: f64 = 0.0;
 /// `InitItem`'s callees: the loader's warning count (a thread's field, read by `0046e8a0`), the
@@ -155,6 +159,18 @@ const FLAG_SCRIPT_PACKAGE: u32 = 0x4000;
 const SLOT_FORM_SET_CHANGED: u32 = 0x48;
 const SLOT_FORM_CLEAR_CHANGED: u32 = 0x4c;
 const NEVER_RUN_CHANGE: u32 = 0x8000_0000;
+/// The flag 0x10000 and the mask its setter tells the form.
+const FLAG_10000: u32 = 0x1_0000;
+const FLAG_10000_CHANGE: u32 = 0x4000_0000;
+/// A form's type, its `+0x3c` member and that member's flag slot, the type 0x28 form's kind byte, the
+/// effect list's three tests (`ECX` = the list at +0x24).
+const FORM_TYPE: u32 = 4;
+const FORM_MEMBER_3C: u32 = 0x3c;
+const SLOT_MEMBER_FLAG: u32 = 4;
+const FORM_28_KIND: u32 = 0xf4;
+const EFFECT_LIST_TARGET: u32 = 0x0040_5f30;
+const EFFECT_LIST_TOUCH: u32 = 0x0040_5fe0;
+const EFFECT_LIST_THIRD: u32 = 0x0040_6090;
 
 fn at(this: u32, offset: u32) -> u32 {
     this.wrapping_add(offset)
@@ -654,7 +670,12 @@ pub fn dialogue_fov(e: &mut Engine, this: u32) -> f32 {
 pub fn acquire_radius(e: &mut Engine, this: u32, argument: u32, radius: u32) -> bool {
     e.mem.set_f32(radius, 0.0);
     if pack_type(e, this) == 0xc {
-        let count = e.call(TYPE_C_COUNT, &args![this, argument]).u32();
+        let count = typed_call!(
+            FAMILY,
+            0x0067_6280,
+            package_place::location_radius_for(e, this, argument)
+        );
+        let count = u32::from_ne_bytes(count.to_ne_bytes());
         e.mem.set_u32(radius, x87_store32(f64::from(count)));
         return true;
     }
@@ -994,4 +1015,186 @@ pub fn type_9_data_construct(e: &mut Engine, this: u32) -> u32 {
     e.mem.set_u32(this, TYPE_9_DATA_VTABLE);
     e.mem.set_u32(at(this, SMALL_SECOND_LOCATION), 0);
     this
+}
+
+// Typed from 00674f30
+/// The flag 0x10000 set for a byte other than zero, else cleared, and for a package without a
+/// created id the form told through its slot 0x48 (set) or 0x4c (cleared) with the mask
+/// 0x4000_0000.
+pub fn set_pack_flag_10000(e: &mut Engine, this: u32, value: u8) {
+    let set = value != 0;
+    set_pack_flag(e, this, FLAG_10000, set);
+    if e.mem.u32(at(this, FORM_ID)) < CREATED_IDS {
+        let slot = if set {
+            SLOT_FORM_SET_CHANGED
+        } else {
+            SLOT_FORM_CLEAR_CHANGED
+        };
+        e.vcall(this, slot, &args![FLAG_10000_CHANGE]);
+    }
+}
+
+/// The data object when the package type is `kind`, else 0.
+fn data_of_type(e: &Engine, this: u32, kind: i32) -> u32 {
+    if pack_type(e, this) == kind {
+        e.mem.u32(at(this, DATA))
+    } else {
+        0
+    }
+}
+
+// Typed from 006758f0
+/// `TESPackage::GetUseWeaponPackageData` (Xbox PDB): the data object of a type 0x10 package, else 0.
+pub fn use_weapon_data_held(e: &mut Engine, this: u32) -> u32 {
+    data_of_type(e, this, TYPE_USE_WEAPON)
+}
+
+// Typed from 00675920
+/// `TESPackage::GetPatrolPackageData` (Xbox PDB): the data object of a type 0xd package, else 0.
+pub fn patrol_data(e: &mut Engine, this: u32) -> u32 {
+    data_of_type(e, this, 0xd)
+}
+
+// Typed from 00675950
+/// `TESPackage::GetFollowPackageData` (Xbox PDB): the data object of a type 1 package, else 0.
+pub fn follow_data(e: &mut Engine, this: u32) -> u32 {
+    data_of_type(e, this, 1)
+}
+
+// Typed from 00675980
+/// The data object of a type 0xe package, else 0.
+pub fn type_e_data(e: &mut Engine, this: u32) -> u32 {
+    data_of_type(e, this, 0xe)
+}
+
+// Typed from 006759b0
+/// `TESPackage::GetEscortPackageData` (Xbox PDB): the data object of a type 2 package, else 0.
+pub fn escort_data(e: &mut Engine, this: u32) -> u32 {
+    data_of_type(e, this, 2)
+}
+
+// Typed from 006784c0
+/// `TESPackage::GetEscortFollowDistance` (Xbox PDB): an escort package's (type 2) follow distance,
+/// the word at +8 of its data object; else 0x100.
+pub fn escort_follow_distance(e: &mut Engine, this: u32) -> u32 {
+    if pack_type(e, this) == 2 {
+        let data = e.mem.u32(at(this, DATA));
+        e.mem.u32(at(data, 8))
+    } else {
+        0x100
+    }
+}
+
+// Typed from 00678610
+/// `TESPackage::IsInterruptPackage` (Xbox PDB): the package types 0x12 to 0x19, 0x1b to 0x1d and
+/// 0x1f to 0x24.
+pub fn is_interrupt_package(e: &mut Engine, this: u32) -> bool {
+    matches!(pack_type(e, this), 0x12..=0x19 | 0x1b..=0x1d | 0x1f..=0x24)
+}
+
+// Typed from 00678d00
+/// `TESPackage::GetShouldReserveTarget` (Xbox PDB): the procedure types 2 to 5 and 0x1a
+/// (`009611e0` in place).
+pub fn should_reserve_target(e: &mut Engine, this: u32) -> bool {
+    let procedure = e.mem.i32(at(this, PROCEDURE));
+    (2..=5).contains(&procedure) || procedure == 0x1a
+}
+
+/// A form's `+0x3c` member's flag (its slot 4).
+fn member_flag(e: &mut Engine, form: u32) -> bool {
+    e.vcall(at(form, FORM_MEMBER_3C), SLOT_MEMBER_FLAG, &args![])
+        .bool()
+}
+
+/// The two tests on a form of type 0x28 (`006450c0`, `004c0c30` in place): the signed byte at
+/// +0xf4 from 0 to 2, and from 3 to 13.
+fn form_28_kind(e: &Engine, form: u32) -> i8 {
+    e.mem.i8(at(form, FORM_28_KIND))
+}
+
+// Typed from 00679ba0
+/// `TESPackage::GetObjectTypeFromForm` (Xbox PDB): a form's package object type (0 for none) from
+/// its form type: 0x14 0x18, 0x15 1, 0x18 to 0x1c 2 to 6, 0x1d 7 (0x12 when its member's flag
+/// holds), 0x1e 8, 0x1f, 0x32, 0x67, 0x6c, 0x73 and 0x74 9, 0x26 10, 0x27 11, 0x28 0xc (0x16 or
+/// 0x17 by its two tests), 0x29 to 0x2b 0xd to 0xf, 0x2e 0x10, 0x2f 0x11 (0x12 by its member).
+pub fn object_type_from_form(e: &mut Engine, form: u32) -> i32 {
+    if form == 0 {
+        return 0;
+    }
+    match e.mem.u8(at(form, FORM_TYPE)) {
+        0x14 => 0x18,
+        0x15 => 1,
+        kind @ 0x18..=0x1c => i32::from(kind) - 0x16,
+        0x1d => {
+            if member_flag(e, form) {
+                0x12
+            } else {
+                7
+            }
+        }
+        0x1e => 8,
+        0x1f | 0x32 | 0x67 | 0x6c | 0x73 | 0x74 => 9,
+        0x26 => 10,
+        0x27 => 0xb,
+        0x28 => match form_28_kind(e, form) {
+            0..=2 => 0x16,
+            3..=13 => 0x17,
+            _ => 0xc,
+        },
+        kind @ 0x29..=0x2b => i32::from(kind) - 0x1c,
+        0x2e => 0x10,
+        0x2f => {
+            if member_flag(e, form) {
+                0x12
+            } else {
+                0x11
+            }
+        }
+        _ => 0,
+    }
+}
+
+// Typed from 00679e00
+/// `TESPackage::FormMatchesPackageObjectType` (Xbox PDB): whether a form satisfies a package
+/// object type (neither 0): by form type, 0x14 matches 0x18 and 0x19 to 0x1b by its effect list's
+/// three tests; the plain types match their own object type ([`object_type_from_form`]); 0x18 and
+/// 0x29 also 0x13 and 0x14, 0x1a also 0x14, 0x2a and 0x2b also 0x1c, 0x28 also 0x13 and 0x14 and
+/// 0x16 or 0x17 by its tests, 0x1d and 0x2f 0x12 by their member's flag.
+pub fn form_matches_object_type(e: &mut Engine, form: u32, object_type: i32) -> bool {
+    if form == 0 || object_type == 0 {
+        return false;
+    }
+    let either = matches!(object_type, 0x13 | 0x14);
+    match e.mem.u8(at(form, FORM_TYPE)) {
+        0x14 => match object_type {
+            0x18 => true,
+            0x19 => e.call(EFFECT_LIST_TARGET, &args![at(form, 0x24)]).bool(),
+            0x1a => e.call(EFFECT_LIST_TOUCH, &args![at(form, 0x24)]).bool(),
+            0x1b => e.call(EFFECT_LIST_THIRD, &args![at(form, 0x24)]).bool(),
+            _ => false,
+        },
+        0x15 => object_type == 1,
+        0x18 => object_type == 2 || either,
+        0x19 => object_type == 3,
+        0x1a => object_type == 4 || object_type == 0x14,
+        0x1b => object_type == 5,
+        0x1c => object_type == 6,
+        0x1d => object_type == 7 || (object_type == 0x12 && member_flag(e, form)),
+        0x1e => object_type == 8,
+        0x1f | 0x32 | 0x67 | 0x6c | 0x73 | 0x74 => object_type == 9,
+        0x26 => object_type == 10,
+        0x27 => object_type == 0xb,
+        0x28 => match object_type {
+            0xc | 0x13 | 0x14 => true,
+            0x16 => (0..=2).contains(&form_28_kind(e, form)),
+            0x17 => (3..=13).contains(&form_28_kind(e, form)),
+            _ => false,
+        },
+        0x29 => object_type == 0xd || either,
+        0x2a => object_type == 0xe || object_type == 0x1c,
+        0x2b => object_type == 0xf || object_type == 0x1c,
+        0x2e => object_type == 0x10,
+        0x2f => object_type == 0x11 || (object_type == 0x12 && member_flag(e, form)),
+        _ => false,
+    }
 }

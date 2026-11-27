@@ -59,7 +59,16 @@
 //!   `SetPackType`, the flag tests and the specific flags' setters, the location, second location
 //!   and target setters, the dialogue data's getters and setters, the acquire radius, the initial
 //!   target count, the use weapon data, the second and search locations, `InitItem`, `GetIsCreated`
-//!   and `SetIsCreated`, the script and never-to-run flags and `SetNeverRun`.
+//!   and `SetIsCreated`, the script and never-to-run flags and `SetNeverRun`; and the unit's other
+//!   short ones: the flag 0x10000's setter, the type data getters, the escort follow distance, the
+//!   interrupt and reserve-target tests, `GetObjectTypeFromForm` and `FormMatchesPackageObjectType`.
+//! - [`package_place`]: `TESPackage`'s place functions: the own, second and search locations' world
+//!   space, cell, position, radius and reference for an actor, `ComputeInitialTarget`, the two "is
+//!   the subject at the location" tests, `IsActorAtRefTarget`, `IsTargetAtLocation`,
+//!   `IsTargetAtSecondLocation`, the follow target's search and its callback, the two radius
+//!   functions and `IsTargetAnActor`.
+//! - [`package_save`]: `TESPackage`'s save game functions: the save size, the old save and load,
+//!   the step after a load, the form flags' hooks, the buffered save, load and init-load.
 //! - [`package_flags`]: a package's flag accessors (the unit after `TESPackage`'s): the getters and
 //!   setters of the bits of its flags and behaviour flags, their copy from another package, and the
 //!   package type's entry in the table at `0119bcb0`.
@@ -126,6 +135,8 @@ pub mod package;
 pub mod package_data;
 pub mod package_flags;
 pub mod package_list;
+pub mod package_place;
+pub mod package_save;
 pub mod queued_maps;
 pub mod schedule;
 pub mod std_exceptions;
@@ -601,6 +612,51 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0067_4e40, package::is_never_to_run(u32) -> bool),
         entry!(0x0067_4e70, package::set_never_run(u32, u32, u8)),
         entry!(0x0067_acf0, package::type_9_data_construct(u32) -> u32),
+        entry!(0x0067_4f30, package::set_pack_flag_10000(u32, u8)),
+        entry!(0x0067_58f0, package::use_weapon_data_held(u32) -> u32),
+        entry!(0x0067_5920, package::patrol_data(u32) -> u32),
+        entry!(0x0067_5950, package::follow_data(u32) -> u32),
+        entry!(0x0067_5980, package::type_e_data(u32) -> u32),
+        entry!(0x0067_59b0, package::escort_data(u32) -> u32),
+        entry!(0x0067_84c0, package::escort_follow_distance(u32) -> u32),
+        entry!(0x0067_8610, package::is_interrupt_package(u32) -> bool),
+        entry!(0x0067_8d00, package::should_reserve_target(u32) -> bool),
+        entry!(0x0067_9ba0, package::object_type_from_form(u32) -> i32),
+        entry!(0x0067_9e00, package::form_matches_object_type(u32, i32) -> bool),
+        entry!(0x0067_4fd0, package_place::second_location_world(u32, u32) -> u32),
+        entry!(0x0067_51a0, package_place::second_location_cell(u32, u32) -> u32),
+        entry!(0x0067_5360, package_place::second_location_coord(u32, u32, u32) -> u32),
+        entry!(0x0067_5670, package_place::second_location_radius(u32) -> u32),
+        entry!(0x0067_56a0, package_place::second_location_reference(u32, u32) -> u32),
+        entry!(0x0067_57e0, package_place::search_location_cell(u32, u32) -> u32),
+        entry!(0x0067_5830, package_place::search_location_coord(u32, u32, u32) -> u32),
+        entry!(0x0067_58a0, package_place::search_location_radius(u32, u32) -> i32),
+        entry!(0x0067_59e0, package_place::compute_initial_target(u32, u32) -> u32),
+        entry!(0x0067_5a50, package_place::location_world(u32, u32) -> u32),
+        entry!(0x0067_5c20, package_place::location_cell(u32, u32) -> u32),
+        entry!(0x0067_5de0, package_place::location_coord(u32, u32, u32) -> u32),
+        entry!(0x0067_6140, package_place::location_reference(u32, u32) -> u32),
+        entry!(0x0067_6280, package_place::location_radius_for(u32, u32) -> i32),
+        entry!(0x0067_6390, package_place::subject_at_second_location(u32, u32, u32, u8, f32, u8) -> bool),
+        entry!(0x0067_68d0, package_place::subject_at_location(u32, u32, u8, f32, u8) -> bool),
+        entry!(0x0067_6e40, package_place::actor_at_ref_target(u32, u32, i32) -> bool),
+        entry!(0x0067_73a0, package_place::target_at_location(u32, u32, i32) -> bool),
+        entry!(0x0067_7570, package_place::target_at_second_location(u32, u32, f32) -> bool),
+        entry!(0x0067_80e0, package_place::follow_target(u32, u32, u8) -> u32),
+        entry!(0x0067_84f0, package_place::follow_candidate(u32, u32) -> bool),
+        entry!(0x0067_8670, package_place::radius_actor_to_location(u32, u32, u8) -> f32),
+        entry!(0x0067_87e0, package_place::radius_actor_to_ref_target(u32, u32, u8) -> f32),
+        entry!(0x0067_8ec0, package_place::target_is_actor(u32, u32) -> bool),
+        entry!(0x0067_8fd0, package_save::save_size(u32) -> u16),
+        entry!(0x0067_9120, package_save::save_old(u32)),
+        entry!(0x0067_9340, package_save::load_old(u32)),
+        entry!(0x0067_96c0, package_save::after_load(u32)),
+        entry!(0x0067_9700, package_save::load_form_flags(u32, u32, u32)),
+        entry!(0x0067_9760, package_save::clear_form_flags(u32, u32)),
+        entry!(0x0067_97c0, package_save::save_game(u32, u32)),
+        entry!(0x0067_98c0, package_save::load_game(u32, u32)),
+        entry!(0x0067_9a90, package_save::init_load_game(u32, u32)),
+        entry!(0x0067_9b10, package_save::clear_loaded_flags(u32, u32)),
         entry!(0x0067_a1b0, package_flags::copy_flags_from(u32, u32)),
         entry!(0x0067_a380, package_flags::pack_flag_1000(u32) -> bool),
         entry!(0x0067_a3a0, package_flags::set_pack_flag_1000(u32, u8)),
