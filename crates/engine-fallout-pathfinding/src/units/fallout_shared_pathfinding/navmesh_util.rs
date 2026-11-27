@@ -346,7 +346,7 @@ fn append_vertex_edge(
         } else {
             let allocated = e.call(0x0040_1000, &args![0x28u32]).u32();
             if allocated != 0 {
-                record = fn_0069a730(e, Ptr::new(allocated));
+                record = Ptr::new(e.call(0x0069_a730, &args![allocated]).u32());
             }
             // 00699cea-00699cf1 (and 00699dc9, 00699ed1, 00699fb0): ECX = the
             // record, push &key, CALL 0069a690 copies the key into record+0.
@@ -3917,7 +3917,9 @@ pub fn fn_00699b60(e: &mut Engine, this: Ptr<NavMesh>) {
                     fn_0069a6c0(e, edge_handle, this.addr(), triangle_index as u16, edge);
                     for corner in [edge, (edge + 1) % 3] {
                         let vertex = corner_vertex_index(e, triangle, corner);
-                        fn_0069a660(e, vertex_handle, this.addr(), vertex);
+                        let _: u32 = e
+                            .call(0x0069_a660, &args![vertex_handle, this.addr(), vertex])
+                            .u32();
                         append_vertex_edge(
                             e,
                             vertex_map,
@@ -4023,8 +4025,8 @@ pub fn fn_00699b60(e: &mut Engine, this: Ptr<NavMesh>) {
                     accept = !parity_even(compare_flags(cross_z as f64, negative_limit), 0x05);
                 }
                 if accept || ordinary_count == 1 {
-                    fn_0069a700(e, pair, packed_first);
-                    fn_0069a700(e, pair.byte_add(2), packed_second);
+                    e.call(0x0069_a700, &args![pair, packed_first]);
+                    e.call(0x0069_a700, &args![pair.byte_add(2), packed_second]);
                     e.call(
                         0x0069_4c50,
                         &args![

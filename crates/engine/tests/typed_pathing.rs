@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, navmesh, navmesh_misc, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -659,6 +659,8 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x006d_b4f0, &[0x006d_bbb0]),
     (0x006d_cf20, &[0x0069_0830, 0x006d_cfe0]),
     (0x006e_78b0, &[0x006e_8f40]),
+    (0x0069_6c30, &[0x0069_6c60, 0x0069_6ca0]),
+    (0x0069_6c60, &[0x0069_6ca0]),
 ];
 
 trait Common {
@@ -4364,4 +4366,172 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+#[test]
+fn grid_bounds_copy() {
+    Diff::new(entry!(
+        0x0069_6a10,
+        navmesh_misc::grid_bounds_copy(Ptr<_>, Ptr, Ptr)
+    ))
+    .common()
+    .plain(0x0069_6a10)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        let grid = e.mem.alloc(0x28);
+        for i in 0..0xa {
+            e.mem
+                .set_u32(grid + 4 * i, case.word(0).wrapping_mul(i + 1));
+        }
+        vec![grid, e.mem.alloc(0xc), e.mem.alloc(0xc)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn grid_forward() {
+    Diff::new(entry!(
+        0x0069_6c00,
+        navmesh_misc::grid_forward(Ptr<_>, u32, u32, u32)
+    ))
+    .common()
+    .plain(0x0069_6c00)
+    .inputs(&[Input::Word, Input::Word, Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x0069_d4b0, |e, a| {
+            log(e, 0x0069_d4b0, a[1]);
+            log(e, 0x0069_d4b0 + 1, a[2]);
+            log(e, 0x0069_d4b0 + 2, a[3]);
+            ret(0)
+        });
+        vec![e.mem.alloc(0x108), case.word(0), case.word(1), case.word(2)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// Two 0x54-byte blocks filled from the case's word.
+fn pair_54(e: &mut Engine, word: u32) -> Vec<u32> {
+    let (a, b) = (e.mem.alloc(0x54), e.mem.alloc(0x54));
+    for i in 0..0x15 {
+        e.mem.set_u32(b + 4 * i, word.wrapping_mul(i + 1));
+    }
+    vec![a, b]
+}
+
+#[test]
+fn copy_assign_54() {
+    Diff::new(entry!(
+        0x0069_6c30,
+        navmesh_misc::copy_assign_54(Ptr, Ptr) -> Ptr
+    ))
+    .common()
+    .plain(0x0069_6c30)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        pair_54(e, case.word(0))
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn copy_44() {
+    Diff::new(entry!(0x0069_6c60, navmesh_misc::copy_44(Ptr, Ptr) -> Ptr))
+        .common()
+        .plain(0x0069_6c60)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            pair_54(e, case.word(0))
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn obstacle_map_lookup() {
+    Diff::new(entry!(
+        0x0069_97b0,
+        navmesh_misc::obstacle_map_lookup(Ptr, u16, Ptr) -> bool
+    ))
+    .common()
+    .plain(0x0069_97b0)
+    .inputs(&[Input::Word, Input::Of(&[0, 1, 3])])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x0069_afb0, |e, a| {
+            log(e, 0x0069_afb0, a[1]);
+            e.mem.set_u32(a[2], a[1].wrapping_mul(0x100));
+            ret(a[1] & 1)
+        });
+        let this = e.mem.alloc(0xe4);
+        e.mem.set_u32(this + 0xe0, 0x2000_0000);
+        vec![this, case.word(0) & 0xffff, e.mem.alloc(4)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn embedded_lists_new() {
+    Diff::new(entry!(
+        0x0069_a730,
+        navmesh_misc::embedded_lists_new(Ptr) -> Ptr
+    ))
+    .common()
+    .plain(0x0069_a730)
+    .inputs(&[Input::Flag])
+    .setup(|e, _| {
+        stand_ins(e);
+        vec![e.mem.alloc(0x28)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pack_edge_descriptor() {
+    Diff::new(entry!(
+        0x0069_a700,
+        navmesh_misc::pack_edge_descriptor(Ptr, Ptr)
+    ))
+    .common()
+    .plain(0x0069_a700)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        let record = e.mem.alloc(0xc);
+        for i in 0..3 {
+            e.mem
+                .set_u32(record + 4 * i, case.word(0).wrapping_mul(i + 1));
+        }
+        vec![e.mem.alloc(2), record]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn compare_keys() {
+    Diff::new(entry!(
+        0x0069_ae60,
+        navmesh_misc::compare_keys(Ptr, Ptr) -> u32
+    ))
+    .common()
+    .plain(0x0069_ae60)
+    .inputs(&[Input::Word, Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        let (a, b) = (e.mem.alloc(2), e.mem.alloc(2));
+        e.mem.set_u16(a, case.word(0) as u16);
+        e.mem.set_u16(b, case.word(1) as u16);
+        vec![a, b]
+    })
+    .run()
+    .assert_same();
 }

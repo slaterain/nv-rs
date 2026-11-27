@@ -39,6 +39,7 @@ use layout::{
 pub mod layout;
 pub mod location;
 pub mod navmesh;
+pub mod navmesh_misc;
 pub mod point;
 pub mod pov;
 pub mod search;
@@ -267,5 +268,14 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // Smaller navmesh_util helpers.
+        entry!(0x0069_6a10, navmesh_misc::grid_bounds_copy(Ptr<NavMeshGrid>, Ptr, Ptr)),
+        entry!(0x0069_6c00, navmesh_misc::grid_forward(Ptr<NavMesh>, u32, u32, u32)),
+        entry!(0x0069_6c30, navmesh_misc::copy_assign_54(Ptr, Ptr) -> Ptr),
+        entry!(0x0069_6c60, navmesh_misc::copy_44(Ptr, Ptr) -> Ptr),
+        entry!(0x0069_97b0, navmesh_misc::obstacle_map_lookup(Ptr, u16, Ptr) -> bool),
+        entry!(0x0069_a730, navmesh_misc::embedded_lists_new(Ptr) -> Ptr),
+        entry!(0x0069_a700, navmesh_misc::pack_edge_descriptor(Ptr, Ptr)),
+        entry!(0x0069_ae60, navmesh_misc::compare_keys(Ptr, Ptr) -> u32),
     ]
 }

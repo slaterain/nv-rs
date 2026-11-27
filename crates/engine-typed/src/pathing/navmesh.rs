@@ -7,8 +7,8 @@ use super::layout::{
 };
 use super::point::{abs, length_squared, subtract};
 use super::{
-    copy_point, double_global, float, float_global, get, low_word, pov, real, search, FAMILY,
-    FLOAT_MAX,
+    copy_point, double_global, float, float_global, get, low_word, navmesh_misc, pov, real, search,
+    FAMILY, FLOAT_MAX,
 };
 use crate::culling::layout::NiPoint3;
 use crate::native::{float_precision, to_float, Real};
@@ -40,7 +40,6 @@ const WATER_HEIGHT: u32 = 0x0054_7250;
 const HEIGHT_IN_TRIANGLE: u32 = 0x0069_7810;
 const HEIGHT_NEAR_TRIANGLE: u32 = 0x0069_7730;
 const FLOOR: u32 = 0x0040_6ce0;
-const GRID_RANGE: u32 = 0x0069_6a10;
 const CROSS: u32 = 0x0053_d1a0;
 const IS_FORMLESS: u32 = 0x0068_f320;
 const CELL_WORLD_SPACE: u32 = 0x0048_39c0;
@@ -899,7 +898,11 @@ pub fn closest_triangle(
 // Typed from 006969e0
 /// The grid cells a box covers (`thiscall(mesh, min, max)`), through `00696a10`; always true.
 pub fn grid_range(e: &mut Engine, this: Ptr<NavMesh>, min: Ptr, max: Ptr) -> bool {
-    e.call(GRID_RANGE, &args![this.at(NavMesh::grid), min, max]);
+    typed_call!(
+        FAMILY,
+        0x0069_6a10,
+        navmesh_misc::grid_bounds_copy(e, this.at(NavMesh::grid), min, max)
+    );
     true
 }
 
