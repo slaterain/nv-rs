@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, navmesh, point, pov, pov_search_misc, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -659,6 +659,7 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x006d_b4f0, &[0x006d_bbb0]),
     (0x006d_cf20, &[0x0069_0830, 0x006d_cfe0]),
     (0x006e_78b0, &[0x006e_8f40]),
+    (0x0069_f920, &[0x006a_1920]),
 ];
 
 trait Common {
@@ -4364,4 +4365,154 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+#[test]
+fn low_14_bits() {
+    Diff::new(entry!(0x0069_ef40, pov_search_misc::low_14_bits(Ptr) -> u32))
+        .common()
+        .plain(0x0069_ef40)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            let p = e.mem.alloc(2);
+            e.mem.set_u16(p, case.word(0) as u16);
+            vec![p]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn top_2_bits() {
+    Diff::new(entry!(0x0069_ef60, pov_search_misc::top_2_bits(Ptr) -> u32))
+        .common()
+        .plain(0x0069_ef60)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            let p = e.mem.alloc(2);
+            e.mem.set_u16(p, case.word(0) as u16);
+            vec![p]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn add_words() {
+    Diff::new(entry!(
+        0x0069_f900,
+        pov_search_misc::add_words(Ptr, u32, u32) -> u32
+    ))
+    .common()
+    .plain(0x0069_f900)
+    .inputs(&[Input::Word, Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        vec![e.mem.alloc(4), case.word(0), case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn first_element() {
+    Diff::new(entry!(
+        0x006a_1420,
+        pov_search_misc::first_element(Ptr) -> u32
+    ))
+    .common()
+    .plain(0x006a_1420)
+    .inputs(&[Input::Of(&[0, 1, 2])])
+    .setup(|e, case| {
+        stand_ins(e);
+        vec![growing(e, case)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn scrap_init() {
+    Diff::new(entry!(
+        0x006a_1f70,
+        pov_search_misc::scrap_init(Ptr) -> Ptr
+    ))
+    .common()
+    .plain(0x006a_1f70)
+    .inputs(&[Input::Flag])
+    .setup(|e, _| {
+        stand_ins(e);
+        e.register(0x00aa_5410, |e, a| {
+            log(e, 0x00aa_5410, a[1]);
+            ret(a[0])
+        });
+        vec![e.mem.alloc(0x20)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn block_copy() {
+    Diff::new(entry!(
+        0x006a_28b0,
+        pov_search_misc::block_copy(Ptr, u32, u32) -> u32
+    ))
+    .common()
+    .plain(0x006a_28b0)
+    .inputs(&[Input::Word, Input::Of(&[0, 1, 5, 0x1000])])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x0042_f5d0, |e, a| {
+            log(e, 0x0042_f5d0, a[0]);
+            log(e, 0x0042_f5d0 + 1, a[1]);
+            ret(a[0])
+        });
+        vec![e.mem.alloc(4), case.word(0), case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn append_node() {
+    Diff::new(entry!(
+        0x0069_f920,
+        pov_search_misc::append_node(Ptr, u32, u32) -> u32
+    ))
+    .common()
+    .plain(0x0069_f920)
+    .inputs(&[Input::Word, Input::Word, Input::Of(&[0, 1, 3])])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x006e_8f80, |e, a| {
+            log(e, 0x006e_8f80, a[1]);
+            ret(a[0] + 0x100)
+        });
+        e.register(0x006e_6da0, |e, a| {
+            log(e, 0x006e_6da0, a[0]);
+            let flag = e.mem.u32(e.mem.u32(0x0300_2ff8));
+            ret(if flag == 0 { a[1] } else { 0 })
+        });
+        e.register(0x006e_2280, |e, a| {
+            log(e, 0x006e_2280, a[0]);
+            log(e, 0x006e_2280 + 1, a[1]);
+            ret(a[0])
+        });
+        let this = e.mem.alloc(0x30);
+        let a = this + 0x20;
+        let vt = vtable(e);
+        e.mem.set_u32(a, vt);
+        e.mem.set_u32(a + 4, 0);
+        e.mem.set_u32(a + 8, case.word(2) & 3);
+        e.mem.set_u32(a + 0xc, 0);
+        let flag = e.mem.alloc(4);
+        e.mem.set_u32(flag, case.word(2) & 1);
+        e.mem.set_u32(0x0300_2ff8, flag);
+        vec![this, case.word(0), case.word(1)]
+    })
+    .run()
+    .assert_same();
 }

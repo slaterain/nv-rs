@@ -41,6 +41,7 @@ pub mod location;
 pub mod navmesh;
 pub mod point;
 pub mod pov;
+pub mod pov_search_misc;
 pub mod search;
 
 /// This family's bit: what each `typed_call!` of it names.
@@ -267,5 +268,13 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // Small navmeshpovsearch helpers.
+        entry!(0x0069_ef40, pov_search_misc::low_14_bits(Ptr) -> u32),
+        entry!(0x0069_ef60, pov_search_misc::top_2_bits(Ptr) -> u32),
+        entry!(0x0069_f900, pov_search_misc::add_words(Ptr, u32, u32) -> u32),
+        entry!(0x006a_1420, pov_search_misc::first_element(Ptr) -> u32),
+        entry!(0x006a_1f70, pov_search_misc::scrap_init(Ptr) -> Ptr),
+        entry!(0x006a_28b0, pov_search_misc::block_copy(Ptr, u32, u32) -> u32),
+        entry!(0x0069_f920, pov_search_misc::append_node(Ptr, u32, u32) -> u32),
     ]
 }
