@@ -1,6 +1,6 @@
 //! Pathing locations: a point with the navmesh triangle and the cell or world space it is in.
 
-use super::layout::{NavMeshInfo, PathingLocation, PATHING_LOCATION_VTABLE};
+use super::layout::{NavMeshInfo, PathingLocation, VirtualPathingNode, PATHING_LOCATION_VTABLE};
 use super::navmesh::{is_loaded, parent_world_space, resolve, NO_TRIANGLE};
 use super::{copy_point, float_global, FAMILY, FLOAT_MAX};
 use crate::culling::layout::NiPoint3;
@@ -223,4 +223,34 @@ pub fn world_location_new(e: &mut Engine, this: Ptr) -> Ptr {
         leaf::same_word(e, this.byte_add(4))
     );
     this
+}
+
+// Typed from 006f4cd0
+pub fn virtual_node_new(e: &mut Engine, node: Ptr<VirtualPathingNode>) -> Ptr<VirtualPathingNode> {
+    typed_call!(
+        FAMILY,
+        0x006d_cbb0,
+        new(e, node.at(VirtualPathingNode::location))
+    );
+    e.set(node, VirtualPathingNode::flags, 0);
+    e.set(node, VirtualPathingNode::door, 0);
+    node
+}
+
+// Typed from 006f4d00
+pub fn virtual_node_from_location(
+    e: &mut Engine,
+    node: Ptr<VirtualPathingNode>,
+    source: Ptr<PathingLocation>,
+) -> Ptr<VirtualPathingNode> {
+    let loc = node.at(VirtualPathingNode::location);
+    typed_call!(FAMILY, 0x006d_cbb0, new(e, loc));
+    typed_call!(FAMILY, 0x006d_cce0, assign(e, loc, source));
+    e.set(node, VirtualPathingNode::door, 0);
+    e.set(node, VirtualPathingNode::flags, 2);
+    if e.call(0x006d_d6f0, &args![loc, 0u32]).bool() {
+        let flags = e.get(node, VirtualPathingNode::flags);
+        e.set(node, VirtualPathingNode::flags, flags | 1);
+    }
+    node
 }
