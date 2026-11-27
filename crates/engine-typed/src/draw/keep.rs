@@ -225,10 +225,16 @@ pub enum Leaf {
         transform: u32,
     },
     /// The vertex entry 17 (`super::super::shader::geometry::vertex_entry_17`): the bound's centre less the camera.
-    Entry17 { this: u32, object: u32 },
+    Entry17 {
+        this: u32,
+        object: u32,
+    },
     /// The simple shadow clip planes (`super::super::shader::geometry::simple_shadow_clip_planes`, types 0x231 to
     /// 0x234): the light's cache of the frame, or the renderer's view and the camera.
-    ClipPlanes { this: u32, pass_type: u32 },
+    ClipPlanes {
+        this: u32,
+        pass_type: u32,
+    },
 }
 
 /// What a set-up did, in its order.
@@ -754,7 +760,10 @@ fn verdict(e: &Engine, key: Key, r: &Record) -> Option<Break> {
     if !statics_same(e, key, &r.statics) {
         return Some(Break::Statics);
     }
-    let (at, _, reader) = r.inputs.iter().find(|(at, bytes, _)| !same_bytes(e, *at, bytes))?;
+    let (at, _, reader) = r
+        .inputs
+        .iter()
+        .find(|(at, bytes, _)| !same_bytes(e, *at, bytes))?;
     let others = r
         .inputs
         .iter()
@@ -2272,7 +2281,10 @@ mod tests {
         let state = e.mem.alloc(0x20);
         let [first, property, shader, data, render, arrays] =
             [0x40, 0x100, 0x80, 0x40, 0x60, 0x180].map(|n| e.mem.alloc(n));
-        for (i, at) in [geometry, first, property, shader, data, render].into_iter().enumerate() {
+        for (i, at) in [geometry, first, property, shader, data, render]
+            .into_iter()
+            .enumerate()
+        {
             for w in 0..8u32 {
                 e.mem.set_u32(at + 4 * w, 0x100 * i as u32 + w);
             }
@@ -2318,7 +2330,8 @@ mod tests {
         e.mem.map(0x011f_0000, 0x1_0000);
         let entry = e.mem.alloc(0x10);
         for i in 0..22 {
-            e.mem.set_u32(crate::shader::geometry::VERTEX_ENTRIES + 4 * i, entry);
+            e.mem
+                .set_u32(crate::shader::geometry::VERTEX_ENTRIES + 4 * i, entry);
         }
         let block = e.mem.alloc(0x40);
         reset_for_tests();
@@ -2361,7 +2374,10 @@ mod tests {
         world(|| draw(&mut e, KEY, body));
         assert_eq!(runs.get(), 1, "replayed: {}", summary_now());
         let s = summary_now();
-        assert!(s.contains("0.0 writes, 3.0 kept calls, 0.0 device calls a replay"), "{s}");
+        assert!(
+            s.contains("0.0 writes, 3.0 kept calls, 0.0 device calls a replay"),
+            "{s}"
+        );
         set_mode_for_tests(None);
         reset_for_tests();
     }
@@ -2383,7 +2399,12 @@ mod tests {
         for _ in 0..SAMPLE_EVERY {
             world(|| draw(&mut e, KEY, body));
         }
-        assert_eq!(runs.get(), 2, "built once, drawn plainly once: {}", summary_now());
+        assert_eq!(
+            runs.get(),
+            2,
+            "built once, drawn plainly once: {}",
+            summary_now()
+        );
         let s = summary_now();
         assert!(s.contains(&format!("{} replayed", SAMPLE_EVERY - 2)), "{s}");
         assert!(s.contains("(1 replayable draws drawn plainly)"), "{s}");

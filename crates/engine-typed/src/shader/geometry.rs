@@ -782,7 +782,14 @@ pub fn obj_to_cube(
 /// [`obj_to_cube`]'s work (a kept draw record makes the call again with the frame's camera and the renderer's
 /// matrix of the frame).
 #[inline(always)]
-fn obj_to_cube_now(e: &mut Engine, this: Ptr, block: Ptr, pass_type: u32, flag: u32, transform: u32) {
+fn obj_to_cube_now(
+    e: &mut Engine,
+    this: Ptr,
+    block: Ptr,
+    pass_type: u32,
+    flag: u32,
+    transform: u32,
+) {
     if !entry_enabled(e, VERTEX_ENTRIES + 4) {
         return;
     }

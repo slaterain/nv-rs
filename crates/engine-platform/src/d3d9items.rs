@@ -91,9 +91,7 @@ fn epoch() -> u64 {
 
 fn begin(e: &mut Engine, ask: Ask) {
     let device = device_now(e);
-    let (cmds, registers) = SPARE
-        .with(|s| s.borrow_mut().take())
-        .unwrap_or_default();
+    let (cmds, registers) = SPARE.with(|s| s.borrow_mut().take()).unwrap_or_default();
     HELD.with(|h| {
         *h.borrow_mut() = Some(Held {
             ask,
@@ -638,7 +636,11 @@ mod tests {
         own(&mut e, stream_source(), 0);
         own(&mut e, draw(), 0);
         assert!(matches!(items::end(&mut e), Done::Recorded(_)));
-        assert_eq!(DEVICE.with(Cell::get).1, device.unwrap(), "kept for the epoch");
+        assert_eq!(
+            DEVICE.with(Cell::get).1,
+            device.unwrap(),
+            "kept for the epoch"
+        );
         let room = SPARE.with(|s| s.borrow().as_ref().map(|(c, _)| c.is_empty()));
         assert_eq!(room, Some(true), "the buffers kept, emptied");
         // A device made (the epoch moved on): looked up again.

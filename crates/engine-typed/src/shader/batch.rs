@@ -1889,7 +1889,6 @@ mod keep_tests {
         }
     }
 
-
     /// Every order-dependent choice gives another key, the first draw after a begin too.
     #[test]
     fn each_order_choice_is_its_own_part_of_the_key() {

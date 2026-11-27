@@ -326,7 +326,9 @@ fn describe_one(path: &str, i: usize, open: impl Fn(&str) -> BufReader<File>) {
 /// How many draws of two equally long digest lists differ, and the first of them: one stale register or a whole
 /// class of draws.
 fn differing(a: &[u64], b: &[u64]) {
-    let at: Vec<usize> = (0..a.len().min(b.len())).filter(|&i| a[i] != b[i]).collect();
+    let at: Vec<usize> = (0..a.len().min(b.len()))
+        .filter(|&i| a[i] != b[i])
+        .collect();
     let first: Vec<String> = at.iter().take(12).map(usize::to_string).collect();
     println!(
         "  {} of {} draws differ; the first at draws [{}]",
@@ -358,7 +360,8 @@ fn items_check(args: &[String]) -> ! {
         Some(i) => {
             println!("old form and items: DIFFER at draw {i} of {}", old.len());
             differing(&old, &items);
-            let open = |path: &str| BufReader::with_capacity(1 << 20, File::open(path).expect("read"));
+            let open =
+                |path: &str| BufReader::with_capacity(1 << 20, File::open(path).expect("read"));
             describe_forms(
                 (path, d3d9_stream::kept::Form::Old),
                 (path, d3d9_stream::kept::Form::Items),
