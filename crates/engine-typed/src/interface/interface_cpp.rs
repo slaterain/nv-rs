@@ -344,11 +344,10 @@ const TRANSLATE_MESSAGE: u32 = 0x00fd_f298;
 const DISPATCH_MESSAGE: u32 = 0x00fd_f294;
 /// The window message the pump fills (`MSG`, 0x1c bytes).
 const MESSAGE_SIZE: u32 = 0x1c;
-/// `RepairMenu::ResetMenu`, `ItemModMenu::ResetMenu`, `MapMenu::UpdateMenu`,
-/// `InventoryMenu::UpdateInventoryMenu` and `InventoryMenu::SavePageState` (Xbox PDB).
+/// `RepairMenu::ResetMenu`, `ItemModMenu::ResetMenu`, `InventoryMenu::UpdateInventoryMenu` and
+/// `InventoryMenu::SavePageState` (Xbox PDB).
 const REPAIR_RESET_MENU: u32 = 0x007b_6fb0;
 const ITEM_MOD_RESET_MENU: u32 = 0x0078_46a0;
-const MAP_MENU_UPDATE: u32 = 0x0079_aba0;
 const INVENTORY_UPDATE_MENU: u32 = 0x0078_2a90;
 const INVENTORY_SAVE_PAGE_STATE: u32 = 0x0077_ffd0;
 
@@ -1703,7 +1702,11 @@ pub fn fn_00704130(e: &mut Engine) {
 /// `MapMenu::Create` (`00796b90`) when the manager is ready, else 0.
 pub fn fn_00704140(e: &mut Engine) -> u32 {
     match ready_manager(e) {
-        Some(_) => e.call(0x0079_6b90, &[]).u32(),
+        Some(_) => typed_call!(
+            super::FAMILY,
+            0x0079_6b90,
+            super::map_menu_p2::map_menu_create(e)
+        ),
         None => 0,
     }
 }
@@ -1777,7 +1780,11 @@ pub fn interface_set_map_menu_visible(e: &mut Engine, show: u8, check_state: u8)
             set_current_menu(e, manager, MENU_MAP);
             menu_fade_in(e, map);
         }
-        e.call(MAP_MENU_UPDATE, &[]);
+        typed_call!(
+            super::FAMILY,
+            0x0079_aba0,
+            super::map_menu_p2::map_menu_update_menu(e)
+        );
     } else if show == 0 && visible && map != 0 {
         menu_fade_out(e, map);
         let menu = e.call(TILE_GET_MENU, &args![map]).u32();
@@ -1785,7 +1792,14 @@ pub fn interface_set_map_menu_visible(e: &mut Engine, show: u8, check_state: u8)
     }
     if show != 0 {
         refresh_pipboy_tab(e, manager, 3);
-        call_if_pipboy_query(e, manager, 0x0079_c340);
+        let pipboy = in_place::pipboy(e, manager);
+        if e.mem.u8(pipboy.wrapping_add(in_place::PIPBOY_QUERY)) != 0 {
+            typed_call!(
+                super::FAMILY,
+                0x0079_c340,
+                super::map_menu_p2::fn_0079c340(e, 0)
+            );
+        }
     }
 }
 

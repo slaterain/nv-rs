@@ -397,6 +397,8 @@ pub enum Arg {
     Key,
     /// The stats menu's page steps: back (4) and on (3).
     PageKey,
+    /// The map menu world's menu (object 255, `MapMenu::pMe` there).
+    MapMenu,
 }
 
 const PTRS: [u32; 3] = [ARENA + 3 * OBJECT, ARENA + 40 * OBJECT, 0];
@@ -435,6 +437,7 @@ const CLICK_IDS: [u32; 10] = [6, 2, 0x1d, 9, 5, 0x31, 0x3b, 0x3c, 0xffff_ffff, 7
 const STATS_TILES: [u32; 3] = [0, ARENA + 116 * OBJECT, ARENA + 107 * OBJECT];
 const KEYS: [u32; 10] = [1, 0xd, 4, 3, 0xb, 2, 9, 0xc, 0xe, 0x20];
 const PAGE_KEYS: [u32; 2] = [4, 3];
+const MAP_MENUS: [u32; 1] = [ARENA + 255 * OBJECT];
 const ACTOR_VALUES: [u32; 11] = [0x10, 0xc, 0x18, 0x36, 0x14, 0x17, 0x19, 0x1e, 0x1f, 5, 0x20];
 const TILE_IDS: [u32; 13] = [
     0xffff_ffff,
@@ -473,6 +476,7 @@ fn values(arg: Arg) -> &'static [u32] {
         Arg::StatsTile => &STATS_TILES,
         Arg::Key => &KEYS,
         Arg::PageKey => &PAGE_KEYS,
+        Arg::MapMenu => &MAP_MENUS,
         Arg::Group => &GROUPS,
         Arg::Effect => &EFFECTS,
     }
@@ -513,6 +517,12 @@ const OTHER_FAMILIES: &[u32] = &[
     0x0040_1460,
     0x0044_1110,
     0x006a_8500,
+    0x0045_bc00,
+    0x00a5_9d30,
+    0x0043_b480,
+    0x0043_b4a0,
+    0x006f_3170,
+    0x0077_a450,
 ];
 
 /// The world's settings for a Diff of the family.
@@ -619,6 +629,7 @@ fn arena_diff(
         .ignore_calls(engine_typed::interface::item_list_box::IN_PLACE)
         .ignore_calls(engine_typed::interface::small_units::IN_PLACE)
         .ignore_calls(engine_typed::interface::stats_menu::IN_PLACE)
+        .ignore_calls(engine_typed::interface::map_menu_p2::IN_PLACE)
         .ignore_calls(without)
         .goes_by_address(OTHER_FAMILIES)
         .inputs(&inputs)

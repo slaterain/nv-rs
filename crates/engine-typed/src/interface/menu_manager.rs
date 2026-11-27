@@ -167,7 +167,7 @@ fn free_if_flagged(e: &mut Engine, this: Ptr, flags: u32) {
 /// The `Menu` base constructor (`00a1c4a0`, plain stores): its vtable, the words at +4, +8, +0xc,
 /// +0x10, +0x14 and +0x18 null, the state (+0x24) 4, the byte at +0x1d 1 and the one at +0x1c 0.
 #[inline]
-fn menu_base(e: &mut Engine, at: u32) {
+pub(super) fn menu_base(e: &mut Engine, at: u32) {
     e.mem.set_u32(at, MENU_VTABLE);
     for offset in [8u32, 0xc, 4, 0x10, 0x14] {
         e.mem.set_u32(at.wrapping_add(offset), 0);
@@ -366,6 +366,11 @@ fn construct_menu(e: &mut Engine, constructor: u32, block: Ptr) -> u32 {
         0x0072_0170 => typed_call!(super::FAMILY, 0x0072_0170, fn_00720170(e, block)),
         0x0072_0550 => typed_call!(super::FAMILY, 0x0072_0550, fn_00720550(e, block)),
         0x0072_0a10 => typed_call!(super::FAMILY, 0x0072_0a10, fn_00720a10(e, block)),
+        0x0079_6740 => typed_call!(
+            super::FAMILY,
+            0x0079_6740,
+            super::map_menu_p2::map_menu_map_menu(e, block)
+        ),
         _ => return e.call(constructor, &args![block]).u32(),
     };
     menu.addr()

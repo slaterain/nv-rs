@@ -108,12 +108,6 @@ const LOAD_BUFFER_READ: u32 = 0x0086_4980;
 /// `BGSLoadGameBuffer::LoadString` (Xbox PDB): reads a string into the given
 /// buffer.
 const LOAD_BUFFER_LOAD_STRING: u32 = 0x0086_49a0;
-/// The state getters written by `007066d0` (bytes, then floats) and the setters `LoadGame` hands
-/// them to (the stats page's, `007dfcd0` and `007dfd00`, are this family's).
-const MAP_FLOAT_GET_A: u32 = 0x007a_17a0;
-const MAP_FLOAT_GET_B: u32 = 0x007a_17e0;
-const MAP_FLOAT_SET_A: u32 = 0x007a_1820;
-const MAP_FLOAT_SET_B: u32 = 0x007a_1850;
 /// The manager's sub-object at `+0x4d4`: `007187a0` writes a string into a
 /// buffer, `00718890` takes one.
 const MANAGER_SUBOBJECT: u32 = 0x4d4;
@@ -639,9 +633,17 @@ pub fn fn_007066d0(e: &mut Engine, stream: u32) {
         ] {
             e.call(SAVE_BUFFER_WRITE, &args![stream, data, size, 0u32]);
         }
-        let float = e.call(MAP_FLOAT_GET_A, &[]).f32();
+        let float = typed_call!(
+            super::FAMILY,
+            0x007a_17a0,
+            super::map_menu_p2::fn_007a17a0(e)
+        );
         e.mem.set_f32(first_float, float);
-        let float = e.call(MAP_FLOAT_GET_B, &[]).f32();
+        let float = typed_call!(
+            super::FAMILY,
+            0x007a_17e0,
+            super::map_menu_p2::fn_007a17e0(e)
+        );
         e.mem.set_f32(second_float, float);
         e.call(SAVE_BUFFER_WRITE, &args![stream, first_float, 4u32, 0u32]);
         e.call(SAVE_BUFFER_WRITE, &args![stream, second_float, 4u32, 0u32]);
@@ -735,9 +737,17 @@ pub fn interface_load_game(e: &mut Engine, stream: u32) {
         e.call(LOAD_BUFFER_READ, &args![stream, first_float, 4u32]);
         e.call(LOAD_BUFFER_READ, &args![stream, second_float, 4u32]);
         let float = e.mem.f32(first_float);
-        e.call(MAP_FLOAT_SET_A, &args![float]);
+        typed_call!(
+            super::FAMILY,
+            0x007a_1820,
+            super::map_menu_p2::fn_007a1820(e, float)
+        );
         let float = e.mem.f32(second_float);
-        e.call(MAP_FLOAT_SET_B, &args![float]);
+        typed_call!(
+            super::FAMILY,
+            0x007a_1850,
+            super::map_menu_p2::fn_007a1850(e, float)
+        );
         let version = e.vcall(stream, 0, &[]).u8();
         if version >= 12 {
             // Under `SUB ESP,0x198` (00706863): the length word is EBP-0x8c
@@ -822,7 +832,11 @@ pub fn interface_finish_load_game(e: &mut Engine) {
     );
     e.call(0x0079_f640, &[]);
     typed_call!(super::FAMILY, 0x0070_6ac0, fn_00706ac0(e));
-    e.call(0x007a_1490, &[]);
+    typed_call!(
+        super::FAMILY,
+        0x007a_1490,
+        super::map_menu_p2::map_menu_clear_map_memory(e)
+    );
     e.call(0x007e_5890, &[]);
 }
 
