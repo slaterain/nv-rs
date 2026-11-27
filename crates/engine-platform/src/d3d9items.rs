@@ -485,23 +485,33 @@ mod tests {
         );
     }
 
-    /// A draw that never came: what was held goes out at the end, as it came.
+    /// A draw that never came: what was held goes out at the end, as it came; with real threads and the device lock
+    /// not held, the end takes the lock itself for that flush (a debug build's check stops the test otherwise) and
+    /// gives it back (review of #1108).
     #[test]
     fn a_run_without_its_draw_goes_out_at_the_end() {
         use engine_core::draw_items as items;
-        let (mut e, log) = device_with_stream();
-        let record = Ask::Record {
-            id: 5,
-            forget: 0,
-            check: false,
-        };
-        items::begin(&mut e, record);
-        own(&mut e, stream_source(), 0);
-        own(&mut e, constants(), 4);
-        assert!(log.lock().unwrap().is_empty(), "held");
-        assert_eq!(items::end(&mut e), Done::Plain);
-        assert_eq!(*log.lock().unwrap(), ["SetStreamSource", "SetConstants 4"]);
-        assert!(!HOLDING.with(Cell::get));
+        use engine_core::real_threads as rt;
+        for real in [false, true] {
+            let (mut e, log) = device_with_stream();
+            if real {
+                rt::start(&mut e).expect("real threads on");
+                assert!(!rt::device_lock_held(&e));
+            }
+            let record = Ask::Record {
+                id: 5,
+                forget: 0,
+                check: false,
+            };
+            items::begin(&mut e, record);
+            own(&mut e, stream_source(), 0);
+            own(&mut e, constants(), 4);
+            assert!(log.lock().unwrap().is_empty(), "held");
+            assert_eq!(items::end(&mut e), Done::Plain);
+            assert_eq!(*log.lock().unwrap(), ["SetStreamSource", "SetConstants 4"]);
+            assert!(!HOLDING.with(Cell::get));
+            assert!(!real || !rt::device_lock_held(&e), "the lock given back");
+        }
     }
 
     /// Without a device the backend has, nothing is held.

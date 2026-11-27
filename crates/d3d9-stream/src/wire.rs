@@ -430,28 +430,37 @@ pub fn command_counts(from: impl std::io::Read) -> Result<Vec<(&'static str, u64
 }
 
 /// How many draws each frame of a file of commands holds: one entry per `Present`, the draws since the one before
-/// (`DrawPrimitive`, `DrawIndexedPrimitive`, `DrawPrimitiveUp`), then the draws after the last present. Two runs of
-/// the same route compare frame by frame where per-draw digests stop at the first difference.
+/// (`DrawPrimitive`, `DrawIndexedPrimitive`, `DrawPrimitiveUp`; a kept record's item is its draw, through
+/// [`crate::Kept`] as [`draw_digests`] counts), then the draws after the last present. Two runs of the same route
+/// compare frame by frame where per-draw digests stop at the first difference.
 pub fn frame_draws(from: impl std::io::Read) -> Result<Vec<u32>, String> {
-    let tag = |name: &str| crate::cmd::NAMES.iter().position(|n| *n == name);
-    let draws: Vec<usize> = ["DrawPrimitive", "DrawIndexedPrimitive", "DrawPrimitiveUp"]
-        .into_iter()
-        .filter_map(tag)
-        .collect();
-    let present = tag("Present").ok_or("no Present in the command list")?;
     let mut records = Records::new(from)?;
-    let (mut frames, mut now) = (Vec::new(), 0u32);
+    let (mut names, mut buf) = (Names::default(), Vec::new());
+    let mut count = crate::Kept::new(FrameDraws::default());
     while let Some(record) = records.next()? {
-        let t = *record.first().ok_or("an empty record")? as usize;
-        if t == present {
-            frames.push(now);
-            now = 0;
-        } else if draws.contains(&t) {
-            now += 1;
-        }
+        count.execute(rename(record, &mut names, &mut buf)?);
     }
+    let FrameDraws { mut frames, now } = count.into_inner();
     frames.push(now);
     Ok(frames)
+}
+
+/// [`frame_draws`]' count: the draws of each frame so far, and of this one.
+#[derive(Default)]
+struct FrameDraws {
+    frames: Vec<u32>,
+    now: u32,
+}
+
+impl Backend for FrameDraws {
+    fn execute(&mut self, cmd: Cmd<Data<'_>>) -> crate::cmd::Reply {
+        match cmd {
+            Cmd::Present { .. } => self.frames.push(std::mem::take(&mut self.now)),
+            Cmd::DrawPrimitive { .. } | Cmd::DrawIndexedPrimitive { .. } | Cmd::DrawPrimitiveUp { .. } => self.now += 1,
+            _ => {}
+        }
+        crate::cmd::Reply::None
+    }
 }
 
 /// Each draw's device-state digest ([`crate::StateDigest`]) of a file of commands, read one record at
@@ -485,17 +494,28 @@ pub fn draw_digests_as(
 
 /// Draw `n` (counted from 0) of a file of commands described in the open ([`crate::DrawSnapshot`]): what
 /// [`draw_digests`] hashes for it, for saying which state two files' draws differ in. `None` when the file has fewer
-/// draws. Reading stops at that draw.
+/// draws. Reading stops at that draw. A kept record's item counts as its draw, as [`draw_digests`] counts it (through
+/// [`crate::Kept`]: a stage-1 run's file counted without it would name another draw).
 pub fn draw_snapshot(
     from: impl std::io::Read,
     n: usize,
 ) -> Result<Option<crate::DrawSnapshot>, String> {
+    draw_snapshot_as(from, n, crate::kept::Form::Old)
+}
+
+/// [`draw_snapshot`] with a check run's draws in `form` (as [`draw_digests_as`]).
+pub fn draw_snapshot_as(
+    from: impl std::io::Read,
+    n: usize,
+    form: crate::kept::Form,
+) -> Result<Option<crate::DrawSnapshot>, String> {
     let mut records = Records::new(from)?;
     let (mut names, mut buf) = (Names::default(), Vec::new());
-    let (mut digest, _list) = crate::StateDigest::stopping_at(n);
+    let (digest, _list) = crate::StateDigest::stopping_at(n);
+    let mut digest = crate::Kept::with_form(digest, form);
     while let Some(record) = records.next()? {
         digest.execute(rename(record, &mut names, &mut buf)?);
-        if let Some(s) = digest.snapshot() {
+        if let Some(s) = digest.inner().snapshot() {
             return Ok(Some(s.clone()));
         }
     }

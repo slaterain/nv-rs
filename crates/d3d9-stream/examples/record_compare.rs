@@ -32,7 +32,19 @@ fn hex(bytes: &[u8]) -> String {
 /// draws since, which states differ (both values), whether the other commands so far differ (with the last of them),
 /// and the two draw commands.
 fn describe(a: &str, b: &str, i: usize, open: impl Fn(&str) -> BufReader<File>) {
-    let snap = |path: &str| match d3d9_stream::wire::draw_snapshot(open(path), i) {
+    let old = d3d9_stream::kept::Form::Old;
+    describe_forms((a, old), (b, old), i, open);
+}
+
+/// [`describe`] with each file's check-run draws in a form of their own (`--items`: one check recording as its old
+/// form against its items).
+fn describe_forms(
+    (a, fa): (&str, d3d9_stream::kept::Form),
+    (b, fb): (&str, d3d9_stream::kept::Form),
+    i: usize,
+    open: impl Fn(&str) -> BufReader<File>,
+) {
+    let snap = |path: &str, form| match d3d9_stream::wire::draw_snapshot_as(open(path), i, form) {
         Ok(Some(s)) => s,
         Ok(None) => {
             println!("  {path}: no draw {i}");
@@ -43,13 +55,19 @@ fn describe(a: &str, b: &str, i: usize, open: impl Fn(&str) -> BufReader<File>) 
             std::process::exit(2);
         }
     };
-    let (sa, sb) = (snap(a), snap(b));
+    let (sa, sb) = (snap(a, fa), snap(b, fb));
     println!(
         "  draw {i}: after present {} (draw {} of that frame) in A; after present {} (draw {}) in B",
         sa.presents, sa.in_frame, sb.presents, sb.in_frame
     );
     let ma: std::collections::BTreeMap<_, _> = sa.state.iter().cloned().collect();
     let mb: std::collections::BTreeMap<_, _> = sb.state.iter().cloned().collect();
+    // Which draw it is: its shaders in A, alike or not.
+    for (k, v) in &ma {
+        if k.starts_with("At(\"SetShader\"") {
+            println!("  A's {k}: {}", hex(v));
+        }
+    }
     let keys: std::collections::BTreeSet<_> = ma.keys().chain(mb.keys()).cloned().collect();
     let mut shown = 0;
     for k in keys {
@@ -189,6 +207,7 @@ fn main() {
             }
             Some(i) => {
                 println!("{i} draws alike, then draw {i} sees another device state");
+                differing(&da, &db);
                 describe(a, b, i, open);
                 std::process::exit(1);
             }
@@ -226,6 +245,19 @@ fn main() {
 /// `--items FILE`: one check run's recording (`NV_DRAW_ITEMS=check`) replayed into the state digest
 /// twice, as its old form and as its items (`d3d9_stream::Kept`): alike when every item gave the
 /// device what its draw gave it. Exits as `main` does.
+/// How many draws of two equally long digest lists differ, and the first of them: one stale register or a whole
+/// class of draws.
+fn differing(a: &[u64], b: &[u64]) {
+    let at: Vec<usize> = (0..a.len().min(b.len())).filter(|&i| a[i] != b[i]).collect();
+    let first: Vec<String> = at.iter().take(12).map(usize::to_string).collect();
+    println!(
+        "  {} of {} draws differ; the first at draws [{}]",
+        at.len(),
+        a.len().min(b.len()),
+        first.join(", ")
+    );
+}
+
 fn items_check(args: &[String]) -> ! {
     let [path] = args else {
         eprintln!("usage: record_compare --items CHECK.d3d9s");
@@ -247,6 +279,14 @@ fn items_check(args: &[String]) -> ! {
     match old.iter().zip(&items).position(|(a, b)| a != b) {
         Some(i) => {
             println!("old form and items: DIFFER at draw {i} of {}", old.len());
+            differing(&old, &items);
+            let open = |path: &str| BufReader::with_capacity(1 << 20, File::open(path).expect("read"));
+            describe_forms(
+                (path, d3d9_stream::kept::Form::Old),
+                (path, d3d9_stream::kept::Form::Items),
+                i,
+                open,
+            );
             std::process::exit(1);
         }
         None if old.len() != items.len() => {

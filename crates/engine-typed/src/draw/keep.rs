@@ -271,9 +271,8 @@ struct Stats {
     built_unkeepable: u64,
     checked: u64,
     mismatched: u64,
-    /// Which input address broke records most (the inputs' addresses, counted).
     /// By (input address, the exe function that read it): how often it broke a record, and how often it was the only
-    /// input that changed (the records it alone kept from replaying).
+    /// input that changed (the records it alone kept from replaying); since the last line ([`report`]).
     broke_at: HashMap<(u32, u32), (u64, u64)>,
     first_mismatch: Option<String>,
     /// Builds made, and those audited ([`Mode::Audit`]) with their uncovered reads by word.
@@ -502,7 +501,9 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
     // A test that set its own mode is alone on its thread: other tests' packets (open on other threads) do not
     // concern it.
     let packets = (capture::active() || capture::viewing(e)) && TEST_MODE.with(Cell::get).is_none();
-    if mode == Mode::Off || packets || building() || !in_world_draw() {
+    // With `NV_BLOCK_CHECK` the set-up's locals are heap blocks (`Engine::locals_below` has no range to leave out):
+    // its writes there would be replayed into freed blocks, so nothing is kept (review of #1108).
+    if mode == Mode::Off || packets || building() || !in_world_draw() || e.mem.block_check_on() {
         body(e);
         return;
     }
@@ -670,11 +671,17 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
     report();
 }
 
-/// `body` with the draw's own commands held for `ask` (`engine_core::draw_items`): what came of it.
+/// `body` with the draw's own commands held for `ask` (`engine_core::draw_items`): what came of it. The holding
+/// ends also when a stop or a C++ exception (a panic here: `engine_core`'s `cxx_exception`) unwinds through `body`
+/// (what was held goes out as it came), and the unwind goes on (review of #1108).
 fn with_held(e: &mut Engine, ask: Ask, body: impl FnOnce(&mut Engine)) -> Done {
     draw_items::begin(e, ask);
-    body(e);
-    draw_items::end(e)
+    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(e)));
+    let done = draw_items::end(e);
+    match ran {
+        Ok(()) => done,
+        Err(stop) => std::panic::resume_unwind(stop),
+    }
 }
 
 /// [`build`] with its draw's own commands sent as a backend record (a new number; the record's `old` one dropped
@@ -752,24 +759,36 @@ fn evict() {
     KEEP.with(|k| evict_from(&mut k.borrow_mut(), MAX_RECORDS, STALE_AFTER));
 }
 
-/// [`evict`] with its limits: above `most` records, those unused in the last `stale` draws go; if still above,
-/// all go.
+/// [`evict`] with its limits: above `most` records, those unused in the last `stale` draws go; if still above
+/// (many cells passed through quickly, everything recent), the least recently used go down to three quarters of
+/// `most`, so the next frames rebuild only those, not every visible draw at once (review of #1108).
 fn evict_from(k: &mut Keep, most: usize, stale: u64) {
-    if k.records.len() > most {
-        let cutoff = k.stats.seen.saturating_sub(stale);
-        let forgotten = &mut k.forgotten;
-        k.records.retain(|_, r| {
-            let keep = r.last_used >= cutoff;
-            if !keep {
-                forgotten.extend(r.item.map(|(id, _)| id));
-            }
-            keep
-        });
-        if k.records.len() > most {
-            forgotten.extend(k.records.values().filter_map(|r| r.item.map(|(id, _)| id)));
-            k.records.clear();
-        }
+    if k.records.len() <= most {
+        return;
     }
+    drop_used_before(k, k.stats.seen.saturating_sub(stale));
+    if k.records.len() > most {
+        let keep = (most - most / 4).max(1);
+        let mut used: Vec<u64> = k.records.values().map(|r| r.last_used).collect();
+        // `keep` < `used.len()` here; the records used at or after the `keep`th latest use stay (each draw is
+        // one key's, so two records share a use only in tests).
+        let at = used.len() - keep;
+        let (_, cut, _) = used.select_nth_unstable(at);
+        let cut = *cut;
+        drop_used_before(k, cut);
+    }
+}
+
+/// Drops the records last used before draw `cutoff`, their backend records with them.
+fn drop_used_before(k: &mut Keep, cutoff: u64) {
+    let forgotten = &mut k.forgotten;
+    k.records.retain(|_, r| {
+        let keep = r.last_used >= cutoff;
+        if !keep {
+            forgotten.extend(r.item.map(|(id, _)| id));
+        }
+        keep
+    });
 }
 
 const MAX_RECORDS: usize = 40_000;
@@ -828,28 +847,71 @@ fn build(e: &mut Engine, key: Key, body: &mut impl FnMut(&mut Engine)) -> Record
     e.mem.store_log_begin(low, top);
     rt::device_record_begin();
     capture::keep_reads_begin(low, top);
-    KEEP.with(|k| k.borrow_mut().leaves = Some(Vec::new()));
+    KEEP.with(|k| {
+        let mut k = k.borrow_mut();
+        k.leaves = Some(Vec::new());
+        k.leaf_depth = 0;
+    });
     BUILDING.with(|b| b.set(true));
-    body(e);
+    // Everything begun above ends also when a stop or a C++ exception (a panic here) unwinds through the set-up,
+    // and the unwind goes on: no log, flag or accessor state outlives the build (review of #1108).
+    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(e)));
     BUILDING.with(|b| b.set(false));
     let audited = if audit {
         e.mem.read_audit_end()
     } else {
         Vec::new()
     };
-    let leaves = KEEP
-        .with(|k| k.borrow_mut().leaves.take())
-        .unwrap_or_default();
+    let leaves = KEEP.with(|k| {
+        let mut k = k.borrow_mut();
+        k.leaf_depth = 0;
+        k.leaves.take()
+    });
     let reads = capture::keep_reads_end();
     let calls = rt::device_record_end();
     let log = e.mem.store_log_end();
-    let (mut record, written) = assemble(log, &calls, &leaves, &reads);
+    if let Err(stop) = ran {
+        std::panic::resume_unwind(stop);
+    }
+    let (mut record, written) = assemble(log, &calls, &leaves.unwrap_or_default(), &reads);
+    let callers = callers_structures(&calls, (low, top), &written, &record.inputs);
+    record.inputs.extend(callers);
     record.replayable = !rt::device_record_unseen();
     if audit {
         note_uncovered(e, key, &audited, &record, &written, &calls);
     }
     record
 }
+
+/// The structures the build's device calls passed from the callers' stack locals, above the set-up's own
+/// (`[low, top)`): the recorder keeps their bytes (it copies any structure on the stack for locals) and a replay
+/// passes those, so they are inputs too, read by [`DEVICE_READER`] and the call's slot: a caller's local that
+/// changes breaks the record instead of going to the device as it was (review of #1108). Bytes the set-up wrote
+/// itself, and addresses already inputs, are left out.
+fn callers_structures(
+    calls: &[DeviceCall],
+    (low, top): (u32, u32),
+    written: &std::collections::HashSet<u32>,
+    inputs: &[(u32, Vec<u8>, u32)],
+) -> Vec<(u32, Vec<u8>, u32)> {
+    let mut out: Vec<(u32, Vec<u8>, u32)> = Vec::new();
+    for call in calls {
+        let Some(at) = call.data_arg.and_then(|i| call.args.get(i).copied()) else {
+            continue;
+        };
+        let len = n32(call.data.len());
+        let own_locals = at >= low && u64::from(at) + u64::from(len) <= u64::from(top);
+        let own_bytes = (0..len).all(|i| written.contains(&at.wrapping_add(i)));
+        let known = inputs.iter().chain(&out).any(|(a, _, _)| *a == at);
+        if len != 0 && !own_locals && !own_bytes && !known {
+            out.push((at, call.data.clone(), DEVICE_READER | call.slot));
+        }
+    }
+    out
+}
+
+/// The reader of an input a device call's structure is ([`callers_structures`]), with the call's slot below.
+const DEVICE_READER: u32 = 0xd3d9_0000;
 
 /// Every [`AUDIT_EVERY`]th build is audited ([`Mode::Audit`]).
 const AUDIT_EVERY: u64 = 64;
@@ -967,21 +1029,28 @@ fn replay(e: &mut Engine, key: Key) {
             .get_mut(&key)
             .map(|r| std::mem::take(&mut r.ops))
     });
-    for op in ops.iter().flatten() {
-        match op {
-            Op::Write(at, bytes) => e.mem.write(*at, bytes),
-            Op::Leaf(leaf) => replay_leaf(e, *leaf),
-            Op::Device(call) => {
-                rt::device_replay(e, call);
+    // Put back also when a stop or a C++ exception unwinds through the replay: a record left without its ops
+    // would replay as nothing.
+    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for op in ops.iter().flatten() {
+            match op {
+                Op::Write(at, bytes) => e.mem.write(*at, bytes),
+                Op::Leaf(leaf) => replay_leaf(e, *leaf),
+                Op::Device(call) => {
+                    rt::device_replay(e, call);
+                }
             }
         }
-    }
+    }));
     if let Some(ops) = ops {
         KEEP.with(|k| {
             if let Some(r) = k.borrow_mut().records.get_mut(&key) {
                 r.ops = ops;
             }
         });
+    }
+    if let Err(stop) = ran {
+        std::panic::resume_unwind(stop);
     }
 }
 
@@ -1213,15 +1282,16 @@ fn difference_kind(old: &[Op], new: &[Op]) -> String {
     )
 }
 
-/// The counters, every [`REPORT_EVERY`] draws seen.
+/// The counters, every [`REPORT_EVERY`] draws seen. The inputs that broke records are counted per line: the table
+/// starts empty again after each, so it stays small however long the run (review of #1108).
 fn report() {
     KEEP.with(|k| {
-        let k = k.borrow();
-        let s = &k.stats;
-        if s.seen % REPORT_EVERY != 0 {
+        let mut k = k.borrow_mut();
+        if k.stats.seen % REPORT_EVERY != 0 {
             return;
         }
-        eprintln!("{}", summary(s, k.records.len()));
+        eprintln!("{}", summary(&k.stats, k.records.len()));
+        k.stats.broke_at.clear();
     });
 }
 
@@ -1263,7 +1333,7 @@ fn summary(s: &Stats, records: usize) -> String {
     let built = s.built_new + s.built_statics + s.built_inputs + s.built_unkeepable;
     let each = |ns: u64, n: u64| ns as f64 / 1000.0 / n.max(1) as f64;
     format!(
-        "NV_DRAW_ITEMS: {} draws: {} replayed, {} built (new {}, own bytes changed {}, inputs changed {}, device reached outside the record {}), {} plain while resting ({} rests); {} checked, {} differed{}; {records} records; inputs that broke records most: [{top}]; differed first at: [{differed}]{audit}; items: {} drawn, {} plain, {} not the record's; backend records: {} sent, {} plain; check items: {} beside their old form, {} dropped; records dropped for a new device: {}; microseconds each: build {:.2}, replay {:.2}, plain {:.2}",
+        "NV_DRAW_ITEMS: {} draws: {} replayed, {} built (new {}, own bytes changed {}, inputs changed {}, device reached outside the record {}), {} plain while resting ({} rests); {} checked, {} differed{}; {records} records; inputs that broke records most since the last line: [{top}]; differed first at: [{differed}]{audit}; items: {} drawn, {} plain, {} not the record's; backend records: {} sent, {} plain; check items: {} beside their old form, {} dropped; records dropped for a new device: {}; microseconds each: build {:.2}, replay {:.2}, plain {:.2}",
         s.seen,
         s.replayed,
         built,
@@ -1833,8 +1903,138 @@ mod tests {
         assert_eq!(k.forgotten, [11], "unused since before draw 90");
         assert_eq!(k.records.len(), 2);
         evict_from(&mut k, 1, 10);
+        assert_eq!(
+            (k.records.len(), &k.forgotten),
+            (1, &vec![11, 13]),
+            "still above: the least recently used went, the latest stays"
+        );
+        assert!(k.records.contains_key(&(2, 0, 0, 0, 0)));
+    }
+
+    /// Above the most records with every one used lately, only the least recently used go, down to three quarters of
+    /// the most, not all at once (review of #1108).
+    #[test]
+    fn above_the_most_records_the_least_recently_used_go() {
+        let mut k = Keep::default();
+        k.stats.seen = 1000;
+        for i in 0..12u32 {
+            let r = Record {
+                statics: Vec::new(),
+                inputs: Vec::new(),
+                ops: Vec::new(),
+                replayable: true,
+                last_used: 990 + u64::from(i),
+                item: Some((100 + i, 0)),
+                streak: 0,
+                rest: 0,
+            };
+            k.records.insert((i, 0, 0, 0, 0), r);
+        }
+        evict_from(&mut k, 8, 100);
+        assert_eq!(k.records.len(), 6, "three quarters of 8");
         k.forgotten.sort_unstable();
-        assert_eq!((k.records.len(), k.forgotten), (0, vec![11, 12, 13]));
+        assert_eq!(k.forgotten, (100..106).collect::<Vec<_>>());
+        assert!((6..12u32).all(|i| k.records.contains_key(&(i, 0, 0, 0, 0))));
+    }
+
+    /// A stop or a C++ exception (a panic) unwinding through a build or a replay ends what they began and goes on
+    /// (review of #1108): no build flag, store log or accessor notes are left on, the held draw ends, a setter's depth
+    /// starts again at the next build (whose setter calls are kept), and a record the unwind went through keeps its
+    /// ops.
+    #[test]
+    fn an_unwind_through_a_build_or_a_replay_leaves_nothing_on() {
+        draw_items::install(&TEST_HOOKS);
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x10);
+        reset_for_tests();
+        set_mode_for_tests(Some(Mode::On));
+        let _ = asks();
+        let leaf = Leaf::Defined([0; 12]);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            world(|| {
+                draw(&mut e, KEY, |e| {
+                    let _ = capture::word(e, block, 0);
+                    super::leaf(e, leaf, |_| panic!("a C++ exception"));
+                })
+            })
+        }));
+        assert!(stopped.is_err(), "the unwind goes on");
+        assert!(!building());
+        assert!(!e.mem.store_log_on());
+        assert!(!capture::keep_reading_for_tests());
+        assert_eq!(asks().len(), 1, "one held draw, ended");
+        let runs = Cell::new(0u32);
+        world(|| {
+            draw(&mut e, KEY, |e| {
+                runs.set(runs.get() + 1);
+                let _ = capture::word(e, block, 0);
+                super::leaf(e, leaf, |_| ());
+                e.mem.set_u32(block + 4, 3);
+            })
+        });
+        assert_eq!(runs.get(), 1);
+        let ops = KEEP.with(|k| k.borrow().records[&KEY].ops.clone());
+        assert_eq!(
+            ops,
+            [Op::Leaf(leaf), Op::Write(block + 4, vec![3, 0, 0, 0])],
+            "the setter call kept: its depth started again"
+        );
+        // A replay that stops half way (a write to unmapped memory) keeps the record's ops for the next one.
+        let broken = vec![Op::Write(block + 8, vec![1]), Op::Write(0x0000_5000, vec![2])];
+        KEEP.with(|k| k.borrow_mut().records.get_mut(&KEY).unwrap().ops = broken.clone());
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| replay(&mut e, KEY)));
+        assert!(stopped.is_err());
+        assert_eq!(KEEP.with(|k| k.borrow().records[&KEY].ops.clone()), broken);
+        set_mode_for_tests(None);
+        reset_for_tests();
+    }
+
+    /// With the block check on (`NV_BLOCK_CHECK`: the set-up's locals are heap blocks) nothing is kept: every draw
+    /// runs its set-up (review of #1108).
+    #[test]
+    fn nothing_is_kept_with_the_block_check_on() {
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x10);
+        e.mem.enable_block_check(false, false);
+        reset_for_tests();
+        set_mode_for_tests(Some(Mode::On));
+        let runs = Cell::new(0u32);
+        let body = |e: &mut Engine| {
+            runs.set(runs.get() + 1);
+            let _ = capture::word(e, block, 0);
+        };
+        world(|| draw(&mut e, KEY, body));
+        world(|| draw(&mut e, KEY, body));
+        assert_eq!(runs.get(), 2);
+        assert!(KEEP.with(|k| k.borrow().records.is_empty()));
+        set_mode_for_tests(None);
+        reset_for_tests();
+    }
+
+    /// A structure a device call passed from a caller's stack local (above the set-up's own) is an input with its
+    /// bytes; one in the set-up's own locals, one it wrote itself, one away from the stack (no bytes kept) and an
+    /// address already an input are not (review of #1108).
+    #[test]
+    fn a_callers_structure_is_an_input() {
+        let call = |slot: u32, at: u32, data: Vec<u8>| DeviceCall {
+            this: 0x100,
+            slot,
+            args: vec![0, at, 1],
+            data,
+            data_arg: Some(1),
+        };
+        let calls = [
+            call(0x178, 0x9000, vec![1; 16]),
+            call(0x1b4, 0x8100, vec![2; 16]),
+            call(0x178, 0x9100, vec![3; 16]),
+            call(0x178, 0x9200, Vec::new()),
+            call(0x178, 0x9300, vec![4; 16]),
+            call(0x1b4, 0x9000, vec![1; 16]),
+        ];
+        let written: std::collections::HashSet<u32> = (0x9100..0x9110).collect();
+        let inputs = [(0x9300, vec![4; 16], 0x11)];
+        let got = callers_structures(&calls, (0x8000, 0x8800), &written, &inputs);
+        assert_eq!(got, [(0x9000, vec![1; 16], DEVICE_READER | 0x178)]);
     }
 
     /// Every accessor notes what it reads while a record is built, but not in the set-up's own locals; no
@@ -1845,6 +2045,14 @@ mod tests {
         let block = e.mem.alloc(0x40);
         capture::keep_reads_begin(block + 0x30, block + 0x40);
         capture::check_packets_open_for_tests();
+        // A build alone is no open packet: `active()` answers false at some moment while it lasts (other tests'
+        // packets come and go on their own threads; with the build counted as a packet it never would).
+        let alone = (0..100_000).any(|_| {
+            let no = !capture::active();
+            std::thread::yield_now();
+            no
+        });
+        assert!(alone, "a build counted as an open packet");
         let _ = capture::word(&e, block, 0);
         let _ = capture::span(&e, block, 8, 0x10);
         capture::image(&mut e, block, 0x10, 0x18, |_, _| ());
