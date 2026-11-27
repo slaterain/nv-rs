@@ -4366,3 +4366,20 @@ fn crossed_edge_rounding_main_thread() {
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
 }
+
+#[test]
+fn cell_array_base_new() {
+    Diff::new(entry!(
+        0x006c_7530,
+        search::cell_array_base_new(Ptr<_>) -> Ptr<_>
+    ))
+    .common()
+    .plain(0x006c_7530)
+    .inputs(&[Input::Flag])
+    .setup(|e, _| {
+        stand_ins(e);
+        vec![array(e, 0x77, 0x77, 0x77)]
+    })
+    .run()
+    .assert_same();
+}
