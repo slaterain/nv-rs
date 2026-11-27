@@ -2420,10 +2420,15 @@ pub fn extra_uses_compare(e: &mut Engine, this: Ptr<ExtraUses>, other: Ptr) -> b
 // Translated from 00431ec0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ExtraTimeLeft`'s constructor (the engine map has no name for it; the class
 /// is the one whose vtable `010158fc` it stores): extra-data type 0x27,
-/// storing `time`. Returns `this`.
+/// storing `time` through x87 FLD/FSTP (signaling NaNs become quiet). Returns
+/// `this`.
 pub fn fn_00431ec0(e: &mut Engine, this: Ptr<ExtraTimeLeft>, time: f32) -> Ptr<ExtraTimeLeft> {
     construct_base(e, this.cast(), TYPE_TIME_LEFT, EXTRA_TIME_LEFT_VTABLE);
-    e.set(this, ExtraTimeLeft::fTime, time);
+    e.set(
+        this,
+        ExtraTimeLeft::fTime,
+        f32::from_bits(x87_quiet_bits(time.to_bits())),
+    );
     this
 }
 
@@ -2442,10 +2447,14 @@ pub fn extra_time_left_compare(e: &mut Engine, this: Ptr<ExtraTimeLeft>, other: 
 // Translated from 00431f60 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ExtraCharge`'s constructor (the engine map has no name for it; the class is
 /// the one whose vtable `01015908` it stores): extra-data type 0x28, storing
-/// `charge`. Returns `this`.
+/// `charge` through x87 FLD/FSTP (signaling NaNs become quiet). Returns `this`.
 pub fn fn_00431f60(e: &mut Engine, this: Ptr<ExtraCharge>, charge: f32) -> Ptr<ExtraCharge> {
     construct_base(e, this.cast(), TYPE_CHARGE, EXTRA_CHARGE_VTABLE);
-    e.set(this, ExtraCharge::fCharge, charge);
+    e.set(
+        this,
+        ExtraCharge::fCharge,
+        f32::from_bits(x87_quiet_bits(charge.to_bits())),
+    );
     this
 }
 
@@ -2534,10 +2543,14 @@ pub fn extra_modding_item_compare(e: &mut Engine, this: Ptr<ExtraModdingItem>, o
 // Translated from 00432220 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ExtraScale`'s constructor (the engine map has no name for it; the class is
 /// the one whose vtable `01015920` it stores): extra-data type 0x30, storing
-/// `scale`. Returns `this`.
+/// `scale` through x87 FLD/FSTP (signaling NaNs become quiet). Returns `this`.
 pub fn fn_00432220(e: &mut Engine, this: Ptr<ExtraScale>, scale: f32) -> Ptr<ExtraScale> {
     construct_base(e, this.cast(), TYPE_SCALE, EXTRA_SCALE_VTABLE);
-    e.set(this, ExtraScale::fScale, scale);
+    e.set(
+        this,
+        ExtraScale::fScale,
+        f32::from_bits(x87_quiet_bits(scale.to_bits())),
+    );
     this
 }
 
@@ -2725,7 +2738,8 @@ pub fn fn_00432650(
 /// `ExtraPackageStartLocation`'s constructor from a place (the engine map has
 /// no name for it): the default construction, then `pLocationForm` is `form`
 /// (or `fallback_form` when `form` is null), `locPt` is a copy of the
-/// `NiPoint3` at `position` and `fZRot` is `z_rot`. Returns `this`. The
+/// `NiPoint3` at `position` and `fZRot` is `z_rot` (through x87 FLD/FSTP:
+/// signaling NaNs become quiet). Returns `this`. The
 /// exception-unwinding frame is not translated.
 pub fn fn_004326c0(
     e: &mut Engine,
@@ -2746,7 +2760,11 @@ pub fn fn_004326c0(
     e.set(point, NiPoint3::x, x);
     e.set(point, NiPoint3::y, y);
     e.set(point, NiPoint3::z, z);
-    e.set(location, WorldLocation::fZRot, z_rot);
+    e.set(
+        location,
+        WorldLocation::fZRot,
+        f32::from_bits(x87_quiet_bits(z_rot.to_bits())),
+    );
     this
 }
 

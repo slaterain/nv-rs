@@ -18,9 +18,10 @@
 //! **Native.** The exe's order of work. Done in place: `BSExtraData`'s constructor, an array's count
 //! (`0044ddc0`) and element (`006a7ad0`), the 00430830 accessor of a reference's angles, the actor
 //! list's constructor (`0096a2d0`, two null words), the world location's constructor (`006d5320`,
-//! nothing), a form's word at +0xc (`0084e3a0`) and +0x68 (`008d8520`), and the save-load object's
-//! test that always answers false (`0047c850`). Typed calls: this family's own functions (the
-//! `DismemberedLimb` record's constructor `0042c470` and its array's destructor `0042ff80`, the
+//! nothing), a form's word at +0xc (`0084e3a0`) and +0x68 (`008d8520`), the save-load object's test
+//! that always answers false (`0047c850`) and the buoy data's compare that always answers 1
+//! (`00401290`). Typed calls: this family's own functions (the `DismemberedLimb` record's
+//! constructor `0042c470` and its array's destructor `0042ff80`, the
 //! reference's NPC `004181e0`, the teleport, map marker and audio marker data's deletes), the cell
 //! references family's `BSExtraData` destructor and `Compare`, the dispatch family's array search and
 //! clear (`00719b20`, `008454f0`), the C runtime's `memcmp` and float-to-int, the multibound family's
@@ -38,6 +39,7 @@ use super::{access, arrays, cell_refs, dispatch, free_when, word_at};
 use super::{EXTRA_PAYLOAD, FAMILY, OPERATOR_DELETE, OPERATOR_NEW};
 use crate::{crt, forms, multibound};
 use engine_core::ptr::Ptr;
+use engine_core::x87::x87_quiet_bits;
 use engine_core::{args, typed_call, Engine};
 
 // ---- The classes' types and vtables ---------------------------------------------------------
@@ -181,12 +183,10 @@ const ARRAY_SAME_BUFFER: u32 = 0x0043_87b0;
 /// The word compare the guards' search matches with (`009a3830`, which the dispatch family's search
 /// does in place).
 const WORDS_EQUAL: u32 = 0x009a_3830;
-/// The data compares of the teleport, map marker, audio marker and audio buoy marker
-/// (`thiscall(data, other)`).
+/// The data compares of the teleport, map marker and audio marker (`thiscall(data, other)`).
 const DOOR_TELEPORT_COMPARE: u32 = 0x0043_a860;
 const MAP_MARKER_DATA_COMPARE: u32 = 0x0043_8e40;
 const AUDIO_MARKER_DATA_COMPARE: u32 = 0x0058_97c0;
-const AUDIO_BUOY_DATA_COMPARE: u32 = 0x0040_1290;
 /// `TESNPC::BuildObjectArray(reference, base, array)` (`thiscall(npc, ...)`).
 const BUILD_OBJECT_ARRAY: u32 = 0x0060_5fc0;
 /// The level getters: the player's (`thiscall(actor)`, a `u16`) and a reference's calculated one
@@ -1061,15 +1061,11 @@ pub fn audio_buoy_drop(e: &mut Engine, this: u32) {
 }
 
 // Typed from 00431710
-/// `ExtraAudioBuoyMarker::Compare`: the buoy data's compare (`00401290`).
+/// `ExtraAudioBuoyMarker::Compare`: past the cast and `BSExtraData::Compare`, the buoy data's compare
+/// (`00401290`, in place: its body answers 1), so two buoy markers always differ.
 pub fn audio_buoy_compare(e: &mut Engine, this: u32, other: u32) -> bool {
-    compare_by(
-        e,
-        this,
-        other,
-        TYPE_AUDIO_BUOY_MARKER,
-        AUDIO_BUOY_DATA_COMPARE,
-    )
+    let _ = compare_start(e, this, other, TYPE_AUDIO_BUOY_MARKER);
+    true
 }
 
 // ---- ExtraAction, ExtraContainerChanges and the one-word classes ------------------------------
@@ -1228,7 +1224,7 @@ pub fn leveled_item_compare(e: &mut Engine, this: u32, other: u32) -> bool {
 /// `ExtraHealth`'s constructor (type 0x25) with its health, through the x87 (a signalling NaN comes
 /// out quiet). Answers `this`.
 pub fn health_new(e: &mut Engine, this: u32, health: u32) -> u32 {
-    let quiet = engine_core::x87::x87_quiet_bits(health);
+    let quiet = x87_quiet_bits(health);
     with_word(e, this, KIND_HEALTH, VTABLE_HEALTH, quiet)
 }
 
@@ -1257,9 +1253,16 @@ pub fn uses_compare(e: &mut Engine, this: u32, other: u32) -> bool {
 }
 
 // Typed from 00431ec0
-/// `ExtraTimeLeft`'s constructor (type 0x27) with its time (moved as its bits). Answers `this`.
+/// `ExtraTimeLeft`'s constructor (type 0x27) with its time, through the x87 (a signalling NaN comes
+/// out quiet). Answers `this`.
 pub fn time_left_new(e: &mut Engine, this: u32, time: u32) -> u32 {
-    with_word(e, this, KIND_TIME_LEFT, VTABLE_TIME_LEFT, time)
+    with_word(
+        e,
+        this,
+        KIND_TIME_LEFT,
+        VTABLE_TIME_LEFT,
+        x87_quiet_bits(time),
+    )
 }
 
 // Typed from 00431ef0
@@ -1269,9 +1272,10 @@ pub fn time_left_compare(e: &mut Engine, this: u32, other: u32) -> bool {
 }
 
 // Typed from 00431f60
-/// `ExtraCharge`'s constructor (type 0x28) with its charge (moved as its bits). Answers `this`.
+/// `ExtraCharge`'s constructor (type 0x28) with its charge, through the x87 (a signalling NaN comes
+/// out quiet). Answers `this`.
 pub fn charge_new(e: &mut Engine, this: u32, charge: u32) -> u32 {
-    with_word(e, this, KIND_CHARGE, VTABLE_CHARGE, charge)
+    with_word(e, this, KIND_CHARGE, VTABLE_CHARGE, x87_quiet_bits(charge))
 }
 
 // Typed from 00431f90
@@ -1321,9 +1325,10 @@ pub fn modding_item_compare(e: &mut Engine, this: u32, other: u32) -> bool {
 }
 
 // Typed from 00432220
-/// `ExtraScale`'s constructor (type 0x30) with its scale (moved as its bits). Answers `this`.
+/// `ExtraScale`'s constructor (type 0x30) with its scale, through the x87 (a signalling NaN comes
+/// out quiet). Answers `this`.
 pub fn scale_new(e: &mut Engine, this: u32, scale: u32) -> u32 {
-    with_word(e, this, KIND_SCALE, VTABLE_SCALE, scale)
+    with_word(e, this, KIND_SCALE, VTABLE_SCALE, x87_quiet_bits(scale))
 }
 
 // Typed from 00432250
@@ -1448,7 +1453,8 @@ pub fn start_location_new(e: &mut Engine, this: u32) -> u32 {
 
 // Typed from 004326c0
 /// `ExtraPackageStartLocation`'s constructor with its place: the form (or `fallback` for none), the
-/// point at `position` and the z angle, moved as their bits. Answers `this`.
+/// point at `position` moved as its bits, and the z angle through the x87 (a signalling NaN comes out
+/// quiet). Answers `this`.
 pub fn start_location_at(
     e: &mut Engine,
     this: u32,
@@ -1462,7 +1468,8 @@ pub fn start_location_at(
     e.mem
         .set_u32(location, if form == 0 { fallback } else { form });
     copy_point(e, position, location.wrapping_add(4));
-    e.mem.set_u32(location.wrapping_add(0x10), z_angle);
+    e.mem
+        .set_u32(location.wrapping_add(0x10), x87_quiet_bits(z_angle));
     this
 }
 

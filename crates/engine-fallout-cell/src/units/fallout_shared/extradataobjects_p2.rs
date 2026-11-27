@@ -1070,8 +1070,8 @@ pub fn fn_00435fa0(
         );
     }
     if !reference.is_null() {
-        let angle = fn_00430830(e, reference);
-        copy_point(e, angle.addr(), this.addr() + 0x0c);
+        let angle = e.call(0x0043_0830, &args![reference]).u32();
+        copy_point(e, angle, this.addr() + 0x0c);
         // The reference's virtual method at +0x1f4 returns the address of a
         // 12-byte vector (`ExtraTalkingActor`'s constructor passes the same
         // result to `TESObjectREFR::SetLocationOnReference`).
@@ -1422,7 +1422,7 @@ pub fn fn_00436780(e: &mut Engine, _unused_this: Ptr, base_object: Ptr, source: 
     e.call(SET_REF_PERSISTS, &args![object, persists]);
     let position = fn_00436aa0(e, source);
     e.call(SET_LOCATION_ON_REFERENCE, &args![object, position]);
-    let rotation = fn_00430830(e, source).addr();
+    let rotation = e.call(0x0043_0830, &args![source]).u32();
     let words = [
         e.mem.u32(rotation),
         e.mem.u32(rotation + 4),

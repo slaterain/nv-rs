@@ -15263,9 +15263,11 @@ fn xo_shared_stand_ins(e: &mut Engine) {
         e.register(addr, xo_array_new);
     }
     e.register(XO_FORM_BY_ID, xo_form);
-    for addr in [0x0043_a860, 0x0043_8e40, 0x0058_97c0, 0x0040_1290] {
+    for addr in [0x0043_a860, 0x0043_8e40, 0x0058_97c0] {
         e.register(addr, xo_data_compare);
     }
+    // The buoy data's compare: 1, as its body answers.
+    e.register(0x0040_1290, |_, _| ret(1));
     e.register(0x007c_b2e0, xo_array_add);
     e.register(0x0043_87b0, xo_same_buffer);
     e.register(0x0087_f9f0, |e, _| ret(e.mem.u32(XO_PLAYER_LEVEL)));
@@ -16374,6 +16376,7 @@ fn xo_audio_buoy_compare() {
         extra_data::objects::audio_buoy_compare(u32, u32) -> bool
     ))
     .xo_compare(0x0043_1710, 0x91, 0, &[0, 1, 2])
+    .ignore_calls(&[0x0040_1290])
     .run()
     .assert_same();
 }
