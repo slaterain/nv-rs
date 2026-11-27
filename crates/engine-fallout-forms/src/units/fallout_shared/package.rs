@@ -1896,9 +1896,9 @@ pub fn tes_package_get_search_location_cell(
     let search = Object::new(e.call(0x0067_2f20, &args![this]).u32());
     let own = location_of(e, this);
     if search == own {
-        tes_package_get_location_cell(e, this, actor)
+        e.call(0x0067_5c20, &args![this, actor]).ptr()
     } else {
-        tes_package_get_second_location_cell(e, this, actor)
+        e.call(0x0067_51a0, &args![this, actor]).ptr()
     }
 }
 
@@ -1916,9 +1916,9 @@ pub fn tes_package_get_search_location_coord(
     let own = location_of(e, this);
     let point = e.with_stack(12, |e, buffer| {
         let made = if search == own {
-            tes_package_get_location_coord(e, this, buffer, actor)
+            e.call(0x0067_5de0, &args![this, buffer, actor]).ptr::<()>()
         } else {
-            tes_package_get_second_location_coord(e, this, buffer, actor)
+            e.call(0x0067_5360, &args![this, buffer, actor]).ptr::<()>()
         };
         point_at(e, made.addr())
     });
@@ -1937,9 +1937,9 @@ pub fn tes_package_get_search_location_radius(
     let search = Object::new(e.call(0x0067_2f20, &args![this]).u32());
     let own = location_of(e, this);
     if search == own {
-        fn_00676280(e, this, actor)
+        e.call(0x0067_6280, &args![this, actor]).i32()
     } else {
-        fn_00675670(e, this) as i32
+        e.call(0x0067_5670, &args![this]).i32()
     }
 }
 
@@ -2559,8 +2559,8 @@ fn second_location_test(
     if location_type(e, location) == 3 && !e.vcall(actor.addr(), SLOT_ACTOR_290, &args![]).bool() {
         return true;
     }
-    let location_world = tes_package_get_second_location_world(e, this, actor);
-    let location_cell_found = tes_package_get_second_location_cell(e, this, actor);
+    let location_world = e.call(0x0067_4fd0, &args![this, actor]).ptr();
+    let location_cell_found = e.call(0x0067_51a0, &args![this, actor]).ptr();
     let subject_cell = match same_place(e, location, subject, location_world, location_cell_found) {
         Place::Immediate => return true,
         Place::Same(cell) => cell,
@@ -2579,7 +2579,7 @@ fn second_location_test(
         return flag != 0;
     }
 
-    let mut radius = fn_00675670(e, this) as i32;
+    let mut radius = e.call(0x0067_5670, &args![this]).i32();
     if radius > 0 {
         furniture_check = 0;
     }
@@ -2592,8 +2592,8 @@ fn second_location_test(
         }
     }
     let mut exact = false;
-    tes_package_get_second_location_coord(e, this, Ptr::new(point), actor);
-    let reference = fn_006756a0(e, this, actor);
+    e.call(0x0067_5360, &args![this, point, actor]);
+    let reference = e.call(0x0067_56a0, &args![this, actor]).ptr();
     if radius == 0 {
         if !reference.is_null() {
             if is_furniture(e, reference) && process_has_point(e, subject) {
@@ -2619,10 +2619,14 @@ fn second_location_test(
     if pack_type(e, this) == 5 && !subject_cell.is_null() {
         let subject_at = e.vcall(subject.addr(), SLOT_POSITION, &args![]).u32();
         let second_height = e.with_stack(12, |e, buffer| {
-            let made = tes_package_get_second_location_coord(e, this, buffer, actor);
+            let made = e.call(0x0067_5360, &args![this, buffer, actor]).ptr::<()>();
             e.mem.f32(made.addr() + 8)
         });
-        let difference = (e.mem.f32(subject_at + 8) as f64 - second_height as f64) as f32;
+        // The exe's x87 subtract under the running thread's control word, stored as a float.
+        let difference = f32::from_bits(engine_core::x87::x87_store32(engine_core::x87::x87_sub(
+            engine_core::x87::x87_load32(e.mem.u32(subject_at + 8)),
+            engine_core::x87::x87_load32(second_height.to_bits()),
+        )));
         let length = e.call(ABSOLUTE_VALUE, &args![difference]).f32();
         let limit: f64 = e.global(DISTANCE_LIMIT);
         if length as f64 > limit {
@@ -2719,8 +2723,8 @@ fn own_location_test(
     {
         return true;
     }
-    let location_world = tes_package_get_location_world(e, this, subject);
-    let location_cell_found = tes_package_get_location_cell(e, this, subject);
+    let location_world = e.call(0x0067_5a50, &args![this, subject]).ptr();
+    let location_cell_found = e.call(0x0067_5c20, &args![this, subject]).ptr();
     match same_place(e, location, subject, location_world, location_cell_found) {
         Place::Immediate => return true,
         Place::Same(_) => {}
@@ -2741,7 +2745,7 @@ fn own_location_test(
         }
     }
 
-    let mut radius = fn_00676280(e, this, subject);
+    let mut radius = e.call(0x0067_6280, &args![this, subject]).i32();
     if skip_radius != 0 {
         radius = 0;
     } else {
@@ -2755,11 +2759,11 @@ fn own_location_test(
         furniture_check = 0;
     }
     let mut exact = false;
-    tes_package_get_location_coord(e, this, Ptr::new(point), subject_actor);
+    e.call(0x0067_5de0, &args![this, point, subject_actor]);
     let reference = if location.is_null() {
         Ptr::NULL
     } else {
-        tes_package_get_location_reference(e, this, subject)
+        e.call(0x0067_6140, &args![this, subject]).ptr()
     };
     if radius == 0 && !location.is_null() {
         if !reference.is_null() {
@@ -2784,7 +2788,7 @@ fn own_location_test(
             radius = 10;
         }
     }
-    if (fn_00676280(e, this, subject) as u32) < 0x15
+    if (e.call(0x0067_6280, &args![this, subject]).i32() as u32) < 0x15
         && !reference.is_null()
         && is_one_of_two_marker_forms(e, reference)
     {
@@ -2897,7 +2901,7 @@ fn actor_at_ref_target(
         return false;
     }
     let mut radius = {
-        let radius = tes_package_get_package_radius_actor_to_ref_target(e, this, actor, 0);
+        let radius = e.call(0x0067_87e0, &args![this, actor, 0u32]).f32();
         float_to_int(e, radius)
     };
     let mut result = false;
@@ -3016,8 +3020,8 @@ pub fn tes_package_is_target_at_location(
     let target = actor_target_reference(e, actor);
     let target_world = world_of_reference(e, target);
     let target_cell = flagged_parent_cell(e, target);
-    let location_world = tes_package_get_location_world(e, this, actor);
-    let location_cell_found = tes_package_get_location_cell(e, this, actor);
+    let location_world = e.call(0x0067_5a50, &args![this, actor]).ptr();
+    let location_cell_found = e.call(0x0067_5c20, &args![this, actor]).ptr();
     let location_cell_found = if !location_cell_found.is_null()
         && !e.call(CELL_FLAG_1, &args![location_cell_found]).bool()
     {
@@ -3045,9 +3049,9 @@ pub fn tes_package_is_target_at_location(
             return flag != 0;
         }
     }
-    let mut radius = fn_00676280(e, this, actor);
+    let mut radius = e.call(0x0067_6280, &args![this, actor]).i32();
     if radius == 0 && !location.is_null() {
-        let reference = tes_package_get_location_reference(e, this, actor);
+        let reference = e.call(0x0067_6140, &args![this, actor]).ptr();
         if !reference.is_null() {
             radius = model_bound_size(e, reference);
         }
@@ -3059,7 +3063,7 @@ pub fn tes_package_is_target_at_location(
     let target_at = e.vcall(target.addr(), SLOT_POSITION, &args![]).u32();
     let length = e.with_stack(12, |e, buffer| {
         e.with_stack(12, |e, difference| {
-            let coord = tes_package_get_location_coord(e, this, buffer, actor);
+            let coord = e.call(0x0067_5de0, &args![this, buffer, actor]).ptr::<()>();
             e.call(POINT_DIFFERENCE, &args![coord, difference, target_at]);
             e.call(FLAT_LENGTH, &args![difference]).f32()
         })
@@ -3086,8 +3090,8 @@ pub fn tes_package_is_target_at_second_location(
     }
     let target_world = world_of_reference(e, target);
     let target_cell = flagged_parent_cell(e, target);
-    let location_world = tes_package_get_location_world(e, this, actor);
-    let location_cell_found = tes_package_get_location_cell(e, this, actor);
+    let location_world = e.call(0x0067_5a50, &args![this, actor]).ptr();
+    let location_cell_found = e.call(0x0067_5c20, &args![this, actor]).ptr();
     let location_cell_found = if !location_cell_found.is_null()
         && !e.call(CELL_FLAG_1, &args![location_cell_found]).bool()
     {
@@ -3117,12 +3121,12 @@ pub fn tes_package_is_target_at_second_location(
     }
     let mut radius = radius;
     if radius < 0.0 {
-        let mut worked_out = fn_00675670(e, this) as i32;
+        let mut worked_out = e.call(0x0067_5670, &args![this]).i32();
         if worked_out == 0 {
-            fn_00675670(e, this);
+            e.call(0x0067_5670, &args![this]);
         }
         if worked_out == 0 && !location.is_null() {
-            let reference = fn_006756a0(e, this, actor);
+            let reference = e.call(0x0067_56a0, &args![this, actor]).ptr();
             if !reference.is_null() {
                 worked_out = model_bound_size(e, reference);
             }
@@ -3135,7 +3139,7 @@ pub fn tes_package_is_target_at_second_location(
     let target_at = e.vcall(target.addr(), SLOT_POSITION, &args![]).u32();
     let length = e.with_stack(12, |e, buffer| {
         e.with_stack(12, |e, difference| {
-            let coord = tes_package_get_second_location_coord(e, this, buffer, actor);
+            let coord = e.call(0x0067_5360, &args![this, buffer, actor]).ptr::<()>();
             e.call(POINT_DIFFERENCE, &args![coord, difference, target_at]);
             e.call(FLAT_LENGTH, &args![difference]).f32()
         })
@@ -3827,22 +3831,26 @@ fn actor_reach_adjustment(
     let at = e
         .vcall(actor_as_actor.addr(), SLOT_POSITION, &args![])
         .u32();
-    let eye_height = ((e.mem.f32(at + 8) as f64 + eye) - reach as f64) as f32;
+    // The exe's x87 add and subtract (`FADD double`, `FSUB float`), stored as a float.
+    let eye_height = f32::from_bits(engine_core::x87::x87_store32(engine_core::x87::x87_sub(
+        engine_core::x87::x87_add(engine_core::x87::x87_load32(e.mem.u32(at + 8)), eye),
+        engine_core::x87::x87_load32(reach.to_bits()),
+    )));
     let target_at = e.vcall(target.addr(), SLOT_POSITION, &args![]).u32();
     let target_height = e.mem.f32(target_at + 8);
     if target_height < eye_height {
-        let difference = eye_height as f64 - target_height as f64;
+        let difference = engine_core::x87::x87_sub(f64::from(eye_height), f64::from(target_height));
         let half = e.global::<f64>(TWO);
         let extent = e.with_stack(12, |e, buffer| {
             let at = e.vcall(actor.addr(), SLOT_BOUNDS_1DC, &args![buffer]).u32();
             e.mem.f32(at + 8)
         });
-        if extent as f64 / half > difference {
+        if engine_core::x87::x87_div(f64::from(extent), half) > difference {
             let extent = e.with_stack(12, |e, buffer| {
                 let at = e.vcall(actor.addr(), SLOT_BOUNDS_1DC, &args![buffer]).u32();
                 e.mem.f32(at + 8)
             });
-            let value = extent as f64 / half;
+            let value = engine_core::x87::x87_div(f64::from(extent), half);
             added = added.wrapping_add(e.call(FTOL, &args![value]).i32());
         }
     }
