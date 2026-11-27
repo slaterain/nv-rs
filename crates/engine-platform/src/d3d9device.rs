@@ -833,6 +833,177 @@ fn state_one_pass(
     Some(D3D_OK)
 }
 
+/// Why [`bulk_update`] took none of a list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))] // the item form's replays (`super::d3d9items`) come next
+pub(super) enum Refused {
+    /// A drawing cut is open (`super::d3d9draw`): the per-call path keeps two copies of the state then.
+    Cut,
+    /// No device of this layer.
+    NoDevice,
+    /// Command `n` (counted from 0) is not a state set the per-call path takes as given: another device's, no
+    /// setter's ([`d3d9_stream::kept::is_state`]), a unit or kind past the model's, an object not of this layer or of
+    /// another kind, or a payload of another size.
+    Command(usize),
+}
+
+/// The device model's mirror brought, in one pass, to where the per-call path leaves it after the state sets `cmds`
+/// (commands as the stream carries them, each a setter's: [`d3d9_stream::kept::is_state`]): the render, texture
+/// stage and sampler states, the textures the samplers hold (with each texture's count of the samplers holding it),
+/// the clip planes, the material, the lights and which are on, and through `super::d3d9resource::Bulk` the
+/// declaration, FVF, shaders, stream sources and indices (counted alike) and the constant registers; each set taken
+/// in order, as its setter takes it. No command goes for the sets: the caller sends what carries them out (the item
+/// form's `DrawPatched`, whose kept states and commands they are). An object that neither the program nor the device
+/// holds any more ends after the pass, in the order the per-call path ends them, its end going to the backend as
+/// there.
+///
+/// Every command is checked before any is taken: a list holding one that the per-call path refuses or stops at is
+/// not taken at all ([`Refused::Command`]); nor is any list while a drawing cut is open. The device and its bindings
+/// are looked up once for the whole list; an object bound is looked up once to check it and once to count it. (An
+/// object a list lets go of for good and binds again later stays: the per-call path refuses that list.)
+#[cfg_attr(not(test), allow(dead_code))] // the item form's replays (`super::d3d9items`) come next
+pub(super) fn bulk_update<'a, I>(e: &mut Engine, device: u32, cmds: I) -> Result<(), Refused>
+where
+    I: Iterator<Item = d3d9_stream::Cmd<d3d9_stream::Data<'a>>> + Clone,
+{
+    use d3d9_stream::Cmd;
+    {
+        let objects = &mut device!(e).device_objects;
+        if super::d3d9draw::cut_open_in(&objects.draw) {
+            return Err(Refused::Cut);
+        }
+        if !objects.devices.contains_key(&device) {
+            return Err(Refused::NoDevice);
+        }
+    }
+    // The caps' clip plane count, asked as the per-call path asks it, only for a list with a clip plane.
+    let planes = if cmds.clone().any(|c| matches!(c, Cmd::SetClipPlane { .. })) {
+        max_user_clip_planes(e, Ptr::new(device))
+    } else {
+        0
+    };
+    let mut ending = Vec::new();
+    {
+        let Objects {
+            devices,
+            textures,
+            resources,
+            ..
+        } = &mut device!(e).device_objects;
+        let d = devices.get_mut(&device).expect("checked above");
+        let mut bulk = super::d3d9resource::bulk_in(resources, device);
+        for (n, cmd) in cmds.clone().enumerate() {
+            let (on, ok) = match cmd {
+                Cmd::SetRenderState { device, state, .. } => (device, state < 256),
+                Cmd::SetTextureStageState {
+                    device,
+                    stage,
+                    kind,
+                    ..
+                } => (device, stage < 8 && stage_index(stage, kind).is_some()),
+                Cmd::SetSamplerState {
+                    device,
+                    sampler,
+                    kind,
+                    ..
+                } => (device, is_sampler(sampler) && (1..=13).contains(&kind)),
+                Cmd::SetTexture {
+                    device,
+                    sampler,
+                    texture,
+                } => {
+                    let held = texture == 0
+                        || d.textures.get(&sampler) == Some(&texture)
+                        || textures.contains_key(&texture);
+                    (device, is_sampler(sampler) && held)
+                }
+                Cmd::SetClipPlane { device, index, .. } => (device, index < planes),
+                Cmd::SetMaterial { device, material } => (device, material.len() == 4 * 17),
+                Cmd::SetLight { device, light, .. } => (device, light.len() == 4 * 26),
+                Cmd::LightEnable { device, .. } => (device, true),
+                other => (device, bulk.check(&other)),
+            };
+            if !ok || on != device {
+                return Err(Refused::Command(n));
+            }
+        }
+        for cmd in cmds {
+            match cmd {
+                Cmd::SetRenderState { state, value, .. } => {
+                    d.render_states.set(state as usize, value)
+                }
+                Cmd::SetTextureStageState {
+                    stage, kind, value, ..
+                } => d
+                    .stage_states
+                    .set(stage_index(stage, kind).expect("checked"), value),
+                Cmd::SetSamplerState {
+                    sampler,
+                    kind,
+                    value,
+                    ..
+                } => d
+                    .sampler_states
+                    .set(sampler_index(sampler, kind).expect("checked"), value),
+                Cmd::SetTexture {
+                    sampler, texture, ..
+                } => {
+                    // As [`texture_one_pass`]: the texture held already changes nothing.
+                    if texture != 0 && d.textures.get(&sampler) == Some(&texture) {
+                        continue;
+                    }
+                    let old = if texture != 0 {
+                        textures.get_mut(&texture).expect("checked").bound += 1;
+                        d.textures.insert(sampler, texture)
+                    } else {
+                        d.textures.remove(&sampler)
+                    };
+                    if let Some(old) = old {
+                        let t = textures
+                            .get_mut(&old)
+                            .expect("an IDirect3DTexture9 of this layer");
+                        t.bound -= 1;
+                        if t.bound == 0 && t.references == 0 {
+                            ending.push(old);
+                        }
+                    }
+                }
+                Cmd::SetClipPlane { index, plane, .. } => {
+                    d.clip_planes.insert(index, plane);
+                }
+                Cmd::SetMaterial { material, .. } => d.material = Some(payload_words(&material)),
+                Cmd::LightEnable { index, enable, .. } => {
+                    d.lights.entry(index).or_insert_with(default_light);
+                    if enable != 0 {
+                        d.enabled_lights.insert(index);
+                    } else {
+                        d.enabled_lights.remove(&index);
+                    }
+                }
+                Cmd::SetLight { index, light, .. } => {
+                    d.lights.insert(index, payload_words(&light));
+                }
+                other => bulk.take(other, &mut ending),
+            }
+        }
+    }
+    // As the per-call path ends them ([`texture_unbind`], `super::d3d9resource`'s `unbind`).
+    for object in ending {
+        if !super::d3d9resource::end_if_unheld(e, object) {
+            end_if_unheld(e, object);
+        }
+    }
+    Ok(())
+}
+
+/// A payload's first `N` words (little-endian), the payload checked to hold them.
+fn payload_words<const N: usize>(data: &d3d9_stream::Data<'_>) -> [u32; N] {
+    let bytes = data.bytes();
+    std::array::from_fn(|i| {
+        u32::from_le_bytes(bytes[4 * i..4 * i + 4].try_into().expect("4 bytes"))
+    })
+}
+
 forwarded! {
     fn fwd_set_render_target = set_render_target(index: u32, surface: u32) => set_render_target;
     fn fwd_set_depth_stencil_surface = set_depth_stencil_surface(surface: u32)
@@ -9570,5 +9741,724 @@ pub(crate) mod tests {
         }
         assert_eq!(set_viewport(e, Ptr::new(device), Ptr::new(v)), D3D_OK);
         e.mem.free(v);
+    }
+
+    /// A state set of the bulk update's tests: the command and its payload's bytes.
+    type BulkSet = (d3d9_stream::Cmd<()>, Vec<u8>);
+
+    /// The commands the bulk update's tests' stream got: each with whether it is a state set
+    /// (`d3d9_stream::kept::is_state`) and its bytes as the wire encodes it.
+    type BulkLog = std::sync::Arc<std::sync::Mutex<Vec<(bool, Vec<u8>)>>>;
+
+    /// What the bulk update's tests bind, made alike on every engine.
+    struct BulkWorld {
+        e: Engine,
+        dev: u32,
+        textures: Vec<u32>,
+        vertex: Vec<u32>,
+        index: Vec<u32>,
+        shaders: Vec<(bool, u32)>,
+        declarations: Vec<u32>,
+        /// Where a per-call set's structure is put (the same address on every engine).
+        scratch: u32,
+        log: BulkLog,
+    }
+
+    impl BulkWorld {
+        /// Every object of the world, textures first.
+        fn objects(&self) -> Vec<u32> {
+            let shaders = self.shaders.iter().map(|s| s.1);
+            self.textures
+                .iter()
+                .chain(&self.vertex)
+                .chain(&self.index)
+                .copied()
+                .chain(shaders)
+                .chain(self.declarations.iter().copied())
+                .collect()
+        }
+    }
+
+    /// A device ([`texture_device`], its caps naming six user clip planes) with six textures, four
+    /// vertex buffers, two index buffers, two vertex and two pixel shaders and two declarations made
+    /// before the stream, each forwarded (so an object's end is a command too), then the stream into
+    /// the world's log; the per-call sets in one pass as `one_pass` says.
+    fn bulk_world(one_pass: bool) -> BulkWorld {
+        use super::super::d3d9resource::one_pass_for_tests;
+        use d3d9_stream::{Backend, Cmd, Data, Reply};
+        struct Log(BulkLog);
+        impl Backend for Log {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                let mut bytes = Vec::new();
+                d3d9_stream::wire::encode(&cmd, &mut bytes);
+                let state = d3d9_stream::kept::is_state(&cmd);
+                self.0.lock().unwrap().push((state, bytes));
+                Reply::None
+            }
+        }
+        let (mut e, dev) = texture_device(Store::Host);
+        let caps = |planes: u32| {
+            let mut caps = vec![0u8; 304];
+            caps[..4].copy_from_slice(&1u32.to_le_bytes());
+            caps[CAPS_SIMULTANEOUS_RTS..CAPS_SIMULTANEOUS_RTS + 4]
+                .copy_from_slice(&4u32.to_le_bytes());
+            caps[0xa4..0xa8].copy_from_slice(&planes.to_le_bytes());
+            caps.iter().map(|x| format!("{x:02x}")).collect::<String>()
+        };
+        let table = test_table().replace(&caps(0), &caps(6))
+            + "\nDomain\td1\t15,31545844"
+            + "\nCheckDeviceFormat\t0 1 16 0 3\t0\t\td1"
+            + "\nCheckDeviceFormat\t0 1 16 200 3\t0\t\td1"
+            + "\nCheckDeviceFormat\t0 1 16 0 5\t0\t\td1";
+        d3d9::load_adapter_table(&mut e, &table);
+        assert_eq!(max_user_clip_planes(&mut e, Ptr::new(dev)), 6);
+        let out = e.mem.alloc(4);
+        let textures: Vec<u32> = (0..6)
+            .map(|_| new_texture(&mut e, dev, [4, 4, 1, 0, A8R8G8B8, 1]))
+            .collect();
+        let make = |e: &mut Engine, slot: u32, args: &[u32]| {
+            let args: Vec<u32> = args.iter().copied().chain([out, 0]).collect();
+            assert_eq!(e.vcall(dev, 4 * slot, &args).u32(), D3D_OK);
+            e.mem.u32(out)
+        };
+        let vertex: Vec<u32> = (0..4)
+            .map(|_| make(&mut e, 26, &[64, 0, 0x142, 1]))
+            .collect();
+        let index: Vec<u32> = (0..2).map(|_| make(&mut e, 27, &[12, 0, 101, 1])).collect();
+        let function = e.mem.alloc(16);
+        let mut shaders = Vec::new();
+        for (pixel, version, slot) in [
+            (false, 0xfffe_0300u32, 91),
+            (false, 0xfffe_0300, 91),
+            (true, 0xffff_0300, 106),
+            (true, 0xffff_0300, 106),
+        ] {
+            for (i, token) in [version, 0x1234 + shaders.len() as u32, 0x0000_ffff]
+                .iter()
+                .enumerate()
+            {
+                e.mem.set_u32(function + 4 * i as u32, *token);
+            }
+            assert_eq!(e.vcall(dev, 4 * slot, &[function, out]).u32(), D3D_OK);
+            shaders.push((pixel, e.mem.u32(out)));
+        }
+        let elements = e.mem.alloc(16);
+        e.mem.set_u16(elements + 8, 0xff);
+        e.mem.set_u8(elements + 12, 17);
+        let declarations: Vec<u32> = (0..2).map(|_| make(&mut e, 86, &[elements])).collect();
+        let scratch = e.mem.alloc(0x200);
+        let log = BulkLog::default();
+        super::super::d3d9real::test_stream(
+            &mut e,
+            dev,
+            d3d9_stream::Stream::direct(Box::new(Log(log.clone()))),
+        );
+        one_pass_for_tests(&mut e, one_pass);
+        let mut world = BulkWorld {
+            e,
+            dev,
+            textures,
+            vertex,
+            index,
+            shaders,
+            declarations,
+            scratch,
+            log,
+        };
+        for o in world.objects() {
+            super::super::d3d9real::test_forwarded(&mut world.e, o);
+        }
+        world
+    }
+
+    /// Everything the model holds for `dev` that a state set changes, in a fixed order: the state
+    /// tables, the textures (each one's counts, each sampler's), the clip planes, the material, the
+    /// lights and which are on, and the bindings and objects of `super::d3d9resource`.
+    fn bulk_model(e: &mut Engine, dev: u32) -> Vec<u32> {
+        let mut out: Vec<u32> = state_tables(e, dev)
+            .into_iter()
+            .flat_map(|v| v.map_or([0, 0], |v| [1, v]))
+            .collect();
+        out.extend(textures_held(e, dev));
+        let d = device!(e)
+            .device_objects
+            .devices
+            .get(&dev)
+            .expect("the device");
+        let mut planes: Vec<_> = d.clip_planes.iter().map(|(i, p)| (*i, *p)).collect();
+        planes.sort_unstable();
+        for (i, p) in planes {
+            out.push(i);
+            out.extend(p);
+        }
+        out.push(u32::MAX);
+        match d.material {
+            Some(m) => {
+                out.push(1);
+                out.extend(m);
+            }
+            None => out.push(0),
+        }
+        let mut lights: Vec<_> = d.lights.iter().map(|(i, l)| (*i, *l)).collect();
+        lights.sort_unstable();
+        for (i, l) in lights {
+            out.push(i);
+            out.extend(l);
+        }
+        out.push(u32::MAX);
+        out.extend(d.enabled_lights.iter().copied());
+        out.push(u32::MAX);
+        out.extend(super::super::d3d9resource::model_for_tests(e, dev));
+        out
+    }
+
+    /// `set` made through the device's vtable, as the game makes it (its structure at the world's
+    /// scratch): the answer.
+    fn bulk_per_call(w: &mut BulkWorld, set: &BulkSet) -> u32 {
+        use d3d9_stream::Cmd;
+        let (cmd, payload) = set;
+        let (e, dev, at) = (&mut w.e, w.dev, w.scratch);
+        e.mem.write(at, payload);
+        let (slot, args): (u32, Vec<u32>) = match *cmd {
+            Cmd::SetRenderState { state, value, .. } => (57, vec![state, value]),
+            Cmd::SetTextureStageState {
+                stage, kind, value, ..
+            } => (67, vec![stage, kind, value]),
+            Cmd::SetSamplerState {
+                sampler,
+                kind,
+                value,
+                ..
+            } => (69, vec![sampler, kind, value]),
+            Cmd::SetTexture {
+                sampler, texture, ..
+            } => (65, vec![sampler, texture]),
+            Cmd::SetVertexDeclaration { declaration, .. } => (87, vec![declaration]),
+            Cmd::SetFvf { fvf, .. } => (89, vec![fvf]),
+            Cmd::SetShader { pixel, shader, .. } => (if pixel { 107 } else { 92 }, vec![shader]),
+            Cmd::SetStreamSource {
+                stream,
+                buffer,
+                offset,
+                stride,
+                ..
+            } => (100, vec![stream, buffer, offset, stride]),
+            Cmd::SetIndices { buffer, .. } => (104, vec![buffer]),
+            Cmd::SetConstants {
+                kind, start, count, ..
+            } => {
+                let slot = [94, 96, 98, 109, 111, 113][usize::from(kind)];
+                (slot, vec![start, at, count])
+            }
+            Cmd::SetClipPlane { index, plane, .. } => {
+                for (i, word) in plane.iter().enumerate() {
+                    e.mem.set_u32(at + 4 * i as u32, *word);
+                }
+                (55, vec![index, at])
+            }
+            Cmd::SetMaterial { .. } => (49, vec![at]),
+            Cmd::SetLight { index, .. } => (51, vec![index, at]),
+            Cmd::LightEnable { index, enable, .. } => (53, vec![index, enable]),
+            other => panic!("no state set: {}", other.name()),
+        };
+        e.vcall(dev, 4 * slot, &args).u32()
+    }
+
+    /// `sets` through [`bulk_update`].
+    fn bulk_sets(w: &mut BulkWorld, sets: &[BulkSet]) -> Result<(), Refused> {
+        let cmds = sets
+            .iter()
+            .map(|(c, p)| c.map(|()| d3d9_stream::Data::Bytes(p)));
+        bulk_update(&mut w.e, w.dev, cmds)
+    }
+
+    /// `n` generated state sets (`next` the generator) for `dev` over the objects of `w` the program
+    /// still holds (`held`): every kind of setter's, few values (so that many sets repeat), objects
+    /// and none, the same object again with another offset, constant registers of every kind.
+    fn bulk_list(
+        w: &BulkWorld,
+        held: &[u32],
+        next: &mut impl FnMut(u32) -> u32,
+        n: u32,
+    ) -> Vec<BulkSet> {
+        use d3d9_stream::Cmd;
+        const SAMPLERS: [u32; 6] = [0, 1, 7, 15, 256, 260];
+        const VALUES: [u32; 4] = [0, 1, 2, 0x3f80_0000];
+        let device = w.dev;
+        let pick = |from: &[u32], next: &mut dyn FnMut(u32) -> u32| -> u32 {
+            let live: Vec<u32> = from.iter().copied().filter(|o| held.contains(o)).collect();
+            if live.is_empty() || next(5) == 0 {
+                0
+            } else {
+                live[next(live.len() as u32) as usize]
+            }
+        };
+        let words = |count: u32, next: &mut dyn FnMut(u32) -> u32| -> Vec<u8> {
+            (0..count)
+                .flat_map(|_| VALUES[next(4) as usize].to_le_bytes())
+                .collect()
+        };
+        (0..n)
+            .map(|_| -> BulkSet {
+                let value = VALUES[next(4) as usize];
+                match next(14) {
+                    0 => (
+                        Cmd::SetRenderState {
+                            device,
+                            state: next(210),
+                            value,
+                        },
+                        vec![],
+                    ),
+                    1 => (
+                        Cmd::SetTextureStageState {
+                            device,
+                            stage: next(8),
+                            kind: 1 + next(32),
+                            value,
+                        },
+                        vec![],
+                    ),
+                    2 => (
+                        Cmd::SetSamplerState {
+                            device,
+                            sampler: SAMPLERS[next(6) as usize],
+                            kind: 1 + next(13),
+                            value,
+                        },
+                        vec![],
+                    ),
+                    3 => {
+                        let sampler = SAMPLERS[next(6) as usize];
+                        let texture = pick(&w.textures, &mut *next);
+                        (
+                            Cmd::SetTexture {
+                                device,
+                                sampler,
+                                texture,
+                            },
+                            vec![],
+                        )
+                    }
+                    4 => {
+                        let declaration = pick(&w.declarations, &mut *next);
+                        (
+                            Cmd::SetVertexDeclaration {
+                                device,
+                                declaration,
+                            },
+                            vec![],
+                        )
+                    }
+                    5 => (
+                        Cmd::SetFvf {
+                            device,
+                            fvf: [0, 0x142, 0x112][next(3) as usize],
+                        },
+                        vec![],
+                    ),
+                    6 => {
+                        let pixel = next(2) == 0;
+                        let of: Vec<u32> = w
+                            .shaders
+                            .iter()
+                            .filter(|s| s.0 == pixel)
+                            .map(|s| s.1)
+                            .collect();
+                        let shader = pick(&of, &mut *next);
+                        (
+                            Cmd::SetShader {
+                                device,
+                                pixel,
+                                shader,
+                            },
+                            vec![],
+                        )
+                    }
+                    7 => {
+                        let stream = [0, 1, 15][next(3) as usize];
+                        let buffer = pick(&w.vertex, &mut *next);
+                        let (offset, stride) = (16 * next(3), [16, 32][next(2) as usize]);
+                        (
+                            Cmd::SetStreamSource {
+                                device,
+                                stream,
+                                buffer,
+                                offset,
+                                stride,
+                            },
+                            vec![],
+                        )
+                    }
+                    8 => (
+                        Cmd::SetIndices {
+                            device,
+                            buffer: pick(&w.index, &mut *next),
+                        },
+                        vec![],
+                    ),
+                    9 => {
+                        let kind = next(6) as u8;
+                        let registers = match kind {
+                            0 => 256,
+                            3 => 224,
+                            _ => 16,
+                        };
+                        let start = next(registers);
+                        let count = 1 + next((registers - start).min(8));
+                        let per = if kind % 3 == 2 { 1 } else { 4 };
+                        let data = words(per * count, &mut *next);
+                        (
+                            Cmd::SetConstants {
+                                device,
+                                kind,
+                                start,
+                                count,
+                                data: (),
+                            },
+                            data,
+                        )
+                    }
+                    10 => {
+                        let plane = [value, VALUES[next(4) as usize], 0, 1];
+                        (
+                            Cmd::SetClipPlane {
+                                device,
+                                index: next(6),
+                                plane,
+                            },
+                            vec![],
+                        )
+                    }
+                    11 => (
+                        Cmd::SetMaterial {
+                            device,
+                            material: (),
+                        },
+                        words(17, &mut *next),
+                    ),
+                    12 => (
+                        Cmd::SetLight {
+                            device,
+                            index: next(10),
+                            light: (),
+                        },
+                        words(26, &mut *next),
+                    ),
+                    _ => (
+                        Cmd::LightEnable {
+                            device,
+                            index: next(10),
+                            enable: next(3),
+                        },
+                        vec![],
+                    ),
+                }
+            })
+            .collect()
+    }
+
+    /// The bulk update against the per-call path over generated lists (several seeds, the per-call
+    /// sets in one pass and as two steps): after each list both engines' models hold the same (every
+    /// state, texture, binding, register and count); the bulk update sends no state set, and what it
+    /// does send (the ends of objects let go of: the program releases some between lists, so later
+    /// lists end them) is what the per-call path sends besides its sets, in the same order.
+    #[test]
+    fn a_bulk_update_leaves_the_model_as_the_per_call_path_does() {
+        for seed in [1u64, 0x9e37_79b9_7f4a_7c15, 0x00c0_ffee, 77] {
+            for one_pass in [true, false] {
+                let mut calls = bulk_world(one_pass);
+                let mut bulk = bulk_world(true);
+                assert_eq!(calls.objects(), bulk.objects(), "the same objects");
+                let mut state = seed | 1;
+                let mut next = move |n: u32| -> u32 {
+                    state ^= state >> 12;
+                    state ^= state << 25;
+                    state ^= state >> 27;
+                    ((state.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 32) % u64::from(n.max(1))) as u32
+                };
+                let mut held = calls.objects();
+                let (mut ended, mut sets) = (0, 0);
+                for round in 0..60 {
+                    let n = 1 + next(40);
+                    let list = bulk_list(&calls, &held, &mut next, n);
+                    for set in &list {
+                        assert_eq!(bulk_per_call(&mut calls, set), D3D_OK, "{set:?}");
+                    }
+                    assert_eq!(bulk_sets(&mut bulk, &list), Ok(()), "round {round}");
+                    sets += list.len();
+                    let at = format!("seed {seed:#x}, one pass {one_pass}, round {round}");
+                    assert!(
+                        bulk_model(&mut calls.e, calls.dev) == bulk_model(&mut bulk.e, bulk.dev),
+                        "the models differ ({at})"
+                    );
+                    let others = |log: &BulkLog| -> Vec<Vec<u8>> {
+                        let mut log = log.lock().unwrap();
+                        let others = log.iter().filter(|c| !c.0).map(|c| c.1.clone()).collect();
+                        log.clear();
+                        others
+                    };
+                    let sent = bulk.log.lock().unwrap().iter().filter(|c| c.0).count();
+                    assert_eq!(sent, 0, "a state set sent by the bulk update ({at})");
+                    let (a, b) = (others(&calls.log), others(&bulk.log));
+                    assert_eq!(a, b, "what goes besides the sets ({at})");
+                    ended += b.len();
+                    // The program lets go of an object now and then (alike on both engines).
+                    if next(3) == 0 && !held.is_empty() {
+                        let o = held.remove(next(held.len() as u32) as usize);
+                        for w in [&mut calls, &mut bulk] {
+                            assert_eq!(w.e.vcall(o, 8, &[]).u32(), 0);
+                        }
+                        let (a, b) = (others(&calls.log), others(&bulk.log));
+                        assert_eq!(a, b, "a release's end ({at})");
+                    }
+                }
+                // The run reached what it is for: many sets, objects ended by a later list's sets.
+                assert!(sets > 600, "{sets}");
+                assert!(
+                    ended > 0,
+                    "no object ended by a bulk update (seed {seed:#x})"
+                );
+            }
+        }
+    }
+
+    /// A list the per-call path would refuse anywhere (or stop at) is not taken at all: the model as
+    /// it was and nothing sent; nor is one while a drawing cut is open, or for no device of the layer.
+    #[test]
+    fn a_bulk_update_takes_all_of_a_list_or_none() {
+        use d3d9_stream::Cmd;
+        let mut w = bulk_world(true);
+        let dev = w.dev;
+        let good: Vec<BulkSet> = vec![
+            (
+                Cmd::SetRenderState {
+                    device: dev,
+                    state: 7,
+                    value: 1,
+                },
+                vec![],
+            ),
+            (
+                Cmd::SetTexture {
+                    device: dev,
+                    sampler: 0,
+                    texture: w.textures[0],
+                },
+                vec![],
+            ),
+            (
+                Cmd::SetStreamSource {
+                    device: dev,
+                    stream: 0,
+                    buffer: w.vertex[0],
+                    offset: 0,
+                    stride: 16,
+                },
+                vec![],
+            ),
+        ];
+        let (vb, texture, shader) = (w.vertex[1], w.textures[1], w.shaders[0].1);
+        let bad: Vec<BulkSet> = vec![
+            (
+                Cmd::SetRenderState {
+                    device: dev,
+                    state: 256,
+                    value: 1,
+                },
+                vec![],
+            ),
+            (
+                Cmd::SetRenderState {
+                    device: dev + 4,
+                    state: 7,
+                    value: 1,
+                },
+                vec![],
+            ),
+            (
+                Cmd::SetTextureStageState {
+                    device: dev,
+                    stage: 8,
+                    kind: 1,
+                    value: 0,
+                },
+                vec![],
+            ),
+            (
+                Cmd::SetTextureStageState {
+                    device: dev,
+                    stage: 0,
+                    kind: 33,
+                    value: 0,
+                },
+                vec![],
+            ),
+            (
+                Cmd::SetSamplerState {
+                    device: dev,
+                    sampler: 16,
+                    kind: 1,
+                    value: 0,
+                },
+                vec![],
+            ),
+            (
+                Cmd::SetSamplerState {
+                    device: dev,
+                    sampler: 0,
+                    kind: 14,
+                    value: 0,
+                },
+                vec![],
+            ),
+            (
+                Cmd::SetTexture {
+                    device: dev,
+                    sampler: 0,
+                    texture: vb,
+                },
+                vec![],
+            ),
+            (
+                Cmd::SetTexture {
+                    device: dev,
+                    sampler: 261,
+                    texture,
+                },
+                vec![],
+            ),
+            (
+                Cmd::SetShader {
+                    device: dev,
+                    pixel: true,
+                    shader,
+                },
+                vec![],
+            ),
+            (
+                Cmd::SetVertexDeclaration {
+                    device: dev,
+                    declaration: shader,
+                },
+                vec![],
+            ),
+            (
+                Cmd::SetStreamSource {
+                    device: dev,
+                    stream: 16,
+                    buffer: vb,
+                    offset: 0,
+                    stride: 16,
+                },
+                vec![],
+            ),
+            (
+                Cmd::SetIndices {
+                    device: dev,
+                    buffer: vb,
+                },
+                vec![],
+            ),
+            (
+                Cmd::SetConstants {
+                    device: dev,
+                    kind: 3,
+                    start: 223,
+                    count: 2,
+                    data: (),
+                },
+                vec![0; 32],
+            ),
+            (
+                Cmd::SetConstants {
+                    device: dev,
+                    kind: 0,
+                    start: 0,
+                    count: 2,
+                    data: (),
+                },
+                vec![0; 16],
+            ),
+            (
+                Cmd::SetConstants {
+                    device: dev,
+                    kind: 6,
+                    start: 0,
+                    count: 1,
+                    data: (),
+                },
+                vec![0; 16],
+            ),
+            (
+                Cmd::SetClipPlane {
+                    device: dev,
+                    index: 6,
+                    plane: [0; 4],
+                },
+                vec![],
+            ),
+            (
+                Cmd::SetMaterial {
+                    device: dev,
+                    material: (),
+                },
+                vec![0; 64],
+            ),
+            (
+                Cmd::SetLight {
+                    device: dev,
+                    index: 0,
+                    light: (),
+                },
+                vec![0; 100],
+            ),
+            (
+                Cmd::DrawPrimitive {
+                    device: dev,
+                    kind: 4,
+                    start: 0,
+                    count: 2,
+                },
+                vec![],
+            ),
+            (
+                Cmd::SetTransform {
+                    device: dev,
+                    state: 256,
+                    matrix: (),
+                },
+                vec![0; 64],
+            ),
+        ];
+        let before = bulk_model(&mut w.e, dev);
+        for (i, set) in bad.iter().enumerate() {
+            let mut list = good.clone();
+            let at = i % (list.len() + 1);
+            list.insert(at, set.clone());
+            assert_eq!(
+                bulk_sets(&mut w, &list),
+                Err(Refused::Command(at)),
+                "{set:?}"
+            );
+            assert!(
+                bulk_model(&mut w.e, dev) == before,
+                "the model changed: {set:?}"
+            );
+        }
+        assert!(w.log.lock().unwrap().is_empty(), "nothing sent");
+        // A cut open: refused, nothing changed (main's state and the drawing side's copy); joined: taken.
+        assert!(super::super::d3d9draw::draw_cut(&mut w.e, dev));
+        let in_cut = bulk_model(&mut w.e, dev);
+        assert_eq!(bulk_sets(&mut w, &good), Err(Refused::Cut));
+        assert!(bulk_model(&mut w.e, dev) == in_cut);
+        super::super::d3d9draw::draw_join(&mut w.e);
+        let joined = bulk_model(&mut w.e, dev);
+        assert_eq!(bulk_sets(&mut w, &good), Ok(()));
+        assert!(bulk_model(&mut w.e, dev) != joined);
+        assert_eq!(
+            bulk_update(&mut w.e, dev + 4, std::iter::empty()),
+            Err(Refused::NoDevice)
+        );
     }
 }

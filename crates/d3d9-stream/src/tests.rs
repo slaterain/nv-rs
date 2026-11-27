@@ -3894,6 +3894,142 @@ fn kept_states_go_only_to_the_record_made_last_and_are_never_carried_out() {
     assert_eq!(b.counts().missing, 3);
 }
 
+/// A record's own set of a state its kept states hold too comes after them, so the record's value
+/// wins, as the set-up's own device call after its setter's does (review of #1220): draw for draw
+/// the plain commands' digests. A `KeepStates` for the record made before a record begun and cut
+/// is dropped (the record begun is the one made last, not the one before). More kept states than a
+/// record keeps are taken by none, and the sets that follow are carried out as ordinary ones.
+#[test]
+fn a_records_own_sets_come_after_its_kept_states_and_kept_states_follow_the_last_begun() {
+    let regs: [u32; 12] = std::array::from_fn(|i| i as u32);
+    let texture = |texture: u32| {
+        (
+            Cmd::SetTexture {
+                device: 1,
+                sampler: 0,
+                texture,
+            },
+            Vec::new(),
+        )
+    };
+    let (mut plain, plain_digests) = StateDigest::new();
+    for _ in 0..2 {
+        run_kept(&mut plain, &[texture(0x70), texture(0x72)]);
+        run_kept(&mut plain, &kept_draw(&regs));
+        run_kept(&mut plain, &[texture(0x71)]);
+    }
+    let plain_digests = plain_digests.lock().unwrap().clone();
+    let (digest, digests) = StateDigest::new();
+    let mut b = Kept::new(digest);
+    // The setter's 0x70 kept back by the cache; the set-up's own device call sets 0x72 after it.
+    run_kept(&mut b, &[texture(0x70)]);
+    b.execute(Cmd::RecordNext {
+        device: 1,
+        id: 4,
+        forget: 0,
+        check: 0,
+    });
+    run_kept(&mut b, &[texture(0x72)]);
+    run_kept(&mut b, &kept_draw(&regs));
+    b.execute(Cmd::KeepStates {
+        device: 1,
+        id: 4,
+        count: 1,
+    });
+    run_kept(&mut b, &[texture(0x70)]);
+    run_kept(&mut b, &[texture(0x71)]);
+    b.execute(Cmd::DrawPatched {
+        device: 1,
+        id: 4,
+        check: 0,
+        patches: Data::Bytes(&[]),
+    });
+    run_kept(&mut b, &[texture(0x71)]);
+    assert_eq!(b.counts().items, 1);
+    assert_eq!(
+        *digests.lock().unwrap(),
+        plain_digests,
+        "the record's own set wins"
+    );
+
+    // Record 5 begun after record 4 and cut by a Present: record 4 is no longer the one made last.
+    let log = Log::default();
+    let lines = log.lines();
+    let mut b = Kept::new(log);
+    b.execute(Cmd::RecordNext {
+        device: 1,
+        id: 4,
+        forget: 0,
+        check: 0,
+    });
+    run_kept(&mut b, &kept_draw(&regs));
+    b.execute(Cmd::RecordNext {
+        device: 1,
+        id: 5,
+        forget: 0,
+        check: 0,
+    });
+    b.execute(Cmd::Present {
+        device: 1,
+        source: None,
+        dest: None,
+        window: 0,
+        dirty: false,
+        model: 0,
+        frame: 0,
+    });
+    let cut = b.counts().cut;
+    b.execute(Cmd::KeepStates {
+        device: 1,
+        id: 4,
+        count: 1,
+    });
+    run_kept(&mut b, &[texture(0x70)]);
+    assert_eq!(b.counts().cut, cut + 1, "the states dropped");
+    let before = lines.lock().unwrap().len();
+    b.execute(Cmd::DrawPatched {
+        device: 1,
+        id: 4,
+        check: 0,
+        patches: Data::Bytes(&[]),
+    });
+    assert_eq!(
+        lines.lock().unwrap().len(),
+        before,
+        "record 4 has no states"
+    );
+    assert_eq!(b.counts().missing, 1);
+
+    // More kept states than a record keeps: none taken, the sets carried out.
+    b.execute(Cmd::RecordNext {
+        device: 1,
+        id: 6,
+        forget: 0,
+        check: 0,
+    });
+    run_kept(&mut b, &kept_draw(&regs));
+    b.execute(Cmd::KeepStates {
+        device: 1,
+        id: 6,
+        count: kept::MOST_COMMANDS as u32 + 1,
+    });
+    let before = lines.lock().unwrap().len();
+    run_kept(&mut b, &[texture(0x70), texture(0x71)]);
+    assert_eq!(lines.lock().unwrap().len(), before + 2, "carried out");
+    b.execute(Cmd::DrawPatched {
+        device: 1,
+        id: 6,
+        check: 0,
+        patches: Data::Bytes(&[]),
+    });
+    assert_eq!(
+        lines.lock().unwrap().len(),
+        before + 2,
+        "record 6 has no states"
+    );
+    assert_eq!(b.counts().missing, 2);
+}
+
 /// A patched item's patches are whole or nothing is drawn; a file's `DrawPatched` with patches not
 /// whole is refused ([`Cmd::check`]).
 #[test]

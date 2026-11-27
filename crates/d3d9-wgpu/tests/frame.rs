@@ -7390,6 +7390,9 @@ fn a_patched_item_gives_wgpu_what_its_draws_set_up_gives() {
     };
     let patched = |keep: bool| {
         kept_script(move |rec| {
+            // The mask was the set-up's already when the record was made: the cache kept its set back,
+            // so only the kept state holds it, as the stream test's cull mode (review of #1220).
+            put_colour_writes(rec, 0xf);
             d3d9_stream::wire::encode(
                 &Cmd::RecordNext {
                     device: DEVICE,
@@ -7399,7 +7402,6 @@ fn a_patched_item_gives_wgpu_what_its_draws_set_up_gives() {
                 },
                 rec,
             );
-            put_colour_writes(rec, 0xf);
             put_kept(rec, &kept_draw(96, KEPT_RED));
             if keep {
                 d3d9_stream::wire::encode(
