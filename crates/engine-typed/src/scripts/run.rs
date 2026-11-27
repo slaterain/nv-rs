@@ -362,6 +362,15 @@ pub fn runner_is_busy(e: &mut Engine, this: Ptr) -> bool {
 // Typed from 005e2730
 /// `ScriptRunManager::InitActionList`: builds the action list (by address: xNVSE wraps it) in the
 /// cached runner (made on first use), or in a temporary one while the cached one is busy.
+///
+/// **Not 1:1 off the main thread**: there the action list is always built in a temporary runner
+/// and the cached one is not touched. The cached runner is the one main runs its scripts in, and
+/// the exe's test that it is free is no claim: a loading thread loading a changed reference's
+/// saved script variables (`ScriptLocals::LoadGame`, `005a9f20`) found it free, then busy in the
+/// build's own test (`005e1160`), then read the running script's word again for the "nested call"
+/// log line after main had finished that script, and read through 0 (the speed-20000 trip,
+/// 2026-11-26). Main keeps the exe's path; a temporary runner is the exe's own path when the
+/// cached one is busy, so the action list is the same.
 pub fn manager_init_action_list(
     e: &mut Engine,
     this: Ptr,
@@ -369,6 +378,15 @@ pub fn manager_init_action_list(
     reference: Ptr,
     locals: Ptr,
 ) -> bool {
+    if !engine_core::thread_host::on_main(e) {
+        let temporary = new_runner(e);
+        e.call(
+            BUILD_ACTION_LIST,
+            &args![temporary, script, reference, locals],
+        );
+        e.call(FREE, &args![temporary]);
+        return true;
+    }
     let me = this.addr();
     if e.mem.u32(me) == 0 {
         let runner = new_runner(e);

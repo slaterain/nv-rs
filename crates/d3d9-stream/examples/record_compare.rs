@@ -1,4 +1,5 @@
-//! `cargo run --release -p d3d9-stream --example record_compare -- [--ends-deferred | --digests | --counts] A.d3d9s B.d3d9s`:
+//! `cargo run --release -p d3d9-stream --example record_compare -- [--ends-deferred | --digests | --counts] A.d3d9s B.d3d9s`
+//! (or `--items CHECK.d3d9s`: a check run's recording as its old form and as its items, draw by draw):
 //! two `NV_D3D9_RECORD` files compared command by command with object handles renamed by first use
 //! (`wire::compare_renamed`): what a run whose game heap was laid out otherwise (a typed family's
 //! objects moved out of it, ADR-0014 stage 2) is compared by, where the plain `cmp` would see every
@@ -87,6 +88,9 @@ fn main() {
     let digests = args.first().is_some_and(|a| a == "--digests");
     let counts = args.first().is_some_and(|a| a == "--counts");
     let frames = args.first().is_some_and(|a| a == "--frames");
+    if args.first().is_some_and(|a| a == "--items") {
+        items_check(&args[1..]);
+    }
     if deferred || digests || counts || frames {
         args.remove(0);
     }
@@ -215,6 +219,47 @@ fn main() {
         Err(why) => {
             eprintln!("{why}");
             std::process::exit(2);
+        }
+    }
+}
+
+/// `--items FILE`: one check run's recording (`NV_DRAW_ITEMS=check`) replayed into the state digest
+/// twice, as its old form and as its items (`d3d9_stream::Kept`): alike when every item gave the
+/// device what its draw gave it. Exits as `main` does.
+fn items_check(args: &[String]) -> ! {
+    let [path] = args else {
+        eprintln!("usage: record_compare --items CHECK.d3d9s");
+        std::process::exit(2);
+    };
+    let read = |form| {
+        let file = File::open(path).unwrap_or_else(|e| {
+            eprintln!("{path}: {e}");
+            std::process::exit(2);
+        });
+        d3d9_stream::wire::draw_digests_as(BufReader::with_capacity(1 << 20, file), form)
+            .unwrap_or_else(|why| {
+                eprintln!("{path}: {why}");
+                std::process::exit(2);
+            })
+    };
+    let old = read(d3d9_stream::kept::Form::Old);
+    let items = read(d3d9_stream::kept::Form::Items);
+    match old.iter().zip(&items).position(|(a, b)| a != b) {
+        Some(i) => {
+            println!("old form and items: DIFFER at draw {i} of {}", old.len());
+            std::process::exit(1);
+        }
+        None if old.len() != items.len() => {
+            println!(
+                "old form and items: DIFFER: {} and {} draws",
+                old.len(),
+                items.len()
+            );
+            std::process::exit(1);
+        }
+        None => {
+            println!("old form and items: alike: {} draws", old.len());
+            std::process::exit(0);
         }
     }
 }

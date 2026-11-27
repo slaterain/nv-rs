@@ -465,6 +465,11 @@ impl Backend for WgpuBackend {
                 return Reply::Query(d.query_get_data(query, flags))
             }
             Cmd::QueryIssue { query, flags } => d.query_issue(query, flags),
+            // Kept draw records: carried out by `d3d9_stream::Kept` in front of the backend, which
+            // the platform puts there whenever the game side may send them.
+            Cmd::RecordNext { .. } | Cmd::DrawItem { .. } | Cmd::ForgetRecords { .. } => {
+                d.not_provided("kept draw records without d3d9_stream::Kept (skipped)");
+            }
             Cmd::SetClipPlane { index, plane, .. } => d.set_clip_plane(index, plane),
             Cmd::ColorFill { .. } => d.not_provided("ColorFill is not provided (skipped)"),
             // The new lighting's frame parameters, recorded just before the game's depth-only
@@ -567,6 +572,20 @@ pub fn replay_merged_digests(
     replay_digests(bytes, true, true, Some((sort, across)), from, to, cache)
 }
 
+/// A check run's recording (`NV_DRAW_ITEMS=check`) replayed with its draws in `form`
+/// ([`d3d9_stream::Kept`]), draw records on: each draw's digest of what it gave wgpu with its
+/// Present, as [`replay_draw_digests`]. The proof that the items draw what their draws drew: the
+/// two forms' lists are the same. None without a GPU adapter.
+pub fn replay_item_digests(
+    bytes: &[u8],
+    form: d3d9_stream::kept::Form,
+    from: u64,
+    to: u64,
+    cache: Option<std::path::PathBuf>,
+) -> Result<Option<Vec<(u64, u64)>>, d3d9_stream::wire::WireError> {
+    Ok(replay_digests_as(bytes, true, false, None, form, from, to, cache)?.map(|(drawn, _)| drawn))
+}
+
 /// [`replay_draw_digests_with`] and [`replay_merged_digests`]: `merge` the sorting and holding
 /// across blended draws when the held draws are merged.
 #[allow(clippy::type_complexity)]
@@ -579,10 +598,27 @@ fn replay_digests(
     to: u64,
     cache: Option<std::path::PathBuf>,
 ) -> Result<Option<(Vec<(u64, u64)>, Vec<(u64, u64)>)>, d3d9_stream::wire::WireError> {
+    let form = d3d9_stream::kept::Form::Old;
+    replay_digests_as(bytes, records, storage, merge, form, from, to, cache)
+}
+
+/// [`replay_digests`] with a check run's draws in `form`.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn replay_digests_as(
+    bytes: &[u8],
+    records: bool,
+    storage: bool,
+    merge: Option<(bool, bool)>,
+    form: d3d9_stream::kept::Form,
+    from: u64,
+    to: u64,
+    cache: Option<std::path::PathBuf>,
+) -> Result<Option<(Vec<(u64, u64)>, Vec<(u64, u64)>)>, d3d9_stream::wire::WireError> {
     let mut b = WgpuBackend::new(Output::Offscreen);
     if let Some(dir) = cache {
         b = b.with_cache_dir(dir);
     }
+    let mut b = d3d9_stream::Kept::with_form(b, form);
     let mut set = false;
     let mut present = 0u64;
     let mut out = Vec::new();
@@ -591,7 +627,7 @@ fn replay_digests(
         let c = c?;
         let p = matches!(c, Cmd::Present { .. });
         b.execute(c);
-        match b.device() {
+        match b.inner_mut().device() {
             Some(d) => {
                 if !set {
                     if d.set_storage_regs(storage) != storage {

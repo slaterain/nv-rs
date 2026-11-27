@@ -128,12 +128,53 @@ pub fn set_defined_constant(
     object: u32,
     fourth: u32,
     fifth: u32,
-    _sixth: u32,
+    sixth: u32,
     properties: u32,
     effects: u32,
-    _ninth: u32,
-    _tenth: u32,
-    _eleventh: u32,
+    ninth: u32,
+    tenth: u32,
+    eleventh: u32,
+) -> u32 {
+    if super::keep::building() {
+        let words = [
+            this.addr(),
+            program,
+            entry,
+            object,
+            fourth,
+            fifth,
+            sixth,
+            properties,
+            effects,
+            ninth,
+            tenth,
+            eleventh,
+        ];
+        let mut answer = 0;
+        super::keep::leaf(e, super::keep::Leaf::Defined(words), |e| {
+            answer = defined_constant_now(
+                e, this, program, entry, object, fourth, fifth, properties, effects,
+            );
+        });
+        return answer;
+    }
+    defined_constant_now(
+        e, this, program, entry, object, fourth, fifth, properties, effects,
+    )
+}
+
+/// [`set_defined_constant`]'s work (a kept draw record makes the call again with the frame's matrices).
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn defined_constant_now(
+    e: &mut Engine,
+    this: Ptr,
+    program: u32,
+    entry: u32,
+    object: u32,
+    fourth: u32,
+    fifth: u32,
+    properties: u32,
+    effects: u32,
 ) -> u32 {
     let base = this.addr();
     let id = e.global::<u32>(entry.wrapping_add(0x10));

@@ -79,6 +79,7 @@ pub mod defined;
 pub mod detach;
 pub mod drivers;
 pub mod group_c;
+pub mod keep;
 pub mod layout;
 pub mod lighting30;
 pub mod lights;

@@ -189,10 +189,10 @@ pub fn run_lines(
         }
         let running = e.mem.u32(me + RUNNING);
         if running != 0 {
-            // 005e0dd1: JIP LN NVSE's G24 jumps over the two names and the log.
+            // 005e0dd1: JIP LN NVSE's G24 jumps over the two names and the log. The running
+            // script's word is read once, as in `build_action_list`.
             if !jip_skips_nested_log(e) {
                 let requested_name = name_of(e, script.addr());
-                let running = e.mem.u32(me + RUNNING);
                 let running_name = name_of(e, running);
                 e.call(
                     SCRIPT_LOG,
@@ -357,9 +357,12 @@ pub fn build_action_list(
     if script.is_null() || !e.call(FORM_FLAG_BIT_3, &args![script]).bool() {
         return false;
     }
-    if e.mem.u32(me + RUNNING) != 0 {
+    // The running script's word is read once: the exe reads it again for the log line's name, and
+    // a script another thread finished meanwhile left 0 there to read through (see
+    // `scripts::run::manager_init_action_list`).
+    let running = e.mem.u32(me + RUNNING);
+    if running != 0 {
         let requested_name = name_of(e, script.addr());
-        let running = e.mem.u32(me + RUNNING);
         let running_name = name_of(e, running);
         e.call(
             SCRIPT_LOG,

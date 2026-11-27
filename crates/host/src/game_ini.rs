@@ -89,6 +89,8 @@ pub struct Keys {
     pub sun_light_from_sky: Option<bool>,
     /// `bSunShadowsCharacters`: with the sun shadows, characters cast (one shadow each).
     pub sun_shadow_characters: Option<bool>,
+    /// `sDrawItems`: the world's still lit objects drawn from kept records (`engine_core::draw_items`).
+    pub draw_items: Option<engine_core::draw_items::Mode>,
     pub stepped_threads: Option<bool>,
     pub render_thread: Option<bool>,
     /// `bNotBackground`: Windows told the game is not background work (`qos`).
@@ -132,6 +134,10 @@ impl Keys {
                 "iMenuFrameLimit" => {
                     keys.menu_frame_limit = raw.parse().ok();
                     keys.menu_frame_limit.is_some()
+                }
+                "sDrawItems" => {
+                    keys.draw_items = items(raw);
+                    keys.draw_items.is_some()
                 }
                 "bShowFrameRate" => {
                     keys.show_frame_rate = flag(raw);
@@ -200,6 +206,11 @@ impl Keys {
 }
 
 /// `1` or `0`.
+/// `sDrawItems`'s words: `0`, `1` and `check` (anything else can't be used).
+fn items(raw: &str) -> Option<engine_core::draw_items::Mode> {
+    matches!(raw, "0" | "1" | "check").then(|| engine_core::draw_items::parse(Some(raw)))
+}
+
 fn flag(raw: &str) -> Option<bool> {
     match raw {
         "1" => Some(true),
@@ -344,6 +355,7 @@ mod tests {
                 "bSunShadows",
                 "bSunLightFromSky",
                 "bSunShadowsCharacters",
+                "sDrawItems",
                 "bSteppedThreads",
                 "bRenderThread",
                 "bNotBackground"
@@ -383,6 +395,7 @@ mod tests {
             Some(crate::fixes::PLAY_AMBIENT_OCCLUSION_STRENGTH)
         );
         assert_eq!(keys.sun_shadows, Some(crate::fixes::PLAY_SUN_SHADOWS));
+        assert_eq!(keys.draw_items, Some(crate::fixes::PLAY_DRAW_ITEMS));
         assert_eq!(
             keys.sun_light_from_sky,
             Some(crate::fixes::PLAY_SUN_LIGHT_FROM_SKY)

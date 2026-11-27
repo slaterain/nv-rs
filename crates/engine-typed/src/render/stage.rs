@@ -75,6 +75,22 @@ fn low8(word: u32) -> u8 {
 /// stage's states (`00e89410`); a non-zero answer returns false, else the stage is applied
 /// ([`apply`]) and true is returned.
 pub fn bind(e: &mut Engine, this: Ptr<TextureStage>, force: u8) -> bool {
+    if crate::draw::keep::building() {
+        let call = crate::draw::keep::Leaf::StageBind {
+            this: this.addr(),
+            force,
+        };
+        let mut bound = false;
+        crate::draw::keep::leaf(e, call, |e| bound = bind_now(e, this, force));
+        return bound;
+    }
+    bind_now(e, this, force)
+}
+
+/// [`bind`]'s work (a kept draw record makes the call again: the texture last bound to the stage and the texture's
+/// device object are those of the moment, not of the build).
+#[inline(always)]
+fn bind_now(e: &mut Engine, this: Ptr<TextureStage>, force: u8) -> bool {
     let stage = e.get(this, TextureStage::m_uiStage);
     let texture = e.get(this, TextureStage::m_pkTexture);
     let shadow = SHADOWED_TEXTURES.wrapping_add(stage.wrapping_mul(4));

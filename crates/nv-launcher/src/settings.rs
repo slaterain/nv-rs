@@ -107,10 +107,12 @@ pub enum List {
 /// `backend_of`, and it is a Windows API).
 const WINDOWS_ONLY: [&str; 2] = ["bNotBackground", "bShaderWarm"];
 
-/// Keys whose rows are not shown: they do nothing in a play run. The world drawn on a second
-/// thread: the host refuses it in every play run (`host::draw_thread::refusal` lets it in only with
-/// its own check variable, which a play run never has).
-const HIDDEN: [&str; 1] = ["bWorldDrawThread"];
+/// Keys whose rows are not shown: they do nothing in a play run, or are the engineers' until their
+/// checks pass. The world drawn on a second thread: the host refuses it in every play run
+/// (`host::draw_thread::refusal` lets it in only with its own check variable, which a play run never
+/// has). The world's still lit objects drawn from kept records (`sDrawItems`): off until its picture
+/// proof and speed check pass.
+const HIDDEN: [&str; 2] = ["bWorldDrawThread", "sDrawItems"];
 
 impl List {
     /// Its rows on this system.
@@ -182,7 +184,7 @@ impl List {
 /// notes are for readers of Fallout.ini): the key, the name ([`LABEL_MAX`] with any
 /// [`EXPERIMENTAL`] mark), the text ([`ABOUT_MAX`]). No key names, values or engine words; a
 /// row with none here gets [`plain_of`] its note.
-const PLAIN: [(&str, &str, &str); 43] = [
+const PLAIN: [(&str, &str, &str); 44] = [
     ("bAmbientOcclusion", "Ambient occlusion", "A soft shade in corners, creases and where things meet the ground. Costs a little speed."),
     ("fAmbientOcclusionStrength", "Ambient occlusion strength", "How strong the ambient occlusion's shade is, from 0.1 (faint) to 1.0 (all of it)."),
     ("bSunShadows", "Sun shadows", "Objects cast shadows on the ground and on each other from the sun, and faintly from the moon at night, out to about 140 m. Costs about 1 ms a frame."),
@@ -203,6 +205,7 @@ const PLAIN: [(&str, &str, &str); 43] = [
     ("bDeadLightGuard", "Destroyed light crash fix", "A light destroyed while something still used it no longer stops the game (seen in fights with JIP's projectile lights)."),
     ("bThreadHeap", "Faster memory handling", "The game gets memory for its objects and texts faster: the pause menu opens sooner with mods and fights stutter less."),
     ("bHalfLoadedMove", "Fast running crash fix", "Running fast across areas no longer crashes the game when a character there changes how the game runs it while it is still loading."),
+    ("bPlayerHighProcess", "Very fast movement crash fix", "Moving very fast across areas no longer crashes the game when you reach an area that is still being set up."),
     ("bTextureReadFirst", "Textures read ahead of drawing", "Texture files are read and unpacked first, so drawing does not wait for them."),
     ("bCellEntryWait", "No pause entering new areas", "Entering a new outdoor area no longer pauses for the areas loaded ahead; they load in the background afterwards."),
     ("bCellOffsets", "Faster area loads with mods", "Areas from mods (and from YUP or TTW) are found through a table made as the game loads, not by searching the file each time."),
