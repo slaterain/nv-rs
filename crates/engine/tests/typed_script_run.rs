@@ -372,6 +372,7 @@ fn scripts_init_action_list_off_main_uses_its_own_runner() {
     const BUILT_IN: u32 = SEEN;
     const BUSY_AT_BUILD: u32 = SEEN + 4;
     const FREED: u32 = SEEN + 8;
+    const PASSED: u32 = SEEN + 0x20;
     let mut e = Engine::new_untyped_for_test();
     world(&mut e);
     e.register(0x0040_1000, |e, a| ret(e.mem.alloc(a[0])));
@@ -384,6 +385,9 @@ fn scripts_init_action_list_off_main_uses_its_own_runner() {
         e.mem.set_u32(BUILT_IN, a[0]);
         let busy = e.mem.u32(a[0] + 0x14);
         e.mem.set_u32(BUSY_AT_BUILD, busy);
+        for (i, word) in a[1..4].iter().enumerate() {
+            e.mem.set_u32(PASSED + 4 * i as u32, *word);
+        }
         ret(1)
     });
     let cached = e.mem.alloc(0xa4);
@@ -408,6 +412,12 @@ fn scripts_init_action_list_off_main_uses_its_own_runner() {
     assert_ne!(temporary, cached, "off main: not the cached runner");
     assert_ne!(temporary, 0);
     assert_eq!(e.mem.u32(BUSY_AT_BUILD), 0, "a fresh runner");
+    let passed: Vec<u32> = (0..3).map(|i| e.mem.u32(PASSED + 4 * i)).collect();
+    assert_eq!(
+        passed,
+        [s, 0x0072_0000, 0x0073_0000],
+        "off main: the script, the reference and its variables reach the build"
+    );
     assert_eq!(e.mem.u32(FREED), temporary, "freed after the build");
     assert_eq!(e.mem.u32(MANAGER), cached);
     for (offset, word) in [(4, 0x0077_0004), (8, 0x0077_0008), (0x14, 0)] {
