@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, navmesh, point, pov, search, task_messages};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -4364,4 +4364,96 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+#[test]
+fn message_new() {
+    Diff::new(entry!(
+        0x006e_9c00,
+        task_messages::message_new(Ptr, u32, u32) -> Ptr
+    ))
+    .common()
+    .plain(0x006e_9c00)
+    .inputs(&[Input::Word, Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x0055_9a40, |e, a| {
+            log(e, 0x0055_9a40, a[0]);
+            log(e, 0x0055_9a40 + 1, a[1]);
+            e.mem.set_u32(a[0], a[1]);
+            ret(0)
+        });
+        vec![e.mem.alloc(8), case.word(0), case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn message_copy() {
+    Diff::new(entry!(
+        0x006e_9c30,
+        task_messages::message_copy(Ptr, Ptr) -> Ptr
+    ))
+    .common()
+    .plain(0x006e_9c30)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x0055_9a40, |e, a| {
+            log(e, 0x0055_9a40, a[0]);
+            e.mem.set_u32(a[0], e.mem.u32(a[1]));
+            ret(0)
+        });
+        let source = e.mem.alloc(8);
+        e.mem.set_u32(source, case.word(0).wrapping_mul(3));
+        e.mem.set_u32(source + 4, case.word(0).wrapping_add(0x77));
+        vec![e.mem.alloc(8), source]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn debug_data_copy() {
+    Diff::new(entry!(
+        0x006e_9c60,
+        task_messages::debug_data_copy(Ptr, Ptr) -> Ptr
+    ))
+    .common()
+    .plain(0x006e_9c60)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x006e_5cc0, |e, a| {
+            log(e, 0x006e_5cc0, a[0]);
+            e.mem.set_u32(a[0], e.mem.u32(a[1]));
+            ret(0)
+        });
+        let source = e.mem.alloc(8);
+        e.mem.set_u32(source, case.word(0).wrapping_mul(5));
+        e.mem.set_u32(source + 4, case.word(0).wrapping_add(0x99));
+        vec![e.mem.alloc(8), source]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn task_data_set_cancelled() {
+    Diff::new(entry!(
+        0x006e_a330,
+        task_messages::task_data_set_cancelled(Ptr)
+    ))
+    .common()
+    .plain(0x006e_a330)
+    .inputs(&[Input::Of(&[0, 1, 0xff])])
+    .setup(|e, case| {
+        stand_ins(e);
+        let t = e.mem.alloc(8);
+        e.mem.set_u8(t + 4, case.word(0) as u8);
+        vec![t]
+    })
+    .run()
+    .assert_same();
 }
