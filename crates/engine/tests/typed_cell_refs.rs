@@ -11815,6 +11815,8 @@ fn xq_copy_byte_d_to_c() {
 const XS_VT: u32 = CONTROL + 0x5e0;
 const XS_FORMAT: u32 = CONTROL + 0x5e4;
 const XS_BYTE_READS: u32 = CONTROL + 0x5e8;
+/// A type the first byte read gives instead (0 for none): a Diff that runs one arm in every seed.
+const XS_FIRST_KIND: u32 = CONTROL + 0x5ec;
 const XS_HITS_N: u32 = CONTROL + 0x600;
 const XS_HITS: u32 = CONTROL + 0x604;
 const XS_HITS_MAX: u32 = 0x3f;
@@ -11888,7 +11890,7 @@ const XS_TURN_KINDS: &[u32] = &[
 const XS_SEEDS: &[u32] = &[
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
     26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
-    50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
+    50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71,
 ];
 
 /// The stand-in at `A` ran (the reach test reads the list).
@@ -12005,7 +12007,8 @@ fn xs_stream_write(e: &mut Engine, position: u32, at: u32, size: u32) {
     e.mem.set_u32(position, p.wrapping_add(size));
 }
 
-/// `size` bytes read to `at`: a type of the world's format for a byte (in turn), a count for two
+/// `size` bytes read to `at`: a type of the world's format for a byte (in turn from the seed's, so
+/// each type is the first read of some seed), a count for two
 /// bytes, a drawn word for four, drawn words for more.
 fn xs_stream_read(e: &mut Engine, at: u32, size: u32) {
     match size {
@@ -12018,7 +12021,9 @@ fn xs_stream_read(e: &mut Engine, at: u32, size: u32) {
                 XS_BUFFER_KINDS
             };
             let seed = e.mem.u32(XF_SEED);
-            let kind = kinds[((seed * 5 + k) % kinds.len() as u32) as usize];
+            let kind = kinds[((seed + k * 5) % kinds.len() as u32) as usize];
+            let first = e.mem.u32(XS_FIRST_KIND);
+            let kind = if k == 0 && first != 0 { first } else { kind };
             e.mem.set_u8(at, kind as u8);
         }
         2 => {
@@ -12230,8 +12235,9 @@ fn xs_stand_ins(e: &mut Engine) {
         0x0083_fbe0, 0x0043_aa40, 0x0043_aaa0, 0x0083_5fe0, 0x0040_37d0, 0x0043_8260, 0x0043_8280,
         0x0047_7ce0, 0x0042_e680, 0x0084_aa30, 0x008b_6820, 0x008b_6ae0, 0x008a_dc50, 0x0057_5690,
         0x004d_1440, 0x004d_1610, 0x004d_1960, 0x0067_77b0, 0x009e_b9c0, 0x0093_6a20, 0x0047_e340,
+        0x0047_cdb0,
     );
-    with!(xs_coin: 0x0042_5fd0, 0x0056_53d0, 0x0043_0660, 0x0047_cdb0);
+    with!(xs_coin: 0x0042_5fd0, 0x0056_53d0, 0x0043_0660);
     with!(xs_pick: 0x0085_a240, 0x0047_7bc0, 0x0097_24e0, 0x0066_e330, 0x004b_f220, 0x0042_e250);
     with!(xs_object: 0x008c_6ca0, 0x0067_0b90, 0x0047_d130);
     with!(xs_built: 0x0043_a160, 0x0083_da50, 0x0043_7c10, 0x0060_1170, 0x005f_7230);
@@ -12280,6 +12286,14 @@ fn xs_world(e: &mut Engine, seed: u32, buffered: bool) -> [u32; 3] {
     }
     e.mem.set_u32(XS_VT, vt);
     e.mem.set_u32(0, vt);
+    // The extra data built from here on (the chain, the constructors' stand-ins) take it too, the
+    // world chain's payload page holds it, and `operator new` never fails here (a failed lock's
+    // allocation would read the stream into address 0, as the exe would).
+    e.mem.set_u32(XD_VT, vt);
+    for offset in (0..0x1000).step_by(4) {
+        e.mem.set_u32(0x1000 + offset, vt);
+    }
+    e.mem.set_u32(XD_NEW_FAILS, 0);
     // Each pool block an object; no small ids (page 0 holds no objects).
     for &block in &pool {
         for offset in (4..0x100).step_by(4) {
@@ -12323,6 +12337,12 @@ fn xs_world(e: &mut Engine, seed: u32, buffered: bool) -> [u32; 3] {
     }
     // The thread cache's decoy's payload (`xd_world`) is an object too.
     e.mem.set_u32(0xeec0, vt);
+    // ... and its payload none, so a list and an object reached through it are not the same block.
+    let tls = e.tls();
+    let decoy = e.mem.u32(tls + 0x10);
+    for offset in [0xc, 0x10, 0x14] {
+        e.mem.set_u32(decoy + offset, 0);
+    }
     e.map(0x0101_5000, 0x1000);
     for offset in (0..0x1000).step_by(4) {
         e.mem.set_u32(0x0101_5000 + offset, EXTRA_VT_FN);
@@ -12363,6 +12383,10 @@ fn xs_world(e: &mut Engine, seed: u32, buffered: bool) -> [u32; 3] {
         let object = pick(&mut d);
         e.mem.set_u32(buffer + offset, object);
     }
+    // No owner in a third of the seeds.
+    if seed % 3 == 0 {
+        e.mem.set_u32(buffer + 0x4c, 0);
+    }
     let buffer_stream = e.mem.alloc(0x1000);
     e.mem.set_u32(buffer + 0x50, buffer_stream);
     e.mem.set_u32(buffer + 0x54, buffer_stream + 0x1000);
@@ -12374,7 +12398,15 @@ fn xs_world(e: &mut Engine, seed: u32, buffered: bool) -> [u32; 3] {
         let kind = kinds[((seed * 4 + j) % count) as usize];
         xf_chain(e, &w, &pool, &mut d, &[kind], 1);
     }
+    if !buffered {
+        // A persistent cell in every old-format list, which its loader takes the reference out of.
+        xf_chain(e, &w, &pool, &mut d, &[0x0c], 1);
+    }
     if buffered {
+        // The marked-only arms' types and the package in every buffered list.
+        for kind in [0x2c, 0x54, 0x19] {
+            xf_chain(e, &w, &pool, &mut d, &[kind], 1);
+        }
         let turns = XS_TURN_KINDS.len() as u32;
         for j in 0..4 {
             let kind = XS_TURN_KINDS[((seed * 4 + j) % turns) as usize];
@@ -12513,6 +12545,7 @@ fn xs_load_game() {
 /// (list, buffer) over the buffered format's world.
 fn xs_buffer_case(diff: Diff) -> Diff {
     diff.xs_case()
+        .max_cases(XS_SEEDS.len())
         .inputs(&[Input::Of(XS_SEEDS)])
         .setup(|e, case| {
             let [list, _, buffer] = xs_world(e, case.word(0), true);
@@ -12591,11 +12624,12 @@ fn the_save_and_load_worlds_reach_every_branch() {
     let mut lines = std::collections::BTreeSet::<u32>::new();
     let mut missing: Vec<String> = Vec::new();
     // Each run as its translation: a stop is a world the Diffs could not use, listed too.
-    let mut run = |seed: u32, function: u32, flags: u32| {
+    let mut run = |seed: u32, function: u32, flags: u32, first_kind: u32| {
         let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut e = Engine::new_untyped_for_test();
             let buffered = function >= 0x0042_6a30;
             let [list, first, buffer] = xs_world(&mut e, seed, buffered);
+            e.mem.set_u32(XS_FIRST_KIND, first_kind);
             match function {
                 0x0042_4960 => e.call(function, &args![list, flags, 0u32, first]),
                 0x0042_2c40 | 0x0042_35e0 => e.call(function, &args![list, flags, first]),
@@ -12615,7 +12649,7 @@ fn the_save_and_load_worlds_reach_every_branch() {
     for &seed in XS_SEEDS {
         for function in [0x0042_2c40u32, 0x0042_35e0, 0x0042_4960] {
             for flags in [0u32, 0x1002_1010] {
-                run(seed, function, flags);
+                run(seed, function, flags, 0);
             }
         }
         for function in [
@@ -12625,8 +12659,10 @@ fn the_save_and_load_worlds_reach_every_branch() {
             0x0042_d9e0,
             0x0042_dae0,
         ] {
-            run(seed, function, 0);
+            run(seed, function, 0, 0);
         }
+        run(seed, 0x0042_4960, 0, 0x0c);
+        run(seed, 0x0042_8150, 0, 0x2e);
     }
     missing.extend(
         [
@@ -12743,4 +12779,42 @@ fn the_save_and_load_worlds_reach_every_branch() {
         }
     }
     assert!(missing.is_empty(), "no world reaches {missing:?}");
+}
+
+/// The old format's loader with the persistent cell as the first type read in every seed.
+#[test]
+fn xs_load_game_persistent_cell() {
+    Diff::new(entry!(
+        0x0042_4960,
+        extra_data::save_game::load_game(u32, u32, u32, u32)
+    ))
+    .xs_case()
+    .max_cases(XS_SEEDS.len())
+    .inputs(&[Input::Of(XS_SEEDS)])
+    .setup(|e, case| {
+        let [list, reference, _] = xs_world(e, case.word(0), false);
+        e.mem.set_u32(XS_FIRST_KIND, 0x0c);
+        vec![list, 0, 0x5a5a_5a5a, reference]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The buffered loader with the leveled creature as the first type read in every seed.
+#[test]
+fn xs_load_game_buffered_leveled_creature() {
+    Diff::new(entry!(
+        0x0042_8150,
+        extra_data::buffered::load_game_buffered(u32, u32)
+    ))
+    .xs_case()
+    .max_cases(XS_SEEDS.len())
+    .inputs(&[Input::Of(XS_SEEDS)])
+    .setup(|e, case| {
+        let [list, _, buffer] = xs_world(e, case.word(0), true);
+        e.mem.set_u32(XS_FIRST_KIND, 0x2e);
+        vec![list, buffer]
+    })
+    .run()
+    .assert_same();
 }
