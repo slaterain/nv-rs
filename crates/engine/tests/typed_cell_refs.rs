@@ -4015,11 +4015,10 @@ use engine_typed::extra_data::{self, EXTRA_DATA};
 /// range's: a simple list's emptiness and its test for an item, a form's type, a reference's extra
 /// list, the store of a payload word, a portal's two rooms, the enable state parent's flag leaves
 /// and the constructors of the range's own classes; and the part 5 range's: the byte store and OR
-/// at +0xc, the constructors of its own classes, the counted pointer's null
-/// constructor, a form's flags word and its bit
-/// test, the weapon mod flags' byte, the say-to topic info's topic store, a list at +0x28 of its
-/// holder, the compare of two counted pointers, placement `new`, the memory manager's address and a
-/// 4-byte `memmove`.
+/// at +0xc, the constructors of its own classes, the counted pointer's null constructor, a form's
+/// flags word and its bit test, the weapon mod flags' byte, a list at +0x28 of its holder, the
+/// compare of two counted pointers, placement `new`, the memory manager's address and a 4-byte
+/// `memmove`.
 const XD_IN_PLACE: &[u32] = &[
     0x0045_34f0,
     0x004f_1540,
@@ -4086,7 +4085,6 @@ const XD_IN_PLACE: &[u32] = &[
     0x0042_ce30,
     0x0042_80f0,
     0x0042_4940,
-    0x0043_7730,
     0x0046_10d0,
     0x004b_0460,
     0x006e_6da0,
@@ -14363,6 +14361,9 @@ fn xt_set_say_to_topic() {
         extra_data::more_setters::set_say_to_topic(u32, u32)
     ))
     .xd_setter(0x75, XD_VALUES)
+    // The topic's store (`00437730`) in place here; the map marker's reputation, the same body,
+    // stays a call by address in `InitItem`.
+    .ignore_calls(&[0x0043_7730])
     .run()
     .assert_same();
 }
