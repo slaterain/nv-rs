@@ -295,8 +295,8 @@ const DOUBLES_5: &[(u32, &[u32])] = &[
     (0x0089_1db0, BOOLS),               // Actor::HasObjects
     (0x0088_1620, UNREAD),              // Actor::SetCurrentTarget
     (0x0088_4350, &[0, FORM]),          // Actor::GetClass
-    (0x005f_6e60, BOOLS),               // TESClass::IsGuard
-    (0x0061_30e0, &[0, NODE_5, NODE_5]), // the alarm package's list
+    (0x005f_6e60, BOOLS),               // TESClass::IsGuard (in place since)
+    (0x0061_30e0, &[0, NODE_5, NODE_5]), // the alarm package's list (in place since)
     (0x008b_06d0, BOOLS),               // Actor::GetShouldAttackActor
     (0x0096_2720, BOOLS),               // the player's follower test
     (0x0096_2620, &[0, 1, 5, 0xffff_ffff]), // the player's follower count
@@ -318,7 +318,7 @@ const DOUBLES_5: &[(u32, &[u32])] = &[
     (0x0048_e8a0, &[0, 5, 0x8000_0000]),  // a form's value
     (0x0089_1d70, &[0, 10, 0xffff_ffff]), // Actor::GetGoldAmount
     (0x0097_0a20, &[0, OTHER]),           // ProcessLists::GetActorRefInHigh
-    (0x0041_81e0, &[FORM, RECORD]),       // the base object
+    (0x0041_81e0, &[FORM, RECORD]),       // the base object (in place since)
     (0x0047_f600, BOOLS),                 // the AI form's sells-buys test
     (0x0041_c8d0, &[0, 0, TARGET]),       // ExtraDataList::GetReferencePointer
     (0x0042_1310, UNREAD),                // ExtraDataList::AddGuard
@@ -369,6 +369,9 @@ const IN_PLACE_5: &[u32] = &[
     0x00ac_bb70, // the null answer's body
     0x0044_0da0, // a form's flag 0x800
     0x008d_0430, // the running instance data
+    0x005f_6e60, // TESClass::IsGuard: the class's byte at +0x54
+    0x0061_30e0, // the alarm package's list: its node at +0x80
+    0x0041_81e0, // the base object: the base form
 ];
 /// An inventory item (its object at +8), the alarm list's nodes and items, and an acquire entry.
 const ITEM_5: u32 = BUFFER + 0xa100;
@@ -1234,6 +1237,11 @@ impl World {
                 let answer = self.resolve(answer);
                 e.mem.set_u32(block + 4 + 4 * i, answer);
             }
+            // A callee done in place since runs as itself (its answers still drawn, so the stream
+            // stays).
+            if IN_PLACE_5.contains(addr) {
+                continue;
+            }
             e.register_double(*addr, move |e, a| {
                 let n = e.mem.u32(block);
                 e.mem.set_u32(block, n + 1);
@@ -1328,7 +1336,7 @@ impl World {
             let row = LISTS + 0x10 + 0x20 * kind;
             for index in 0..5 {
                 let procedure = self.pick5(&[
-                    0, 1, 2, 6, 9, 13, 27, 31, 47, 47, 50, 54, 54, 54, 0x33, 0x37,
+                    0, 1, 2, 6, 9, 13, 27, 30, 31, 47, 47, 50, 54, 54, 0x33, 0x37,
                 ]);
                 e.mem.set_u32(row - 4 + 4 * index, procedure);
             }
@@ -1432,6 +1440,17 @@ impl World {
             e.mem.set_u32(entry + 4, form);
             let state = self.pick5(&[0, 1, 1, 2]);
             e.mem.set_u32(entry + 0x18, state);
+        }
+    }
+
+    /// The alarm package's list in place (`006130e0`: its first node at +0x80 of the package): the
+    /// cast's answers (the actor and the target) get the alarm list's first node, for the alarm's tests
+    /// only (elsewhere their +0x84 is a location search's field).
+    fn seed_alarm_list(&self, e: &mut Engine) {
+        let (item, next) = (e.mem.u32(NODE_5), e.mem.u32(NODE_5 + 4));
+        for o in [self.objects[1], self.objects[2]] {
+            e.mem.set_u32(o + 0x80, item);
+            e.mem.set_u32(o + 0x84, next);
         }
     }
 
@@ -2781,6 +2800,27 @@ fn calls_5(e: &Engine, addr: u32) -> u32 {
     e.mem.u32(block_5(k))
 }
 
+/// The block of the fifth part's double at `addr`.
+fn block_of_5(addr: u32) -> u32 {
+    let k = DOUBLES_5
+        .iter()
+        .position(|(a, _)| *a == addr)
+        .expect("a fifth part's double");
+    block_5(k)
+}
+
+/// What the fifth part's double at `addr` answered last (after at least one call).
+fn last_answer_5(e: &Engine, addr: u32) -> u32 {
+    let block = block_of_5(addr);
+    let n = e.mem.u32(block);
+    e.mem.u32(block + 4 + 4 * ((n + 7) % 8))
+}
+
+/// The second word of the last call of the fifth part's double at `addr`.
+fn last_second_5(e: &Engine, addr: u32) -> u32 {
+    e.mem.u32(block_of_5(addr) + 0x28)
+}
+
 /// The fifth part's tests: [`InWorld::in_world`] with the fifth part's world made over it and its
 /// callees done in place ignored.
 trait InWorld5 {
@@ -2885,6 +2925,12 @@ fn combat_alarm_and_follow() {
         .assert_same();
     Diff::new(entry!(0x0090_d240, low_process::process_alarm(Ptr, u32)))
         .in_world_5(&MOST, process_actor_5)
+        .setup(|e, case| {
+            let mut w = World::new(e, case.word(0));
+            w.seed_part_5(e);
+            w.seed_alarm_list(e);
+            process_actor_5(&mut w)
+        })
         .local_at(0x008b_06d0, 3, 4)
         .run()
         .assert_same();
@@ -2947,11 +2993,24 @@ fn reaches_5(
     branches: &[&str],
     check: fn(&Engine, &[u32]) -> Vec<bool>,
 ) {
+    reaches_5_in(addr, seeds, |_, _| {}, words, branches, check);
+}
+
+/// [`reaches_5`] with `more` made over the fifth part's world.
+fn reaches_5_in(
+    addr: u32,
+    seeds: &[u32],
+    more: fn(&World, &mut Engine),
+    words: fn(&mut World) -> Vec<u32>,
+    branches: &[&str],
+    check: fn(&Engine, &[u32]) -> Vec<bool>,
+) {
     let mut taken = vec![0u32; branches.len()];
     for &seed in seeds {
         let mut e = Engine::new_untyped_for_test();
         let mut w = World::new(&mut e, seed);
         w.seed_part_5(&mut e);
+        more(&w, &mut e);
         let args = words(&mut w);
         let answer = e.call(addr, &args).eax;
         let mut seen = vec![answer];
@@ -3088,17 +3147,20 @@ fn the_fifth_part_reaches_every_branch() {
             ]
         },
     );
-    reaches_5(
+    reaches_5_in(
         0x0090_d240,
         &MOST,
+        World::seed_alarm_list,
         process_actor_5,
         &["found", "not found", "a guard", "a guard far off"],
         |e, _| {
-            let guard = calls_5(e, 0x005f_6e60) > 0 && calls(e, 0x0057_23b0) > 0;
+            // The class (`GetClass`'s answer) is a guard when its byte at +0x54 has bit 2.
+            let asked = calls_5(e, 0x0088_4350) > 0;
+            let guard = asked && e.mem.i8(last_answer_5(e, 0x0088_4350) + 0x54) & 2 != 0;
             vec![
                 calls_5(e, 0x008b_06d0) > 0 && slot_calls(e, 0x298) > 0,
-                calls_5(e, 0x0061_30e0) > 0 && slot_calls(e, 0x298) == 0,
-                guard,
+                asked && !guard && slot_calls(e, 0x288) > 0 && slot_last(e, 0x288) == 3,
+                guard && calls(e, 0x0057_23b0) > 0,
                 calls(e, 0x0088_1680) > 0,
             ]
         },
@@ -3268,4 +3330,90 @@ fn the_fifth_part_reaches_the_exe_bodies() {
             ]
         },
     );
+    // The guard's run-once data: slot 0x20c answers a package of procedure 0xe while slot 0x270
+    // holds the null answer's body.
+    reaches_5(
+        0x0091_2b00,
+        &WIDE,
+        process_actor_5,
+        &["slot 0x270's body"],
+        |e, seen| {
+            let process = seen[1];
+            let run_once = if holds(e, process, 0x20c, 0x00ac_bb70) {
+                0
+            } else {
+                e.mem.u32(e.mem.u32(process) + ANSWERS + 0x20c)
+            };
+            vec![
+                run_once != 0
+                    && e.mem.i8(run_once + 0x20) == 0xe
+                    && holds(e, process, 0x270, 0x00ac_bb70)
+                    && slot_calls(e, 0x270) == 0,
+            ]
+        },
+    );
+    // The alarm's guard pursues through slot 0x29c's body (only `ProcessPursue` lets a flee target
+    // go or asks the actor's slot 0x304).
+    reaches_5_in(
+        0x0090_d240,
+        &MOST,
+        World::seed_alarm_list,
+        process_actor_5,
+        &["slot 0x29c's body"],
+        |e, seen| {
+            vec![
+                holds(e, seen[1], 0x29c, 0x0090_dc60)
+                    && slot_calls(e, 0x29c) == 0
+                    && (calls(e, 0x008a_6730) > 0 || slot_calls(e, 0x304) > 0),
+            ]
+        },
+    );
+    // The escort's follow saves the target's package through its process's slot 0x710 body.
+    reaches_5(
+        0x0090_8cd0,
+        &MOST,
+        |w| {
+            let actor = w.one_of5(&[ACTOR, TARGET]);
+            let escort = w.one_of5(&[PACKAGE, PACKAGE_B]);
+            vec![w.process(), actor, escort, 0]
+        },
+        &["slot 0x710's body"],
+        |e, _| {
+            let target = last_second_5(e, 0x008b_c790);
+            let other = e.mem.u32(target + 0x68);
+            vec![
+                calls_5(e, 0x008b_c790) > 0
+                    && holds(e, other, 0x710, 0x0091_30f0)
+                    && slot_calls(e, 0x710) == 0,
+            ]
+        },
+    );
+}
+
+/// Procedure 30 takes the package's radius to its target and 31 the default (the exe's byte map
+/// `0090f87c`), on the translation: every procedure row holds the one procedure.
+#[test]
+fn procedure_30_takes_the_target_radius_and_31_the_default() {
+    let mut asked = [0u32; 2];
+    for &seed in MOST.iter() {
+        for (n, procedure) in [30u32, 31].into_iter().enumerate() {
+            let mut e = Engine::new_untyped_for_test();
+            let mut w = World::new(&mut e, seed);
+            w.seed_part_5(&mut e);
+            for kind in 0..6 {
+                let row = LISTS + 0x10 + 0x20 * kind;
+                for index in 0..5 {
+                    e.mem.set_u32(row - 4 + 4 * index, procedure);
+                }
+            }
+            let words = process_actor_5(&mut w);
+            e.call(0x0090_f670, &words);
+            asked[n] += calls_5(&e, 0x0067_87e0);
+        }
+    }
+    assert!(
+        asked[0] > 0,
+        "procedure 30 never asks for the target radius"
+    );
+    assert_eq!(asked[1], 0, "procedure 31 asks for the target radius");
 }

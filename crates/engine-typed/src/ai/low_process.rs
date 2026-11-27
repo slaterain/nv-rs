@@ -3610,7 +3610,7 @@ pub fn current_destination_coordinate(
 enum Radius {
     /// The package location's radius (`0`, `50`).
     Location,
-    /// The package target's radius (`1` to `3`, `6` to `8`, `13` to `15`, `31`).
+    /// The package target's radius (`1` to `3`, `6` to `8`, `13` to `15`, `30`).
     Target,
     /// The default, after the reads the exe makes for a radius it never uses (`47`).
     Unread,
@@ -3621,7 +3621,7 @@ enum Radius {
 fn radius_case(procedure: u32) -> Radius {
     match procedure {
         0 | 50 => Radius::Location,
-        1..=3 | 6..=8 | 13..=15 | 31 => Radius::Target,
+        1..=3 | 6..=8 | 13..=15 | 30 => Radius::Target,
         47 => Radius::Unread,
         _ => Radius::Default,
     }
@@ -3694,7 +3694,8 @@ const ACTOR_MAY_USE_REFERENCE: u32 = 0x0088_59e0;
 /// `__RTDynamicCast`'s type descriptors of `BaseProcess` and `LowProcess`.
 const TYPE_BASE_PROCESS: u32 = 0x0118_a6b8;
 const TYPE_LOW_PROCESS: u32 = 0x011a_364c;
-/// `TESForm::MatchesPackageObjectType` (`00679e00`, one stack word: the type; its `AL`).
+/// `TESForm::MatchesPackageObjectType` (`00679e00`, `cdecl`, two stack words: the form and the type;
+/// its `AL`).
 const FORM_MATCHES_OBJECT_TYPE: u32 = 0x0067_9e00;
 /// The inventory's item count (`00575590`) and item at an index (`005754a0`) (`thiscall` on a
 /// reference, two stack words), the item's worn test (`004bddd0`, one stack word) and its deleting
@@ -3810,7 +3811,7 @@ pub fn location_callback(e: &mut Engine, reference: u32, actor: u32) -> bool {
     false
 }
 
-/// `Actor::HasObjects` (`00891db0`, six stack words: form, type, count, a word and the out count;
+/// `Actor::HasObjects` (`00891db0`, five stack words: form, type, count, a word and the out count;
 /// its `AL`).
 const ACTOR_HAS_OBJECTS: u32 = 0x0089_1db0;
 
@@ -4013,14 +4014,15 @@ pub fn process_combat(e: &mut Engine, this: Ptr, actor: u32) {
 }
 
 /// `__RTDynamicCast`'s descriptors of `TESPackage` and `AlarmPackage`, `Actor::GetClass`
-/// (`00884350`), `TESClass::IsGuard` (`005f6e60`), the alarm package's list (`006130e0`),
+/// (`00884350`), `TESClass::IsGuard` (`005f6e60`, in place: the class's byte at +0x54 has bit 2),
+/// the alarm package's list (`006130e0`, in place: its first node, at +0x80 of the package),
 /// `Actor::GetShouldAttackActor` (`008b06d0`, four stack words) and the distance past which a guard
 /// leaves the alarm (`double` 3500.0).
 const TYPE_PACKAGE: u32 = 0x0118_46a0;
 const TYPE_ALARM_PACKAGE: u32 = 0x011a_39c8;
 const ACTOR_GET_CLASS: u32 = 0x0088_4350;
-const CLASS_IS_GUARD: u32 = 0x005f_6e60;
-const ALARM_PACKAGE_LIST: u32 = 0x0061_30e0;
+const CLASS_FLAGS: u32 = 0x54;
+const ALARM_PACKAGE_LIST: u32 = 0x80;
 const ACTOR_SHOULD_ATTACK: u32 = 0x008b_06d0;
 const ALARM_GUARD_DISTANCE: u32 = 0x0108_8f48;
 
@@ -4040,8 +4042,8 @@ pub fn process_alarm(e: &mut Engine, this: Ptr, actor: u32) {
         return;
     }
     let class = e.call(ACTOR_GET_CLASS, &args![actor]).u32();
-    if !e.call(CLASS_IS_GUARD, &args![class]).bool() {
-        let mut node = e.call(ALARM_PACKAGE_LIST, &args![package]).u32();
+    if e.mem.i8(class.wrapping_add(CLASS_FLAGS)) & 2 == 0 {
+        let mut node = package.wrapping_add(ALARM_PACKAGE_LIST);
         let found = e.with_stack(4, |e, attack| {
             while node != 0 {
                 let item = e.mem.u32(node);
@@ -4604,14 +4606,14 @@ const ACQUIRE_WANTED: u16 = 0x400;
 const ACQUIRE_DANGEROUS: u16 = 0x200;
 /// `TESObjectREFR::GetOwner` (`00567790`), a form's value (`0048e8a0`), `Actor::GetGoldAmount`
 /// (`00891d70`), the process lists and their actor in high (`00970a20`, two stack words), the base
-/// object (`004181e0`), the AI form's sell-buys test (`0047f600`, at +0x90 of the base object, one
-/// stack word), the key form (the global `011ca268`) and the deleting destructor `007b3fa0`.
+/// object (`004181e0`, in place: the base form), the AI form's sell-buys test (`0047f600`, at +0x90
+/// of the base object, one stack word), the key form (the global `011ca268`) and the deleting
+/// destructor `007b3fa0`.
 const REFERENCE_GET_OWNER: u32 = 0x0056_7790;
 const FORM_VALUE: u32 = 0x0048_e8a0;
 const ACTOR_GOLD_AMOUNT: u32 = 0x0089_1d70;
 const PROCESS_LISTS: u32 = 0x011e_0e80;
 const PROCESS_LISTS_ACTOR_IN_HIGH: u32 = 0x0097_0a20;
-const BASE_OBJECT: u32 = 0x0041_81e0;
 const AI_FORM_SELLS_BUYS_ITEM: u32 = 0x0047_f600;
 const AI_FORM: u32 = 0x90;
 const KEY_FORM: u32 = 0x011c_a268;
@@ -4675,7 +4677,7 @@ fn evaluate_acquire_entry(
             }
         };
         if seller != 0 && sells {
-            let base_object = e.call(BASE_OBJECT, &args![seller]).u32();
+            let base_object = e.mem.u32(seller.wrapping_add(BASE_FORM));
             if e.call(
                 AI_FORM_SELLS_BUYS_ITEM,
                 &args![base_object.wrapping_add(AI_FORM), form],
