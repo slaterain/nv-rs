@@ -1014,7 +1014,10 @@ pub fn fn_006ca0e0(e: &mut Engine, this: Ptr<PathBuilder>, segment_word: u32, in
         e.call(SOLUTION_RESET, &[sol]);
         e.mem.set_i32(f.at(-0x10), -1);
         e.mem.set_i32(f.at(-0x14), -1);
-        if !fn_006c9fc0(e, this, index, f.at(-0x10), f.at(-0x14)) {
+        if !e
+            .call(0x006c_9fc0, &args![this, index, f.at(-0x10), f.at(-0x14)])
+            .bool()
+        {
             return true;
         }
         let solution_ptr = Ptr::<PathingSolution>::new(sol);
@@ -1145,7 +1148,7 @@ pub fn fn_006ca500(e: &mut Engine, this: Ptr<PathBuilder>, segments: u32) -> boo
         let mut index = first;
         while index <= last {
             let node = virtual_node(e, sol, index as u32);
-            let value = fn_006ca830(e, node);
+            let value = e.call(0x006c_a830, &args![node]).bool();
             e.mem.set_u8(f.at(-0x85), u8::from(value));
             e.call(BOOL_SCRAP_ARRAY_ADD, &[flags, f.at(-0x85)]);
             index = index.wrapping_add(1);
@@ -1263,7 +1266,7 @@ pub fn fn_006ca850(e: &mut Engine, this: Ptr<PathBuilder>, _unused_1: u32) -> bo
             return false;
         }
         let req = request(e, this);
-        let lenient = fn_006caa20(e, req);
+        let lenient = e.call(0x006c_aa20, &args![req]).bool();
         array_size(e, segments);
         let sol = solution(e, this);
         let mut index = 0u32;
@@ -2335,7 +2338,7 @@ pub fn fn_006cc5e0(
                 break;
             }
             let tries_now = e.mem.i32(tries);
-            if attempt == tries_now.wrapping_sub(1) && fn_006cd1d0(e, req) {
+            if attempt == tries_now.wrapping_sub(1) && e.call(0x006c_d1d0, &args![req]).bool() {
                 incomplete = true;
                 fn_006c9fa0(e, sol, 1);
                 let mut index = 0u32;

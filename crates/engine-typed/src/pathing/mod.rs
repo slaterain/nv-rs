@@ -36,6 +36,7 @@ use layout::{
     Sphere,
 };
 
+pub mod builder_run;
 pub mod layout;
 pub mod location;
 pub mod navmesh;
@@ -267,5 +268,10 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The builder's virtual-node run finder and flag accessors.
+        entry!(0x006c_9fc0, builder_run::find_virtual_node_run(Ptr, i32, u32, u32) -> bool),
+        entry!(0x006c_a830, builder_run::virtual_node_has_navmesh(u32) -> bool),
+        entry!(0x006c_aa20, builder_run::request_byte_0xa1(u32) -> bool),
+        entry!(0x006c_d1d0, builder_run::request_byte_0xa3(u32) -> bool),
     ]
 }

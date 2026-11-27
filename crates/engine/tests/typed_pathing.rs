@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, builder_run, location, navmesh, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -660,6 +660,7 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x006d_b4f0, &[0x006d_bbb0]),
     (0x006d_cf20, &[0x0069_0830, 0x006d_cfe0]),
     (0x006e_78b0, &[0x006e_8f40]),
+    (0x006c_9fc0, &[0x006c_a0c0, 0x006e_8f40]),
 ];
 
 trait Common {
@@ -4365,4 +4366,122 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- PathBuilder virtual-node run finder and flag accessors ----
+
+/// Stands in for the run finder's callees: each logs its words; the node slot is
+/// `data + 4 * index`, the node count is the array's size, the node's location is the node
+/// itself (its cell word at +0x18) and the cell test passes nonzero cells.
+fn builder_run_stubs(e: &mut Engine) {
+    e.register(0x005a_4320, |e, a| {
+        log(e, 0x005a_4320, a[0]);
+        ret(e.mem.u32(a[0] + 8))
+    });
+    e.register(0x0071_7e50, |e, a| {
+        log(e, 0x0071_7e50, a[0]);
+        ret(a[0])
+    });
+    e.register(0x0045_0ff0, |e, a| {
+        log(e, 0x0045_0ff0, a[0]);
+        ret(u32::from(a[0] != 0))
+    });
+}
+
+/// A builder whose solution has three virtual nodes (inline `0x30`-byte elements at `+8`'s
+/// data): `flags` on each, cells `0x6000`, `0x6001`, `0` (the last fails the cell test).
+fn builder_with_nodes(e: &mut Engine, flags: u32) -> u32 {
+    let builder = e.mem.alloc(0x34);
+    let sol = e.mem.alloc(0x100);
+    e.mem.set_u32(builder + 4, sol);
+    let data = e.mem.alloc(0x90);
+    let vt = vtable(e);
+    e.mem.set_u32(sol + 8, vt);
+    e.mem.set_u32(sol + 8 + 4, data);
+    e.mem.set_u32(sol + 8 + 8, 3);
+    e.mem.set_u32(sol + 8 + 0xc, 0x10);
+    for (i, cell) in [0x6000u32, 0x6001, 0].iter().enumerate() {
+        let node = data + 0x30 * i as u32;
+        e.mem.set_u32(node, flags);
+        e.mem.set_u32(node + 0x18, *cell);
+    }
+    builder
+}
+
+#[test]
+fn find_virtual_node_run() {
+    Diff::new(entry!(
+        0x006c_9fc0,
+        builder_run::find_virtual_node_run(Ptr, i32, u32, u32) -> bool
+    ))
+    .common()
+    .plain(0x006c_9fc0)
+    .inputs(&[Input::Of(&[0, 1, 2]), Input::Of(&[0, 4, 5])])
+    .setup(|e, case| {
+        stand_ins(e);
+        builder_run_stubs(e);
+        let builder = builder_with_nodes(e, case.word(1));
+        let first = e.mem.alloc(4);
+        let last = e.mem.alloc(4);
+        vec![builder, case.word(0), first, last]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn virtual_node_has_navmesh() {
+    Diff::new(entry!(
+        0x006c_a830,
+        builder_run::virtual_node_has_navmesh(u32) -> bool
+    ))
+    .common()
+    .plain(0x006c_a830)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        let node = e.mem.alloc(4);
+        e.mem.set_u32(node, case.word(0));
+        vec![node]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn request_byte_0xa1() {
+    Diff::new(entry!(
+        0x006c_aa20,
+        builder_run::request_byte_0xa1(u32) -> bool
+    ))
+    .common()
+    .plain(0x006c_aa20)
+    .inputs(&[Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        stand_ins(e);
+        let req = e.mem.alloc(0xa4);
+        e.mem.set_u8(req + 0xa1, case.word(0) as u8);
+        vec![req]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn request_byte_0xa3() {
+    Diff::new(entry!(
+        0x006c_d1d0,
+        builder_run::request_byte_0xa3(u32) -> bool
+    ))
+    .common()
+    .plain(0x006c_d1d0)
+    .inputs(&[Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        stand_ins(e);
+        let req = e.mem.alloc(0xa4);
+        e.mem.set_u8(req + 0xa3, case.word(0) as u8);
+        vec![req]
+    })
+    .run()
+    .assert_same();
 }
