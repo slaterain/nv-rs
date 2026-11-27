@@ -132,6 +132,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0055_82f0, navmesh::triangle(Ptr<NavMesh>, u16) -> Ptr<NavMeshTriangle>),
         entry!(0x0055_8dd0, navmesh::triangle_at(Ptr<SimpleArray>, u32) -> Ptr<NavMeshTriangle>),
         entry!(0x0055_82d0, navmesh::vertex(Ptr<NavMeshTriangle>, u32) -> u16),
+        entry!(0x0069_5370, navmesh::edge_info_count(Ptr<NavMesh>) -> u32),
+        entry!(0x0069_5390, navmesh::fill_bytes(Ptr, i32, u32) -> Ptr),
         entry!(0x0055_8200, navmesh::triangle_count(Ptr<NavMesh>) -> u32),
         entry!(0x0055_8220, navmesh::center(Ptr<NavMesh>, Ptr<NiPoint3>, u16) -> Ptr<NiPoint3>),
         entry!(0x0068_f0a0, navmesh::vertex_point(Ptr<NavMesh>, u16) -> Ptr<NiPoint3>),

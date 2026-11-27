@@ -1109,6 +1109,39 @@ fn vertex() {
 }
 
 #[test]
+fn edge_info_count() {
+    Diff::new(entry!(0x0069_5370, navmesh::edge_info_count(Ptr<_>) -> u32))
+        .family(&pathing::PATHING)
+        .family(&leaf::LEAVES)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            let mesh = e.mem.alloc(0x108);
+            e.mem.set_u32(mesh + 0x40, 3);
+            e.mem.set_u32(mesh + 0x50, case.word(0));
+            vec![mesh]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn fill_bytes() {
+    Diff::new(entry!(0x0069_5390, navmesh::fill_bytes(Ptr, i32, u32) -> Ptr))
+        .family(&pathing::PATHING)
+        .family(&engine_typed::crt::CRT)
+        .inputs(&[Input::Of(&[0, 1, 7, 32]), Input::Of(&[0, 0x1234, u32::MAX])])
+        .setup(|e, case| {
+            let buffer = e.mem.alloc(40);
+            for offset in 0..40 {
+                e.mem.set_u8(buffer + offset, 0x76);
+            }
+            vec![buffer + 3, case.word(1), case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
 fn triangle_count() {
     Diff::new(entry!(0x0055_8200, navmesh::triangle_count(Ptr<_>) -> u32))
         .common()

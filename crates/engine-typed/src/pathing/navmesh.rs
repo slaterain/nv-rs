@@ -85,6 +85,24 @@ pub fn vertex(e: &mut Engine, this: Ptr<NavMeshTriangle>, index: u32) -> u16 {
     e.get(this, vertex_field(index))
 }
 
+// Typed from 00695370
+pub fn edge_info_count(e: &mut Engine, mesh: Ptr<NavMesh>) -> u32 {
+    typed_call!(
+        leaf::FAMILY,
+        0x0044_ddc0,
+        leaf::word_at_8(e, mesh.at(NavMesh::edge_infos))
+    )
+}
+
+// Typed from 00695390
+pub fn fill_bytes(e: &mut Engine, dest: Ptr, value: i32, size: u32) -> Ptr {
+    typed_call!(
+        crate::crt::FAMILY,
+        0x0040_3d30,
+        crate::crt::mem::memset_wrapper(e, dest, value, size)
+    )
+}
+
 // Typed from 00558200
 /// `NavMesh::GetTriangleCount` (`thiscall(mesh)`): the triangle array's count.
 pub fn triangle_count(e: &mut Engine, this: Ptr<NavMesh>) -> u32 {
