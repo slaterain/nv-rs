@@ -244,7 +244,7 @@ pub fn nav_mesh_search_flee_build_node_path(
             copy_words(e, t.wrapping_add(GOAL_LOCATION), position, 3);
         }
         let current = e.get(this, NavMeshSearchFlee::pCurrentRequest);
-        let allow_incomplete = u32::from(fn_006a9560(e, current));
+        let allow_incomplete = u32::from(e.call(0x006a_9560, &args![current]).u8());
         let mut found = e
             .call(SEARCH, &args![this, path, limit, allow_incomplete])
             .u8();

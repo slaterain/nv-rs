@@ -182,7 +182,7 @@ pub fn navmesh_search_hide_scalar_deleting_destructor(
     this: Ptr,
     flags: u32,
 ) -> Ptr {
-    fn_006a9d60(e, this);
+    e.call(0x006a_9d60, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
