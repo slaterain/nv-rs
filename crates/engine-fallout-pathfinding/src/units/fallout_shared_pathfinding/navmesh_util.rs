@@ -2883,8 +2883,8 @@ pub fn fn_0069a660(e: &mut Engine, this: Ptr, value: u32, edge: u16) -> Ptr {
 /// Copies the 6-byte edge record at `other` to `this`.
 pub fn fn_0069a690(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
     let value = e.mem.u32(other.addr());
-    let edge = e.mem.u16(other.addr() + 4);
     e.mem.set_u32(this.addr(), value);
+    let edge = e.mem.u16(other.addr() + 4);
     e.mem.set_u16(this.addr() + 4, edge);
     this
 }
@@ -6027,6 +6027,17 @@ mod tests {
         assert_eq!(e.mem.u16(copy.addr() + 4), 0x9abc);
         assert_eq!(e.mem.u16(copy.addr() + 6), 0xbbbb);
         assert_eq!(e.mem.u32(copy.addr() + 8), 0xcccc_cccc);
+    }
+
+    #[test]
+    fn overlapping_edge_copy_reads_index_after_writing_mesh() {
+        let mut e = Engine::new();
+        let source = Ptr::new(e.mem.alloc(12));
+        let dest = source.byte_add(4);
+        e.mem.set_u32(source.addr(), 0x1234_5678);
+        e.mem.set_u16(source.addr() + 4, 0x9abc);
+        fn_0069a690(&mut e, dest, source);
+        assert_eq!(e.mem.u16(dest.addr() + 4), 0x5678);
     }
 
     #[test]

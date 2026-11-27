@@ -421,6 +421,53 @@ pub fn free_block(e: &mut Engine, _this: Ptr<SimpleArray>, block: u32) {
     e.call(FREE, &args![block]);
 }
 
+// Typed from 00691c60
+/// Copy the leading word before assigning the embedded triangle reference.
+pub fn copy_entry_12(e: &mut Engine, out: Ptr, source: Ptr) -> Ptr {
+    let word = e.mem.u32(source.addr());
+    e.mem.set_u32(out.addr(), word);
+    typed_call!(
+        FAMILY,
+        0x0069_a690,
+        super::pov::triangle_ref_copy(e, out.byte_add(4).cast(), source.byte_add(4).cast())
+    );
+    out
+}
+
+// Typed from 00691c90
+/// Fill the removed range from the end. Each callee can observe the array header.
+pub fn remove_entries_12(e: &mut Engine, array: Ptr<SimpleArray>, index: u32, count: u32) {
+    let remaining = e
+        .get(array, SimpleArray::size)
+        .wrapping_sub(index)
+        .wrapping_sub(count);
+    let tail = e.call(0x0042_f5a0, &args![remaining, count]).u32();
+    let offset = index.wrapping_mul(12);
+    let gap = e.get(array, SimpleArray::data).wrapping_add(offset);
+    e.call(0x0072_ba80, &args![array, gap, count]);
+
+    let data = e.get(array, SimpleArray::data);
+    let tail_index = e.get(array, SimpleArray::size).wrapping_sub(tail);
+    let source = data.wrapping_add(tail_index.wrapping_mul(12));
+    e.call(
+        0x006d_c6e0,
+        &args![array, data.wrapping_add(offset), source, tail],
+    );
+    let size = e.get(array, SimpleArray::size).wrapping_sub(count);
+    e.set(array, SimpleArray::size, size);
+}
+
+// Typed from 00691d20
+pub fn reallocate_entries_12(
+    e: &mut Engine,
+    _array: Ptr<SimpleArray>,
+    block: u32,
+    count: u32,
+) -> u32 {
+    e.call(COPY_BLOCK, &args![block, count.wrapping_mul(12)])
+        .u32()
+}
+
 // Typed from 006917d0
 /// `BSSimpleArray<unsigned short>::BSSimpleArray` (`thiscall(array)`): the vtable, then empty
 /// ([`init_indices`]).
