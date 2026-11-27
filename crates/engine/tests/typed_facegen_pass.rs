@@ -322,6 +322,9 @@ impl Common for Diff {
             .ignore_calls(&PER_VERTEX)
             // The translations construct their stack points (`006815c0`, a leaf answering its `this`).
             .ignore_calls(&[0x0068_15c0])
+            // The geometry data's vertex count (`004a8ae0`, its word at +8): the typed morph reads it
+            // in place (#1101).
+            .ignore_calls(&[0x004a_8ae0])
             // The pair split's two outputs are locals it only writes: what they held before (stack residue) differs.
             .local_at(0x0065_3d70, 2, 0)
             .local_at(0x0065_3d70, 3, 0)
