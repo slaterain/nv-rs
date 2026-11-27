@@ -462,6 +462,15 @@ mod native {
     /// The thread whose crash the filter is saying (0: none): a crash on it while it does ends
     /// the process at once; another thread's waits for the end.
     static SAYING: AtomicU32 = AtomicU32::new(0);
+    /// The saying thread has made its message and is showing it: a waiting thread then waits for
+    /// the end however long the player reads ([`WAIT_STEPS`]).
+    static SHOWING: AtomicBool = AtomicBool::new(false);
+    /// How long another thread's crash waits for the saying thread to reach its message box, in
+    /// steps of [`WAIT_STEP_MS`] (about 10 seconds): the saying thread may need a lock the waiting
+    /// thread held when it crashed (Windows' loader lock, the heap's), so after that the process
+    /// ends as it did before this filter existed, instead of hanging.
+    const WAIT_STEPS: u32 = 100;
+    const WAIT_STEP_MS: u32 = 100;
     /// This Play.exe was started again by a crash: no crash starts it again.
     static RESTARTED: AtomicBool = AtomicBool::new(false);
 
@@ -705,10 +714,19 @@ mod native {
         match turn(saying, me) {
             Turn::Say => {}
             Turn::End => return EXCEPTION_EXECUTE_HANDLER,
-            // SAFETY: no pointers; the saying thread ends the process.
-            Turn::Wait => loop {
-                unsafe { Sleep(u32::MAX) };
-            },
+            Turn::Wait => {
+                for _ in 0..WAIT_STEPS {
+                    if SHOWING.load(Ordering::SeqCst) {
+                        // SAFETY: no pointers; the saying thread ends the process.
+                        loop {
+                            unsafe { Sleep(u32::MAX) };
+                        }
+                    }
+                    // SAFETY: no pointers.
+                    unsafe { Sleep(WAIT_STEP_MS) };
+                }
+                return EXCEPTION_EXECUTE_HANDLER;
+            }
         }
         // SAFETY: Windows passes the crash's record, or nothing.
         let (code, address) = match unsafe { pointers.as_ref().and_then(|p| p.record.as_ref()) } {
@@ -744,7 +762,9 @@ mod native {
         } else {
             format!("Start Play.exe again to try once more.\n\n{}", report())
         };
-        message_box(&stopped_text(in_window, &what, &lines, &next), 0x1_0010);
+        let text = stopped_text(in_window, &what, &lines, &next);
+        SHOWING.store(true, Ordering::SeqCst);
+        message_box(&text, 0x1_0010);
         EXCEPTION_EXECUTE_HANDLER
     }
 
