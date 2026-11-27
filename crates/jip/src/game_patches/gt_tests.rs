@@ -176,6 +176,10 @@ fn the_clean_up_frees_only_unused_strings() {
     e.mem.set_u32(sa - 8, 0);
     e.mem.set_u32(sc - 8, 0xffff_ffff);
     e.call(FREE_UNUSED.addr(), &[]);
+    // The unused string has left the pool; the counted ones are still in it.
+    assert_eq!(super::Pool::lookup_for_test(&mut e, a), None);
+    assert_eq!(super::Pool::lookup_for_test(&mut e, b), Some(sb));
+    assert_eq!(super::Pool::lookup_for_test(&mut e, c), Some(sc));
     // The unused string's block is freed; the counted ones' blocks stay.
     assert_eq!(e.mem.block_size(sa - 8), None, "freed");
     assert!(e.mem.block_size(sb - 8).is_some() && e.mem.block_size(sc - 8).is_some());
