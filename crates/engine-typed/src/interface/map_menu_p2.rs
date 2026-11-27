@@ -30,9 +30,12 @@
 //! `RemoveAll`, `Sort`, `GetTileAt` and `+0x10` slots, the menus' deletion, class and click slots
 //! and the node's `+0xe8` slot stay virtual: the object's class is not known here.
 //!
-//! **Floats.** The main thread's: each x87 step the `f64` result rounded once to the float (the
-//! 24-bit step); the exe's double constants read where it reads them; a float the exe moves
-//! through the x87 stack quieted (`x87_quiet`).
+//! **Floats.** The main thread's precision (the x87 control word of the thread that runs them):
+//! a step whose result the exe stores as a float is rounded once to the float; a step whose result
+//! stays on the x87 stack or goes into a double (the update's minutes into `_ftol2`, the cursor's
+//! product, the waveform's offset and elapsed time) goes through engine-core's x87 steps, which keep
+//! its wider exponent; the exe's double constants are read where it reads them; a float the exe moves
+//! through the x87 stack is quieted (`x87_quiet`).
 
 use super::interface_cpp::{self, in_place};
 use super::interface_cpp_p2::{self, name_characters};
@@ -46,7 +49,9 @@ use super::narrow;
 use crate::{cell_refs, dispatch, hud, multibound, pathing};
 use engine_core::prelude::*;
 use engine_core::typed_call;
-use engine_core::x87::x87_quiet;
+use engine_core::x87::{
+    x87_add, x87_div, x87_load32, x87_m32, x87_mul, x87_quiet, x87_quiet_bits, x87_store32, x87_sub,
+};
 
 /// What this file does in place besides the other files' lists: plain reads the exe calls (the
 /// differential tests leave these out of the translation's calls).
@@ -779,8 +784,9 @@ pub fn map_menu_update_menu(e: &mut Engine) {
         let hour = narrow(e.call(CALENDAR_GET_HOUR, &args![CALENDAR]).f64());
         let whole = ftol2(e, f64::from(hour));
         let sixty: f64 = e.global(SIXTY_DOUBLE);
-        let fraction = narrow(f64::from(hour) - f64::from(whole));
-        let minutes = ftol2(e, f64::from(narrow(f64::from(fraction) * sixty)));
+        // The fraction and the minutes stay on the x87 stack (its wide exponent) into `_ftol2`.
+        let fraction = x87_sub(x87_m32(hour.to_bits()), f64::from(whole));
+        let minutes = ftol2(e, x87_mul(fraction, sixty));
         let hours = ftol2(e, f64::from(hour));
         let date_string = e
             .call(CALENDAR_GET_DATE_STRING, &args![CALENDAR, date])
@@ -842,11 +848,15 @@ pub fn map_menu_update_menu(e: &mut Engine) {
 /// The cursor's y (the code calls it on the interface manager): the float at +0x4b0 times 960.0,
 /// over the renderer's height.
 pub fn fn_007983c0(e: &mut Engine, this: Ptr) -> f32 {
-    let value = x87_quiet(e.mem.f32(this.addr().wrapping_add(0x4b0)));
+    let value = e.mem.u32(this.addr().wrapping_add(0x4b0));
     let scale: f64 = e.global(CURSOR_SCALE);
-    let product = narrow(f64::from(value) * scale);
+    // The product is stored as a double (`FSTP double`), the quotient as the float.
+    let product = x87_mul(x87_load32(value), scale);
     let height = e.mem.i32(RENDERER_HEIGHT);
-    narrow(f64::from(product) / f64::from(height))
+    f32::from_bits(x87_quiet_bits(x87_store32(x87_div(
+        product,
+        f64::from(height),
+    ))))
 }
 
 // Typed from 00798400
@@ -1893,22 +1903,23 @@ pub fn fn_0079c0c0(e: &mut Engine, this: Ptr) {
             hud::compass::set_strip(e, Ptr::new(property), offset, 0.0)
         );
         let step: f64 = e.global(WAVEFORM_STEP);
-        let offset = narrow(f64::from(x87_quiet(e.mem.f32(WAVEFORM_OFFSET))) + step);
-        e.mem.set_f32(WAVEFORM_OFFSET, offset);
+        let offset = x87_store32(x87_add(x87_load32(e.mem.u32(WAVEFORM_OFFSET)), step));
+        e.mem.set_u32(WAVEFORM_OFFSET, offset);
         let one: f64 = e.global(ONE_DOUBLE);
-        if f64::from(offset) > one {
-            e.mem
-                .set_f32(WAVEFORM_OFFSET, narrow(f64::from(offset) - one));
+        if x87_load32(offset) > one {
+            let wrapped = x87_store32(x87_sub(x87_load32(offset), one));
+            e.mem.set_u32(WAVEFORM_OFFSET, wrapped);
         }
         let now = e.call(CLOCK, &args![]).u32();
         e.mem.set_u32(WAVEFORM_STEP_TIME, now);
     }
     let now = e.call(CLOCK, &args![]).u32();
-    let elapsed = narrow(f64::from(now) - f64::from(e.mem.f32(start)));
+    // The time since the start stays on the x87 stack for the compare.
+    let elapsed = x87_sub(f64::from(now), x87_m32(e.mem.u32(start)));
     let frame: f64 = e.global(WAVEFORM_FRAME);
     // On unless below the frame time or unordered.
     if matches!(
-        f64::from(elapsed).partial_cmp(&frame),
+        elapsed.partial_cmp(&frame),
         Some(std::cmp::Ordering::Less) | None
     ) {
         return;
