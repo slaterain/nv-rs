@@ -11,6 +11,13 @@
 //! ends with the draw is sent as the [`Ask`] says. Without the platform's hooks (tests, scripts) nothing is held:
 //! [`end`] answers [`Done::Plain`].
 //!
+//! A record the backend can draw with no set-up command ([`Done::Patchable`]) is replayed with every device call
+//! deferred (`crate::real_threads::device_defer_begin`): the setters and camera set-ups run their own code (the state
+//! cache is written as ever) but nothing reaches the device until the record's draw, where [`patched`] hands the
+//! calls to the platform layer at once: one update of its model, the state sets the setters and camera set-ups made
+//! (as the device would have got them), and one `DrawPatched` with every constant upload as its patches. When it
+//! cannot, the calls are made as they came, in their order.
+//!
 //! The engineers' switches (players see only `sDrawItems`, the `Fallout.ini` row of `NV_DRAW_ITEMS`):
 //! - `NV_DRAW_ITEMS=1` / `check` (off by default): the world pass's plain lit geometries (the shadow light shader's
 //!   standard set-up, unskinned) drawn from kept records while nothing their set-ups read changed; `check` draws
@@ -102,6 +109,9 @@ pub enum Ask {
 pub enum Done {
     /// The record was sent ([`Ask::Record`]): its commands' hash (not counting the registers).
     Recorded(u64),
+    /// As [`Done::Recorded`], and the record can be drawn as a patched item ([`patched`]): every command it holds
+    /// but its draw is a state set, and none was cut away.
+    Patchable(u64),
     /// The item was sent ([`Ask::Item`]).
     Drawn,
     /// Neither: the commands went out as they came (or, for a check item, were dropped), or there
@@ -123,6 +133,8 @@ pub struct Hooks {
     /// Bumped whenever the backend's records are gone (a device made or reset): the typed draw
     /// code then drops its record numbers.
     pub epoch: fn() -> u64,
+    /// Record `id` drawn as a patched item from this thread's deferred device calls ([`patched`]).
+    pub patched: fn(&mut Engine, u32) -> bool,
 }
 
 static HOOKS: OnceLock<&'static Hooks> = OnceLock::new();
@@ -180,6 +192,17 @@ pub fn forget(e: &mut Engine, ids: &[u32]) {
 /// The backend's records' epoch ([`Hooks::epoch`]); 0 without the hooks.
 pub fn epoch() -> u64 {
     HOOKS.get().map_or(0, |h| (h.epoch)())
+}
+
+/// Record `id` (one a [`Done::Patchable`] build sent) drawn as a patched item from this thread's deferred device
+/// calls (`crate::real_threads::with_deferred`: its replay's calls up to its draw, which is the last): the platform
+/// layer brings its model to where those calls would leave it in one update and sends the setters' and camera
+/// set-ups' state sets as they are, then one `DrawPatched` whose patches are every constant upload, in order. True
+/// when sent; false (nothing sent, nothing changed: a call it cannot take, another device, a drawing cut open, no
+/// hooks) and the caller makes the calls (`crate::real_threads::device_deferred_make`).
+#[inline]
+pub fn patched(e: &mut Engine, id: u32) -> bool {
+    HOOKS.get().is_some_and(|h| (h.patched)(e, id))
 }
 
 #[cfg(test)]

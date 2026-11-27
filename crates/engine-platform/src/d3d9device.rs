@@ -835,7 +835,6 @@ fn state_one_pass(
 
 /// Why [`bulk_update`] took none of a list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))] // the item form's replays (`super::d3d9items`) come next
 pub(super) enum Refused {
     /// A drawing cut is open (`super::d3d9draw`): the per-call path keeps two copies of the state then.
     Cut,
@@ -853,20 +852,27 @@ pub(super) enum Refused {
 /// the clip planes, the material, the lights and which are on, and through `super::d3d9resource::Bulk` the
 /// declaration, FVF, shaders, stream sources and indices (counted alike) and the constant registers; each set taken
 /// in order, as its setter takes it. No command goes for the sets: the caller sends what carries them out (the item
-/// form's `DrawPatched`, whose kept states and commands they are). An object that neither the program nor the device
-/// holds any more ends after the pass, in the order the per-call path ends them, its end going to the backend as
-/// there.
+/// form's sets and `DrawPatched`, in the order given here). The objects that neither the program nor the device holds
+/// any more after the pass are answered, in the order the per-call path ends them: the caller ends them
+/// ([`end_after_bulk`]) once it has sent the item, so the backend never gets a set of an object it has ended (review
+/// of #1227).
 ///
 /// Every command is checked before any is taken: a list holding one that the per-call path refuses or stops at is
 /// not taken at all ([`Refused::Command`]); nor is any list while a drawing cut is open. The device and its bindings
 /// are looked up once for the whole list; an object bound is looked up once to check it and once to count it. (An
 /// object a list lets go of for good and binds again later stays: the per-call path refuses that list.)
-#[cfg_attr(not(test), allow(dead_code))] // the item form's replays (`super::d3d9items`) come next
-pub(super) fn bulk_update<'a, I>(e: &mut Engine, device: u32, cmds: I) -> Result<(), Refused>
+///
+/// Under the device lock: the caller holds `engine_core::real_threads::device_guard` (as the per-call setters run
+/// under the dispatcher's).
+pub(super) fn bulk_update<'a, I>(e: &mut Engine, device: u32, cmds: I) -> Result<Vec<u32>, Refused>
 where
     I: Iterator<Item = d3d9_stream::Cmd<d3d9_stream::Data<'a>>> + Clone,
 {
     use d3d9_stream::Cmd;
+    debug_assert!(
+        engine_core::real_threads::device_lock_held(e),
+        "a bulk update without the device lock"
+    );
     {
         let objects = &mut device!(e).device_objects;
         if super::d3d9draw::cut_open_in(&objects.draw) {
@@ -987,13 +993,18 @@ where
             }
         }
     }
-    // As the per-call path ends them ([`texture_unbind`], `super::d3d9resource`'s `unbind`).
+    Ok(ending)
+}
+
+/// Ends the objects a [`bulk_update`] let go of (its answer), in its order, as the per-call path ends them
+/// ([`texture_unbind`], `super::d3d9resource`'s `unbind`): each that neither the program nor a device holds now, its
+/// end going to the backend. Under the device lock.
+pub(super) fn end_after_bulk(e: &mut Engine, ending: Vec<u32>) {
     for object in ending {
         if !super::d3d9resource::end_if_unheld(e, object) {
             end_if_unheld(e, object);
         }
     }
-    Ok(())
 }
 
 /// A payload's first `N` words (little-endian), the payload checked to hold them.
@@ -7433,7 +7444,7 @@ pub(crate) mod tests {
     }
 
     /// `CreateTexture(width, height, levels, usage, format, pool)`: the texture.
-    fn new_texture(e: &mut Engine, device: u32, words: [u32; 6]) -> u32 {
+    pub(crate) fn new_texture(e: &mut Engine, device: u32, words: [u32; 6]) -> u32 {
         let out = e.mem.alloc(4);
         let [w, h, levels, usage, format, pool] = words;
         let hr = e
@@ -9964,12 +9975,58 @@ pub(crate) mod tests {
         e.vcall(dev, 4 * slot, &args).u32()
     }
 
-    /// `sets` through [`bulk_update`].
+    /// `sets` through [`bulk_update`], then the objects it let go of ended ([`end_after_bulk`]).
     fn bulk_sets(w: &mut BulkWorld, sets: &[BulkSet]) -> Result<(), Refused> {
         let cmds = sets
             .iter()
             .map(|(c, p)| c.map(|()| d3d9_stream::Data::Bytes(p)));
-        bulk_update(&mut w.e, w.dev, cmds)
+        let ending = bulk_update(&mut w.e, w.dev, cmds)?;
+        end_after_bulk(&mut w.e, ending);
+        Ok(())
+    }
+
+    /// Sets for the front of a list naming textures the program has released while a sampler still holds them
+    /// (Direct3D keeps such a texture alive while it is bound; review of #1227): each set again on its sampler,
+    /// and one bound a second time on a sampler holding nothing or a texture still held, so no set of the front
+    /// ends an object a later one names.
+    fn released_but_bound(
+        w: &mut BulkWorld,
+        held: &[u32],
+        next: &mut impl FnMut(u32) -> u32,
+    ) -> Vec<BulkSet> {
+        use d3d9_stream::Cmd;
+        let device = w.dev;
+        let d = device!(w.e)
+            .device_objects
+            .devices
+            .get(&device)
+            .expect("the device");
+        let mut bound: Vec<(u32, u32)> = d
+            .textures
+            .iter()
+            .map(|(s, t)| (*s, *t))
+            .filter(|(_, t)| !held.contains(t))
+            .collect();
+        bound.sort_unstable();
+        let free: Vec<u32> = [0u32, 1, 7, 15, 256, 260]
+            .into_iter()
+            .filter(|s| d.textures.get(s).is_none_or(|t| held.contains(t)))
+            .collect();
+        let set = |sampler, texture| -> BulkSet {
+            (
+                Cmd::SetTexture {
+                    device,
+                    sampler,
+                    texture,
+                },
+                vec![],
+            )
+        };
+        let mut out: Vec<BulkSet> = bound.iter().map(|&(s, t)| set(s, t)).collect();
+        if let (Some(&(_, t)), false) = (bound.first(), free.is_empty()) {
+            out.push(set(free[next(free.len() as u32) as usize], t));
+        }
+        out
     }
 
     /// `n` generated state sets (`next` the generator) for `dev` over the objects of `w` the program
@@ -10178,10 +10235,12 @@ pub(crate) mod tests {
                     ((state.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 32) % u64::from(n.max(1))) as u32
                 };
                 let mut held = calls.objects();
-                let (mut ended, mut sets) = (0, 0);
+                let (mut ended, mut sets, mut released) = (0, 0, 0);
                 for round in 0..60 {
                     let n = 1 + next(40);
-                    let list = bulk_list(&calls, &held, &mut next, n);
+                    let mut list = released_but_bound(&mut calls, &held, &mut next);
+                    released += list.len();
+                    list.extend(bulk_list(&calls, &held, &mut next, n));
                     for set in &list {
                         assert_eq!(bulk_per_call(&mut calls, set), D3D_OK, "{set:?}");
                     }
@@ -10213,8 +10272,13 @@ pub(crate) mod tests {
                         assert_eq!(a, b, "a release's end ({at})");
                     }
                 }
-                // The run reached what it is for: many sets, objects ended by a later list's sets.
+                // The run reached what it is for: many sets, objects ended by a later list's sets, released
+                // textures still bound set again.
                 assert!(sets > 600, "{sets}");
+                assert!(
+                    released > 0,
+                    "no released texture set again (seed {seed:#x})"
+                );
                 assert!(
                     ended > 0,
                     "no object ended by a bulk update (seed {seed:#x})"
@@ -10430,21 +10494,43 @@ pub(crate) mod tests {
                 },
                 vec![0; 64],
             ),
+            // Bindings of another device (review of #1227: only `Bulk::check` refuses them).
+            (
+                Cmd::SetStreamSource {
+                    device: dev + 4,
+                    stream: 0,
+                    buffer: vb,
+                    offset: 0,
+                    stride: 16,
+                },
+                vec![],
+            ),
+            (
+                Cmd::SetConstants {
+                    device: dev + 4,
+                    kind: 0,
+                    start: 0,
+                    count: 1,
+                    data: (),
+                },
+                vec![0; 16],
+            ),
         ];
         let before = bulk_model(&mut w.e, dev);
-        for (i, set) in bad.iter().enumerate() {
-            let mut list = good.clone();
-            let at = i % (list.len() + 1);
-            list.insert(at, set.clone());
-            assert_eq!(
-                bulk_sets(&mut w, &list),
-                Err(Refused::Command(at)),
-                "{set:?}"
-            );
-            assert!(
-                bulk_model(&mut w.e, dev) == before,
-                "the model changed: {set:?}"
-            );
+        for set in &bad {
+            for at in 0..=good.len() {
+                let mut list = good.clone();
+                list.insert(at, set.clone());
+                assert_eq!(
+                    bulk_sets(&mut w, &list),
+                    Err(Refused::Command(at)),
+                    "{set:?} at {at}"
+                );
+                assert!(
+                    bulk_model(&mut w.e, dev) == before,
+                    "the model changed: {set:?} at {at}"
+                );
+            }
         }
         assert!(w.log.lock().unwrap().is_empty(), "nothing sent");
         // A cut open: refused, nothing changed (main's state and the drawing side's copy); joined: taken.

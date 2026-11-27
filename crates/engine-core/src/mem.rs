@@ -2452,6 +2452,50 @@ impl Mem {
         self.read_pages(addr, buf, true)
     }
 
+    /// Whether the `bytes.len()` bytes at `addr` are `bytes`, compared where they lie (no copy into a buffer first):
+    /// false when they differ or any of them is unmapped. As [`Mem::try_read`] followed by a compare, in one pass;
+    /// a read of a page the touch census marked is counted as [`Mem::try_read`] counts it. A tool of the kept draw
+    /// records (the typed draw code's test that a record's bytes are still the same, once a draw).
+    pub fn same(&self, addr: u32, bytes: &[u8]) -> bool {
+        let mut a = addr;
+        let mut done = 0;
+        while done < bytes.len() {
+            let off = (a as usize) & (PAGE - 1);
+            let n = (PAGE - off).min(bytes.len() - done);
+            let state = self.page_state((a >> PAGE_BITS) as usize);
+            if state != MAPPED {
+                if state != TOUCH {
+                    return false;
+                }
+                self.touch_note(a, n, false);
+            }
+            let want = &bytes[done..done + n];
+            let here = self.host_at(a);
+            let mut i = 0;
+            // Eight bytes at a time, then the rest byte by byte: plain loads, as `read_pages` copies (no reference
+            // into the guest space is made).
+            while i + 8 <= n {
+                // SAFETY: `[a + i, a + i + 8)` lies in the one mapped page `[a, a + n)`; `want` is host memory.
+                let now = unsafe { std::ptr::read_unaligned(here.add(i).cast::<u64>()) };
+                let was = u64::from_ne_bytes(want[i..i + 8].try_into().expect("eight bytes"));
+                if now != was {
+                    return false;
+                }
+                i += 8;
+            }
+            while i < n {
+                // SAFETY: `a + i` lies in the one mapped page `[a, a + n)`.
+                if unsafe { here.add(i).read() } != want[i] {
+                    return false;
+                }
+                i += 1;
+            }
+            done += n;
+            a = a.wrapping_add(n as u32);
+        }
+        true
+    }
+
     /// [`Mem::try_read`] for a diagnostic that looks at memory without the touch census counting it
     /// (the census itself, a dump).
     pub fn peek(&self, addr: u32, buf: &mut [u8]) -> Result<(), Fault> {
@@ -3364,6 +3408,42 @@ mod tests {
         let mut other = Mem::new();
         other.start_sharing();
         assert!(other.enable_track().is_none());
+    }
+
+    /// [`Mem::same`] is [`Mem::try_read`] and a compare: true only when every byte is mapped and equal, across a
+    /// page's end too, for a difference in the eight-byte part, in the tail and in the next page alike.
+    #[test]
+    fn same_compares_in_place_as_a_read_and_compare() {
+        let mut m = Mem::new();
+        m.map(0x0010_0000, 0x2000);
+        let at = 0x0010_0ff3u32;
+        let bytes: Vec<u8> = (0..37u8)
+            .map(|i| i.wrapping_mul(7).wrapping_add(1))
+            .collect();
+        m.write(at, &bytes);
+        assert!(
+            m.same(at, &bytes),
+            "the bytes written, across the page's end"
+        );
+        assert!(m.same(at, &[]), "nothing to compare");
+        assert!(m.same(at + 3, &bytes[3..14]), "a piece of them");
+        for i in [0usize, 7, 8, 12, 13, 14, 36] {
+            let mut other = bytes.clone();
+            other[i] ^= 0x40;
+            assert!(!m.same(at, &other), "byte {i} differs");
+            let mut got = vec![0u8; other.len()];
+            assert_eq!(
+                m.try_read(at, &mut got).is_ok() && got == other,
+                m.same(at, &other),
+                "as a read and compare (byte {i})"
+            );
+        }
+        // Unmapped: the page after the mapped range, and bytes running into it.
+        assert!(!m.same(0x0010_2000, &[0]), "unmapped");
+        let end = 0x0010_1ffc;
+        let tail = [0u8; 8];
+        assert!(!m.same(end, &tail), "running into an unmapped page");
+        assert!(m.same(end, &tail[..4]), "the mapped part alone (zero)");
     }
 
     /// The write watch with the track on: both see a store.

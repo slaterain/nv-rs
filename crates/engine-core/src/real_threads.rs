@@ -6443,7 +6443,11 @@ fn direct_hold(e: &Engine, world: &'static World) {
 /// threads, the switch off).
 #[inline]
 pub fn device_vcall(e: &mut Engine, this: u32, slot: u32, args: &[u32]) -> Ret {
-    let _call = NotedCall::enter(note_device_call(e, this, slot, args));
+    let note = note_device_call(e, this, slot, args);
+    if note == Note::Deferred {
+        return crate::abi::RetVal::into_ret(0u32);
+    }
+    let _call = NotedCall::enter(note);
     if DIRECT.with(Cell::get) == 0 || e.diagnosing_direct() {
         return e.vcall(this, slot, args);
     }
@@ -6551,7 +6555,11 @@ fn device_typed(
     pick: fn(&'static DeviceWriter) -> AbiFn,
     typed: impl FnOnce(&mut Engine, &'static DeviceWriter) -> u32,
 ) -> Ret {
-    let _call = NotedCall::enter(note_device_call(e, this, slot, args));
+    let note = note_device_call(e, this, slot, args);
+    if note == Note::Deferred {
+        return crate::abi::RetVal::into_ret(0u32);
+    }
+    let _call = NotedCall::enter(note);
     if DIRECT.with(Cell::get) == 0 || e.diagnosing_direct() {
         return e.vcall(this, slot, args);
     }
@@ -6810,15 +6818,47 @@ thread_local! {
     /// The calls recorded on this thread while its recorder is on.
     static RECORDED: std::cell::RefCell<Option<Vec<DeviceCall>>> =
         const { std::cell::RefCell::new(None) };
-    /// 1 while the recorder is on and not paused (the one test a device call makes), else 0.
+    /// What this thread's device calls and the platform's reaches of the device's state are watched for: the one
+    /// test each makes, 0 when nothing is ([`NOTE`], [`WATCH`], [`DEFER`]; set by [`rewatch`] alone).
     static RECORDING: Cell<u32> = const { Cell::new(0) };
-    /// Pauses in force while the recorder is on.
+    /// Whether the recorder is on ([`device_record_begin`] to [`device_record_end`]), and the pauses in force.
+    static RECORD_ON: Cell<bool> = const { Cell::new(false) };
     static RECORD_PAUSES: Cell<u32> = const { Cell::new(0) };
+    /// The recorder's pauses when a build's setter or camera call began to be watched ([`device_leaf_watch`]).
+    static LEAF_WATCH: Cell<Option<u32>> = const { Cell::new(None) };
     /// How deep this thread is in device calls the recorder noted.
     static IN_CALL: Cell<u32> = const { Cell::new(0) };
+    /// How deep this thread is in the typed draw code's device calls made while [`WATCH`] is on.
+    static IN_TYPED: Cell<u32> = const { Cell::new(0) };
     /// Whether the device's state was reached outside a noted call while the recorder was on (a call it cannot
     /// make again: [`note_device_state`]).
     static UNSEEN: Cell<bool> = const { Cell::new(false) };
+    /// Whether, inside a watched setter or camera call of a build, the device's state was reached outside the typed
+    /// draw code's device calls ([`device_leaf_unseen`]).
+    static LEAF_UNSEEN: Cell<bool> = const { Cell::new(false) };
+}
+
+/// [`RECORDING`]'s bits: the recorder notes the calls (on, not paused); a build's setter or camera call is watched
+/// ([`device_leaf_watch`]); the calls are deferred ([`device_defer_begin`]).
+const NOTE: u32 = 1;
+const WATCH: u32 = 2;
+const DEFER: u32 = 4;
+
+/// [`RECORDING`] from the states it sums up.
+fn rewatch() {
+    let on = RECORD_ON.with(Cell::get);
+    let pauses = RECORD_PAUSES.with(Cell::get);
+    let mut word = 0;
+    if on && pauses == 0 {
+        word |= NOTE;
+    }
+    if on && LEAF_WATCH.with(Cell::get) == Some(pauses) {
+        word |= WATCH;
+    }
+    if DEFER_ON.with(Cell::get) {
+        word |= DEFER;
+    }
+    RECORDING.with(|r| r.set(word));
 }
 
 /// Starts this thread's device call recorder (the kept draw records' build, the typed draw code):
@@ -6826,34 +6866,58 @@ thread_local! {
 /// [`device_record_end`]. Starting it again drops what it held.
 pub fn device_record_begin() {
     IN_CALL.with(|c| c.set(0));
+    IN_TYPED.with(|c| c.set(0));
     UNSEEN.with(|u| u.set(false));
+    LEAF_UNSEEN.with(|u| u.set(false));
     RECORDED.with(|r| *r.borrow_mut() = Some(Vec::new()));
     RECORD_PAUSES.with(|p| p.set(0));
-    RECORDING.with(|r| r.set(1));
+    LEAF_WATCH.with(|w| w.set(None));
+    RECORD_ON.with(|o| o.set(true));
+    rewatch();
 }
 
 /// Ends this thread's recorder: the calls noted, in order.
 pub fn device_record_end() -> Vec<DeviceCall> {
-    RECORDING.with(|r| r.set(0));
+    RECORD_ON.with(|o| o.set(false));
     RECORD_PAUSES.with(|p| p.set(0));
+    LEAF_WATCH.with(|w| w.set(None));
+    rewatch();
     RECORDED.with(|r| r.borrow_mut().take()).unwrap_or_default()
 }
 
 /// Pauses (`true`) or resumes (`false`) this thread's recorder; pauses nest. Nothing without it.
 pub fn device_record_pause(pause: bool) {
-    if RECORDED.with(|r| r.borrow().is_none()) {
+    if !RECORD_ON.with(Cell::get) {
         return;
     }
-    let n = RECORD_PAUSES.with(|p| {
-        let n = if pause {
+    RECORD_PAUSES.with(|p| {
+        p.set(if pause {
             p.get() + 1
         } else {
             p.get().saturating_sub(1)
-        };
-        p.set(n);
-        n
+        });
     });
-    RECORDING.with(|r| r.set(u32::from(n == 0)));
+    rewatch();
+}
+
+/// A build's setter or camera call (the kept draw records' kept calls, which the recorder does not note) begins
+/// (`true`) or ends: while it runs, at the recorder's pauses of its start (a hook pausing again inside it is not
+/// watched), the device's state reached outside the typed draw code's device calls (a call by the vtable from
+/// translated code) is noted for [`device_leaf_unseen`]. Nothing without the recorder.
+pub fn device_leaf_watch(on: bool) {
+    if !RECORD_ON.with(Cell::get) {
+        return;
+    }
+    let pauses = RECORD_PAUSES.with(Cell::get);
+    LEAF_WATCH.with(|w| w.set(on.then_some(pauses)));
+    rewatch();
+}
+
+/// Whether, since [`device_record_begin`], a watched setter or camera call ([`device_leaf_watch`]) reached the
+/// device's state outside the typed draw code's device calls: a replay could not defer that reach
+/// ([`device_defer_begin`]).
+pub fn device_leaf_unseen() -> bool {
+    LEAF_UNSEEN.with(Cell::get)
 }
 
 /// The word of a device call that is the address of a structure, and the structure's bytes:
@@ -6873,34 +6937,52 @@ pub fn device_structure(slot: u32, args: &[u32]) -> Option<(usize, u32)> {
     }
 }
 
-/// Notes a device call when this thread's recorder is on (one thread-local test otherwise); answers whether it did.
-#[inline(always)]
-fn note_device_call(e: &Engine, this: u32, slot: u32, args: &[u32]) -> bool {
-    if RECORDING.with(Cell::get) != 0 {
-        note_device_call_slow(e, this, slot, args);
-        return true;
-    }
-    false
+/// What became of a device call at its start ([`note_device_call`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Note {
+    /// Nothing watched: made as ever.
+    Plain,
+    /// Noted by the recorder: made, one of the draw's own calls.
+    Noted,
+    /// Made inside a watched setter or camera call of a build ([`WATCH`]).
+    Typed,
+    /// Deferred ([`device_defer_begin`]): not made now.
+    Deferred,
 }
 
-/// A noted device call running ([`IN_CALL`] one deeper while it does).
-struct NotedCall(bool);
+/// Notes a device call when this thread's recorder is on, or defers it (one thread-local test when nothing is
+/// watched); answers what became of it.
+#[inline(always)]
+fn note_device_call(e: &mut Engine, this: u32, slot: u32, args: &[u32]) -> Note {
+    let watched = RECORDING.with(Cell::get);
+    if watched != 0 {
+        return note_device_call_slow(e, this, slot, args, watched);
+    }
+    Note::Plain
+}
+
+/// A device call running ([`IN_CALL`], or [`IN_TYPED`], one deeper while it does).
+struct NotedCall(Note);
 
 impl NotedCall {
     #[inline(always)]
-    fn enter(noted: bool) -> NotedCall {
-        if noted {
-            IN_CALL.with(|c| c.set(c.get() + 1));
+    fn enter(note: Note) -> NotedCall {
+        match note {
+            Note::Noted => IN_CALL.with(|c| c.set(c.get() + 1)),
+            Note::Typed => IN_TYPED.with(|c| c.set(c.get() + 1)),
+            Note::Plain | Note::Deferred => {}
         }
-        NotedCall(noted)
+        NotedCall(note)
     }
 }
 
 impl Drop for NotedCall {
     #[inline(always)]
     fn drop(&mut self) {
-        if self.0 {
-            IN_CALL.with(|c| c.set(c.get().saturating_sub(1)));
+        match self.0 {
+            Note::Noted => IN_CALL.with(|c| c.set(c.get().saturating_sub(1))),
+            Note::Typed => IN_TYPED.with(|c| c.set(c.get().saturating_sub(1))),
+            Note::Plain | Note::Deferred => {}
         }
     }
 }
@@ -6916,7 +6998,7 @@ pub fn in_noted_call() -> bool {
 /// Tests: `f` as inside a noted device call ([`in_noted_call`]).
 #[doc(hidden)]
 pub fn as_noted_call_for_tests<R>(f: impl FnOnce() -> R) -> R {
-    let _call = NotedCall::enter(true);
+    let _call = NotedCall::enter(Note::Noted);
     f()
 }
 
@@ -6925,8 +7007,27 @@ pub fn as_noted_call_for_tests<R>(f: impl FnOnce() -> R) -> R {
 /// translated code, a buffer's `Lock`), noted for [`device_record_unseen`]. One thread-local test otherwise.
 #[inline(always)]
 pub fn note_device_state() {
-    if RECORDING.with(Cell::get) != 0 && IN_CALL.with(Cell::get) == 0 {
+    let watched = RECORDING.with(Cell::get);
+    if watched != 0 {
+        note_device_state_slow(watched);
+    }
+}
+
+/// [`note_device_state`] while something is watched: a reach outside a noted call while the recorder notes; one
+/// outside the typed draw code's device calls inside a watched setter or camera call ([`device_leaf_unseen`]); any
+/// reach while calls are deferred (it went to the device before the calls deferred so far: [`Deferral::Missed`]).
+#[cold]
+#[inline(never)]
+fn note_device_state_slow(watched: u32) {
+    let in_call = IN_CALL.with(Cell::get) != 0;
+    if watched & NOTE != 0 && !in_call {
         UNSEEN.with(|u| u.set(true));
+    }
+    if watched & WATCH != 0 && !in_call && IN_TYPED.with(Cell::get) == 0 {
+        LEAF_UNSEEN.with(|u| u.set(true));
+    }
+    if watched & DEFER != 0 {
+        DEFER_HOW.with(|h| h.set(Deferral::Missed));
     }
 }
 
@@ -6938,7 +7039,33 @@ pub fn device_record_unseen() -> bool {
 
 #[cold]
 #[inline(never)]
-fn note_device_call_slow(e: &Engine, this: u32, slot: u32, args: &[u32]) {
+fn note_device_call_slow(
+    e: &mut Engine,
+    this: u32,
+    slot: u32,
+    args: &[u32],
+    mut watched: u32,
+) -> Note {
+    if watched & DEFER != 0 {
+        let own = IN_CALL.with(Cell::get) != 0;
+        if defer(e, this, slot, args, own, None) {
+            return Note::Deferred;
+        }
+        // Not deferrable: what was deferred was made just now, and this call is made after it.
+        watched = RECORDING.with(Cell::get);
+    }
+    if watched & NOTE != 0 {
+        note_call(e, this, slot, args);
+        return Note::Noted;
+    }
+    if watched & WATCH != 0 {
+        return Note::Typed;
+    }
+    Note::Plain
+}
+
+/// The recorder's note of a device call ([`note_device_call`]).
+fn note_call(e: &Engine, this: u32, slot: u32, args: &[u32]) {
     // A structure on the caller's stack for locals is gone by replay time: its bytes are kept. One elsewhere (the
     // shader statics, an object) is read again where it is at replay, as the call would read it then.
     let (data_arg, data) = match device_structure(slot, args) {
@@ -6977,9 +7104,30 @@ pub const DEVICE_CALL_MARK: u32 = 0;
 /// local copy of its bytes; through the writer's function for the slots it has, else
 /// [`device_vcall`]. Its answer.
 pub fn device_replay(e: &mut Engine, call: &DeviceCall) -> Ret {
+    // Deferred ([`device_defer_begin`]) with its kept bytes, no copy to the stack first.
+    if RECORDING.with(Cell::get) & DEFER != 0 {
+        let kept = call
+            .data_arg
+            .filter(|_| !call.data.is_empty())
+            .map(|_| call.data.as_slice());
+        if defer(e, call.this, call.slot, &call.args, true, kept) {
+            return crate::abi::RetVal::into_ret(0u32);
+        }
+    }
     // The draw's own call again: its commands are the draw's, as at the build ([`in_noted_call`]).
-    let _call = NotedCall::enter(true);
+    let _call = NotedCall::enter(Note::Noted);
     match call.data_arg {
+        // The words copied to a stack array (no allocation a call), the structure's address in its word.
+        Some(i) if !call.data.is_empty() && call.args.len() <= 16 => {
+            e.with_stack(call.data.len() as u32, |e, local| {
+                e.mem.write(local.addr(), &call.data);
+                let mut words = [0u32; 16];
+                let args = &mut words[..call.args.len()];
+                args.copy_from_slice(&call.args);
+                args[i] = local.addr();
+                device_call_by_slot(e, call.this, call.slot, args)
+            })
+        }
         Some(i) if !call.data.is_empty() => e.with_stack(call.data.len() as u32, |e, local| {
             e.mem.write(local.addr(), &call.data);
             let mut args = call.args.clone();
@@ -7004,6 +7152,248 @@ fn device_call_by_slot(e: &mut Engine, this: u32, slot: u32, a: &[u32]) -> Ret {
         (0x178 | 0x1b4, 3) => device_set_constants(e, this, slot, w(0), w(1), w(2)),
         _ => device_vcall(e, this, slot, a),
     }
+}
+
+// Deferred device calls (the kept draw records' patched items, `crate::draw_items::patched`).
+//
+// While a record's patched replay runs ([`device_defer_begin`] to [`device_defer_end`]), the typed draw code's device
+// calls are not made: each is kept, in order, with the bytes of the structure it passes (registers, a plane), and
+// answers `D3D_OK` at once. At the record's draw the platform layer either takes them all at once (one update of its
+// model and one patched item) or the caller makes them, in their order, as they would have been made
+// ([`device_deferred_make`]). A call that cannot be deferred (not a state set, a constant upload or a draw: one whose
+// answer or effect the caller could read) makes the calls kept so far, then itself, and ends the deferral
+// ([`Deferral::Made`]); a reach of the device's state outside the calls (a call by the vtable from translated code)
+// is noted ([`Deferral::Missed`]).
+// ---------------------------------------------------------------------------------------------
+
+/// One deferred device call ([`Deferred`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeferredCall {
+    pub this: u32,
+    /// The vtable slot (byte offset).
+    pub slot: u32,
+    args: [u32; 6],
+    len: u8,
+    /// Its structure's bytes in [`Deferred`]'s: from, length.
+    data: (u32, u32),
+    /// One of the draw's own calls (a record's device call made again), not a setter's or a camera set-up's.
+    pub own: bool,
+}
+
+impl DeferredCall {
+    /// Its words as the device function takes them (a structure's word the caller's address).
+    pub fn args(&self) -> &[u32] {
+        &self.args[..usize::from(self.len)]
+    }
+}
+
+/// The device calls deferred on this thread ([`device_defer_begin`]), in order, and the bytes of their structures.
+#[derive(Default)]
+pub struct Deferred {
+    calls: Vec<DeferredCall>,
+    bytes: Vec<u8>,
+    mark: usize,
+}
+
+impl Deferred {
+    /// Each call with its structure's bytes (registers, a plane; empty for none).
+    pub fn calls(&self) -> impl Iterator<Item = (&DeferredCall, &[u8])> + Clone + '_ {
+        self.calls.iter().map(|c| {
+            let from = c.data.0 as usize;
+            (c, &self.bytes[from..from + c.data.1 as usize])
+        })
+    }
+
+    pub fn len(&self) -> usize {
+        self.calls.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.calls.is_empty()
+    }
+
+    /// How many calls came before [`device_defer_mark`] (all when it was not called).
+    pub fn mark(&self) -> usize {
+        self.mark
+    }
+}
+
+/// How a deferral ended ([`device_defer_end`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Deferral {
+    /// Every call kept: the platform layer may take them; else [`device_deferred_make`].
+    Kept,
+    /// A call that cannot be deferred came: the calls kept before it were made then, and every call after it.
+    Made,
+    /// The device's state was reached outside the calls while some were kept: that reach came before them.
+    Missed,
+}
+
+thread_local! {
+    /// True between [`device_defer_begin`] and [`device_defer_end`] while no call ended the deferral.
+    static DEFER_ON: Cell<bool> = const { Cell::new(false) };
+    static DEFER_HOW: Cell<Deferral> = const { Cell::new(Deferral::Kept) };
+    static DEFERRED: std::cell::RefCell<Deferred> = const {
+        std::cell::RefCell::new(Deferred {
+            calls: Vec::new(),
+            bytes: Vec::new(),
+            mark: 0,
+        })
+    };
+}
+
+/// Whether a call (slot, words) can be deferred: the state sets a draw's set-up makes (render, stage and sampler
+/// states, a texture, the declaration or FVF, shaders, a stream source, the indices, a clip plane), the constant
+/// uploads, and the draws; nothing the caller reads an answer or a result of.
+fn deferrable(slot: u32, args: &[u32]) -> bool {
+    matches!(
+        (slot, args.len()),
+        (0xe4, 2)
+            | (0x10c, 3)
+            | (0x114, 3)
+            | (0x104, 2)
+            | (0x15c, 1)
+            | (0x164, 1)
+            | (0x170, 1)
+            | (0x1ac, 1)
+            | (0x190, 4)
+            | (0x1a0, 1)
+            | (0x144, 3)
+            | (0x148, 6)
+            | (0x178 | 0x180 | 0x188 | 0x1b4 | 0x1bc | 0x1c4, 3)
+            | (0xdc, 2)
+    )
+}
+
+/// The most structure bytes one deferred call keeps (as the recorder).
+const DEFER_MOST_BYTES: u32 = 0x4000;
+
+/// This thread's device calls deferred from here ([`Deferred`]) until [`device_defer_end`]; the list starts empty.
+pub fn device_defer_begin() {
+    DEFERRED.with(|d| {
+        let mut d = d.borrow_mut();
+        d.calls.clear();
+        d.bytes.clear();
+        d.mark = 0;
+    });
+    DEFER_HOW.with(|h| h.set(Deferral::Kept));
+    DEFER_ON.with(|o| o.set(true));
+    rewatch();
+}
+
+/// The calls deferred so far came before the mark ([`Deferred::mark`]).
+pub fn device_defer_mark() {
+    DEFERRED.with(|d| {
+        let mut d = d.borrow_mut();
+        d.mark = d.calls.len();
+    });
+}
+
+/// The deferral ends: how ([`Deferral`]). The calls kept stay for [`with_deferred`] and [`device_deferred_make`].
+pub fn device_defer_end() -> Deferral {
+    DEFER_ON.with(|o| o.set(false));
+    rewatch();
+    DEFER_HOW.with(Cell::get)
+}
+
+/// Whether this thread defers its device calls now.
+pub fn device_deferring() -> bool {
+    DEFER_ON.with(Cell::get)
+}
+
+/// `f` with this thread's deferred calls.
+pub fn with_deferred<R>(f: impl FnOnce(&Deferred) -> R) -> R {
+    DEFERRED.with(|d| f(&d.borrow()))
+}
+
+/// Keeps a device call while deferring ([`note_device_call`], [`device_replay`]: `kept` the structure's bytes the
+/// record kept, else they are read where the call passes them, as the call would read them now). False when it
+/// cannot be deferred: then the calls kept so far have just been made and the deferral has ended
+/// ([`Deferral::Made`]), so the caller makes this one after them.
+fn defer(
+    e: &mut Engine,
+    this: u32,
+    slot: u32,
+    args: &[u32],
+    own: bool,
+    kept: Option<&[u8]>,
+) -> bool {
+    let ok = deferrable(slot, args)
+        && DEFERRED.with(|d| {
+            let mut d = d.borrow_mut();
+            let d = &mut *d;
+            let from = d.bytes.len();
+            if let Some((i, len)) = device_structure(slot, args) {
+                match kept {
+                    Some(bytes) if bytes.len() == len as usize => d.bytes.extend_from_slice(bytes),
+                    Some(_) => return false,
+                    None => {
+                        let at = args[i];
+                        if at == 0 || len > DEFER_MOST_BYTES {
+                            return false;
+                        }
+                        d.bytes.resize(from + len as usize, 0);
+                        if e.mem.try_read(at, &mut d.bytes[from..]).is_err() {
+                            d.bytes.truncate(from);
+                            return false;
+                        }
+                    }
+                }
+            }
+            let mut words = [0u32; 6];
+            words[..args.len()].copy_from_slice(args);
+            d.calls.push(DeferredCall {
+                this,
+                slot,
+                args: words,
+                len: args.len() as u8,
+                data: (from as u32, (d.bytes.len() - from) as u32),
+                own,
+            });
+            true
+        });
+    if !ok {
+        DEFER_ON.with(|o| o.set(false));
+        DEFER_HOW.with(|h| {
+            if h.get() == Deferral::Kept {
+                h.set(Deferral::Made);
+            }
+        });
+        rewatch();
+        device_deferred_make(e);
+    }
+    ok
+}
+
+/// Makes this thread's deferred calls, in their order, as they would have been made (a structure from a copy of its
+/// bytes on the stack, the draw's own calls as a record's calls again: [`in_noted_call`]); the list is emptied. Only
+/// with the deferral ended.
+pub fn device_deferred_make(e: &mut Engine) {
+    let mut d = DEFERRED.with(|d| std::mem::take(&mut *d.borrow_mut()));
+    for (c, bytes) in d.calls() {
+        let _call = NotedCall::enter(if c.own { Note::Noted } else { Note::Plain });
+        match device_structure(c.slot, c.args()) {
+            Some((i, _)) => e.with_stack(bytes.len().max(4) as u32, |e, local| {
+                e.mem.write(local.addr(), bytes);
+                let mut words = c.args;
+                words[i] = local.addr();
+                device_call_by_slot(e, c.this, c.slot, &words[..usize::from(c.len)]);
+            }),
+            None => {
+                device_call_by_slot(e, c.this, c.slot, c.args());
+            }
+        }
+    }
+    // The buffers back, emptied, for the next deferral (no allocation a replay).
+    d.calls.clear();
+    d.bytes.clear();
+    d.mark = 0;
+    DEFERRED.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.calls.is_empty() {
+            *slot = d;
+        }
+    });
 }
 
 /// The world draw's hold of the device lock with real threads (`NV_DRAW_DIRECT`): what a wait, a
@@ -7427,5 +7817,140 @@ mod recorder_tests {
         note_device_state();
         assert!(device_record_unseen(), "outside any noted call");
         device_record_end();
+    }
+
+    thread_local! {
+        /// The calls the logging device got: (slot, a word: the state, or the first register's first word).
+        static LOG: std::cell::RefCell<Vec<(u32, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// TEST DATA: a device's `SetRenderState(state, value)`: logs the state.
+    fn render_state(_: &mut Engine, a: &[u32]) -> Ret {
+        note_device_state();
+        LOG.with(|l| l.borrow_mut().push((0xe4, a[1])));
+        Ret::default()
+    }
+
+    /// TEST DATA: a device's `SetVertexShaderConstantF(start, data, count)`: logs the first register's first word.
+    fn vertex_constants(e: &mut Engine, a: &[u32]) -> Ret {
+        note_device_state();
+        let word = e.mem.u32(a[2]);
+        LOG.with(|l| l.borrow_mut().push((0x178, word)));
+        Ret::default()
+    }
+
+    /// [`test_device`] with a logging `SetRenderState` (0xe4), `SetVertexShaderConstantF` (0x178) and `SetTransform`
+    /// (0xb0, logged with word 0).
+    fn logging_device() -> (Engine, u32) {
+        let (mut e, device) = test_device();
+        e.register(0x0040_3100, render_state);
+        e.register(0x0040_3200, vertex_constants);
+        e.register(0x0040_3300, |e, a| {
+            LOG.with(|l| l.borrow_mut().push((0xb0, 0)));
+            set_transform(e, a)
+        });
+        let vtable = e.mem.u32(device);
+        e.mem.set_u32(vtable + 0xe4, 0x0040_3100);
+        e.mem.set_u32(vtable + 0x178, 0x0040_3200);
+        e.mem.set_u32(vtable + 0xb0, 0x0040_3300);
+        LOG.with(|l| l.borrow_mut().clear());
+        (e, device)
+    }
+
+    fn log() -> Vec<(u32, u32)> {
+        LOG.with(|l| std::mem::take(&mut *l.borrow_mut()))
+    }
+
+    /// Deferred calls are not made: each answers at once and is kept in order, a constant upload with its registers
+    /// as they were at the call; made later, they reach the device in their order with those registers. A call that
+    /// cannot be deferred makes the kept ones first, then itself, and every call after it is made at once; a reach
+    /// of the device's state outside the calls is noted.
+    #[test]
+    fn deferred_calls_are_kept_in_order_and_made_as_they_came() {
+        let (mut e, device) = logging_device();
+        let registers = e.mem.alloc(0x10);
+        e.mem.set_u32(registers, 11);
+        device_defer_begin();
+        assert!(device_deferring());
+        device_vcall(&mut e, device, 0xe4, &[7, 1]);
+        device_set_vertex_constants(&mut e, device, 4, registers, 1);
+        e.mem.set_u32(registers, 99);
+        device_defer_mark();
+        device_set_render_state(&mut e, device, 8, 0);
+        assert!(log().is_empty(), "none made");
+        assert_eq!(device_defer_end(), Deferral::Kept);
+        with_deferred(|d| {
+            let calls: Vec<_> = d
+                .calls()
+                .map(|(c, b)| (c.slot, c.args()[0], b.to_vec()))
+                .collect();
+            assert_eq!(
+                calls,
+                [
+                    (0xe4, 7, vec![]),
+                    (
+                        0x178,
+                        4,
+                        [11u32, 0, 0, 0]
+                            .iter()
+                            .flat_map(|w| w.to_le_bytes())
+                            .collect()
+                    ),
+                    (0xe4, 8, vec![]),
+                ]
+            );
+            assert_eq!(d.mark(), 2);
+        });
+        device_deferred_make(&mut e);
+        assert_eq!(
+            log(),
+            [(0xe4, 7), (0x178, 11), (0xe4, 8)],
+            "in order, the registers of the call"
+        );
+        assert!(with_deferred(Deferred::is_empty));
+        // A call that cannot be deferred.
+        device_defer_begin();
+        device_vcall(&mut e, device, 0xe4, &[9, 1]);
+        e.with_stack(0x40, |e, local| {
+            device_vcall(e, device, 0xb0, &[256, local.addr()]);
+        });
+        device_vcall(&mut e, device, 0xe4, &[10, 1]);
+        assert_eq!(log(), [(0xe4, 9), (0xb0, 0), (0xe4, 10)]);
+        assert_eq!(device_defer_end(), Deferral::Made);
+        // A reach of the device's state outside the calls.
+        device_defer_begin();
+        note_device_state();
+        assert_eq!(device_defer_end(), Deferral::Missed);
+        assert_eq!(RECORDING.with(Cell::get), 0, "nothing watched after");
+    }
+
+    /// Inside a build's watched setter or camera call, a device call of the typed draw code reaching the device's
+    /// state is fine; a reach outside such a call (the vtable from translated code) is noted; a hook's own pause
+    /// inside the watched call is not watched; nothing outside the watch.
+    #[test]
+    fn a_watched_leaf_notes_a_reach_outside_the_typed_calls() {
+        let (mut e, device) = logging_device();
+        device_record_begin();
+        device_record_pause(true);
+        device_leaf_watch(true);
+        device_vcall(&mut e, device, 0xe4, &[7, 1]);
+        assert!(!device_leaf_unseen(), "the typed call's reach");
+        device_record_pause(true);
+        note_device_state();
+        device_record_pause(false);
+        assert!(!device_leaf_unseen(), "a hook's pause");
+        note_device_state();
+        assert!(device_leaf_unseen(), "outside the typed calls");
+        device_leaf_watch(false);
+        device_record_pause(false);
+        assert!(!device_record_unseen(), "the leaf's calls are no record's");
+        let calls = device_record_end();
+        assert!(calls.is_empty(), "nothing noted inside the leaf");
+        device_record_begin();
+        assert!(!device_leaf_unseen(), "a new build starts clean");
+        note_device_state();
+        assert!(!device_leaf_unseen(), "not watched");
+        device_record_end();
+        assert_eq!(log(), [(0xe4, 7)]);
     }
 }

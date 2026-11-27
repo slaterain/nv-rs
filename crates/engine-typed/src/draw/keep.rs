@@ -267,10 +267,40 @@ struct Record {
     /// The backend's record of its draw's own commands (`engine_core::draw_items`): its number and their shape's
     /// hash; none when they could not be sent as a record (a setter's send between them, or no draw).
     item: Option<(u32, u64)>,
+    /// Where its draw and its backend record's commands lie in `ops` when the backend can draw it as a patched item
+    /// ([`replay_patched`]); none otherwise.
+    patched: Option<Patched>,
+    /// False when one of its setter or camera calls reached the device outside the typed draw code's device calls
+    /// (`engine_core::real_threads::device_leaf_unseen`): a replay could not defer that, so it is no patched item.
+    leaves_typed: bool,
     /// How many times in a row the key's record broke (built again with a record there), and how many of the key's
     /// next draws run plainly ([`BACK_OFF_AFTER`]).
     streak: u32,
     rest: u32,
+}
+
+/// Where a patched item's parts lie in its record's ops ([`Record::patched`]): its draw, and the first op after the
+/// last setter or camera call before it (from there to the draw, the draw's own calls are the backend record's
+/// commands: each setter or camera call ended the run the platform layer held, at the build as at a replay).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Patched {
+    run_from: u32,
+    draw_at: u32,
+}
+
+/// [`Patched`] of `ops`: none without a draw among the record's device calls.
+fn patched_shape(ops: &[Op]) -> Option<Patched> {
+    let draw_at = ops
+        .iter()
+        .position(|op| matches!(op, Op::Device(call) if matches!(call.slot, 0x144 | 0x148)))?;
+    let run_from = ops[..draw_at]
+        .iter()
+        .rposition(|op| matches!(op, Op::Leaf(_)))
+        .map_or(0, |at| at + 1);
+    Some(Patched {
+        run_from: n32(run_from),
+        draw_at: n32(draw_at),
+    })
 }
 
 /// After this many breaks in a row a key rests: its next [`REST_DRAWS`] draws run plainly (no logs, no compare),
@@ -318,6 +348,12 @@ struct Stats {
     records_plain: u64,
     check_items: u64,
     check_items_dropped: u64,
+    /// Patched replays ([`replay_patched`]): items sent; refused by the platform layer; with a call that could not
+    /// wait; with a reach of the device besides the calls.
+    patched: u64,
+    patched_refused: u64,
+    patched_made: u64,
+    patched_missed: u64,
     /// Every record dropped because the backend's were gone (a device made or reset).
     epochs: u64,
     /// Draws run plainly while their key rested ([`BACK_OFF_AFTER`]), and the times a key began to rest.
@@ -434,9 +470,13 @@ pub fn leaf(e: &mut Engine, leaf: Leaf, body: impl FnOnce(&mut Engine)) {
         // (`engine_core::draw_items`), as at the replay.
         pause(e, true);
         draw_items::interrupt(e);
+        // Watched while it runs: a reach of the device outside the typed draw code's calls (one a replay could not
+        // defer) makes the record no patched item's.
+        rt::device_leaf_watch(true);
     }
     body(e);
     if outer {
+        rt::device_leaf_watch(false);
         pause(e, false);
     }
     KEEP.with(|k| k.borrow_mut().leaf_depth -= 1);
@@ -541,19 +581,11 @@ fn spans_same(e: &Engine, s: &Spans) -> bool {
     let mut from = 0usize;
     for &(at, len) in &s.spans {
         let len = len as usize;
-        let want = &s.bytes[from..from + len];
-        from += len;
-        let mut done = 0usize;
-        while done < len {
-            let n = (len - done).min(buf.len());
-            let now = &mut buf[..n];
-            if e.mem.try_read(at.wrapping_add(n32(done)), now).is_err()
-                || now != &want[done..done + n]
-            {
-                return false;
-            }
-            done += n;
+        // Compared where it lies (`Mem::same`: no copy first).
+        if !e.mem.same(at, &s.bytes[from..from + len]) {
+            return false;
         }
+        from += len;
     }
     s.unread
         .iter()
@@ -636,7 +668,15 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
     let packets = (capture::active() || capture::viewing(e)) && TEST_MODE.with(Cell::get).is_none();
     // With `NV_BLOCK_CHECK` the set-up's locals are heap blocks (`Engine::locals_below` has no range to leave out):
     // its writes there would be replayed into freed blocks, so nothing is kept (review of #1108).
-    if mode == Mode::Off || packets || building() || !in_world_draw() || e.mem.block_check_on() {
+    // A draw made inside a patched replay (none is known) runs as it is: its calls join the replay's deferred ones,
+    // whose platform layer then refuses the item (two draws) and makes them all as they came.
+    if mode == Mode::Off
+        || packets
+        || building()
+        || !in_world_draw()
+        || e.mem.block_check_on()
+        || rt::device_deferring()
+    {
         body(e);
         return;
     }
@@ -679,7 +719,7 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
                 *all += u64::from(n);
             }
         }
-        Plan::Replay(Rc::clone(&r.ops), r.item)
+        Plan::Replay(Rc::clone(&r.ops), r.item, r.patched)
     });
     match plan {
         // The plain draws are timed from just before the set-up (review of #1145): the set-up and draw alone, as a
@@ -694,11 +734,33 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
             body(e);
             count(|s| s.sample_ns += nanos(start));
         }
-        Plan::Replay(ops, item) if mode == Mode::On => {
+        Plan::Replay(ops, item, patched) if mode == Mode::On => {
             let looked = nanos(start);
-            // The record's replay; its own commands one item when the backend has them.
-            match item {
-                Some((id, hash)) => {
+            // The record's replay: a patched item when the backend can draw one (never with the drawing thread's
+            // packets on: review of #1227); else its own commands one item when the backend has them.
+            match (item, patched) {
+                (Some((id, _)), Some(p)) if capture::mode() == capture::Mode::Off => {
+                    let came = replay_patched(e, &ops, id, p);
+                    KEEP.with(|k| {
+                        let mut k = k.borrow_mut();
+                        let k = &mut *k;
+                        let s = &mut k.stats;
+                        match came {
+                            Patch::Drawn => s.patched += 1,
+                            Patch::Refused => s.patched_refused += 1,
+                            Patch::Made => s.patched_made += 1,
+                            Patch::Missed => s.patched_missed += 1,
+                        }
+                        // A call that could not wait, or a reach of the device besides the calls: it would come
+                        // again, so the record draws as a stage-1 item from now on.
+                        if matches!(came, Patch::Made | Patch::Missed) {
+                            if let Some(r) = k.records.get_mut(&key) {
+                                r.patched = None;
+                            }
+                        }
+                    });
+                }
+                (Some((id, hash)), _) => {
                     let ask = Ask::Item {
                         id,
                         hash,
@@ -711,14 +773,14 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
                         _ => s.items_plain += 1,
                     });
                 }
-                None => replay(e, &ops),
+                (None, _) => replay(e, &ops),
             }
             count(|s| {
                 s.replay_ns += nanos(start);
                 s.look_ns += looked;
             });
         }
-        Plan::Replay(ops, item) => {
+        Plan::Replay(ops, item, _) => {
             // Check: the item this draw would have been, made from the record's replay as `On` makes it; then the
             // set-up runs as always (its commands the old form beside the item) and what it did is compared with
             // the record.
@@ -822,8 +884,8 @@ enum Plan {
     Rest,
     /// A replayable draw drawn plainly to time the plain set-up ([`SAMPLE_EVERY`]).
     Sample,
-    /// The record's ops and backend record.
-    Replay(Rc<[Op]>, Option<(u32, u64)>),
+    /// The record's ops, backend record and patched item's shape.
+    Replay(Rc<[Op]>, Option<(u32, u64)>, Option<Patched>),
     /// Built again: why, and the backend record there was.
     Build(Break, Option<(u32, u64)>),
 }
@@ -900,11 +962,16 @@ fn build_sent(
     };
     let mut built = None;
     let done = with_held(e, ask, |e| built = Some(build(e, key, body)));
-    let built = built.expect("the build ran");
+    let mut built: Record = built.expect("the build ran");
     let sent = match done {
-        Done::Recorded(hash) => Some((id, hash)),
+        Done::Recorded(hash) | Done::Patchable(hash) => Some((id, hash)),
         _ => None,
     };
+    // A patched item's record: the backend can draw it with no set-up command, and every setter and camera call
+    // reached the device only through the typed draw code's calls (which a replay defers).
+    if matches!(done, Done::Patchable(_)) && built.replayable && built.leaves_typed {
+        built.patched = patched_shape(&built.ops);
+    }
     KEEP.with(|k| {
         let mut k = k.borrow_mut();
         if sent.is_some() {
@@ -997,13 +1064,7 @@ fn count(f: impl FnOnce(&mut Stats)) {
 
 /// Whether guest memory at `at` holds `bytes`.
 fn same_bytes(e: &Engine, at: u32, bytes: &[u8]) -> bool {
-    let mut now = [0u8; 64];
-    if bytes.len() <= now.len() {
-        let now = &mut now[..bytes.len()];
-        return e.mem.try_read(at, now).is_ok() && now == bytes;
-    }
-    let mut now = vec![0u8; bytes.len()];
-    e.mem.try_read(at, &mut now).is_ok() && now == bytes
+    e.mem.same(at, bytes)
 }
 
 /// Runs `body` with the three logs on and makes the record of what it did (statics filled in by the caller).
@@ -1054,6 +1115,7 @@ fn build(e: &mut Engine, key: Key, body: &mut impl FnMut(&mut Engine)) -> Record
     let callers = callers_structures(&calls, (low, top), &written, &record.inputs);
     record.inputs.extend(callers);
     record.replayable = !rt::device_record_unseen();
+    record.leaves_typed = !rt::device_leaf_unseen();
     if audit {
         note_uncovered(e, key, &audited, &record, &written, &calls);
     }
@@ -1217,6 +1279,8 @@ fn assemble(
             replayable: true,
             last_used: 0,
             item: None,
+            patched: None,
+            leaves_typed: true,
             streak: 0,
             rest: 0,
         },
@@ -1274,9 +1338,72 @@ impl Hasher for KeyHasher {
     }
 }
 
+/// What came of a patched replay ([`replay_patched`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Patch {
+    /// The patched item went (`engine_core::draw_items::patched`).
+    Drawn,
+    /// The platform layer refused it: the calls were made as they came.
+    Refused,
+    /// A call that cannot wait came: the calls before it were made then, every call after it as it came.
+    Made,
+    /// The device was reached besides the calls while they waited: they were made as they came after it.
+    Missed,
+}
+
+/// A record's replay as a patched item: its ops up to its draw run with every device call deferred
+/// (`engine_core::real_threads::device_defer_begin`): its writes as ever, its setter and camera calls with their own
+/// code (the state cache written as the plain set-up writes it), its own device calls kept, none made. At the draw the
+/// platform layer takes them all at once as record `id`'s patched item (`engine_core::draw_items::patched`); when it
+/// cannot, they are made as they came, in their order (the device then gets what the plain set-up gives it). The ops
+/// after the draw run as ever. Also when a stop unwinds through the replay, what waited is made first.
+fn replay_patched(e: &mut Engine, ops: &[Op], id: u32, p: Patched) -> Patch {
+    let (run_from, draw_at) = (p.run_from as usize, p.draw_at as usize);
+    rt::device_defer_begin();
+    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for (i, op) in ops[..=draw_at].iter().enumerate() {
+            // From here the draw's own calls are the backend record's commands.
+            if i == run_from {
+                rt::device_defer_mark();
+            }
+            match op {
+                Op::Write(at, bytes) => e.mem.write(*at, bytes),
+                Op::Leaf(leaf) => replay_call(e, *leaf),
+                Op::Device(call) => {
+                    rt::device_replay(e, call);
+                }
+            }
+        }
+    }));
+    let how = rt::device_defer_end();
+    if let Err(stop) = ran {
+        rt::device_deferred_make(e);
+        std::panic::resume_unwind(stop);
+    }
+    let came = match how {
+        rt::Deferral::Kept if draw_items::patched(e, id) => Patch::Drawn,
+        rt::Deferral::Kept => {
+            rt::device_deferred_make(e);
+            Patch::Refused
+        }
+        rt::Deferral::Made => Patch::Made,
+        rt::Deferral::Missed => {
+            rt::device_deferred_make(e);
+            Patch::Missed
+        }
+    };
+    replay(e, &ops[draw_at + 1..]);
+    came
+}
+
 fn replay_leaf(e: &mut Engine, leaf: Leaf) {
     // As at the build ([`leaf`]): the run of the draw's own commands held so far ends here.
     draw_items::interrupt(e);
+    replay_call(e, leaf);
+}
+
+/// A kept call made again ([`replay_leaf`] without the end of the held run: a patched replay holds nothing).
+fn replay_call(e: &mut Engine, leaf: Leaf) {
     use crate::shader::{state, FAMILY as SHADER};
     use engine_core::ptr::Ptr;
     use engine_core::typed_call;
@@ -1595,7 +1722,7 @@ fn summary(s: &Stats, records: usize) -> String {
     let each = |ns: u64, n: u64| ns as f64 / 1000.0 / n.max(1) as f64;
     let per = |n: u64| n as f64 / s.replayed.max(1) as f64;
     format!(
-        "NV_DRAW_ITEMS: {} draws: {} replayed, {} built (new {}, own bytes changed {}, inputs changed {}, device reached outside the record {}), {} plain while resting ({} rests); {} checked, {} differed{}; {records} records; inputs that broke records most since the last line: [{top}]; differed first at: [{differed}]{audit}; items: {} drawn, {} plain, {} not the record's; backend records: {} sent, {} plain; check items: {} beside their old form, {} dropped; records dropped for a new device: {}; microseconds each: build {:.2}, replay {:.2} (look-up and compares {:.2}, its ops {:.2}; {:.1} writes, {:.1} kept calls, {:.1} device calls a replay), plain {:.2} (the set-up and draw alone, as with the switch off; {} replayable draws drawn plainly), plain while resting {:.2}",
+        "NV_DRAW_ITEMS: {} draws: {} replayed, {} built (new {}, own bytes changed {}, inputs changed {}, device reached outside the record {}), {} plain while resting ({} rests); {} checked, {} differed{}; {records} records; inputs that broke records most since the last line: [{top}]; differed first at: [{differed}]{audit}; patched items: {} drawn, {} refused, {} with a call that could not wait, {} with the device reached besides the calls; items: {} drawn, {} plain, {} not the record's; backend records: {} sent, {} plain; check items: {} beside their old form, {} dropped; records dropped for a new device: {}; microseconds each: build {:.2}, replay {:.2} (look-up and compares {:.2}, its ops {:.2}; {:.1} writes, {:.1} kept calls, {:.1} device calls a replay), plain {:.2} (the set-up and draw alone, as with the switch off; {} replayable draws drawn plainly), plain while resting {:.2}",
         s.seen,
         s.replayed,
         built,
@@ -1608,6 +1735,10 @@ fn summary(s: &Stats, records: usize) -> String {
         s.checked,
         s.mismatched,
         s.first_mismatch.as_deref().map_or_else(String::new, |m| format!(" (first: {m})")),
+        s.patched,
+        s.patched_refused,
+        s.patched_made,
+        s.patched_missed,
         s.items,
         s.items_plain,
         s.items_other,
@@ -1983,6 +2114,10 @@ mod tests {
         assert!(!all.contains(&0));
     }
 
+    /// A patched item the test hooks were offered: its record, its mark, and each deferred call's slot and whether it is
+    /// the draw's own.
+    type PatchedCalls = (u32, usize, Vec<(u32, bool)>);
+
     thread_local! {
         /// The test hooks' log of what was asked, their answer to a record (`None`: plain), what they were told to
         /// drop, and their epoch.
@@ -1990,23 +2125,40 @@ mod tests {
         static RECORDED: Cell<Option<u64>> = const { Cell::new(Some(77)) };
         static DROPPED: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
         static EPOCH: Cell<u64> = const { Cell::new(0) };
+        /// Whether a record's answer says a patched item can draw it; the answer to a patched item, and the deferred
+        /// calls it was given (record, mark, each call's slot and whether it is the draw's own).
+        static PATCHABLE: Cell<bool> = const { Cell::new(false) };
+        static PATCH_ANSWER: Cell<bool> = const { Cell::new(false) };
+        static PATCHED: RefCell<Vec<PatchedCalls>> = const { RefCell::new(Vec::new()) };
     }
 
-    /// TEST DATA: the platform layer's side as a log (a record answered `RECORDED`, an item drawn); other threads'
-    /// tests see their own empty log and plain answers, as without hooks. Its interrupt reaches the device's state
-    /// as the platform's flush does.
+    /// TEST DATA: the platform layer's side as a log (a record answered `RECORDED`, patchable when `PATCHABLE`; an
+    /// item drawn; a patched item answered `PATCH_ANSWER`); other threads' tests see their own empty log and plain
+    /// answers, as without hooks. Its interrupt reaches the device's state as the platform's flush does.
     static TEST_HOOKS: draw_items::Hooks = draw_items::Hooks {
         begin: |_, ask| ASKS.with(|a| a.borrow_mut().push(ask)),
         end: |_| match ASKS.with(|a| a.borrow().last().copied()) {
-            Some(Ask::Record { .. }) => {
-                RECORDED.with(Cell::get).map_or(Done::Plain, Done::Recorded)
-            }
+            Some(Ask::Record { .. }) => RECORDED.with(Cell::get).map_or(Done::Plain, |hash| {
+                if PATCHABLE.with(Cell::get) {
+                    Done::Patchable(hash)
+                } else {
+                    Done::Recorded(hash)
+                }
+            }),
             Some(Ask::Item { .. }) => Done::Drawn,
             None => Done::Plain,
         },
         interrupt: |_| rt::note_device_state(),
         forget: |_, ids| DROPPED.with(|d| d.borrow_mut().extend_from_slice(ids)),
         epoch: || EPOCH.with(Cell::get),
+        patched: |_, id| {
+            let calls = rt::with_deferred(|d| {
+                let calls = d.calls().map(|(c, _)| (c.slot, c.own)).collect();
+                (d.mark(), calls)
+            });
+            PATCHED.with(|p| p.borrow_mut().push((id, calls.0, calls.1)));
+            PATCH_ANSWER.with(Cell::get)
+        },
     };
 
     fn asks() -> Vec<Ask> {
@@ -2093,6 +2245,139 @@ mod tests {
         reset_for_tests();
     }
 
+    thread_local! {
+        /// The test device's calls (slots), in order.
+        static DEVICE_LOG: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn device_log() -> Vec<u32> {
+        DEVICE_LOG.with(|l| std::mem::take(&mut *l.borrow_mut()))
+    }
+
+    /// A device whose `SetRenderState`, `SetTransform`, `SetStreamSource` and `DrawPrimitive` log their slot
+    /// ([`DEVICE_LOG`]), and a render state cache of it: (device, cache).
+    fn logging_device(e: &mut Engine) -> (u32, u32) {
+        use engine_core::abi::{AbiFn, Ret};
+        fn logged<const SLOT: u32>(_: &mut Engine, _: &[u32]) -> Ret {
+            DEVICE_LOG.with(|l| l.borrow_mut().push(SLOT));
+            Ret::default()
+        }
+        let (device, vtable) = (e.mem.alloc(8), e.mem.alloc(0x200));
+        e.mem.set_u32(device, vtable);
+        let functions: [(u32, AbiFn); 4] = [
+            (0xe4, logged::<0xe4>),
+            (0xb0, logged::<0xb0>),
+            (0x190, logged::<0x190>),
+            (0x144, logged::<0x144>),
+        ];
+        for (slot, f) in functions {
+            e.register(0x0400_6000 + slot, f);
+            e.mem.set_u32(vtable + slot, 0x0400_6000 + slot);
+        }
+        let cache = e.mem.alloc(0x1200);
+        e.mem.set_u32(
+            cache + crate::shader::layout::NiDX9RenderState::m_pkD3DDevice9.off,
+            device,
+        );
+        let _ = device_log();
+        (device, cache)
+    }
+
+    /// With the backend able to draw a record as a patched item, its replay makes no device call: its setter call
+    /// writes the state cache as ever and every call waits until the draw, where the platform layer is given them
+    /// all, in order (the setter's, then from the mark the record's own). Refused, they are made as they came. A
+    /// call that cannot wait (a transform) makes those before it and itself at once, and the record draws as a
+    /// stage-1 item from then on.
+    #[test]
+    fn a_patched_replay_defers_every_device_call_to_its_draw() {
+        use engine_core::ptr::Ptr;
+        draw_items::install(&TEST_HOOKS);
+        let mut e = Engine::new();
+        let (device, cache) = logging_device(&mut e);
+        let cull = cache + crate::shader::layout::NiDX9RenderState::auiRenderStates.off + 22 * 8;
+        let block = e.mem.alloc(0x40);
+        reset_for_tests();
+        let _ = asks();
+        PATCHABLE.with(|p| p.set(true));
+        set_mode_for_tests(Some(Mode::On));
+        let (runs, transform) = (Cell::new(0u32), Cell::new(false));
+        let body = |e: &mut Engine| {
+            runs.set(runs.get() + 1);
+            let _ = capture::word(e, block, 0);
+            crate::shader::state::set_render_state(e, Ptr::new(cache), 22, 1, 0, 0);
+            rt::device_set_stream_source(e, device, 0, 0x50, 0, 16);
+            if transform.get() {
+                rt::device_vcall(e, device, 0xb0, &[256, block]);
+            }
+            rt::device_draw_primitive(e, device, 4, 0, 2);
+        };
+        world(|| draw(&mut e, KEY, body));
+        assert_eq!(device_log(), [0xe4, 0x190, 0x144], "the build's calls");
+        let patched = KEEP.with(|k| k.borrow().records[&KEY].patched);
+        assert_eq!(
+            patched,
+            Some(Patched {
+                run_from: 1,
+                draw_at: 2
+            })
+        );
+        let id = recorded(&asks(), 0, false);
+        // Replayed: the cache sends the state again (another value there now), but nothing reaches the device.
+        e.mem.set_u32(cull, 2);
+        PATCH_ANSWER.with(|a| a.set(true));
+        world(|| draw(&mut e, KEY, body));
+        assert_eq!(runs.get(), 1, "replayed");
+        assert_eq!(device_log(), [], "no call made");
+        assert_eq!(e.mem.u32(cull), 1, "the cache written as ever");
+        let given = PATCHED.with(|p| std::mem::take(&mut *p.borrow_mut()));
+        assert_eq!(
+            given,
+            [(id, 1, vec![(0xe4, false), (0x190, true), (0x144, true)])]
+        );
+        // Refused: made as they came.
+        e.mem.set_u32(cull, 2);
+        PATCH_ANSWER.with(|a| a.set(false));
+        world(|| draw(&mut e, KEY, body));
+        assert_eq!(device_log(), [0xe4, 0x190, 0x144]);
+        assert_eq!(asks(), [], "nothing held");
+        let given = PATCHED.with(|p| std::mem::take(&mut *p.borrow_mut()));
+        assert_eq!(given.len(), 1, "offered, refused");
+        // A record with a call that cannot wait: built again (its input changed), then replayed.
+        transform.set(true);
+        e.mem.set_u32(block, 1);
+        world(|| draw(&mut e, KEY, body));
+        let id = recorded(&asks(), id, false);
+        let _ = device_log();
+        e.mem.set_u32(cull, 2);
+        PATCH_ANSWER.with(|a| a.set(true));
+        world(|| draw(&mut e, KEY, body));
+        assert_eq!(runs.get(), 2);
+        assert_eq!(
+            device_log(),
+            [0xe4, 0x190, 0xb0, 0x144],
+            "made at the transform, in order"
+        );
+        assert!(PATCHED.with(|p| p.borrow().is_empty()), "no patched item");
+        world(|| draw(&mut e, KEY, body));
+        let item = Ask::Item {
+            id,
+            hash: 77,
+            check: false,
+        };
+        assert_eq!(asks(), [item], "a stage-1 item from then on");
+        let s = summary_now();
+        assert!(
+            s.contains(
+                "patched items: 1 drawn, 1 refused, 1 with a call that could not wait, 0 with"
+            ),
+            "{s}"
+        );
+        PATCHABLE.with(|p| p.set(false));
+        PATCH_ANSWER.with(|a| a.set(false));
+        set_mode_for_tests(None);
+        reset_for_tests();
+    }
+
     /// A set-up that reached the device outside the calls the recorder saw is never replayed; a held run's flush
     /// at a setter call (the hooks' interrupt, which reaches the device's state) is no such reach (review of #1108).
     #[test]
@@ -2159,6 +2444,8 @@ mod tests {
             replayable: true,
             last_used,
             item: Some((id, 0)),
+            patched: None,
+            leaves_typed: true,
             streak: 0,
             rest: 0,
         };
@@ -2196,6 +2483,8 @@ mod tests {
                 replayable: true,
                 last_used: 990 + u64::from(i),
                 item: Some((100 + i, 0)),
+                patched: None,
+                leaves_typed: true,
                 streak: 0,
                 rest: 0,
             };

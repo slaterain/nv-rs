@@ -25,6 +25,7 @@ use super::d3d9real::Sink;
 use d3d9_stream::kept::Commands;
 use d3d9_stream::{Cmd, Data, Reply};
 use engine_core::draw_items::{Ask, Done, Hooks};
+use engine_core::real_threads::{Deferred, DeferredCall};
 use engine_core::Engine;
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -38,6 +39,9 @@ struct Held {
     cmds: Commands,
     registers: Vec<u8>,
     done: Option<Done>,
+    /// A run was sent as it came for being as long as the backend keeps: the record is a cut-off tail of the draw's
+    /// own commands, so no patched item draws it.
+    capped: bool,
 }
 
 impl Held {
@@ -99,6 +103,7 @@ fn begin(e: &mut Engine, ask: Ask) {
             cmds,
             registers,
             done: None,
+            capped: false,
         });
     });
     HOLDING.with(|h| h.set(device != 0));
@@ -162,7 +167,197 @@ pub(super) static HOOKS: Hooks = Hooks {
     interrupt,
     forget,
     epoch,
+    patched,
 };
+
+thread_local! {
+    /// A patched item's patches as they are built (no allocation per item).
+    static PATCHES: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The `SetConstants` kind of a constant upload's device slot.
+fn constant_kind(slot: u32) -> Option<u8> {
+    match slot {
+        0x178 => Some(0),
+        0x180 => Some(1),
+        0x188 => Some(2),
+        0x1b4 => Some(3),
+        0x1bc => Some(4),
+        0x1c4 => Some(5),
+        _ => None,
+    }
+}
+
+/// The command a deferred device call is when the device takes it (`engine_core::real_threads::DeferredCall`, its
+/// structure's bytes): as the per-call path records it (`super::d3d9real`'s setters); None for a call the item form
+/// does not carry.
+fn command<'a>(c: &DeferredCall, bytes: &'a [u8]) -> Option<Cmd<Data<'a>>> {
+    let a = c.args();
+    let device = c.this;
+    Some(match (c.slot, a.len()) {
+        (0xe4, 2) => Cmd::SetRenderState {
+            device,
+            state: a[0],
+            value: a[1],
+        },
+        (0x10c, 3) => Cmd::SetTextureStageState {
+            device,
+            stage: a[0],
+            kind: a[1],
+            value: a[2],
+        },
+        (0x114, 3) => Cmd::SetSamplerState {
+            device,
+            sampler: a[0],
+            kind: a[1],
+            value: a[2],
+        },
+        (0x104, 2) => Cmd::SetTexture {
+            device,
+            sampler: a[0],
+            texture: a[1],
+        },
+        (0x15c, 1) => Cmd::SetVertexDeclaration {
+            device,
+            declaration: a[0],
+        },
+        (0x164, 1) => Cmd::SetFvf { device, fvf: a[0] },
+        (0x170 | 0x1ac, 1) => Cmd::SetShader {
+            device,
+            pixel: c.slot == 0x1ac,
+            shader: a[0],
+        },
+        (0x190, 4) => Cmd::SetStreamSource {
+            device,
+            stream: a[0],
+            buffer: a[1],
+            offset: a[2],
+            stride: a[3],
+        },
+        (0x1a0, 1) => Cmd::SetIndices {
+            device,
+            buffer: a[0],
+        },
+        (0xdc, 2) if bytes.len() == 16 => Cmd::SetClipPlane {
+            device,
+            index: a[0],
+            plane: std::array::from_fn(|i| {
+                u32::from_le_bytes(bytes[4 * i..4 * i + 4].try_into().expect("4 bytes"))
+            }),
+        },
+        (0x144, 3) => Cmd::DrawPrimitive {
+            device,
+            kind: a[0],
+            start: a[1],
+            count: a[2],
+        },
+        (0x148, 6) => Cmd::DrawIndexedPrimitive {
+            device,
+            kind: a[0],
+            base_vertex: a[1] as i32,
+            min_index: a[2],
+            vertices: a[3],
+            start_index: a[4],
+            count: a[5],
+        },
+        (slot, 3) => Cmd::SetConstants {
+            device,
+            kind: constant_kind(slot)?,
+            start: a[0],
+            count: a[2],
+            data: Data::Bytes(bytes),
+        },
+        _ => return None,
+    })
+}
+
+/// Record `id` drawn as a patched item from this thread's deferred device calls
+/// (`engine_core::draw_items::patched`). Refused on the drawing side and while a drawing cut is open on the device
+/// (the bulk update's refusal): with the drawing thread on, its calls are made as they came (review of #1227; the
+/// typed draw code asks for none while the drawing thread's packets are on). Refused too without a device, or when
+/// [`patched_from`] refuses.
+fn patched(e: &mut Engine, id: u32) -> bool {
+    if super::d3d9draw::drawing_thread() {
+        return false;
+    }
+    let device = device_now(e);
+    if device == 0 {
+        return false;
+    }
+    let _device = engine_core::real_threads::device_guard(e);
+    if super::d3d9real::sink_of(e).is_none() {
+        return false;
+    }
+    engine_core::real_threads::with_deferred(|d| patched_from(e, device, id, d))
+}
+
+/// [`patched`] under the device lock. The calls (`d`) must all be the device's and carried by the item form, with the
+/// draw last and alone. The item is then, in order: the state sets of the setters and camera set-ups (and of the
+/// draw's own calls made before the record's commands begin: [`engine_core::real_threads::Deferred::mark`]) sent as
+/// they are; the record's own commands, which the backend keeps (their state sets are the own calls' after the mark,
+/// with the same words); the patches, every constant upload of the calls in their order (the record's own uploads
+/// among them, so every register the record sets is set again with the replay's values, and a register set twice
+/// ends with its last value: obligations a and b of the review of #1220); its draw. The model is brought by one
+/// [`bulk_update`](super::d3d9device::bulk_update) to where exactly those sets leave it (the record's own uploads
+/// left out of its list: the patches set the same registers after them; review of #1227), and the objects it let go
+/// of end after the item. False, with nothing sent or changed, when a call is not one of those or the update is
+/// refused.
+fn patched_from(e: &mut Engine, device: u32, id: u32, d: &Deferred) -> bool {
+    let n = d.len();
+    let carried = d.calls().enumerate().all(|(i, (c, bytes))| {
+        c.this == device
+            && command(c, bytes).is_some_and(|cmd| {
+                matches!(
+                    cmd,
+                    Cmd::DrawPrimitive { .. } | Cmd::DrawIndexedPrimitive { .. }
+                ) == (i + 1 == n)
+            })
+    });
+    if n == 0 || !carried {
+        return false;
+    }
+    let mark = d.mark();
+    let constant = |c: &DeferredCall| constant_kind(c.slot).is_some();
+    let sets = d.calls().take(n - 1).enumerate();
+    let ordinary = sets
+        .clone()
+        .filter(move |(i, (c, _))| !constant(c) && !(c.own && *i >= mark));
+    let own = sets
+        .clone()
+        .filter(move |(i, (c, _))| !constant(c) && c.own && *i >= mark);
+    let uploads = sets.filter(move |(_, (c, _))| constant(c));
+    fn cmd<'a>((_, (c, bytes)): (usize, (&DeferredCall, &'a [u8]))) -> Cmd<Data<'a>> {
+        command(c, bytes).expect("checked above")
+    }
+    let list = ordinary.clone().chain(own).chain(uploads.clone()).map(cmd);
+    let Ok(ending) = super::d3d9device::bulk_update(e, device, list) else {
+        return false;
+    };
+    PATCHES.with(|p| {
+        let mut p = p.borrow_mut();
+        p.clear();
+        for (_, (c, bytes)) in uploads {
+            let a = c.args();
+            let kind = u32::from(constant_kind(c.slot).expect("an upload"));
+            for word in [kind, a[0], a[2]] {
+                p.extend_from_slice(&word.to_le_bytes());
+            }
+            p.extend_from_slice(bytes);
+        }
+        let mut s = super::d3d9real::sink_of(e).expect("checked by the caller");
+        for c in ordinary.map(cmd) {
+            s.submit_now(c);
+        }
+        s.submit_now(Cmd::DrawPatched {
+            device,
+            id,
+            check: 0,
+            patches: Data::Bytes(&p),
+        });
+    });
+    super::d3d9device::end_after_bulk(e, ending);
+    true
+}
 
 /// The run held goes out as it came; holding goes on.
 fn flush(s: &mut Sink<'_>, held: &mut Held) {
@@ -187,7 +382,25 @@ fn finish(s: &mut Sink<'_>, held: &mut Held) {
             for c in held.cmds.iter() {
                 s.submit_now(c);
             }
-            Done::Recorded(held.cmds.shape())
+            // A record of state sets and its draw, whole: its kept states (none: a patched item's own sets go before
+            // it as ordinary ones, [`patched`]) let a `DrawPatched` draw it. Never one holding an upload, a creation
+            // or a clear (review of #1220).
+            let last = held.cmds.len().saturating_sub(1);
+            let sets = held
+                .cmds
+                .iter()
+                .take(last)
+                .all(|c| d3d9_stream::kept::is_state(&c));
+            if !check && sets && !held.capped {
+                s.submit_now(Cmd::KeepStates {
+                    device,
+                    id,
+                    count: 0,
+                });
+                Done::Patchable(held.cmds.shape())
+            } else {
+                Done::Recorded(held.cmds.shape())
+            }
         }
         Ask::Item { id, hash, check } if held.cmds.shape() == hash => {
             s.submit_now(Cmd::DrawItem {
@@ -234,6 +447,7 @@ pub(super) fn submit(s: &mut Sink<'_>, cmd: Cmd<Data<'_>>) -> Reply {
         // A run the backend would cut goes out as it came, and a new one starts (a replay cuts at the same place).
         if held.cmds.len() >= d3d9_stream::kept::MOST_COMMANDS {
             flush(s, &mut held);
+            held.capped = true;
         }
         held.cmds.keep(cmd);
         if let Cmd::SetConstants { data, .. } = cmd {
@@ -295,6 +509,7 @@ mod tests {
                 cmds: Commands::default(),
                 registers: Vec::new(),
                 done: None,
+                capped: false,
             });
         });
         for &(own, cmd, word) in cmds {
@@ -371,7 +586,7 @@ mod tests {
             check: false,
         };
         let (got, done) = run(&mut stream, &log, record, &one_draw(7));
-        let Some(Done::Recorded(hash)) = done else {
+        let Some(Done::Patchable(hash)) = done else {
             panic!("{done:?}");
         };
         let want = |w: u32| {
@@ -418,7 +633,7 @@ mod tests {
             check: false,
         };
         let (got, done) = run(&mut stream, &log, record, &cmds);
-        assert!(matches!(done, Some(Done::Recorded(_))), "{done:?}");
+        assert!(matches!(done, Some(Done::Patchable(_))), "{done:?}");
         assert_eq!(
             got,
             [
@@ -502,7 +717,7 @@ mod tests {
         );
         rt::device_record_end();
         let want = shape(&[(stream_source(), 0), (constants(), 7), (draw(), 0)]);
-        assert_eq!(items::end(&mut e), Done::Recorded(want));
+        assert_eq!(items::end(&mut e), Done::Patchable(want));
         items::forget(&mut e, &[3]);
         assert!(!rt::device_lock_held(&e));
         assert_eq!(
@@ -572,7 +787,7 @@ mod tests {
             check: false,
         };
         let (_, done) = run(&mut stream, &log, record, &one_draw(7));
-        let Some(Done::Recorded(hash)) = done else {
+        let Some(Done::Patchable(hash)) = done else {
             panic!("{done:?}");
         };
         let item = Ask::Item {
@@ -604,7 +819,203 @@ mod tests {
         assert_eq!(got.len(), most + 4, "every command went out once");
         let mut last = vec![(constants(), 1); 3];
         last.push((draw(), 0));
-        assert_eq!(done, Some(Done::Recorded(shape(&last))));
+        assert_eq!(
+            done,
+            Some(Done::Recorded(shape(&last))),
+            "a cut-off tail: no patched item's"
+        );
+    }
+
+    /// The texture lines the patched items' tests' device takes (A8R8G8B8 managed textures; TEST DATA).
+    const TEXTURES: &str = "\nDomain\td1\t15,31545844\nCheckDeviceFormat\t0 1 16 0 3\t0\t\td1";
+
+    /// A device with a kept records' stream (its log), the hooks, and `n` textures, each forwarded (its end is a
+    /// command): (engine, device, textures, log).
+    fn patched_world(n: usize) -> (Engine, u32, Vec<u32>, Arc<Mutex<Vec<String>>>) {
+        use super::super::d3d9device::tests::{device_with, new_texture};
+        let (mut e, device) = device_with(TEXTURES, 0x40);
+        let textures: Vec<u32> = (0..n)
+            .map(|_| new_texture(&mut e, device, [4, 4, 1, 0, 21, 1]))
+            .collect();
+        // The cull mode the tests read set first (the model answers no default for it).
+        assert_eq!(e.vcall(device, 4 * 57, &[22, 2]).u32(), 0);
+        let (stream, log) = kept_stream();
+        super::super::d3d9real::test_stream(&mut e, device, stream);
+        for t in &textures {
+            super::super::d3d9real::test_forwarded(&mut e, *t);
+        }
+        engine_core::draw_items::install(&HOOKS);
+        (e, device, textures, log)
+    }
+
+    /// Record `id` built from the draw's own commands: a stream source of no buffer, an upload of first word 7, the
+    /// draw.
+    fn build_record(e: &mut Engine, id: u32) -> Done {
+        use engine_core::draw_items as items;
+        let record = Ask::Record {
+            id,
+            forget: 0,
+            check: false,
+        };
+        items::begin(e, record);
+        let unbound = Cmd::SetStreamSource {
+            device: 1,
+            stream: 0,
+            buffer: 0,
+            offset: 0,
+            stride: 16,
+        };
+        own(e, unbound, 0);
+        own(e, constants(), 7);
+        own(e, draw(), 0);
+        items::end(e)
+    }
+
+    /// One of the draw's own calls as a record keeps it (no structure kept: one is read where it lies).
+    fn own_call(this: u32, slot: u32, args: &[u32]) -> engine_core::real_threads::DeviceCall {
+        engine_core::real_threads::DeviceCall {
+            this,
+            slot,
+            args: args.to_vec(),
+            data: Vec::new(),
+            data_arg: None,
+        }
+    }
+
+    /// The record's own calls made again while deferring (after the mark): its stream source, its upload (of
+    /// first word `word`, from guest memory) and its draw.
+    fn replay_own(e: &mut Engine, device: u32, word: u32) {
+        use engine_core::real_threads as rt;
+        rt::device_defer_mark();
+        rt::device_replay(e, &own_call(device, 0x190, &[0, 0, 0, 16]));
+        let registers = e.mem.alloc(16);
+        e.mem.set_u32(registers, word);
+        rt::device_replay(e, &own_call(device, 0x178, &[0, registers, 1]));
+        rt::device_replay(e, &own_call(device, 0x144, &[4, 0, 2]));
+    }
+
+    /// A word the device model answers for `Get*(args.., out)` at vtable index `index`.
+    fn get(e: &mut Engine, device: u32, index: u32, args: &[u32]) -> u32 {
+        let out = e.mem.alloc(16);
+        let args: Vec<u32> = args.iter().copied().chain([out]).collect();
+        assert_eq!(e.vcall(device, 4 * index, &args).u32(), 0);
+        e.mem.u32(out)
+    }
+
+    /// A record of state sets and its draw is patchable (`KeepStates` of none after it, so the backend can draw it as
+    /// a patched item). Its replay with every device call deferred reaches nothing until the draw; then one patched
+    /// item carries them: the setter's set as it is, the record's own commands (its upload with the build's
+    /// registers), the patches (every upload, with the replay's registers), the draw. The model holds what the calls
+    /// would have left.
+    #[test]
+    fn a_patched_item_is_the_deferred_calls_at_once() {
+        use engine_core::draw_items as items;
+        use engine_core::real_threads as rt;
+        let (mut e, device, _, log) = patched_world(0);
+        assert!(matches!(build_record(&mut e, 3), Done::Patchable(_)));
+        log.lock().unwrap().clear();
+        rt::device_defer_begin();
+        rt::device_vcall(&mut e, device, 0xe4, &[22, 1]);
+        replay_own(&mut e, device, 9);
+        assert_eq!(rt::device_defer_end(), rt::Deferral::Kept);
+        assert!(log.lock().unwrap().is_empty(), "nothing before the draw");
+        assert_ne!(get(&mut e, device, 58, &[22]), 1, "the model not yet");
+        assert!(items::patched(&mut e, 3));
+        assert_eq!(
+            *log.lock().unwrap(),
+            [
+                "SetRenderState",
+                "SetStreamSource",
+                "SetConstants 7",
+                "SetConstants 9",
+                "DrawPrimitive"
+            ]
+        );
+        assert_eq!(get(&mut e, device, 58, &[22]), 1, "the setter's state");
+        let out = e.mem.alloc(16);
+        assert_eq!(e.vcall(device, 4 * 95, &[0, out, 1]).u32(), 0);
+        assert_eq!(e.mem.u32(out), 9, "the replay's register");
+    }
+
+    /// No patched item (nothing sent, the model as it was, the caller makes the calls): with a drawing cut open,
+    /// for a call of another device, for a draw that is not last and alone, for no record's build being patchable
+    /// (a check run's).
+    #[test]
+    fn a_patched_item_is_refused_when_it_could_differ() {
+        use engine_core::draw_items as items;
+        use engine_core::real_threads as rt;
+        let (mut e, device, _, log) = patched_world(0);
+        assert!(matches!(build_record(&mut e, 3), Done::Patchable(_)));
+        log.lock().unwrap().clear();
+        let refused = |e: &mut Engine, why: &str| {
+            assert_eq!(rt::device_defer_end(), rt::Deferral::Kept, "{why}");
+            assert!(!items::patched(e, 3), "{why}");
+            assert!(log.lock().unwrap().is_empty(), "{why}: nothing sent");
+            assert_ne!(get(e, device, 58, &[22]), 1, "{why}: the model as it was");
+        };
+        assert!(super::super::d3d9draw::draw_cut(&mut e, device));
+        rt::device_defer_begin();
+        rt::device_vcall(&mut e, device, 0xe4, &[22, 1]);
+        replay_own(&mut e, device, 9);
+        refused(&mut e, "a cut open");
+        super::super::d3d9draw::draw_join(&mut e);
+        log.lock().unwrap().clear();
+        rt::device_defer_begin();
+        rt::device_vcall(&mut e, device + 4, 0xe4, &[22, 1]);
+        rt::device_vcall(&mut e, device, 0xe4, &[22, 1]);
+        replay_own(&mut e, device, 9);
+        refused(&mut e, "another device");
+        rt::device_defer_begin();
+        rt::device_vcall(&mut e, device, 0xe4, &[22, 1]);
+        replay_own(&mut e, device, 9);
+        rt::device_replay(&mut e, &own_call(device, 0x144, &[4, 0, 2]));
+        refused(&mut e, "two draws");
+        rt::device_defer_begin();
+        rt::device_vcall(&mut e, device, 0xe4, &[22, 1]);
+        rt::device_defer_mark();
+        refused(&mut e, "no draw");
+        // A check run's record is no patched item's.
+        let record = Ask::Record {
+            id: 4,
+            forget: 0,
+            check: true,
+        };
+        items::begin(&mut e, record);
+        own(&mut e, draw(), 0);
+        assert!(matches!(items::end(&mut e), Done::Recorded(_)));
+    }
+
+    /// A texture the program released while a sampler holds it, set again by a setter and then replaced: its end goes
+    /// after the patched item (review of #1227), so the backend never gets a set of a texture it has ended.
+    #[test]
+    fn an_object_a_patched_item_lets_go_of_ends_after_it() {
+        use engine_core::draw_items as items;
+        use engine_core::real_threads as rt;
+        let (mut e, device, textures, log) = patched_world(2);
+        let (b, c) = (textures[0], textures[1]);
+        assert_eq!(e.vcall(device, 4 * 65, &[0, b]).u32(), 0);
+        assert_eq!(e.vcall(b, 8, &[]).u32(), 0, "released, still bound");
+        assert!(matches!(build_record(&mut e, 5), Done::Patchable(_)));
+        log.lock().unwrap().clear();
+        rt::device_defer_begin();
+        rt::device_vcall(&mut e, device, 0x104, &[0, b]);
+        rt::device_vcall(&mut e, device, 0x104, &[0, c]);
+        replay_own(&mut e, device, 9);
+        assert_eq!(rt::device_defer_end(), rt::Deferral::Kept);
+        assert!(items::patched(&mut e, 5));
+        assert_eq!(
+            *log.lock().unwrap(),
+            [
+                "SetTexture",
+                "SetTexture",
+                "SetStreamSource",
+                "SetConstants 7",
+                "SetConstants 9",
+                "DrawPrimitive",
+                "Destroy"
+            ]
+        );
+        assert_eq!(get(&mut e, device, 64, &[0]), c, "the sampler's texture");
     }
 
     /// A check run keeps the states set again to their value (review of #1108), as `NV_D3D9_REPEATS=keep` does.
@@ -635,7 +1046,7 @@ mod tests {
         assert!(matches!(device, Some(d) if d != 0));
         own(&mut e, stream_source(), 0);
         own(&mut e, draw(), 0);
-        assert!(matches!(items::end(&mut e), Done::Recorded(_)));
+        assert!(matches!(items::end(&mut e), Done::Patchable(_)));
         assert_eq!(
             DEVICE.with(Cell::get).1,
             device.unwrap(),
