@@ -32,12 +32,13 @@ use crate::native::Real;
 use engine_core::ptr::{Field, Ptr};
 use layout::{
     AStarQueue, AStarSearch, Arc, Counter, EdgeLocation, EdgePair, MeshEdge, NavMesh, NavMeshGrid,
-    NavMeshInfo, NavMeshTriangle, PathingLocation, Point2, SearchLocation, SimpleArray, SortNode,
-    Sphere,
+    NavMeshInfo, NavMeshTriangle, PathingLocation, PathingRequestLOS, Point2, SearchLocation,
+    SimpleArray, SortNode, Sphere,
 };
 
 pub mod layout;
 pub mod location;
+pub mod los_request;
 pub mod navmesh;
 pub mod point;
 pub mod pov;
@@ -254,6 +255,15 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006b_9cf0, pov::height_in(Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr, f32, f32) -> bool),
         entry!(0x006b_ab00, pov::segment_within(Ptr<NiPoint3>, f32, Ptr<NiPoint3>, Ptr<NiPoint3>) -> bool),
         entry!(0x006b_b570, pov::sphere_tangents(Ptr<Sphere>, Ptr<Sphere>, u32, Ptr) -> u32),
+        // The LOS request.
+        entry!(0x006e_57e0, los_request::new(Ptr<PathingRequestLOS>) -> Ptr<PathingRequestLOS>),
+        entry!(0x006e_5890, los_request::scalar_deleting_destructor(Ptr<PathingRequestLOS>, u32) -> Ptr<PathingRequestLOS>),
+        entry!(0x006e_58d0, los_request::destructor(Ptr<PathingRequestLOS>)),
+        entry!(0x006e_5940, los_request::copy_new(Ptr<PathingRequestLOS>, Ptr<PathingRequestLOS>) -> Ptr<PathingRequestLOS>),
+        entry!(0x006e_5a40, los_request::set_search_center(Ptr<PathingRequestLOS>, u32, u32, u32, f32)),
+        entry!(0x006e_5a80, los_request::copy_to(Ptr<PathingRequestLOS>, Ptr<PathingRequestLOS>)),
+        entry!(0x006e_5b20, los_request::save_game(Ptr<PathingRequestLOS>, Ptr)),
+        entry!(0x006e_5c00, los_request::load_game(Ptr<PathingRequestLOS>, Ptr)),
         // Pathing locations.
         entry!(0x0044_1110, location::world_space(Ptr<PathingLocation>) -> u32),
         entry!(0x006a_9520, location::is_valid(Ptr<PathingLocation>) -> bool),
