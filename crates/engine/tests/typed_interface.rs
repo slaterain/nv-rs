@@ -7656,7 +7656,8 @@ fn put_stats_pad(e: &mut Engine, variant: u32) {
 }
 
 /// `DoGamepad` past the top-menu check with every key: the limb picks, the page and sub page steps
-/// with the knob, the map and the inventory, keys 9, 0xb and 0xc, the stick's scroll.
+/// with the knob, the map and the inventory, keys 9, 0xb and 0xc, the stick's scroll. (The map's
+/// and the inventory's `Interface::` translations call `00704140` and `007048c0` plainly.)
 #[test]
 fn stats_menu_do_gamepad_every_key_diff() {
     Diff::new(engine_core::entry!(
@@ -7666,7 +7667,14 @@ fn stats_menu_do_gamepad_every_key_diff() {
     .in_arena_without_and(
         &[Arg::Object, Arg::Key, Arg::F32],
         CALLEES,
-        &[0x0071_f9f0, 0x0071_f570, 0x0070_27b0, 0x0070_2680],
+        &[
+            0x0071_f9f0,
+            0x0071_f570,
+            0x0070_27b0,
+            0x0070_2680,
+            0x0070_4140,
+            0x0070_48c0,
+        ],
         &[0x00ec_782f],
         &STATS_PAD_VARIANTS,
         put_stats_pad,
@@ -7759,7 +7767,10 @@ fn stats_menu_create_depth_diff() {
 /// [`put_stats_third`]'s variant 0 (an active effect, every cast answering object 226) with one of
 /// `UpdateActiveEffects`' rarer branches by the variant: the item's form kind 0xd (the name from the
 /// setting), no full name (the cast to `TESFullName`, `01183158`, answering 0: the virtual name), the
-/// usage monitor's word (`011c33f4`) the effect's setting (object 248), the setting without 0x2000.
+/// usage monitor's word (`011c33f4`) the effect's setting (object 248); the setting's archetype (0)
+/// without `007df1b0`'s flag 0x40 and the setting without 0x2000 (kept), the archetype with the flag
+/// and the setting without 0x2000 (skipped), the archetype with the flag and the setting with 0x2000
+/// (kept).
 fn put_stats_effects(e: &mut Engine, variant: u32) {
     use arena::object;
     put_stats_third(e, 0);
@@ -7774,7 +7785,15 @@ fn put_stats_effects(e: &mut Engine, variant: u32) {
             ..Ret::default()
         }),
         2 => e.mem.set_u32(0x011c_33f4, object(248)),
-        _ => e.mem.set_u32(object(248) + 0x58, 0),
+        3 => {
+            e.mem.set_u32(0x0118_3328, 0);
+            e.mem.set_u32(object(248) + 0x58, 0);
+        }
+        4 => {
+            e.mem.set_u32(0x0118_3328, 0x40);
+            e.mem.set_u32(object(248) + 0x58, 0);
+        }
+        _ => e.mem.set_u32(0x0118_3328, 0x40),
     }
 }
 
@@ -7790,7 +7809,7 @@ fn stats_menu_update_active_effects_branches_diff() {
         CALLEES,
         &[0x0071_f9f0, 0x0071_f570, 0x0070_27b0, 0x0070_2680],
         &[0x00ec_782f],
-        &[0, 1, 2, 3],
+        &[0, 1, 2, 3, 4, 5],
         put_stats_effects,
     )
     .max_calls(6000)
