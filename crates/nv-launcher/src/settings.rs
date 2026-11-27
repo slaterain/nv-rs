@@ -205,7 +205,7 @@ const PLAIN: [(&str, &str, &str); 44] = [
     ("bDeadLightGuard", "Destroyed light crash fix", "A light destroyed while something still used it no longer stops the game (seen in fights with JIP's projectile lights)."),
     ("bThreadHeap", "Faster memory handling", "The game gets memory for its objects and texts faster: the pause menu opens sooner with mods and fights stutter less."),
     ("bHalfLoadedMove", "Fast running crash fix", "Running fast across areas no longer crashes the game when a character there changes how the game runs it while it is still loading."),
-    ("bPlayerHighProcess", "Very fast travel crash fix", "Moving very fast across areas no longer crashes the game when you reach an area that is still being set up."),
+    ("bPlayerHighProcess", "Very fast movement crash fix", "Moving very fast across areas no longer crashes the game when you reach an area that is still being set up."),
     ("bTextureReadFirst", "Textures read ahead of drawing", "Texture files are read and unpacked first, so drawing does not wait for them."),
     ("bCellEntryWait", "No pause entering new areas", "Entering a new outdoor area no longer pauses for the areas loaded ahead; they load in the background afterwards."),
     ("bCellOffsets", "Faster area loads with mods", "Areas from mods (and from YUP or TTW) are found through a table made as the game loads, not by searching the file each time."),

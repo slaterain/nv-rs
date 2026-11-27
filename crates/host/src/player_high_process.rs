@@ -28,9 +28,13 @@
 //! `AddActorToTempChangeList` no longer queues the player for a level change (its current level
 //! is the desired one), `UpdateProcessLevel` returns before any change, and `MoveRefToNewSpace`'s
 //! unload branch (desired 3) never picks the player. The player is never in the process lists'
-//! array, so their own level updates never reach it. The three direct calls inside
-//! `mobileobject.rs` (`00932b70` and `00932d60`, run while a mobile object is loaded from a
-//! save) do not come through here and keep the translation's answer.
+//! array, so their own level updates never reach it. Besides the cell that is loaded but not
+//! attached, the original also answers lower for the player with no 3D outside a save load and
+//! with no cell at all; the row answers high there too. Each of those could only move the player
+//! down, which the game does not survive. The three direct calls inside `mobileobject.rs`
+//! (`00932b70` and `00932d60`, run while a mobile object is loaded from a save) do not come
+//! through here and keep the translation's answer; the last of them runs for the player on every
+//! save load, where the original answers high (saves load fine in the original).
 
 use crate::fixes::Fix;
 use engine::prelude::*;
