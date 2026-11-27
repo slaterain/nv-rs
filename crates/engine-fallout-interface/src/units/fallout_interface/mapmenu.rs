@@ -7021,7 +7021,7 @@ pub fn map_menu_update_world_map(e: &mut Engine, this: Ptr<MapMenu>) {
             e.call(NODE_DELETE, &args![list, 1u32]);
         }
     }
-    map_menu_add_map_icons(e, this);
+    e.call(0x0079_dbb0, &args![this]);
 }
 
 /// One marker of `UpdateWorldMap`'s list: a visible marker (not
@@ -7302,7 +7302,7 @@ pub fn map_menu_update_local_map(e: &mut Engine, this: Ptr<MapMenu>) {
                 node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
             }
         }
-        map_menu_add_map_icons(e, this);
+        e.call(0x0079_dbb0, &args![this]);
     }
     let tile_2 = map_tile(e, base, 2);
     e.call(TILE_SET_INT, &args![tile_2, 0xfa3u32, 1u32]);

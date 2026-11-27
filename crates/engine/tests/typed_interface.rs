@@ -99,7 +99,6 @@ const CALLEES: &[u32] = &[
     0x0047_7ba0,
     0x0047_e040,
     0x0047_e0e0,
-    0x0048_3710,
     0x0048_39c0,
     0x0048_3a00,
     0x0048_73d0,
@@ -369,12 +368,7 @@ const CALLEES: &[u32] = &[
     0x0078_db00,
     0x0078_e7c0,
     0x0079_17a0,
-    0x0079_8bf0,
-    0x0079_93d0,
-    0x0079_cdb0,
-    0x0079_d410,
     0x0079_dbb0,
-    0x0079_f640,
     0x007a_22d0,
     0x007a_7eb0,
     0x007a_8a10,
@@ -9035,10 +9029,11 @@ const MAP_VARIANTS: [u32; 7] = [0, 1, 2, 3, 4, 5, 6];
 /// (objects 133, 134; none in variant 2); the menu answered for the map file (00a03c90) and its
 /// class 0x3ff but in variant 2; the player (object 140): two notes (objects 150, 151: the first
 /// read, its quests the quest 160), two objectives (objects 170, 171 of the quests 160, done, and
-/// 161; the first's state 2) and the active quest 160 in variant 2; three challenges (objects 180 to
-/// 182 of the owner object 147: inserted dim, inserted, left out) and the type shown (the variant
-/// mod 3), challenge mode in variant 6; one radio station (object 185, the current one in the even
-/// variants); the clock in 50 ms steps (the step's time 0) and the waveform's frame 75.0; the heap.
+/// 161; the first's state 2) and the active quest 160 in variant 2; three challenges (objects 180
+/// to 182 of the owner object 147: inserted dim, inserted, left out) and the type shown (the
+/// variant mod 3), challenge mode in variant 6; one radio station (object 185, the current one in
+/// the even variants); the clock in 50 ms steps (the step's time 0) and the waveform's frame 75.0;
+/// the heap.
 fn put_map_menu(e: &mut Engine, variant: u32) {
     use arena::object;
     const MAP_PAGES: [u32; 13] = [
@@ -9173,6 +9168,7 @@ fn put_map_menu(e: &mut Engine, variant: u32) {
             ..Ret::default()
         }
     });
+    put_map_answers(e);
     put_map_rare(e, variant);
 }
 
@@ -9217,8 +9213,9 @@ const MAP_ITEM_VARIANTS: [u32; 6] = [0, 1, 2, 3, 4, 5];
 /// (objects 3 and 40) as the callbacks' items. As challenges, each variant one case of the filter:
 /// kinds 0, 3, 9, 1, 8 and 0xe of the type shown 0, 1, 2, 2, 1 and 0, the value above 0 (variants
 /// 0, 4, 5), the flag bit 2 (1) or the state bit 2 (2), none (3). As notes: their first quest the
-/// player's active quest (object 160) but in variant 4, all notes shown in variant 1. As objectives:
-/// object 3's quest the displayed one in variant 0. As stations: the form flag 0x800 in variant 1.
+/// player's active quest (object 160) but in variant 4, all notes shown in variant 1. As
+/// objectives: object 3's quest the displayed one in variant 0. As stations: the form flag 0x800 in
+/// variant 1.
 fn put_map_items(e: &mut Engine, variant: u32) {
     use arena::object;
     let v = variant as usize;
@@ -9246,9 +9243,9 @@ fn put_map_items(e: &mut Engine, variant: u32) {
 const MAP_SORT_VARIANTS: [u32; 5] = [0, 1, 2, 3, 4];
 
 /// Two list items for the sorts (objects 3 and 40: their tiles objects 110 and 112, their data
-/// objects 111 and 113, whose names are strings): the text alphas (`Tile::GetFloat` of any trait but
-/// `0xfac` answers the tile's float at +0x40, of `0xfac` its +0x44) 128.0 and 255.0, the other way
-/// round, both 255.0 with the indices 1 and 2, equal indices, the indices 2 and 1.
+/// objects 111 and 113, whose names are strings): the text alphas (`Tile::GetFloat` of any trait
+/// but `0xfac` answers the tile's float at +0x40, of `0xfac` its +0x44) 128.0 and 255.0, the other
+/// way round, both 255.0 with the indices 1 and 2, equal indices, the indices 2 and 1.
 fn put_map_sort(e: &mut Engine, variant: u32) {
     use arena::object;
     let v = variant as usize;
@@ -9296,8 +9293,8 @@ fn put_map_sort(e: &mut Engine, variant: u32) {
 
 /// The map menu's worlds, as settings of a Diff.
 trait MapMenuWorlds {
-    /// In [`put_map_menu`]'s world with `args`, the variants `variants`, `calls` calls at most a run;
-    /// `IsTopMenuID`'s translation reaches `007027b0` and `00702680` plainly.
+    /// In [`put_map_menu`]'s world with `args`, the variants `variants`, `calls` calls at most a
+    /// run; `IsTopMenuID`'s translation reaches `007027b0` and `00702680` plainly.
     fn in_map_menu(self, args: &'static [Arg], variants: &'static [u32], calls: usize) -> Diff;
 }
 
@@ -9482,8 +9479,8 @@ fn map_menu_do_controller_switch_diff() {
     .assert_same();
 }
 
-/// `UpdateMenu`: every page (its `UpdateCurrentPage` runs), no map menu, and the hour 13.75 with the
-/// real 60.0 (10: the minutes' x87 steps).
+/// `UpdateMenu`: every page (its `UpdateCurrentPage` runs), no map menu, and the hour 13.75 with
+/// the real 60.0 (10: the minutes' x87 steps).
 #[test]
 fn map_menu_update_menu_diff() {
     Diff::new(engine_core::entry!(
@@ -9913,25 +9910,26 @@ fn map_menu_fn_007a1b10_diff() {
 // ---- The map menu, part 3 ----------------------------------------------------------------------
 
 /// The variants: the local map (0), the world map (1), the quests page with no map tile (2), the
-/// notes page with a sound playing (3), the radio page with the sounds loading (4), no map menu (5),
-/// the notes page in challenge mode (6), the local map in an interior with the fog of war on and a
-/// grid of two by two cells to make (7). [`put_map_menu`]'s world (its variant's page; variant 7
-/// the local map's) with what the third part reads: the map tile (tile 2, object 102) but in variant 2; a reference's position (slot
-/// +0x1f4: object 201's three floats); the map rectangle 0.0 to 4096.0; the root space (object 206)
-/// on the world map; the map's player reference (object 207); the fast travel marker (object 208)
-/// in the odd variants; the north rotation cell (object 209) in variant 7; the next grid 0; the fog
-/// of war in the odd variants; a sound node (object 205, its next 0) as the current sound in
-/// variant 3 with the length 1000.0, the loading byte in variant 4; the grid side 1 (2 in variant
-/// 7); the settings' floats (the knob's step 0.5 and time 0.25, the note delay 1.0, the zoom limits
-/// 0.5 and 4.0 and the traits' ranges 0.0 to 1.0) and bytes (the quest markers on, the local
-/// step asked in variant 0); and the by-address functions whose answers the code reads through: the
-/// target, companion and marker lists (one node each, objects 210, 211, 212), the world map data
-/// (object 213: 256 x 128, cells -2..1), a marker's data (object 214: no reputation), a door's
-/// teleport (object 215: its reference object 207), a template's tile (object 216, its owner
-/// object 217), the font's dimensions (the result word), a colour's and a request's constructor
-/// (their own word), a point difference (the result word), the texture's surface object (object
-/// 218), a note's text object (object 219), a pathing array's entries (object 220: a set byte and a
-/// door, object 207), a subtitle element (object 221: a text) and a form's text (object 222).
+/// notes page with a sound playing (3), the radio page with the sounds loading (4), no map menu
+/// (5), the notes page in challenge mode (6), the local map in an interior with the fog of war on
+/// and a grid of two by two cells to make (7). [`put_map_menu`]'s world (its variant's page;
+/// variant 7 the local map's) with what the third part reads: the map tile (tile 2, object 102) but
+/// in variant 2; a reference's position (slot +0x1f4: object 201's three floats); the map rectangle
+/// 0.0 to 4096.0; the root space (object 206) on the world map; the map's player reference (object
+/// 207); the fast travel marker (object 208) in the odd variants; the north rotation cell (object
+/// 209) in variant 7; the next grid 0; the fog of war in the odd variants; a sound node (object
+/// 205, its next 0) as the current sound in variant 3 with the length 1000.0, the loading byte in
+/// variant 4; the grid side 1 (2 in variant 7); the settings' floats (the knob's step 0.5 and time
+/// 0.25, the note delay 1.0, the zoom limits 0.5 and 4.0 and the traits' ranges 0.0 to 1.0) and
+/// bytes (the quest markers on, the local step asked in variant 0); and the by-address functions
+/// whose answers the code reads through: the target, companion and marker lists (one node each,
+/// objects 210, 211, 212), the world map data (object 213: 256 x 128, cells -2..1), a marker's data
+/// (object 214: no reputation), a door's teleport (object 215: its reference object 207), a
+/// template's tile (object 216, its owner object 217), the font's dimensions (the result word), a
+/// colour's and a request's constructor (their own word), a point difference (the result word), the
+/// texture's surface object (object 218), a note's text object (object 219), a pathing array's
+/// entries (object 220: a set byte and a door, object 207), a subtitle element (object 221: a text),
+/// a form's text (object 222) and a marker's icon kind (3).
 fn put_map_world(e: &mut Engine, variant: u32) {
     use arena::object;
     const BASE: [u32; 8] = [0, 1, 2, 3, 4, 5, 6, 0];
@@ -9966,6 +9964,16 @@ fn put_map_world(e: &mut Engine, variant: u32) {
     e.mem.set_u32(menu + 0xc4, 0);
     e.mem
         .set_u32(0x011c_63cc + 4, if variant == 7 { 2 } else { 1 });
+    e.mem.set_u8(0x011d_a3b8 + 4, u8::from(variant == 0));
+}
+
+/// What every map menu world holds for the third part (see [`put_map_world`]): a grid side of 1,
+/// the settings' floats and bytes, the teleport paths' array sizes, the objects the answers give
+/// and the answers of the by-address functions whose results the code reads through.
+fn put_map_answers(e: &mut Engine) {
+    use arena::object;
+    let menu = object(255);
+    e.mem.set_u32(0x011c_63cc + 4, 1);
     for (setting, value) in [
         (0x011d_b2f0u32, 0.5f32),
         (0x011d_b358, 0.25),
@@ -9998,7 +10006,25 @@ fn put_map_world(e: &mut Engine, variant: u32) {
         e.mem.set_f32(to + 4, 1.0);
     }
     e.mem.set_u8(0x011e_07f0 + 4, 1);
-    e.mem.set_u8(0x011d_a3b8 + 4, u8::from(variant == 0));
+    // The teleport paths' sizes (spaces at +8, doors at +0x18): a target's (object 223 +0x10), the
+    // player's (+0x6f8), objects 3 and 40 as paths, and each one the constructor (`006f48b0`) makes.
+    for (path, spaces, doors) in [
+        (object(223) + 0x10, 1u32, 1u32),
+        (object(140) + 0x6f8, 1, 1),
+        (object(3), 2, 2),
+        (object(40), 1, 2),
+    ] {
+        e.mem.set_u32(path + 8, spaces);
+        e.mem.set_u32(path + 0x18, doors);
+    }
+    e.register_double(0x006f_48b0, |e, words| {
+        e.mem.set_u32(words[0] + 8, 1);
+        e.mem.set_u32(words[0] + 0x18, 1);
+        Ret::default()
+    });
+    for challenge in [3u32, 40, 180, 181, 182] {
+        e.mem.set_u32(object(challenge) + 0x24, arena::VTABLES);
+    }
     // One node each: a target (object 223), a companion (object 207), a marker (object 207).
     for (node, entry) in [(210u32, 223u32), (211, 207), (212, 207)] {
         e.mem.set_u32(object(node), object(entry));
@@ -10015,8 +10041,52 @@ fn put_map_world(e: &mut Engine, variant: u32) {
     e.mem.set_u8(object(220), 1);
     e.mem.set_u32(object(220) + 4, object(207));
     e.mem.set_u32(object(221), EMPTY_TEXT_WORD);
+    // Object 207 (the reference the lists and answers give): its cell (object 209), its base (object
+    // 224, a door: form type 0x1c) and its name (object 229, "abc"); the root space's parent none;
+    // the challenges' owner's markers (its +0x10 list: object 207 only); the player's map marker
+    // (+0x6f4) object 207; the door list (+0xe0) object 207 only.
     e.mem.set_u32(object(207) + 0x40, object(209));
-    let answers: [(u32, u32); 14] = [
+    e.mem.set_u32(object(207) + 0x20, object(224));
+    e.mem.set_u8(object(224) + 4, 0x1c);
+    e.mem.set_u32(object(207) + 0x1c, object(229));
+    e.mem.set_u32(object(229), 0x0063_6261);
+    e.mem.set_u32(object(206) + 0x70, 0);
+    e.mem.set_u32(object(147) + 0x10, object(207));
+    e.mem.set_u32(object(147) + 0x14, 0);
+    e.mem.set_u32(object(140) + 0x6f4, object(207));
+    e.mem.set_u32(menu + 0xe0, object(207));
+    e.mem.set_u32(menu + 0xe4, 0);
+    // The reference answers: a world space (object 206), a quest target's reference (object 207),
+    // the local map's target reference none, the player's marker reference (object 207), the
+    // objective's targets (object 210's list), a note's image (object 227), the TES object's cell
+    // and world space (object 226), a map child 0x1c (object 228, else none).
+    for (address, answer) in [
+        (0x0057_5d70u32, object(206)),
+        (0x0061_01b0, object(207)),
+        (0x005c_bb70, 0),
+        (0x0077_a400, object(207)),
+        (0x007d_6bb0, object(210)),
+        (0x005e_9160, object(227)),
+        (0x005f_36f0, object(226)),
+        (0x004f_d3e0, object(226)),
+    ] {
+        e.register_double(address, move |_, _| Ret {
+            eax: answer,
+            ..Ret::default()
+        });
+    }
+    e.register_double(0x00a0_3eb0, |_, words| Ret {
+        eax: if words[1] == 0x1c { object(228) } else { 0 },
+        ..Ret::default()
+    });
+    // The cells' textures (`0054e750`, `0054e640`) fill the texture pointer with object 225.
+    for (address, word) in [(0x0054_e750u32, 3usize), (0x0054_e640, 1)] {
+        e.register_double(address, move |e, words| {
+            e.mem.set_u32(words[word], object(225));
+            Ret::default()
+        });
+    }
+    let answers: [(u32, u32); 15] = [
         (arena::CODE + 0x1f4, object(201)),
         (0x0095_2ba0, object(210)),
         (0x005e_b7e0, object(211)),
@@ -10031,6 +10101,7 @@ fn put_map_world(e: &mut Engine, variant: u32) {
         (0x0055_8dd0, object(220) + 4),
         (0x0069_50d0, object(221)),
         (0x0058_6440, object(222)),
+        (0x0043_8f30, 3),
     ];
     for (address, answer) in answers {
         e.register_double(address, move |_, _| Ret {
