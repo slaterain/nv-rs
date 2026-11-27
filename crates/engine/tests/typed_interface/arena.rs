@@ -385,6 +385,14 @@ pub enum Arg {
     /// experience, radiation, 0x14, karma, the first and the last body part, the first value past
     /// them, a SPECIAL value, a skill.
     ActorValue,
+    /// The stats menu's click and enter ids: 6 (no page: `pTiles[6]`, a healing option's tile in the
+    /// stats world), a page, a status page, 9, 5, 0x31, the last and the first past `pTiles`, -1, 7.
+    ClickId,
+    /// The tiles a click or an enter is given: none (`pTiles[id]`), the healing option's, another.
+    StatsTile,
+    /// The stats menu's gamepad keys: the limb picks and page steps (1 to 4), the map and inventory
+    /// (0xd, 0xe), 9, 0xb, 0xc and one no case takes.
+    Key,
 }
 
 const PTRS: [u32; 3] = [ARENA + 3 * OBJECT, ARENA + 40 * OBJECT, 0];
@@ -419,6 +427,9 @@ const SMALL: [u32; 8] = [0, 1, 2, 3, 4, 5, 0xa, 0xffff_ffff];
 const GROUPS: [u32; 6] = [0, 1, 2, 3, 4, 5];
 const EFFECTS: [u32; 2] = [ARENA + 50 * OBJECT, ARENA + 51 * OBJECT];
 const STATS_IDS: [u32; 9] = [0x1c, 0x1d, 0x1e, 0x35, 0x37, 0x39, 0x1b, 0x36, 0];
+const CLICK_IDS: [u32; 10] = [6, 2, 0x1d, 9, 5, 0x31, 0x3b, 0x3c, 0xffff_ffff, 7];
+const STATS_TILES: [u32; 3] = [0, ARENA + 116 * OBJECT, ARENA + 107 * OBJECT];
+const KEYS: [u32; 10] = [1, 0xd, 4, 3, 0xb, 2, 9, 0xc, 0xe, 0x20];
 const ACTOR_VALUES: [u32; 11] = [0x10, 0xc, 0x18, 0x36, 0x14, 0x17, 0x19, 0x1e, 0x1f, 5, 0x20];
 const TILE_IDS: [u32; 13] = [
     0xffff_ffff,
@@ -453,6 +464,9 @@ fn values(arg: Arg) -> &'static [u32] {
         Arg::Small => &SMALL,
         Arg::ActorValue => &ACTOR_VALUES,
         Arg::StatsId => &STATS_IDS,
+        Arg::ClickId => &CLICK_IDS,
+        Arg::StatsTile => &STATS_TILES,
+        Arg::Key => &KEYS,
         Arg::Group => &GROUPS,
         Arg::Effect => &EFFECTS,
     }
@@ -491,6 +505,7 @@ const OTHER_FAMILIES: &[u32] = &[
     0x0040_4010,
     0x00a0_1290,
     0x0040_1460,
+    0x0044_1110,
 ];
 
 /// The world's settings for a Diff of the family.
