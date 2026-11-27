@@ -37,10 +37,12 @@ const ISSUES: &str = "https://github.com/slaterain/nv-rs/issues";
 
 static LINES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 
-/// The window's run is going on (a crash now starts Play.exe again), and Play's work is running
-/// (a crash now does not: the game may be running, and a second Play would start a second one).
+/// The window's run is going on (a crash now starts Play.exe again), Play's work is running (a
+/// crash now does not: the game may be running, and a second Play would start a second one), and
+/// the launcher is ending as asked ([`leave`]: a stop now is left as it was before any of this).
 static IN_WINDOW: AtomicBool = AtomicBool::new(false);
 static WORKING: AtomicBool = AtomicBool::new(false);
+static LEAVING: AtomicBool = AtomicBool::new(false);
 
 /// A start-up line: on stderr as before, and kept for a stop's message.
 pub fn note(text: &str) {
@@ -92,6 +94,51 @@ pub fn set_in_window(yes: bool) {
 /// Play's work (or the installer's, or the import) starts (`true`) or has ended.
 pub fn set_working(yes: bool) {
     WORKING.store(yes, Ordering::SeqCst);
+}
+
+/// Whether the window's run is going on, and whether Play's work is running.
+pub fn in_window() -> bool {
+    IN_WINDOW.load(Ordering::SeqCst)
+}
+
+pub fn working() -> bool {
+    WORKING.load(Ordering::SeqCst)
+}
+
+/// The launcher is ending as the player or Play asked (Exit, Play's good end, the window closed
+/// with nothing running), before anything is put away. From now on a crash is left to Windows as
+/// before (no message, Play.exe not started again) and a panic ends it quietly: the drawing
+/// device, the window and the sounds go now, and overlays and drivers often crash just then,
+/// which is no reason to play again.
+pub fn leave() {
+    if !LEAVING.swap(true, Ordering::SeqCst) {
+        #[cfg(debug_assertions)]
+        test_stop(true);
+    }
+}
+
+pub fn leaving() -> bool {
+    LEAVING.load(Ordering::SeqCst)
+}
+
+/// What follows a panic in the window's run.
+#[derive(Debug, PartialEq)]
+pub enum AfterPanic {
+    /// The launcher was ending as asked: it ends, quietly, as before.
+    Quiet,
+    /// Play's work runs: said, then its end is waited for.
+    WaitForWork,
+    /// Said, then Play in message boxes (play.sh in the terminal).
+    PlayWithoutWindow,
+}
+
+/// [`AfterPanic`] for a panic while `leaving` or with work `running`.
+pub fn after_panic(leaving: bool, running: bool) -> AfterPanic {
+    match (leaving, running) {
+        (true, _) => AfterPanic::Quiet,
+        (false, true) => AfterPanic::WaitForWork,
+        (false, false) => AfterPanic::PlayWithoutWindow,
+    }
 }
 
 thread_local! {
@@ -258,25 +305,35 @@ pub fn say(text: &str, icon: Icon, log: Option<&Path>) {
     }
 }
 
-/// A stop's text for the launcher's log. Windows: held for Play's first write
-/// (`place::log_line`), so it is written only once Play's own checks of the folder pass (never in
-/// the game's folder, a temporary folder, Documents or AppData) and never where they refuse;
-/// elsewhere [`say`] wrote it already.
+/// A stop's text for the launcher's log. Windows: written at once if a Play in this process has
+/// passed its first write, else held for Play's first write (`place::log_line`), so it is written
+/// only where Play's own checks of the folder pass (never in the game's folder, a temporary
+/// folder, Documents or AppData) and never where they refuse; elsewhere [`say`] wrote it already.
 pub fn hold_for_log(text: &str) {
     #[cfg(windows)]
-    crate::place::log_line(Path::new(""), false, text);
+    if !crate::play::append_if_written(text) {
+        crate::place::log_line(Path::new(""), false, text);
+    }
     #[cfg(not(windows))]
     let _ = text;
 }
 
 /// Debug builds only, for the live check of this module: `NV_RS_TEST_LAUNCHER_STOP=panic` panics
-/// here, `=crash` (Windows) reads an address no program may read, as a faulty driver does.
+/// in the window's run, `=crash` (Windows) reads an address no program may read there, as a
+/// faulty driver does; `exit-panic` and `exit-crash` do the same as the launcher ends as asked
+/// (`at_exit`, [`leave`]).
 #[cfg(debug_assertions)]
-pub fn test_stop() {
-    match std::env::var("NV_RS_TEST_LAUNCHER_STOP").as_deref() {
-        Ok("panic") => panic!("NV_RS_TEST_LAUNCHER_STOP=panic: the window stopped on purpose"),
+pub fn test_stop(at_exit: bool) {
+    let asked = std::env::var("NV_RS_TEST_LAUNCHER_STOP").unwrap_or_default();
+    let what = match asked.strip_prefix("exit-") {
+        Some(what) if at_exit => what,
+        None if !at_exit => asked.as_str(),
+        _ => return,
+    };
+    match what {
+        "panic" => panic!("NV_RS_TEST_LAUNCHER_STOP={asked}: the window stopped on purpose"),
         #[cfg(windows)]
-        Ok("crash") => {
+        "crash" => {
             // SAFETY: none; the point is the access violation (a debug build's test only).
             let _ = unsafe { std::ptr::read_volatile(std::ptr::without_provenance::<u8>(8)) };
         }
@@ -314,11 +371,13 @@ pub use native::{crash_passed_on, watch_crashes, Crash};
 mod native {
     use super::*;
     use std::ffi::c_void;
+    use std::sync::atomic::AtomicU32;
     use std::sync::OnceLock;
 
     /// What a crash passes on to the Play.exe it starts again ([`crash_value`]).
     pub const CRASH_VAR: &str = "NV_RS_LAUNCHER_CRASH";
     const EXCEPTION_EXECUTE_HANDLER: i32 = 1;
+    const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
 
     /// `EXCEPTION_RECORD` (only the code and the address are read).
     #[repr(C)]
@@ -389,14 +448,17 @@ mod native {
             information: *mut ProcessInformation,
         ) -> i32;
         fn CloseHandle(handle: *mut c_void) -> i32;
+        fn GetCurrentThreadId() -> u32;
+        fn Sleep(milliseconds: u32);
     }
 
     /// This program's path and its whole command line as Windows has it (each ending in a NUL),
     /// kept before any crash so the filter only copies them.
     static EXE: OnceLock<Vec<u16>> = OnceLock::new();
     static COMMAND: OnceLock<Vec<u16>> = OnceLock::new();
-    /// The filter is saying a crash: a crash while it does ends the process at once.
-    static SAYING: AtomicBool = AtomicBool::new(false);
+    /// The thread whose crash the filter is saying (0: none): a crash on it while it does ends
+    /// the process at once; another thread's waits for the end.
+    static SAYING: AtomicU32 = AtomicU32::new(0);
     /// This Play.exe was started again by a crash: no crash starts it again.
     static RESTARTED: AtomicBool = AtomicBool::new(false);
 
@@ -433,9 +495,9 @@ mod native {
         (exe, command)
     }
 
-    /// The file holding `address` (a DLL's or a program's name, without its folder), if a file
-    /// this process loaded holds it.
-    pub fn module_of(address: usize) -> Option<String> {
+    /// The file holding `address` (a DLL's or a program's name, without its folder) and where
+    /// that file starts in memory, if a file this process loaded holds it.
+    pub fn module_of(address: usize) -> Option<(String, usize)> {
         let mut module = std::ptr::null_mut();
         // 4 | 2: GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, ..._UNCHANGED_REFCOUNT.
         // SAFETY: with FROM_ADDRESS the "name" is only an address, never read.
@@ -449,7 +511,9 @@ mod native {
             return None;
         }
         let path = String::from_utf16_lossy(&name[..(n as usize).min(name.len())]);
-        path.rsplit(['\\', '/']).next().map(str::to_string)
+        let file = path.rsplit(['\\', '/']).next()?.to_string();
+        // A module's handle is where it starts.
+        Some((file, module as usize))
     }
 
     /// The plain name of an exception code people meet.
@@ -467,34 +531,66 @@ mod native {
         })
     }
 
-    /// The crash, for the message: the file it happened in, the exception's name and code.
-    pub fn crash_line(code: u32, module: Option<&str>) -> String {
+    /// The crash, for the message: the file it happened in and how far into it (Windows' own
+    /// record of the crash, which says that, is not made when the filter says it), the
+    /// exception's name and code.
+    pub fn crash_line(code: u32, module: Option<(&str, usize)>) -> String {
         let kind = match exception_name(code) {
             Some(name) => format!("{name}, {code:#010x}"),
             None => format!("exception {code:#010x}"),
         };
         match module {
-            Some(file) => format!("it crashed in {file} ({kind})"),
+            Some((file, offset)) => format!("it crashed in {file}+{offset:#x} ({kind})"),
             None => format!("it crashed outside every file it loaded ({kind})"),
         }
     }
 
-    /// What a crash does: start Play.exe again (its message and Play in message boxes), or say
-    /// it here and end.
+    /// What a crash does: nothing (Windows ends the process as before any of this), start
+    /// Play.exe again (its message and Play in message boxes), or say it here and end.
     #[derive(Debug, PartialEq)]
     pub enum AfterCrash {
+        AsBefore,
         StartAgain,
         SayHere,
     }
 
-    /// Only a crash in the window's run, with no work running, in a Play.exe not started again
-    /// by a crash, starts Play.exe again: never twice in a row, and never while Play runs (the
-    /// game may be running; a second Play would start a second game).
-    pub fn after_crash(restarted: bool, in_window: bool, working: bool) -> AfterCrash {
+    /// A crash while the launcher ends as asked (`leaving`) is left as it was before. Otherwise
+    /// only a crash in the window's run, with no work running, in a Play.exe not started again by
+    /// a crash, starts Play.exe again: never twice in a row, and never while Play runs (the game
+    /// may be running; a second Play would start a second game).
+    pub fn after_crash(
+        leaving: bool,
+        restarted: bool,
+        in_window: bool,
+        working: bool,
+    ) -> AfterCrash {
+        if leaving {
+            return AfterCrash::AsBefore;
+        }
         if !restarted && in_window && !working {
             AfterCrash::StartAgain
         } else {
             AfterCrash::SayHere
+        }
+    }
+
+    /// What the filter does when it is `me` that crashed and `saying` is the thread whose crash
+    /// it is saying (0: none).
+    #[derive(Debug, PartialEq)]
+    pub enum Turn {
+        /// Say this crash.
+        Say,
+        /// A crash on the thread saying one: end the process at once.
+        End,
+        /// Another thread's crash while one is said: wait for the end.
+        Wait,
+    }
+
+    pub fn turn(saying: u32, me: u32) -> Turn {
+        match saying {
+            0 => Turn::Say,
+            owner if owner == me => Turn::End,
+            _ => Turn::Wait,
         }
     }
 
@@ -593,25 +689,40 @@ mod native {
     /// process ends. In the window's run, Play.exe is started again to say it and play in
     /// message boxes ([`after_crash`]); otherwise (or if it cannot start) a message box here.
     unsafe extern "system" fn last_chance(pointers: *const ExceptionPointers) -> i32 {
-        if SAYING.swap(true, Ordering::SeqCst) {
-            return EXCEPTION_EXECUTE_HANDLER;
+        let (in_window, working) = (in_window(), working());
+        let after = after_crash(leaving(), restarted(), in_window, working);
+        if after == AfterCrash::AsBefore {
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+        // SAFETY: no pointers.
+        let me = unsafe { GetCurrentThreadId() };
+        let saying = SAYING
+            .compare_exchange(0, me, Ordering::SeqCst, Ordering::SeqCst)
+            .unwrap_or_else(|owner| owner);
+        match turn(saying, me) {
+            Turn::Say => {}
+            Turn::End => return EXCEPTION_EXECUTE_HANDLER,
+            // SAFETY: no pointers; the saying thread ends the process.
+            Turn::Wait => loop {
+                unsafe { Sleep(u32::MAX) };
+            },
         }
         // SAFETY: Windows passes the crash's record, or nothing.
         let (code, address) = match unsafe { pointers.as_ref().and_then(|p| p.record.as_ref()) } {
             Some(r) => (r.code, r.address as usize),
             None => (0, 0),
         };
-        let what = crash_line(code, module_of(address).as_deref());
+        let module = module_of(address);
+        let at = module
+            .as_ref()
+            .map(|(file, base)| (file.as_str(), address.wrapping_sub(*base)));
+        let what = crash_line(code, at);
         // The start-up lines unless the crash came while they were being kept.
         let lines: Vec<String> = LINES
             .try_lock()
             .map(|l| l.iter().cloned().collect())
             .unwrap_or_default();
-        let (in_window, working) = (
-            IN_WINDOW.load(Ordering::SeqCst),
-            WORKING.load(Ordering::SeqCst),
-        );
-        if after_crash(restarted(), in_window, working) == AfterCrash::StartAgain {
+        if after == AfterCrash::StartAgain {
             if let (Some(exe), Some(command)) = (EXE.get(), COMMAND.get()) {
                 if let Some(started) = spawn_with(exe, command, &crash_value(&what, &lines)) {
                     // SAFETY: the new process's handles, closed once.
@@ -646,16 +757,16 @@ mod native {
             fn GetExitCodeProcess(process: *mut c_void, code: *mut u32) -> i32;
         }
 
-        /// The crash's line names the file, the exception and its code.
+        /// The crash's line names the file, how far into it, the exception and its code.
         #[test]
         fn a_crash_names_the_exception_and_the_file() {
             assert_eq!(
-                crash_line(0xc000_0005, Some("overlay64.dll")),
-                "it crashed in overlay64.dll (an access violation, 0xc0000005)"
+                crash_line(0xc000_0005, Some(("overlay64.dll", 0x1a_2b3c))),
+                "it crashed in overlay64.dll+0x1a2b3c (an access violation, 0xc0000005)"
             );
             assert_eq!(
-                crash_line(0x8000_0003, Some("Play.exe")),
-                "it crashed in Play.exe (a breakpoint, 0x80000003)"
+                crash_line(0x8000_0003, Some(("Play.exe", 0x10))),
+                "it crashed in Play.exe+0x10 (a breakpoint, 0x80000003)"
             );
             assert_eq!(
                 crash_line(0xc000_0135, None),
@@ -663,13 +774,16 @@ mod native {
             );
         }
 
-        /// An address in this test program names this program; one in Windows' own kernel names
-        /// that DLL; an address no file holds names none.
+        /// An address in this test program names this program, which starts before it; one in
+        /// Windows' own kernel names that DLL; an address no file holds names none.
         #[test]
         fn an_address_names_the_file_holding_it() {
             let exe = std::env::current_exe().unwrap();
             let name = exe.file_name().unwrap().to_string_lossy().into_owned();
-            assert_eq!(module_of(module_of as *const () as usize), Some(name));
+            let here = module_of as *const () as usize;
+            let (file, base) = module_of(here).unwrap();
+            assert_eq!(file, name);
+            assert!(base < here && here - base < 1 << 30, "{base:#x} {here:#x}");
             let kernel = wide("kernel32.dll");
             // SAFETY: NUL-ended names; kernel32 is in every process.
             let at = unsafe {
@@ -679,28 +793,48 @@ mod native {
                 )
             };
             assert!(!at.is_null());
-            let dll = module_of(at as usize).unwrap().to_ascii_lowercase();
+            let dll = module_of(at as usize).unwrap().0.to_ascii_lowercase();
             assert!(dll.starts_with("kernel") && dll.ends_with(".dll"), "{dll}");
             assert_eq!(module_of(8), None);
         }
 
-        /// Only the first crash in the window's run, with no work running, starts Play.exe again.
+        /// While the launcher ends as asked, a crash is left as before; otherwise only the first
+        /// crash in the window's run, with no work running, starts Play.exe again.
         #[test]
         fn only_a_crash_in_the_window_with_nothing_running_starts_play_again() {
             use AfterCrash::*;
-            assert_eq!(after_crash(false, true, false), StartAgain);
+            assert_eq!(after_crash(false, false, true, false), StartAgain);
             assert_eq!(
-                after_crash(true, true, false),
+                after_crash(true, false, true, false),
+                AsBefore,
+                "ending as asked (Exit, Play's good end)"
+            );
+            assert_eq!(after_crash(true, true, false, true), AsBefore);
+            assert_eq!(
+                after_crash(false, true, true, false),
                 SayHere,
                 "started again already"
             );
-            assert_eq!(after_crash(false, true, true), SayHere, "Play is running");
             assert_eq!(
-                after_crash(false, false, false),
+                after_crash(false, false, true, true),
+                SayHere,
+                "Play is running"
+            );
+            assert_eq!(
+                after_crash(false, false, false, false),
                 SayHere,
                 "message-box Play"
             );
-            assert_eq!(after_crash(true, false, true), SayHere);
+            assert_eq!(after_crash(false, true, false, true), SayHere);
+        }
+
+        /// The first crashing thread says its crash; a second crash on it ends the process; another
+        /// thread's crash waits.
+        #[test]
+        fn one_thread_says_a_crash_and_others_wait() {
+            assert_eq!(turn(0, 7), Turn::Say);
+            assert_eq!(turn(7, 7), Turn::End);
+            assert_eq!(turn(7, 9), Turn::Wait);
         }
 
         /// What starts Play.exe again: this program's own path and its whole command line.
@@ -746,7 +880,10 @@ mod native {
             assert_eq!(crash.lines, lines);
             assert_eq!(std::env::var_os(CRASH_VAR), None, "taken out");
             assert!(restarted());
-            assert_eq!(after_crash(restarted(), true, false), AfterCrash::SayHere);
+            assert_eq!(
+                after_crash(false, restarted(), true, false),
+                AfterCrash::SayHere
+            );
         }
 
         /// A crash's value read back keeps the start-up lines' limits.
@@ -797,6 +934,16 @@ mod tests {
         // Taken: a payload without the hook's line is its message alone.
         let other: Box<dyn std::any::Any + Send> = Box::new("plain");
         assert_eq!(panic_line(&*other), "plain");
+    }
+
+    /// A panic while the launcher ends as asked ends it quietly (no Play in message boxes);
+    /// otherwise running work is waited for, and with none Play goes on without the window.
+    #[test]
+    fn a_panic_while_leaving_ends_quietly() {
+        assert_eq!(after_panic(true, false), AfterPanic::Quiet);
+        assert_eq!(after_panic(true, true), AfterPanic::Quiet);
+        assert_eq!(after_panic(false, true), AfterPanic::WaitForWork);
+        assert_eq!(after_panic(false, false), AfterPanic::PlayWithoutWindow);
     }
 
     /// The message says what stopped, its last steps and what happens next; a long line is cut.

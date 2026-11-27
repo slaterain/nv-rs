@@ -1498,23 +1498,29 @@ fn running_work() -> Option<std::thread::JoinHandle<i32>> {
 /// Starts Play's work on a thread of its own with `args` (Play.exe's, or play.sh's on Linux and
 /// macOS); it always sends `Ended` with its exit code ([`work_code`]: 101 after a panic).
 fn start_work(args: Vec<OsString>) {
+    start_work_with(move || {
+        #[cfg(windows)]
+        {
+            let args: Vec<String> = args
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            crate::play::run_play(&args)
+        }
+        #[cfg(not(windows))]
+        match crate::play_unix::script() {
+            Some(script) => crate::play_unix::run(&script, &args),
+            None => 127,
+        }
+    });
+}
+
+/// [`start_work`] with the work `work`: marked as running ([`stopped::set_working`]: a crash
+/// meanwhile starts no second Play) from before it starts until it has ended.
+fn start_work_with(work: impl FnOnce() -> i32 + Send + 'static) {
     stopped::set_working(true);
     let work = std::thread::spawn(move || {
-        let code = work_code(move || {
-            #[cfg(windows)]
-            {
-                let args: Vec<String> = args
-                    .iter()
-                    .map(|a| a.to_string_lossy().into_owned())
-                    .collect();
-                crate::play::run_play(&args)
-            }
-            #[cfg(not(windows))]
-            match crate::play_unix::script() {
-                Some(script) => crate::play_unix::run(&script, &args),
-                None => 127,
-            }
-        });
+        let code = work_code(work);
         stopped::set_working(false);
         session::send(Event::Ended(code));
         code
@@ -1986,7 +1992,10 @@ impl App {
         match act {
             Act::EndIntro => self.end_intro(),
             Act::Play { mods, game } => self.play(mods, game),
-            Act::Exit => event_loop.exit(),
+            Act::Exit => {
+                stopped::leave();
+                event_loop.exit();
+            }
             Act::Mods => self.mods(),
             Act::ImportSaves => self.import_saves(),
             Act::Answer(i) => {
@@ -2491,12 +2500,13 @@ impl winit::application::ApplicationHandler<Event> for App {
         self.gpu = Some(drawing.gpu);
         window.set_visible(true);
         self.window = Some(window);
-        #[cfg(debug_assertions)]
-        stopped::test_stop();
         let proxy = std::sync::Mutex::new(self.proxy.clone());
         session::connect(move |e| proxy.lock().is_ok_and(|p| p.send_event(e).is_ok()));
         // From here on a program the work runs takes the lines typed at the prompt.
         crate::piped::window_takes_lines(true);
+        // (After the window took the channel: message-box Play must take it over.)
+        #[cfg(debug_assertions)]
+        stopped::test_stop(false);
         // The game's card, from a process of its own.
         std::thread::spawn(|| {
             session::send(Event::Card(ask_game_card()));
@@ -2604,7 +2614,10 @@ impl winit::application::ApplicationHandler<Event> for App {
                     matches!(self.mode, Mode::Output(_)),
                 ) {
                     // Closed while the work ran, or Play's good end: the launcher ends.
-                    EndStep::Exit => event_loop.exit(),
+                    EndStep::Exit => {
+                        stopped::leave();
+                        event_loop.exit();
+                    }
                     // The installer's good end, or Play.exe's message shown and answered.
                     EndStep::Start => self.show_start(),
                     // The work's own lines say what went wrong; Back or Exit below them.
@@ -2658,6 +2671,7 @@ impl winit::application::ApplicationHandler<Event> for App {
             // too, play.sh's input is closed, and the launcher ends when Play ends, with its code.
             WindowEvent::CloseRequested => {
                 if !self.working {
+                    stopped::leave();
                     std::process::exit(session::stop_code().unwrap_or(self.exit_code));
                 }
                 self.close_while_working(event_loop);
@@ -2932,6 +2946,8 @@ fn without_window(raw: &[String]) -> i32 {
         caught(|| crate::play::run_play(raw)).unwrap_or_else(|line| {
             let what = stopped::panic_what(&line);
             let text = stopped::stopped_text(false, &what, &stopped::lines(), &stopped::report());
+            // In the log at once if this Play passed its first write.
+            stopped::hold_for_log(&text);
             stopped::say(&text, stopped::Icon::Error, None);
             101
         })
@@ -2962,23 +2978,35 @@ enum Ran {
 /// [`stopped::watch_crashes`]'s filter.
 pub fn run(raw: Vec<String>) -> i32 {
     let mut log = None;
-    stopped::set_in_window(true);
-    let ran = caught(|| run_window(&raw, &mut log));
-    stopped::set_in_window(false);
-    match ran {
+    match in_window(|| run_window(&raw, &mut log)) {
         Ok(Ran::Ended(code)) => code,
         Ok(Ran::NoWindow) => without_window(&raw),
         Err(line) => after_panic(&raw, &line, log.as_deref()),
     }
 }
 
-/// The window's run ended in a panic (`line`): said with the start-up lines (and held for the
-/// log, [`stopped::hold_for_log`]); then Play goes on without the window. With work running
-/// (Play's, the installer's, the import), to its end: its questions in Windows' own message boxes
-/// (elsewhere answered as Esc answers them); with none, Play as after [`cannot_draw`]. `log`:
-/// nv-rs's own folder when it may hold the log (Linux and macOS write it at once).
+/// `run` [`caught`], with the window's run marked as going on ([`stopped::set_in_window`]: a
+/// crash in it starts Play.exe again) until it returns or panics.
+fn in_window<T>(run: impl FnOnce() -> T) -> Result<T, String> {
+    stopped::set_in_window(true);
+    let ran = caught(run);
+    stopped::set_in_window(false);
+    ran
+}
+
+/// The window's run ended in a panic (`line`). While the launcher was ending as asked
+/// ([`stopped::leave`]) it ends quietly, as before. Otherwise said with the start-up lines (and
+/// kept for the log, [`stopped::hold_for_log`]), then Play goes on without the window: with work
+/// running (Play's, the installer's, the import), to its end, its questions in Windows' own
+/// message boxes (elsewhere answered as Esc answers them); with none, Play as after
+/// [`cannot_draw`]. `log`: nv-rs's own folder when it may hold the log (Linux and macOS write it
+/// at once).
 fn after_panic(raw: &[String], line: &str, log: Option<&Path>) -> i32 {
     let running = running_work();
+    let after = stopped::after_panic(stopped::leaving(), running.is_some());
+    if after == stopped::AfterPanic::Quiet {
+        return 101;
+    }
     if running.is_some() {
         // Before the message: a question the work asks meanwhile goes to the new answers.
         #[cfg(windows)]
@@ -2992,8 +3020,9 @@ fn after_panic(raw: &[String], line: &str, log: Option<&Path>) -> i32 {
     };
     let what = stopped::panic_what(line);
     let text = stopped::stopped_text(true, &what, &stopped::lines(), &next);
-    stopped::say(&text, stopped::Icon::Error, log);
+    // Kept first: running work that ends while the message is up writes it.
     stopped::hold_for_log(&text);
+    stopped::say(&text, stopped::Icon::Error, log);
     match running {
         Some(work) => work.join().unwrap_or(101),
         None => without_window(raw),
@@ -3006,8 +3035,8 @@ fn after_panic(raw: &[String], line: &str, log: Option<&Path>) -> i32 {
 #[cfg(windows)]
 pub fn after_crash(raw: &[String], crash: &stopped::Crash) -> i32 {
     let text = stopped::stopped_text(true, &crash.what, &crash.lines, &stopped::next_play(true));
-    stopped::say(&text, stopped::Icon::Error, None);
     stopped::hold_for_log(&text);
+    stopped::say(&text, stopped::Icon::Error, None);
     without_window(raw)
 }
 
@@ -3086,11 +3115,15 @@ fn run_window(raw: &[String], log: &mut Option<PathBuf>) -> Ran {
             return Ran::NoWindow;
         }
         stopped::note(&format!("error: {e}"));
+        stopped::leave();
         return Ran::Ended(1);
     }
     if app.no_window {
         return Ran::NoWindow;
     }
+    // Ending as asked (Exit and Play's good end said so already): before the drawing, the window
+    // and the sounds go, as `app` and `event_loop` are dropped on the way out.
+    stopped::leave();
     Ran::Ended(app.exit_code)
 }
 
@@ -3753,25 +3786,44 @@ mod tests {
         assert!(line.contains("app.rs:"), "{line}");
     }
 
-    /// Work still running is waited for after a panic; work that has ended is not.
+    /// Work is marked as running (a crash then starts no second Play) from before it starts until
+    /// it has ended; still running, it is waited for after a panic, and once ended it is not.
     #[test]
-    fn only_work_still_running_is_waited_for() {
+    fn work_is_marked_running_and_only_running_work_is_waited_for() {
         let (go, wait) = std::sync::mpsc::channel::<()>();
-        let work = std::thread::spawn(move || {
+        start_work_with(move || {
             let _ = wait.recv();
             5
         });
-        *WORK.lock().unwrap() = Some(work);
+        assert!(stopped::working(), "marked before it runs");
         let running = running_work().expect("still running");
         assert!(WORK.lock().unwrap().is_none(), "taken");
+        assert!(stopped::working(), "still marked while it runs");
         go.send(()).unwrap();
         assert_eq!(running.join().unwrap(), 5);
-        let ended = std::thread::spawn(|| 6);
-        while !ended.is_finished() {
+        assert!(!stopped::working(), "unmarked once it has ended");
+        start_work_with(|| 6);
+        let started = Instant::now();
+        while stopped::working() || !WORK.lock().unwrap().as_ref().unwrap().is_finished() {
+            assert!(started.elapsed() < Duration::from_secs(20));
             std::thread::yield_now();
         }
-        *WORK.lock().unwrap() = Some(ended);
         assert!(running_work().is_none(), "ended already");
+    }
+
+    /// The window's run is marked as going on (a crash in it starts Play.exe again) only while
+    /// it runs, also when it panics.
+    #[test]
+    fn the_window_is_marked_only_while_it_runs() {
+        assert!(!stopped::in_window());
+        assert_eq!(in_window(stopped::in_window), Ok(true));
+        assert!(!stopped::in_window());
+        stopped::watch_panics();
+        let stopped_run = in_window(|| -> bool { panic!("made-up stop in the window") });
+        assert!(stopped_run
+            .unwrap_err()
+            .starts_with("made-up stop in the window"));
+        assert!(!stopped::in_window());
     }
 
     /// Play's arguments: `--mods` for Play with mods, `--game FOLDER` for a typed or dropped
