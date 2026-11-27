@@ -669,7 +669,7 @@ mod native {
         fn an_address_names_the_file_holding_it() {
             let exe = std::env::current_exe().unwrap();
             let name = exe.file_name().unwrap().to_string_lossy().into_owned();
-            assert_eq!(module_of(module_of as usize), Some(name));
+            assert_eq!(module_of(module_of as *const () as usize), Some(name));
             let kernel = wide("kernel32.dll");
             // SAFETY: NUL-ended names; kernel32 is in every process.
             let at = unsafe {
