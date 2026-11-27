@@ -1309,14 +1309,14 @@ pub fn nav_mesh_obstacle_manager_initialize(
     }
     let memory = e.call(OPERATOR_NEW, &args![4u32]).u32();
     let listener = if memory != 0 {
-        fn_006c00b0(e, Ptr::new(memory)).addr()
+        e.call(0x006c_00b0, &args![memory]).u32()
     } else {
         0
     };
     e.set(this, NavMeshObstacleManager::pListener, listener);
     let memory = e.call(OPERATOR_NEW, &args![4u32]).u32();
     let remove_listener = if memory != 0 {
-        fn_006c0210(e, Ptr::new(memory)).addr()
+        e.call(0x006c_0210, &args![memory]).u32()
     } else {
         0
     };
