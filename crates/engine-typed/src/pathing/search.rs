@@ -421,6 +421,26 @@ pub fn free_block(e: &mut Engine, _this: Ptr<SimpleArray>, block: u32) {
     e.call(FREE, &args![block]);
 }
 
+// Typed from 006abf60
+pub fn search_node_array_new(e: &mut Engine, this: Ptr<SimpleArray>) -> Ptr<SimpleArray> {
+    e.set(this, SimpleArray::vtable, 0x0106_b8a0);
+    e.call(0x009a_3d00, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Typed from 006abf90
+pub fn search_link_array_new(e: &mut Engine, this: Ptr<SimpleArray>) -> Ptr<SimpleArray> {
+    e.set(this, SimpleArray::vtable, 0x0106_b8c8);
+    typed_call!(FAMILY, 0x006b_3f40, init_nodes(e, this, 0, 0));
+    this
+}
+
+// Typed from 006abfc0
+pub fn location_array_drop(e: &mut Engine, this: Ptr<SimpleArray>) {
+    e.set(this, SimpleArray::vtable, 0x0106_b91c);
+    e.call(0x006a_c010, &args![this, 1u32]);
+}
+
 // Typed from 006917d0
 /// `BSSimpleArray<unsigned short>::BSSimpleArray` (`thiscall(array)`): the vtable, then empty
 /// ([`init_indices`]).

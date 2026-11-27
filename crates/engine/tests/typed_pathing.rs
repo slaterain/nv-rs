@@ -2545,6 +2545,59 @@ fn free_block() {
 }
 
 #[test]
+fn search_node_array_new() {
+    Diff::new(entry!(
+        0x006a_bf60,
+        search::search_node_array_new(Ptr<_>) -> Ptr<_>
+    ))
+    .family(&pathing::PATHING)
+    .setup(|e, _| vec![array(e, 0xfeed, 3, 7)])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn search_link_array_new() {
+    Diff::new(entry!(
+        0x006a_bf90,
+        search::search_link_array_new(Ptr<_>) -> Ptr<_>
+    ))
+    .family(&pathing::PATHING)
+    .setup(|e, _| vec![array(e, 0xfeed, 3, 7)])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn location_array_drop() {
+    Diff::new(entry!(0x006a_bfc0, search::location_array_drop(Ptr<_>)))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Of(&[0, 1, 2])])
+        .setup(|e, case| {
+            stand_ins(e);
+            // Observe the frees through the vtable installed by the destructor.
+            e.mem.set_u32(0x0106_b91c + 8, VT_FN + 8);
+            e.register(0x004f_f7e0, |e, args| {
+                log(e, 0x004f_f7e0, args[0]);
+                ret(0)
+            });
+            let buffer = if case.word(0) == 0 {
+                0
+            } else {
+                e.mem.alloc(0x50)
+            };
+            let size = if case.word(0) == 2 { 2 } else { 0 };
+            let header = array(e, buffer, size, 2);
+            // If the old vtable is used for release, it dispatches to a different logged slot.
+            let old_vtable = e.mem.u32(header);
+            e.mem.set_u32(old_vtable + 8, VT_FN + 0xc);
+            vec![header]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
 fn index_array_new() {
     Diff::new(entry!(
         0x0069_17d0,
