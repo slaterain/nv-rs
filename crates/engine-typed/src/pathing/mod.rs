@@ -42,6 +42,7 @@ pub mod navmesh;
 pub mod point;
 pub mod pov;
 pub mod search;
+pub mod task_data;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(7);
@@ -112,6 +113,8 @@ pub(crate) fn copy_point(e: &mut Engine, from: Ptr<NiPoint3>, to: Ptr<NiPoint3>)
 #[rustfmt::skip]
 fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x006e_9f60, task_data::request_delete(Ptr, u32) -> Ptr),
+        entry!(0x006e_9f90, task_data::ray_cast_path_delete(Ptr, u32) -> Ptr),
         // Point helpers.
         entry!(0x0043_9ef0, point::subtract(Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>) -> Ptr<NiPoint3>),
         entry!(0x0043_9e90, point::add(Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>) -> Ptr<NiPoint3>),
