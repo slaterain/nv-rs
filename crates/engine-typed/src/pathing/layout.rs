@@ -226,6 +226,16 @@ image! {
         0x26 flags: u8,
         0x27 pad: u8,
     }
+
+    /// `PathingAvoidNode` (Xbox PDB): a point, or a segment from one point to another, with a
+    /// radius, a cost and a type (0 or 2: the point; 1: the segment; else: neither).
+    pub struct PathingAvoidNode / PathingAvoidNodeImage: 0x24 {
+        0x00 start: Inline<NiPoint3> = NiPoint3Image,
+        0x0c end: Inline<NiPoint3> = NiPoint3Image,
+        0x18 radius: f32,
+        0x1c cost: f32,
+        0x20 kind: u32,
+    }
 }
 
 /// Vertex `i` of a triangle (the exe indexes the words from the start, `i` unchecked).

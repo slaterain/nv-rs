@@ -36,6 +36,7 @@ use layout::{
     Sphere,
 };
 
+pub mod avoid_node;
 pub mod layout;
 pub mod location;
 pub mod navmesh;
@@ -254,6 +255,9 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006b_9cf0, pov::height_in(Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr, f32, f32) -> bool),
         entry!(0x006b_ab00, pov::segment_within(Ptr<NiPoint3>, f32, Ptr<NiPoint3>, Ptr<NiPoint3>) -> bool),
         entry!(0x006b_b570, pov::sphere_tangents(Ptr<Sphere>, Ptr<Sphere>, u32, Ptr) -> u32),
+        // The avoid nodes.
+        entry!(0x006d_c780, avoid_node::cost_for_point(Ptr, Ptr) -> f32),
+        entry!(0x006d_c990, avoid_node::array_cost_for_point(Ptr, Ptr) -> f32),
         // Pathing locations.
         entry!(0x0044_1110, location::world_space(Ptr<PathingLocation>) -> u32),
         entry!(0x006a_9520, location::is_valid(Ptr<PathingLocation>) -> bool),

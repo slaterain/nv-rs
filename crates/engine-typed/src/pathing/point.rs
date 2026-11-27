@@ -97,7 +97,7 @@ fn squares_xy<R: Real, S>(e: &Engine, p: Ptr<S>, x: Field<S, f32>, y: Field<S, f
 
 /// `(x*x + y*y) + z*z` in `R`.
 #[inline(always)]
-fn squares_xyz<R: Real>(e: &Engine, p: Ptr<NiPoint3>) -> R {
+pub(crate) fn squares_xyz<R: Real>(e: &Engine, p: Ptr<NiPoint3>) -> R {
     let z: R = get(e, p, NiPoint3::z);
     squares_xy::<R, _>(e, p, NiPoint3::x, NiPoint3::y) + z * z
 }
