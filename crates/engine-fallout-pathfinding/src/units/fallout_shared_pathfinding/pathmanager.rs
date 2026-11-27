@@ -116,7 +116,7 @@ pub fn fn_006e9e20(e: &mut Engine, this: Ptr) {
         );
         let request = e.mem.u32(request_slot);
         if request != 0 {
-            pathing_task_data_request_deleting_destructor(e, Ptr::new(request), 1);
+            e.call(0x006e_9f60, &args![request, 1u32]);
         }
         let path_slot = typed_call!(
             leaf::FAMILY,
@@ -125,7 +125,7 @@ pub fn fn_006e9e20(e: &mut Engine, this: Ptr) {
         );
         let path = e.mem.u32(path_slot);
         if path != 0 {
-            pathing_task_data_path_deleting_destructor(e, Ptr::new(path), 1);
+            e.call(0x006e_9f90, &args![path, 1u32]);
         }
         index = index.wrapping_add(1);
     }

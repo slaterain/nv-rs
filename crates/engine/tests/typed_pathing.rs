@@ -33,6 +33,33 @@ const TEN: u32 = 0x4120_0000;
 const HALF: u32 = 0x3f00_0000;
 const MINUS_ONE: u32 = 0xbf80_0000;
 
+fn task_data_delete_args(e: &mut Engine, case: &Case) -> Vec<u32> {
+    e.register(0x006c_b410, |_, _| ret(0));
+    e.register(0x006c_b4a0, |_, _| ret(0));
+    e.register(0x0040_1030, |_, _| ret(0));
+    vec![e.mem.alloc(16), case.word(0)]
+}
+
+#[test]
+fn task_data_request_delete() {
+    Diff::new(entry!(0x006e_9f60, pathing::task_data::request_delete(Ptr, u32) -> Ptr))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Of(&[0, 1, 2, 3, u32::MAX])])
+        .setup(task_data_delete_args)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn task_data_ray_cast_path_delete() {
+    Diff::new(entry!(0x006e_9f90, pathing::task_data::ray_cast_path_delete(Ptr, u32) -> Ptr))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Of(&[0, 1, 2, 3, u32::MAX])])
+        .setup(task_data_delete_args)
+        .run()
+        .assert_same();
+}
+
 fn ret(eax: u32) -> Ret {
     Ret {
         eax,
