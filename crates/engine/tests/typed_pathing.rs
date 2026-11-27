@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, manager_state, navmesh, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -4365,4 +4365,145 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+/// A manager impl block with the state word from the case.
+fn impl_block(e: &mut Engine, state: u32) -> u32 {
+    let m = e.mem.alloc(0xc40);
+    e.mem.set_u32(m + 0x0c24, state);
+    m
+}
+
+/// Stands in for the lock enter/leave pair: logs the tag.
+fn lock_stubs(e: &mut Engine) {
+    e.register(0x0045_38a0, |e, a| {
+        log(e, 0x0045_38a0, a[1]);
+        ret(0)
+    });
+    e.register(0x0045_38c0, |e, a| {
+        log(e, 0x0045_38c0, a[0]);
+        ret(0)
+    });
+}
+
+#[test]
+fn manager_pause() {
+    Diff::new(entry!(0x006e_b310, manager_state::pause(Ptr)))
+        .common()
+        .plain(0x006e_b310)
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 7])])
+        .setup(|e, case| {
+            stand_ins(e);
+            lock_stubs(e);
+            vec![impl_block(e, case.word(0))]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn manager_is_paused() {
+    Diff::new(entry!(0x006e_b390, manager_state::is_paused(Ptr) -> bool))
+        .common()
+        .plain(0x006e_b390)
+        .inputs(&[Input::Of(&[0, 1, 2, 3])])
+        .setup(|e, case| {
+            stand_ins(e);
+            vec![impl_block(e, case.word(0))]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn manager_resume() {
+    Diff::new(entry!(0x006e_b3b0, manager_state::resume(Ptr)))
+        .common()
+        .plain(0x006e_b3b0)
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 7])])
+        .setup(|e, case| {
+            stand_ins(e);
+            lock_stubs(e);
+            vec![impl_block(e, case.word(0))]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn manager_is_running() {
+    Diff::new(entry!(0x006e_b420, manager_state::is_running(Ptr) -> bool))
+        .common()
+        .plain(0x006e_b420)
+        .inputs(&[Input::Of(&[0, 1, 2, 3])])
+        .setup(|e, case| {
+            stand_ins(e);
+            vec![impl_block(e, case.word(0))]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn cancel_unless_complete() {
+    Diff::new(entry!(
+        0x006e_b670,
+        manager_state::cancel_unless_complete(Ptr, u8)
+    ))
+    .common()
+    .plain(0x006e_b670)
+    .inputs(&[Input::Of(&[0, 1, 2]), Input::Of(&[0, 1, 0xff])])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x004f_1540, |e, a| {
+            log(e, 0x004f_1540, a[0]);
+            ret(case_flag(e) & 1)
+        });
+        let this = e.mem.alloc(4);
+        let cancellation = if case.word(0) == 0 {
+            0
+        } else {
+            let c = e.mem.alloc(0x40);
+            let vt = vtable(e);
+            e.mem.set_u32(c, vt);
+            c
+        };
+        e.mem.set_u32(this, cancellation);
+        let cell = e.mem.alloc(4);
+        e.mem.set_u32(0x0300_2ff8, cell);
+        e.mem.set_u32(e.mem.u32(0x0300_2ff8), case.word(1));
+        vec![this, u32::from(case.word(1) as u8)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// Reads the flag cell at 0x03002ff8.
+fn case_flag(e: &mut Engine) -> u32 {
+    e.mem.u32(e.mem.u32(0x0300_2ff8))
+}
+
+#[test]
+fn pause_event_signalled() {
+    Diff::new(entry!(
+        0x006e_b790,
+        manager_state::pause_event_signalled(Ptr) -> bool
+    ))
+    .common()
+    .plain(0x006e_b790)
+    .inputs(&[Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x00aa_6120, |e, a| {
+            log(e, 0x00aa_6120, a[0]);
+            ret(case_flag(e))
+        });
+        let m = impl_block(e, 0);
+        let cell = e.mem.alloc(4);
+        e.mem.set_u32(0x0300_2ff8, cell);
+        e.mem.set_u32(e.mem.u32(0x0300_2ff8), case.word(0));
+        vec![m]
+    })
+    .run()
+    .assert_same();
 }
