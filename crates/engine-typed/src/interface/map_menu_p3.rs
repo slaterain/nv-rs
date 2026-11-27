@@ -1822,9 +1822,9 @@ fn show_play_time(e: &mut Engine, at: u32) {
         at,
         &[
             PLAY_TIME_FORMAT,
-            minutes as u32,
-            seconds as u32,
-            tenths as u32,
+            super::bits(minutes),
+            super::bits(seconds),
+            super::bits(tenths),
             label,
         ],
     );
@@ -3840,9 +3840,9 @@ fn make_shape(e: &mut Engine, position: u32, cell_size: i32, uv_scale: u32) -> u
         return 0;
     }
     let height = e.call(SCREEN_HEIGHT, &args![]).f64();
-    let height = ftol2(e, height) as u32;
+    let height = super::bits(ftol2(e, height));
     let width = e.call(SCREEN_WIDTH, &args![]).f64();
-    let width = ftol2(e, width) as u32;
+    let width = super::bits(ftol2(e, width));
     e.call(
         SCISSOR_TRI_SHAPE_CONSTRUCT,
         &args![
