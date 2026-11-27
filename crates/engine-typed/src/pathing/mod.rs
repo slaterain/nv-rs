@@ -42,6 +42,7 @@ pub mod navmesh;
 pub mod point;
 pub mod pov;
 pub mod search;
+pub mod storage;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(7);
@@ -254,6 +255,10 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006b_9cf0, pov::height_in(Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr, f32, f32) -> bool),
         entry!(0x006b_ab00, pov::segment_within(Ptr<NiPoint3>, f32, Ptr<NiPoint3>, Ptr<NiPoint3>) -> bool),
         entry!(0x006b_b570, pov::sphere_tangents(Ptr<Sphere>, Ptr<Sphere>, u32, Ptr) -> u32),
+        entry!(0x006e_bda0, storage::free_list_base_destruct(Ptr)),
+        entry!(0x006e_be30, storage::free_list_base_delete(Ptr, u32) -> Ptr),
+        entry!(0x006e_bdc0, storage::task_stack_base_destruct(Ptr)),
+        entry!(0x006e_be60, storage::task_stack_base_delete(Ptr, u32) -> Ptr),
         // Pathing locations.
         entry!(0x0044_1110, location::world_space(Ptr<PathingLocation>) -> u32),
         entry!(0x006a_9520, location::is_valid(Ptr<PathingLocation>) -> bool),

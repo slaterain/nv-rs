@@ -4366,3 +4366,70 @@ fn crossed_edge_rounding_main_thread() {
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
 }
+
+fn storage_base(e: &mut Engine) -> u32 {
+    let object = e.mem.alloc(8);
+    e.mem.set_u32(object, 0x1122_3344);
+    e.mem.set_u32(object + 4, 0x5566_7788);
+    object
+}
+
+#[test]
+fn free_list_base_destruct() {
+    Diff::new(entry!(
+        0x006e_bda0,
+        pathing::storage::free_list_base_destruct(Ptr)
+    ))
+    .family(&pathing::PATHING)
+    .inputs(&FIXED)
+    .setup(|e, _| vec![storage_base(e)])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn free_list_base_delete() {
+    Diff::new(entry!(0x006e_be30, pathing::storage::free_list_base_delete(Ptr, u32) -> Ptr))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Of(&[0, 1, 2, 3])])
+        .setup(|e, case| {
+            e.register(0x0040_1030, |e, a| {
+                let vtable = e.mem.u32(a[0]);
+                e.mem.set_u32(a[0] + 4, vtable);
+                Ret::default()
+            });
+            vec![storage_base(e), case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn task_stack_base_destruct() {
+    Diff::new(entry!(
+        0x006e_bdc0,
+        pathing::storage::task_stack_base_destruct(Ptr)
+    ))
+    .family(&pathing::PATHING)
+    .inputs(&FIXED)
+    .setup(|e, _| vec![storage_base(e)])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn task_stack_base_delete() {
+    Diff::new(entry!(0x006e_be60, pathing::storage::task_stack_base_delete(Ptr, u32) -> Ptr))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Of(&[0, 1, 2, 3])])
+        .setup(|e, case| {
+            e.register(0x0040_1030, |e, a| {
+                let vtable = e.mem.u32(a[0]);
+                e.mem.set_u32(a[0] + 4, vtable);
+                Ret::default()
+            });
+            vec![storage_base(e), case.word(0)]
+        })
+        .run()
+        .assert_same();
+}

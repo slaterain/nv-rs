@@ -1340,7 +1340,7 @@ pub fn fn_006ebd30(e: &mut Engine, this: Ptr) {
         0x00ec_5fce,
         &args![this.addr() + 12, 12u32, 256u32, 0x0048_3710u32],
     );
-    fn_006ebda0(e, this);
+    e.call(0x006e_bda0, &args![this]);
 }
 
 // Translated from 006ebda0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1374,7 +1374,7 @@ pub fn fn_006ebe00(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
 // Translated from 006ebe30 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Runs the object destructor, freeing storage only for delete flag bit zero.
 pub fn fn_006ebe30(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_006ebda0(e, this);
+    e.call(0x006e_bda0, &args![this]);
     if flags & 1 != 0 {
         e.call(0x0040_1030, &args![this]);
     }
@@ -1384,7 +1384,7 @@ pub fn fn_006ebe30(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
 // Translated from 006ebe60 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Runs the object destructor, freeing storage only for delete flag bit zero.
 pub fn fn_006ebe60(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_006ebdc0(e, this);
+    e.call(0x006e_bdc0, &args![this]);
     if flags & 1 != 0 {
         e.call(0x0040_1030, &args![this]);
     }
