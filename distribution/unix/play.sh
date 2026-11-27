@@ -347,7 +347,11 @@ usable_games() {
 remember=0
 game=''
 if [ -n "$opt_game" ]; then
-    game=$(typed_folder "$opt_game")
+    game=$opt_game
+    # Pasted paths may need decoding. An existing path is already unambiguous.
+    if [ ! -e "$game" ]; then
+        game=$(typed_folder "$opt_game")
+    fi
     has_game "$game" || fail "$(not_a_game "$game")"
     remember=1
 elif [ -n "${NV_RS_GAME:-}" ]; then
