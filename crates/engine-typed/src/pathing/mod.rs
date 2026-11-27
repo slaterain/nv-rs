@@ -38,6 +38,7 @@ use layout::{
 
 pub mod layout;
 pub mod location;
+pub mod manager_events;
 pub mod navmesh;
 pub mod point;
 pub mod pov;
@@ -267,5 +268,13 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The manager's task-data delete, pause event, message queue and message lifecycle.
+        entry!(0x006e_9c90, manager_events::task_data_scalar_delete(Ptr, u32) -> Ptr),
+        entry!(0x006e_b790, manager_events::pause_event_signalled(Ptr) -> bool),
+        entry!(0x006e_b7b0, manager_events::signal_pause_event(Ptr)),
+        entry!(0x006e_b7d0, manager_events::cancel_paths_flag(Ptr) -> u8),
+        entry!(0x006e_b7f0, manager_events::enqueue_message(Ptr, u32)),
+        entry!(0x006e_b820, manager_events::construct_build_path_message(Ptr) -> Ptr),
+        entry!(0x006e_b850, manager_events::stop_owned_task(Ptr)),
     ]
 }

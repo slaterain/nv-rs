@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, manager_events, navmesh, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -660,6 +660,7 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x006d_b4f0, &[0x006d_bbb0]),
     (0x006d_cf20, &[0x0069_0830, 0x006d_cfe0]),
     (0x006e_78b0, &[0x006e_8f40]),
+    (0x006e_9c90, &[0x006e_9e20, 0x006e_9f60, 0x006e_9f90]),
 ];
 
 trait Common {
@@ -4365,4 +4366,214 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- Path manager task-data delete, pause event, message queue, message lifecycle ----
+
+/// The signalled cell the event stub reads.
+const EV_SIGNALLED: u32 = 0x0300_2f30;
+
+/// Stands in for the manager-events callees: each logs its words; the signalled query reads the
+/// case's cell.
+fn manager_events_stubs(e: &mut Engine) {
+    e.register(0x00aa_6120, |e, a| {
+        log(e, 0x00aa_6120, a[0]);
+        ret(e.mem.u32(EV_SIGNALLED))
+    });
+    e.register(0x00aa_62c0, |e, a| {
+        log(e, 0x00aa_62c0, a[0]);
+        ret(0)
+    });
+    e.register(0x0045_d260, |e, a| {
+        for (i, w) in a.iter().enumerate() {
+            log(e, 0x0045_d260 + i as u32, *w);
+        }
+        ret(0)
+    });
+    e.register(0x006e_b890, |e, a| {
+        log(e, 0x006e_b890, a[0]);
+        log(e, 0x006e_b890 + 1, a[1]);
+        ret(0)
+    });
+    // The task-data destructor's callees (it runs for real on the typed side).
+    e.register(0x006e_bf90, |e, a| {
+        log(e, 0x006e_bf90, a[0]);
+        ret(0)
+    });
+    e.register(0x006e_bf10, |e, a| {
+        log(e, 0x006e_bf10, a[0]);
+        ret(0)
+    });
+    e.register(0x006e_bec0, |e, a| {
+        log(e, 0x006e_bec0, a[0]);
+        ret(0)
+    });
+    e.register(0x0045_cec0, |e, a| {
+        log(e, 0x0045_cec0, a[0]);
+        ret(0)
+    });
+    e.register(0x006c_b410, |e, a| {
+        log(e, 0x006c_b410, a[0]);
+        ret(0)
+    });
+    e.register(0x006c_b4a0, |e, a| {
+        log(e, 0x006c_b4a0, a[0]);
+        ret(0)
+    });
+    e.register(0x00b0_0ec0, |e, a| {
+        log(e, 0x00b0_0ec0, a[0]);
+        ret(0)
+    });
+}
+
+/// A manager impl block of `0xc40` bytes with the case's cancel flag.
+fn events_manager(e: &mut Engine, cancel: u8) -> u32 {
+    let m = e.mem.alloc(0xc40);
+    e.mem.set_u8(m + 0x0c34, cancel);
+    m
+}
+
+#[test]
+fn task_data_scalar_delete() {
+    Diff::new(entry!(
+        0x006e_9c90,
+        manager_events::task_data_scalar_delete(Ptr, u32) -> Ptr
+    ))
+    .common()
+    .plain(0x006e_9c90)
+    .inputs(&[Input::Of(&[0, 1, 2, 0xffff_fffe])])
+    .setup(|e, case| {
+        stand_ins(e);
+        manager_events_stubs(e);
+        // Empty request and path arrays at +0x40 and +0x50.
+        let data = e.mem.alloc(0x68);
+        let req_data = e.mem.alloc(4);
+        let path_data = e.mem.alloc(4);
+        let requests = array(e, req_data, 0, 1);
+        let paths = array(e, path_data, 0, 1);
+        e.mem.set_u32(data + 0x40, requests);
+        e.mem.set_u32(data + 0x50, paths);
+        vec![data, case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pause_event_signalled() {
+    Diff::new(entry!(
+        0x006e_b790,
+        manager_events::pause_event_signalled(Ptr) -> bool
+    ))
+    .common()
+    .plain(0x006e_b790)
+    .inputs(&[Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        stand_ins(e);
+        manager_events_stubs(e);
+        e.mem.set_u32(EV_SIGNALLED, case.word(0));
+        vec![e.mem.alloc(0xc40)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn signal_pause_event() {
+    Diff::new(entry!(0x006e_b7b0, manager_events::signal_pause_event(Ptr)))
+        .common()
+        .plain(0x006e_b7b0)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            manager_events_stubs(e);
+            let m = e.mem.alloc(0xc40);
+            e.mem.set_u32(m + 0x0c2c, case.word(0));
+            vec![m]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn cancel_paths_flag() {
+    Diff::new(entry!(
+        0x006e_b7d0,
+        manager_events::cancel_paths_flag(Ptr) -> u8
+    ))
+    .common()
+    .plain(0x006e_b7d0)
+    .inputs(&[Input::Of(&[0, 1, 0xff])])
+    .setup(|e, case| {
+        stand_ins(e);
+        vec![events_manager(e, case.word(0) as u8)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn enqueue_message() {
+    Diff::new(entry!(
+        0x006e_b7f0,
+        manager_events::enqueue_message(Ptr, u32)
+    ))
+    .common()
+    .plain(0x006e_b7f0)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        // The queue's vtable slot 4 (byte offset) is the enqueue stand-in.
+        e.register(0x00ff_2030, |e, a| {
+            log(e, 0x00ff_2030, a[0]);
+            log(e, 0x00ff_2030 + 1, a[1]);
+            ret(0)
+        });
+        let m = e.mem.alloc(0xc40);
+        let vt = vtable(e);
+        e.mem.set_u32(vt + 4, 0x00ff_2030);
+        e.mem.set_u32(m + 0x0c10, vt);
+        vec![m, case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn construct_build_path_message() {
+    Diff::new(entry!(
+        0x006e_b820,
+        manager_events::construct_build_path_message(Ptr) -> Ptr
+    ))
+    .common()
+    .plain(0x006e_b820)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        manager_events_stubs(e);
+        let m = e.mem.alloc(0x20);
+        e.mem.set_u32(m, case.word(0));
+        vec![m]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stop_owned_task() {
+    Diff::new(entry!(0x006e_b850, manager_events::stop_owned_task(Ptr)))
+        .common()
+        .plain(0x006e_b850)
+        .inputs(&[Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            stand_ins(e);
+            manager_events_stubs(e);
+            let m = e.mem.alloc(8);
+            if case.word(0) != 0 {
+                e.mem.set_u32(m, 0x8000);
+            }
+            vec![m]
+        })
+        .run()
+        .assert_same();
 }
