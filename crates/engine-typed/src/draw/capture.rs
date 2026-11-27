@@ -292,6 +292,17 @@ fn packets_open(open: usize) -> bool {
     open & (KEEP_OPEN - 1) != 0
 }
 
+/// Tests: a kept record's build is no open packet, a packet beside it still is ([`packets_open`]; review of #1108).
+#[cfg(test)]
+pub(crate) fn check_packets_open_for_tests() {
+    assert!(!packets_open(0));
+    assert!(!packets_open(KEEP_OPEN));
+    assert!(!packets_open(3 * KEEP_OPEN));
+    assert!(packets_open(1));
+    assert!(packets_open(KEEP_OPEN + 1));
+    assert!(packets_open(KEEP_OPEN - 1));
+}
+
 /// [`KEEP_READS`]'s type: each read's address, the bytes read and the exe function reading (the call stack's top).
 type KeepReads = Option<Vec<(u32, Vec<u8>, u32)>>;
 
@@ -2450,15 +2461,4 @@ mod tests {
         assert_eq!(end(&mut e), Report::default());
         assert_eq!(e.mem.u32(at), 1);
     }
-}
-
-/// Tests: a kept record's build is no open packet, a packet beside it still is ([`packets_open`]; review of #1108).
-#[cfg(test)]
-pub(crate) fn check_packets_open_for_tests() {
-    assert!(!packets_open(0));
-    assert!(!packets_open(KEEP_OPEN));
-    assert!(!packets_open(3 * KEEP_OPEN));
-    assert!(packets_open(1));
-    assert!(packets_open(KEEP_OPEN + 1));
-    assert!(packets_open(KEEP_OPEN - 1));
 }
