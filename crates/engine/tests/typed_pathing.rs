@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, navmesh, pathfind_accessors, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -4364,4 +4364,184 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+#[test]
+fn set_embedded_location() {
+    Diff::new(entry!(
+        0x006d_1bc0,
+        pathfind_accessors::set_embedded_location(Ptr, Ptr)
+    ))
+    .common()
+    .plain(0x006d_1bc0)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        let loc = e.mem.alloc(0x28);
+        for i in 0..0xa {
+            e.mem.set_u32(loc + 4 * i, case.word(0).wrapping_mul(i + 1));
+        }
+        vec![e.mem.alloc(0x40), loc]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The LOS search's node words at +0x2090, +0x2094 and +0x2098, from the case's word.
+fn los_search(e: &mut Engine, case: &Case) -> u32 {
+    let s = e.mem.alloc(0x20a0);
+    for (off, i) in [(0x2090u32, 0usize), (0x2094, 1), (0x2098, 2), (0x2070, 3)] {
+        e.mem
+            .set_u32(s + off, case.word(0).wrapping_mul(i as u32 + 1));
+    }
+    s
+}
+
+#[test]
+fn first_ignored_goal() {
+    Diff::new(entry!(
+        0x006d_1be0,
+        pathfind_accessors::first_ignored_goal(Ptr) -> u32
+    ))
+    .common()
+    .plain(0x006d_1be0)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        vec![los_search(e, case)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn last_valid_node() {
+    Diff::new(entry!(
+        0x006d_1c00,
+        pathfind_accessors::last_valid_node(Ptr) -> u32
+    ))
+    .common()
+    .plain(0x006d_1c00)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        vec![los_search(e, case)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn closest_node() {
+    Diff::new(entry!(
+        0x006d_1c20,
+        pathfind_accessors::closest_node(Ptr) -> u32
+    ))
+    .common()
+    .plain(0x006d_1c20)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        vec![los_search(e, case)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn los_map() {
+    Diff::new(entry!(
+        0x006d_1c40,
+        pathfind_accessors::los_map(Ptr) -> u32
+    ))
+    .common()
+    .plain(0x006d_1c40)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        let s = los_search(e, case);
+        let holder = e.mem.alloc(4);
+        e.mem.set_u32(holder, case.word(0).wrapping_add(0x1000));
+        e.mem.set_u32(s + 0x2070, holder);
+        vec![s]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn location_set_flag_2() {
+    Diff::new(entry!(
+        0x006d_2c00,
+        pathfind_accessors::location_set_flag_2(Ptr<_>)
+    ))
+    .common()
+    .plain(0x006d_2c00)
+    .inputs(&[Input::Of(&[0, 1, 2, 0xfd, 0xff])])
+    .setup(|e, case| {
+        stand_ins(e);
+        let l = e.mem.alloc(0x28);
+        e.mem.set_u8(l + 0x26, case.word(0) as u8);
+        vec![l]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn min_distance() {
+    Diff::new(entry!(
+        0x006d_2c20,
+        pathfind_accessors::min_distance(Ptr) -> f32
+    ))
+    .common()
+    .plain(0x006d_2c20)
+    .inputs(&[Input::F32])
+    .float_sweep(FLOAT_SWEEP)
+    .setup(|e, case| {
+        stand_ins(e);
+        let r = e.mem.alloc(0xb4);
+        e.mem.set_u32(r + 0xb0, bits(case, 0));
+        vec![r]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn max_distance() {
+    Diff::new(entry!(
+        0x006d_2c40,
+        pathfind_accessors::max_distance(Ptr) -> f32
+    ))
+    .common()
+    .plain(0x006d_2c40)
+    .inputs(&[Input::F32])
+    .float_sweep(FLOAT_SWEEP)
+    .setup(|e, case| {
+        stand_ins(e);
+        let r = e.mem.alloc(0xb8);
+        e.mem.set_u32(r + 0xb4, bits(case, 0));
+        vec![r]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn set_cost_limit() {
+    Diff::new(entry!(
+        0x006d_2c60,
+        pathfind_accessors::set_cost_limit(Ptr, f32)
+    ))
+    .common()
+    .plain(0x006d_2c60)
+    .inputs(&[Input::F32])
+    .float_sweep(FLOAT_SWEEP)
+    .setup(|e, case| {
+        stand_ins(e);
+        vec![e.mem.alloc(0x20a8), bits(case, 0)]
+    })
+    .run()
+    .assert_same();
 }
