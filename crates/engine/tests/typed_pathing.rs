@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, navmesh, point, pov, search, smoother_pov};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -659,6 +659,7 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x006d_b4f0, &[0x006d_bbb0]),
     (0x006d_cf20, &[0x0069_0830, 0x006d_cfe0]),
     (0x006e_78b0, &[0x006e_8f40]),
+    (0x006b_3570, &[0x006b_3eb0]),
 ];
 
 trait Common {
@@ -4364,4 +4365,216 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- The smoother's POV arrays and holder ----
+
+/// The smoother callees as logged stand-ins: the array release, the buffer allocation, the link
+/// array's init, and the interlocked reference count. (`006b3eb0`/`006b3f40` are family members
+/// and run for real on both sides.)
+fn smoother_stubs(e: &mut Engine) {
+    e.register(0x0084_54f0, |e, a| {
+        log(e, 0x54f0, a[0]);
+        log(e, 0x54f1, a[1]);
+        ret(0)
+    });
+    e.register(0x0040_1000, |e, a| {
+        log(e, 0x1000, a[0]);
+        ret(e.mem.alloc(a[0].max(4)))
+    });
+    e.register(0x006a_2130, |e, a| {
+        log(e, 0x2130, a[0]);
+        log(e, 0x2131, a[1]);
+        log(e, 0x2132, a[2]);
+        ret(a[0])
+    });
+    e.register(0x0040_f6e0, |e, a| {
+        let n = e.mem.u32(a[0]).wrapping_add(1);
+        e.mem.set_u32(a[0], n);
+        log(e, 0xf6e0, a[0]);
+        ret(n)
+    });
+    e.register(0x0040_1970, |e, a| {
+        let n = e.mem.u32(a[0]).wrapping_sub(1);
+        e.mem.set_u32(a[0], n);
+        log(e, 0x1970, a[0]);
+        ret(n)
+    });
+}
+
+#[test]
+fn smoother_pov_array_ctor() {
+    Diff::new(entry!(0x006b_3570, smoother_pov::pov_array_ctor(Ptr) -> Ptr))
+        .common()
+        .plain(0x006b_3570)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            smoother_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn smoother_pov_array_dtor() {
+    Diff::new(entry!(0x006b_35a0, smoother_pov::pov_array_dtor(Ptr)))
+        .common()
+        .plain(0x006b_35a0)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            smoother_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn smoother_node_array_ctor() {
+    Diff::new(entry!(0x006b_35c0, smoother_pov::node_array_ctor(Ptr) -> Ptr))
+        .common()
+        .plain(0x006b_35c0)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            smoother_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn smoother_node_array_dtor() {
+    Diff::new(entry!(0x006b_35f0, smoother_pov::node_array_dtor(Ptr)))
+        .common()
+        .plain(0x006b_35f0)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            smoother_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn smoother_link_array_ctor() {
+    Diff::new(entry!(0x006b_3610, smoother_pov::link_array_ctor(Ptr) -> Ptr))
+        .common()
+        .plain(0x006b_3610)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            smoother_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn smoother_link_array_dtor() {
+    Diff::new(entry!(0x006b_3640, smoother_pov::link_array_dtor(Ptr)))
+        .common()
+        .plain(0x006b_3640)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            smoother_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn smoother_link_buffer_allocate() {
+    Diff::new(entry!(
+        0x006b_36b0,
+        smoother_pov::link_buffer_allocate(Ptr, u32) -> u32
+    ))
+    .common()
+    .plain(0x006b_36b0)
+    .inputs(&[Input::Of(&[0, 1, 3, 0x100, 0x0400_0000])])
+    .setup(|e, case| {
+        stand_ins(e);
+        smoother_stubs(e);
+        let this = e.mem.alloc(0x10);
+        vec![this, case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn smoother_edge_vert_buffer_allocate() {
+    Diff::new(entry!(
+        0x006b_3780,
+        smoother_pov::edge_vert_buffer_allocate(Ptr, u32) -> u32
+    ))
+    .common()
+    .plain(0x006b_3780)
+    .inputs(&[Input::Of(&[0, 1, 3, 0x100, 0x0800_0000])])
+    .setup(|e, case| {
+        stand_ins(e);
+        smoother_stubs(e);
+        let this = e.mem.alloc(0x10);
+        vec![this, case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn smoother_holder_new() {
+    Diff::new(entry!(0x006b_37b0, smoother_pov::holder_new(Ptr, u32) -> Ptr))
+        .common()
+        .plain(0x006b_37b0)
+        .inputs(&[Input::Word, Input::Of(&[0, 0x2000])])
+        .setup(|e, case| {
+            stand_ins(e);
+            smoother_stubs(e);
+            let held = e.mem.alloc(0x14);
+            e.mem.set_u32(held + 0x10, case.word(0));
+            let this = e.mem.alloc(0x10);
+            vec![this, if case.word(1) == 0 { 0 } else { held }]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn smoother_holder_drop() {
+    Diff::new(entry!(0x006b_37e0, smoother_pov::holder_drop(Ptr)))
+        .common()
+        .plain(0x006b_37e0)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            smoother_stubs(e);
+            let held = e.mem.alloc(0x14);
+            e.mem.set_u32(held + 0x10, case.word(0));
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, held);
+            vec![this]
+        })
+        .run()
+        .assert_same();
 }

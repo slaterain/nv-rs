@@ -42,6 +42,7 @@ pub mod navmesh;
 pub mod point;
 pub mod pov;
 pub mod search;
+pub mod smoother_pov;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(7);
@@ -267,5 +268,16 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The smoother's POV arrays and holder.
+        entry!(0x006b_3570, smoother_pov::pov_array_ctor(Ptr) -> Ptr),
+        entry!(0x006b_35a0, smoother_pov::pov_array_dtor(Ptr)),
+        entry!(0x006b_35c0, smoother_pov::node_array_ctor(Ptr) -> Ptr),
+        entry!(0x006b_35f0, smoother_pov::node_array_dtor(Ptr)),
+        entry!(0x006b_3610, smoother_pov::link_array_ctor(Ptr) -> Ptr),
+        entry!(0x006b_3640, smoother_pov::link_array_dtor(Ptr)),
+        entry!(0x006b_36b0, smoother_pov::link_buffer_allocate(Ptr, u32) -> u32),
+        entry!(0x006b_3780, smoother_pov::edge_vert_buffer_allocate(Ptr, u32) -> u32),
+        entry!(0x006b_37b0, smoother_pov::holder_new(Ptr, u32) -> Ptr),
+        entry!(0x006b_37e0, smoother_pov::holder_drop(Ptr)),
     ]
 }
