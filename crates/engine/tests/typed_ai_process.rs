@@ -1415,50 +1415,59 @@ fn low_process_save_and_load() {
     .assert_same();
 }
 
-/// The loads on every seed (a block's clean end needs a length from the byte reader that few seeds
-/// give), each in two halves so they run as parallel tests.
-fn low_process_load(seeds: &'static [u32]) {
+// The loads on every seed (a block's clean end needs a length from the byte reader that few seeds
+// give), each in two halves so they run as parallel tests.
+
+#[test]
+fn low_process_load_first_seeds() {
     Diff::new(entry!(
         0x0090_fd80,
         low_process::load_game(Ptr, u32, u32, u32)
     ))
-    .in_world(seeds, load_words)
+    .in_world(&ALL_FIRST, load_words)
     .ignore_calls(LOW_IN_PLACE)
     .allow_nan_payloads()
     .run()
     .assert_same();
-}
-
-fn middle_low_process_load(seeds: &'static [u32]) {
-    Diff::new(entry!(
-        0x0092_e730,
-        middle_low_process::load_game(Ptr, u32, u32, u32)
-    ))
-    .in_world(seeds, load_words)
-    .ignore_calls(LOW_IN_PLACE)
-    .allow_nan_payloads()
-    .run()
-    .assert_same();
-}
-
-#[test]
-fn low_process_load_first_seeds() {
-    low_process_load(&ALL_FIRST);
 }
 
 #[test]
 fn low_process_load_last_seeds() {
-    low_process_load(&ALL_LAST);
+    Diff::new(entry!(
+        0x0090_fd80,
+        low_process::load_game(Ptr, u32, u32, u32)
+    ))
+    .in_world(&ALL_LAST, load_words)
+    .ignore_calls(LOW_IN_PLACE)
+    .allow_nan_payloads()
+    .run()
+    .assert_same();
 }
 
 #[test]
 fn middle_low_process_load_first_seeds() {
-    middle_low_process_load(&ALL_FIRST);
+    Diff::new(entry!(
+        0x0092_e730,
+        middle_low_process::load_game(Ptr, u32, u32, u32)
+    ))
+    .in_world(&ALL_FIRST, load_words)
+    .ignore_calls(LOW_IN_PLACE)
+    .allow_nan_payloads()
+    .run()
+    .assert_same();
 }
 
 #[test]
 fn middle_low_process_load_last_seeds() {
-    middle_low_process_load(&ALL_LAST);
+    Diff::new(entry!(
+        0x0092_e730,
+        middle_low_process::load_game(Ptr, u32, u32, u32)
+    ))
+    .in_world(&ALL_LAST, load_words)
+    .ignore_calls(LOW_IN_PLACE)
+    .allow_nan_payloads()
+    .run()
+    .assert_same();
 }
 
 #[test]
