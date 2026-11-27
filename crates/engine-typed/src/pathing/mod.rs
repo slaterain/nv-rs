@@ -38,6 +38,7 @@ use layout::{
 
 pub mod layout;
 pub mod location;
+pub mod manager_result;
 pub mod navmesh;
 pub mod point;
 pub mod pov;
@@ -267,5 +268,9 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The manager's yield flag and completion result.
+        entry!(0x006e_a330, manager_result::set_yield_flag(Ptr)),
+        entry!(0x006e_a9d0, manager_result::completion_init(Ptr) -> Ptr),
+        entry!(0x006e_aa00, manager_result::completion_copy(Ptr, Ptr) -> Ptr),
     ]
 }
