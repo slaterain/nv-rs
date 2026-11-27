@@ -2626,7 +2626,11 @@ mod tests {
         // span of its own, and the replay's compare fails on it.
         let contained = vec![(block + 0x10, vec![0x11], 0), (block + 0x13, vec![0, 0], 0)];
         let s = make_spans(&e, &ranges, &statics, &contained);
-        assert_eq!(s.spans, [(block + 0x10, 8), (block + 0x13, 2)]);
+        // (0x7000 is mapped by now: its fill is a span too.)
+        assert_eq!(
+            s.spans,
+            [(0x0000_7000, 4), (block + 0x10, 8), (block + 0x13, 2)]
+        );
         assert!(
             !spans_same(&e, &s),
             "the contained piece's own bytes compared"
