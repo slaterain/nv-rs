@@ -11,7 +11,7 @@ use crate::culling::layout::NiPoint3;
 use crate::native::{float_precision, Real};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
-use engine_core::x87::fistp_chop64;
+use engine_core::x87::{fistp_chop64, x87_quiet};
 use engine_core::{args, typed_call, Engine};
 
 /// The `double` 19 the scaled cost multiplies by (`010356e8`).
@@ -50,6 +50,10 @@ const CONSTRUCT_EDGES: u32 = 0x0069_b9d0;
 const EDGE_ASSIGN: u32 = 0x006d_bbb0;
 const SOLUTION_NODE: u32 = 0x006e_8f40;
 const TAG_INIT: u32 = 0x0044_e010;
+/// The curve segment's parameter setter (`006e7c20`).
+const SET_PARAMETER: u32 = 0x006e_7c20;
+/// The curve segment's blend of its two position-and-tangent blocks into a point (`006e7d60`).
+const BLEND_POINT: u32 = 0x006e_7d60;
 
 /// The vtables the arrays' constructors and destructors install.
 const INDEX_ARRAY_VTABLE: u32 = 0x0106_abe4;
@@ -566,6 +570,17 @@ pub fn append_edge(e: &mut Engine, this: Ptr<SimpleArray>, item: u32) -> u32 {
 /// Node `index` of a pathing solution (`thiscall(solution, index)`): `006e8f40` on its array at +8.
 pub fn solution_node(e: &mut Engine, this: Ptr, index: u32) -> u32 {
     e.call(SOLUTION_NODE, &args![this.byte_add(8), index]).u32()
+}
+
+// Typed from 006e9ab0
+/// The curve segment's point at `parameter` (`thiscall(this, out, parameter) -> out`, `RET 8`):
+/// sets the parameter (`006e7c20`, the `float` copied with `FLD`/`FSTP`), then blends the blocks
+/// at +0x14 and +0x2c into `out` (`006e7d60`). Returns `out`.
+pub fn segment_point(e: &mut Engine, this: Ptr, out: Ptr, parameter: f32) -> Ptr {
+    e.call(SET_PARAMETER, &args![this, x87_quiet(parameter).to_bits()]);
+    let base = this.addr();
+    e.call(BLEND_POINT, &args![this, out, base + 0x14, base + 0x2c]);
+    out
 }
 
 // Typed from 006ecba0

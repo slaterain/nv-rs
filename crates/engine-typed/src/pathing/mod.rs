@@ -227,6 +227,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_4ca0, search::edges_equal(Ptr<MeshEdge>, Ptr<MeshEdge>) -> bool),
         entry!(0x006d_b4f0, search::append_edge(Ptr<SimpleArray>, u32) -> u32),
         entry!(0x006e_78b0, search::solution_node(Ptr, u32) -> u32),
+        entry!(0x006e_9ab0, search::segment_point(Ptr, Ptr, f32) -> Ptr),
         entry!(0x006e_cba0, search::tagged_new(Ptr, u8, u32) -> Ptr),
         // The point-of-view search.
         entry!(0x0069_85f0, pov::copy_pair(Ptr<Point2>, Ptr<Point2>) -> Ptr<Point2>),
