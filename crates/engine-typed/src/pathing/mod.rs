@@ -215,6 +215,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0069_1800, search::index_array_drop(Ptr<SimpleArray>)),
         entry!(0x0069_b2c0, search::edge_array_new(Ptr<SimpleArray>) -> Ptr<SimpleArray>),
         entry!(0x0069_b2f0, search::edge_array_drop(Ptr<SimpleArray>)),
+        entry!(0x0069_19a0, search::array_dtor(Ptr)),
+        entry!(0x0069_1a00, search::array_dtor_body(Ptr)),
         entry!(0x006a_8a30, search::construct_20s(Ptr, u32, u32)),
         entry!(0x006d_03d0, search::construct_12s(Ptr, u32, u32)),
         entry!(0x006b_40f0, search::construct_32s(Ptr, u32, u32)),

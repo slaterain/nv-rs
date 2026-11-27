@@ -45,6 +45,9 @@ const PLACEMENT_NEW: u32 = 0x006e_6da0;
 const SMOOTHER_EDGE_NEW: u32 = 0x006a_eb70;
 const MEMSET: u32 = 0x0040_3d30;
 const OPEN_LIST_NEW: u32 = 0x006a_8380;
+/// The hash table clean-up (`00438af0`) and the block release (`00aa10f0`).
+const TABLE_CLEAN_UP: u32 = 0x0043_8af0;
+const RELEASE_BLOCK: u32 = 0x00aa_10f0;
 const NEXT_EDGE_SLOT: u32 = 0x0097_8bc0;
 const CONSTRUCT_EDGES: u32 = 0x0069_b9d0;
 const EDGE_ASSIGN: u32 = 0x006d_bbb0;
@@ -55,6 +58,9 @@ const TAG_INIT: u32 = 0x0044_e010;
 const INDEX_ARRAY_VTABLE: u32 = 0x0106_abe4;
 const EDGE_ARRAY_VTABLE: u32 = 0x0106_b1e0;
 const SEARCH_VTABLE: u32 = 0x0106_b650;
+/// The vtables the array's destructor bodies install (`006919a0`, `00691a00`).
+const ARRAY_DTOR_VTABLE: u32 = 0x0106_aba4;
+const ARRAY_DTOR_BODY_VTABLE: u32 = 0x0106_abf8;
 /// An array's vtable slots: allocate a buffer, free one.
 const SLOT_ALLOCATE: u32 = 0x4;
 const SLOT_FREE: u32 = 0x8;
@@ -450,6 +456,25 @@ pub fn edge_array_new(e: &mut Engine, this: Ptr<SimpleArray>) -> Ptr<SimpleArray
 pub fn edge_array_drop(e: &mut Engine, this: Ptr<SimpleArray>) {
     e.set(this, SimpleArray::vtable, EDGE_ARRAY_VTABLE);
     e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Typed from 00691a00
+/// The array's destructor body (`thiscall(this)`): the vtable `0106abf8`, the table clean-up
+/// (`00438af0`), then the block at +8 released (`00aa10f0`).
+pub fn array_dtor_body(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), ARRAY_DTOR_BODY_VTABLE);
+    e.call(TABLE_CLEAN_UP, &args![this]);
+    let block = e.mem.u32(this.addr() + 8);
+    e.call(RELEASE_BLOCK, &args![block]);
+}
+
+// Typed from 006919a0
+/// The array's destructor (`thiscall(this)`): the vtable `0106aba4`, the table clean-up
+/// (`00438af0`), then the destructor body [`array_dtor_body`] (`00691a00`).
+pub fn array_dtor(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), ARRAY_DTOR_VTABLE);
+    e.call(TABLE_CLEAN_UP, &args![this]);
+    typed_call!(FAMILY, 0x0069_1a00, array_dtor_body(e, this));
 }
 
 /// `count` placements of `size` bytes from `elements` on (`006e6da0`).

@@ -16,7 +16,7 @@ const FREE: u32 = 0x00aa_10f0;
 pub fn fn_006919a0(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), 0x0106_aba4);
     e.call(BASE_CLEAN_UP, &args![this]);
-    fn_00691a00(e, this);
+    e.call(0x0069_1a00, &args![this]);
 }
 
 // Translated from 00691a00 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -56,6 +56,7 @@ mod tests {
             log[1..],
             [
                 (BASE_CLEAN_UP, vec![this]),
+                (0x0069_1a00, vec![this]),
                 (BASE_CLEAN_UP, vec![this]),
                 (FREE, vec![0x7000])
             ]
