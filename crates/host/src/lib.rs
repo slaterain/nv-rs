@@ -28,6 +28,7 @@ pub mod full_screen;
 pub mod game_file;
 pub mod game_ini;
 pub mod half_loaded_move;
+pub mod high_list_check;
 pub mod hitch_log;
 pub mod launcher;
 pub mod mod_files;
@@ -187,6 +188,11 @@ impl Host {
             engine.register(address, function);
         }
         install_rows_and_extenders(&mut engine, choice);
+        // `NV_HIGH_LIST_CHECK` (a diagnostic, not a row; off unless set): over the rows, so the level
+        // changes it notes go through the half-loaded row's wrappers when that row is on.
+        if high_list_check::on() {
+            high_list_check::install(&mut engine, choice.is_on(&half_loaded_move::FIX));
+        }
         eprintln!("{}", choice.describe());
         let jip_state = {
             let jip = engine.ext::<jip::Jip>();

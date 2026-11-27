@@ -1221,6 +1221,7 @@ const TEST_VARIABLES: &[&str] = &[
     "NV_PASS_CHECK",
     "NV_TOPIC_INDEX_CHECK",
     "NV_NVSE_EVENT_LOG",
+    "NV_HIGH_LIST_CHECK",
     DRAW_THREAD_CHECK,
 ];
 
