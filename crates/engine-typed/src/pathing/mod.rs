@@ -39,6 +39,7 @@ use layout::{
 pub mod layout;
 pub mod location;
 pub mod navmesh;
+pub mod obstacle_manager;
 pub mod point;
 pub mod pov;
 pub mod search;
@@ -267,5 +268,12 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The obstacle manager's queues and bookkeeping.
+        entry!(0x006c_1130, obstacle_manager::queue_navmesh_enable(Ptr, u32)),
+        entry!(0x006c_1150, obstacle_manager::queue_navmesh_disable(Ptr, u32)),
+        entry!(0x006c_1170, obstacle_manager::request_update_all(Ptr)),
+        entry!(0x006c_1190, obstacle_manager::add_reference_obstacles(Ptr, u32)),
+        entry!(0x006c_1590, obstacle_manager::remove_reference_obstacles(Ptr, u32)),
+        entry!(0x006c_1760, obstacle_manager::reregister_obstacle(Ptr, u32)),
     ]
 }
