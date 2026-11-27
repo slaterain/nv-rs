@@ -563,15 +563,16 @@ pub fn navmesh_ptr_release(e: &mut Engine, this: u32) {
 
 // Typed from 0042fdc0
 /// The counted pointer's assignment from the one at `source`: another object than the one held
-/// releases the old one (when not null), is stored and has a reference taken (when not null).
-/// Answers `this`.
+/// releases the old one (when not null), is stored and has a reference taken (when not null). The
+/// source is read again after the release, as the exe reads it (`0042fdeb`): the release can delete
+/// the object the source lives in. Answers `this`.
 pub fn navmesh_ptr_assign(e: &mut Engine, this: u32, source: u32) -> u32 {
     let held = e.mem.u32(this);
-    let object = e.mem.u32(source);
-    if held != object {
+    if held != e.mem.u32(source) {
         if held != 0 {
             give_reference(e, held);
         }
+        let object = e.mem.u32(source);
         e.mem.set_u32(this, object);
         if object != 0 {
             take_reference(e, object);

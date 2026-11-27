@@ -45,7 +45,6 @@ const EXTRA_WORN_INIT: u32 = 0x0043_22f0;
 const EXTRA_WORN_LEFT_INIT: u32 = 0x0043_2320;
 const EXTRA_CAN_NOT_WEAR_INIT: u32 = 0x0043_2350;
 const EXTRA_SEED_INIT: u32 = 0x0043_25b0;
-const EXTRA_PACKAGE_START_LOCATION_INIT: u32 = 0x0043_26c0;
 const EXTRA_STARTING_WORLD_OR_CELL_INIT: u32 = 0x0043_08c0;
 const EXTRA_SOUND_INIT: u32 = 0x0043_60c0;
 const EXTRA_ACTIVATE_LOOP_SOUND_INIT: u32 = 0x0043_6660;
@@ -207,11 +206,11 @@ pub fn set_package_start_location(
     if extra == 0 {
         let created = new_object(e, 0x20, |e, block| {
             let z_rot = x87_quiet_bits(z_rot.to_bits());
-            e.call(
-                EXTRA_PACKAGE_START_LOCATION_INIT,
-                &args![block, location_form, cell, position, z_rot],
+            typed_call!(
+                FAMILY,
+                0x0043_26c0,
+                super::objects::start_location_at(e, block, location_form, cell, position, z_rot)
             )
-            .u32()
         });
         list_add(e, this, created);
         return;

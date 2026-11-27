@@ -316,7 +316,10 @@ fn compare_byte(e: &mut Engine, this: u32, other: u32, target: u32) -> bool {
 fn compare_float(e: &mut Engine, this: u32, other: u32, target: u32) -> bool {
     match compare_start(e, this, other, target) {
         None => true,
-        Some(cast) => e.mem.f32(this.wrapping_add(EXTRA_PAYLOAD)) != e.mem.f32(cast.wrapping_add(EXTRA_PAYLOAD)),
+        Some(cast) => {
+            e.mem.f32(this.wrapping_add(EXTRA_PAYLOAD))
+                != e.mem.f32(cast.wrapping_add(EXTRA_PAYLOAD))
+        }
     }
 }
 
@@ -338,7 +341,14 @@ fn compare_by(e: &mut Engine, this: u32, other: u32, target: u32, compare: u32) 
 fn compare_bytes(e: &mut Engine, this: u32, other: u32, target: u32, n: u32) -> bool {
     match compare_start(e, this, other, target) {
         None => true,
-        Some(cast) => memcmp(e, this.wrapping_add(EXTRA_PAYLOAD), cast.wrapping_add(EXTRA_PAYLOAD), n) != 0,
+        Some(cast) => {
+            memcmp(
+                e,
+                this.wrapping_add(EXTRA_PAYLOAD),
+                cast.wrapping_add(EXTRA_PAYLOAD),
+                n,
+            ) != 0
+        }
     }
 }
 
@@ -364,7 +374,9 @@ fn item_of(e: &Engine, array: u32, index: u32) -> u32 {
 /// The address of slot `index` of a pointer array (`006a7ad0`, in place).
 #[inline]
 fn slot_of(e: &Engine, array: u32, index: u32) -> u32 {
-    e.mem.u32(array.wrapping_add(4)).wrapping_add(index.wrapping_mul(4))
+    e.mem
+        .u32(array.wrapping_add(4))
+        .wrapping_add(index.wrapping_mul(4))
 }
 
 /// An empty actor list (`0096a2d0` in place: two null words) in an 8-byte block from `operator new`,
@@ -418,8 +430,10 @@ pub fn sequence_word(e: &mut Engine, this: u32, section: i32) -> u16 {
         0x15 => 4,
         other => other,
     };
-    e.mem
-        .u16(this.wrapping_add(0x4c).wrapping_add((slot as u32).wrapping_mul(2)))
+    e.mem.u16(
+        this.wrapping_add(0x4c)
+            .wrapping_add((slot as u32).wrapping_mul(2)),
+    )
 }
 
 // Typed from 00430200
@@ -498,7 +512,9 @@ pub fn limbs_dismember(e: &mut Engine, this: u32, actor: u32, limb: u8, exploded
     }
     let at = this.wrapping_add(0x0c);
     let limbs = u32::from(e.mem.u16(at));
-    e.mem.set_u16(at, (limbs | (1u32 << (limb & 31))) as u16);
+    // The word with the bit set, stored as its low half.
+    let bits = (limbs | (1u32 << (limb & 31))).to_le_bytes();
+    e.mem.set_u16(at, u16::from_le_bytes([bits[0], bits[1]]));
     let block = e.call(OPERATOR_NEW, &args![0x14u32]).u32();
     let record = if block == 0 {
         0
@@ -541,7 +557,9 @@ pub fn limbs_dismember(e: &mut Engine, this: u32, actor: u32, limb: u8, exploded
         index -= 1;
     };
     let earlier_objects = earlier.wrapping_add(LIMB_OBJECTS);
-    if e.call(ARRAY_SAME_BUFFER, &args![earlier_objects, objects]).bool() {
+    if e.call(ARRAY_SAME_BUFFER, &args![earlier_objects, objects])
+        .bool()
+    {
         e.mem.set_u8(record.wrapping_add(2), 1);
         typed_call!(
             dispatch::FAMILY,
@@ -610,7 +628,9 @@ pub fn starting_position_new(e: &mut Engine, this: u32, reference: u32) -> u32 {
     e.call(FILE_POS_ROT_NEW, &args![start]);
     let position = e.vcall(reference, 0x1f4, &[]).u32();
     copy_point(e, position, start);
-    copy_point(e, angles_of(e, reference), start.wrapping_add(0x0c));
+    // The angles' address (`00430830`), in place.
+    let angles = reference.wrapping_add(0x24);
+    copy_point(e, angles, start.wrapping_add(0x0c));
     this
 }
 
@@ -711,7 +731,10 @@ pub fn lock_is_broken(e: &mut Engine, this: u32) -> bool {
     let player = e.mem.u32(PLAYER);
     let value = e.with_stack(4, |e, result| {
         e.mem.set_f32(result.addr(), 0.0);
-        e.call(HANDLE_ENTRY_POINT, &args![ENTRY_LOCK_BROKEN, player, result]);
+        e.call(
+            HANDLE_ENTRY_POINT,
+            &args![ENTRY_LOCK_BROKEN, player, result],
+        );
         e.mem.f32(result.addr())
     });
     let allowed = if f64::from(value) == e.mem.f64(ZERO_DOUBLE) {
@@ -726,9 +749,9 @@ pub fn lock_is_broken(e: &mut Engine, this: u32) -> bool {
 /// `REFR_LOCK::NumericValueToEnum`: the first of the five lock level settings `value` is at most, else
 /// 5 (requires key).
 pub fn lock_bracket(e: &mut Engine, value: i32) -> i32 {
-    for (bracket, &setting) in LOCK_LEVEL_SETTINGS[..5].iter().enumerate() {
+    for (bracket, &setting) in (0..).zip(&LOCK_LEVEL_SETTINGS[..5]) {
         if value <= setting_int(e, setting) {
-            return bracket as i32;
+            return bracket;
         }
     }
     5
@@ -893,7 +916,11 @@ pub fn guarded_notify(e: &mut Engine, this: u32, first: u32, second: u32) {
     let mut index = 0;
     while index < count_of(e, guards) {
         let id = item_of(e, guards, index);
-        let form = typed_call!(forms::FAMILY, 0x0048_39c0, forms::tesform::form_by_id(e, id));
+        let form = typed_call!(
+            forms::FAMILY,
+            0x0048_39c0,
+            forms::tesform::form_by_id(e, id)
+        );
         if form != 0 && e.vcall(form, 0xf0, &[]).bool() && e.vcall(form, 0x100, &[]).bool() {
             let process = e.mem.u32(form.wrapping_add(0x68));
             if process != 0 {
@@ -924,7 +951,11 @@ pub fn teleport_drop(e: &mut Engine, this: u32) {
     e.mem.set_u32(this, VTABLE_TELEPORT);
     let data = word_at(e, this, EXTRA_PAYLOAD);
     if data != 0 {
-        typed_call!(FAMILY, 0x0041_9220, access::teleport_data_delete(e, data, 1));
+        typed_call!(
+            FAMILY,
+            0x0041_9220,
+            access::teleport_data_delete(e, data, 1)
+        );
     }
     extra_drop(e, this);
 }
@@ -956,7 +987,11 @@ pub fn map_marker_drop(e: &mut Engine, this: u32) {
     e.mem.set_u32(this, VTABLE_MAP_MARKER);
     let data = word_at(e, this, EXTRA_PAYLOAD);
     if data != 0 {
-        typed_call!(FAMILY, 0x0041_9350, access::map_marker_data_delete(e, data, 1));
+        typed_call!(
+            FAMILY,
+            0x0041_9350,
+            access::map_marker_data_delete(e, data, 1)
+        );
     }
     extra_drop(e, this);
 }
@@ -986,7 +1021,11 @@ pub fn audio_marker_drop(e: &mut Engine, this: u32) {
     e.mem.set_u32(this, VTABLE_AUDIO_MARKER);
     let data = word_at(e, this, EXTRA_PAYLOAD);
     if data != 0 {
-        typed_call!(FAMILY, 0x0041_9480, access::audio_marker_data_delete(e, data, 1));
+        typed_call!(
+            FAMILY,
+            0x0041_9480,
+            access::audio_marker_data_delete(e, data, 1)
+        );
     }
     extra_drop(e, this);
 }
@@ -1000,7 +1039,13 @@ pub fn audio_marker_compare(e: &mut Engine, this: u32, other: u32) -> bool {
 // Typed from 00431620
 /// `ExtraAudioBuoyMarker`'s constructor (type 0x91) with its data. Answers `this`.
 pub fn audio_buoy_new(e: &mut Engine, this: u32, data: u32) -> u32 {
-    with_word(e, this, KIND_AUDIO_BUOY_MARKER, VTABLE_AUDIO_BUOY_MARKER, data)
+    with_word(
+        e,
+        this,
+        KIND_AUDIO_BUOY_MARKER,
+        VTABLE_AUDIO_BUOY_MARKER,
+        data,
+    )
 }
 
 // Typed from 00431650
@@ -1019,7 +1064,13 @@ pub fn audio_buoy_drop(e: &mut Engine, this: u32) {
 // Typed from 00431710
 /// `ExtraAudioBuoyMarker::Compare`: the buoy data's compare (`00401290`).
 pub fn audio_buoy_compare(e: &mut Engine, this: u32, other: u32) -> bool {
-    compare_by(e, this, other, TYPE_AUDIO_BUOY_MARKER, AUDIO_BUOY_DATA_COMPARE)
+    compare_by(
+        e,
+        this,
+        other,
+        TYPE_AUDIO_BUOY_MARKER,
+        AUDIO_BUOY_DATA_COMPARE,
+    )
 }
 
 // ---- ExtraAction, ExtraContainerChanges and the one-word classes ------------------------------
@@ -1041,7 +1092,13 @@ pub fn action_compare(e: &mut Engine, this: u32, other: u32) -> bool {
 // Typed from 00431830
 /// `ExtraContainerChanges`' constructor (type 0x15) with its changes. Answers `this`.
 pub fn container_changes_new(e: &mut Engine, this: u32, changes: u32) -> u32 {
-    with_word(e, this, KIND_CONTAINER_CHANGES, VTABLE_CONTAINER_CHANGES, changes)
+    with_word(
+        e,
+        this,
+        KIND_CONTAINER_CHANGES,
+        VTABLE_CONTAINER_CHANGES,
+        changes,
+    )
 }
 
 // Typed from 00431860
@@ -1073,7 +1130,13 @@ pub fn inventory_changes_delete(e: &mut Engine, this: u32, flags: u32) -> u32 {
 // Typed from 00431950
 /// `ExtraOriginalReference`'s constructor (type 0x20) with its reference. Answers `this`.
 pub fn original_reference_new(e: &mut Engine, this: u32, reference: u32) -> u32 {
-    with_word(e, this, KIND_ORIGINAL_REFERENCE, VTABLE_ORIGINAL_REFERENCE, reference)
+    with_word(
+        e,
+        this,
+        KIND_ORIGINAL_REFERENCE,
+        VTABLE_ORIGINAL_REFERENCE,
+        reference,
+    )
 }
 
 // Typed from 00431980
@@ -1135,7 +1198,8 @@ pub fn rank_compare(e: &mut Engine, this: u32, other: u32) -> bool {
 /// `ExtraCount`'s constructor (type 0x24) with its count (a 16-bit store). Answers `this`.
 pub fn count_new(e: &mut Engine, this: u32, count: i16) -> u32 {
     extra_with_vtable(e, this, KIND_COUNT, VTABLE_COUNT);
-    e.mem.set_u16(this.wrapping_add(EXTRA_PAYLOAD), count as u16);
+    e.mem
+        .set_u16(this.wrapping_add(EXTRA_PAYLOAD), count as u16);
     this
 }
 
@@ -1145,7 +1209,8 @@ pub fn count_compare(e: &mut Engine, this: u32, other: u32) -> bool {
     match compare_start(e, this, other, TYPE_COUNT) {
         None => true,
         Some(cast) => {
-            e.mem.u16(this.wrapping_add(EXTRA_PAYLOAD)) != e.mem.u16(cast.wrapping_add(EXTRA_PAYLOAD))
+            e.mem.u16(this.wrapping_add(EXTRA_PAYLOAD))
+                != e.mem.u16(cast.wrapping_add(EXTRA_PAYLOAD))
         }
     }
 }
@@ -1323,7 +1388,13 @@ pub fn topic_delete(e: &mut Engine, this: u32, flags: u32) -> u32 {
 // Typed from 00432470
 /// `ExtraInfoGeneralTopic`'s constructor (type 0x4d) with its topic. Answers `this`.
 pub fn topic_new(e: &mut Engine, this: u32, topic: u32) -> u32 {
-    with_word(e, this, KIND_INFO_GENERAL_TOPIC, VTABLE_INFO_GENERAL_TOPIC, topic)
+    with_word(
+        e,
+        this,
+        KIND_INFO_GENERAL_TOPIC,
+        VTABLE_INFO_GENERAL_TOPIC,
+        topic,
+    )
 }
 
 // Typed from 004324a0
@@ -1363,7 +1434,12 @@ pub fn seed_compare(e: &mut Engine, this: u32, other: u32) -> bool {
 /// `ExtraPackageStartLocation`'s constructor (type 0x18): its world location (`006d5320` in place:
 /// nothing to store). Answers `this`.
 pub fn start_location_new(e: &mut Engine, this: u32) -> u32 {
-    extra_with_vtable(e, this, KIND_PACKAGE_START_LOCATION, VTABLE_PACKAGE_START_LOCATION);
+    extra_with_vtable(
+        e,
+        this,
+        KIND_PACKAGE_START_LOCATION,
+        VTABLE_PACKAGE_START_LOCATION,
+    );
     this
 }
 
@@ -1380,7 +1456,8 @@ pub fn start_location_at(
 ) -> u32 {
     typed_call!(FAMILY, 0x0043_2650, start_location_new(e, this));
     let location = this.wrapping_add(0x0c);
-    e.mem.set_u32(location, if form == 0 { fallback } else { form });
+    e.mem
+        .set_u32(location, if form == 0 { fallback } else { form });
     copy_point(e, position, location.wrapping_add(4));
     e.mem.set_u32(location.wrapping_add(0x10), z_angle);
     this
@@ -1397,7 +1474,13 @@ pub fn start_location_compare(e: &mut Engine, this: u32, other: u32) -> bool {
 // Typed from 004327e0
 /// `ExtraReferencePointer`'s constructor (type 0x1c) with its reference. Answers `this`.
 pub fn reference_pointer_new(e: &mut Engine, this: u32, reference: u32) -> u32 {
-    with_word(e, this, KIND_REFERENCE_POINTER, VTABLE_REFERENCE_POINTER, reference)
+    with_word(
+        e,
+        this,
+        KIND_REFERENCE_POINTER,
+        VTABLE_REFERENCE_POINTER,
+        reference,
+    )
 }
 
 // Typed from 00432810
@@ -1432,7 +1515,13 @@ pub fn package_new_with(
 // Typed from 004328d0
 /// `ExtraTresPassPackage`'s constructor (type 0x1a) with its package. Answers `this`.
 pub fn trespass_new(e: &mut Engine, this: u32, package: u32) -> u32 {
-    with_word(e, this, KIND_TRESPASS_PACKAGE, VTABLE_TRESPASS_PACKAGE, package)
+    with_word(
+        e,
+        this,
+        KIND_TRESPASS_PACKAGE,
+        VTABLE_TRESPASS_PACKAGE,
+        package,
+    )
 }
 
 // Typed from 00432900
@@ -1516,4 +1605,74 @@ pub fn persistent_cell_delete(e: &mut Engine, this: u32, flags: u32) -> u32 {
 /// `ExtraPersistentCell`'s destructor.
 pub fn persistent_cell_drop(e: &mut Engine, this: u32) {
     drop_plain(e, this, VTABLE_PERSISTENT_CELL);
+}
+
+// ---- The constructors by address ----------------------------------------------------------------
+
+/// A constructor the caller holds as its exe address (the family's setters and loaders take the
+/// class's constructor as a word): one of this file's as its typed call, with the `words` after the
+/// block it takes; any other by address with `block` and `words` (`thiscall`).
+// A byte or 16-bit argument is the low bytes of the word handed on, as the callee reads it.
+#[allow(clippy::cast_possible_truncation)]
+pub(super) fn construct_at(e: &mut Engine, construct: u32, block: u32, words: &[u32]) -> u32 {
+    macro_rules! by_words {
+        ($($addr:literal => $f:ident($($i:literal as $t:ty),*)),* $(,)?) => {
+            match construct {
+                $( $addr if words.len() == 0 $(+ { let _ = $i; 1 })* => {
+                    typed_call!(FAMILY, $addr, $f(e, block $(, words[$i] as $t)*))
+                } )*
+                _ => {
+                    let mut all = Vec::with_capacity(words.len() + 1);
+                    all.push(block);
+                    all.extend_from_slice(words);
+                    e.call(construct, &all).u32()
+                }
+            }
+        };
+    }
+    by_words! {
+        0x0043_0200 => limbs_new(),
+        0x0043_0780 => starting_position_new(0 as u32),
+        0x0043_08c0 => type_49_new(),
+        0x0043_08f0 => light_new(0 as u32),
+        0x0043_0c70 => lock_new(0 as u32),
+        0x0043_0dd0 => follower_new(),
+        0x0043_0f30 => guarded_new(),
+        0x0043_11f0 => type_2e_new(),
+        0x0043_1230 => teleport_new(0 as u32),
+        0x0043_1360 => map_marker_new(0 as u32),
+        0x0043_14c0 => audio_marker_new(0 as u32),
+        0x0043_1620 => audio_buoy_new(0 as u32),
+        0x0043_1780 => action_new(),
+        0x0043_1830 => container_changes_new(0 as u32),
+        0x0043_1950 => original_reference_new(0 as u32),
+        0x0043_1a40 => ownership_new(0 as u32),
+        0x0043_1ae0 => global_new(0 as u32),
+        0x0043_1b80 => rank_new(0 as u32),
+        0x0043_1c20 => count_new(0 as i16),
+        0x0043_1d10 => health_new(0 as u32),
+        0x0043_1e20 => uses_new(0 as u8),
+        0x0043_1ec0 => time_left_new(0 as u32),
+        0x0043_1f60 => charge_new(0 as u32),
+        0x0043_2000 => script_new(0 as u32),
+        0x0043_2220 => scale_new(0 as u32),
+        0x0043_22c0 => ghost_new(),
+        0x0043_22f0 => worn_new(),
+        0x0043_2320 => worn_left_new(),
+        0x0043_2350 => cannot_wear_new(),
+        0x0043_2380 => hot_key_new(0 as u8),
+        0x0043_2470 => topic_new(0 as u32),
+        0x0043_24a0 => topic_new_empty(),
+        0x0043_25b0 => seed_new(0 as u8),
+        0x0043_2650 => start_location_new(),
+        0x0043_26c0 => start_location_at(0 as u32, 1 as u32, 2 as u32, 3 as u32),
+        0x0043_27e0 => reference_pointer_new(0 as u32),
+        0x0043_2810 => package_new(),
+        0x0043_2870 => package_new_with(0 as u32, 1 as u32, 2 as u32, 3 as u8, 4 as u8, 5 as u8),
+        0x0043_28d0 => trespass_new(0 as u32),
+        0x0043_29d0 => crime_list_new(),
+        0x0043_2aa0 => crime_list_new_with(0 as u32),
+        0x0043_2be0 => leveled_item_new(0 as u32),
+        0x0043_2c20 => persistent_cell_new(0 as u32),
+    }
 }

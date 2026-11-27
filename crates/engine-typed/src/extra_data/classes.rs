@@ -6,14 +6,17 @@
 //!
 //! A constructor is `BSExtraData`'s (`0040ec80`) in place with the class's type, then its vtable
 //! and its empty payload; a `float` payload's 0.0 (`FLDZ`, `FSTP`) is the word 0. The destructors
-//! and members of other units (`ExtraLock`'s, `ExtraTeleport`'s, `ExtraScript`'s,
-//! `ExtraTresPassPackage`'s and `ExtraHeadingTarget`'s destructors, the string members) are called
-//! by address; the actor cause's handle and the flags record's member (the part 5 file's, in
-//! [`super::arrays`]) are typed calls, and `BSExtraData`'s destructor (`0040ecb0`) and the lock
-//! record's constructor (`00411b00`) typed calls into the cell references family.
+//! and members of other units (`ExtraHeadingTarget`'s destructor, the string members) are called
+//! by address; `ExtraLock`'s, `ExtraTeleport`'s, `ExtraScript`'s and `ExtraTresPassPackage`'s
+//! destructors (the objects unit's, in [`super::objects`]), the actor cause's handle and the flags
+//! record's member (the part 5 file's, in [`super::arrays`]) are typed calls, and `BSExtraData`'s
+//! destructor (`0040ecb0`) and the lock record's constructor (`00411b00`) typed calls into the cell
+//! references family.
 
 use super::links::is_empty;
-use super::{arrays, cell_refs, extra_init, free_when, new_object, word_at, EXTRA_PAYLOAD, FAMILY};
+use super::{
+    arrays, cell_refs, extra_init, free_when, new_object, objects, word_at, EXTRA_PAYLOAD, FAMILY,
+};
 use engine_core::x87::x87_quiet_bits;
 use engine_core::{args, typed_call, Engine};
 
@@ -77,12 +80,7 @@ const VTABLE_EXTRA_PACKAGE_DATA: u32 = 0x0101_51fc;
 const VTABLE_EXTRA_WEAPON_MOD_SLOTS: u32 = 0x0101_59a4;
 const VTABLE_EXTRA_SECURITRON_FACE: u32 = 0x0101_59b0;
 
-/// Other units' destructors (`thiscall(extra)`): `ExtraLock`'s, `ExtraTeleport`'s, `ExtraScript`'s,
-/// `ExtraTresPassPackage`'s, `ExtraHeadingTarget`'s.
-const EXTRA_LOCK_DROP: u32 = 0x0043_0ca0;
-const EXTRA_TELEPORT_DROP: u32 = 0x0043_1260;
-const EXTRA_SCRIPT_DROP: u32 = 0x0043_2040;
-const EXTRA_TRESPASS_PACKAGE_DROP: u32 = 0x0043_2900;
+/// Another unit's destructor (`thiscall(extra)`): `ExtraHeadingTarget`'s.
 const EXTRA_HEADING_TARGET_DROP: u32 = 0x0043_5ef0;
 /// `BSString`'s constructor and destructor (`thiscall(string)`) and its assignment from another
 /// (`thiscall(string, source)`).
@@ -222,7 +220,8 @@ pub fn lock_extra_new(e: &mut Engine, this: u32) -> u32 {
 /// `ExtraLock`'s scalar deleting destructor: its destructor (`00430ca0`), then `operator delete`
 /// for bit 0 of `flags`. Answers `this`.
 pub fn lock_extra_delete(e: &mut Engine, this: u32, flags: u32) -> u32 {
-    delete_by(e, this, flags, EXTRA_LOCK_DROP)
+    typed_call!(FAMILY, 0x0043_0ca0, objects::lock_drop(e, this));
+    free_when(e, this, flags)
 }
 
 // Typed from 0042c580
@@ -234,7 +233,8 @@ pub fn teleport_extra_new(e: &mut Engine, this: u32) -> u32 {
 // Typed from 0042c5b0
 /// `ExtraTeleport`'s scalar deleting destructor (its destructor `00431260`). Answers `this`.
 pub fn teleport_extra_delete(e: &mut Engine, this: u32, flags: u32) -> u32 {
-    delete_by(e, this, flags, EXTRA_TELEPORT_DROP)
+    typed_call!(FAMILY, 0x0043_1260, objects::teleport_drop(e, this));
+    free_when(e, this, flags)
 }
 
 // Typed from 0042c5e0
@@ -296,7 +296,8 @@ pub fn script_extra_new(e: &mut Engine, this: u32) -> u32 {
 // Typed from 0042c7a0
 /// `ExtraScript`'s scalar deleting destructor (its destructor `00432040`). Answers `this`.
 pub fn script_extra_delete(e: &mut Engine, this: u32, flags: u32) -> u32 {
-    delete_by(e, this, flags, EXTRA_SCRIPT_DROP)
+    typed_call!(FAMILY, 0x0043_2040, objects::script_drop(e, this));
+    free_when(e, this, flags)
 }
 
 // Typed from 0042c7d0
@@ -336,7 +337,8 @@ pub fn trespass_package_extra_new(e: &mut Engine, this: u32) -> u32 {
 // Typed from 0042c890
 /// `ExtraTresPassPackage`'s scalar deleting destructor (its destructor `00432900`). Answers `this`.
 pub fn trespass_package_extra_delete(e: &mut Engine, this: u32, flags: u32) -> u32 {
-    delete_by(e, this, flags, EXTRA_TRESPASS_PACKAGE_DROP)
+    typed_call!(FAMILY, 0x0043_2900, objects::trespass_drop(e, this));
+    free_when(e, this, flags)
 }
 
 // Typed from 0042c8c0

@@ -155,7 +155,7 @@ fn set_word(e: &mut Engine, list: u32, kind: u8, value: u32, construct: u32) {
 /// Another unit's constructor (`thiscall(block)`) as a build step.
 #[inline]
 fn by(construct: u32) -> impl FnOnce(&mut Engine, u32) -> u32 {
-    move |e, block| e.call(construct, &args![block]).u32()
+    move |e, block| super::objects::construct_at(e, construct, block, &[])
 }
 
 /// The handle setters: 0 deletes the extra data of `kind` by type; otherwise the `NiPointer` at

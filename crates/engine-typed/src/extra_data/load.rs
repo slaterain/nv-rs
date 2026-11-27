@@ -43,7 +43,6 @@ const LOD_DEFAULT: u32 = 0x0101_45a8;
 const LIST_ADD_HEAD: u32 = 0x005a_e3d0;
 /// Other units' constructors.
 const ACTIVATE_REF_INIT: u32 = 0x0043_38b0;
-const EXTRA_LOCK_INIT: u32 = 0x0043_0c70;
 const EXTRA_RAGDOLL_DATA_INIT: u32 = 0x0043_2cb0;
 const RAGDOLL_DATA_INIT: u32 = 0x004d_9330;
 const DOOR_TELEPORT_DATA_INIT: u32 = 0x0043_a160;
@@ -67,7 +66,6 @@ const MULTIBOUND_MARKER_DATA_LOAD: u32 = 0x0043_8fc0;
 const NAVMESH_PORTAL_LOAD: u32 = 0x0069_dfd0;
 const NAVMESH_PORTAL_EXTRA_DESTROY: u32 = 0x0043_2f30;
 const PACKAGE_EVENT_ACTION_LOAD: u32 = 0x0067_dd20;
-const REFR_LOCK_SET_LOCKED: u32 = 0x0043_0a90;
 const REGION_LIST_FIND: u32 = 0x004f_66c0;
 const REGION_LIST_ADD: u32 = 0x004f_6600;
 const PRIMITIVE_CREATE: u32 = 0x004a_4e90;
@@ -250,7 +248,9 @@ fn member_or_new(
 ) -> u32 {
     let mut member = get(e, list);
     if member == 0 {
-        member = new_object(e, size, |e, block| e.call(construct, &args![block]).u32());
+        member = new_object(e, size, |e, block| {
+            super::objects::construct_at(e, construct, block, &[])
+        });
         set(e, list, member);
     }
     member
@@ -812,7 +812,11 @@ fn load_lock(e: &mut Engine, this: u32, file: u32) {
             )
         });
         let created = new_object(e, 0x10, |e, block| {
-            e.call(EXTRA_LOCK_INIT, &args![block, made]).u32()
+            typed_call!(
+                FAMILY,
+                0x0043_0c70,
+                super::objects::lock_new(e, block, made)
+            )
         });
         list_add(e, this, created);
         made
@@ -823,7 +827,11 @@ fn load_lock(e: &mut Engine, this: u32, file: u32) {
     if file_swaps(e, file) {
         e.call(SWAP_WORD_AT_4, &args![lock_data]);
     }
-    e.call(REFR_LOCK_SET_LOCKED, &args![lock_data, 1u32]);
+    typed_call!(
+        FAMILY,
+        0x0043_0a90,
+        super::objects::lock_set_locked(e, lock_data, true)
+    );
 }
 
 /// `XCLR`: the region form ids, each looked up in the data handler's region list (`004169d0`) and

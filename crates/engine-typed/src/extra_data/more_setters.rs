@@ -109,10 +109,7 @@ fn remove_found(e: &mut Engine, list: u32, kind: u8) {
 #[inline]
 fn add_built(e: &mut Engine, list: u32, size: u32, construct: u32, words: &[u32]) -> u32 {
     let extra = new_object(e, size, |e, block| {
-        let mut all = Vec::with_capacity(words.len() + 1);
-        all.push(block);
-        all.extend_from_slice(words);
-        e.call(construct, &all).u32()
+        super::objects::construct_at(e, construct, block, words)
     });
     list_add(e, list, extra);
     extra

@@ -1662,14 +1662,15 @@ pub fn fn_0042fda0(e: &mut Engine, this: Ptr) {
 /// null). Returns `this`.
 pub fn fn_0042fdc0(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
     let held = e.mem.u32(this.addr());
-    let object = e.mem.u32(source.addr());
-    if held != object {
+    if held != e.mem.u32(source.addr()) {
         if held != 0 {
             e.call(
                 OBJECT_REFERENCE_RELEASE,
                 &args![held.wrapping_add(REFERENCE_COUNT_OFFSET)],
             );
         }
+        // The source is read again after the release (`0042fdeb`).
+        let object = e.mem.u32(source.addr());
         e.mem.set_u32(this.addr(), object);
         if object != 0 {
             e.call(
