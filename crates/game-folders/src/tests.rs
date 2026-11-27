@@ -1079,6 +1079,39 @@ fn a_mod_managers_plugin_list_is_found_in_the_games_proton_prefix_first() {
     assert_eq!(tree(&s.0), before, "the scan wrote nothing");
 }
 
+/// The Unix launcher's --find report must also name plugin lists in CrossOver bottles on macOS.
+#[test]
+fn macos_reports_a_mod_managers_plugin_list_in_crossover() {
+    let s = Scratch::new("manager-mac");
+    let home = s.home(System::MacOs);
+    let bottles = "home/Library/Application Support/CrossOver/Bottles";
+    let users = format!("{bottles}/FNV/drive_c/users");
+    let local = s.dir(&format!("{users}/crossover/AppData/Local"));
+    s.file(
+        &format!("{users}/crossover/AppData/Local/FalloutNV/plugins.txt"),
+        "Mod.esp",
+    );
+    s.file(
+        &format!("{users}/Public/AppData/Local/FalloutNV/plugins.txt"),
+        "Other.esp",
+    );
+    s.dir(&format!(
+        "{bottles}/Empty/drive_c/users/crossover/AppData/Local/FalloutNV"
+    ));
+    let before = tree(&s.0);
+
+    let found = scan(&home);
+    assert_eq!(found.appdata, [local]);
+    let expected = format!("appdata\t{}", escape(&path_bytes(&found.appdata[0])));
+    let report = report(&home);
+    let records: Vec<_> = report
+        .lines()
+        .filter(|l| l.starts_with("appdata\t"))
+        .collect();
+    assert_eq!(records, [expected.as_str()]);
+    assert_eq!(tree(&s.0), before, "the scan wrote into the bottle");
+}
+
 /// Every file and folder under `dir`, sorted, with each file's bytes.
 fn tree(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     let mut out = Vec::new();
