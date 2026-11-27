@@ -22,7 +22,7 @@
 //! methods, the `Interface::` functions and this file's own are this family's (all through
 //! `typed_call!`). Done in place ([`IN_PLACE`] and the other files' lists): the interface manager,
 //! its Pip-Boy and the Pip-Boy's query byte, the menu by class, the menus root, the `Menu` base's
-//! and the lists' constructors, a tile's node and a property's word, the property kind (3), a
+//! and the lists' constructors, a tile's node, a property's word and byte, the property kind (3), a
 //! world space's parent, a setting's text and value, a string's characters and constructor, the
 //! player's active quest and notes, a note's quest list, the challenges' list, flags and values, an
 //! objective's quest, text and state, a quest's done flag, a form's flag, a list's count and whether
@@ -74,6 +74,7 @@ pub const IN_PLACE: &[u32] = &[
     0x005e_c330, // an objective's text (its +8, or the empty text)
     0x0059_e400, // a quest's done flag (bit 1 of the byte at +0x3c)
     0x0044_0da0, // a form's flag 0x800 (+8)
+    0x0077_00d0, // a property's byte at +0x91 stored
 ];
 
 /// `MapMenu::pMe`, the map menu's vtable and its class (`0x3ff`).
@@ -132,17 +133,17 @@ const TEXTURE_CLEARED: u32 = 0x011d_a36c;
 const CHALLENGE_MODE: u32 = 0x011d_a36d;
 const CHALLENGE_TYPE: u32 = 0x011d_a36e;
 const CHALLENGE_TYPE_NAMES: u32 = 0x011a_03e4;
-/// The player, the calendar, the player marker's start point, the word `007a1480` answers, the
-/// station `0079c070` answers, the stations' list, the challenges' owner, the byte `00798440`
-/// answers.
+/// The player, the calendar, the player marker's start point, the LOD root (`007a1480`'s word), the
+/// current station (`0079c070`'s), the stations' list, the challenges' owner, the Pip-Boy radio's
+/// on byte (`00798440`'s: the map's radio click turns the radio off first while it is set).
 const PLAYER: u32 = 0x011d_ea3c;
 const CALENDAR: u32 = 0x011d_e7b8;
 const MARKER_START: u32 = 0x011f_426c;
-const VALUE_011DEA14: u32 = 0x011d_ea14;
+const LOD_ROOT: u32 = 0x011d_ea14;
 const CURRENT_STATION: u32 = 0x011d_d42c;
 const STATIONS: u32 = 0x011d_d59c;
 const CHALLENGE_OWNER: u32 = 0x011c_3f2c;
-const FLAG_011DD434: u32 = 0x011d_d434;
+const RADIO_ON: u32 = 0x011d_d434;
 /// The grid setting (`011c63cc`) whose value `0043d4d0` answers (its `+4`, a constant object).
 const GRID_SETTING: u32 = 0x011c_63cc;
 /// The renderer's height word (`004dc200`'s).
@@ -170,6 +171,8 @@ const OBJECTIVE_STATE: u32 = 0x20;
 const OWNER_CHALLENGES: u32 = 0x98;
 const WORLD_PARENT: u32 = 0x70;
 const PROPERTY_WORD: u32 = 0x60;
+/// The byte of a tile shader property `Create` sets (`007700d0`, in place).
+const PROPERTY_BYTE: u32 = 0x91;
 /// The property kind `NiAVObject::GetProperty` gets (`00438220`: 3).
 const PROPERTY_KIND: i32 = 3;
 /// The empty text.
@@ -302,7 +305,6 @@ const TUTORIAL_SHOW_MESSAGE: u32 = 0x0071_8630;
 const INITIALIZE_TABLINE: u32 = 0x0070_7be0;
 const LIST_BOX_INITIALIZE: u32 = 0x0075_a0d0;
 const LIST_BOX_GET_TILE_FOR: u32 = 0x007a_22d0;
-const PROPERTY_SET_007700D0: u32 = 0x0077_00d0;
 const SET_TILE_TEXTURE: u32 = 0x00bb_7a10;
 const SOUND_LIST_CONSTRUCT: u32 = 0x0076_b930;
 const SOUND_LIST_DESTRUCT: u32 = 0x0076_b8a0;
@@ -320,7 +322,7 @@ const PLAYER_MESSAGE: u32 = 0x0057_8870;
 const SET_TAB_KNOB_POSITION: u32 = 0x007f_a0f0;
 const SET_CURRENT_FOCUS_TARGET: u32 = 0x0071_5860;
 const MANAGER_STATE_TEST: u32 = 0x004b_71d0;
-const FORM_FLAG_004FEE60: u32 = 0x004f_ee60;
+const TALKING_ACTIVATOR_TEST: u32 = 0x004f_ee60;
 const CONVERSATION_DESTRUCT: u32 = 0x0083_b8d0;
 const ARRAY_SHRUNK_SIZE: u32 = 0x0086_9600;
 const ARRAY_MOVE: u32 = 0x0069_2480;
@@ -458,7 +460,7 @@ fn initialize_tabline(e: &mut Engine, words: &[u32]) {
             e.typed_note_direct(INITIALIZE_TABLINE, words);
         }
         e.typed_slice_step(INITIALIZE_TABLINE);
-        interface_cpp_p2::interface_initialize_tabline(e, words);
+        interface_cpp_p2::initialize_tabline(e, words[0], words[1], words[2], &words[3..]);
     } else {
         e.call(INITIALIZE_TABLINE, words);
     }
@@ -706,7 +708,8 @@ pub fn map_menu_create(e: &mut Engine) -> u32 {
     let map = map_tile(e, singleton(e), 16);
     let property = tile_shader_property(e, map);
     if property != 0 {
-        e.call(PROPERTY_SET_007700D0, &args![property, 1u32]);
+        // `007700d0`: the property's byte at +0x91 set.
+        e.mem.set_u8(property.wrapping_add(PROPERTY_BYTE), 1);
     }
     let title = e
         .call(ADD_USER_TRAIT, &args![0x0106_ed20u32, u32::MAX])
@@ -872,9 +875,9 @@ pub fn fn_00798420(e: &mut Engine, this: Ptr) -> u8 {
 }
 
 // Typed from 00798440
-/// The byte at `011dd434`.
+/// The Pip-Boy radio's on byte (`011dd434`).
 pub fn fn_00798440(e: &mut Engine) -> u8 {
-    e.mem.u8(FLAG_011DD434)
+    e.mem.u8(RADIO_ON)
 }
 
 // Typed from 00798480
@@ -941,13 +944,14 @@ pub fn fn_0079bc50(e: &mut Engine, objective: u32) -> u8 {
 
 // Typed from 0079be30
 /// The radio list's filter (cdecl): 1 for a null station, one with the form flag 0x800, or one
-/// whose form (`+0x20`) `004fee60` (with 0) answers; else 0.
+/// whose form (`+0x20`) passes `004fee60` (with 0: a talking activator, form type 0x16, passing its
+/// two tests); else 0.
 pub fn fn_0079be30(e: &mut Engine, station: u32) -> u8 {
     if station == 0 || e.mem.u32(station.wrapping_add(8)) & 0x800 != 0 {
         return 1;
     }
     let form = e.mem.u32(station.wrapping_add(0x20));
-    u8::from(e.call(FORM_FLAG_004FEE60, &args![form, 0u32]).bool())
+    u8::from(e.call(TALKING_ACTIVATOR_TEST, &args![form, 0u32]).bool())
 }
 
 // Typed from 0079be80
@@ -1018,9 +1022,9 @@ pub fn fn_007a1450(e: &mut Engine, this: Ptr, from: u32) {
 }
 
 // Typed from 007a1480
-/// The word at `011dea14`.
+/// The LOD root's word (`011dea14`).
 pub fn fn_007a1480(e: &mut Engine) -> u32 {
-    e.mem.u32(VALUE_011DEA14)
+    e.mem.u32(LOD_ROOT)
 }
 
 // Typed from 007a1490
