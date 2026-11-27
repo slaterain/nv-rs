@@ -55,6 +55,12 @@ const TAG_INIT: u32 = 0x0044_e010;
 const INDEX_ARRAY_VTABLE: u32 = 0x0106_abe4;
 const EDGE_ARRAY_VTABLE: u32 = 0x0106_b1e0;
 const SEARCH_VTABLE: u32 = 0x0106_b650;
+/// `NavMeshInfoSearch`'s vtable (`0106c22c`; RTTI `.?AVNavMeshInfoSearch@@`).
+const INFO_SEARCH_VTABLE: u32 = 0x0106_c22c;
+/// The `AStarSearch`-based base constructor of a navmesh info search (`006b8d90`).
+const INFO_SEARCH_BASE: u32 = 0x006b_8d90;
+/// The constructor of the six-word member an info search keeps at +0x2084.
+const SIX_WORD_CTOR: u32 = 0x0050_1cd0;
 /// An array's vtable slots: allocate a buffer, free one.
 const SLOT_ALLOCATE: u32 = 0x4;
 const SLOT_FREE: u32 = 0x8;
@@ -518,6 +524,31 @@ pub fn search_new(e: &mut Engine, this: Ptr<AStarSearch>) -> Ptr<AStarSearch> {
     e.set(this, AStarSearch::unknown_204c, 0);
     e.set(this, AStarSearch::unknown_2050, 0);
     e.set(this, AStarSearch::done, 0);
+    this
+}
+
+// Typed from 006b8310
+/// The folded map allocator's release (`thiscall(this, item)`): `operator delete` (`00401030`)
+/// on the item, even when null.
+pub fn free_item(e: &mut Engine, _this: Ptr, item: Ptr) {
+    e.call(FREE, &args![item]);
+}
+
+// Typed from 006b8340
+/// The `NavMeshInfoSearch` constructor (`thiscall(this) -> this`): the `AStarSearch`-based base
+/// (`006b8d90`), the vtable `0106c22c`, `006815c0` on the members at +0x2058 and +0x2068, the
+/// six-word member at +0x2084 constructed (`00501cd0`), and the words at +0x2078, +0x2064 and
+/// +0x2074 cleared, in that order. Returns `this`.
+pub fn info_search_new(e: &mut Engine, this: Ptr<AStarSearch>) -> Ptr<AStarSearch> {
+    let base = this.addr();
+    e.call(INFO_SEARCH_BASE, &args![this]);
+    e.mem.set_u32(base, INFO_SEARCH_VTABLE);
+    typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, base + 0x2058));
+    typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, base + 0x2068));
+    e.call(SIX_WORD_CTOR, &args![base + 0x2084]);
+    e.mem.set_u32(base + 0x2078, 0);
+    e.mem.set_u32(base + 0x2064, 0);
+    e.mem.set_u32(base + 0x2074, 0);
     this
 }
 

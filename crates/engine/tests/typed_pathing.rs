@@ -2709,6 +2709,42 @@ fn search_new() {
 }
 
 #[test]
+fn free_item() {
+    Diff::new(entry!(0x006b_8310, search::free_item(Ptr, Ptr)))
+        .common()
+        .plain(0x006b_8310)
+        .inputs(&[Input::Word, Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            e.register(0x0040_1030, |_, _| Ret::default());
+            vec![case.word(0), e.mem.alloc(0x10)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn info_search_new() {
+    Diff::new(entry!(
+        0x006b_8340,
+        search::info_search_new(Ptr<_>) -> Ptr<_>
+    ))
+    .common()
+    .plain(0x006b_8340)
+    .inputs(&[Input::Flag])
+    .setup(|e, _| {
+        stand_ins(e);
+        let s = e.mem.alloc(0x20a0);
+        for i in 0..0x828 {
+            e.mem.set_u32(s + 4 * i, 0x6b6b_6b6b);
+        }
+        vec![s]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
 fn at_5c() {
     Diff::new(entry!(0x006c_9900, search::at_5c(u32) -> u32))
         .common()
