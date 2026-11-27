@@ -547,7 +547,7 @@ mod native {
     pub fn spawn_with(exe: &[u16], command: &[u16], value: &str) -> Option<ProcessInformation> {
         let (name, value) = (wide(CRASH_VAR), wide(value));
         let mut command = command.to_vec();
-        let null = std::ptr::null_mut();
+        let null: *mut c_void = std::ptr::null_mut();
         let startup = StartupInfoW {
             size: std::mem::size_of::<StartupInfoW>() as u32,
             reserved: null.cast(),
