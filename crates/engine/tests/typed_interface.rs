@@ -1291,17 +1291,15 @@ fn fn_00704be0_diff() {
         .assert_same();
 }
 
+/// `StatsMenu::UpdateAll` runs for real here: the stats menu's world, whose `.rdata` doubles (the
+/// face image's 5.0) are the exe's and whose fade object the native code builds in place.
 #[test]
 fn interface_set_stats_menu_visible_diff() {
     Diff::new(engine_core::entry!(
         0x0070_4c10,
         interface::interface_cpp::interface_set_stats_menu_visible(u8, u8)
     ))
-    .in_arena(
-        &[Arg::Byte, Arg::Byte],
-        CALLEES,
-        &[0x0070_27b0, 0x0070_4be0, 0x0070_2680],
-    )
+    .in_stats_third_with(&[Arg::Byte, Arg::Byte], 6000, &[0x0070_4be0])
     .run()
     .assert_same();
 }
@@ -6111,6 +6109,14 @@ fn put_stats_menu(e: &mut Engine, variant: u32) {
         if variant == 0 || variant == 3 { 0xa } else { 3 },
     );
     e.mem.set_u8(object(106) + 0x10, u8::from(variant == 0));
+    // The effect's item (object 247: actor value 0x14) and its setting (object 248: the flag
+    // 0x2000, archetype 0), a real pair: on the arena's words alone the setting's flag test
+    // (`0058cba0`, `+0x58`) met a word near the top of memory, which the translation can't add to.
+    e.mem.set_u32(object(106) + 0xc, object(247));
+    e.mem.set_u32(object(247) + 0x10, 0x14);
+    e.mem.set_u32(object(247) + 0x14, object(248));
+    e.mem.set_u32(object(248) + 0x58, 0x2000);
+    e.mem.set_u32(object(248) + 0x98, 0);
     e.mem
         .set_u8(0x011a_0ae1, u8::from(variant == 0 || variant == 3));
     e.mem
@@ -6124,6 +6130,11 @@ fn put_stats_menu(e: &mut Engine, variant: u32) {
     // words there would make status effects of small numbers, whose clean-up calls through them.
     for slot in [0x74u32, 0x78, 0x7c, 0x80, 0x88, 0x8c] {
         e.mem.set_u32(menu + slot, 0);
+    }
+    // The effects and reputation list boxes (`+0x240`, `+0x270`, past the menu's first object) with
+    // a vtable of stand-ins: an arena word there would make their virtual `RemoveAll` a small number.
+    for list in [0x240u32, 0x270] {
+        e.mem.set_u32(menu + list, VTABLES + 0x800);
     }
     e.mem.set_u8(menu + 0x2a0, u8::from(variant == 0));
     e.mem.set_u8(menu + 0x2a1, u8::from(variant == 3));
@@ -6521,6 +6532,7 @@ fn stats_menu_update_all_actor_values_diff() {
         interface::stats_menu::stats_menu_update_all_actor_values(Ptr)
     ))
     .in_stats(&[Arg::Object])
+    .max_calls(2000)
     .run()
     .assert_same();
 }
@@ -7319,6 +7331,32 @@ fn stats_menu_fn_007e16d0_diff() {
 
 // ---- The stats menu, its third part --------------------------------------------------------------
 
+/// A page of fresh blocks (`HEAP`, its first word the next free one) that `FormHeap_Allocate`
+/// (`00401000`) hands out in 16-byte steps, zeroed, null once spent. The arena's stand-in answers
+/// one of the world's objects (the player's effects, their items), which a new entry or stage
+/// effect then overwrites while the code still reads it.
+const HEAP: u32 = 0x0600_0000;
+const HEAP_SIZE: u32 = 0x4_0000;
+
+fn put_heap(e: &mut Engine) {
+    e.map(HEAP, HEAP_SIZE);
+    e.mem.set_u32(HEAP, HEAP + 0x10);
+    e.register_double(0x0040_1000, |e, words| {
+        let next = e.mem.u32(HEAP);
+        let size = (words[0].wrapping_add(15) & !15).max(0x10);
+        let eax = if size <= HEAP + HEAP_SIZE - next {
+            e.mem.set_u32(HEAP, next + size);
+            next
+        } else {
+            0
+        };
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    });
+}
+
 /// [`put_stats_menu`]'s world with what the third part's functions read: in the variants 0 and 3
 /// the reputations (`011c3f2c`, object 250; its list at `+0x90` holds objects 251, 253 and 255:
 /// the first value above 0.0, only the second above 0.0, neither and a NaN) and the reputation
@@ -7332,6 +7370,7 @@ fn stats_menu_fn_007e16d0_diff() {
 fn put_stats_third(e: &mut Engine, variant: u32) {
     use arena::{object, CODE};
     put_stats_menu(e, variant);
+    put_heap(e);
     let menu = object(3);
     if variant == 0 || variant == 3 {
         e.mem.set_u32(0x011c_3f2c, object(250));
@@ -7402,14 +7441,22 @@ fn put_stats_third(e: &mut Engine, variant: u32) {
 trait StatsThirdWorlds {
     /// In [`put_stats_third`]'s world with `args`, `calls` calls at most a run.
     fn in_stats_third(self, args: &'static [Arg], calls: usize) -> Diff;
+    /// [`StatsThirdWorlds::in_stats_third`] with more of the translation's plain calls, `plain`.
+    fn in_stats_third_with(self, args: &'static [Arg], calls: usize, plain: &[u32]) -> Diff;
 }
 
 impl StatsThirdWorlds for Diff {
     fn in_stats_third(self, args: &'static [Arg], calls: usize) -> Diff {
+        self.in_stats_third_with(args, calls, &[])
+    }
+
+    fn in_stats_third_with(self, args: &'static [Arg], calls: usize, plain: &[u32]) -> Diff {
+        let mut all = vec![0x0071_f9f0, 0x0071_f570, 0x0070_27b0, 0x0070_2680];
+        all.extend_from_slice(plain);
         self.in_arena_without_and(
             args,
             CALLEES,
-            &[0x0071_f9f0, 0x0071_f570, 0x0070_27b0, 0x0070_2680],
+            &all,
             &[0x00ec_782f],
             &STATS_VARIANTS,
             put_stats_third,
