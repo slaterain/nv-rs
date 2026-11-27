@@ -3487,6 +3487,107 @@ fn location_cell() {
         .assert_same();
 }
 
+fn ray_array_storage(e: &mut Engine, case: &Case) -> u32 {
+    e.register(0x0072_ba80, |_, _| ret(0));
+    // The arrays' vtables live in the exe's data.
+    e.map(0x0106_d000, 0x1000);
+    for vtable in [0x0106_d650, 0x0106_d664] {
+        e.mem.set_u32(vtable + 8, VT_FN + 8);
+    }
+    e.register(VT_FN + 8, |_, _| ret(0));
+    e.register(0x0040_1030, |_, _| ret(0));
+    let buffer = if case.word(0) == 0 {
+        0
+    } else {
+        e.mem.alloc(16)
+    };
+    array(e, buffer, 2, 4)
+}
+
+#[test]
+fn ray_request_array_new() {
+    Diff::new(entry!(
+        0x006e_be90,
+        pathing::ray_arrays::ray_request_array_new(Ptr<_>) -> Ptr<_>
+    ))
+    .family(&pathing::PATHING)
+    .family(&engine_typed::dispatch::DISPATCH)
+    .inputs(&[Input::Flag])
+    .setup(|e, case| vec![ray_array_storage(e, case)])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ray_request_array_destruct() {
+    Diff::new(entry!(
+        0x006e_bec0,
+        pathing::ray_arrays::ray_request_array_destruct(Ptr<_>)
+    ))
+    .family(&pathing::PATHING)
+    .family(&engine_typed::dispatch::DISPATCH)
+    .inputs(&[Input::Flag])
+    .setup(|e, case| vec![ray_array_storage(e, case)])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ray_request_array_delete() {
+    Diff::new(entry!(
+        0x006e_ca20,
+        pathing::ray_arrays::ray_request_array_delete(Ptr<_>, u32) -> Ptr<_>
+    ))
+    .family(&pathing::PATHING)
+    .family(&engine_typed::dispatch::DISPATCH)
+    .inputs(&[Input::Flag, Input::Of(&[0, 1, 2, 3])])
+    .setup(|e, case| vec![ray_array_storage(e, case), case.word(1)])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ray_result_array_new() {
+    Diff::new(entry!(
+        0x006e_bee0,
+        pathing::ray_arrays::ray_result_array_new(Ptr<_>) -> Ptr<_>
+    ))
+    .family(&pathing::PATHING)
+    .family(&engine_typed::dispatch::DISPATCH)
+    .inputs(&[Input::Flag])
+    .setup(|e, case| vec![ray_array_storage(e, case)])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ray_result_array_destruct() {
+    Diff::new(entry!(
+        0x006e_bf10,
+        pathing::ray_arrays::ray_result_array_destruct(Ptr<_>)
+    ))
+    .family(&pathing::PATHING)
+    .family(&engine_typed::dispatch::DISPATCH)
+    .inputs(&[Input::Flag])
+    .setup(|e, case| vec![ray_array_storage(e, case)])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ray_result_array_delete() {
+    Diff::new(entry!(
+        0x006e_ca50,
+        pathing::ray_arrays::ray_result_array_delete(Ptr<_>, u32) -> Ptr<_>
+    ))
+    .family(&pathing::PATHING)
+    .family(&engine_typed::dispatch::DISPATCH)
+    .inputs(&[Input::Flag, Input::Of(&[0, 1, 2, 3])])
+    .setup(|e, case| vec![ray_array_storage(e, case), case.word(1)])
+    .run()
+    .assert_same();
+}
+
 /// A location's bytes before construction.
 fn raw_location(e: &mut Engine) -> u32 {
     let l = e.mem.alloc(0x28);

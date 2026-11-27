@@ -41,6 +41,7 @@ pub mod location;
 pub mod navmesh;
 pub mod point;
 pub mod pov;
+pub mod ray_arrays;
 pub mod search;
 
 /// This family's bit: what each `typed_call!` of it names.
@@ -254,6 +255,12 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006b_9cf0, pov::height_in(Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr, f32, f32) -> bool),
         entry!(0x006b_ab00, pov::segment_within(Ptr<NiPoint3>, f32, Ptr<NiPoint3>, Ptr<NiPoint3>) -> bool),
         entry!(0x006b_b570, pov::sphere_tangents(Ptr<Sphere>, Ptr<Sphere>, u32, Ptr) -> u32),
+        entry!(0x006e_be90, ray_arrays::ray_request_array_new(Ptr<SimpleArray>) -> Ptr<SimpleArray>),
+        entry!(0x006e_bec0, ray_arrays::ray_request_array_destruct(Ptr<SimpleArray>)),
+        entry!(0x006e_ca20, ray_arrays::ray_request_array_delete(Ptr<SimpleArray>, u32) -> Ptr<SimpleArray>),
+        entry!(0x006e_bee0, ray_arrays::ray_result_array_new(Ptr<SimpleArray>) -> Ptr<SimpleArray>),
+        entry!(0x006e_bf10, ray_arrays::ray_result_array_destruct(Ptr<SimpleArray>)),
+        entry!(0x006e_ca50, ray_arrays::ray_result_array_delete(Ptr<SimpleArray>, u32) -> Ptr<SimpleArray>),
         // Pathing locations.
         entry!(0x0044_1110, location::world_space(Ptr<PathingLocation>) -> u32),
         entry!(0x006a_9520, location::is_valid(Ptr<PathingLocation>) -> bool),

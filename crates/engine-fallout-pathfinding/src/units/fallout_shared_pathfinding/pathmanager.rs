@@ -1735,7 +1735,7 @@ pub fn task_stack_construct(e: &mut Engine, this: Ptr) -> Ptr {
 // Translated from 006eca20 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `BSSimpleArray<RayCastPathRequest_P_1024>::_scalar_deleting_destructor_` (Xbox PDB).
 pub fn path_request_array_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_006ebec0(e, this);
+    e.call(0x006e_bec0, &args![this]);
     if flags & 1 != 0 {
         e.call(0x0040_1030, &args![this]);
     }
@@ -1745,7 +1745,7 @@ pub fn path_request_array_deleting_destructor(e: &mut Engine, this: Ptr, flags: 
 // Translated from 006eca50 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `BSSimpleArray<RayCastPath_P_1024>::_scalar_deleting_destructor_` (Xbox PDB).
 pub fn path_result_array_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_006ebf10(e, this);
+    e.call(0x006e_bf10, &args![this]);
     if flags & 1 != 0 {
         e.call(0x0040_1030, &args![this]);
     }
