@@ -205,6 +205,13 @@ image! {
         0x68 radius: f32,
     }
 
+    /// `PathingRequestSafeStraightLine` (Xbox PDB), 0xBC bytes: a `PathingRequestClosePoint`
+    /// (0xB8 bytes) and the target (`TESObjectREFR*`, saved as its form id).
+    pub struct PathingRequestSafeStraightLine / PathingRequestSafeStraightLineImage: 0xbc {
+        0x00 head: [u32; 0x2e],
+        0xb8 pTarget: u32,
+    }
+
     /// A path smoother node, as far as its flag byte.
     pub struct SmootherNode / SmootherNodeImage: 0x44 {
         0x00 head: [u32; 16],
