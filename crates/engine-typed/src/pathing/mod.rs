@@ -113,6 +113,8 @@ pub(crate) fn copy_point(e: &mut Engine, from: Ptr<NiPoint3>, to: Ptr<NiPoint3>)
 fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         // Point helpers.
+        entry!(0x006a_b360, point::member_b4(Ptr) -> Ptr),
+        entry!(0x006a_b380, point::copy_member_point(Ptr, Ptr<NiPoint3>) -> Ptr<NiPoint3>),
         entry!(0x0043_9ef0, point::subtract(Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>) -> Ptr<NiPoint3>),
         entry!(0x0043_9e90, point::add(Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>) -> Ptr<NiPoint3>),
         entry!(0x004a_3760, point::scaled(Ptr<NiPoint3>, f32, Ptr<NiPoint3>) -> Ptr<NiPoint3>),
