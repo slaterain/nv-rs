@@ -41,6 +41,7 @@ pub mod location;
 pub mod navmesh;
 pub mod point;
 pub mod pov;
+pub mod pov_arrays;
 pub mod search;
 
 /// This family's bit: what each `typed_call!` of it names.
@@ -267,5 +268,13 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The POV search's array destructor bodies and member release.
+        entry!(0x006a_14e0, pov_arrays::pov_array_dtor(Ptr)),
+        entry!(0x006a_1700, pov_arrays::pov_list_array_dtor(Ptr)),
+        entry!(0x006a_1890, pov_arrays::search_node_array_dtor(Ptr)),
+        entry!(0x006a_18e0, pov_arrays::search_link_array_dtor(Ptr)),
+        entry!(0x006a_19e0, pov_arrays::vert_handle_list_array_dtor(Ptr)),
+        entry!(0x006a_1a30, pov_arrays::remove_index_array_dtor(Ptr)),
+        entry!(0x0069_efd0, pov_arrays::release_member(Ptr)),
     ]
 }

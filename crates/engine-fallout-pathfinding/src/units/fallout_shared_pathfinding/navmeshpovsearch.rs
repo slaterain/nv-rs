@@ -931,7 +931,7 @@ pub fn fn_0069efd0(e: &mut Engine, this: Ptr) {
 /// `0069e2c0` object: `0069efd0`, then `operator delete` when bit 0 of
 /// `flags` is set. Returns `this`.
 pub fn fn_0069efa0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_0069efd0(e, this);
+    e.call(0x0069_efd0, &args![this]);
     delete_if(e, this, flags)
 }
 
@@ -958,12 +958,12 @@ pub fn fn_006a15b0(e: &mut Engine, this: Ptr) {
 pub fn fn_0069e200(e: &mut Engine, this: Ptr) {
     let base = this.addr();
     e.mem.set_u32(base, POV_SEARCH_VTABLE);
-    fn_006a18e0(e, Ptr::new(base + LINKS));
-    fn_006a1890(e, Ptr::new(base + NODES));
+    e.call(0x006a_18e0, &args![base + LINKS]);
+    e.call(0x006a_1890, &args![base + NODES]);
     e.call(LOCATION_DTOR_004FF7E0, &args![base + GOAL_LOCATION]);
     e.call(LOCATION_DTOR_004FF7E0, &args![base + START_LOCATION]);
-    fn_006a1700(e, Ptr::new(base + POVS));
-    fn_006a14e0(e, Ptr::new(base + ALL_POVS));
+    e.call(0x006a_1700, &args![base + POVS]);
+    e.call(0x006a_14e0, &args![base + ALL_POVS]);
     fn_006a15b0(e, this);
 }
 
@@ -2748,10 +2748,10 @@ pub fn navmesh_pov_search_build_pov_list_for_triangles(
             index = index.wrapping_sub(1);
         }
 
-        fn_006a1a30(e, Ptr::new(removals));
+        e.call(0x006a_1a30, &args![removals]);
         e.call(VERTEX_LIST_DTOR_00691800, &args![vertices]);
-        fn_006a19e0(e, Ptr::new(edges));
-        fn_006a19e0(e, Ptr::new(corners));
+        e.call(0x006a_19e0, &args![edges]);
+        e.call(0x006a_19e0, &args![corners]);
         true
     })
 }
