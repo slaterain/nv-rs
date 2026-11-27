@@ -11573,6 +11573,7 @@ trait PlCases {
     fn pl_actor(self) -> Diff;
     fn pl_actor_word(self, words: &'static [u32]) -> Diff;
     fn pl_some_actor_word(self, words: &'static [u32]) -> Diff;
+    fn pl_coord(self) -> Diff;
     fn pl_packages(self) -> Diff;
 }
 
@@ -11606,6 +11607,10 @@ impl PlCases for Diff {
                 let (_, package, actor) = pl_case(e, case.word(0), case.word(1));
                 vec![package, actor, case.word(2)]
             })
+    }
+    /// A coordinate getter: [`pl_coord_case`].
+    fn pl_coord(self) -> Diff {
+        pl_coord_case(self)
     }
     /// [`PlCases::pl_actor_word`] with an actor always there.
     fn pl_some_actor_word(self, words: &'static [u32]) -> Diff {
@@ -11660,10 +11665,11 @@ fn pl_coord_case(d: Diff) -> Diff {
 
 #[test]
 fn pl_second_location_coord() {
-    pl_coord_case(Diff::new(entry!(
+    Diff::new(entry!(
         0x0067_5360,
         package_place::second_location_coord(u32, u32, u32) -> u32
-    )))
+    ))
+    .pl_coord()
     .run()
     .assert_same();
 }
@@ -11700,10 +11706,11 @@ fn pl_search_location_cell() {
 
 #[test]
 fn pl_search_location_coord() {
-    pl_coord_case(Diff::new(entry!(
+    Diff::new(entry!(
         0x0067_5830,
         package_place::search_location_coord(u32, u32, u32) -> u32
-    )))
+    ))
+    .pl_coord()
     .run()
     .assert_same();
 }
@@ -11742,10 +11749,11 @@ fn pl_location_cell() {
 
 #[test]
 fn pl_location_coord() {
-    pl_coord_case(Diff::new(entry!(
+    Diff::new(entry!(
         0x0067_5de0,
         package_place::location_coord(u32, u32, u32) -> u32
-    )))
+    ))
+    .pl_coord()
     .run()
     .assert_same();
 }
@@ -11761,9 +11769,66 @@ fn pl_location_reference() {
 #[test]
 fn pl_location_radius_for() {
     Diff::new(entry!(0x0067_6280, package_place::location_radius_for(u32, u32) -> i32))
-        .pl_actor()
+        .pl_caller()
+        .max_cases(1024)
+        .inputs(&[Input::Of(PL_TYPES), Input::Of(PL_SEEDS), Input::Flag])
+        .setup(|e, case| {
+            let (pool, package, actor) = pl_case(e, case.word(0), case.word(1));
+            if case.word(2) != 0 {
+                // A type 0 location without a radius of its own whose reference's base form is the
+                // 0x15 one with a box.
+                let location = e.mem.alloc(0xc);
+                e.mem.set_u32(location + 8, pool.refs[2]);
+                e.mem.set_u32(pool.refs[2] + 0x20, pool.bases[0]);
+                e.mem.set_u32(package + 0x2c, location);
+            }
+            vec![package, actor]
+        })
         .run()
         .assert_same();
+}
+
+/// A process for `reference` when it has none (the point flag and the 0x4c8 reference from `seed`).
+fn pl_give_process(e: &mut Engine, reference: u32, held: u32, seed: u32) {
+    let mut process = e.mem.u32(reference + 0x68);
+    if process == 0 {
+        process = e.mem.alloc(0x40);
+        e.mem.set_u32(process, PL_PROC_VT);
+        e.mem.set_u32(reference + 0x68, process);
+    }
+    e.mem.set_u8(process + 0x1c, 1);
+    e.mem.set_u32(process + 0x28, pick(seed, 120, &[0, 1]));
+    e.mem
+        .set_u32(process + 0x30, pick(seed, 121, &[held, 0, held]));
+}
+
+/// The furniture scene of the second location test: a type 0 second location without a radius
+/// whose reference is furniture, the subject (an actor of kind 4, 9 or 1 whose process holds a point
+/// and now and then that reference) in its cell and world space, the actor with a process. Answers
+/// the subject.
+fn pl_furniture_scene(e: &mut Engine, pool: &PlPool, package: u32, actor: u32, seed: u32) -> u32 {
+    let furniture = pool.refs[4];
+    e.mem.set_u32(furniture + 0x20, pool.bases[1]);
+    let location = e.mem.alloc(0xc);
+    e.mem.set_u32(location + 8, furniture);
+    let mut data = e.mem.u32(package + 0x28);
+    if data == 0 {
+        data = e.mem.alloc(0x24);
+        e.mem.set_u32(data, PF_DATA_VTABLE);
+        e.mem.set_u32(package + 0x28, data);
+    }
+    for at in [4, 8, 0xc] {
+        e.mem.set_u32(data + at, location);
+    }
+    let subject = pool.refs[1];
+    e.mem.set_u8(subject + 0x49, pick(seed, 122, &[4u8, 9, 1]));
+    let cell = e.mem.u32(furniture + 0x40);
+    let world = e.mem.u32(furniture + 0x50);
+    e.mem.set_u32(subject + 0x40, cell);
+    e.mem.set_u32(subject + 0x50, world);
+    pl_give_process(e, subject, furniture, seed);
+    pl_give_process(e, actor, furniture, seed ^ 1);
+    subject
 }
 
 /// The "is at the location" tests' extra radius: -1.0 (none), whole and fractional values.
@@ -11781,15 +11846,20 @@ fn pl_subject_at_second_location() {
         Input::Of(PL_TYPES),
         Input::Of(PL_SEEDS),
         Input::Of(&[0, 1, 2, 3]),
+        Input::Flag,
     ])
     .setup(|e, case| {
         let seed = case.word(1);
         let (pool, package, actor) = pl_case_actor(e, case.word(0), seed, true);
-        let subject = pick(
-            seed,
-            110,
-            &[pool.refs[1], pool.refs[0], pool.refs[4], 0, pool.refs[2]],
-        );
+        let subject = if case.word(3) != 0 {
+            pl_furniture_scene(e, &pool, package, actor, seed)
+        } else {
+            pick(
+                seed,
+                110,
+                &[pool.refs[1], pool.refs[0], pool.refs[4], 0, pool.refs[2]],
+            )
+        };
         let extra = pick(seed ^ case.word(2), 111, PL_EXTRA_RADII);
         vec![
             package,
@@ -11886,6 +11956,7 @@ fn pl_follow_target() {
 fn pl_follow_candidate() {
     Diff::new(entry!(0x0067_84f0, package_place::follow_candidate(u32, u32) -> bool))
         .pl_caller()
+        .max_cases(1024)
         .inputs(&[
             Input::Of(PL_SEEDS),
             Input::Of(&[0, 1, 2, 3, 4, 5]),
