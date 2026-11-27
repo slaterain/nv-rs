@@ -4366,3 +4366,14 @@ fn crossed_edge_rounding_main_thread() {
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
 }
+
+#[test]
+fn placement_new() {
+    Diff::new(entry!(0x006e_6da0, search::placement_new(u32, u32) -> u32))
+        .common()
+        .plain(0x006e_6da0)
+        .inputs(&[Input::Word, Input::Word])
+        .setup(|_, case| vec![case.word(0), case.word(1)])
+        .run()
+        .assert_same();
+}
