@@ -5872,82 +5872,64 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                 let now = e.call(0x0045_7fe0, &args![]).u32();
                 if e.global::<u32>(ALERT_TIME_011E0BA8) < now {
                     while list != 0 {
-                        let item = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, list));
-                        if e.mem.u32(item) == 0 {
-                            break;
-                        }
+                        // The exe reads the node's reference afresh for the test and for each use
+                        // below; another thread can change the cell's list in between (the fast
+                        // flight's stop: the test saw a reference, the next read gave 0). One read
+                        // per node, used throughout, gives the same walk without that window.
                         let item = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, list));
                         let reference = e.mem.u32(item);
+                        if reference == 0 {
+                            break;
+                        }
                         if e.call(0x0040_1170, &args![reference]).u32() == 0x3a {
-                            let item =
-                                typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, list));
-                            let base = e.mem.u32(item);
-                            let form =
-                                typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, base));
+                            let form = typed_call!(
+                                leaf::FAMILY,
+                                0x007a_f430,
+                                leaf::word_at_20(e, reference)
+                            );
                             let cast = e
                                 .call(
                                     0x00ec_43fb,
                                     &args![form, 0u32, 0x0118_3108u32, 0x0118_6568u32, 0u32],
                                 )
                                 .u32();
-                            if cast != 0 && e.mem.i8(cast + 0x50) != -1 {
-                                let item = typed_call!(
-                                    leaf::FAMILY,
-                                    0x0068_15c0,
-                                    leaf::same_word(e, list)
-                                );
-                                let first = e.mem.u32(item);
-                                if e.vcall(first, 0x1d0, &args![]).u32() != 0 {
-                                    let item = typed_call!(
-                                        leaf::FAMILY,
-                                        0x0068_15c0,
-                                        leaf::same_word(e, list)
-                                    );
-                                    let second = e.mem.u32(item);
-                                    let node = e.vcall(second, 0x1d0, &args![]).u32();
-                                    let radius = e.call(0x0087_ce50, &args![node]).f32();
-                                    let radius_squared = (radius as f64 * radius as f64) as f32;
-                                    let item = typed_call!(
-                                        leaf::FAMILY,
-                                        0x0068_15c0,
-                                        leaf::same_word(e, list)
-                                    );
-                                    let third = e.mem.u32(item);
-                                    let own = e.vcall(this.addr(), 0x1f4, &args![]).u32();
-                                    let other = e.vcall(third, 0x1f4, &args![]).u32();
-                                    let offset = local(frame, -0x40c);
-                                    let difference =
-                                        e.call(0x0043_9ef0, &args![other, offset, own]).u32();
-                                    let distance = e.call(0x004a_7290, &args![difference]).f64();
-                                    if distance < radius_squared as f64 {
-                                        let kind = e.mem.i8(cast + 0x50) as i32;
-                                        let sound_form = e.call(0x005e_2a70, &args![kind]).u32();
-                                        if sound_form != 0 {
-                                            e.with_stack(12, |e, found| {
-                                                let id = typed_call!(
-                                                    leaf::FAMILY,
-                                                    0x0084_e3a0,
-                                                    leaf::word_at_c(e, sound_form)
-                                                );
-                                                let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
-                                                let result = e
-                                                    .call(
-                                                        0x00ad_73b0,
-                                                        &args![audio, found, id, 0x101u32],
-                                                    )
-                                                    .u32();
-                                                e.call(SOUND_HANDLE_PLAY, &args![result, 0u32]);
-                                                e.call(SOUND_HANDLE_DESTRUCT, &args![found]);
-                                            });
-                                            let now = e.call(0x0045_7fe0, &args![]).u32();
-                                            let wait = e
-                                                .call(0x0094_4460, &args![0x5dcu32, 0x7d0u32])
-                                                .u32();
-                                            e.set_global(
-                                                ALERT_TIME_011E0BA8,
-                                                now.wrapping_add(wait),
+                            if cast != 0
+                                && e.mem.i8(cast + 0x50) != -1
+                                && e.vcall(reference, 0x1d0, &args![]).u32() != 0
+                            {
+                                let node = e.vcall(reference, 0x1d0, &args![]).u32();
+                                let radius = e.call(0x0087_ce50, &args![node]).f32();
+                                let radius_squared = (radius as f64 * radius as f64) as f32;
+                                let own = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+                                let other = e.vcall(reference, 0x1f4, &args![]).u32();
+                                let offset = local(frame, -0x40c);
+                                let difference =
+                                    e.call(0x0043_9ef0, &args![other, offset, own]).u32();
+                                let distance = e.call(0x004a_7290, &args![difference]).f64();
+                                if distance < radius_squared as f64 {
+                                    let kind = e.mem.i8(cast + 0x50) as i32;
+                                    let sound_form = e.call(0x005e_2a70, &args![kind]).u32();
+                                    if sound_form != 0 {
+                                        e.with_stack(12, |e, found| {
+                                            let id = typed_call!(
+                                                leaf::FAMILY,
+                                                0x0084_e3a0,
+                                                leaf::word_at_c(e, sound_form)
                                             );
-                                        }
+                                            let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+                                            let result = e
+                                                .call(
+                                                    0x00ad_73b0,
+                                                    &args![audio, found, id, 0x101u32],
+                                                )
+                                                .u32();
+                                            e.call(SOUND_HANDLE_PLAY, &args![result, 0u32]);
+                                            e.call(SOUND_HANDLE_DESTRUCT, &args![found]);
+                                        });
+                                        let now = e.call(0x0045_7fe0, &args![]).u32();
+                                        let wait =
+                                            e.call(0x0094_4460, &args![0x5dcu32, 0x7d0u32]).u32();
+                                        e.set_global(ALERT_TIME_011E0BA8, now.wrapping_add(wait));
                                     }
                                 }
                             }
@@ -16843,6 +16825,65 @@ mod tests {
             [0x34, 1, UPDATE_GUARD_FILE, 0xc41]
         );
         assert_eq!(called(&e, 0x0040_4ee0).len(), 1);
+    }
+
+    /// The player's cell, the first node of its reference list and a reference.
+    const WALK_CELL: u32 = 0x0310_0000;
+    const WALK_NODE: u32 = 0x0310_0100;
+    const WALK_REFERENCE: u32 = 0x0310_0200;
+    /// How many times the test's list-item stand-in has been asked.
+    const WALK_ITEM_ASKED: u32 = 0x0310_0300;
+
+    /// [`update_world`] with the player in [`WALK_CELL`] past the alert time, so `Update` walks
+    /// the cell's references from [`WALK_NODE`] (one node, empty, no next).
+    fn cell_walk_world(e: &mut Engine) {
+        e.map(WALK_CELL, 0x1000);
+        e.register(0x0049_38e0, |_, _| int(1));
+        e.register(0x008d_6f30, |_, _| int(WALK_CELL));
+        e.register(0x0096_04f0, |_, _| int(WALK_NODE));
+        e.register(0x0045_7fe0, |_, _| int(1));
+        e.register(LIST_ITEM_ADDRESS, |_, args| int(args[0]));
+    }
+
+    #[test]
+    fn update_cell_walk_uses_the_reference_it_tested_when_the_list_changes() {
+        // The walk over the player's cell's references (00943e62..0094408d): another thread
+        // emptied a node between the test and the next read on the fast flight, and the port
+        // read the type of a null reference. The node is cleared here as soon as its item is
+        // asked for a second time and as the type is asked: the type, the base form and the
+        // cast still get the tested reference, not 0.
+        let mut e = engine();
+        let this = update_world(&mut e);
+        cell_walk_world(&mut e);
+        e.mem.set_u32(WALK_NODE, WALK_REFERENCE);
+        e.register(LIST_ITEM_ADDRESS, |e, args| {
+            if args[0] == WALK_NODE {
+                let asked = e.mem.u32(WALK_ITEM_ASKED) + 1;
+                e.mem.set_u32(WALK_ITEM_ASKED, asked);
+                if asked > 1 {
+                    e.mem.set_u32(WALK_NODE, 0);
+                }
+            }
+            int(args[0])
+        });
+        e.register(0x0040_1170, |e, _| {
+            e.mem.set_u32(WALK_NODE, 0);
+            int(0x3a)
+        });
+        e.register(0x007a_f430, |_, _| int(0x4600));
+        player_character_update(&mut e, this, 0.5);
+        assert_eq!(called(&e, 0x0040_1170), vec![vec![WALK_REFERENCE]]);
+        assert_eq!(called(&e, 0x007a_f430), vec![vec![WALK_REFERENCE]]);
+        assert_eq!(called(&e, 0x00ec_43fb)[0][0], 0x4600);
+    }
+
+    #[test]
+    fn update_cell_walk_stops_at_an_empty_node() {
+        let mut e = engine();
+        let this = update_world(&mut e);
+        cell_walk_world(&mut e);
+        player_character_update(&mut e, this, 0.5);
+        assert!(called(&e, 0x0040_1170).is_empty());
     }
 
     #[test]

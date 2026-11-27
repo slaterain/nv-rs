@@ -698,7 +698,7 @@ pub fn tes_package_tes_package(e: &mut Engine, this: Ptr<TESPackage>) -> Ptr<TES
         );
     }
     e.call(SET_FORM_TYPE, &args![this, 0x49u32]);
-    fn_006709d0(e, this);
+    e.call(0x0067_09d0, &args![this]);
     e.set(this, TESPackage::uiRefCount, 0);
     this
 }
@@ -719,7 +719,7 @@ pub fn fn_006709d0(e: &mut Engine, this: Ptr<TESPackage>) {
     e.call(FN_00673180, &args![this, 0u32]);
     e.set(this, TESPackage::ePROCEDURE_TYPE, -1);
     e.set(this, TESPackage::cPackType, TYPE_NONE as i8);
-    tes_package_set_is_created(e, this, 0);
+    e.call(0x0067_4d70, &args![this, 0u32]);
 }
 
 // Translated from 00670b90 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -759,7 +759,7 @@ pub fn tes_package_create_package(e: &mut Engine, package_type: i32) -> Ptr<TESP
     };
     let package: Ptr<TESPackage> = package.cast();
     if !package.is_null() {
-        tes_package_set_pack_type(e, package, package_type);
+        e.call(0x0067_0fc0, &args![package, package_type as u32]);
     }
     package
 }
@@ -826,13 +826,17 @@ pub fn tes_package_set_pack_type(e: &mut Engine, this: Ptr<TESPackage>, new_type
     // First table: clear what the new type does not keep.
     match new_type {
         0 | 1 | 2 | 8 | 9 | 10 | 11 | 14 | 16 => {
-            tes_package_set_package_second_location(e, this, Ptr::NULL)
+            e.call(0x0067_1e10, &args![this, Object::NULL]);
         }
-        4..=6 | 13 => tes_package_set_package_target(e, this, Ptr::NULL),
-        7 => tes_package_set_package_location(e, this, Ptr::NULL),
+        4..=6 | 13 => {
+            e.call(0x0067_2fc0, &args![this, Object::NULL]);
+        }
+        7 => {
+            e.call(0x0067_1d30, &args![this, Object::NULL]);
+        }
         12 => {
-            tes_package_set_package_target(e, this, Ptr::NULL);
-            tes_package_set_package_second_location(e, this, Ptr::NULL);
+            e.call(0x0067_2fc0, &args![this, Object::NULL]);
+            e.call(0x0067_1e10, &args![this, Object::NULL]);
         }
         _ => {}
     }
@@ -874,7 +878,7 @@ pub fn tes_package_set_pack_type(e: &mut Engine, this: Ptr<TESPackage>, new_type
             build_data(e, this, DIALOGUE_DATA_SIZE, DIALOGUE_DATA_CONSTRUCTOR);
         }
         0x10 => {
-            fn_00671a20(e, this, 1);
+            e.call(0x0067_1a20, &args![this, 1u32]);
             ensure_target(e, this);
             build_data(e, this, USE_WEAPON_DATA_SIZE, USE_WEAPON_DATA_CONSTRUCTOR);
         }
@@ -883,18 +887,18 @@ pub fn tes_package_set_pack_type(e: &mut Engine, this: Ptr<TESPackage>, new_type
 
     e.set(this, TESPackage::iPackageSpecificFlags, 0);
     if new_type == 0xc {
-        fn_00671ad0(e, this, 1);
-        fn_00671b30(e, this, 1);
-        fn_00671b90(e, this, 1);
-        fn_00671bf0(e, this, 1);
-        fn_00671c50(e, this, 1);
-        fn_00671cb0(e, this, 1);
-        fn_00671a70(e, this, 0);
+        e.call(0x0067_1ad0, &args![this, 1u32]);
+        e.call(0x0067_1b30, &args![this, 1u32]);
+        e.call(0x0067_1b90, &args![this, 1u32]);
+        e.call(0x0067_1bf0, &args![this, 1u32]);
+        e.call(0x0067_1c50, &args![this, 1u32]);
+        e.call(0x0067_1cb0, &args![this, 1u32]);
+        e.call(0x0067_1a70, &args![this, 0u32]);
     }
     e.set(this, TESPackage::cPackType, new_type as i8);
-    if new_type == 9 && fn_00672dd0(e, this).is_null() {
+    if new_type == 9 && Object::new(e.call(0x0067_2dd0, &args![this]).u32()).is_null() {
         let location = new_location(e);
-        tes_package_set_package_second_location(e, this, location);
+        e.call(0x0067_1e10, &args![this, location]);
         if !location.is_null() {
             e.call(LOCATION_DELETE, &args![location, 1u32]);
         }
@@ -1017,7 +1021,7 @@ pub fn tes_package_set_package_second_location(
         }
     }
     if pack_type(e, this) == TYPE_USE_WEAPON {
-        let data = tes_package_get_or_create_use_weapon_package_data(e, this);
+        let data = Object::new(e.call(0x0067_2d10, &args![this]).u32());
         replace_location(e, data.addr() + USE_WEAPON_TARGET_LOCATION, location);
     }
 }
@@ -1084,7 +1088,7 @@ pub fn tes_package_get_acquire_radius(
 ) -> bool {
     e.mem.set_f32(radius.addr(), 0.0);
     if pack_type(e, this) == 0xc {
-        let value = fn_00676280(e, this, Ptr::new(argument)) as u32;
+        let value = e.call(0x0067_6280, &args![this, argument]).u32();
         e.mem.set_f32(radius.addr(), value as f64 as f32);
         return true;
     }
@@ -1162,10 +1166,12 @@ pub fn fn_00672b70(e: &mut Engine, this: Ptr<TESPackage>, value: u8) {
 }
 
 // Translated from 00672c40 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Sets `fFov` (+4) of the dialogue data (built when missing).
+/// Sets `fFov` (+4) of the dialogue data (built when missing). The exe moves
+/// the float through `FLD`/`FSTP`, which quiets a signalling NaN.
 pub fn fn_00672c40(e: &mut Engine, this: Ptr<TESPackage>, value: f32) {
     if let Some(data) = dialogue_data_or_create(e, this) {
-        e.mem.set_f32(data + DIALOGUE_FOV, value);
+        let bits = engine_core::x87::x87_quiet_bits(value.to_bits());
+        e.mem.set_u32(data + DIALOGUE_FOV, bits);
     }
 }
 
@@ -1220,13 +1226,13 @@ pub fn tes_package_get_package_search_location(e: &mut Engine, this: Ptr<TESPack
     match pack_type(e, this) {
         0 | 0xc | 0x11 | 0x1c => location_of(e, this),
         2 | 3 | 8 | 0x10 => {
-            let second = fn_00672dd0(e, this);
+            let second = Object::new(e.call(0x0067_2dd0, &args![this]).u32());
             if !second.is_null()
                 && e.call(LOCATION_GET_TYPE, &args![second]).u32() == LOCATION_TYPE_SEVEN
             {
                 location_of(e, this)
             } else {
-                fn_00672dd0(e, this)
+                Object::new(e.call(0x0067_2dd0, &args![this]).u32())
             }
         }
         _ => Ptr::NULL,
@@ -1270,8 +1276,8 @@ pub fn tes_package_init_item(e: &mut Engine, this: Ptr<TESPackage>) {
         let location = location_of(e, this);
         e.call(LOCATION_INIT_ITEM, &args![location, this]);
     }
-    if !fn_00672dd0(e, this).is_null() {
-        let second = fn_00672dd0(e, this);
+    if !Object::new(e.call(0x0067_2dd0, &args![this]).u32()).is_null() {
+        let second = Object::new(e.call(0x0067_2dd0, &args![this]).u32());
         e.call(LOCATION_INIT_ITEM, &args![second, this]);
     }
     if !fn_00671d10(e, this).is_null() {
@@ -1356,7 +1362,7 @@ pub fn tes_package_init_item(e: &mut Engine, this: Ptr<TESPackage>) {
     // Per-type fix-ups of the location and target.
     match pack_type(e, this) {
         9 => {
-            if fn_00674d20(e, this) {
+            if e.call(0x0067_4d20, &args![this]).bool() {
                 let location = location_of(e, this);
                 e.call(LOCATION_SET_TYPE, &args![location, LOCATION_TYPE_SIX]);
             }
@@ -1377,16 +1383,16 @@ pub fn tes_package_init_item(e: &mut Engine, this: Ptr<TESPackage>) {
             if location_of(e, this).is_null() {
                 let made = new_location(e);
                 e.call(LOCATION_SET_TYPE, &args![made, LOCATION_TYPE_SIX]);
-                tes_package_set_package_location(e, this, made);
+                e.call(0x0067_1d30, &args![this, made]);
                 if !made.is_null() {
                     e.call(LOCATION_DELETE, &args![made, 1u32]);
                 }
             }
         }
-        0xe if fn_00674d20(e, this) => {
+        0xe if e.call(0x0067_4d20, &args![this]).bool() => {
             if fn_00671d10(e, this).is_null() {
                 let made = new_target(e);
-                tes_package_set_package_target(e, this, made);
+                e.call(0x0067_2fc0, &args![this, made]);
             }
             let target = fn_00671d10(e, this);
             e.call(TARGET_SET_TYPE, &args![target, 3u32]);
@@ -1598,7 +1604,7 @@ pub fn tes_package_get_second_location_world(
     this: Ptr<TESPackage>,
     actor: Object,
 ) -> Object {
-    let location = fn_00672dd0(e, this);
+    let location = Object::new(e.call(0x0067_2dd0, &args![this]).u32());
     if location.is_null() || location_type(e, location) == 2 {
         if !actor.is_null() {
             return e.call(START_LOCATION_WORLD, &args![actor]).ptr();
@@ -1658,7 +1664,7 @@ pub fn tes_package_get_second_location_cell(
     this: Ptr<TESPackage>,
     actor: Object,
 ) -> Object {
-    let location = fn_00672dd0(e, this);
+    let location = Object::new(e.call(0x0067_2dd0, &args![this]).u32());
     if location.is_null() || location_type(e, location) == 2 {
         if !actor.is_null() {
             return e.call(START_LOCATION_INTERIOR_CELL, &args![actor]).ptr();
@@ -1777,7 +1783,7 @@ pub fn tes_package_get_second_location_coord(
     out: Object,
     actor: Object,
 ) -> Object {
-    let location = fn_00672dd0(e, this);
+    let location = Object::new(e.call(0x0067_2dd0, &args![this]).u32());
     let mut point = default_point(e);
     if location.is_null() || location_type(e, location) == 2 {
         if !actor.is_null() {
@@ -1832,7 +1838,7 @@ pub fn tes_package_get_second_location_coord(
 /// The radius of the second location (`0067f1c0`: its `+0x04` word unless
 /// the location type is 0xff or 1), or 0 without one.
 pub fn fn_00675670(e: &mut Engine, this: Ptr<TESPackage>) -> u32 {
-    let location = fn_00672dd0(e, this);
+    let location = Object::new(e.call(0x0067_2dd0, &args![this]).u32());
     if location.is_null() {
         return 0;
     }
@@ -1846,7 +1852,7 @@ pub fn fn_00675670(e: &mut Engine, this: Ptr<TESPackage>) -> u32 {
 /// process chose (else the actor); 6 the linked reference. Null where the
 /// actor is needed and null.
 pub fn fn_006756a0(e: &mut Engine, this: Ptr<TESPackage>, actor: Object) -> Object {
-    let location = fn_00672dd0(e, this);
+    let location = Object::new(e.call(0x0067_2dd0, &args![this]).u32());
     let mut result = Ptr::NULL;
     if location.is_null() || location_type(e, location) == 2 {
         if !actor.is_null() {
@@ -1887,7 +1893,7 @@ pub fn tes_package_get_search_location_cell(
     this: Ptr<TESPackage>,
     actor: Object,
 ) -> Object {
-    let search = tes_package_get_package_search_location(e, this);
+    let search = Object::new(e.call(0x0067_2f20, &args![this]).u32());
     let own = location_of(e, this);
     if search == own {
         tes_package_get_location_cell(e, this, actor)
@@ -1906,7 +1912,7 @@ pub fn tes_package_get_search_location_coord(
     out: Object,
     actor: Object,
 ) -> Object {
-    let search = tes_package_get_package_search_location(e, this);
+    let search = Object::new(e.call(0x0067_2f20, &args![this]).u32());
     let own = location_of(e, this);
     let point = e.with_stack(12, |e, buffer| {
         let made = if search == own {
@@ -1928,7 +1934,7 @@ pub fn tes_package_get_search_location_radius(
     this: Ptr<TESPackage>,
     actor: Object,
 ) -> i32 {
-    let search = tes_package_get_package_search_location(e, this);
+    let search = Object::new(e.call(0x0067_2f20, &args![this]).u32());
     let own = location_of(e, this);
     if search == own {
         fn_00676280(e, this, actor)
@@ -2546,7 +2552,7 @@ fn second_location_test(
     if e.vcall(subject.addr(), SLOT_IS_ACTOR, &args![]).bool() {
         subject_actor = subject;
     }
-    let location = fn_00672dd0(e, this);
+    let location = Object::new(e.call(0x0067_2dd0, &args![this]).u32());
     if location.is_null() {
         return true;
     }
@@ -3097,7 +3103,7 @@ pub fn tes_package_is_target_at_second_location(
     ) {
         return false;
     }
-    let location = fn_00672dd0(e, this);
+    let location = Object::new(e.call(0x0067_2dd0, &args![this]).u32());
     if !location.is_null() {
         let (decided, flag) = e.with_stack(4, |e, flag| {
             let decided = e
@@ -3266,7 +3272,7 @@ pub fn tes_package_calculate_procedure_type(
             e.call(CRT_SPRINTF, &args![buffer, MESSAGE_INVALID_PACKAGE, text]);
         });
         e.set(this, TESPackage::ePROCEDURE_TYPE, 0);
-        tes_package_set_pack_type(e, this, 6);
+        e.call(0x0067_0fc0, &args![this, 6u32]);
     }
 }
 
@@ -3343,7 +3349,7 @@ fn procedure_type_1(e: &mut Engine, this: Ptr<TESPackage>) -> i32 {
     if target_of(e, this).is_null() {
         return -1;
     }
-    let location = fn_00672dd0(e, this);
+    let location = Object::new(e.call(0x0067_2dd0, &args![this]).u32());
     if !location.is_null()
         && (location_type(e, location) == 6
             || !location_reference(e, location).is_null()
@@ -3565,7 +3571,7 @@ pub fn fn_006780e0(e: &mut Engine, this: Ptr<TESPackage>, actor: Object, flag: u
     }
     if !result.is_null()
         && e.vcall(result.addr(), SLOT_IS_ACTOR, &args![]).bool()
-        && !tes_package_get_is_created(e, this)
+        && !e.call(0x0067_4d40, &args![this]).bool()
     {
         let held = result;
         let player: u32 = e.global(PLAYER);
@@ -3688,7 +3694,7 @@ pub fn tes_package_get_package_radius_actor_to_location(
     second: u8,
 ) -> f32 {
     let location = if second != 0 {
-        fn_00672dd0(e, this)
+        Object::new(e.call(0x0067_2dd0, &args![this]).u32())
     } else {
         location_of(e, this)
     };
@@ -3749,7 +3755,7 @@ pub fn tes_package_get_package_radius_actor_to_ref_target(
 ) -> f32 {
     let mut radius: i32 = 0;
     if second != 0 {
-        fn_00672dd0(e, this);
+        e.call(0x0067_2dd0, &args![this]);
     } else {
         location_of(e, this);
     }
@@ -4910,7 +4916,10 @@ mod tests {
                 PACKAGE_EVENT_ACTION_CONSTRUCTOR,
                 PACKAGE_EVENT_ACTION_CONSTRUCTOR,
                 SET_FORM_TYPE,
+                // The reset and its `SetIsCreated`, called by address.
+                0x0067_09d0,
                 FN_00673180,
+                0x0067_4d70,
                 GET_FORM_ID,
                 IS_DYNAMIC_FORM_ID,
             ]
@@ -5550,6 +5559,16 @@ mod tests {
         let q = package(&mut e, 4);
         e.call(0x00672c40, &args![q, 1.75f32]);
         assert!(e.get(q, TESPackage::pPackData).is_null());
+    }
+
+    /// The exe moves the float through `FLD`/`FSTP`: a signalling NaN is stored quiet.
+    #[test]
+    fn dialogue_fov_setter_quiets_a_signalling_nan() {
+        let mut e = engine();
+        let p = package(&mut e, 0x1c);
+        e.call(0x00672c40, &args![p, f32::from_bits(0x7f80_0001)]);
+        let data = e.get(p, TESPackage::pPackData).addr();
+        assert_eq!(e.mem.u32(data + 4), 0x7fc0_0001);
     }
 
     #[test]

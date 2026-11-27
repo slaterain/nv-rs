@@ -388,6 +388,8 @@ pub(crate) fn test_stream(e: &mut Engine, device: u32, stream: Stream) {
     let r = real(e);
     r.stream = Some(stream);
     r.devices.push((device, None));
+    // A device made: the records' epoch moves on, as at a real `CreateDevice`.
+    super::d3d9items::bump_epoch();
 }
 
 /// Tests: the modelled object `object` as one the backend was asked for (its calls are recorded;
@@ -588,6 +590,8 @@ pub fn forget(e: &mut Engine, object: u32) {
     let device = match r.devices.iter().position(|(d, _)| *d == object) {
         Some(at) => {
             r.devices.remove(at);
+            // The records' epoch moves on, so a kept draw's cached device goes with it (`d3d9items`; review of #1145).
+            super::d3d9items::bump_epoch();
             true
         }
         None => false,

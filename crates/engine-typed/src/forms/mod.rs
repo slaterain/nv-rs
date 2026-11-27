@@ -54,6 +54,15 @@
 //!   chunk swaps, and the package event action's constructor, clear and copy.
 //! - [`conditions`]: a condition list's constructor, destructor and clear, a condition's compare of
 //!   two values and its function data's swap.
+//! - [`package`]: `TESPackage`'s first functions (its unit, `006707c0` to `00674e70`, and the
+//!   type 9 data's constructor): the constructor and the package data's reset, `CreatePackage`,
+//!   `SetPackType`, the flag tests and the specific flags' setters, the location, second location
+//!   and target setters, the dialogue data's getters and setters, the acquire radius, the initial
+//!   target count, the use weapon data, the second and search locations, `InitItem`, `GetIsCreated`
+//!   and `SetIsCreated`, the script and never-to-run flags and `SetNeverRun`.
+//! - [`package_flags`]: a package's flag accessors (the unit after `TESPackage`'s): the getters and
+//!   setters of the bits of its flags and behaviour flags, their copy from another package, and the
+//!   package type's entry in the table at `0119bcb0`.
 //!
 //! Reached: each function stays registered at its exe address, so the translations' calls by
 //! address and the vtable slots that hold them (`TESForm`'s vtable `0101c794` and the form classes
@@ -61,8 +70,9 @@
 //! translations that called one of them as a plain Rust function (in `tesform.rs`,
 //! `tesactorbasedata.rs`, `tesactorbase.rs`, `tesattributes.rs`, `run_004801e0.rs`, `tesaiform.rs`,
 //! `run_0047f940.rs`, `tesobject.rs`, `packagelist.rs`, `run_0067ad20.rs`, `run_0067c330.rs`,
-//! `run_0067ec40.rs`, `run_0067fcb0.rs`, `run_0044a880.rs` and `run_0044a170.rs` themselves) call
-//! it by address now, so the game reaches the typed function from there too.
+//! `run_0067ec40.rs`, `run_0067fcb0.rs`, `run_0044a880.rs`, `run_0044a170.rs`, `package.rs` and
+//! `run_0067a1b0.rs` themselves) call it by address now, so the game reaches the typed function
+//! from there too.
 //!
 //! Native: the one-line bodies the exe calls (the form type, its flag tests, the byte swaps, the
 //! files' and save buffers' fields, the components' accessors) are done in place, the leaves', the
@@ -78,11 +88,12 @@
 //! script extender's in the destructor (`00483669`), JohnnyGuitar NVSE's after `SetTemporary`'s
 //! removal (`0048449a`) and at `GetFormDetailedString`'s name (`00486903`), JIP LN's G45 mask in the
 //! flags' load (`00484e03`, under its fix bit) and its clone of a model with lights of its own in
-//! `Clone3D` (`0050ef46`, while JIP LN is installed). A seam is a check inside the function, not a
-//! registration over it, so it costs the family nothing; no extender or fix row registers over any
-//! of this family's addresses (`GetFormByEditorID`, which JohnnyGuitar NVSE replaces, and
-//! `TESObject::IsMarker`, which JIP LN rewrites, stay out),
-//! so the family's calls stay direct in play.
+//! `Clone3D` (`0050ef46`, while JIP LN is installed), and JIP LN's H16 combat controller size
+//! in `CreatePackage` (`00670c30`, while JIP LN is installed). A seam is a check inside the
+//! function, not a registration over it, so it costs the family nothing; no extender or fix row
+//! registers over any of this family's addresses (`GetFormByEditorID`, which JohnnyGuitar NVSE
+//! replaces, and `TESObject::IsMarker`, which JIP LN rewrites, stay out), so the family's calls
+//! stay direct in play.
 //! Plugins' load order and form ids are untouched: the ids, the files' order in a form's list and
 //! the compile index are computed exactly as the translation computes them.
 //!
@@ -111,7 +122,9 @@ pub mod attributes;
 pub mod conditions;
 pub mod debug_string;
 pub mod object;
+pub mod package;
 pub mod package_data;
+pub mod package_flags;
 pub mod package_list;
 pub mod queued_maps;
 pub mod schedule;
@@ -544,6 +557,92 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0068_0fe0, conditions::clear(u32)),
         entry!(0x0068_1050, conditions::compare_values(u32, f32, f32) -> bool),
         entry!(0x0068_1110, conditions::swap_function_data(u32)),
+        entry!(0x0067_07c0, package::construct(u32) -> u32),
+        entry!(0x0067_09d0, package::reset(u32)),
+        entry!(0x0067_0b90, package::create_package(i32) -> u32),
+        entry!(0x0067_0ed0, package::pack_flag_40(u32) -> bool),
+        entry!(0x0067_0ef0, package::pack_flag_10(u32) -> bool),
+        entry!(0x0067_0f10, package::pack_flag_80(u32) -> bool),
+        entry!(0x0067_0f40, package::pack_flag_20(u32) -> bool),
+        entry!(0x0067_0f60, package::pack_flag_100(u32) -> bool),
+        entry!(0x0067_0f90, package::once_per_day(u32) -> bool),
+        entry!(0x0067_0fc0, package::set_pack_type(u32, i32)),
+        entry!(0x0067_1a20, package::set_pack_flag_800000(u32, u8)),
+        entry!(0x0067_1a70, package::set_specific_flag_40(u32, u8)),
+        entry!(0x0067_1ad0, package::set_specific_flag_1_clear(u32, u8)),
+        entry!(0x0067_1b30, package::set_specific_flag_2_clear(u32, u8)),
+        entry!(0x0067_1b90, package::set_specific_flag_4_clear(u32, u8)),
+        entry!(0x0067_1bf0, package::set_specific_flag_8_clear(u32, u8)),
+        entry!(0x0067_1c50, package::set_specific_flag_10_clear(u32, u8)),
+        entry!(0x0067_1cb0, package::set_specific_flag_20_clear(u32, u8)),
+        entry!(0x0067_1d30, package::set_location(u32, u32)),
+        entry!(0x0067_1e10, package::set_second_location(u32, u32)),
+        entry!(0x0067_2710, package::dialogue_say_to(u32) -> u8),
+        entry!(0x0067_2760, package::dialogue_topic(u32) -> u32),
+        entry!(0x0067_27b0, package::dialogue_do_not_control_target(u32) -> u8),
+        entry!(0x0067_2800, package::dialogue_no_headtrack(u32) -> u8),
+        entry!(0x0067_2850, package::dialogue_fov(u32) -> f32),
+        entry!(0x0067_28a0, package::acquire_radius(u32, u32, u32) -> bool),
+        entry!(0x0067_2930, package::initial_target_count(u32) -> i32),
+        entry!(0x0067_29d0, package::set_dialogue_topic(u32, u32)),
+        entry!(0x0067_2aa0, package::set_dialogue_do_not_control_target(u32, u8)),
+        entry!(0x0067_2b70, package::set_dialogue_no_headtrack(u32, u8)),
+        entry!(0x0067_2c40, package::set_dialogue_fov(u32, f32)),
+        entry!(0x0067_2d10, package::use_weapon_data(u32) -> u32),
+        entry!(0x0067_2dd0, package::second_location(u32) -> u32),
+        entry!(0x0067_2f20, package::search_location(u32) -> u32),
+        entry!(0x0067_2fc0, package::set_target(u32, u32)),
+        entry!(0x0067_4d20, package::specific_flag_2(u32) -> bool),
+        entry!(0x0067_4d40, package::is_created(u32) -> bool),
+        entry!(0x0067_4d70, package::set_is_created(u32, u8)),
+        entry!(0x0067_4930, package::init_item(u32)),
+        entry!(0x0067_4dd0, package::is_script_package(u32) -> bool),
+        entry!(0x0067_4e00, package::set_script_package(u32, u8)),
+        entry!(0x0067_4e40, package::is_never_to_run(u32) -> bool),
+        entry!(0x0067_4e70, package::set_never_run(u32, u32, u8)),
+        entry!(0x0067_acf0, package::type_9_data_construct(u32) -> u32),
+        entry!(0x0067_a1b0, package_flags::copy_flags_from(u32, u32)),
+        entry!(0x0067_a380, package_flags::pack_flag_1000(u32) -> bool),
+        entry!(0x0067_a3a0, package_flags::set_pack_flag_1000(u32, u8)),
+        entry!(0x0067_a3f0, package_flags::pack_flag_400000(u32) -> bool),
+        entry!(0x0067_a410, package_flags::set_pack_flag_400000(u32, u8)),
+        entry!(0x0067_a460, package_flags::pack_flag_800000(u32) -> bool),
+        entry!(0x0067_a480, package_flags::pack_flag_2000(u32) -> bool),
+        entry!(0x0067_a4a0, package_flags::set_pack_flag_2000(u32, u8)),
+        entry!(0x0067_a4f0, package_flags::pack_flag_20000(u32) -> bool),
+        entry!(0x0067_a510, package_flags::set_pack_flag_20000(u32, u8)),
+        entry!(0x0067_a560, package_flags::pack_flag_40000(u32) -> bool),
+        entry!(0x0067_a580, package_flags::set_pack_flag_40000(u32, u8)),
+        entry!(0x0067_a5d0, package_flags::pack_flag_80000(u32) -> bool),
+        entry!(0x0067_a5f0, package_flags::set_pack_flag_80000(u32, u8)),
+        entry!(0x0067_a640, package_flags::set_pack_flag_200000(u32, u8)),
+        entry!(0x0067_a690, package_flags::pack_flag_100000(u32) -> bool),
+        entry!(0x0067_a6b0, package_flags::set_pack_flag_100000(u32, u8)),
+        entry!(0x0067_a700, package_flags::pack_flag_4000000(u32) -> bool),
+        entry!(0x0067_a720, package_flags::set_pack_flag_4000000(u32, u8)),
+        entry!(0x0067_a770, package_flags::pack_flag_8000000_clear(u32) -> bool),
+        entry!(0x0067_a790, package_flags::set_pack_flag_8000000_clear(u32, u8)),
+        entry!(0x0067_a7e0, package_flags::pack_flag_10000000_clear(u32) -> bool),
+        entry!(0x0067_a800, package_flags::set_pack_flag_10000000_clear(u32, u8)),
+        entry!(0x0067_a850, package_flags::behavior_flag_1(u32) -> bool),
+        entry!(0x0067_a870, package_flags::set_behavior_flag_1(u32, u8)),
+        entry!(0x0067_a8d0, package_flags::behavior_flag_2(u32) -> bool),
+        entry!(0x0067_a8f0, package_flags::set_behavior_flag_2(u32, u8)),
+        entry!(0x0067_a950, package_flags::behavior_flag_4(u32) -> bool),
+        entry!(0x0067_a970, package_flags::set_behavior_flag_4(u32, u8)),
+        entry!(0x0067_a9d0, package_flags::behavior_flag_8(u32) -> bool),
+        entry!(0x0067_a9f0, package_flags::set_behavior_flag_8(u32, u8)),
+        entry!(0x0067_aa50, package_flags::behavior_flag_10(u32) -> bool),
+        entry!(0x0067_aa70, package_flags::set_behavior_flag_10(u32, u8)),
+        entry!(0x0067_aad0, package_flags::behavior_flag_20(u32) -> bool),
+        entry!(0x0067_aaf0, package_flags::set_behavior_flag_20(u32, u8)),
+        entry!(0x0067_ab50, package_flags::behavior_flag_40(u32) -> bool),
+        entry!(0x0067_ab70, package_flags::set_behavior_flag_40(u32, u8)),
+        entry!(0x0067_abd0, package_flags::behavior_flag_80(u32) -> bool),
+        entry!(0x0067_abf0, package_flags::set_behavior_flag_80(u32, u8)),
+        entry!(0x0067_ac50, package_flags::behavior_flag_100(u32) -> bool),
+        entry!(0x0067_ac70, package_flags::set_behavior_flag_100(u32, u8)),
+        entry!(0x0067_acd0, package_flags::type_table_entry(u32) -> u32),
     ]
 }
 
@@ -568,6 +667,7 @@ mod tests {
             0x0048_4e03,
             0x0048_6903,
             0x0050_ef46,
+            0x0067_0c30,
         ] {
             assert!(engine_core::extend::all_sites().any(|row| row.addr == seam));
             assert!(!members.contains(&seam));
