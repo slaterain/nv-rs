@@ -1844,7 +1844,7 @@ mod tests {
         let mut e = Engine::new();
         let block = e.mem.alloc(0x40);
         capture::keep_reads_begin(block + 0x30, block + 0x40);
-        assert!(!capture::active());
+        capture::check_packets_open_for_tests();
         let _ = capture::word(&e, block, 0);
         let _ = capture::span(&e, block, 8, 0x10);
         capture::image(&mut e, block, 0x10, 0x18, |_, _| ());

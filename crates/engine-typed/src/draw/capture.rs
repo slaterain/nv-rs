@@ -283,8 +283,14 @@ thread_local! {
 static OPEN: AtomicUsize = AtomicUsize::new(0);
 
 /// Added to [`OPEN`] while a thread builds a kept draw record (`super::keep`): the read accessors then note what
-/// they read ([`note_keep_read`]) on that thread; every packet test masks it out.
+/// they read ([`note_keep_read`]) on that thread; every packet test masks it out ([`packets_open`]).
 const KEEP_OPEN: usize = 1 << 24;
+
+/// Whether [`OPEN`]'s value `open` counts an open packet (the kept records' builds left out).
+#[inline(always)]
+fn packets_open(open: usize) -> bool {
+    open & (KEEP_OPEN - 1) != 0
+}
 
 /// [`KEEP_READS`]'s type: each read's address, the bytes read and the exe function reading (the call stack's top).
 type KeepReads = Option<Vec<(u32, Vec<u8>, u32)>>;
@@ -967,7 +973,7 @@ pub struct Report {
 /// value the original leaves. With POISON, a byte found no longer the scribble is a write past the packet,
 /// counted in [`Report::written`].
 pub fn end(e: &mut Engine) -> Report {
-    if OPEN.load(Relaxed) & (KEEP_OPEN - 1) == 0 {
+    if !packets_open(OPEN.load(Relaxed)) {
         return Report::default();
     }
     unserve(e);
@@ -1239,7 +1245,7 @@ pub fn words<const N: usize>(e: &Engine, object: u32, offset: u32) -> [u32; N] {
 /// goes the other way.
 #[inline(always)]
 pub fn active() -> bool {
-    OPEN.load(Relaxed) & (KEEP_OPEN - 1) != 0
+    packets_open(OPEN.load(Relaxed))
 }
 
 /// A value the draw's own state holds ([`own_at`]): its bytes, little-endian, as guest memory keeps them.
@@ -2444,4 +2450,15 @@ mod tests {
         assert_eq!(end(&mut e), Report::default());
         assert_eq!(e.mem.u32(at), 1);
     }
+}
+
+/// Tests: a kept record's build is no open packet, a packet beside it still is ([`packets_open`]; review of #1108).
+#[cfg(test)]
+pub(crate) fn check_packets_open_for_tests() {
+    assert!(!packets_open(0));
+    assert!(!packets_open(KEEP_OPEN));
+    assert!(!packets_open(3 * KEEP_OPEN));
+    assert!(packets_open(1));
+    assert!(packets_open(KEEP_OPEN + 1));
+    assert!(packets_open(KEEP_OPEN - 1));
 }
