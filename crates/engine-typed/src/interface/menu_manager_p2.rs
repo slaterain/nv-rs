@@ -22,9 +22,9 @@
 //! the dispatch family's (all through `typed_call!`). A virtual call (an item tile's deleting
 //! destructor, `GetTileAt`) stays virtual: its object's class is not known here. What the exe calls
 //! that is a plain read or store is done in place ([`IN_PLACE`]; a list node's item and next and the
-//! word at +4 are in the interface unit's lists), and so are three of this file's own functions,
-//! a vtable store and the two collection calls the constructors and destructors make (`007240c0`,
-//! `00721130`, `007211c0`, which the translation calls as plain functions too).
+//! word at +4 are in the interface unit's lists). The constructors and destructors call this
+//! file's `ListBoxBase` constructor and the collection's add and remove (`007240c0`, `00721130`,
+//! `007211c0`) through `typed_call!`, as the exe calls them.
 
 use crate::{crt, dispatch, pathing};
 use engine_core::prelude::*;
@@ -646,12 +646,13 @@ pub(super) fn set_flag(e: &mut Engine, at: u32, bit: u32, set: bool) {
     e.mem.set_u16(at.wrapping_add(FLAGS), flags);
 }
 
-/// `ListBox<T>::ListBox` (Xbox PDB): the `ListBoxBase` vtable (`007240c0`), the embedded list, the
-/// instance's vtable, the fields cleared, the flag 0 set (`007a1950` with 0 and 1, in place), the
-/// list box added to the collection (`00721130`). `this`.
+/// `ListBox<T>::ListBox` (Xbox PDB): the `ListBoxBase` constructor (`007240c0`), the embedded list,
+/// the instance's vtable, the fields cleared, the flag 0 set (`007a1950` with 0 and 1, in place),
+/// the list box added to the collection (`00721130`). The two calls are this family's, as the exe
+/// makes them. `this`.
 pub(super) fn construct(e: &mut Engine, of: Of, this: Ptr) -> Ptr {
     let at = this.addr();
-    e.mem.set_u32(at, LIST_BOX_BASE_VTABLE);
+    typed_call!(super::FAMILY, 0x0072_40c0, fn_007240c0(e, this));
     super::menu_manager::empty_list(e, at.wrapping_add(4));
     e.mem.set_u32(at, of.vtable());
     e.mem.set_u32(at.wrapping_add(SCROLL_BAR), 0);
@@ -664,17 +665,17 @@ pub(super) fn construct(e: &mut Engine, of: Of, this: Ptr) -> Ptr {
     e.mem.set_f32(at.wrapping_add(SAVED_HIGHLIGHT_INDEX), 0.0);
     e.mem.set_f32(at.wrapping_add(TOTAL_HEIGHT), 0.0);
     set_flag(e, at, 0, true);
-    collection(e, LIST_BOX_COLLECTION_ADD, at);
+    typed_call!(super::FAMILY, 0x0072_1130, fn_00721130(e, at));
     this
 }
 
 /// `ListBox<T>::~ListBox` (Xbox PDB): the vtable, `RemoveAll`, the list box removed from the
-/// collection (`007211c0`), the embedded list destroyed.
+/// collection (`007211c0`, this family's, as the exe calls it), the embedded list destroyed.
 pub(super) fn destruct(e: &mut Engine, of: Of, this: Ptr) {
     let at = this.addr();
     e.mem.set_u32(at, of.vtable());
     remove_all_of(e, of, this);
-    collection(e, LIST_BOX_COLLECTION_REMOVE, at);
+    typed_call!(super::FAMILY, 0x0072_11c0, fn_007211c0(e, at));
     e.call(LIST_DESTRUCT, &args![at.wrapping_add(4)]);
 }
 

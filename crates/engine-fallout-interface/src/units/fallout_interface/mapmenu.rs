@@ -21,7 +21,6 @@ pub fn fn_007a1aa0(e: &mut Engine, this: Ptr) {
 }
 
 use crate::types::BSSimpleArray;
-use crate::units::fallout_interface::menumanager;
 use crate::units::fallout_interface::startmenu::ListBox;
 
 layout! {
@@ -527,13 +526,16 @@ const RADIO_FILTER_CALLBACK: u32 = 0x0079_be80;
 const RADIO_ENABLE: u32 = 0x0083_24e0;
 /// Cdecl (station, word) (`falloutradio.cpp`).
 const RADIO_SET_STATION_00832240: u32 = 0x0083_2240;
-/// `ListBox<BGSNote_P>::Filter` (`007a2e30`) and
-/// `ListBox<TESChallenge_P>::Filter` (`007a5730`) (engine map), thiscall
+/// `ListBox<BGSNote_P>::Filter` (`007a2e30`), `ListBox<TESChallenge_P>::Filter`
+/// (`007a5730`), `ListBox<TESObjectREFR_P>::Filter` (`007a3d20`) and
+/// `ListBox<BGSQuestObjective_P>::Filter` (`007a49e0`) (engine map), thiscall
 /// (callback), `RET 4`, with the callbacks the code passes.
 const NOTE_LIST_FILTER: u32 = 0x007a_2e30;
 const NOTE_FILTER_CALLBACK: u32 = 0x0079_b390;
 const CHALLENGE_LIST_FILTER: u32 = 0x007a_5730;
 const CHALLENGE_FILTER_CALLBACK: u32 = 0x0079_b720;
+const REFERENCE_LIST_FILTER: u32 = 0x007a_3d20;
+const OBJECTIVE_LIST_FILTER: u32 = 0x007a_49e0;
 /// Thiscall on a 12-byte point (x, y, z), `RET 0xC`: the point.
 #[cfg(test)]
 const POINT_SET_00416870: u32 = 0x0041_6870;
@@ -573,10 +575,14 @@ const SHOW_MESSAGE_007052F0: u32 = 0x0070_52f0;
 const TRIGGER_BURST: u32 = 0x007f_b150;
 /// Cdecl: `AL` (`interface.cpp`).
 const FLAG_00709D40: u32 = 0x0070_9d40;
-/// The list box collection's add and remove (thiscall on the collection, the
-/// address of a word holding the list box), which `menumanager.rs`'s
-/// `00721130` and `007211c0` (reached with plain calls by the instances'
-/// constructors and destructors) make.
+/// The `ListBoxBase` constructor (`007240c0`, thiscall) and the list box
+/// collection's add and remove wrappers (`00721130`, `007211c0`, cdecl: the
+/// list box), which the instances' constructors and destructors call.
+const LIST_BOX_BASE_CONSTRUCT: u32 = 0x0072_40c0;
+const LIST_BOX_COLLECTION_ADD_00721130: u32 = 0x0072_1130;
+const LIST_BOX_COLLECTION_REMOVE_007211C0: u32 = 0x0072_11c0;
+/// The collection's add and remove themselves (thiscall on the collection,
+/// the address of a word holding the list box), which those wrappers make.
 #[cfg(test)]
 const LIST_BOX_COLLECTION_ADD: u32 = 0x005a_e3d0;
 #[cfg(test)]
@@ -2412,10 +2418,9 @@ const CHALLENGE_LIST: ListBoxKind = list_box_kind(
 /// The constructor of a `ListBox<T *>` instance: the `ListBoxBase` base
 /// (`007240c0`), the embedded list (+4, `0096a2d0`), the vtable, the fields
 /// cleared, `007a1950(this, 0, 1)` and the list box handed to `00721130`
-/// (the base and the collection's add are `menumanager.rs`'s, reached with a
-/// plain call as that file's instances reach them).
+/// (the base and the collection's add, by address).
 fn list_box_construct(e: &mut Engine, this: Ptr<ListBox>, kind: ListBoxKind) -> Ptr<ListBox> {
-    menumanager::fn_007240c0(e, this.cast());
+    e.call(LIST_BOX_BASE_CONSTRUCT, &args![this]);
     e.call(LIST_CONSTRUCT, &args![this.addr() + 4]);
     e.mem.set_u32(this.addr(), kind.vtable);
     e.set(this, ListBox::pScrollBar, Ptr::NULL);
@@ -2428,17 +2433,17 @@ fn list_box_construct(e: &mut Engine, this: Ptr<ListBox>, kind: ListBoxKind) -> 
     e.set(this, ListBox::fSavedHighlightIndex, 0.0);
     e.set(this, ListBox::fTotalListHeight, 0.0);
     e.call(0x007a_1950, &args![this, 0, 1]);
-    menumanager::fn_00721130(e, this.addr());
+    e.call(LIST_BOX_COLLECTION_ADD_00721130, &args![this]);
     this
 }
 
 /// The destructor of a `ListBox<T *>` instance: the vtable, `RemoveAll`, the
-/// list box handed to `007211c0` (`menumanager.rs`'s, a plain call), then the
-/// embedded list destroyed.
+/// list box handed to `007211c0` (by address), then the embedded list
+/// destroyed.
 fn list_box_destruct(e: &mut Engine, this: Ptr<ListBox>, kind: ListBoxKind) {
     e.mem.set_u32(this.addr(), kind.vtable);
     e.call(kind.remove_all, &args![this]);
-    menumanager::fn_007211c0(e, this.addr());
+    e.call(LIST_BOX_COLLECTION_REMOVE_007211C0, &args![this]);
     e.call(LIST_DESTRUCT, &args![this.addr() + 4]);
 }
 
@@ -3451,9 +3456,10 @@ fn list_box_num_unfiltered(e: &mut Engine, this: Ptr<ListBox>, which: StaticTrai
 
 /// `007a6220`, `007a6250`, `007a6280`, `007a62b0`: the tile of the last
 /// unfiltered item, through the list box's vtable +0x14 (index
-/// `NumUnfiltered - 1`, 0).
-fn list_box_last_tile(e: &mut Engine, this: Ptr<ListBox>, which: StaticTrait) -> u32 {
-    let count = list_box_num_unfiltered(e, this, which);
+/// `NumUnfiltered - 1`, 0); the instance's `NumUnfiltered` (`num_unfiltered`)
+/// is called by address.
+fn list_box_last_tile(e: &mut Engine, this: Ptr<ListBox>, num_unfiltered: u32) -> u32 {
+    let count = e.call(num_unfiltered, &args![this]).u32();
     e.vcall(this.addr(), 0x14, &args![count.wrapping_sub(1), 0u32])
         .u32()
 }
@@ -4033,14 +4039,14 @@ pub fn list_box_tes_challenge_filter(e: &mut Engine, this: Ptr<ListBox>, callbac
 /// not fit the body): the `ListBox<BGSNote *>`'s last unfiltered tile (see
 /// [`list_box_last_tile`]).
 pub fn fn_007a6220(e: &mut Engine, this: Ptr<ListBox>) -> u32 {
-    list_box_last_tile(e, this, NOTE_NUM_FILTERED)
+    list_box_last_tile(e, this, 0x007a_6a50)
 }
 
 // Translated from 007a6250 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map: the `ListBox<TESObjectREFR *>`'s last
 /// unfiltered tile (see [`list_box_last_tile`]).
 pub fn fn_007a6250(e: &mut Engine, this: Ptr<ListBox>) -> u32 {
-    list_box_last_tile(e, this, REFERENCE_NUM_FILTERED)
+    list_box_last_tile(e, this, 0x007a_71b0)
 }
 
 // Translated from 007a6280 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4048,14 +4054,14 @@ pub fn fn_007a6250(e: &mut Engine, this: Ptr<ListBox>) -> u32 {
 /// name does not fit the body): the `ListBox<BGSQuestObjective *>`'s last
 /// unfiltered tile (see [`list_box_last_tile`]).
 pub fn fn_007a6280(e: &mut Engine, this: Ptr<ListBox>) -> u32 {
-    list_box_last_tile(e, this, OBJECTIVE_NUM_FILTERED)
+    list_box_last_tile(e, this, 0x007a_7830)
 }
 
 // Translated from 007a62b0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map: the `ListBox<TESChallenge *>`'s last
 /// unfiltered tile (see [`list_box_last_tile`]).
 pub fn fn_007a62b0(e: &mut Engine, this: Ptr<ListBox>) -> u32 {
-    list_box_last_tile(e, this, CHALLENGE_NUM_FILTERED)
+    list_box_last_tile(e, this, 0x007a_8030)
 }
 
 // Translated from 007a6480 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4595,10 +4601,9 @@ pub fn map_menu_do_enter(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32)
                     .call(LIST_BOX_ITEM_OF_007E1110, &args![base + 0x130, tile])
                     .u32();
                 e.set(this, MapMenu::pDisplayedQuest, quest);
-                list_box_bgs_quest_objective_filter(
-                    e,
-                    Ptr::new(base + 0x1c0),
-                    OBJECTIVE_QUEST_CALLBACK_0079BC50,
+                e.call(
+                    OBJECTIVE_LIST_FILTER,
+                    &args![base + 0x1c0, OBJECTIVE_QUEST_CALLBACK_0079BC50],
                 );
                 index = if tile != 0 {
                     let value = e.call(TILE_GET_FLOAT, &args![tile, 0xfacu32]).f64();
@@ -6019,10 +6024,9 @@ pub fn fn_0079b600(e: &mut Engine, this: Ptr<MapMenu>) {
         }
         node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
     }
-    list_box_tes_challenge_filter(
-        e,
-        Ptr::new(base + 0x1f0),
-        CHALLENGES_FILTER_CALLBACK_0079B720,
+    e.call(
+        CHALLENGE_LIST_FILTER,
+        &args![base + 0x1f0, CHALLENGES_FILTER_CALLBACK_0079B720],
     );
     e.vcall(
         base + 0x1f0,
@@ -6214,10 +6218,9 @@ pub fn map_menu_update_quests(e: &mut Engine, this: Ptr<MapMenu>) {
     e.call(0x007a_2350, &args![base + 0x130, 1u32]);
     let player = e.mem.u32(PLAYER_011DEA3C);
     if e.call(PLAYER_QUEST_005CBB50, &args![player]).u32() == 0 {
-        list_box_bgs_quest_objective_filter(
-            e,
-            Ptr::new(base + 0x1c0),
-            OBJECTIVE_QUEST_CALLBACK_0079BC50,
+        e.call(
+            OBJECTIVE_LIST_FILTER,
+            &args![base + 0x1c0, OBJECTIVE_QUEST_CALLBACK_0079BC50],
         );
         return;
     }
@@ -6343,10 +6346,9 @@ pub fn map_menu_update_radio_list(e: &mut Engine, this: Ptr<MapMenu>) {
             set_item_alpha(e, tile, !reachable);
             node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
         }
-        list_box_tes_object_refr_filter(
-            e,
-            Ptr::new(base + 0x190),
-            RADIO_LIST_FILTER_CALLBACK_0079BE30,
+        e.call(
+            REFERENCE_LIST_FILTER,
+            &args![base + 0x190, RADIO_LIST_FILTER_CALLBACK_0079BE30],
         );
         e.vcall(base + 0x190, 0x20, &args![RADIO_SORT_CALLBACK_0079BD70]);
         e.call(LIST_REMOVE_ALL, &args![in_range]);

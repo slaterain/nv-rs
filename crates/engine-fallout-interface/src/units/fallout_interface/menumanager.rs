@@ -664,13 +664,13 @@ fn list_box_delete_item(e: &mut Engine, this: Ptr<ListBox>, item: impl Fn(&mut E
 
 /// The `ListBox<T>` constructor body: the `ListBoxBase` base, the embedded
 /// list (+4), the vtable, the fields cleared, `007a1950` with 0 and 1, and
-/// the list box passed to the collection (`fn_00721130`).
+/// the list box passed to the collection (`00721130`, by address).
 fn list_box_construct(
     e: &mut Engine,
     this: Ptr<ListBox>,
     instance: ListBoxInstance,
 ) -> Ptr<ListBox> {
-    fn_007240c0(e, this.cast());
+    e.call(0x0072_40c0, &args![this]);
     e.call(LIST_CONSTRUCT, &args![this.addr() + 4]);
     set_vtable(e, this.cast(), instance.vtable);
     e.set(this, ListBox::pScrollBar, Ptr::NULL);
@@ -683,17 +683,17 @@ fn list_box_construct(
     e.set(this, ListBox::fSavedHighlightIndex, 0.0);
     e.set(this, ListBox::fTotalListHeight, 0.0);
     e.call(LIST_BOX_INIT_FLAGS, &args![this, 0u32, 1u32]);
-    fn_00721130(e, this.addr());
+    e.call(0x0072_1130, &args![this]);
     this
 }
 
 /// The `ListBox<T>` destructor body: restores the vtable, empties the list
 /// (`RemoveAll`), passes the list box to the collection's second method
-/// (`fn_007211c0`) and destroys the embedded list (+4).
+/// (`007211c0`, by address) and destroys the embedded list (+4).
 fn list_box_destruct(e: &mut Engine, this: Ptr<ListBox>, instance: ListBoxInstance) {
     set_vtable(e, this.cast(), instance.vtable);
     list_box_remove_all(e, this, instance);
-    fn_007211c0(e, this.addr());
+    e.call(0x0072_11c0, &args![this]);
     e.call(LIST_DESTRUCT, &args![this.addr() + 4]);
 }
 

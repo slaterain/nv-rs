@@ -1444,8 +1444,9 @@ pub fn fn_007e0e30(e: &mut Engine, this: Ptr, callback: u32, value: u32) {
 }
 
 /// `ListBox<T>::AddItem` of the perk rank and misc stat instances and the map menu's five
-/// `Insert`s (the template's body, as the level-up menu's `ListBox<BGSPerk_P>` has it): with a container and a template (`template`,
-/// else the list's), the template rendered into the container; the new tile's id -1 when it has
+/// `Insert`s (the template's body, as the level-up menu's `ListBox<BGSPerk_P>` has it): with a
+/// container and a template (`template`, else the list's), the template rendered into the
+/// container; the new tile's id -1 when it has
 /// none and its string `text` when given; a new `ListBoxItem` of the tile and `data` (`007a62e0`,
 /// in place) inserted by `compare` (then `Synchronize` with flag 0) or appended (then, with flag 0,
 /// the tile's position and `SetTotalListHeight`; the tile numbered with the next index). With

@@ -102,10 +102,10 @@ fn set_enabled(e: &mut Engine, guard: u32, this: Ptr, value: u8) {
     tile_set_int(e, container, enabled, i32::from(value));
 }
 
-/// The tile of the last unfiltered item (`007a6220` and the three like it): `NumUnfiltered`'s body
-/// (inlined there, with the instance's static) less one, through `GetTileAt` with 0.
+/// The tile of the last unfiltered item (`007a6220` and the three like it): the instance's
+/// `NumUnfiltered` (called, as the exe does) less one, through `GetTileAt` with 0.
 fn last_tile(e: &mut Engine, of: Of, this: Ptr) -> u32 {
-    let count = template::num_unfiltered(e, of, this);
+    let count = template::num_unfiltered_of(e, of, this);
     e.vcall(
         this.addr(),
         TILE_AT_SLOT,
