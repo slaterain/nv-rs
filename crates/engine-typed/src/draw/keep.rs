@@ -258,6 +258,8 @@ pub type Key = (u32, u32, u32, u32, u32);
 struct Record {
     /// The geometry's and its properties' own bytes as they were (a change of any breaks the record).
     statics: Vec<u8>,
+    /// Those bytes and the inputs as a replay compares them ([`Spans`]).
+    spans: Spans,
     /// The inputs the set-up read through the accessors, with their bytes at the time (reads of what the set-up
     /// itself had written left out).
     inputs: Vec<(u32, Vec<u8>, u32)>,
@@ -470,6 +472,97 @@ fn statics(e: &Engine, key: Key) -> Vec<u8> {
     out
 }
 
+/// What a replay compares ([`spans_same`]): the record's own bytes' ranges as [`statics`] read them at the build and
+/// its inputs, sorted by address, adjacent and overlapping ones merged (`spans`, their bytes back to back in
+/// `bytes`), and the own bytes' ranges that could not be read then (`unread`), which must still not be (or read as
+/// [`statics`]' fill). The ranges are kept as they were: every pointer [`statics_ranges`] follows lies in a range
+/// before it (the property state's words, the geometry's data, the data's render data, the property's texture count,
+/// arrays and effect), so while those bytes stay, the ranges are the same.
+#[derive(Default)]
+struct Spans {
+    spans: Vec<(u32, u32)>,
+    bytes: Vec<u8>,
+    unread: Vec<(u32, u32)>,
+}
+
+/// [`Spans`] from a build: its own bytes (`statics` as read from `ranges`) and its inputs.
+fn make_spans(
+    e: &Engine,
+    ranges: &[(u32, u32)],
+    statics: &[u8],
+    inputs: &[(u32, Vec<u8>, u32)],
+) -> Spans {
+    let mut out = Spans::default();
+    let mut pieces: Vec<(u32, &[u8])> = Vec::with_capacity(ranges.len() + inputs.len());
+    let mut from = 0usize;
+    for &(at, len) in ranges {
+        let Some(bytes) = statics.get(from..from + len as usize) else {
+            break;
+        };
+        from += len as usize;
+        if at == 0 {
+            continue;
+        }
+        let mut now = [0u8; 0x100];
+        match now.get_mut(..len as usize) {
+            Some(now) if e.mem.try_read(at, now).is_ok() => pieces.push((at, bytes)),
+            _ => out.unread.push((at, len)),
+        }
+    }
+    pieces.extend(inputs.iter().map(|(at, bytes, _)| (*at, bytes.as_slice())));
+    pieces.sort_by_key(|&(at, _)| at);
+    for (at, bytes) in pieces {
+        let end = u64::from(at) + bytes.len() as u64;
+        if let Some((start, len)) = out.spans.last_mut() {
+            let last_end = u64::from(*start) + u64::from(*len);
+            // Adjacent or overlapping, and the shared bytes alike (read at another moment of the build, they could
+            // differ only if another thread wrote them: then both stay, and the record breaks next time).
+            if u64::from(at) <= last_end {
+                let shared = (last_end - u64::from(at)).min(bytes.len() as u64) as usize;
+                let tail = out.bytes.len() - shared;
+                if out.bytes[tail..] == bytes[..shared] || shared == 0 {
+                    if end > last_end {
+                        out.bytes.extend_from_slice(&bytes[shared..]);
+                        *len += n32(bytes.len() - shared);
+                    }
+                    continue;
+                }
+            }
+        }
+        out.spans.push((at, n32(bytes.len())));
+        out.bytes.extend_from_slice(bytes);
+    }
+    out
+}
+
+/// Whether every span of `s` holds its bytes and every unread range is still unread ([`Spans`]): a replay's test.
+fn spans_same(e: &Engine, s: &Spans) -> bool {
+    let mut buf = [0u8; 0x100];
+    let mut from = 0usize;
+    for &(at, len) in &s.spans {
+        let len = len as usize;
+        let want = &s.bytes[from..from + len];
+        from += len;
+        let mut done = 0usize;
+        while done < len {
+            let n = (len - done).min(buf.len());
+            let now = &mut buf[..n];
+            if e.mem.try_read(at.wrapping_add(n32(done)), now).is_err()
+                || now != &want[done..done + n]
+            {
+                return false;
+            }
+            done += n;
+        }
+    }
+    s.unread
+        .iter()
+        .all(|&(at, len)| match buf.get_mut(..len as usize) {
+            Some(now) => e.mem.try_read(at, now).is_err() || now.iter().all(|&b| b == 0xa5),
+            None => false,
+        })
+}
+
 /// Whether `kept` is what [`statics`] makes now, compared where the bytes lie (each range read into the stack, no
 /// copy kept): a replay's test of the record's own bytes.
 fn statics_same(e: &Engine, key: Key, kept: &[u8]) -> bool {
@@ -570,12 +663,13 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
         body(e);
         return;
     }
-    follow_epoch();
+    let epoch = draw_items::epoch();
     let start = Instant::now();
     // One look-up says what this draw is: a rest, a replay of the record's ops, or a build (and why).
     let plan = KEEP.with(|k| {
         let mut k = k.borrow_mut();
         let k = &mut *k;
+        follow_epoch(k, epoch);
         k.stats.seen += 1;
         let seen = k.stats.seen;
         let Some(r) = k.records.get_mut(&key) else {
@@ -647,7 +741,7 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
             // Check: the item this draw would have been, made from the record's replay as `On` makes it; then the
             // set-up runs as always (its commands the old form beside the item) and what it did is compared with
             // the record.
-            let snapshot = statics(e, key);
+            let (ranges, snapshot) = (statics_ranges(e, key), statics(e, key));
             let beside = item.is_some_and(|(id, hash)| {
                 let ask = Ask::Item {
                     id,
@@ -669,6 +763,7 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
                 done == Done::Drawn
             });
             let (built, sent) = build_sent(e, key, &mut body, item, beside);
+            let spans = make_spans(e, &ranges, &snapshot, &built.inputs);
             KEEP.with(|k| {
                 let mut k = k.borrow_mut();
                 let k = &mut *k;
@@ -688,6 +783,7 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
                     key,
                     Record {
                         statics: snapshot,
+                        spans,
                         last_used: seen,
                         item: sent,
                         ..built
@@ -697,8 +793,9 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
             });
         }
         Plan::Build(why, old) => {
-            let snapshot = statics(e, key);
+            let (ranges, snapshot) = (statics_ranges(e, key), statics(e, key));
             let (built, sent) = build_sent(e, key, &mut body, old, false);
+            let spans = make_spans(e, &ranges, &snapshot, &built.inputs);
             KEEP.with(|k| {
                 let mut k = k.borrow_mut();
                 let k = &mut *k;
@@ -725,6 +822,7 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
                     key,
                     Record {
                         statics: snapshot,
+                        spans,
                         last_used: seen,
                         item: sent,
                         streak,
@@ -757,13 +855,20 @@ pub const SAMPLE_EVERY: u64 = 64;
 /// What breaks the record `r` of `key` now, if anything: None reuses it. Its own bytes compared where they lie (no
 /// copy made), then its inputs.
 fn verdict(e: &Engine, key: Key, r: &Record) -> Option<Break> {
+    if spans_same(e, &r.spans) {
+        return None;
+    }
+    // Something changed: which, for the counters (any other difference rebuilds it as its own bytes').
     if !statics_same(e, key, &r.statics) {
         return Some(Break::Statics);
     }
-    let (at, _, reader) = r
+    let Some((at, _, reader)) = r
         .inputs
         .iter()
-        .find(|(at, bytes, _)| !same_bytes(e, *at, bytes))?;
+        .find(|(at, bytes, _)| !same_bytes(e, *at, bytes))
+    else {
+        return Some(Break::Statics);
+    };
     let others = r
         .inputs
         .iter()
@@ -839,20 +944,16 @@ fn build_sent(
 }
 
 /// The backend's records are gone (a device made or reset: `engine_core::draw_items::epoch`): every record goes, so
-/// each is built again and sent anew.
-fn follow_epoch() {
-    let now = draw_items::epoch();
-    KEEP.with(|k| {
-        let mut k = k.borrow_mut();
-        if k.epoch != now {
-            k.epoch = now;
-            if !k.records.is_empty() {
-                k.stats.epochs += 1;
-            }
-            k.records.clear();
-            k.forgotten.clear();
+/// each is built again and sent anew. `now`: the backend's epoch.
+fn follow_epoch(k: &mut Keep, now: u64) {
+    if k.epoch != now {
+        k.epoch = now;
+        if !k.records.is_empty() {
+            k.stats.epochs += 1;
         }
-    });
+        k.records.clear();
+        k.forgotten.clear();
+    }
 }
 
 const FORGET_BATCH: usize = 256;
@@ -1103,6 +1204,20 @@ fn assemble(
         for i in 0..n32(bytes.len()) {
             written.insert(at.wrapping_add(i));
         }
+        // A write that starts inside or right after the write just before it (nothing between them: a matrix or a
+        // row stored word by word) joins it, made in the same order: one write on replay.
+        if let Some(Op::Write(last_at, last)) = ops.last_mut() {
+            let start = u64::from(*last_at);
+            let end = start + last.len() as u64;
+            let from = u64::from(at);
+            if (start..=end).contains(&from) {
+                let off = (from - start) as usize;
+                let over = (last.len() - off).min(bytes.len());
+                last[off..off + over].copy_from_slice(&bytes[..over]);
+                last.extend_from_slice(&bytes[over..]);
+                continue;
+            }
+        }
         ops.push(Op::Write(at, bytes));
     }
     let mut counts = [0u32; 3];
@@ -1116,6 +1231,7 @@ fn assemble(
     (
         Record {
             statics: Vec::new(),
+            spans: Spans::default(),
             inputs,
             ops: ops.into(),
             counts,
@@ -1366,39 +1482,50 @@ fn replay_leaf(e: &mut Engine, leaf: Leaf) {
             0x00b7_9730,
             crate::shader::geometry::pixel_entry_19(e)
         ),
-        // Called directly, as the per-geometry set-up calls them.
         Leaf::ObjToCube {
             this,
             block,
             pass_type,
             flag,
             transform,
-        } => crate::shader::geometry::obj_to_cube(
-            e,
-            Ptr::new(this),
-            Ptr::new(block),
-            pass_type,
-            flag,
-            transform,
+        } => typed_call!(
+            SHADER,
+            0x00b7_b730,
+            crate::shader::geometry::obj_to_cube(
+                e,
+                Ptr::new(this),
+                Ptr::new(block),
+                pass_type,
+                flag,
+                transform
+            )
         ),
         Leaf::ShadowProj {
             this,
             block,
             flag,
             transform,
-        } => crate::shader::geometry::shadow_proj(
-            e,
-            Ptr::new(this),
-            Ptr::new(block),
-            flag,
-            Ptr::new(transform),
+        } => typed_call!(
+            SHADER,
+            0x00b7_b930,
+            crate::shader::geometry::shadow_proj(
+                e,
+                Ptr::new(this),
+                Ptr::new(block),
+                flag,
+                Ptr::new(transform)
+            )
         ),
-        Leaf::Entry17 { this, object } => {
-            crate::shader::geometry::vertex_entry_17(e, Ptr::new(this), Ptr::new(object));
-        }
-        Leaf::ClipPlanes { this, pass_type } => {
-            crate::shader::geometry::simple_shadow_clip_planes(e, Ptr::new(this), pass_type);
-        }
+        Leaf::Entry17 { this, object } => typed_call!(
+            SHADER,
+            0x00b7_9180,
+            crate::shader::geometry::vertex_entry_17(e, Ptr::new(this), Ptr::new(object))
+        ),
+        Leaf::ClipPlanes { this, pass_type } => typed_call!(
+            SHADER,
+            0x00b7_be00,
+            crate::shader::geometry::simple_shadow_clip_planes(e, Ptr::new(this), pass_type)
+        ),
     }
 }
 
@@ -2062,6 +2189,7 @@ mod tests {
     fn records_unused_for_long_are_dropped_with_their_backend_records() {
         let record = |last_used: u64, id: u32| Record {
             statics: Vec::new(),
+            spans: Spans::default(),
             inputs: Vec::new(),
             ops: Rc::from([]),
             counts: [0; 3],
@@ -2099,6 +2227,7 @@ mod tests {
         for i in 0..12u32 {
             let r = Record {
                 statics: Vec::new(),
+                spans: Spans::default(),
                 inputs: Vec::new(),
                 ops: Rc::from([]),
                 counts: [0; 3],
@@ -2281,12 +2410,9 @@ mod tests {
         let state = e.mem.alloc(0x20);
         let [first, property, shader, data, render, arrays] =
             [0x40, 0x100, 0x80, 0x40, 0x60, 0x180].map(|n| e.mem.alloc(n));
-        for (i, at) in [geometry, first, property, shader, data, render]
-            .into_iter()
-            .enumerate()
-        {
+        for (i, at) in (0u32..).zip([geometry, first, property, shader, data, render]) {
             for w in 0..8u32 {
-                e.mem.set_u32(at + 4 * w, 0x100 * i as u32 + w);
+                e.mem.set_u32(at + 4 * w, 0x100 * i + w);
             }
         }
         e.mem.set_u32(state, first);
@@ -2444,5 +2570,70 @@ mod tests {
         assert_eq!((e.mem.u32(owed), e.mem.u32(block + 4)), (0, 7));
         set_mode_for_tests(None);
         reset_for_tests();
+    }
+
+    /// A replay compares the own bytes' ranges and the inputs merged by address (adjacent and overlapping ones one
+    /// span, a range at 0 left out): any byte changed in any of them is a difference, and a range that could not be
+    /// read at the build must stay unread (or read as the fill).
+    #[test]
+    fn a_replay_compares_merged_spans() {
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x40);
+        let inputs = vec![
+            (block + 4, vec![1, 2, 3, 4], 0),
+            (block, vec![9, 9, 9, 9], 0),
+            (block + 6, vec![3, 4, 5, 6], 0),
+            (block + 0x20, vec![7], 0),
+        ];
+        for (at, bytes, _) in &inputs {
+            e.mem.write(*at, bytes);
+        }
+        e.mem.set_u32(block + 0x10, 0x11);
+        e.mem.set_u32(block + 0x14, 0x22);
+        let ranges = [(block + 0x10, 8), (0, 4), (0x0000_7000, 4)];
+        let statics = [e.mem.bytes(block + 0x10, 8), vec![0xa5; 8]].concat();
+        let s = make_spans(&e, &ranges, &statics, &inputs);
+        assert_eq!(s.spans, [(block, 10), (block + 0x10, 8), (block + 0x20, 1)]);
+        assert_eq!(s.bytes[..10], [9, 9, 9, 9, 1, 2, 3, 4, 5, 6]);
+        assert_eq!(s.unread, [(0x0000_7000, 4)]);
+        assert!(spans_same(&e, &s));
+        for at in [block + 9, block + 0x17, block + 0x20] {
+            let was = e.mem.u8(at);
+            e.mem.set_u8(at, was ^ 0x40);
+            assert!(!spans_same(&e, &s), "{at:x} changed");
+            e.mem.set_u8(at, was);
+        }
+        assert!(spans_same(&e, &s));
+        e.mem.map(0x0000_7000, 0x1000);
+        assert!(!spans_same(&e, &s), "an unread range readable now");
+        e.mem.write(0x0000_7000, &[0xa5; 4]);
+        assert!(spans_same(&e, &s), "as the fill reads");
+    }
+
+    /// Writes one after another with nothing between them join when each starts inside or right after the last (in
+    /// their order: a later byte wins); one apart, or with a kept call between, they stay apart.
+    #[test]
+    fn writes_in_a_row_join() {
+        let m = |kind: u32, i: u32| (STORE_LOG_MARK + kind, i.to_le_bytes().to_vec());
+        let leaf = Leaf::Entry19;
+        let log = vec![
+            (0x5000, vec![1, 2]),
+            (0x5002, vec![3]),
+            (0x5001, vec![9, 8, 7]),
+            (0x5005, vec![5]),
+            m(MARK_LEAF, 0),
+            (0x5006, vec![6]),
+        ];
+        let (r, _) = assemble(log, &[], &[leaf], &[]);
+        assert_eq!(
+            *r.ops,
+            [
+                Op::Write(0x5000, vec![1, 9, 8, 7]),
+                Op::Write(0x5005, vec![5]),
+                Op::Leaf(leaf),
+                Op::Write(0x5006, vec![6]),
+            ]
+        );
+        assert_eq!(r.counts, [3, 1, 0]);
     }
 }
