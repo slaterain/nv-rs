@@ -137,6 +137,7 @@ nvse_not_built_in() {
     children "$nv_data" NVSE | while IFS= read -r nv_nvse; do
         children "$nv_nvse" Plugins | while IFS= read -r nv_plugins; do
             ls -1 -- "$nv_plugins" 2>/dev/null | while IFS= read -r nv_name; do
+                [ -f "$nv_plugins/$nv_name" ] || continue
                 case $(lower "$nv_name") in
                 (jip_nvse.dll | johnnyguitarnvse.dll | ui_organizer.dll) ;;
                 (*.dll) printf '%s\n' "$nv_name" ;;
