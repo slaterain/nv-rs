@@ -204,23 +204,23 @@ pub fn pathing_request_cover_copy_to(e: &mut Engine, this: Ptr<PathingRequestCov
     let crouch = float_copy(e, base + 0xc0);
     e.call(SET_CROUCH_HEIGHT, &args![other, crouch]);
     let distance = f32::from_bits(float_copy(e, base + 0xbc));
-    fn_006e4320(e, other.cast(), distance);
+    e.call(0x006e_4320, &args![other, distance]);
     let change = f32::from_bits(float_copy(e, base + 0xc4));
-    fn_006e4340(e, other.cast(), change);
+    e.call(0x006e_4340, &args![other, change]);
     let results = e.get(this, PathingRequestCover::iMaxResults);
     e.call(SET_MAX_RESULTS, &args![other, results]);
     let other = other.cast::<PathingRequestCover>();
     let flag = e.get(this, PathingRequestCover::bFindBothSides);
-    fn_006e4360(e, other, flag);
+    e.call(0x006e_4360, &args![other, flag]);
     let flag = e.get(this, PathingRequestCover::bFindBehindTarget);
-    fn_006e4380(e, other, flag);
+    e.call(0x006e_4380, &args![other, flag]);
     let flag = e.get(this, PathingRequestCover::bSortFarthestFirst);
-    fn_006e43a0(e, other, flag);
+    e.call(0x006e_43a0, &args![other, flag]);
     let flag = e.get(this, PathingRequestCover::bSortDistanceFromTarget);
-    fn_006e43c0(e, other, flag);
+    e.call(0x006e_43c0, &args![other, flag]);
     let flag = e.get(this, PathingRequestCover::bHideCover);
-    fn_006e43e0(e, other, flag);
-    fn_006e4400(e, other, base + 0xd4);
+    e.call(0x006e_43e0, &args![other, flag]);
+    e.call(0x006e_4400, &args![other, base + 0xd4]);
 }
 
 // Translated from 006e4320 (decompiled, FalloutNV.exe 1.4.0.525)

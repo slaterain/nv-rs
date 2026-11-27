@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, cover_request, location, navmesh, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -4365,4 +4365,167 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- The cover request's destructor and setters ----
+
+/// A `PathingRequestCover`: 0xec bytes.
+fn cover_request(e: &mut Engine) -> u32 {
+    e.mem.alloc(0xec)
+}
+
+#[test]
+fn cover_scalar_deleting_destructor() {
+    Diff::new(entry!(
+        0x006e_41e0,
+        cover_request::scalar_deleting_destructor(Ptr, u32) -> Ptr
+    ))
+    .family(&pathing::PATHING)
+    .inputs(&[Input::Flag])
+    .setup(|e, case| {
+        e.register(0x006d_ad70, |_, _| Ret::default());
+        e.register(0x00aa_1460, |_, _| Ret::default());
+        vec![cover_request(e), case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn cover_set_max_cover_distance() {
+    Diff::new(entry!(
+        0x006e_4320,
+        cover_request::set_max_cover_distance(Ptr<_>, f32)
+    ))
+    .family(&pathing::PATHING)
+    .allow_nan_payloads()
+    .inputs(&[Input::F32])
+    .setup(|e, case| {
+        let t = cover_request(e);
+        e.mem.set_u32(t + 0xbc, 0xdead_beef);
+        vec![t, case.words()[0]]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn cover_set_max_height_change() {
+    Diff::new(entry!(
+        0x006e_4340,
+        cover_request::set_max_height_change(Ptr<_>, f32)
+    ))
+    .family(&pathing::PATHING)
+    .allow_nan_payloads()
+    .inputs(&[Input::F32])
+    .setup(|e, case| {
+        let t = cover_request(e);
+        e.mem.set_u32(t + 0xc4, 0xdead_beef);
+        vec![t, case.words()[0]]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn cover_set_find_both_sides() {
+    Diff::new(entry!(
+        0x006e_4360,
+        cover_request::set_find_both_sides(Ptr<_>, u8)
+    ))
+    .family(&pathing::PATHING)
+    .inputs(&[Input::Of(&[0, 1, 0x80, 0xff])])
+    .setup(|e, case| {
+        let t = cover_request(e);
+        e.mem.set_u8(t + 0xcd, 0xa5);
+        vec![t, case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn cover_set_find_behind_target() {
+    Diff::new(entry!(
+        0x006e_4380,
+        cover_request::set_find_behind_target(Ptr<_>, u8)
+    ))
+    .family(&pathing::PATHING)
+    .inputs(&[Input::Of(&[0, 1, 0x80, 0xff])])
+    .setup(|e, case| {
+        let t = cover_request(e);
+        e.mem.set_u8(t + 0xce, 0xa5);
+        vec![t, case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn cover_set_sort_farthest_first() {
+    Diff::new(entry!(
+        0x006e_43a0,
+        cover_request::set_sort_farthest_first(Ptr<_>, u8)
+    ))
+    .family(&pathing::PATHING)
+    .inputs(&[Input::Of(&[0, 1, 0x80, 0xff])])
+    .setup(|e, case| {
+        let t = cover_request(e);
+        e.mem.set_u8(t + 0xcf, 0xa5);
+        vec![t, case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn cover_set_sort_distance_from_target() {
+    Diff::new(entry!(
+        0x006e_43c0,
+        cover_request::set_sort_distance_from_target(Ptr<_>, u8)
+    ))
+    .family(&pathing::PATHING)
+    .inputs(&[Input::Of(&[0, 1, 0x80, 0xff])])
+    .setup(|e, case| {
+        let t = cover_request(e);
+        e.mem.set_u8(t + 0xd0, 0xa5);
+        vec![t, case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn cover_set_hide_cover() {
+    Diff::new(entry!(
+        0x006e_43e0,
+        cover_request::set_hide_cover(Ptr<_>, u8)
+    ))
+    .family(&pathing::PATHING)
+    .inputs(&[Input::Of(&[0, 1, 0x80, 0xff])])
+    .setup(|e, case| {
+        let t = cover_request(e);
+        e.mem.set_u8(t + 0xd1, 0xa5);
+        vec![t, case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+#[test]
+fn cover_set_projection_vector() {
+    Diff::new(entry!(
+        0x006e_4400,
+        cover_request::set_projection_vector(Ptr<_>, u32)
+    ))
+    .family(&pathing::PATHING)
+    .inputs(&[Input::Word, Input::Word, Input::Word])
+    .setup(|e, case| {
+        let vector = e.mem.alloc(0xc);
+        point_at(e, vector, [case.word(0), case.word(1), case.word(2)]);
+        let t = cover_request(e);
+        point_at(e, t + 0xd4, [0xdead_beef, 0xdead_beef, 0xdead_beef]);
+        vec![t, vector]
+    })
+    .run()
+    .assert_same();
 }
