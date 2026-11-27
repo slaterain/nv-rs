@@ -261,7 +261,7 @@ fn extra_list_of(reference: u32) -> u32 {
 }
 
 /// `size` bytes at `at` saved into the buffer.
-fn save(e: &mut Engine, buffer: u32, at: u32, size: u32) {
+fn buffer_save(e: &mut Engine, buffer: u32, at: u32, size: u32) {
     e.call(SAVE_BYTES, &args![buffer, at, size, 0u32]);
 }
 
@@ -269,7 +269,7 @@ fn save(e: &mut Engine, buffer: u32, at: u32, size: u32) {
 fn save_value(e: &mut Engine, buffer: u32, value: u32, size: u32) {
     e.with_stack(4, |e, local| {
         e.mem.set_u32(local.addr(), value);
-        save(e, buffer, local.addr(), size);
+        buffer_save(e, buffer, local.addr(), size);
     });
 }
 
@@ -426,7 +426,7 @@ fn save_payload(e: &mut Engine, buffer: u32, extra: u32, kind: u8, flag: u32) {
     let at = |offset: u32| extra.wrapping_add(offset);
     match kind {
         0x16 | 0x3e | 0x90 | 0x91 | 0x1f => {}
-        0x24 => save(e, buffer, at(0x0c), 2),
+        0x24 => buffer_save(e, buffer, at(0x0c), 2),
         // The friend hits: the old hits go first, then the counted time stamps.
         0x45 => {
             e.call(REMOVE_OLD_HITS, &args![extra]);
@@ -440,10 +440,10 @@ fn save_payload(e: &mut Engine, buffer: u32, extra: u32, kind: u8, flag: u32) {
         }
         // The dismembered limbs: fields, a form and the counted records, each with its forms.
         0x5f => {
-            save(e, buffer, at(0x0c), 2);
-            save(e, buffer, at(0x10), 4);
-            save(e, buffer, at(0x18), 4);
-            save(e, buffer, at(0x1c), 1);
+            buffer_save(e, buffer, at(0x0c), 2);
+            buffer_save(e, buffer, at(0x10), 4);
+            buffer_save(e, buffer, at(0x18), 4);
+            buffer_save(e, buffer, at(0x1c), 1);
             let form = word_at(e, extra, 0x14);
             save_form(e, buffer, form);
             let array = at(0x20);
@@ -452,7 +452,7 @@ fn save_payload(e: &mut Engine, buffer: u32, extra: u32, kind: u8, flag: u32) {
             for index in 0..n {
                 let entry = e.mem.u32(element(e, array, index));
                 for offset in 0..4 {
-                    save(e, buffer, entry.wrapping_add(offset), 1);
+                    buffer_save(e, buffer, entry.wrapping_add(offset), 1);
                 }
                 let inner = entry.wrapping_add(4);
                 let inner_n = array_count(e, inner);
@@ -464,9 +464,9 @@ fn save_payload(e: &mut Engine, buffer: u32, extra: u32, kind: u8, flag: u32) {
             }
         }
         0x25 | 0x30 | 0x23 | 0x56 | 0x5c | 0x5d | 0x1e | 0x27 | 0x28 => {
-            save(e, buffer, at(0x0c), 4);
+            buffer_save(e, buffer, at(0x0c), 4);
         }
-        0x4a | 0x26 | 0x8d | 0x4e => save(e, buffer, at(0x0c), 1),
+        0x4a | 0x26 | 0x8d | 0x4e => buffer_save(e, buffer, at(0x0c), 1),
         0x21 | 0x22 | 0x1c | 0x49 | 0x6c | 0x74 | 0x55 | 0x3c | 0x39 | 0x46 | 0x89 => {
             let form = word_at(e, extra, 0x0c);
             save_form(e, buffer, form);
@@ -492,17 +492,17 @@ fn save_payload(e: &mut Engine, buffer: u32, extra: u32, kind: u8, flag: u32) {
             save_form(e, buffer, form);
             let target = word_at(e, extra, 0x14);
             save_form(e, buffer, target);
-            save(e, buffer, at(0x10), 4);
-            save(e, buffer, at(0x18), 1);
-            save(e, buffer, at(0x19), 1);
-            save(e, buffer, at(0x1a), 1);
+            buffer_save(e, buffer, at(0x10), 4);
+            buffer_save(e, buffer, at(0x18), 1);
+            buffer_save(e, buffer, at(0x19), 1);
+            buffer_save(e, buffer, at(0x1a), 1);
         }
         // The package start location: its form, 12 bytes and the rotation.
         0x18 => {
             let form = word_at(e, extra, 0x0c);
             save_form(e, buffer, form);
-            save(e, buffer, at(0x10), 0x0c);
-            save(e, buffer, at(0x1c), 4);
+            buffer_save(e, buffer, at(0x10), 0x0c);
+            buffer_save(e, buffer, at(0x1c), 4);
         }
         // The run once packages and the type 0x5e list: counted (form, byte) records.
         0x1b | 0x5e => {
@@ -513,7 +513,7 @@ fn save_payload(e: &mut Engine, buffer: u32, extra: u32, kind: u8, flag: u32) {
                     if item != 0 {
                         let form = word_at(e, item, 0);
                         save_form(e, buffer, form);
-                        save(e, buffer, item.wrapping_add(4), 1);
+                        buffer_save(e, buffer, item.wrapping_add(4), 1);
                         n += 1;
                     }
                 });
@@ -540,8 +540,8 @@ fn save_payload(e: &mut Engine, buffer: u32, extra: u32, kind: u8, flag: u32) {
                 if item != 0 {
                     let form = word_at(e, item, 0);
                     save_form(e, buffer, form);
-                    save(e, buffer, item.wrapping_add(4), 4);
-                    save(e, buffer, item.wrapping_add(8), 4);
+                    buffer_save(e, buffer, item.wrapping_add(4), 4);
+                    buffer_save(e, buffer, item.wrapping_add(8), 4);
                     n += 1;
                 }
             });
@@ -553,7 +553,7 @@ fn save_payload(e: &mut Engine, buffer: u32, extra: u32, kind: u8, flag: u32) {
             save_form(e, buffer, first);
             let second = word_at(e, extra, 0x0c);
             save_form(e, buffer, second);
-            save(e, buffer, at(0x18), 1);
+            buffer_save(e, buffer, at(0x18), 1);
         }
         // Counted pairs: each item's words at +0x28 and +4 (`0045cd60`, `00726070`, in place).
         0x35 => save_counted(e, buffer, |e| {
@@ -606,7 +606,7 @@ fn save_payload(e: &mut Engine, buffer: u32, extra: u32, kind: u8, flag: u32) {
         0x6e => {
             let form = word_at(e, extra, 0x0c);
             save_form(e, buffer, form);
-            save(e, buffer, at(0x10), 4);
+            buffer_save(e, buffer, at(0x10), 4);
         }
         // The trespass package: its form and its object's state (slot 0x54).
         0x1a => {
@@ -619,16 +619,16 @@ fn save_payload(e: &mut Engine, buffer: u32, extra: u32, kind: u8, flag: u32) {
         // The lock: its level and flags, the key, two words.
         0x2a => {
             let lock = word_at(e, extra, 0x0c);
-            save(e, buffer, lock, 1);
-            save(e, buffer, lock.wrapping_add(8), 1);
+            buffer_save(e, buffer, lock, 1);
+            buffer_save(e, buffer, lock.wrapping_add(8), 1);
             let key = word_at(e, lock, 4);
             save_form(e, buffer, key);
-            save(e, buffer, lock.wrapping_add(0x0c), 4);
-            save(e, buffer, lock.wrapping_add(0x10), 4);
+            buffer_save(e, buffer, lock.wrapping_add(0x0c), 4);
+            buffer_save(e, buffer, lock.wrapping_add(0x10), 4);
         }
         0x2f => {
-            save(e, buffer, at(0x0c), 4);
-            save(e, buffer, at(0x10), 1);
+            buffer_save(e, buffer, at(0x0c), 4);
+            buffer_save(e, buffer, at(0x10), 1);
         }
         // The magic caster: the magic item's and target's ids, the reference.
         0x32 => {
@@ -699,28 +699,28 @@ fn save_payload(e: &mut Engine, buffer: u32, extra: u32, kind: u8, flag: u32) {
             e.vcall(object, 0x54, &args![buffer]);
             e.mem.set_u32(kind_at, saved);
         }
-        0x54 => save(e, buffer, at(0x14), 4),
+        0x54 => buffer_save(e, buffer, at(0x14), 4),
         0x50 => {
-            save(e, buffer, at(0x0c), 1);
-            save(e, buffer, at(0x0d), 1);
+            buffer_save(e, buffer, at(0x0c), 1);
+            buffer_save(e, buffer, at(0x0d), 1);
         }
         // 12 bytes, an id, a word and counted records.
         0x8b => {
-            save(e, buffer, at(0x10), 0x0c);
+            buffer_save(e, buffer, at(0x10), 0x0c);
             let id = word_at(e, extra, 0x1c);
             save_id(e, buffer, id);
-            save(e, buffer, at(0x0c), 4);
+            buffer_save(e, buffer, at(0x0c), 4);
             save_counted(e, buffer, |e| {
                 let mut n = 0;
                 each_node_item(e, at(0x20), |e, item| {
                     if item != 0 {
-                        save(e, buffer, item, 0x0c);
+                        buffer_save(e, buffer, item, 0x0c);
                         let first = word_at(e, item, 0x0c);
                         save_id(e, buffer, first);
-                        save(e, buffer, item.wrapping_add(0x10), 0x0c);
+                        buffer_save(e, buffer, item.wrapping_add(0x10), 0x0c);
                         let second = word_at(e, item, 0x1c);
                         save_id(e, buffer, second);
-                        save(e, buffer, item.wrapping_add(0x20), 1);
+                        buffer_save(e, buffer, item.wrapping_add(0x20), 1);
                         n += 1;
                     }
                 });
@@ -755,7 +755,7 @@ fn save_payload(e: &mut Engine, buffer: u32, extra: u32, kind: u8, flag: u32) {
         0x92 => {
             let id = id_of(e, extra);
             save_value(e, buffer, id, 4);
-            save(e, buffer, at(0x10), 4);
+            buffer_save(e, buffer, at(0x10), 4);
         }
         _ => {
             e.call(WARNING, &args![SAVE_UNKNOWN_TYPE, u32::from(kind)]);

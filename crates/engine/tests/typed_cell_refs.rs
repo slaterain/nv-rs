@@ -12484,6 +12484,8 @@ fn xs_world(e: &mut Engine, seed: u32, buffered: bool) -> [u32; 3] {
 /// The save and load functions' families and stand-ins.
 trait XsCase {
     fn xs_case(self) -> Diff;
+    fn xs_old(self) -> Diff;
+    fn xs_buffered(self) -> Diff;
 }
 
 impl XsCase for Diff {
@@ -12492,35 +12494,48 @@ impl XsCase for Diff {
             .ignore_calls(XS_IN_PLACE)
             .goes_by_address(XS_TYPED_STAND_INS)
     }
-}
 
-/// (list, change flags, reference) over the old format's world.
-fn xs_old_case(diff: Diff) -> Diff {
-    diff.xs_case()
-        .max_cases(XS_SEEDS.len() * 3)
-        .inputs(&[Input::Of(XS_SEEDS), Input::Of(&[0, 0x1002_1000, u32::MAX])])
-        .setup(|e, case| {
-            let [list, reference, _] = xs_world(e, case.word(0), false);
-            vec![list, case.word(1), reference]
-        })
+    /// (list, change flags, reference) over the old format's world.
+    fn xs_old(self) -> Diff {
+        self.xs_case()
+            .max_cases(XS_SEEDS.len() * 3)
+            .inputs(&[Input::Of(XS_SEEDS), Input::Of(&[0, 0x1002_1000, u32::MAX])])
+            .setup(|e, case| {
+                let [list, reference, _] = xs_world(e, case.word(0), false);
+                vec![list, case.word(1), reference]
+            })
+    }
+
+    /// (list, buffer) over the buffered format's world.
+    fn xs_buffered(self) -> Diff {
+        self.xs_case()
+            .max_cases(XS_SEEDS.len())
+            .inputs(&[Input::Of(XS_SEEDS)])
+            .setup(|e, case| {
+                let [list, _, buffer] = xs_world(e, case.word(0), true);
+                vec![list, buffer]
+            })
+    }
 }
 
 #[test]
 fn xs_save_size() {
-    xs_old_case(Diff::new(entry!(
+    Diff::new(entry!(
         0x0042_2c40,
         extra_data::save_game::save_size(u32, u32, u32) -> u16
-    )))
+    ))
+    .xs_old()
     .run()
     .assert_same();
 }
 
 #[test]
 fn xs_save_game() {
-    xs_old_case(Diff::new(entry!(
+    Diff::new(entry!(
         0x0042_35e0,
         extra_data::save_game::save_game(u32, u32, u32)
-    )))
+    ))
+    .xs_old()
     .run()
     .assert_same();
 }
@@ -12542,33 +12557,24 @@ fn xs_load_game() {
     .assert_same();
 }
 
-/// (list, buffer) over the buffered format's world.
-fn xs_buffer_case(diff: Diff) -> Diff {
-    diff.xs_case()
-        .max_cases(XS_SEEDS.len())
-        .inputs(&[Input::Of(XS_SEEDS)])
-        .setup(|e, case| {
-            let [list, _, buffer] = xs_world(e, case.word(0), true);
-            vec![list, buffer]
-        })
-}
-
 #[test]
 fn xs_save_game_buffered() {
-    xs_buffer_case(Diff::new(entry!(
+    Diff::new(entry!(
         0x0042_6a30,
         extra_data::buffered::save_game_buffered(u32, u32)
-    )))
+    ))
+    .xs_buffered()
     .run()
     .assert_same();
 }
 
 #[test]
 fn xs_load_game_buffered() {
-    xs_buffer_case(Diff::new(entry!(
+    Diff::new(entry!(
         0x0042_8150,
         extra_data::buffered::load_game_buffered(u32, u32)
-    )))
+    ))
+    .xs_buffered()
     .run()
     .assert_same();
 }
@@ -12597,20 +12603,22 @@ fn xs_fix_up_loaded() {
 
 #[test]
 fn xs_finish_load_game() {
-    xs_buffer_case(Diff::new(entry!(
+    Diff::new(entry!(
         0x0042_d9e0,
         extra_data::buffered::finish_load_game(u32, u32)
-    )))
+    ))
+    .xs_buffered()
     .run()
     .assert_same();
 }
 
 #[test]
 fn xs_clean_up_loaded() {
-    xs_buffer_case(Diff::new(entry!(
+    Diff::new(entry!(
         0x0042_dae0,
         extra_data::buffered::clean_up_loaded(u32, u32)
-    )))
+    ))
+    .xs_buffered()
     .run()
     .assert_same();
 }

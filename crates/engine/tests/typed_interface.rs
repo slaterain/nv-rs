@@ -5443,7 +5443,9 @@ fn no_member_of_a_family_on_by_default_holds_a_seam() {
     }
     let mut found = Vec::new();
     for site in engine_core::extend::all_sites() {
-        let holder = (0..0x4000u32)
+        // Back as far as the longest member holding a seam reaches (`LoadGame_ov2`, `00428150`, holds
+        // JIP's `0x42C328` 0x41d8 bytes in).
+        let holder = (0..0x8000u32)
             .map(|back| site.addr.wrapping_sub(back))
             .find(|&start| e.is_translated(start));
         if let Some(start) = holder.filter(|start| members.contains_key(start)) {
