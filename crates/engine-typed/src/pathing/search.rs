@@ -415,6 +415,25 @@ pub fn allocate_entries(e: &mut Engine, _this: Ptr<SimpleArray>, count: u32) -> 
     e.call(ALLOCATE, &args![count.wrapping_mul(0xc)]).u32()
 }
 
+fn drop_render_map(e: &mut Engine, map: Ptr<Counter>, vtable: u32) {
+    e.set(map, Counter::vtable, vtable);
+    e.call(0x0043_8af0, &args![map]);
+    let buckets = e.get(map, Counter::bucket_array);
+    e.call(0x00aa_10f0, &args![buckets]);
+}
+
+// Typed from 006a64b0
+/// Destroy the navmesh renderer's map from meshes to scene nodes.
+pub fn mesh_node_map_drop(e: &mut Engine, map: Ptr<Counter>) {
+    drop_render_map(e, map, 0x0106_b56c);
+}
+
+// Typed from 006a65b0
+/// Destroy the navmesh renderer's map from cells to scene nodes.
+pub fn cell_node_map_drop(e: &mut Engine, map: Ptr<Counter>) {
+    drop_render_map(e, map, 0x0106_b58c);
+}
+
 // Typed from 006db090
 /// Frees a buffer (`thiscall(array, block)`, `00401030`).
 pub fn free_block(e: &mut Engine, _this: Ptr<SimpleArray>, block: u32) {

@@ -138,10 +138,11 @@ image! {
         0x4 estimate: f32,
     }
 
-    /// A hash map as far as its hash reads it: the bucket count.
-    pub struct Counter / CounterImage: 0x8 {
+    /// A hash map through its bucket count and bucket array.
+    pub struct Counter / CounterImage: 0xc {
         0x0 vtable: u32,
         0x4 buckets: u32,
+        0x8 bucket_array: u32,
     }
 
     /// The A* search's best-node queue, as far as its constructor writes it.

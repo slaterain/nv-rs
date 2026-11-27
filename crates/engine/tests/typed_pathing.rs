@@ -2529,6 +2529,57 @@ fn allocate_entries() {
     .assert_same();
 }
 
+/// Run the translated clear on a null bucket array, an empty bucket or a two-entry chain.
+fn render_map(e: &mut Engine, shape: u32, vtable: u32) -> Vec<u32> {
+    let map = e.mem.alloc(16);
+    let buckets = if shape == 0 { 0 } else { e.mem.alloc(4) };
+    e.mem.set_u32(map, 0x1234);
+    e.mem.set_u32(map + 4, u32::from(shape != 0));
+    e.mem.set_u32(map + 8, buckets);
+    if shape >= 2 {
+        let first = e.mem.alloc(8);
+        e.mem.set_u32(buckets, first);
+        e.mem.set_u32(first, first + 4);
+        e.mem.set_u32(map + 12, 2);
+    }
+    e.map(vtable & !0xfff, 0x1000);
+    e.mem.set_u32(vtable + 0x10, VT_FN);
+    e.mem.set_u32(vtable + 0x18, VT_FN + 4);
+    e.register(VT_FN, |_, _| Ret::default());
+    if shape == 3 {
+        // Entry cleanup can replace the bucket array before the destructor frees it.
+        e.register(VT_FN + 4, |e, args| {
+            let replacement = e.mem.alloc(4);
+            e.mem.set_u32(args[0] + 8, replacement);
+            Ret::default()
+        });
+    } else {
+        e.register(VT_FN + 4, |_, _| Ret::default());
+    }
+    e.register(0x00aa_10f0, |_, _| Ret::default());
+    vec![map]
+}
+
+#[test]
+fn mesh_node_map_drop() {
+    Diff::new(entry!(0x006a_64b0, search::mesh_node_map_drop(Ptr<_>)))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Of(&[0, 1, 2, 3])])
+        .setup(|e, case| render_map(e, case.word(0), 0x0106_b56c))
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn cell_node_map_drop() {
+    Diff::new(entry!(0x006a_65b0, search::cell_node_map_drop(Ptr<_>)))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Of(&[0, 1, 2, 3])])
+        .setup(|e, case| render_map(e, case.word(0), 0x0106_b58c))
+        .run()
+        .assert_same();
+}
+
 #[test]
 fn free_block() {
     Diff::new(entry!(0x006d_b090, search::free_block(Ptr<_>, u32)))
