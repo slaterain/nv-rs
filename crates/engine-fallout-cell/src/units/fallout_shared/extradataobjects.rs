@@ -3695,7 +3695,11 @@ pub fn fn_00433a00(
     this: Ptr<ExtraActivateRef>,
     reference: u32,
 ) -> Ptr<RefActivateData> {
-    e.call(0x0043_36f0, &args![reference, this.at(ExtraActivateRef::ParentList)]).ptr()
+    e.call(
+        0x0043_36f0,
+        &args![reference, this.at(ExtraActivateRef::ParentList)],
+    )
+    .ptr()
 }
 
 // Translated from 00433a20 (decompiled, FalloutNV.exe 1.4.0.525)

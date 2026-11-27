@@ -1620,8 +1620,8 @@ pub fn persistent_cell_drop(e: &mut Engine, this: u32) {
 // ---- The constructors by address ----------------------------------------------------------------
 
 /// A constructor the caller holds as its exe address (the family's setters and loaders take the
-/// class's constructor as a word): one of this file's as its typed call, with the `words` after the
-/// block it takes; any other by address with `block` and `words` (`thiscall`).
+/// class's constructor as a word): one of this file's or `object_refs`' as its typed call, with the
+/// `words` after the block it takes; any other by address with `block` and `words` (`thiscall`).
 // A byte or 16-bit argument is the low bytes of the word handed on, as the callee reads it.
 #[allow(clippy::cast_possible_truncation)]
 pub(super) fn construct_at(e: &mut Engine, construct: u32, block: u32, words: &[u32]) -> u32 {

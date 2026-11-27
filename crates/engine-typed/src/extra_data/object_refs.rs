@@ -544,7 +544,12 @@ pub fn random_teleport_compare(e: &mut Engine, this: u32, other: u32) -> bool {
 // Typed from 00433530
 /// `ExtraLinkedRefChildren`' constructor (type 0x52): an empty child list. Answers `this`.
 pub fn linked_children_new(e: &mut Engine, this: u32) -> u32 {
-    with_list(e, this, KIND_LINKED_REF_CHILDREN, VTABLE_LINKED_REF_CHILDREN)
+    with_list(
+        e,
+        this,
+        KIND_LINKED_REF_CHILDREN,
+        VTABLE_LINKED_REF_CHILDREN,
+    )
 }
 
 // Typed from 004335a0
@@ -797,7 +802,11 @@ fn resolve_reference(e: &mut Engine, owner: u32, id_slot: u32) -> u32 {
         forms::tesform::add_compile_index(e, id_slot, file)
     );
     let id = e.mem.u32(id_slot);
-    let form = typed_call!(forms::FAMILY, 0x0048_39c0, forms::tesform::form_by_id(e, id));
+    let form = typed_call!(
+        forms::FAMILY,
+        0x0048_39c0,
+        forms::tesform::form_by_id(e, id)
+    );
     e.call(
         DYNAMIC_CAST,
         &args![form, 0u32, TYPE_FORM, TYPE_REFERENCE, 0u32],
@@ -1080,11 +1089,7 @@ pub fn reflected_copy(e: &mut Engine, this: u32, other: u32) {
         return;
     }
     typed_call!(FAMILY, 0x0043_4d90, clear_reference_data(e, this));
-    copy_entries(
-        e,
-        this.wrapping_add(OWN_LIST),
-        cast.wrapping_add(OWN_LIST),
-    );
+    copy_entries(e, this.wrapping_add(OWN_LIST), cast.wrapping_add(OWN_LIST));
 }
 
 // Typed from 00434800
@@ -1158,12 +1163,7 @@ fn references_differ(e: &mut Engine, mine: u32, theirs: u32) -> bool {
 /// `ExtraWaterLightRefs::Compare`: the references.
 pub fn water_light_compare(e: &mut Engine, this: u32, other: u32) -> bool {
     let cast = cast_to(e, other, TYPE_WATER_LIGHT_REFS);
-    cast == 0
-        || references_differ(
-            e,
-            this.wrapping_add(OWN_LIST),
-            cast.wrapping_add(OWN_LIST),
-        )
+    cast == 0 || references_differ(e, this.wrapping_add(OWN_LIST), cast.wrapping_add(OWN_LIST))
 }
 
 /// The water light and lit water `Copy`s: from the class with the descriptor `target` only, the
@@ -1211,11 +1211,7 @@ pub fn reflector_copy(e: &mut Engine, this: u32, other: u32) {
         return;
     }
     typed_call!(FAMILY, 0x0043_4d90, clear_reference_data(e, this));
-    copy_entries(
-        e,
-        this.wrapping_add(OWN_LIST),
-        cast.wrapping_add(OWN_LIST),
-    );
+    copy_entries(e, this.wrapping_add(OWN_LIST), cast.wrapping_add(OWN_LIST));
 }
 
 // Typed from 00434d90
@@ -1238,12 +1234,7 @@ pub fn lit_water_drop(e: &mut Engine, this: u32) {
 /// `ExtraLitWaterRefs::Compare`: the references.
 pub fn lit_water_compare(e: &mut Engine, this: u32, other: u32) -> bool {
     let cast = cast_to(e, other, TYPE_LIT_WATER_REFS);
-    cast == 0
-        || references_differ(
-            e,
-            this.wrapping_add(OWN_LIST),
-            cast.wrapping_add(OWN_LIST),
-        )
+    cast == 0 || references_differ(e, this.wrapping_add(OWN_LIST), cast.wrapping_add(OWN_LIST))
 }
 
 // Typed from 00434ee0
