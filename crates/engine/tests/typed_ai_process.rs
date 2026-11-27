@@ -64,13 +64,14 @@ const SAVE_PAST: u32 = 2;
 const LOAD_EDGE: u32 = 3;
 
 /// LowProcess's own block's bytes besides the modifiers' in this world (with the modifiers' change
-/// flag and without the old extra block): at version 0x4b and later the length, the flags, the
+/// flag and without the old extra block): from version 0x56 (to 0x73) the length, the flags, the
 /// essential down timer, three ids (each 4 + `EXTRA`), the items to activate and the tracked damage
-/// (27 + 3 `EXTRA`); earlier the length, the flags, two ids and the tracked damage, and the old date
-/// when loading (`early` + 2 `EXTRA`: 15 saved, 19 loaded).
+/// (27 + 3 `EXTRA`); before 0x33 the length, the flags, two ids and the tracked damage, and the old
+/// date when loading (`early` + 2 `EXTRA`: 15 saved, 19 loaded). Versions 0x33 to 0x55 differ;
+/// the world's block versions are only 0x1f, 0x20 and 0x59.
 fn low_block_rest(e: &Engine, early: u32) -> u32 {
     let extra = e.mem.u32(EXTRA);
-    if e.mem.u8(e.mem.u32(SAVE_LOAD_GAME) + 0x80) >= 0x4b {
+    if e.mem.u8(e.mem.u32(SAVE_LOAD_GAME) + 0x80) >= 0x56 {
         extra.wrapping_mul(3).wrapping_add(27)
     } else {
         extra.wrapping_mul(2).wrapping_add(early)
@@ -906,7 +907,7 @@ impl InWorld for Diff {
             .ignore_calls(IN_PLACE)
             // The forms family's form for an id (`LowProcess`'s loads ask it as a typed call): by
             // address here, to its double.
-            .goes_by_address(&[0x0048_39c0])
+            .goes_by_address(&[0x0048_39c0, 0x0067_4d70, 0x0067_0b90, 0x0067_2dd0])
             .inputs(&[Input::Of(seeds)])
             .setup(move |e, case| {
                 let mut w = World::new(e, case.word(0));
@@ -1960,13 +1961,18 @@ fn low_process_reaches() {
             "its block too large",
             "the modifiers saved",
             "exactly 0xffff",
+            "one past",
         ],
-        |e, _, _| {
+        |e, args, _| {
             let too_large = warned_from(e, 0x0101_5318, 1, LOW);
             vec![
                 too_large,
                 calls(e, 0x0093_78d0) > 0,
                 blocks_on(e) && !too_large && saved_block_of_0xffff(e),
+                blocks_on(e)
+                    && too_large
+                    && args[1] & 0x0020_0000 != 0
+                    && e.mem.u32(EXTRA_2) == 0x1_0000_u32.wrapping_sub(low_block_rest(e, 15)),
             ]
         },
     );
@@ -2042,7 +2048,11 @@ fn low_process_reaches() {
         0x0092_e560,
         &MOST,
         save_words,
-        &["its block too large", "exactly 0xffff", "reported"],
+        &[
+            "its block too large",
+            "exactly 0xffff",
+            "the record named in a report",
+        ],
         |e, _, _| {
             let too_large = warned_from(e, 0x0101_5318, 1, MIDDLE_LOW);
             vec![

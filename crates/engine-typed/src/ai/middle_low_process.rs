@@ -447,7 +447,7 @@ pub fn process_combat(e: &mut Engine, this: Ptr, actor: u32) {
         object != 0 && process_level(e, object) == 2
     };
     if !engaged {
-        e.vcall(this.addr(), 0x298, &args![actor, 1u32, 0x101u32, 0u32]);
+        low_process::follow_slot(e, this.addr(), actor, [1, 0x101, 0]);
         return;
     }
     let mut fought = false;
@@ -465,7 +465,7 @@ pub fn process_combat(e: &mut Engine, this: Ptr, actor: u32) {
     }
     if fought && target != 0 {
         let object = actor_process(e, target);
-        e.vcall(object, 0x28, &[]);
+        low_process::compute_last_time_processed_slot(e, object);
     }
 }
 
@@ -496,7 +496,7 @@ pub fn process_combat_one_hour(e: &mut Engine, this: Ptr, actor: u32, _unused: u
     }
     if target != 0 && !actor_slot_22c(e, target) {
         let object = actor_process(e, target);
-        e.vcall(object, 0x28, &[]);
+        low_process::compute_last_time_processed_slot(e, object);
     }
     false
 }
@@ -903,7 +903,7 @@ fn procedure_action(e: &mut Engine, process: u32) -> u32 {
 /// The actor's process's slot 0x28 (`Update`'s last step).
 fn update_actor_process(e: &mut Engine, actor: u32) {
     let object = actor_process(e, actor);
-    e.vcall(object, 0x28, &[]);
+    low_process::compute_last_time_processed_slot(e, object);
 }
 
 /// The current package's slot 0x13c with (actor, 0, -1.0, 0).
@@ -978,7 +978,7 @@ fn update_travel(e: &mut Engine, process: u32, actor: u32, location: u32) {
     if target == 0 {
         let own = actor_process(e, actor);
         if own != 0 {
-            target = e.vcall(own, 0x514, &[]).u32();
+            target = low_process::process_slot_514(e, own);
         }
     }
     if !package_test_13c(e, process, actor) && e.call(0x008b_3bb0, &args![actor]).bool() {
@@ -1053,7 +1053,12 @@ fn update_use_object(e: &mut Engine, process: u32, actor: u32) {
         return;
     }
     let package = current_package(e, process);
-    if e.call(0x0067_2dd0, &args![package]).u32() != 0 {
+    if typed_call!(
+        forms::FAMILY,
+        0x0067_2dd0,
+        forms::package::second_location(e, package)
+    ) != 0
+    {
         let package = current_package(e, process);
         let minus_one = x87_quiet_bits(e.mem.u32(base_process::MINUS_ONE_FLOAT));
         if !e
@@ -1192,7 +1197,7 @@ fn update_action(
         4 => show_procedure_text(e, process, actor, 0x0108_8f2c),
         5 => show_procedure_text(e, process, actor, 0x0108_8f14),
         6 => {
-            e.vcall(process, 0x298, &args![actor, 1u32, 0x101u32, 0u32]);
+            low_process::follow_slot(e, process, actor, [1, 0x101, 0]);
         }
         7 => one(e, 0x7b4),
         8 => one(e, 0x7c4),
