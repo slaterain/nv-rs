@@ -274,6 +274,123 @@ const REAL_SLOTS_4: &[(u32, u32)] = &[
     (0x234, 0x008d_03a0),
     (0x524, 0x0091_0b30),
 ];
+
+/// The fifth part's doubles' blocks: double `k` at `CONTROL_5 + 0x40 * k` (a page the fifth part's
+/// worlds map).
+const CONTROL_5: u32 = CONTROL + 0x5000;
+/// The callees the fifth part's functions call by address and the world has no double for, with the
+/// words each may answer (drawn from the fifth stream; registered only in the fifth part's worlds).
+const DOUBLES_5: &[(u32, &[u32])] = &[
+    (0x0067_6140, &[0, TARGET, ACTOR]), // TESPackage::GetLocationReference
+    (0x0056_add0, &[ACTOR, FORM]),      // the start location's point
+    (0x0067_8670, FLOATS),              // the package's radius to its location
+    (0x0067_87e0, FLOATS),              // its radius to its target
+    (0x0088_59e0, BOOLS),               // the actor's test of a reference
+    (0x0067_9e00, BOOLS),               // MatchesPackageObjectType
+    (0x0057_5590, &[0, 1, 2, 0xffff_ffff]), // the inventory's count
+    (0x0057_54a0, &[0, ITEM_5, ITEM_5]), // its item at an index
+    (0x004b_ddd0, BOOLS),               // the item's worn test
+    (0x0044_59e0, UNREAD),              // its deleting destructor
+    (0x0090_5820, UNREAD),              // the lists' add
+    (0x0089_1db0, BOOLS),               // Actor::HasObjects
+    (0x0088_1620, UNREAD),              // Actor::SetCurrentTarget
+    (0x0088_4350, &[0, FORM]),          // Actor::GetClass
+    (0x005f_6e60, BOOLS),               // TESClass::IsGuard
+    (0x0061_30e0, &[0, NODE_5, NODE_5]), // the alarm package's list
+    (0x008b_06d0, BOOLS),               // Actor::GetShouldAttackActor
+    (0x0096_2720, BOOLS),               // the player's follower test
+    (0x0096_2620, &[0, 1, 5, 0xffff_ffff]), // the player's follower count
+    (0x0067_4f30, UNREAD),              // the package's follow flag
+    (0x008b_3690, UNREAD),              // Actor::SetPathfindingGoal_ov2
+    (0x0067_0b90, &[PACKAGE_B]),        // TESPackage::CreatePackage
+    (0x0067_0fc0, UNREAD),              // SetPackType
+    (0x0067_1d30, UNREAD),              // SetLocation
+    (0x0067_84c0, &[0, 0x40, 0xffff_ffff]), // the escort's follow distance
+    (0x0067_f1f0, UNREAD),              // the location's distance
+    (0x0067_2fc0, UNREAD),              // SetTarget
+    (0x0068_00b0, UNREAD),              // the package target's SetTargType
+    (0x0067_a1b0, UNREAD),
+    (0x008b_c790, UNREAD),                // Actor::AddFollower
+    (0x0067_2930, &[0, 1, 3]),            // GetInitialTargetCount
+    (0x0067_4e70, UNREAD),                // SetNeverRun
+    (0x008b_3b90, BOOLS),                 // the actor's test
+    (0x0056_7790, &[0, 0, FORM, RECORD]), // TESObjectREFR::GetOwner
+    (0x0048_e8a0, &[0, 5, 0x8000_0000]),  // a form's value
+    (0x0089_1d70, &[0, 10, 0xffff_ffff]), // Actor::GetGoldAmount
+    (0x0097_0a20, &[0, OTHER]),           // ProcessLists::GetActorRefInHigh
+    (0x0041_81e0, &[FORM, RECORD]),       // the base object
+    (0x0047_f600, BOOLS),                 // the AI form's sells-buys test
+    (0x0041_c8d0, &[0, 0, TARGET]),       // ExtraDataList::GetReferencePointer
+    (0x0042_1310, UNREAD),                // ExtraDataList::AddGuard
+    (0x0090_7650, UNREAD),                // ComputeLastTimeProcessed (the dispatch family's)
+];
+/// The fifth part's typed callees of families its tests do not run.
+const BY_ADDRESS_5: &[u32] = &[0x0041_c8d0, 0x0042_1310, 0x0090_7650];
+/// The slots the fifth part's functions call that the world had none of, stand-ins unless the seed
+/// gives the exe's body.
+const SLOTS_5: &[u32] = &[
+    0x24, 0x28, 0x74, 0x144, 0x148, 0x1a0, 0x20c, 0x218, 0x21c, 0x270, 0x29c, 0x2f4, 0x35c, 0x438,
+    0x4b4, 0x514, 0x710, 0x7b4, 0x7c8, 0x7f8, 0x80c,
+];
+/// The exe's bodies the processes' slots may hold instead, from the fifth stream.
+const REAL_SLOTS_5: &[(u32, u32)] = &[
+    (0x298, 0x0090_9de0),
+    (0x514, 0x0080_41a0),
+    (0x20c, 0x00ac_bb70),
+    (0x270, 0x00ac_bb70),
+    (0x35c, 0x0047_c850),
+    (0x80c, 0x0090_ac40),
+    (0x28, 0x0090_7650),
+    (0x29c, 0x0090_dc60),
+    (0x710, 0x0091_30f0),
+];
+/// The callees the fifth part's translations call and its typed code does in place.
+const IN_PLACE_5: &[u32] = &[
+    0x0040_77c0, // a reference's form flag 0x4000
+    0x005c_1a00, // the player's wake fields
+    0x0082_6b40, // the package's flags 2 and 4 and its word at +0x18
+    0x0082_6b90,
+    0x0098_4f60,
+    0x0046_f070, // the light's flag 2
+    0x0067_8610, // the interrupt package test
+    0x0067_f390, // the location's reference
+    0x0068_0050, // the package target's object and object type
+    0x0068_0080,
+    0x0068_0110, // its reference's store
+    0x008a_6290, // the package's follow flag
+    0x0040_3e20, // the settings' values
+    0x0043_d4d0,
+    0x0041_d8a0, // the package's list node
+    0x008e_30e0, // the package's acquire flags
+    0x008e_3100,
+    0x008e_3120,
+    0x0049_3bb0, // the actor's byte at +0x104
+    0x0080_41a0, // the slot 0x514's body
+    0x00ac_bb70, // the null answer's body
+    0x0044_0da0, // a form's flag 0x800
+    0x008d_0430, // the running instance data
+];
+/// An inventory item (its object at +8), the alarm list's nodes and items, and an acquire entry.
+const ITEM_5: u32 = BUFFER + 0xa100;
+const NODE_5: u32 = BUFFER + 0xa200;
+const NODE_5_B: u32 = BUFFER + 0xa210;
+const ALARM_ITEM: u32 = BUFFER + 0xa220;
+const ENTRY_5: u32 = BUFFER + 0xa300;
+const ENTRY_5_B: u32 = BUFFER + 0xa340;
+const TEMP_NODE: u32 = BUFFER + 0xa380;
+/// The fifth part's globals: `FLT_MAX` and 3500.0 (`double`s), the combat rounds' factor 4.0
+/// (`double`) and setting, the followers' setting, 128.0, 30.0 and 3600.0 (`float`s) and the key
+/// form.
+const FLOAT_MAX: u32 = 0x0102_31b0;
+const ALARM_DISTANCE: u32 = 0x0108_8f48;
+const ROUNDS_FACTOR: u32 = 0x0101_db80;
+const ROUNDS_SETTING: u32 = 0x011c_d6cc;
+const FOLLOW_SETTING: u32 = 0x011c_dad0;
+const DESTINATION_RADIUS: u32 = 0x0101_e704;
+const TARGET_RADIUS: u32 = 0x0101_8f5c;
+const ONE_HOUR: u32 = 0x0108_4838;
+const KEY_FORM: u32 = 0x011c_a268;
+
 /// The acquire records, the list nodes and the cached values the fourth part seeds.
 const ACQUIRE_A: u32 = BUFFER + 0x9000;
 const ACQUIRE_B: u32 = BUFFER + 0x9010;
@@ -301,6 +418,10 @@ const PLAYER: u32 = 0x011d_ea3c;
 
 /// The typed callees of families this test does not run, so they stand in on both sides.
 const BY_ADDRESS: &[u32] = &[
+    0x0067_4d70, // the forms family's package functions: the created flag, the creation, the second
+    // location
+    0x0067_0b90,
+    0x0067_2dd0,
     0x0042_12b0,
     0x0040_8840,
     0x0045_11e0,
@@ -415,6 +536,8 @@ const BLOCKED_TIME_LIMIT: u32 = 0x0101_ffa0;
 static FEW: [u32; 8] = seeds();
 static MANY: [u32; 64] = seeds();
 static MOST: [u32; 192] = seeds();
+/// More seeds for the fifth part's destinations, whose rarest branches need two rare picks at once.
+static WIDE: [u32; 512] = seeds();
 
 const fn seeds<const N: usize>() -> [u32; N] {
     let mut out = [0; N];
@@ -498,6 +621,8 @@ struct World {
     rng3: u64,
     /// The fourth part's stream.
     rng4: u64,
+    /// The fifth part's stream (its own tests' worlds only).
+    rng5: u64,
 }
 
 impl World {
@@ -508,6 +633,7 @@ impl World {
             rng2: (u64::from(seed) ^ 0x94d0_49bb_1331_11eb).wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1,
             rng3: (u64::from(seed) ^ 0x2545_f491_4f6c_dd1d).wrapping_mul(0xd6e8_feb8_6659_fd93) | 1,
             rng4: (u64::from(seed) ^ 0x6a09_e667_f3bc_c909).wrapping_mul(0xbb67_ae85_84ca_a73b) | 1,
+            rng5: (u64::from(seed) ^ 0x3c6e_f372_fe94_f82b).wrapping_mul(0xa54f_f53a_5f1d_36f1) | 1,
         };
         e.map(0, 0x1000);
         e.map(CONTROL, 0x5000);
@@ -1081,6 +1207,252 @@ impl World {
         }
         let reference = self.one_of4(&[0, TARGET, LOCATION, LOCATION]);
         e.mem.set_u32(r + 0x3c, reference);
+    }
+
+    /// The fifth part's doubles, slots and fields, from the fifth stream, made only in its own
+    /// tests' worlds (after the other four parts', over some of their fields), so their worlds stay
+    /// as they were.
+    fn seed_part_5(&mut self, e: &mut Engine) {
+        for page in [
+            CONTROL_5,
+            0x0102_3000,
+            0x0108_8000,
+            0x0101_d000,
+            0x011c_d000,
+            0x0101_e000,
+            0x0108_4000,
+            0x011a_4000,
+        ] {
+            if !e.mem.is_mapped(page) {
+                e.map(page, 0x1000);
+            }
+        }
+        for (k, (addr, answers)) in DOUBLES_5.iter().enumerate() {
+            let block = block_5(k);
+            for i in 0..8 {
+                let answer = self.pick5(answers);
+                let answer = self.resolve(answer);
+                e.mem.set_u32(block + 4 + 4 * i, answer);
+            }
+            e.register_double(*addr, move |e, a| {
+                let n = e.mem.u32(block);
+                e.mem.set_u32(block, n + 1);
+                e.mem.set_u32(block + 0x24, a.first().copied().unwrap_or(0));
+                e.mem.set_u32(block + 0x28, a.get(1).copied().unwrap_or(0));
+                ret(e.mem.u32(block + 4 + 4 * (n % 8)))
+            });
+        }
+        // The distance may be exactly `FLT_MAX` (the ambush's test) or past 3500 (the alarm's).
+        let distance = block(double_index(0x0057_23b0));
+        for i in 0..8 {
+            let answer = self.pick5(&[0x7f7f_ffff, 0x4600_0000, 0x4140_0000, 0x7f80_0000]);
+            if self.flag5() {
+                e.mem.set_u32(distance + 4 + 4 * i, answer);
+            }
+        }
+        // The package's initial target is a reference with a vtable (the guard calls its slots).
+        let initial = block(double_index(0x0067_59e0));
+        for i in 0..8 {
+            let answer = self.one_of5(&[0, TARGET, ACTOR]);
+            e.mem.set_u32(initial + 4 + 4 * i, answer);
+        }
+        for &slot in SLOTS_5 {
+            e.register_double(VT_FN + slot, move |e, a| {
+                let n = e.mem.u32(SLOT_COUNTS + slot);
+                let third = a.get(2).copied().unwrap_or(0);
+                e.mem.set_u32(SLOT_LAST + slot, third);
+                e.mem.set_u32(SLOT_COUNTS + slot, n + 1);
+                let vt = e.mem.u32(a[0]);
+                ret(e.mem.u32(vt + ANSWERS + slot))
+            });
+        }
+        for i in 0..=COUNT {
+            if (WITH_VTABLE..COUNT).contains(&i) {
+                continue;
+            }
+            let o = if i < COUNT { self.objects[i] } else { 0 };
+            let vt = e.mem.u32(o);
+            for &slot in SLOTS_5 {
+                e.mem.set_u32(vt + slot, VT_FN + slot);
+                let answers: &[u32] = match slot {
+                    0x144 | 0x148 | 0x1a0 | 0x218 | 0x21c | 0x35c | 0x4b4 | 0x80c => BOOLS,
+                    0x20c => &[0, 0, PACKAGE, PACKAGE_B],
+                    0x270 => &[0, RECORD],
+                    0x514 => &[0, TARGET],
+                    _ => UNREAD,
+                };
+                let answer = self.pick5(answers);
+                e.mem.set_u32(vt + ANSWERS + slot, self.resolve(answer));
+            }
+            // The references' tests: an actor (0x100), dead (0x22c), the guard's state (0x214).
+            if i == 1 || i == 2 || i == 6 {
+                for (slot, answers) in [
+                    (0x100, BOOLS),
+                    (0x22c, &[0, 0, 1][..]),
+                    (0x214, &[0, 4, 9, 1][..]),
+                ] {
+                    let answer = self.pick5(answers);
+                    e.mem.set_u32(vt + ANSWERS + slot, answer);
+                }
+            }
+            if i == 0 || i == 5 {
+                for &(slot, body) in REAL_SLOTS_5 {
+                    if self.flag5() {
+                        e.mem.set_u32(vt + slot, body);
+                    }
+                }
+            }
+        }
+        // The globals.
+        e.mem.set_f64(FLOAT_MAX, f64::from(f32::MAX));
+        e.mem.set_f64(ALARM_DISTANCE, 3500.0);
+        e.mem.set_f64(ROUNDS_FACTOR, 4.0);
+        let rounds = self.pick5(&[0, 0x3e80_0000, 0x3f80_0000, 0x7f80_0001]);
+        e.mem.set_u32(ROUNDS_SETTING + 4, rounds);
+        let limit = self.pick5(&[0, 1, 5]);
+        e.mem.set_u32(FOLLOW_SETTING + 4, limit);
+        e.mem.set_u32(DESTINATION_RADIUS, 128.0f32.to_bits());
+        e.mem.set_u32(TARGET_RADIUS, 30.0f32.to_bits());
+        e.mem.set_u32(ONE_HOUR, 3600.0f32.to_bits());
+        let key = self.one_of5(&[0, FORM]);
+        e.mem.set_u32(KEY_FORM, key);
+        let player = self.one_of5(&[0, ACTOR, TARGET, OTHER]);
+        e.mem.set_u32(PLAYER, player);
+        // The player's wake byte, so a wake shows.
+        e.mem.set_u8(player + 0x658, 0);
+        // The procedure lists: the destinations' cases, the radius's and the acquire's; the type
+        // 0x1a's row.
+        e.mem
+            .set_u32(PROCEDURE_LISTS + 4 * 0x1a, LISTS + 0x10 + 0x20 * 5);
+        for kind in 0..6 {
+            let row = LISTS + 0x10 + 0x20 * kind;
+            for index in 0..5 {
+                let procedure = self.pick5(&[
+                    0, 1, 2, 6, 9, 13, 27, 31, 47, 47, 50, 54, 54, 54, 0x33, 0x37,
+                ]);
+                e.mem.set_u32(row - 4 + 4 * index, procedure);
+            }
+        }
+        // The packages: type, flags, procedure, location flags and acquire flags (+0x24), target.
+        for o in [self.objects[3], self.objects[4]] {
+            let kind = self.pick5(&[0xffff_ffff, 0, 1, 2, 3, 0x1a]);
+            e.mem.set_u32(o + 0x18, kind);
+            let mut flags = e.mem.u32(o + 0x1c) & !(0x804 | 0x1_0000);
+            for bit in [4, 0x800, 0x1_0000] {
+                if self.flag5() {
+                    flags |= bit;
+                }
+            }
+            e.mem.set_u32(o + 0x1c, flags);
+            let procedure =
+                self.pick5(&[0, 1, 2, 3, 6, 6, 6, 8, 0xe, 0x10, 0x13, 0x1a, 0x1c, 0xff]);
+            e.mem.set_u8(o + 0x20, procedure as u8);
+            let mut word = 0;
+            for bit in [4, 0x100, 0x200, 0x400] {
+                if self.flag5() {
+                    word |= bit;
+                }
+            }
+            e.mem.set_u16(o + 0x24, word);
+            let target = self.one_of5(&[0, LOCATION, LOCATION]);
+            e.mem.set_u32(o + 0x30, target);
+            let location = self.pick5(&[0, 0, LOCATION_2]);
+            e.mem.set_u32(o + 0x2c, location);
+        }
+        // The package location (its kind and reference) and the package target (kind, word, value).
+        let kind = self.pick5(&[0, 0, 1]);
+        e.mem.set_u8(LOCATION_2, kind as u8);
+        let reference = self.one_of5(&[0, TARGET, ACTOR]);
+        e.mem.set_u32(LOCATION_2 + 8, reference);
+        let l = self.objects[8];
+        let kind = self.pick5(&[0, 0, 1, 2, 3, 4]);
+        e.mem.set_u32(l, kind);
+        let word = self.one_of5(&[0, FORM, TARGET]);
+        e.mem.set_u32(l + 4, word);
+        // The processes: generic location, the embedded package's target, the location search's
+        // object and type, the acquire object, the temporary objects list.
+        for o in [self.objects[0], self.objects[5]] {
+            let location = self.one_of5(&[0, TARGET]);
+            e.mem.set_u32(o + 0x44, location);
+            let reference = self.one_of5(&[0, TARGET, ACTOR]);
+            e.mem.set_u32(o + 0xc, reference);
+            for at in [0x84, 0x88, 0x8c] {
+                let word = self.one_of5(&[0, 0, FORM, 0x1e]);
+                e.mem.set_u32(o + at, word);
+            }
+            let acquire = self.one_of5(&[0, FORM]);
+            e.mem.set_u32(o + 0x64, acquire);
+            let head = self.pick5(&[0, ENTRY_5, ENTRY_5]);
+            e.mem.set_u32(o + 0x74, head);
+            let next = self.pick5(&[0, TEMP_NODE]);
+            e.mem.set_u32(o + 0x78, next);
+        }
+        e.mem.set_u32(TEMP_NODE, ENTRY_5_B);
+        e.mem.set_u32(TEMP_NODE + 4, 0);
+        // The actors (and the form as a reference): flags, base form, process, the bytes at +0x104
+        // and +0x18d and +0x20c (the player's); the location search's fields.
+        for o in [self.objects[1], self.objects[2], self.objects[6]] {
+            let flags = self.pick5(&[0, 0, 0x20, 0x800, 0x0004_0000]);
+            e.mem.set_u32(o + 8, flags);
+            let form = self.one_of5(&[FORM, FORM, RECORD, 0]);
+            e.mem.set_u32(o + 0x20, form);
+            let process = self.one_of5(&[0, OTHER, OTHER, PROCESS]);
+            e.mem.set_u32(o + 0x68, process);
+            for at in [0x104, 0x18d, 0x20c] {
+                let byte = self.pick5(&[0, 0, 1]);
+                e.mem.set_u8(o + at, byte as u8);
+            }
+            for at in [0x84, 0x88, 0x8c] {
+                let word = self.one_of5(&[0, 0, FORM, 0x1e]);
+                e.mem.set_u32(o + at, word);
+            }
+        }
+        // The forms' types (a container, a light, a book, an acquirable type, other).
+        for o in [self.objects[6], self.objects[7]] {
+            let kind = self.pick5(&[0x15, 0x1b, 0x1e, 0x28, 0x2a, 0x30, 0x3c]);
+            e.mem.set_u8(o + 4, kind as u8);
+        }
+        // The inventory item, the alarm list, the acquire entries.
+        let object = self.one_of5(&[0, FORM, RECORD]);
+        e.mem.set_u32(ITEM_5 + 8, object);
+        let item = self.pick5(&[0, ALARM_ITEM, ALARM_ITEM]);
+        e.mem.set_u32(NODE_5, item);
+        let next = self.pick5(&[0, NODE_5_B]);
+        e.mem.set_u32(NODE_5 + 4, next);
+        e.mem.set_u32(NODE_5_B, ALARM_ITEM);
+        e.mem.set_u32(NODE_5_B + 4, 0);
+        let word = self.pick5(&[0, 2, 3, 0xffff_ffff]);
+        e.mem.set_u32(ALARM_ITEM + 4, word);
+        let reference = self.one_of5(&[TARGET, ACTOR]);
+        e.mem.set_u32(ALARM_ITEM + 0xc, reference);
+        for entry in [ENTRY_5, ENTRY_5_B] {
+            let reference = self.one_of5(&[TARGET, ACTOR, FORM]);
+            e.mem.set_u32(entry, reference);
+            let form = self.one_of5(&[FORM, RECORD]);
+            e.mem.set_u32(entry + 4, form);
+            let state = self.pick5(&[0, 1, 1, 2]);
+            e.mem.set_u32(entry + 0x18, state);
+        }
+    }
+
+    fn next5(&mut self) -> u64 {
+        self.rng5 ^= self.rng5 << 13;
+        self.rng5 ^= self.rng5 >> 7;
+        self.rng5 ^= self.rng5 << 17;
+        self.rng5
+    }
+
+    fn pick5(&mut self, from: &[u32]) -> u32 {
+        from[(self.next5() % from.len() as u64) as usize]
+    }
+
+    fn flag5(&mut self) -> bool {
+        self.next5() & 1 != 0
+    }
+
+    fn one_of5(&mut self, from: &[u32]) -> u32 {
+        let word = self.pick5(from);
+        self.resolve(word)
     }
 
     fn next4(&mut self) -> u64 {
@@ -2390,6 +2762,509 @@ fn the_seeds_reach_every_branch() {
                 calls(e, 0x0041_cc60) == 0,
                 asked && index == kept,
                 asked && index == 0,
+            ]
+        },
+    );
+}
+
+/// A fifth part's double's block.
+fn block_5(k: usize) -> u32 {
+    CONTROL_5 + 0x40 * k as u32
+}
+
+/// How many times the fifth part's double at `addr` was called.
+fn calls_5(e: &Engine, addr: u32) -> u32 {
+    let k = DOUBLES_5
+        .iter()
+        .position(|(a, _)| *a == addr)
+        .expect("a fifth part's double");
+    e.mem.u32(block_5(k))
+}
+
+/// The fifth part's tests: [`InWorld::in_world`] with the fifth part's world made over it and its
+/// callees done in place ignored.
+trait InWorld5 {
+    fn in_world_5(self, seeds: &'static [u32], words: fn(&mut World) -> Vec<u32>) -> Diff;
+}
+
+impl InWorld5 for Diff {
+    fn in_world_5(self, seeds: &'static [u32], words: fn(&mut World) -> Vec<u32>) -> Diff {
+        self.family(&AI)
+            .family(&leaf::LEAVES)
+            .family(&AI_QUERIES)
+            .family(&CRT)
+            .ignore_calls(IN_PLACE)
+            .ignore_calls(IN_PLACE_5)
+            .goes_by_address(BY_ADDRESS)
+            .goes_by_address(BY_ADDRESS_5)
+            .inputs(&[Input::Of(seeds)])
+            .setup(move |e, case| {
+                let mut w = World::new(e, case.word(0));
+                w.seed_part_5(e);
+                words(&mut w)
+            })
+    }
+}
+
+/// The process, an actor (or none, or another reference) and a byte flag.
+fn process_actor_flag(w: &mut World) -> Vec<u32> {
+    let actor = w.one_of5(&[0, ACTOR, ACTOR, TARGET]);
+    let flag = w.pick5(&[0, 0, 1, 0x100]);
+    vec![w.process(), actor, flag]
+}
+
+/// The process and an actor (or another reference).
+fn process_actor_5(w: &mut World) -> Vec<u32> {
+    let actor = w.one_of5(&[ACTOR, ACTOR, TARGET]);
+    vec![w.process(), actor]
+}
+
+#[test]
+fn destinations() {
+    Diff::new(entry!(
+        0x0090_e970,
+        low_process::current_destination_reference(Ptr, u32, u8) -> u32
+    ))
+    .in_world_5(&MOST, process_actor_flag)
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0090_ec70,
+        low_process::current_destination_coordinate(Ptr, Ptr, Ptr, u8) -> Ptr
+    ))
+    .in_world_5(&WIDE, |w| {
+        let actor = w.one_of5(&[ACTOR, ACTOR, TARGET]);
+        let flag = w.pick5(&[0, 0, 0, 1]);
+        vec![w.process(), ITEM_5 + 0x40, actor, flag]
+    })
+    // The package location's point goes into a local of a different frame.
+    .local_at(0x0067_5de0, 1, 12)
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0090_f670,
+        low_process::current_destination_radius(Ptr, u32) -> f32
+    ))
+    .in_world_5(&WIDE, process_actor_5)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn location_callback_and_object_test() {
+    Diff::new(entry!(
+        0x0090_e660,
+        low_process::location_callback(u32, u32) -> bool
+    ))
+    .in_world_5(&MOST, |w| {
+        let reference = w.one_of5(&[0, TARGET, ACTOR, FORM]);
+        let actor = w.one_of5(&[0, ACTOR, ACTOR, TARGET]);
+        vec![reference, actor]
+    })
+    .local_at(0x0090_5820, 1, 4)
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0090_ac40,
+        low_process::check_if_has_object(Ptr, u32, u32) -> bool
+    ))
+    .in_world_5(&MANY, |w| {
+        let count = w.pick5(&[1, 3]);
+        vec![w.process(), w.objects[1], count]
+    })
+    .local_at(0x0089_1db0, 5, 4)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn combat_alarm_and_follow() {
+    Diff::new(entry!(0x0090_d000, low_process::process_combat(Ptr, u32)))
+        .in_world_5(&MOST, process_actor_5)
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x0090_d240, low_process::process_alarm(Ptr, u32)))
+        .in_world_5(&MOST, process_actor_5)
+        .local_at(0x008b_06d0, 3, 4)
+        .run()
+        .assert_same();
+    Diff::new(entry!(
+        0x0090_9de0,
+        low_process::process_follow(Ptr, Ptr, u32, u32, u32)
+    ))
+    .in_world_5(&MOST, |w| {
+        let mut words = process_actor_5(w);
+        words.extend([0, 0x101, 0]);
+        words
+    })
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0090_8cd0,
+        low_process::create_follow_for_escort(Ptr, u32, u32, u32)
+    ))
+    .in_world_5(&MANY, |w| {
+        let actor = w.one_of5(&[ACTOR, TARGET]);
+        let escort = w.one_of5(&[PACKAGE, PACKAGE_B]);
+        vec![w.process(), actor, escort, 0]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn acquire_ambush_and_guard() {
+    Diff::new(entry!(
+        0x0090_7d90,
+        low_process::evaluate_order_acquire_list(Ptr, u32)
+    ))
+    .in_world_5(&MOST, process_actor_5)
+    .local_at(0x0090_5820, 1, 4)
+    .run()
+    .assert_same();
+    Diff::new(entry!(0x0090_8f70, low_process::process_acquire(Ptr, Ptr)))
+        .in_world_5(&MOST, process_actor_5)
+        .run()
+        .assert_same();
+    Diff::new(entry!(
+        0x0091_0c80,
+        low_process::process_ambush_wait(Ptr, Ptr)
+    ))
+    .in_world_5(&MOST, process_actor_5)
+    .run()
+    .assert_same();
+    Diff::new(entry!(0x0091_2b00, low_process::process_guard(Ptr, Ptr)))
+        .in_world_5(&MOST, process_actor_5)
+        .run()
+        .assert_same();
+}
+
+/// [`reaches`] in the fifth part's world. `seen` is the answer, then the call's words.
+fn reaches_5(
+    addr: u32,
+    seeds: &[u32],
+    words: fn(&mut World) -> Vec<u32>,
+    branches: &[&str],
+    check: fn(&Engine, &[u32]) -> Vec<bool>,
+) {
+    let mut taken = vec![0u32; branches.len()];
+    for &seed in seeds {
+        let mut e = Engine::new_untyped_for_test();
+        let mut w = World::new(&mut e, seed);
+        w.seed_part_5(&mut e);
+        let args = words(&mut w);
+        let answer = e.call(addr, &args).eax;
+        let mut seen = vec![answer];
+        seen.extend_from_slice(&args);
+        for (n, hit) in taken.iter_mut().zip(check(&e, &seen)) {
+            *n += u32::from(hit);
+        }
+    }
+    for (name, n) in branches.iter().zip(&taken) {
+        assert!(*n > 0, "{addr:08x}: no seed reaches \"{name}\": {taken:?}");
+    }
+}
+
+/// The fifth part's deep branches, on the translations.
+#[test]
+fn the_fifth_part_reaches_every_branch() {
+    reaches_5(
+        0x0090_e970,
+        &MOST,
+        process_actor_flag,
+        &[
+            "no package",
+            "the location's reference",
+            "the actor's process's slot 0x514",
+            "the actor",
+            "the extra package",
+            "the target's package's location",
+            "past the done procedure",
+        ],
+        |e, seen| {
+            let answer = seen[0];
+            let actor = seen[2];
+            vec![
+                answer == 0,
+                answer != 0 && answer == e.mem.u32(LOCATION_2 + 8),
+                slot_calls(e, 0x514) > 0,
+                answer != 0 && answer == actor,
+                calls(e, 0x0041_cb10) > 0,
+                calls_5(e, 0x0067_6140) > 0,
+                answer != 0 && answer == e.mem.u32(seen[1] + 0x40),
+            ]
+        },
+    );
+    reaches_5(
+        0x0090_ec70,
+        &WIDE,
+        |w| {
+            let actor = w.one_of5(&[ACTOR, ACTOR, TARGET]);
+            let flag = w.pick5(&[0, 0, 0, 1]);
+            vec![w.process(), ITEM_5 + 0x40, actor, flag]
+        },
+        &[
+            "the location's point",
+            "a position",
+            "the start location",
+            "the zero point",
+        ],
+        |e, _| {
+            vec![
+                calls(e, 0x0067_5de0) > 0,
+                slot_calls(e, 0x1f4) > 0,
+                calls_5(e, 0x0056_add0) > 0,
+                calls(e, 0x0067_5de0) == 0 && slot_calls(e, 0x1f4) == 0,
+            ]
+        },
+    );
+    reaches_5(
+        0x0090_f670,
+        &WIDE,
+        process_actor_5,
+        &[
+            "to the location",
+            "to the target",
+            "the unread radius",
+            "the default",
+        ],
+        |e, seen| {
+            vec![
+                calls_5(e, 0x0067_8670) > 0,
+                calls_5(e, 0x0067_87e0) > 0,
+                calls(e, 0x0067_6280) > 0,
+                calls_5(e, 0x0067_8670) == 0
+                    && calls_5(e, 0x0067_87e0) == 0
+                    && calls(e, 0x0067_6280) == 0,
+            ]
+        },
+    );
+    reaches_5(
+        0x0090_e660,
+        &MOST,
+        |w| {
+            let reference = w.one_of5(&[0, TARGET, ACTOR, FORM]);
+            let actor = w.one_of5(&[0, ACTOR, ACTOR, TARGET]);
+            vec![reference, actor]
+        },
+        &["taken", "items walked", "an item taken", "no process"],
+        |e, seen| {
+            vec![
+                calls_5(e, 0x0090_5820) > 0,
+                calls_5(e, 0x0044_59e0) > 0,
+                calls_5(e, 0x0044_59e0) > 0 && calls_5(e, 0x0090_5820) > 0,
+                seen[0] & 0xff != 0,
+            ]
+        },
+    );
+    reaches_5(
+        0x0090_ac40,
+        &MANY,
+        |w| {
+            let count = w.pick5(&[1, 3]);
+            vec![w.process(), w.objects[1], count]
+        },
+        &["asked", "no target"],
+        |e, _| vec![calls_5(e, 0x0089_1db0) > 0, calls_5(e, 0x0089_1db0) == 0],
+    );
+    reaches_5(
+        0x0090_d000,
+        &MOST,
+        process_actor_5,
+        &[
+            "follow",
+            "the player woken",
+            "a round",
+            "a fought round",
+            "combat",
+        ],
+        |e, _| {
+            vec![
+                slot_calls(e, 0x298) > 0,
+                e.mem.u8(e.mem.u32(PLAYER) + 0x658) == 1,
+                slot_calls(e, 0x438) > 0,
+                calls_5(e, 0x0088_1620) > 0 && slot_calls(e, 0x438) > 1,
+                slot_calls(e, 0x33c) > 0 || slot_calls(e, 0x424) > 0,
+            ]
+        },
+    );
+    reaches_5(
+        0x0090_d240,
+        &MOST,
+        process_actor_5,
+        &["found", "not found", "a guard", "a guard far off"],
+        |e, _| {
+            let guard = calls_5(e, 0x005f_6e60) > 0 && calls(e, 0x0057_23b0) > 0;
+            vec![
+                calls_5(e, 0x008b_06d0) > 0 && slot_calls(e, 0x298) > 0,
+                calls_5(e, 0x0061_30e0) > 0 && slot_calls(e, 0x298) == 0,
+                guard,
+                calls(e, 0x0088_1680) > 0,
+            ]
+        },
+    );
+    reaches_5(
+        0x0090_9de0,
+        &MOST,
+        |w| {
+            let mut words = process_actor_5(w);
+            words.extend([0, 0x101, 0]);
+            words
+        },
+        &[
+            "the follow flag stops",
+            "finished",
+            "dropped",
+            "the path goal",
+        ],
+        |e, _| {
+            vec![
+                calls_5(e, 0x0096_2720) > 0,
+                slot_calls(e, 0x288) > 0,
+                slot_calls(e, 0x24) > 0,
+                calls_5(e, 0x008b_3690) > 0,
+            ]
+        },
+    );
+    reaches_5(
+        0x0090_8cd0,
+        &MANY,
+        |w| {
+            let actor = w.one_of5(&[ACTOR, TARGET]);
+            let escort = w.one_of5(&[PACKAGE, PACKAGE_B]);
+            vec![w.process(), actor, escort, 0]
+        },
+        &["a follow package"],
+        |e, _| vec![calls_5(e, 0x008b_c790) > 0],
+    );
+    reaches_5(
+        0x0090_7d90,
+        &MOST,
+        process_actor_5,
+        &["kept", "deleted", "bought", "a key asked", "stolen"],
+        |e, _| {
+            vec![
+                calls_5(e, 0x0090_5820) > 0,
+                calls(e, 0x007b_3fa0) > 0,
+                calls_5(e, 0x0047_f600) > 0,
+                calls_5(e, 0x0089_1db0) > 0,
+                [ENTRY_5, ENTRY_5_B]
+                    .iter()
+                    .any(|&entry| e.mem.u8(entry + 9) == 1),
+            ]
+        },
+    );
+    reaches_5(
+        0x0090_8f70,
+        &MOST,
+        process_actor_5,
+        &[
+            "the form finishes",
+            "a light",
+            "no reference",
+            "has the object",
+            "activates",
+        ],
+        |e, _| {
+            vec![
+                slot_calls(e, 0x288) > 0 && slot_calls(e, 0x80c) == 0,
+                calls(e, 0x00ec_43fb) > 0,
+                slot_calls(e, 0x80c) == 0 && calls_5(e, 0x0089_1db0) == 0,
+                slot_calls(e, 0x13c) > 0,
+                slot_calls(e, 0x74) > 0 || slot_calls(e, 0x7c8) > 0,
+            ]
+        },
+    );
+    reaches_5(
+        0x0091_0c80,
+        &MOST,
+        process_actor_5,
+        &["never run", "back", "at FLT_MAX", "on"],
+        |e, _| {
+            vec![
+                calls_5(e, 0x0067_4e70) > 0,
+                slot_calls(e, 0x13c) > 0 && slot_calls(e, 0x148) == 0,
+                calls(e, 0x0057_23b0) > 0 && slot_calls(e, 0x148) == 0,
+                slot_calls(e, 0x148) > 0,
+            ]
+        },
+    );
+    reaches_5(
+        0x0091_2b00,
+        &MOST,
+        process_actor_5,
+        &["no data", "a new guard", "the actor's state", "travels"],
+        |e, _| {
+            vec![
+                calls(e, 0x0067_59e0) == 0,
+                calls_5(e, 0x0042_1310) > 0,
+                calls(e, 0x006e_cd40) > 0,
+                slot_calls(e, 0x7f8) > 0,
+            ]
+        },
+    );
+}
+
+/// Whether an object's slot holds the exe's body.
+fn holds(e: &Engine, object: u32, slot: u32, body: u32) -> bool {
+    object != 0 && e.mem.u32(e.mem.u32(object) + slot) == body
+}
+
+/// The processes' slots holding the exe's bodies take their direct branches, on the translations.
+#[test]
+fn the_fifth_part_reaches_the_exe_bodies() {
+    reaches_5(
+        0x0090_d000,
+        &MOST,
+        process_actor_5,
+        &["the follow's body", "slot 0x28's body"],
+        |e, seen| {
+            let followed = calls_5(e, 0x0067_87e0) > 0
+                || calls_5(e, 0x0096_2720) > 0
+                || slot_calls(e, 0x13c) > 0
+                || slot_calls(e, 0x288) > 0;
+            vec![
+                holds(e, seen[1], 0x298, 0x0090_9de0) && followed,
+                calls_5(e, 0x0090_7650) > 0,
+            ]
+        },
+    );
+    reaches_5(
+        0x0090_e970,
+        &MOST,
+        process_actor_flag,
+        &["slot 0x514's body"],
+        |e, seen| {
+            let process = e.mem.u32(seen[2] + 0x68);
+            vec![
+                holds(e, process, 0x514, 0x0080_41a0)
+                    && seen[0] != 0
+                    && seen[0] == e.mem.u32(process + 0x44),
+            ]
+        },
+    );
+    reaches_5(
+        0x0090_8f70,
+        &MOST,
+        process_actor_5,
+        &["the object test's body"],
+        |e, seen| {
+            vec![
+                holds(e, seen[1], 0x80c, 0x0090_ac40)
+                    && slot_calls(e, 0x80c) == 0
+                    && calls_5(e, 0x0089_1db0) > 0,
+            ]
+        },
+    );
+    reaches_5(
+        0x0091_2b00,
+        &MOST,
+        process_actor_5,
+        &["slot 0x20c's body", "slot 0x35c's body"],
+        |e, seen| {
+            vec![
+                holds(e, seen[1], 0x20c, 0x00ac_bb70) && calls(e, 0x0067_59e0) > 0,
+                holds(e, seen[1], 0x35c, 0x0047_c850) && calls(e, 0x006e_cd40) > 0,
             ]
         },
     );

@@ -11,14 +11,17 @@
 //!   class keeps in its vtable (the stubs that answer false, 0, -1 or 0.0 and those that do
 //!   nothing), the embedded current package's getters and setters, the destructor, `Copy`, the
 //!   save and load of the process block and the breath timer.
-//! - [`low_process`]: `LowProcess` (its Xbox PDB source unit), parts 1 to 4: the process lock map,
+//! - [`low_process`]: `LowProcess` (its Xbox PDB source unit), parts 1 to 5: the process lock map,
 //!   the processed date's parts, the flags and timers, the target and location setters and
 //!   `ResetTarget`, the damage modifier, the package tests, starts, schedule and done step, the
 //!   greeting, the procedure index steps, the patrol, the clear of the current data, the level
 //!   copy, the time update, the door lock and unlock callbacks, the small procedure steps, the
 //!   acquire lists' release and clears, the time delta, the flee, pursue, remove-worn and sandbox
 //!   procedures, the current destination, the loads' resolves and the package's extra data; the
-//!   actor values, the destructors and the save, load and revert of the process block.
+//!   actor values, the destructors and the save, load and revert of the process block; the
+//!   current destination's reference, point and radius, the location callback, the object test
+//!   and the combat, alarm, follow, escort follow, acquire list, acquire, ambush and guard
+//!   procedures.
 //! - [`middle_low_process`]: `MiddleLowProcess` (its Xbox PDB source unit): the temporary and
 //!   damage modifiers on top of `LowProcess`'s actor values, the hourly package check, the combat
 //!   rounds, `Update` (the package's procedure actions), the destructors, the copy and the save,
@@ -250,6 +253,22 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0091_0450, low_process::save_game_buffer(Ptr, Ptr)),
         entry!(0x0091_0630, low_process::load_game_buffer(Ptr, u32)),
         entry!(0x0091_0a60, low_process::revert_buffer(Ptr, u32)),
+        entry!(0x0090_e970, low_process::current_destination_reference(Ptr, u32, u8) -> u32),
+        entry!(
+            0x0090_ec70,
+            low_process::current_destination_coordinate(Ptr, Ptr, Ptr, u8) -> Ptr
+        ),
+        entry!(0x0090_f670, low_process::current_destination_radius(Ptr, u32) -> f32),
+        entry!(0x0090_e660, low_process::location_callback(u32, u32) -> bool),
+        entry!(0x0090_ac40, low_process::check_if_has_object(Ptr, u32, u32) -> bool),
+        entry!(0x0090_d000, low_process::process_combat(Ptr, u32)),
+        entry!(0x0090_d240, low_process::process_alarm(Ptr, u32)),
+        entry!(0x0090_9de0, low_process::process_follow(Ptr, Ptr, u32, u32, u32)),
+        entry!(0x0090_8cd0, low_process::create_follow_for_escort(Ptr, u32, u32, u32)),
+        entry!(0x0090_7d90, low_process::evaluate_order_acquire_list(Ptr, u32)),
+        entry!(0x0090_8f70, low_process::process_acquire(Ptr, Ptr)),
+        entry!(0x0091_0c80, low_process::process_ambush_wait(Ptr, Ptr)),
+        entry!(0x0091_2b00, low_process::process_guard(Ptr, Ptr)),
         entry!(0x0092_c9d0, middle_low_process::scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x0092_ca00, middle_low_process::destructor(Ptr)),
         entry!(0x0092_ca70, middle_low_process::copy(Ptr, Ptr)),

@@ -65,8 +65,6 @@ const PACKAGE_TYPE_NAMES: u32 = 0x0119_bcb0;
 const CALENDAR_GET_HOUR: u32 = 0x0086_7da0;
 /// `ActorPackageData::CreateActorPackageData` (`cdecl`, the package type).
 const CREATE_ACTOR_PACKAGE_DATA: u32 = 0x008c_6ca0;
-/// `TESPackage::CreatePackage` (`cdecl`, the type).
-const CREATE_PACKAGE: u32 = 0x0067_0b90;
 /// `TESPackage::CalculateProcedureType` (`thiscall`, one word).
 const CALCULATE_PROCEDURE_TYPE: u32 = 0x0067_77b0;
 /// `TESObjectREFR::SetTargeted` (`thiscall`, one word).
@@ -548,7 +546,11 @@ pub fn load_game_buffer(e: &mut Engine, this: Ptr, buffer: Ptr) {
             e.call(BUFFER_READ, &args![buffer, kind_at, 1u32]);
             let kind = e.mem.i8(kind_at);
             if kind != -1 {
-                let package = e.call(CREATE_PACKAGE, &args![i32::from(kind)]).u32();
+                let package = typed_call!(
+                    forms::FAMILY,
+                    0x0067_0b90,
+                    forms::package::create_package(e, i32::from(kind))
+                );
                 set_word(e, this, PACKAGE, package);
                 let new_id = form_id(e, package);
                 let changed = e.mem.u32(CHANGED_FORMS);

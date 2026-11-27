@@ -827,7 +827,13 @@ impl InWorld for Diff {
             .family(&MULTIBOUND)
             .ignore_calls(IN_PLACE)
             // The form for an id (`004839c0`, the forms family's) stands in on both sides.
-            .goes_by_address(&[0x0070_3180, 0x0048_39c0])
+            .goes_by_address(&[
+                0x0070_3180,
+                0x0048_39c0,
+                0x0067_4d70,
+                0x0067_0b90,
+                0x0067_2dd0,
+            ])
             .inputs(&[Input::Of(seeds)])
             .setup(move |e, case| {
                 let mut w = World::new(e, case.word(0));
