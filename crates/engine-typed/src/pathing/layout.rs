@@ -35,6 +35,15 @@ image! {
         0xc flags: u32,
     }
 
+    /// Obstacle cutter edge through the two triangle indices and their corresponding sides.
+    pub struct CutterEdge / CutterEdgeImage: 0x10 {
+        0x0 head: [u32; 2],
+        0x8 triangle_0: u16,
+        0xa triangle_1: u16,
+        0xc side_0: u16,
+        0xe side_1: u16,
+    }
+
     /// An edge's extra information: the navmesh info of the mesh on the other side and its triangle.
     pub struct EdgeInfo / EdgeInfoImage: 0xc {
         0x0 head: u32,
