@@ -45,6 +45,11 @@ const PLACEMENT_NEW: u32 = 0x006e_6da0;
 const SMOOTHER_EDGE_NEW: u32 = 0x006a_eb70;
 const MEMSET: u32 = 0x0040_3d30;
 const OPEN_LIST_NEW: u32 = 0x006a_8380;
+/// The `NavMeshSearch` part's constructor (`006a7b10`), the `AStarSearch` destructor (`006a7bc0`)
+/// and `operator delete` (`00401030`).
+const SEARCH_BASE_CONSTRUCT: u32 = 0x006a_7b10;
+const A_STAR_DTOR: u32 = 0x006a_7bc0;
+const OPERATOR_DELETE: u32 = 0x0040_1030;
 const NEXT_EDGE_SLOT: u32 = 0x0097_8bc0;
 const CONSTRUCT_EDGES: u32 = 0x0069_b9d0;
 const EDGE_ASSIGN: u32 = 0x006d_bbb0;
@@ -55,6 +60,8 @@ const TAG_INIT: u32 = 0x0044_e010;
 const INDEX_ARRAY_VTABLE: u32 = 0x0106_abe4;
 const EDGE_ARRAY_VTABLE: u32 = 0x0106_b1e0;
 const SEARCH_VTABLE: u32 = 0x0106_b650;
+/// `NavMeshSearchFlee`'s vtable (`0106b78c`, RTTI `.?AVNavMeshSearchFlee@@`).
+const FLEE_SEARCH_VTABLE: u32 = 0x0106_b78c;
 /// An array's vtable slots: allocate a buffer, free one.
 const SLOT_ALLOCATE: u32 = 0x4;
 const SLOT_FREE: u32 = 0x8;
@@ -518,6 +525,41 @@ pub fn search_new(e: &mut Engine, this: Ptr<AStarSearch>) -> Ptr<AStarSearch> {
     e.set(this, AStarSearch::unknown_204c, 0);
     e.set(this, AStarSearch::unknown_2050, 0);
     e.set(this, AStarSearch::done, 0);
+    this
+}
+
+// Typed from 006a9200
+/// `NavMeshSearchFlee::NavMeshSearchFlee` (Xbox PDB, `thiscall(this) -> this`): the base part's
+/// constructor (`006a7b10`), the vtable `0106b78c`, `006815c0` on the members at +0x2070 and
+/// +0x2084, the word at +0x2058 and the byte at +0x2080 cleared.
+pub fn flee_search_new(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(SEARCH_BASE_CONSTRUCT, &args![this]);
+    e.mem.set_u32(base, FLEE_SEARCH_VTABLE);
+    typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, base + 0x2070));
+    typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, base + 0x2084));
+    e.mem.set_u32(base + 0x2058, 0);
+    e.mem.set_u8(base + 0x2080, 0);
+    this
+}
+
+// Typed from 006a92c0
+/// `NavMeshSearchFlee`'s destructor body (`thiscall(this)`): the vtable `0106b78c`, then the
+/// `AStarSearch` destructor (`006a7bc0`).
+pub fn flee_dtor(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), FLEE_SEARCH_VTABLE);
+    e.call(A_STAR_DTOR, &args![this]);
+}
+
+// Typed from 006a9290
+/// `NavMeshSearchFlee`'s scalar deleting destructor (`thiscall(this, flags) -> this`): the
+/// destructor body [`flee_dtor`] (`006a92c0`), then `operator delete` when bit 0 of `flags` is
+/// set.
+pub fn flee_deleting_dtor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    typed_call!(FAMILY, 0x006a_92c0, flee_dtor(e, this));
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
     this
 }
 
