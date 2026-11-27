@@ -11898,7 +11898,7 @@ fn xs_hits(e: &Engine) -> Vec<u32> {
 
 /// The arrays' allocate (slot 4): room past what was asked (the shrinking removal moves the size less
 /// one past its index, as the exe does).
-fn xt_allocate(e: &mut Engine, a: &[u32]) -> Ret {
+fn xt_allocate_fn(e: &mut Engine, a: &[u32]) -> Ret {
     let block = e.mem.alloc(4 * (a[1].clamp(1, 0x40) + 8));
     for i in 0..a[1].clamp(1, 0x40) {
         e.mem.set_u32(block + 4 * i, 0x5a5a_5a5a);
@@ -11907,7 +11907,7 @@ fn xt_allocate(e: &mut Engine, a: &[u32]) -> Ret {
 }
 
 /// The arrays' reallocate (slot 0xc): a new block with what fits of the old one.
-fn xt_reallocate(e: &mut Engine, a: &[u32]) -> Ret {
+fn xt_reallocate_fn(e: &mut Engine, a: &[u32]) -> Ret {
     let n = a[2].clamp(1, 0x40);
     let block = e.mem.alloc(4 * n);
     let keep = e.mem.block_size(a[1]).unwrap_or(0).min(4 * n);
@@ -11918,15 +11918,15 @@ fn xt_reallocate(e: &mut Engine, a: &[u32]) -> Ret {
     ret(block)
 }
 
-/// [`xt_allocate`] and [`xt_reallocate`] marked, for the reach test.
+/// [`xt_allocate_fn`] and [`xt_reallocate_fn`] marked, for the reach test.
 fn xt_allocate_marked(e: &mut Engine, a: &[u32]) -> Ret {
     xs_mark(e, XT_ALLOCATE_FN);
-    xt_allocate(e, a)
+    xt_allocate_fn(e, a)
 }
 
 fn xt_reallocate_marked(e: &mut Engine, a: &[u32]) -> Ret {
     xs_mark(e, XT_REALLOCATE_FN);
-    xt_reallocate(e, a)
+    xt_reallocate_fn(e, a)
 }
 
 /// A callee of another unit: marked, counted, its first word answered.
@@ -13146,8 +13146,8 @@ fn xt_stand_ins(e: &mut Engine) {
         noted(e, a);
         ret(junk(e, a[2].max(4)))
     });
-    e.register(XT_ALLOCATE_FN, xt_allocate);
-    e.register(XT_REALLOCATE_FN, xt_reallocate);
+    e.register(XT_ALLOCATE_FN, xt_allocate_fn);
+    e.register(XT_REALLOCATE_FN, xt_reallocate_fn);
     e.register(XT_HASH_FN, |_, a| ret(a[1] % 4));
     e.register(XT_EQUAL_FN, |_, a| ret(u32::from(a[1] == a[2])));
 }
@@ -13751,6 +13751,19 @@ fn the_part_5_worlds_reach_every_branch() {
                 reached.insert(format!("type {kind:#x} missing, new fails {fails}"));
             }
         }
+        // Observed: the topic getter run on its Diff's world, and whether it forwards (`0083df80`).
+        let mut e = Engine::new_untyped_for_test();
+        let w = xd_world(&mut e, seed);
+        e.register(0x0083_df80, xs_hit::<0x0083_df80>);
+        let placed = place_kind(&mut e, &w, seed, 0x4d);
+        let topic = match seed % 3 {
+            0 => 0,
+            n => xt_topic(&mut e, n - 1),
+        };
+        xe_hold(&mut e, placed, 0x4d, topic);
+        e.call(0x0042_df90, &args![w.list, 0x1234_5678u32]);
+        let forwarded = xs_hits(&e).contains(&0x0083_df80);
+        reached.insert(format!("topic forwarded {forwarded}"));
         for zone in 0..4u32 {
             for flag in 0..2u32 {
                 // Observed: the update run on its Diff's world, and whether the water extra data is
@@ -13776,16 +13789,7 @@ fn the_part_5_worlds_reach_every_branch() {
     for key in [1u32, 5, 0x1000, 2] {
         reached.insert(format!("water key held {}", [1, 5, 0x1000].contains(&key)));
     }
-    // Observed: the topic forward, the set size's and the removal's calls, each run on its Diff's world.
-    for count in 0..4u32 {
-        let mut e = Engine::new_untyped_for_test();
-        xd_stand_ins(&mut e);
-        e.register(0x0083_df80, xs_hit::<0x0083_df80>);
-        let topic = xt_topic(&mut e, count);
-        e.call(0x0042_e010, &args![topic, count ^ 0x77]);
-        let forwarded = xs_hits(&e).contains(&0x0083_df80);
-        reached.insert(format!("topic forwarded {forwarded}"));
-    }
+    // Observed: the set size's and the removal's calls, each run on its Diff's world.
     for &size in XT_SIZES {
         for &room in XT_ROOMS {
             for &new_size in XT_NEW_SIZES {
@@ -15053,13 +15057,15 @@ fn xt_lock_data_at_44() {
 
 /// What the objects functions do in place besides [`XD_IN_PLACE`]: an array's element (`006a7ad0`),
 /// a form's process (`008d8520`), the actor list's constructor (`0096a2d0`), the world location's
-/// constructor (`006d5320`) and a reference's angles (`00430830`).
+/// constructor (`006d5320`), a reference's angles (`00430830`), and the guards' word compare
+/// (`009a3830`, which the dispatch family's search does in place).
 const XO_IN_PLACE: &[u32] = &[
     0x006a_7ad0,
     0x008d_8520,
     0x0096_a2d0,
     0x006d_5320,
     0x0043_0830,
+    0x009a_3830,
 ];
 /// The forms family's lookup by id, stood in here (the world has no form map).
 const XO_FORM_BY_ID: u32 = 0x0048_39c0;
@@ -15161,7 +15167,9 @@ fn xo_form(e: &mut Engine, a: &[u32]) -> Ret {
     );
     e.mem.set_u32(form, vt);
     let process = if id & 8 != 0 {
-        xo_object(e, 0x20, 0x77)
+        let process = xo_object(e, 0x20, 0x77);
+        e.mem.set_u32(process, vt);
+        process
     } else {
         0
     };
