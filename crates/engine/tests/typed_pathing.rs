@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, max_cost, navmesh, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -4365,4 +4365,139 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- The max-cost search ----
+
+#[test]
+fn max_cost_ctor_body() {
+    Diff::new(entry!(0x006a_b480, max_cost::ctor_body(Ptr)))
+        .common()
+        .plain(0x006a_b480)
+        .inputs(&[Input::Of(&[0, 0x0106_b650, 0xdead_beef])])
+        .setup(|e, case| {
+            stand_ins(e);
+            // The `NavMeshSearch` base constructor, logged.
+            e.register(0x006a_6b00, |e, a| {
+                log(e, 0x6b00, a[0]);
+                ret(a[0])
+            });
+            let this = e.mem.alloc(0x2100);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn max_cost_simple_array_dtor() {
+    Diff::new(entry!(0x006a_bc30, max_cost::simple_array_dtor(Ptr)))
+        .common()
+        .plain(0x006a_bc30)
+        .inputs(&[Input::Of(&[0, 0x0106_abe4, 0xdead_beef])])
+        .setup(|e, case| {
+            stand_ins(e);
+            // The array's release, logged with both words.
+            e.register(0x0084_54f0, |e, a| {
+                log(e, 0x54f0, a[0]);
+                log(e, 0x54f1, a[1]);
+                ret(0)
+            });
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn max_cost_scrap_array_dtor() {
+    Diff::new(entry!(0x006a_bc50, max_cost::scrap_array_dtor(Ptr)))
+        .common()
+        .plain(0x006a_bc50)
+        .inputs(&[Input::Of(&[0, 0x0106_b1e0, 0xdead_beef])])
+        .setup(|e, case| {
+            stand_ins(e);
+            e.register(0x0084_54f0, |e, a| {
+                log(e, 0x54f0, a[0]);
+                log(e, 0x54f1, a[1]);
+                ret(0)
+            });
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn max_cost_scalar_deleting_dtor() {
+    Diff::new(entry!(
+        0x006a_b450,
+        max_cost::scalar_deleting_dtor(Ptr, u32) -> Ptr
+    ))
+    .common()
+    .plain(0x006a_b450)
+    .inputs(&[Input::Word, Input::Of(&[0, 1, 2, 3])])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x006a_6b00, |e, a| {
+            log(e, 0x6b00, a[0]);
+            ret(a[0])
+        });
+        // `operator delete`, logged.
+        e.register(0x0040_1030, |e, a| {
+            log(e, 0x1030, a[0]);
+            ret(0)
+        });
+        let this = e.mem.alloc(0x2100);
+        e.mem.set_u32(this, case.word(0));
+        vec![this, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn max_cost_is_goal_node() {
+    Diff::new(entry!(0x006a_bb60, max_cost::is_goal_node(Ptr, Ptr) -> bool))
+        .common()
+        .plain(0x006a_bb60)
+        .inputs(&inputs(&[
+            &[Input::Of(&[0, 1, 0xff])],
+            &[Input::Word],
+            &[Input::Of(&[0, 2, 0xffff])],
+        ]))
+        .setup(|e, case| {
+            stand_ins(e);
+            // No request (zeroed): the nested `NavMeshSearch::IsGoalNode` (`006a79c0`, a family
+            // member, run for real) compares the node's mesh and triangle with the zeroed goal.
+            let this = e.mem.alloc(0x2100);
+            e.mem.set_u8(this + 0x20a8, case.word(0) as u8);
+            let node = e.mem.alloc(0x20);
+            e.mem.set_u32(node + 8, case.word(1));
+            e.mem.set_u16(node + 0xc, case.word(2) as u16);
+            vec![this, node]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn max_cost_best_node_so_far() {
+    Diff::new(entry!(0x006a_bb90, max_cost::best_node_so_far(Ptr) -> u32))
+        .common()
+        .plain(0x006a_bb90)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            let this = e.mem.alloc(0x2100);
+            e.mem.set_u32(this + 0x2048, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
 }
