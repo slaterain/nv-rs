@@ -2513,6 +2513,79 @@ fn allocate_indices() {
 }
 
 #[test]
+fn copy_entry_12() {
+    Diff::new(entry!(0x0069_1c60, search::copy_entry_12(Ptr, Ptr) -> Ptr))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Of(&[0, 1, 2, 3])])
+        .setup(|e, case| {
+            let data = e.mem.alloc(32);
+            for offset in 0..32 {
+                e.mem.set_u8(data + offset, (offset + 1) as u8);
+            }
+            let (dest, source) = [(16, 0), (4, 0), (0, 4), (0, 0)][case.word(0) as usize];
+            vec![data + dest, data + source]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn remove_entries_12() {
+    Diff::new(entry!(
+        0x0069_1c90,
+        search::remove_entries_12(Ptr<_>, u32, u32)
+    ))
+    .family(&pathing::PATHING)
+    .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5]), Input::Flag])
+    .setup(|e, case| {
+        let data = e.mem.alloc(8 * 12);
+        for offset in 0..8 * 12 {
+            e.mem.set_u8(data + offset, (offset + 1) as u8);
+        }
+        let (size, index, count) = [
+            (0, 0, 0),
+            (8, 2, 0),
+            (8, 1, 2),
+            (8, 4, 3),
+            (8, 5, 3),
+            (8, 0, 8),
+        ][case.word(0) as usize];
+        if case.word(1) != 0 {
+            // Change the header at each call boundary to exercise the original's reloads.
+            e.register(0x0072_ba80, |e, args| {
+                let replacement = e.mem.alloc(10 * 12);
+                e.mem.set_u32(args[0] + 4, replacement);
+                e.mem.set_u32(args[0] + 8, 10);
+                Ret::default()
+            });
+            e.register(0x006d_c6e0, |e, args| {
+                e.mem.set_u32(args[0] + 8, 3);
+                Ret::default()
+            });
+        }
+        vec![array(e, data, size, 8), index, count]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn reallocate_entries_12() {
+    Diff::new(entry!(
+        0x0069_1d20,
+        search::reallocate_entries_12(Ptr<_>, u32, u32) -> u32
+    ))
+    .family(&pathing::PATHING)
+    .inputs(&[Input::Of(&[0, 1, 3, 0x1555_5556, u32::MAX])])
+    .setup(|e, case| {
+        e.register(0x0042_f5d0, |_, args| ret(args[0].wrapping_add(args[1])));
+        vec![0, 0x5000, case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
 fn allocate_entries() {
     Diff::new(entry!(
         0x0069_af80,
