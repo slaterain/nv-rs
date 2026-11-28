@@ -4366,3 +4366,58 @@ fn crossed_edge_rounding_main_thread() {
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
 }
+
+fn pause_control_args(e: &mut Engine, case: &Case) -> Vec<u32> {
+    let manager = e.mem.alloc(0xc40);
+    let owner = e.mem.alloc(4);
+    e.mem.set_u32(owner, manager);
+    e.mem.set_u32(manager + 0xc24, case.word(0));
+    e.mem.set_u32(manager + 0xc28, 17);
+    e.register(0x0045_38a0, |_, _| ret(0));
+    e.register(0x0045_38c0, |_, _| ret(0));
+    vec![owner]
+}
+
+#[test]
+fn pause_control_pause() {
+    Diff::new(entry!(0x006e_bc70, pathing::pause_control::pause(Ptr)))
+        .family(&pathing::PATHING)
+        .translation_calls_plainly(&[0x006e_b310])
+        .inputs(&[Input::Of(&[0, 1, 2, 3, u32::MAX])])
+        .setup(pause_control_args)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pause_control_is_paused() {
+    Diff::new(entry!(0x006e_bc90, pathing::pause_control::is_paused(Ptr) -> bool))
+        .family(&pathing::PATHING)
+        .translation_calls_plainly(&[0x006e_b390])
+        .inputs(&[Input::Of(&[0, 1, 2, 3, u32::MAX])])
+        .setup(pause_control_args)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pause_control_is_running() {
+    Diff::new(entry!(0x006e_bcb0, pathing::pause_control::is_running(Ptr) -> bool))
+        .family(&pathing::PATHING)
+        .translation_calls_plainly(&[0x006e_b420])
+        .inputs(&[Input::Of(&[0, 1, 2, 3, u32::MAX])])
+        .setup(pause_control_args)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pause_control_resume() {
+    Diff::new(entry!(0x006e_bcd0, pathing::pause_control::resume(Ptr)))
+        .family(&pathing::PATHING)
+        .translation_calls_plainly(&[0x006e_b3b0])
+        .inputs(&[Input::Of(&[0, 1, 2, 3, u32::MAX])])
+        .setup(pause_control_args)
+        .run()
+        .assert_same();
+}

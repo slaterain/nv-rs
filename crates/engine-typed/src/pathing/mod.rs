@@ -39,6 +39,7 @@ use layout::{
 pub mod layout;
 pub mod location;
 pub mod navmesh;
+pub mod pause_control;
 pub mod point;
 pub mod pov;
 pub mod search;
@@ -254,6 +255,10 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006b_9cf0, pov::height_in(Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr, f32, f32) -> bool),
         entry!(0x006b_ab00, pov::segment_within(Ptr<NiPoint3>, f32, Ptr<NiPoint3>, Ptr<NiPoint3>) -> bool),
         entry!(0x006b_b570, pov::sphere_tangents(Ptr<Sphere>, Ptr<Sphere>, u32, Ptr) -> u32),
+        entry!(0x006e_bc70, pause_control::pause(Ptr)),
+        entry!(0x006e_bc90, pause_control::is_paused(Ptr) -> bool),
+        entry!(0x006e_bcb0, pause_control::is_running(Ptr) -> bool),
+        entry!(0x006e_bcd0, pause_control::resume(Ptr)),
         // Pathing locations.
         entry!(0x0044_1110, location::world_space(Ptr<PathingLocation>) -> u32),
         entry!(0x006a_9520, location::is_valid(Ptr<PathingLocation>) -> bool),
