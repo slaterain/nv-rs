@@ -4459,6 +4459,24 @@ fn xd_source(e: &mut Engine, d: &mut Draw, kind: u32) -> u32 {
     }
     e.mem.set_u32(x + 0x20, [record, 0][d.next(2) as usize]);
     e.mem.set_u32(x + 0x24, 0);
+    // The objects unit's list classes hold a list of their own at +0xc, which their copies and
+    // destructors walk: the activate reference's and the reflect lists' 8-byte entries, the decals'
+    // 0x1c-byte ones, the water lists' references (drawn apart, so the other types' draws stay).
+    let size = match kind {
+        0x53 | 0x65 | 0x66 => 8,
+        0x57 => 0x1c,
+        0x84 | 0x85 => 0,
+        _ => return x,
+    };
+    let mut own = Draw(x ^ kind);
+    let n = own.next(4);
+    let items = xr_items(e, &mut own, n, size);
+    let [item, next] = xp_nodes(e, &items);
+    e.mem.set_u32(x + 0xc, item);
+    e.mem.set_u32(x + 0x10, next);
+    if kind == 0x53 {
+        xr_text(e, x, own.next(3));
+    }
     x
 }
 
@@ -8322,7 +8340,19 @@ fn xe_add_run_once_package() {
         0x0041_d700,
         extra_data::packages::add_run_once_package(u32, u32, u8)
     ))
-    .xe_pair(&[0x1b], XD_VALUES, XE_BYTES)
+    .extra_data_case()
+    .max_cases(EXTRA_SEEDS.len() * 5 * XE_BYTES.len())
+    .inputs(&[
+        Input::Of(EXTRA_SEEDS),
+        Input::Of(&[0, 1, 2, 3, 4]),
+        Input::Of(XE_BYTES),
+    ])
+    .setup(|e, case| {
+        // The run-once world's list and a package of it (or one it lacks), with a flag byte.
+        let mut words = xe_run_once_world(e, case.word(0), case.word(1), false);
+        words.push(case.word(2));
+        words
+    })
     .run()
     .assert_same();
 }
@@ -8851,7 +8881,13 @@ impl XpShapes for Diff {
             .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(XD_VALUES)])
             .setup(|e, case| {
                 let w = xd_world(e, case.word(0));
-                place_kind(e, &w, case.word(0), 0x57);
+                let placed = place_kind(e, &w, case.word(0), 0x57);
+                // The decal list (+0xc): up to three entries of [`XR_REFS`].
+                let mut d = Draw(case.word(0) ^ 0x57);
+                let n = d.next(4);
+                let items = xr_items(e, &mut d, n, 0x1c);
+                let words = xp_nodes(e, &items);
+                xp_hold(e, placed, 0x57, &words);
                 vec![w.list, case.word(1), junk(e, 0xc), junk(e, 0xc)]
             })
     }
@@ -10749,7 +10785,21 @@ fn xq_lev_crea_modifier() {
         0x0042_14f0,
         extra_data::followers::lev_crea_modifier(u32, u32, u32)
     ))
-    .xq_outs(0x1e)
+    .extra_data_case()
+    .inputs(&[Input::Of(EXTRA_SEEDS)])
+    .setup(|e, case| {
+        // A modifier the table has (or "none"), the setting's float one of [`XO_FLOATS`].
+        let seed = case.word(0);
+        let w = xd_world(e, seed);
+        let placed = place_kind(e, &w, seed, 0x1e);
+        let modifier = XR_MODIFIERS[seed as usize % XR_MODIFIERS.len()];
+        xp_hold(e, placed, 0x1e, &[modifier]);
+        e.mem.set_u32(
+            XO_LOCK_SCALE,
+            XO_FLOATS[seed as usize / 2 % XO_FLOATS.len()],
+        );
+        vec![w.list, junk(e, 0x10), junk(e, 0x10)]
+    })
     .run()
     .assert_same();
 }
@@ -11167,7 +11217,19 @@ fn xq_set_last_finished_sequence() {
         0x0042_2850,
         extra_data::followers::set_last_finished_sequence(u32, u32)
     ))
-    .xd_setter(0x41, XD_VALUES)
+    .extra_data_case()
+    .max_cases(EXTRA_SEEDS.len() * 3)
+    .inputs(&[Input::Of(EXTRA_SEEDS), Input::Of(&[0, 1, 15])])
+    .setup(|e, case| {
+        let w = xd_world(e, case.word(0));
+        place_kind(e, &w, case.word(0), 0x41);
+        // No name, or one of 1 or 15 characters (the constructor copies it).
+        let name = match case.word(1) {
+            0 => 0,
+            n => xr_name(e, n),
+        };
+        vec![w.list, name]
+    })
     .run()
     .assert_same();
 }
@@ -12161,11 +12223,39 @@ fn xs_remove_at(e: &mut Engine, a: &[u32]) -> Ret {
     Ret::default()
 }
 
-/// A simple list's node after `previous` removed (`thiscall(previous, node)`): unlinked.
+/// `BSSimpleList::Remove(&item)` (`00905330`, `thiscall(node, &item)`), as its translation does it:
+/// the first node from `node` on holding the item unlinked (at `node` itself, the next node's words
+/// moved into it, or its item cleared); nothing for a null item or an empty node (at most 64 nodes).
 fn xs_remove_after(e: &mut Engine, a: &[u32]) -> Ret {
     xs_mark(e, 0x0090_5330);
-    let next = e.mem.u32(a[1] + 4);
-    e.mem.set_u32(a[0] + 4, next);
+    let (head, item) = (a[0], e.mem.u32(a[1]));
+    if item == 0 || e.mem.u32(head) == 0 && e.mem.u32(head + 4) == 0 {
+        return Ret::default();
+    }
+    let (mut node, mut previous) = (head, head);
+    for _ in 0..64 {
+        if node == 0 || e.mem.u32(node) == item {
+            break;
+        }
+        previous = node;
+        node = e.mem.u32(node + 4);
+    }
+    if node == 0 || e.mem.u32(node) != item {
+        return Ret::default();
+    }
+    if node == head {
+        let second = e.mem.u32(head + 4);
+        if second == 0 {
+            e.mem.set_u32(head, 0);
+        } else {
+            let (moved, after) = (e.mem.u32(second), e.mem.u32(second + 4));
+            e.mem.set_u32(head + 4, after);
+            e.mem.set_u32(head, moved);
+        }
+    } else {
+        let after = e.mem.u32(node + 4);
+        e.mem.set_u32(previous + 4, after);
+    }
     Ret::default()
 }
 
@@ -15154,9 +15244,17 @@ fn xo_shared_stand_ins(e: &mut Engine) {
         e.register(addr, xo_array_new);
     }
     e.register(XO_FORM_BY_ID, xo_form);
-    // A form's file (its owner) and the compile index (the id's low bit turned).
+    // A form's file (its owner) and the compile index (the id's low bit turned), `strcpy_s`.
     e.register(XR_FORM_FILE, noted);
     e.register(XR_COMPILE_INDEX, xf_compile_index);
+    e.register(0x0040_6d30, xr_strcpy);
+    // `BSStringT::Set(other)` (the activate reference's copy): counted.
+    e.register(0x0043_8470, noted);
+    // The vtables of the objects unit's classes (`01015xxx`): each slot the extra data's delete.
+    e.map(0x0101_5000, 0x1000);
+    for offset in (0..0x1000).step_by(4) {
+        e.mem.set_u32(0x0101_5000 + offset, EXTRA_VT_FN);
+    }
     for addr in [0x0043_a860, 0x0043_8e40, 0x0058_97c0] {
         e.register(addr, xo_data_compare);
     }
@@ -17043,6 +17141,16 @@ fn xr_lookup(e: &mut Engine, a: &[u32]) -> Ret {
     ret(form)
 }
 
+/// A C string of `n` letters (at most 15) in a block of 0x10.
+fn xr_name(e: &mut Engine, n: u32) -> u32 {
+    let name = e.mem.alloc(0x10);
+    for i in 0..0x10 {
+        e.mem
+            .set_u8(name + i, if i < n.min(15) { b'a' + i as u8 } else { 0 });
+    }
+    name
+}
+
 /// The `strcpy_s` wrapper (`00406d30`, `cdecl(to, size, from)`): the C string copied, cut to the
 /// size; 22 for no buffer or size, else 0.
 fn xr_strcpy(e: &mut Engine, a: &[u32]) -> Ret {
@@ -17060,18 +17168,15 @@ fn xr_strcpy(e: &mut Engine, a: &[u32]) -> Ret {
     ret(0)
 }
 
-/// [`xo_world`] with the lists' add, clear and count, the `strcpy_s` wrapper, the rag doll data's destructor body (counted)
-/// and compare, the string copy (counted) and length, the persistence, the lookup, the persistence
+/// [`xo_world`] with the lists' add, clear and count, the rag doll data's destructor body (counted)
+/// and compare, the string length, the persistence, the lookup, the persistence
 /// bits and the distant data's z (one of [`XO_FLOATS`] by the seed).
 fn xr_world(e: &mut Engine, seed: u32) -> ExtraWorld {
     let w = xo_world(e, seed);
     e.register(0x005a_e3d0, xr_adds);
     e.register(0x0047_0470, xr_empties);
     e.register(0x005a_e380, xr_count);
-    e.register(0x0040_6d30, xr_strcpy);
-    for addr in [0x004d_9380, 0x0043_8470] {
-        e.register(addr, noted);
-    }
+    e.register(0x004d_9380, noted);
     e.register(0x004d_9780, xo_data_compare);
     e.register(0x0040_48e0, |e, a| ret(u32::from(e.mem.u16(a[0] + 4))));
     e.register(0x0056_53d0, xr_persistence);
@@ -18458,12 +18563,7 @@ fn xr_last_sequence_new() {
     .setup(|e, case| {
         xr_world(e, case.word(0));
         // A name of 0, 1 or 15 characters.
-        let n = case.word(1);
-        let name = e.mem.alloc(0x10);
-        for i in 0..0x10 {
-            e.mem
-                .set_u8(name + i, if i < n { b'a' + i as u8 } else { 0 });
-        }
+        let name = xr_name(e, case.word(1));
         vec![xd_block(e, 0x10, 0x5a), name]
     })
     .run()

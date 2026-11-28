@@ -1620,29 +1620,18 @@ pub fn persistent_cell_drop(e: &mut Engine, this: u32) {
 // ---- The constructors by address ----------------------------------------------------------------
 
 /// A constructor the caller holds as its exe address (the family's setters and loaders take the
-/// class's constructor as a word): one of this file's or `object_refs`' as its typed call, with the
-/// `words` after the block it takes; any other by address with `block` and `words` (`thiscall`).
+/// class's constructor as a word): one of this file's as its typed call, with the `words` after the
+/// block it takes; any other handed on to `object_refs::construct_at` (that file's, or by address).
 // A byte or 16-bit argument is the low bytes of the word handed on, as the callee reads it.
 #[allow(clippy::cast_possible_truncation)]
 pub(super) fn construct_at(e: &mut Engine, construct: u32, block: u32, words: &[u32]) -> u32 {
-    use super::object_refs::{
-        activate_children_new, activate_ref_new, ash_pile_new, decal_new, distant_data_new,
-        enable_children_new, enable_parent_new, encounter_zone_new, last_sequence_new,
-        lev_crea_new, linked_children_new, linked_ref_new, merchant_new, poison_new, rag_doll_new,
-        random_teleport_new, reserved_markers_new, run_once_new, used_markers_new, x_target_new,
-    };
     macro_rules! by_words {
         ($($addr:literal => $f:ident($($i:literal as $t:ty),*)),* $(,)?) => {
             match construct {
                 $( $addr if words.len() == 0 $(+ { let _ = $i; 1 })* => {
                     typed_call!(FAMILY, $addr, $f(e, block $(, words[$i] as $t)*))
                 } )*
-                _ => {
-                    let mut all = Vec::with_capacity(words.len() + 1);
-                    all.push(block);
-                    all.extend_from_slice(words);
-                    e.call(construct, &all).u32()
-                }
+                _ => super::object_refs::construct_at(e, construct, block, words),
             }
         };
     }
@@ -1690,25 +1679,5 @@ pub(super) fn construct_at(e: &mut Engine, construct: u32, block: u32, words: &[
         0x0043_2aa0 => crime_list_new_with(0 as u32),
         0x0043_2be0 => leveled_item_new(0 as u32),
         0x0043_2c20 => persistent_cell_new(0 as u32),
-        0x0043_2cb0 => rag_doll_new(),
-        0x0043_2e60 => encounter_zone_new(),
-        0x0043_2f00 => used_markers_new(),
-        0x0043_2f50 => reserved_markers_new(),
-        0x0043_3010 => run_once_new(),
-        0x0043_3260 => distant_data_new(),
-        0x0043_3300 => enable_parent_new(),
-        0x0043_33a0 => enable_children_new(),
-        0x0043_34b0 => random_teleport_new(),
-        0x0043_3530 => linked_children_new(),
-        0x0043_3640 => linked_ref_new(),
-        0x0043_36c0 => ash_pile_new(),
-        0x0043_3790 => activate_children_new(),
-        0x0043_38b0 => activate_ref_new(),
-        0x0043_3ca0 => decal_new(),
-        0x0043_4fc0 => merchant_new(),
-        0x0043_5040 => lev_crea_new(),
-        0x0043_5150 => poison_new(0 as u32),
-        0x0043_51d0 => last_sequence_new(0 as u32),
-        0x0043_5370 => x_target_new(),
     }
 }

@@ -50,8 +50,8 @@ use super::objects::{
     DYNAMIC_CAST, TYPE_BS_EXTRA_DATA,
 };
 use super::{
-    free_when, next_node, read_word, records, rooms, simple_list_init, word_at, EXTRA_PAYLOAD, FAMILY,
-    OPERATOR_DELETE, OPERATOR_NEW,
+    free_when, next_node, read_word, records, rooms, simple_list_init, word_at, EXTRA_PAYLOAD,
+    FAMILY, OPERATOR_DELETE, OPERATOR_NEW,
 };
 use crate::{crt, forms};
 use engine_core::ptr::Ptr;
@@ -1313,7 +1313,7 @@ pub fn lev_crea_compare(e: &mut Engine, this: u32, other: u32) -> bool {
 
 // Typed from 004350c0
 /// The modifier's multiplier: 1.0 for "none", else the value of the float setting the modifier
-/// picks from the table (`00403e20`).
+/// picks from the table (`00403e20`), as the x87 loads it (a signalling NaN comes out quiet).
 pub fn lev_crea_multiplier(e: &mut Engine, this: u32) -> f32 {
     let modifier = word_at(e, this, EXTRA_PAYLOAD);
     if modifier == LEV_CREA_NONE {
@@ -1323,7 +1323,7 @@ pub fn lev_crea_multiplier(e: &mut Engine, this: u32) -> f32 {
         .mem
         .u32(LEV_CREA_SETTINGS.wrapping_add(modifier.wrapping_mul(4)));
     let value = e.call(SETTING_FLOAT, &args![setting]).u32();
-    e.mem.f32(value)
+    f32::from_bits(x87_quiet_bits(e.mem.u32(value)))
 }
 
 // Typed from 00435100
@@ -1416,6 +1416,44 @@ pub fn x_target_delete(e: &mut Engine, this: u32, flags: u32) -> u32 {
 /// `ExtraXTarget`'s destructor (the target is not owned).
 pub fn x_target_drop(e: &mut Engine, this: u32) {
     drop_plain(e, this, VTABLE_X_TARGET);
+}
+
+// ---- The constructors by address ----------------------------------------------------------------
+
+/// A constructor the caller holds as its exe address that is not one of `objects`' (which hands it
+/// on): one of this file's as its typed call, with the `words` after the block it takes; any other
+/// by address with `block` and `words` (`thiscall`).
+pub(super) fn construct_at(e: &mut Engine, construct: u32, block: u32, words: &[u32]) -> u32 {
+    match (construct, words) {
+        (0x0043_2cb0, []) => typed_call!(FAMILY, 0x0043_2cb0, rag_doll_new(e, block)),
+        (0x0043_2e60, []) => typed_call!(FAMILY, 0x0043_2e60, encounter_zone_new(e, block)),
+        (0x0043_2f00, []) => typed_call!(FAMILY, 0x0043_2f00, used_markers_new(e, block)),
+        (0x0043_2f50, []) => typed_call!(FAMILY, 0x0043_2f50, reserved_markers_new(e, block)),
+        (0x0043_3010, []) => typed_call!(FAMILY, 0x0043_3010, run_once_new(e, block)),
+        (0x0043_3260, []) => typed_call!(FAMILY, 0x0043_3260, distant_data_new(e, block)),
+        (0x0043_3300, []) => typed_call!(FAMILY, 0x0043_3300, enable_parent_new(e, block)),
+        (0x0043_33a0, []) => typed_call!(FAMILY, 0x0043_33a0, enable_children_new(e, block)),
+        (0x0043_34b0, []) => typed_call!(FAMILY, 0x0043_34b0, random_teleport_new(e, block)),
+        (0x0043_3530, []) => typed_call!(FAMILY, 0x0043_3530, linked_children_new(e, block)),
+        (0x0043_3640, []) => typed_call!(FAMILY, 0x0043_3640, linked_ref_new(e, block)),
+        (0x0043_36c0, []) => typed_call!(FAMILY, 0x0043_36c0, ash_pile_new(e, block)),
+        (0x0043_3790, []) => typed_call!(FAMILY, 0x0043_3790, activate_children_new(e, block)),
+        (0x0043_38b0, []) => typed_call!(FAMILY, 0x0043_38b0, activate_ref_new(e, block)),
+        (0x0043_3ca0, []) => typed_call!(FAMILY, 0x0043_3ca0, decal_new(e, block)),
+        (0x0043_4fc0, []) => typed_call!(FAMILY, 0x0043_4fc0, merchant_new(e, block)),
+        (0x0043_5040, []) => typed_call!(FAMILY, 0x0043_5040, lev_crea_new(e, block)),
+        (0x0043_5150, [poison]) => typed_call!(FAMILY, 0x0043_5150, poison_new(e, block, *poison)),
+        (0x0043_51d0, [name]) => {
+            typed_call!(FAMILY, 0x0043_51d0, last_sequence_new(e, block, *name))
+        }
+        (0x0043_5370, []) => typed_call!(FAMILY, 0x0043_5370, x_target_new(e, block)),
+        _ => {
+            let mut all = Vec::with_capacity(words.len() + 1);
+            all.push(block);
+            all.extend_from_slice(words);
+            e.call(construct, &all).u32()
+        }
+    }
 }
 
 // Typed from 00435ac0
