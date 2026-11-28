@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, navmesh, point, pov, pov_search, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -4365,4 +4365,190 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- The POV search's small members ----
+
+#[test]
+fn pov_search_low_14() {
+    Diff::new(entry!(0x0069_ef40, pov_search::low_14(Ptr) -> u32))
+        .common()
+        .plain(0x0069_ef40)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            let this = e.mem.alloc(4);
+            e.mem.set_u16(this, case.word(0) as u16);
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pov_search_top_2() {
+    Diff::new(entry!(0x0069_ef60, pov_search::top_2(Ptr) -> u32))
+        .common()
+        .plain(0x0069_ef60)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            let this = e.mem.alloc(4);
+            e.mem.set_u16(this, case.word(0) as u16);
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pov_search_wrapping_add() {
+    Diff::new(entry!(
+        0x0069_f900,
+        pov_search::wrapping_add(Ptr, u32, u32) -> u32
+    ))
+    .common()
+    .plain(0x0069_f900)
+    .inputs(&[Input::Word, Input::Word, Input::Word])
+    .setup(|e, _| {
+        stand_ins(e);
+        vec![e.mem.alloc(4), 0, 0]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pov_search_element_24() {
+    Diff::new(entry!(0x006a_1490, pov_search::element_24(Ptr, u32) -> u32))
+        .common()
+        .plain(0x006a_1490)
+        .inputs(&[Input::Word, Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this + 4, case.word(0));
+            vec![this, case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pov_search_element_24_forward() {
+    Diff::new(entry!(
+        0x006a_1400,
+        pov_search::element_24_forward(Ptr, u32) -> u32
+    ))
+    .common()
+    .plain(0x006a_1400)
+    .inputs(&[Input::Word, Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 4, case.word(0));
+        vec![this, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pov_search_first_triangle() {
+    Diff::new(entry!(0x006a_1420, pov_search::first_triangle(Ptr) -> u32))
+        .common()
+        .plain(0x006a_1420)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this + 4, case.word(0));
+            e.mem.set_u32(this + 8, 3);
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pov_search_scrap_init() {
+    Diff::new(entry!(0x006a_1f70, pov_search::scrap_init(Ptr) -> Ptr))
+        .common()
+        .plain(0x006a_1f70)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            // `stand_ins` already logs the scrap-heap set-up (`00aa5410`).
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pov_search_byte_span() {
+    Diff::new(entry!(
+        0x006a_28b0,
+        pov_search::byte_span(Ptr, u32, u32) -> u32
+    ))
+    .common()
+    .plain(0x006a_28b0)
+    .inputs(&[Input::Word, Input::Of(&[0, 1, 2, 0x100])])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x0042_f5d0, |e, a| {
+            log(e, 0xf5d0, a[0]);
+            log(e, 0xf5d1, a[1]);
+            ret(e.mem.u32(a[0]).wrapping_add(a[1]))
+        });
+        let first = e.mem.alloc(4);
+        e.mem.set_u32(first, case.word(0));
+        vec![e.mem.alloc(4), first, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pov_search_node_array_dtor() {
+    Diff::new(entry!(0x006a_2580, pov_search::node_array_dtor(Ptr)))
+        .common()
+        .plain(0x006a_2580)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            e.register(0x0084_54f0, |e, a| {
+                log(e, 0x54f0, a[0]);
+                log(e, 0x54f1, a[1]);
+                ret(0)
+            });
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pov_search_vert_handle_array_dtor() {
+    Diff::new(entry!(0x006a_2900, pov_search::vert_handle_array_dtor(Ptr)))
+        .common()
+        .plain(0x006a_2900)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            e.register(0x0084_54f0, |e, a| {
+                log(e, 0x54f0, a[0]);
+                log(e, 0x54f1, a[1]);
+                ret(0)
+            });
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
 }
