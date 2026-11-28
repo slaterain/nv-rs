@@ -18,16 +18,18 @@
 //! target (`00671d10`, the word at +0x30), procedure type (`009611e0`, the word at +0x18) and
 //! flag tests (`00674e40` 0x8000, `00670f90` 0x400 of the word at +0x1c), the schedule's fields
 //! (`00678ca0` the month, `00678cc0` the day of the week, `00678ce0` the date, `0086a460` the
-//! hour), a reference's extra data list (`005d43c0`, +0x44) and process (`008d8520`, the word at
-//! +0x68), and the word swap (`00401080`, over the runtime's `_byteswap_ulong`). This unit's
-//! functions call each other as typed calls, and so are the form lookup and the compile index
-//! (this family's), a reference's current package and a package's type (`ai_queries`'), the
-//! run-once-a-day list's test (`extra_data`'s), the calendar's day (`ai`'s), the interface's
-//! target (`interface`'s) and `_ftol2` (the C runtime's). What stays a call by address: the
-//! list's clear, destructor, append and removals, the RTTI cast, the strings, the warning logger
-//! (which a fix may replace), the package's flag test, its procedure type's calculation and
-//! the per-actor test, the conditions' test, the calendar's month, hour and day of the week, the
-//! action flag setter (which a fix may replace), the follower's removal and the days in a month.
+//! hour), a package's type (`0041ca90`, its signed byte at +0x20), a target's reference
+//! (`00680020`, its word at +4 for type 0), a reference's extra data
+//! list (`005d43c0`, +0x44) and process (`008d8520`, the word at +0x68), and the word swap
+//! (`00401080`, over the runtime's `_byteswap_ulong`). This unit's functions call each other as
+//! typed calls, and so are the form lookup, the compile index, the package's day test, its
+//! procedure type's calculation and the per-actor test (this family's), a reference's current
+//! package (`ai_queries`'), the run-once-a-day list's test (`extra_data`'s),
+//! the calendar's day (`ai`'s), the interface's target (`interface`'s) and `_ftol2` (the C
+//! runtime's). What stays a call by address: the list's clear, destructor, append and removals,
+//! the RTTI cast, the strings, the warning logger (which a fix may replace), the conditions' test,
+//! the calendar's month, hour and day of the week, the action flag setter (which a fix may
+//! replace), the follower's removal and the days in a month.
 //! Every virtual call is made through its slot: the package classes override them.
 //!
 //! Floats: the schedule window's hour is truncated by `_ftol2` from the `f32` the exe loads
@@ -37,7 +39,7 @@
 //! pair fails) and truncated through `_ftol2`; the calendar's hour is passed on as the `f32` the
 //! exe stores (`FSTP`).
 
-use super::{tesform, FAMILY};
+use super::{package_place, schedule, tesform, FAMILY};
 use crate::{ai, ai_queries, crt, extra_data, interface};
 use core::cmp::Ordering::Greater;
 use engine_core::x87::{x87_add, x87_load32, x87_quiet_bits, x87_store32};
@@ -85,16 +87,9 @@ const SLOT_NAME: u32 = 0x130;
 const SLOT_PROCESS_OBJECT: u32 = 0x128;
 const SLOT_PROCESS_PACKAGE_END: u32 = 0x59c;
 const SLOT_PROCESS_PACKAGE_START: u32 = 0x5a8;
-/// The package's flag test with a word (`00678d40`), its procedure type's calculation
-/// (`TESPackage::CalculateProcedureType`, `006777b0`: package, value), the reference's value it
-/// takes (`00569b80`) and the per-actor test (`00677760`: package, actor).
-const PACKAGE_FLAG_TEST: u32 = 0x0067_8d40;
-const PACKAGE_CALCULATE_PROCEDURE: u32 = 0x0067_77b0;
+/// The reference's value a package's procedure type is calculated for (`00569b80`).
 const REFERENCE_PROCEDURE_VALUE: u32 = 0x0056_9b80;
-const PACKAGE_ACTOR_TEST: u32 = 0x0067_7760;
-/// `PackageTarget::GetTargReference` (`00680020`) and `TESCondition`'s test (`00680c30`:
-/// conditions, reference, target reference).
-const TARGET_REFERENCE: u32 = 0x0068_0020;
+/// `TESCondition`'s test (`00680c30`: conditions, reference, target reference).
 const CONDITIONS_HOLD: u32 = 0x0068_0c30;
 /// `ExtraDataList::RemoveFollower` (`00422690`: list, reference).
 const REMOVE_FOLLOWER: u32 = 0x0042_2690;
@@ -121,6 +116,7 @@ const LAST_HOUR: f64 = 23.0;
 // A package's fields.
 const PROCEDURE_TYPE: u32 = 0x18;
 const PACKAGE_FLAGS: u32 = 0x1c;
+const PACK_TYPE: u32 = 0x20;
 const TARGET: u32 = 0x30;
 const SCHEDULE: u32 = 0x38;
 const CONDITIONS: u32 = 0x40;
@@ -153,6 +149,16 @@ fn item_of(e: &Engine, node: u32) -> u32 {
 
 fn next_of(e: &Engine, node: u32) -> u32 {
     e.mem.u32(at(node, 4))
+}
+
+/// A target's reference (`PackageTarget::GetTargReference`, `00680020`): its word at +4 when its
+/// type byte is 0.
+fn target_reference(e: &Engine, target: u32) -> u32 {
+    if e.mem.u8(target) == 0 {
+        e.mem.u32(at(target, 4))
+    } else {
+        0
+    }
 }
 
 fn schedule_month(e: &Engine, schedule: u32) -> i32 {
@@ -370,7 +376,7 @@ fn schedule_allows(e: &mut Engine, package: u32, schedule: u32) -> bool {
     let mut day_before = false;
     let mut month_before = false;
     if schedule_hour(e, schedule).wrapping_add(schedule_duration(e, schedule)) > 0x18 {
-        late_flag = e.call(PACKAGE_FLAG_TEST, &args![package, 1u32]).bool();
+        late_flag = typed_call!(FAMILY, 0x0067_8d40, schedule::day_fits(e, package, 1));
         let mut day = calendar_day(e).wrapping_sub(1);
         if day < 0 {
             day = 0x1e;
@@ -394,7 +400,7 @@ fn schedule_allows(e: &mut Engine, package: u32, schedule: u32) -> bool {
         return false;
     }
     if schedule_day_of_week(e, schedule) != -1
-        && !e.call(PACKAGE_FLAG_TEST, &args![package, 0u32]).bool()
+        && !typed_call!(FAMILY, 0x0067_8d40, schedule::day_fits(e, package, 0))
         && !late_flag
     {
         return false;
@@ -419,7 +425,7 @@ fn schedule_allows(e: &mut Engine, package: u32, schedule: u32) -> bool {
 fn conditions_hold(e: &mut Engine, package: u32, reference: u32) -> bool {
     let target = e.mem.u32(at(package, TARGET));
     let target_reference = if target != 0 {
-        e.call(TARGET_REFERENCE, &args![target]).u32()
+        target_reference(e, target)
     } else {
         0
     };
@@ -474,13 +480,9 @@ pub fn find_current_package(e: &mut Engine, this: u32, reference: u32) -> u32 {
     current
 }
 
-/// A package's type (`0041ca90`).
-fn package_type(e: &mut Engine, package: u32) -> i32 {
-    typed_call!(
-        ai_queries::FAMILY,
-        0x0041_ca90,
-        ai_queries::queries::package_type(e, package)
-    )
+/// A package's type (`0041ca90`, its signed byte at +0x20).
+fn package_type(e: &Engine, package: u32) -> i32 {
+    i32::from(e.mem.i8(at(package, PACK_TYPE)))
 }
 
 /// What `FindCurrentPackage` does with the package it picked.
@@ -515,7 +517,11 @@ fn picked(e: &mut Engine, package: u32, reference: u32, current: u32) {
     }
     if e.mem.i32(at(package, PROCEDURE_TYPE)) == -1 {
         let value = e.call(REFERENCE_PROCEDURE_VALUE, &args![reference]).u32();
-        e.call(PACKAGE_CALCULATE_PROCEDURE, &args![package, value]);
+        typed_call!(
+            FAMILY,
+            0x0067_77b0,
+            package_place::calculate_procedure_type(e, package, value)
+        );
     }
     if current == 0 || current == package {
         if package != 0 && package != current {
@@ -580,9 +586,11 @@ fn qualifies(e: &mut Engine, package: u32, step: &Step) -> bool {
     if !typed_call!(FAMILY, 0x0067_efd0, is_missable(e, package)) {
         return false;
     }
-    if !e
-        .call(PACKAGE_ACTOR_TEST, &args![package, step.actor])
-        .bool()
+    if typed_call!(
+        FAMILY,
+        0x0067_7760,
+        package_place::actor_process_allows(e, package, step.actor)
+    ) == 0
     {
         return false;
     }
@@ -670,7 +678,11 @@ pub fn missed_packages(e: &mut Engine, this: u32, actor: u32, out: u32, _unused:
                 if qualifies(e, package, &step) {
                     if e.mem.i32(at(package, PROCEDURE_TYPE)) == -1 {
                         let value = e.call(REFERENCE_PROCEDURE_VALUE, &args![actor]).u32();
-                        e.call(PACKAGE_CALCULATE_PROCEDURE, &args![package, value]);
+                        typed_call!(
+                            FAMILY,
+                            0x0067_77b0,
+                            package_place::calculate_procedure_type(e, package, value)
+                        );
                     }
                     e.call(LIST_APPEND, &args![out, slot]);
                 }

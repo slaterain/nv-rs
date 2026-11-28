@@ -129,7 +129,7 @@ pub fn fn_0067ffa0(
     other: Ptr<PackageTarget>,
 ) -> Ptr<PackageTarget> {
     let other_type = e.get(other, PackageTarget::eTargType);
-    package_target_set_targ_type(e, this, other_type as u32);
+    e.call(0x0068_00b0, &args![this, other_type as u32]);
     let value = e.get(other, PackageTarget::iValue);
     e.call(SET_VALUE, &args![this, value]);
     let radius = e.get(other, PackageTarget::fAcquireRadius);
@@ -145,7 +145,7 @@ pub fn fn_0067ffa0(
 /// `PackageTarget::GetTargReference` (Xbox PDB): the +4 word when the type
 /// is 0, else 0.
 pub fn package_target_get_targ_reference(e: &mut Engine, this: Ptr<PackageTarget>) -> u32 {
-    if package_target_get_targ_type(e, this) == 0 {
+    if e.call(0x0051_9b00, &args![this]).u8() == 0 {
         e.get(this, PackageTarget::pRefOrObj)
     } else {
         0
@@ -156,7 +156,7 @@ pub fn package_target_get_targ_reference(e: &mut Engine, this: Ptr<PackageTarget
 /// `PackageTarget::GetTargObject` (Xbox PDB): the +4 word when the type is
 /// 1, else 0.
 pub fn package_target_get_targ_object(e: &mut Engine, this: Ptr<PackageTarget>) -> u32 {
-    if package_target_get_targ_type(e, this) == 1 {
+    if e.call(0x0051_9b00, &args![this]).u8() == 1 {
         e.get(this, PackageTarget::pRefOrObj)
     } else {
         0
@@ -167,7 +167,7 @@ pub fn package_target_get_targ_object(e: &mut Engine, this: Ptr<PackageTarget>) 
 /// `PackageTarget::GetTargObjectType` (Xbox PDB): the +4 word when the type
 /// is 2, else 0.
 pub fn package_target_get_targ_object_type(e: &mut Engine, this: Ptr<PackageTarget>) -> u32 {
-    if package_target_get_targ_type(e, this) == 2 {
+    if e.call(0x0051_9b00, &args![this]).u8() == 2 {
         e.get(this, PackageTarget::pRefOrObj)
     } else {
         0
@@ -191,7 +191,7 @@ pub fn package_target_set_targ_type(e: &mut Engine, this: Ptr<PackageTarget>, ta
 /// `PackageTarget::SetTargReference` (Xbox PDB): stores the +4 word when the
 /// type is 0.
 pub fn package_target_set_targ_reference(e: &mut Engine, this: Ptr<PackageTarget>, reference: u32) {
-    if package_target_get_targ_type(e, this) == 0 {
+    if e.call(0x0051_9b00, &args![this]).u8() == 0 {
         e.set(this, PackageTarget::pRefOrObj, reference);
     }
 }
@@ -200,7 +200,7 @@ pub fn package_target_set_targ_reference(e: &mut Engine, this: Ptr<PackageTarget
 /// Stores the +4 word when the type is 1 (the object setter; unnamed in the
 /// map).
 pub fn fn_00680140(e: &mut Engine, this: Ptr<PackageTarget>, object: u32) {
-    if package_target_get_targ_type(e, this) == 1 {
+    if e.call(0x0051_9b00, &args![this]).u8() == 1 {
         e.set(this, PackageTarget::pRefOrObj, object);
     }
 }
@@ -209,7 +209,7 @@ pub fn fn_00680140(e: &mut Engine, this: Ptr<PackageTarget>, object: u32) {
 /// Stores the +4 word when the type is 2 (the object type setter; unnamed in
 /// the map).
 pub fn fn_00680170(e: &mut Engine, this: Ptr<PackageTarget>, object_type: u32) {
-    if package_target_get_targ_type(e, this) == 2 {
+    if e.call(0x0051_9b00, &args![this]).u8() == 2 {
         e.set(this, PackageTarget::pRefOrObj, object_type);
     }
 }
@@ -223,14 +223,14 @@ pub fn package_target_copy(e: &mut Engine, this: Ptr<PackageTarget>, source: Ptr
     if source.is_null() {
         return;
     }
-    let targ_type = package_target_get_targ_type(e, source);
-    package_target_set_targ_type(e, this, targ_type as u32);
-    let reference = package_target_get_targ_reference(e, source);
-    package_target_set_targ_reference(e, this, reference);
-    let object = package_target_get_targ_object(e, source);
-    fn_00680140(e, this, object);
-    let object_type = package_target_get_targ_object_type(e, source);
-    fn_00680170(e, this, object_type);
+    let targ_type = e.call(0x0051_9b00, &args![source]).u8();
+    e.call(0x0068_00b0, &args![this, targ_type as u32]);
+    let reference = e.call(0x0068_0020, &args![source]).u32();
+    e.call(0x0068_0110, &args![this, reference]);
+    let object = e.call(0x0068_0050, &args![source]).u32();
+    e.call(0x0068_0140, &args![this, object]);
+    let object_type = e.call(0x0068_0080, &args![source]).u32();
+    e.call(0x0068_0170, &args![this, object_type]);
     let value = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, source));
     e.call(SET_VALUE, &args![this, value]);
     let radius = e.call(GET_ACQUIRE_RADIUS, &args![source]).f32();
@@ -249,17 +249,16 @@ pub fn package_target_compare(
     if other.is_null() {
         return 1;
     }
-    if package_target_get_targ_type(e, this) != package_target_get_targ_type(e, other) {
+    if e.call(0x0051_9b00, &args![this]).u8() != e.call(0x0051_9b00, &args![other]).u8() {
         return 1;
     }
-    if package_target_get_targ_reference(e, this) != package_target_get_targ_reference(e, other) {
+    if e.call(0x0068_0020, &args![this]).u32() != e.call(0x0068_0020, &args![other]).u32() {
         return 1;
     }
-    if package_target_get_targ_object(e, this) != package_target_get_targ_object(e, other) {
+    if e.call(0x0068_0050, &args![this]).u32() != e.call(0x0068_0050, &args![other]).u32() {
         return 1;
     }
-    if package_target_get_targ_object_type(e, this) != package_target_get_targ_object_type(e, other)
-    {
+    if e.call(0x0068_0080, &args![this]).u32() != e.call(0x0068_0080, &args![other]).u32() {
         return 1;
     }
     let own_value = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, this));
@@ -287,8 +286,10 @@ pub fn package_target_save(e: &mut Engine, this: Ptr<PackageTarget>, record: u32
         e.call(MEMSET, &args![chunk, 0u32, 0x10u32]);
         let value = e.get(this, PackageTarget::iValue);
         e.mem.set_u32(chunk.addr() + 8, value);
+        // `FLD`, `FSTP`: a signalling NaN is stored quiet.
         let radius = e.get(this, PackageTarget::fAcquireRadius);
-        e.mem.set_f32(chunk.addr() + 0xC, radius);
+        e.mem
+            .set_u32(chunk.addr() + 0xC, x87_quiet_bits(radius.to_bits()));
         let targ_type = e.get(this, PackageTarget::eTargType);
         e.mem.set_u8(chunk.addr(), targ_type);
         if targ_type < 2 {
@@ -298,7 +299,7 @@ pub fn package_target_save(e: &mut Engine, this: Ptr<PackageTarget>, record: u32
                 e.mem.set_u32(chunk.addr() + 4, form_id);
             }
         } else if targ_type == 2 {
-            let object_type = package_target_get_targ_object_type(e, this);
+            let object_type = e.call(0x0068_0080, &args![this]).u32();
             e.mem.set_u32(chunk.addr() + 4, object_type);
         }
         if e.call(NEEDS_BYTE_SWAP, &args![]).u8() != 0 {
@@ -580,10 +581,14 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    /// An engine with doubles for the value and radius accessors of the
-    /// +8 and +0xC words.
+    /// An engine with this unit's functions (they call each other by
+    /// address) and doubles for the value and radius accessors of the +8 and
+    /// +0xC words.
     fn engine() -> Engine {
         let mut e = Engine::new();
+        for (address, f) in funcs() {
+            e.register(address, f);
+        }
         e.register(GET_VALUE, |e, a| e.mem.u32(a[0] + 8).into_ret());
         e.register(SET_VALUE, |e, a| {
             e.mem.set_u32(a[0] + 8, a[1]);

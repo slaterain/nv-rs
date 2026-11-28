@@ -2638,8 +2638,12 @@ fn second_location_test(
         && is_furniture(e, reference)
         && process_has_point(e, subject)
     {
-        // The difference is computed and not used.
-        flat_distance_from(e, point, subject);
+        // The difference to the subject's position is worked out and not used (no flat length:
+        // the exe stops at the difference).
+        let subject_at = e.vcall(subject.addr(), SLOT_POSITION, &args![]).u32();
+        e.with_stack(12, |e, difference| {
+            e.call(POINT_DIFFERENCE, &args![point, difference, subject_at]);
+        });
         if subject_actor.is_null() {
             return false;
         }
@@ -8392,6 +8396,34 @@ mod second_batch_tests {
         e.mem.set_u8(actor + 0x1f0, 1);
         e.mem.set_u8(target_reference + 0x1f0, 1);
         assert_eq!(call(&mut e, plain, actor), 77.0);
+    }
+
+    #[test]
+    fn reach_adjustment_eye_line_rounds_to_the_threads_precision() {
+        // The eye line is the actor's z 1.0 plus the eye level 2^-24 (`FADD double`) minus the
+        // reach -2^-25 (`FSUB float`), stored as a float. Rounded to 24 bits at each step (the
+        // main thread's word) it is 1.0, not above the target's z 1.0: the bound 10 alone. At 53
+        // bits the sum is 1 + 0.75 of a float step, stored as 1 + 2^-23: above the target by less
+        // than half the actor's extent 2.0, so half of it (1) is added.
+        let saved = crate::x87::control_word();
+        let mut answers = Vec::new();
+        for word in [0x007fu16, 0x027f] {
+            let mut e = world();
+            let (actor, target_reference) = heading(&mut e);
+            let base = e.mem.u32(target_reference + 0x20);
+            let p = package_with(&mut e, 0, None, None);
+            e.mem.set_u8(base + 4, 0x16);
+            e.mem.set_f32(target_reference + 0x21c, 10.0);
+            e.mem.set_f32(actor + 0x214, -(2.0f32).powi(-25));
+            e.mem.set_f32(actor + 0x250, (2.0f32).powi(-24));
+            set_point(&mut e, actor + 0x180, [0.0, 0.0, 1.0]);
+            set_point(&mut e, target_reference + 0x180, [10.0, 0.0, 1.0]);
+            e.mem.set_f32(actor + 0x1a0, 2.0);
+            crate::x87::set_control_word(word);
+            answers.push(e.call(0x006787e0, &args![p, actor, 0u32]).f32());
+            crate::x87::set_control_word(saved);
+        }
+        assert_eq!(answers, vec![10.0, 11.0]);
     }
 
     #[test]

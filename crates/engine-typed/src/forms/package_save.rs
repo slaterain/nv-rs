@@ -11,15 +11,16 @@
 //! save size logging flag (`00408d60` on its fixed object: the byte at +4), the created-id test
 //! (`00469860`), the form's id (`0084e3a0`), `PackageLocation`'s and `PackageTarget`'s
 //! constructors (`0067f030`, `0067ff70`) and the form's empty flag clear (`004534f0`). `TESForm`'s
-//! old save and load of a buffer, its `LoadGame` and its lookup by id are typed calls; the
+//! old save and load of a buffer, its `LoadGame`, its lookup by id and the target's save, load,
+//! save size and after-load functions (`package_target`) are typed calls; the
 //! save buffer's save kind and flags reads (`00428110`, `0042ce30`) and their test (`004280f0`) are
 //! done in place. What stays a call by address: the allocator, the save/load object's
-//! raw save and load, the save buffer's write and read, the location's and target's save, load,
-//! save size and after-load functions, the logger (which YUP and xNVSE may replace); the data
+//! raw save and load, the save buffer's write and read, the location's save, load, save size and
+//! after-load functions, the logger (which YUP and xNVSE may replace); the data
 //! object's save, load and init-load go through its slots and the form's name through its slot.
 //! No floats.
 
-use super::{tesform, FAMILY};
+use super::{package_target, tesform, FAMILY};
 use engine_core::typed::leaf;
 use engine_core::{args, typed_call, Engine};
 
@@ -52,8 +53,8 @@ const BUFFER_LOAD: u32 = 0x0086_4980;
 const OPERATOR_NEW: u32 = 0x0040_1000;
 const LOCATION_SIZE: u32 = 0xc;
 const TARGET_SIZE: u32 = 0x10;
-/// `PackageLocation`'s and `PackageTarget`'s save size, old save, old load, after-load step,
-/// buffered save, load and init-load.
+/// `PackageLocation`'s save size, old save, old load, after-load step, buffered save, load and
+/// init-load.
 const LOCATION_SAVE_SIZE: u32 = 0x0067_f990;
 const LOCATION_SAVE_OLD: u32 = 0x0067_fa00;
 const LOCATION_LOAD_OLD: u32 = 0x0067_faa0;
@@ -61,13 +62,6 @@ const LOCATION_AFTER_LOAD: u32 = 0x0067_fb20;
 const LOCATION_SAVE: u32 = 0x0067_fb60;
 const LOCATION_LOAD: u32 = 0x0067_fbe0;
 const LOCATION_INIT_LOAD: u32 = 0x0067_fc50;
-const TARGET_SAVE_SIZE: u32 = 0x0068_0520;
-const TARGET_SAVE_OLD: u32 = 0x0068_0590;
-const TARGET_LOAD_OLD: u32 = 0x0068_0640;
-const TARGET_AFTER_LOAD: u32 = 0x0068_06e0;
-const TARGET_SAVE: u32 = 0x0068_0720;
-const TARGET_LOAD: u32 = 0x0068_07b0;
-const TARGET_INIT_LOAD: u32 = 0x0068_0830;
 /// The data object's slots: `SaveGame`, `LoadGame`, `InitLoadGame` (each the buffer); the form's
 /// name slot.
 const SLOT_DATA_SAVE: u32 = 0x14;
@@ -168,7 +162,11 @@ pub fn save_size(e: &mut Engine, this: u32) -> u16 {
     }
     let target = e.mem.u32(at(this, TARGET));
     if target != 0 {
-        size = size.wrapping_add(e.call(TARGET_SAVE_SIZE, &args![target]).u16());
+        size = size.wrapping_add(typed_call!(
+            FAMILY,
+            0x0068_0520,
+            package_target::save_size(e, target)
+        ));
     }
     size = size.wrapping_add(4);
     if size_logging(e) {
@@ -219,7 +217,7 @@ pub fn save_old(e: &mut Engine, this: u32) {
         }
         let target = e.mem.u32(at(this, TARGET));
         if target != 0 {
-            e.call(TARGET_SAVE_OLD, &args![target]);
+            typed_call!(FAMILY, 0x0068_0590, package_target::save_old(e, target));
         }
         e.call(SAVE_BYTES, &args![save, at(this, PROCEDURE), 4u32]);
         if size_logging(e) {
@@ -324,7 +322,7 @@ pub fn load_old(e: &mut Engine, this: u32) {
         if flags & 2 != 0 {
             let made = new_target(e);
             e.mem.set_u32(at(this, TARGET), made);
-            e.call(TARGET_LOAD_OLD, &args![made]);
+            typed_call!(FAMILY, 0x0068_0640, package_target::load_old(e, made));
         }
         e.call(LOAD_BYTES, &args![save, at(this, PROCEDURE), 4u32]);
         if uses_blocks(e) {
@@ -352,7 +350,7 @@ pub fn after_load(e: &mut Engine, this: u32) {
     }
     let target = e.mem.u32(at(this, TARGET));
     if target != 0 {
-        e.call(TARGET_AFTER_LOAD, &args![target]);
+        typed_call!(FAMILY, 0x0068_06e0, package_target::after_load(e, target));
     }
 }
 
@@ -417,7 +415,11 @@ pub fn save_game(e: &mut Engine, this: u32, buffer: u32) {
     }
     let target = e.mem.u32(at(this, TARGET));
     if target != 0 {
-        e.call(TARGET_SAVE, &args![target, buffer]);
+        typed_call!(
+            FAMILY,
+            0x0068_0720,
+            package_target::save_game(e, target, buffer)
+        );
     }
     let data = e.mem.u32(at(this, DATA));
     if data != 0 {
@@ -470,7 +472,11 @@ pub fn load_game(e: &mut Engine, this: u32, buffer: u32) {
     if parts & 2 != 0 {
         let made = new_target(e);
         e.mem.set_u32(at(this, TARGET), made);
-        e.call(TARGET_LOAD, &args![made, buffer]);
+        typed_call!(
+            FAMILY,
+            0x0068_07b0,
+            package_target::load_game(e, made, buffer)
+        );
     }
     if parts & 4 != 0 {
         let data = e.mem.u32(at(this, DATA));
@@ -492,7 +498,11 @@ pub fn init_load_game(e: &mut Engine, this: u32, buffer: u32) {
     }
     let target = e.mem.u32(at(this, TARGET));
     if target != 0 {
-        e.call(TARGET_INIT_LOAD, &args![target, buffer]);
+        typed_call!(
+            FAMILY,
+            0x0068_0830,
+            package_target::init_load_game(e, target, buffer)
+        );
     }
     let data = e.mem.u32(at(this, DATA));
     if data != 0 {

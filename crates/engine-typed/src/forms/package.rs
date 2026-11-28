@@ -39,12 +39,13 @@
 //! just set to zero, so they are left out. The other functions of the family are typed calls:
 //! `TESForm`'s constructor, the schedule's, the conditions' and the event actions'
 //! constructors, the package data constructors, `TESForm`'s file, compile index, form map lookup
-//! and flag 8 setter, and this unit's own functions that do more than one line. What stays a
-//! call by address: the allocator, the subclasses' constructors, the location's and target's
-//! deleting destructors, copies and type setter, the use weapon data's constructor, the
-//! form type's setter (`004f15a0`, which JIP LN may replace), the schedule's setter (`00673180`),
+//! and flag 8 setter, the target's copy, type setter and `InitItem` (`package_target`), and this
+//! unit's own functions that do more than one line. What stays a call by address: the allocator,
+//! the subclasses' constructors, the location's and target's deleting destructors, the location's
+//! copy, the use weapon data's constructor, the form type's setter (`004f15a0`, which JIP LN may
+//! replace), the schedule's setter (`00673180`),
 //! the assert, the count `GetAcquireRadius` takes for type 0xc (`00676280`), `InitItem`'s loader
-//! warning count, its location's, target's, conditions', idle collection's and event actions'
+//! warning count, its location's, conditions', idle collection's and event actions'
 //! `InitItem`s, the RTTI cast, the warning logger (which a fix may replace), the location's type
 //! setter and the type 0xc test `00673890`; the data object's deleting destructor and `InitItem`
 //! and the form's name and change slots are called through their slots (each class has its own).
@@ -58,7 +59,7 @@
 //! rounded to an `f32`.
 
 use super::package_flags::{pack_flag, set_pack_flag, PACK_FLAGS, PACK_TYPE};
-use super::{conditions, package_data, package_place, schedule, tesform, FAMILY};
+use super::{conditions, package_data, package_place, package_target, schedule, tesform, FAMILY};
 use engine_core::x87::{x87_load32, x87_quiet_bits, x87_store32};
 use engine_core::{args, typed_call, Engine};
 
@@ -101,11 +102,9 @@ const LOCATION_DELETE: u32 = 0x0067_0b30;
 const LOCATION_COPY: u32 = 0x0067_f4d0;
 /// The location type for which the search location is the package's own location.
 const LOCATION_TYPE_SEVEN: i32 = 7;
-/// `PackageTarget`: its size, deleting destructor (flags), copy (source) and type setter.
+/// `PackageTarget`: its size and deleting destructor (flags).
 const TARGET_SIZE: u32 = 0x10;
 const TARGET_DELETE: u32 = 0x007b_3fa0;
-const TARGET_COPY: u32 = 0x0068_01a0;
-const TARGET_SET_TYPE: u32 = 0x0068_00b0;
 /// The data objects: the dialogue data's size and offsets, the use weapon data's size,
 /// constructor (by address) and second location, the small data objects' second location.
 const DIALOGUE_DATA_SIZE: u32 = 0x20;
@@ -134,7 +133,6 @@ const ZERO: f64 = 0.0;
 /// action's `InitItem` (the package), the location's type setter, the type 0xc test `00673890`.
 const WARNING_COUNT: u32 = 0x0046_e8a0;
 const LOCATION_INIT_ITEM: u32 = 0x0067_f760;
-const TARGET_INIT_ITEM: u32 = 0x0068_03b0;
 const CONDITIONS_INIT_ITEM: u32 = 0x0068_0a20;
 const IDLE_COLLECTION_INIT_ITEM: u32 = 0x0047_9b00;
 const SLOT_DATA_INIT_ITEM: u32 = 0x10;
@@ -485,7 +483,11 @@ pub fn set_pack_type(e: &mut Engine, this: u32, new_type: i32) {
             ensure_target(e, this);
             let target = e.mem.u32(at(this, TARGET));
             if e.mem.u8(target) == 0 {
-                e.call(TARGET_SET_TYPE, &args![target, 2u32]);
+                typed_call!(
+                    FAMILY,
+                    0x0068_00b0,
+                    package_target::set_targ_type(e, target, 2)
+                );
             }
             build_data(e, this, 8, 0x0067_b950);
             ensure_location(e, this);
@@ -811,7 +813,7 @@ pub fn set_target(e: &mut Engine, this: u32, target: u32) {
     } else {
         ensure_target(e, this);
         let held = e.mem.u32(at(this, TARGET));
-        e.call(TARGET_COPY, &args![held, target]);
+        typed_call!(FAMILY, 0x0068_01a0, package_target::copy(e, held, target));
     }
 }
 
@@ -837,7 +839,11 @@ pub fn init_item(e: &mut Engine, this: u32) {
     }
     let target = e.mem.u32(at(this, TARGET));
     if target != 0 {
-        e.call(TARGET_INIT_ITEM, &args![target, this]);
+        typed_call!(
+            FAMILY,
+            0x0068_03b0,
+            package_target::init_item(e, target, this)
+        );
     }
     let conditions = at(this, CONDITIONS);
     if conditions != 0 {
@@ -931,7 +937,11 @@ pub fn init_item(e: &mut Engine, this: u32) {
                 typed_call!(FAMILY, 0x0067_2fc0, set_target(e, this, made));
             }
             let target = e.mem.u32(at(this, TARGET));
-            e.call(TARGET_SET_TYPE, &args![target, 3u32]);
+            typed_call!(
+                FAMILY,
+                0x0068_00b0,
+                package_target::set_targ_type(e, target, 3)
+            );
         }
         _ => {}
     }
