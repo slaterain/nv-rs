@@ -176,6 +176,9 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_6f40, navmesh::potential_info(u32) -> u32),
         entry!(0x006d_6f60, navmesh::potential_info_in_world(u32, u32) -> u32),
         // The search.
+        entry!(0x006c_72f0, search::allocate_record(Ptr) -> Ptr),
+        entry!(0x006c_7370, search::construct_record(Ptr) -> Ptr),
+        entry!(0x006c_7390, search::construct_record_member(Ptr) -> Ptr),
         entry!(0x006b_9710, search::sort_key(Ptr<SortNode>) -> f32),
         entry!(0x006b_9130, search::second_float(Ptr<SortNode>) -> f64),
         entry!(0x0069_ef80, search::request_radius(Ptr) -> f64),

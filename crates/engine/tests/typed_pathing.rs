@@ -4366,3 +4366,46 @@ fn crossed_edge_rounding_main_thread() {
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
 }
+
+fn record_member_setup(e: &mut Engine) -> u32 {
+    let record = e.mem.alloc(12);
+    e.mem.set_u32(record + 8, 0xaaaa_5555);
+    e.register(0x0063_3c90, |e, a| {
+        e.mem.set_u32(a[0], a[1]);
+        ret(a[0])
+    });
+    record
+}
+
+#[test]
+fn allocate_record() {
+    Diff::new(entry!(0x006c_72f0, search::allocate_record(Ptr) -> Ptr))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            let record = record_member_setup(e);
+            let result = if case.word(0) == 0 { 0 } else { record };
+            e.register_double(0x0040_1000, move |_, _| ret(result));
+            vec![0]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn construct_record() {
+    Diff::new(entry!(0x006c_7370, search::construct_record(Ptr) -> Ptr))
+        .family(&pathing::PATHING)
+        .setup(|e, _| vec![record_member_setup(e)])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn construct_record_member() {
+    Diff::new(entry!(0x006c_7390, search::construct_record_member(Ptr) -> Ptr))
+        .family(&pathing::PATHING)
+        .setup(|e, _| vec![record_member_setup(e)])
+        .run()
+        .assert_same();
+}

@@ -610,3 +610,27 @@ pub fn smoother_array_should_shrink(e: &mut Engine, this: Ptr<SimpleArray>) -> b
     };
     e.get(this, SimpleArray::size) <= limit
 }
+
+/// Allocate the twelve-byte record and construct it when allocation succeeds.
+// Typed from 006c72f0
+pub fn allocate_record(e: &mut Engine, _this: Ptr) -> Ptr {
+    let record = e.call(ALLOCATE, &args![12u32]).ptr::<()>();
+    if record.is_null() {
+        return record;
+    }
+    typed_call!(FAMILY, 0x006c_7370, construct_record(e, record))
+}
+
+/// Construct the record's embedded member and return the record itself.
+// Typed from 006c7370
+pub fn construct_record(e: &mut Engine, this: Ptr) -> Ptr {
+    typed_call!(FAMILY, 0x006c_7390, construct_record_member(e, this));
+    this
+}
+
+/// Initialize the smart pointer at offset eight with a null pointer.
+// Typed from 006c7390
+pub fn construct_record_member(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x0063_3c90, &args![this.addr().wrapping_add(8), 0u32]);
+    this
+}
