@@ -6823,9 +6823,16 @@ fn held_blended_draws_never_move_past_opaque_draws_when_they_ignore_or_write_dep
     let Some((off, _, _)) = held_script(false, false, &script) else {
         return;
     };
-    let (on, _, mismatches) = held_script(true, true, &script).expect("the adapter, as above");
+    let (on, held, mismatches) = held_script(true, true, &script).expect("the adapter, as above");
     assert_eq!(on, off, "the pixels");
     assert_eq!(mismatches, 0, "each held draw drawn with its own state");
+    // Only the two opaque draws were held, each its own key: neither blended draw was held after
+    // them (one ignores depth, the other writes it).
+    assert_eq!(
+        held,
+        (2, 2),
+        "the opaque draws held, the blended ones given"
+    );
     assert_eq!(
         off[0],
         [0, 0, 255, 255],
@@ -6836,6 +6843,36 @@ fn held_blended_draws_never_move_past_opaque_draws_when_they_ignore_or_write_dep
         "column 1: the blended draw alone (the opaque one failed): {:?}",
         off[1]
     );
+}
+
+/// The scissor rectangle cuts at each of its own sides (left, top, right, bottom: the bottom row
+/// not drawn): [`held_script`]'s strip, the whole height of column 2, drawn with the scissor test
+/// on and a rectangle whose left and top differ, keeps rows 3 to 5 only.
+#[test]
+fn the_scissor_rectangle_cuts_at_its_own_top_and_bottom() {
+    const SCISSORTESTENABLE: u32 = 174;
+    let script = |g: &mut Gpu, draw: &StripDraw| {
+        g.state(SCISSORTESTENABLE, 1);
+        g.run(Cmd::SetScissorRect {
+            device: DEVICE,
+            rect: [1, 3, 8, 6],
+        });
+        draw(g, 2, [0.0, 1.0, 0.0, 1.0]);
+        g.state(SCISSORTESTENABLE, 0);
+    };
+    let Some((px, _, _)) = held_script(false, false, &script) else {
+        return;
+    };
+    let at = |y: usize| px[8 * y + 2];
+    let cleared = px[0];
+    for y in 0..8 {
+        let want = if (3..6).contains(&y) {
+            [0, 255, 0, 255]
+        } else {
+            cleared
+        };
+        assert_eq!(at(y), want, "column 2, row {y}");
+    }
 }
 
 /// [`held_script`]'s strip drawn with its registers: moved right by `column` columns and back by
