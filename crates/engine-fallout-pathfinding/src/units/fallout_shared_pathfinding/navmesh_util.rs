@@ -564,7 +564,7 @@ pub fn fn_00695660(e: &mut Engine, this: Ptr<NavMesh>, triangle: u16) {
     } else {
         e.call(SET_EDGE_NEIGHBOUR, &args![tri, 0u32, second_slot]);
     }
-    if fn_006957d0(e, tri) {
+    if e.call(0x0069_57d0, &args![tri]).bool() {
         // Value word, then the two flag bytes, of edge 0 and edge 1.
         e.with_stack(16, |e, scratch| {
             let (value0, flag0_a, flag0_b) = (scratch, scratch.byte_add(4), scratch.byte_add(5));
@@ -2217,7 +2217,7 @@ pub fn fn_00699000(e: &mut Engine, this: Ptr<NavMesh>, index: u32, context: Ptr)
                 e.call(0x006b_c3e0, &args![cutter, this, record, context]);
             }
             e.call(0x006b_c8e0, &args![cutter, this, record]);
-            fn_00699590(e, this, index);
+            e.call(0x0069_9590, &args![this, index]);
             e.call(0x006b_bc50, &args![cutter]);
         });
     } else if fn_00699690(e, this, record.cast()) == 0 {
@@ -2258,7 +2258,7 @@ pub fn fn_00699000(e: &mut Engine, this: Ptr<NavMesh>, index: u32, context: Ptr)
                     }
                     let undo = record_at(e, cursor);
                     e.call(0x006b_c8e0, &args![cutter, this, undo]);
-                    fn_00699590(e, this, cursor);
+                    e.call(0x0069_9590, &args![this, cursor]);
                     cursor = cursor.wrapping_sub(1);
                 }
                 while cursor != u32::MAX {
@@ -2269,7 +2269,7 @@ pub fn fn_00699000(e: &mut Engine, this: Ptr<NavMesh>, index: u32, context: Ptr)
                     }
                     let undo = record_at(e, cursor);
                     e.call(0x006b_c8e0, &args![cutter, this, undo]);
-                    fn_00699590(e, this, cursor);
+                    e.call(0x0069_9590, &args![this, cursor]);
                     cursor = cursor.wrapping_sub(1);
                 }
                 for item in 0..captured_count {
@@ -2305,8 +2305,8 @@ pub fn fn_00699690(e: &mut Engine, this: Ptr<NavMesh>, obstacle: Ptr) -> u32 {
             let triangle = e
                 .call(GET_TRIANGLE, &args![this, triangle_index])
                 .ptr::<NavMeshTriangle>();
-            let triangle_type = fn_00699790(e, triangle.cast()) as u16;
-            largest = fn_00699760(e, largest, triangle_type);
+            let triangle_type = e.call(0x0069_9790, &args![triangle]).u32() as u16;
+            largest = e.call(0x0069_9760, &args![largest, triangle_type]).u32();
             index += 1;
         }
     }
