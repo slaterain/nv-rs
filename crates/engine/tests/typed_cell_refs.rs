@@ -12223,12 +12223,28 @@ fn xs_remove_at(e: &mut Engine, a: &[u32]) -> Ret {
     Ret::default()
 }
 
-/// `BSSimpleList::Remove(&item)` (`00905330`, `thiscall(node, &item)`), as its translation does it:
-/// the first node from `node` on holding the item unlinked (at `node` itself, the next node's words
-/// moved into it, or its item cleared); nothing for a null item or an empty node (at most 64 nodes).
+/// `BSSimpleList::Remove(&item)` (`00905330`, `thiscall(node, &item)`): handed a node after `node`
+/// (as the buffered loader hands it), that node unlinked; else, as its translation does it, the
+/// first node from `node` on holding the item at the address given unlinked (at `node` itself, the
+/// next node's words moved into it, or its item cleared), nothing for a null item or an empty node
+/// (at most 64 nodes either way).
 fn xs_remove_after(e: &mut Engine, a: &[u32]) -> Ret {
     xs_mark(e, 0x0090_5330);
-    let (head, item) = (a[0], e.mem.u32(a[1]));
+    let (head, given) = (a[0], a[1]);
+    let (mut node, mut previous) = (e.mem.u32(head + 4), head);
+    for _ in 0..64 {
+        if node == 0 {
+            break;
+        }
+        if node == given {
+            let after = e.mem.u32(node + 4);
+            e.mem.set_u32(previous + 4, after);
+            return Ret::default();
+        }
+        previous = node;
+        node = e.mem.u32(node + 4);
+    }
+    let item = e.mem.u32(given);
     if item == 0 || e.mem.u32(head) == 0 && e.mem.u32(head + 4) == 0 {
         return Ret::default();
     }
@@ -12463,6 +12479,16 @@ fn xs_world(e: &mut Engine, seed: u32, buffered: bool) -> [u32; 3] {
     let decoy = e.mem.u32(tls + 0x10);
     for offset in [0xc, 0x10, 0x14] {
         e.mem.set_u32(decoy + offset, 0);
+    }
+    // Where the cache answers the decoy for the run-once packages (type 0x1b), a decoy of their own
+    // with no list: the shared one's payload holds another type's word by the time the loader asks
+    // for 0x1b, and the run-once set walks it as a list.
+    if e.mem.u32(tls + 0x10 + 4 * 0x1b) == decoy {
+        let own = e.mem.alloc(0x20);
+        for (k, word) in [vt, 0xee, 0, 0, 0, 0].into_iter().enumerate() {
+            e.mem.set_u32(own + 4 * k as u32, word);
+        }
+        e.mem.set_u32(tls + 0x10 + 4 * 0x1b, own);
     }
     e.map(0x0101_5000, 0x1000);
     for offset in (0..0x1000).step_by(4) {
