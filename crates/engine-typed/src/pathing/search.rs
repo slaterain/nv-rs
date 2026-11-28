@@ -14,6 +14,33 @@ use engine_core::typed::leaf;
 use engine_core::x87::fistp_chop64;
 use engine_core::{args, typed_call, Engine};
 
+/// Whether all paths in the locked task have a result.
+// Typed from 006ea490
+pub fn all_paths_ready(e: &mut Engine, this: Ptr) -> bool {
+    use crate::dispatch::{self, refs};
+    let lock = this.byte_add(0x20).cast();
+    let paths = this.byte_add(0x50);
+    typed_call!(dispatch::FAMILY, 0x0040_fbf0, refs::lock(e, lock, 0));
+    let mut index = 0;
+    let ready = loop {
+        if index >= typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, paths)) {
+            break true;
+        }
+        let slot = typed_call!(
+            leaf::FAMILY,
+            0x0087_7a30,
+            leaf::array_element(e, paths, index)
+        );
+        let path = e.mem.u32(slot);
+        if e.mem.u32(path.wrapping_add(4)) == 0 {
+            break false;
+        }
+        index += 1;
+    };
+    typed_call!(dispatch::FAMILY, 0x0040_fba0, refs::unlock(e, lock));
+    ready
+}
+
 /// The `double` 19 the scaled cost multiplies by (`010356e8`).
 const NINETEEN: u32 = 0x0103_56e8;
 /// The `double` 100 the request's radius has to pass (`01017a40`).

@@ -188,6 +188,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0069_e390, search::first_word_at_94(Ptr) -> u32),
         entry!(0x006f_4790, search::scaled_cost(Ptr, Ptr<SortNode>) -> u32),
         entry!(0x006a_1f90, search::scrap_new(u32, Ptr) -> u32),
+        entry!(0x006e_a490, search::all_paths_ready(Ptr) -> bool),
         entry!(0x006a_79c0, search::is_goal(Ptr<AStarSearch>, Ptr) -> bool),
         entry!(0x006b_8c20, search::info_is_goal(Ptr, Ptr) -> u32),
         entry!(0x006a_6eb0, search::location_center(Ptr<SearchLocation>, Ptr<NiPoint3>) -> Ptr<NiPoint3>),
