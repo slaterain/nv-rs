@@ -651,6 +651,7 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x006a_0660, &[0x0069_85f0, 0x006a_06f0]),
     (0x006a_79c0, &[0x006a_6eb0]),
     (0x006a_7b10, &[0x006a_8380]),
+    (0x006a_9cb0, &[0x006a_8380]),
     (0x006b_40f0, &[0x006a_eb70]),
     (0x006b_77e0, &[0x006b_7850, 0x006b_78b0]),
     (0x006b_9b10, &[0x0040_19d0]),
@@ -4365,4 +4366,22 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+#[test]
+fn hide_search_new() {
+    Diff::new(entry!(0x006a_9cb0, search::hide_search_new(Ptr) -> Ptr))
+        .common()
+        .plain(0x006a_9cb0)
+        .inputs(&[Input::Flag])
+        .setup(|e, _| {
+            stand_ins(e);
+            let s = e.mem.alloc(0x20d0);
+            for i in 0..0x834 {
+                e.mem.set_u32(s + 4 * i, 0x6b6b_6b6b);
+            }
+            vec![s]
+        })
+        .run()
+        .assert_same();
 }
