@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, los_map, navmesh, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -4365,4 +4365,198 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- The LOS map's folded NiTMap ----
+
+/// The map callees as logged stand-ins: the bucket-table allocation and clear, removing every
+/// item, freeing the table, and `operator delete`.
+fn map_stubs(e: &mut Engine) {
+    e.register(0x00aa_1070, |e, a| {
+        log(e, 0x1070, a[0]);
+        ret(e.mem.alloc(a[0].max(4)))
+    });
+    e.register(0x0040_3d30, |e, a| {
+        log(e, 0x3d30, a[0]);
+        log(e, 0x3d31, a[1]);
+        log(e, 0x3d32, a[2]);
+        ret(0)
+    });
+    e.register(0x0043_8af0, |e, a| {
+        log(e, 0x8af0, a[0]);
+        ret(0)
+    });
+    e.register(0x00aa_10f0, |e, a| {
+        log(e, 0x10f0, a[0]);
+        ret(0)
+    });
+    e.register(0x0040_1030, |e, a| {
+        log(e, 0x1030, a[0]);
+        ret(0)
+    });
+}
+
+#[test]
+fn los_map_construct_base() {
+    Diff::new(entry!(0x006e_20e0, los_map::construct_base(Ptr, u32) -> Ptr))
+        .common()
+        .plain(0x006e_20e0)
+        .inputs(&[
+            Input::Of(&[0, 0x0106_cf68, 0xdead_beef]),
+            Input::Of(&[0, 1, 3, 0x40]),
+        ])
+        .setup(|e, case| {
+            stand_ins(e);
+            map_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this, case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_map_construct() {
+    Diff::new(entry!(0x006e_2080, los_map::construct(Ptr, u32) -> Ptr))
+        .common()
+        .plain(0x006e_2080)
+        .inputs(&[
+            Input::Of(&[0, 0x0106_cf88, 0xdead_beef]),
+            Input::Of(&[0, 1, 3, 0x40]),
+        ])
+        .setup(|e, case| {
+            stand_ins(e);
+            map_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this, case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_map_ni_t_map_dtor() {
+    Diff::new(entry!(0x006e_2150, los_map::ni_t_map_dtor(Ptr)))
+        .common()
+        .plain(0x006e_2150)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            map_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            e.mem.set_u32(this + 8, case.word(0).wrapping_mul(2));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_map_ni_t_map_base_dtor() {
+    Diff::new(entry!(0x006e_21b0, los_map::ni_t_map_base_dtor(Ptr)))
+        .common()
+        .plain(0x006e_21b0)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            map_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            e.mem.set_u32(this + 8, case.word(0).wrapping_mul(2));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_map_ni_t_map_scalar_deleting_dtor() {
+    Diff::new(entry!(
+        0x006e_20b0,
+        los_map::ni_t_map_scalar_deleting_dtor(Ptr, u32) -> Ptr
+    ))
+    .common()
+    .plain(0x006e_20b0)
+    .inputs(&[Input::Word, Input::Of(&[0, 1, 2, 3])])
+    .setup(|e, case| {
+        stand_ins(e);
+        map_stubs(e);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this, case.word(0));
+        e.mem.set_u32(this + 8, case.word(0).wrapping_mul(2));
+        vec![this, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn los_map_ni_t_map_base_scalar_deleting_dtor() {
+    Diff::new(entry!(
+        0x006e_21e0,
+        los_map::ni_t_map_base_scalar_deleting_dtor(Ptr, u32) -> Ptr
+    ))
+    .common()
+    .plain(0x006e_21e0)
+    .inputs(&[Input::Word, Input::Of(&[0, 1, 2, 3])])
+    .setup(|e, case| {
+        stand_ins(e);
+        map_stubs(e);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this, case.word(0));
+        e.mem.set_u32(this + 8, case.word(0).wrapping_mul(2));
+        vec![this, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn los_map_min_byte() {
+    Diff::new(entry!(0x006e_1f80, los_map::min_byte(i8, i8) -> i8))
+        .common()
+        .plain(0x006e_1f80)
+        .inputs(&[
+            Input::Of(&[0, 1, 0x7f, 0x80, 0xff, 0x81]),
+            Input::Of(&[0, 1, 0x7f, 0x80, 0xff, 0x81]),
+        ])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_map_max_byte() {
+    Diff::new(entry!(0x006e_1fb0, los_map::max_byte(i8, i8) -> i8))
+        .common()
+        .plain(0x006e_1fb0)
+        .inputs(&[
+            Input::Of(&[0, 1, 0x7f, 0x80, 0xff, 0x81]),
+            Input::Of(&[0, 1, 0x7f, 0x80, 0xff, 0x81]),
+        ])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_map_children_set_size() {
+    Diff::new(entry!(0x006e_1fe0, los_map::children_set_size(Ptr, u32)))
+        .common()
+        .plain(0x006e_1fe0)
+        .inputs(&[Input::Of(&[0, 1, 0xa, 0xffffffff])])
+        .setup(|e, case| {
+            stand_ins(e);
+            // The children array's sizing, logged with both words.
+            e.register(0x0060_bef0, |e, a| {
+                log(e, 0xbef0, a[0]);
+                log(e, 0xbef1, a[1]);
+                ret(0)
+            });
+            let node = e.mem.alloc(0xa0);
+            vec![node, case.word(0)]
+        })
+        .run()
+        .assert_same();
 }

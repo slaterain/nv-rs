@@ -23,7 +23,7 @@ pub fn construct_base(e: &mut Engine, this: Ptr, buckets: u32) -> Ptr {
 // Translated from 006e2080 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Folded map constructor: constructs the base then installs its vtable.
 pub fn construct(e: &mut Engine, this: Ptr, buckets: u32) -> Ptr {
-    construct_base(e, this, buckets);
+    e.call(0x006e_20e0, &args![this, buckets]);
     e.mem.set_u32(this.addr(), 0x0106cf68);
     this
 }
@@ -45,7 +45,7 @@ const OPERATOR_DELETE: u32 = 0x0040_1030;
 /// (engine map): [`fn_006e2150`], then `operator delete` when bit 0 of
 /// `flags` is set. Returns `this`.
 pub fn ni_t_map_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_006e2150(e, this);
+    e.call(0x006e_2150, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -60,7 +60,7 @@ pub fn ni_t_map_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32
 pub fn fn_006e2150(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), VTABLE_NI_T_MAP);
     e.call(REMOVE_ALL, &args![this]);
-    fn_006e21b0(e, this);
+    e.call(0x006e_21b0, &args![this]);
 }
 
 // Translated from 006e21b0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -268,7 +268,7 @@ pub fn fn_006e1470(e: &mut Engine, this: Ptr<PathingLOSMap>) {
         NAV_MESH_POINTERS_DESTRUCT,
         &args![this.byte_add(LOS_MAP_NAV_MESHES)],
     );
-    fn_006e2150(e, this.byte_add(8));
+    e.call(0x006e_2150, &args![this.byte_add(8)]);
     e.call(REF_OBJECT_DESTRUCT, &args![this]);
 }
 
@@ -507,13 +507,13 @@ pub fn fn_006e1800(e: &mut Engine, this: Ptr<PathingLOSMap>) -> u32 {
     while i < e.call(TOTAL_TRIANGLE_COUNT, &args![this]).u32() {
         let score = e.call(TRIANGLE_SCORE, &args![this, i]).u8() as i8;
         if score != 0x7f {
-            highest = fn_006e1fb0(e, highest, score);
-            lowest = fn_006e1f80(e, lowest, score);
+            highest = e.call(0x006e_1fb0, &args![highest, score]).u8() as i8;
+            lowest = e.call(0x006e_1f80, &args![lowest, score]).u8() as i8;
         }
         i = i.wrapping_add(1);
     }
     let count = e.call(TOTAL_TRIANGLE_COUNT, &args![this]).u32();
-    fn_006e1fe0(e, Ptr::new(node), count.wrapping_add(10));
+    e.call(0x006e_1fe0, &args![node, count.wrapping_add(10)]);
 
     let (mesh_pointer, triangle_slot) = (local(0x60), local(0x5c));
     let (color_a, points, geometry) = (local(0x54), local(0x84), local(0x88));
@@ -695,7 +695,7 @@ pub fn fn_006e2050(e: &mut Engine, this: Ptr<PathingLOSMap>, key: u32) -> u32 {
 /// (engine map): the base destructor ([`fn_006e21b0`]), then `operator
 /// delete` when bit 0 of `flags` is set. Returns `this`.
 pub fn ni_t_map_base_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_006e21b0(e, this);
+    e.call(0x006e_21b0, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -823,7 +823,9 @@ mod b040_tests {
         assert_eq!(
             log[1..],
             [
+                (0x006e_2150, vec![map]),
                 (REMOVE_ALL, vec![map]),
+                (0x006e_21b0, vec![map]),
                 (REMOVE_ALL, vec![map]),
                 (FREE_TABLE, vec![0x4240]),
                 (OPERATOR_DELETE, vec![map]),
@@ -916,7 +918,9 @@ mod n032_tests {
             let mut expected = vec![
                 OPERATOR_DELETE,
                 NAV_MESH_POINTERS_DESTRUCT,
+                0x006e_2150,
                 REMOVE_ALL,
+                0x006e_21b0,
                 REMOVE_ALL,
                 FREE_TABLE,
                 REF_OBJECT_DESTRUCT,
