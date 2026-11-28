@@ -4366,3 +4366,47 @@ fn crossed_edge_rounding_main_thread() {
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
 }
+
+fn message_routing_args(e: &mut Engine, case: &Case, through_owner: bool) -> Vec<u32> {
+    let manager = e.mem.alloc(0x1068);
+    for (offset, target) in [(0xc50, VT_FN), (0x1064, VT_FN + 4)] {
+        let table = e.mem.alloc(8);
+        e.mem.set_u32(manager + offset, table);
+        e.mem.set_u32(table + 4, target);
+        e.register(target, |_, _| ret(0));
+    }
+    let receiver = if through_owner {
+        let owner = e.mem.alloc(4);
+        e.mem.set_u32(owner, manager);
+        owner
+    } else {
+        manager
+    };
+    vec![receiver, case.word(0), case.word(1)]
+}
+
+#[test]
+fn message_routing_enqueue() {
+    Diff::new(entry!(0x006e_b200, pathing::routing::enqueue(Ptr, u32, u8) -> bool))
+        .family(&pathing::PATHING)
+        .inputs(&[
+            Input::Of(&[0, 0x8123_4567]),
+            Input::Of(&[0, 1, 2, 0xff, 0x100]),
+        ])
+        .setup(|e, case| message_routing_args(e, case, false))
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn message_routing_enqueue_from_owner() {
+    Diff::new(entry!(0x006e_bbd0, pathing::routing::enqueue_from_owner(Ptr, u32, u8) -> bool))
+        .family(&pathing::PATHING)
+        .inputs(&[
+            Input::Of(&[0, 0x8123_4567]),
+            Input::Of(&[0, 1, 2, 0xff, 0x100]),
+        ])
+        .setup(|e, case| message_routing_args(e, case, true))
+        .run()
+        .assert_same();
+}

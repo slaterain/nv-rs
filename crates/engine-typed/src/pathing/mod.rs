@@ -41,6 +41,7 @@ pub mod location;
 pub mod navmesh;
 pub mod point;
 pub mod pov;
+pub mod routing;
 pub mod search;
 
 /// This family's bit: what each `typed_call!` of it names.
@@ -112,6 +113,8 @@ pub(crate) fn copy_point(e: &mut Engine, from: Ptr<NiPoint3>, to: Ptr<NiPoint3>)
 #[rustfmt::skip]
 fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x006e_b200, routing::enqueue(Ptr, u32, u8) -> bool),
+        entry!(0x006e_bbd0, routing::enqueue_from_owner(Ptr, u32, u8) -> bool),
         // Point helpers.
         entry!(0x0043_9ef0, point::subtract(Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>) -> Ptr<NiPoint3>),
         entry!(0x0043_9e90, point::add(Ptr<NiPoint3>, Ptr<NiPoint3>, Ptr<NiPoint3>) -> Ptr<NiPoint3>),
