@@ -5008,8 +5008,8 @@ const LIST_BOX_GUARDS: [u32; 43] = [
 /// heights equal; five enabled and none highlighted; no container; six with only the last enabled
 /// (the moves search on to it); six with the first and the last disabled and the last highlighted
 /// (the moves walk back from the ends through `GetTileAt`); and (the eighth, the item list box's
-/// only, [`ITEM_LIST_VARIANTS`]) one item, highlighted, with a scroll bar, two visible items, flags 0
-/// and 1 set.
+/// only, [`ITEM_LIST_VARIANTS`]) one item, highlighted, with a scroll bar, two visible items, flags
+/// 0 and 1 set.
 fn put_list_box(e: &mut Engine, variant: u32) {
     use arena::object;
     let v = variant as usize;
@@ -5129,14 +5129,15 @@ fn put_allocator(e: &mut Engine, variant: u32) {
 const MENU_LIST_VARIANTS: [u32; 5] = [0, 1, 2, 3, 4];
 
 /// A world for `GetFrontmostMenu` and `IsMenuOpen` that reaches each of their tests: the manager
-/// (`011d8a80`) with a menus root whose tile list has six nodes (the second's tile null, the third's
-/// tile with no menu, the fourth's menu with no tile); `Tile::GetMenu` answering a tile's `+0x10`;
-/// each menu's class (its vtable's `+0x34`) its `+0x30`, its state its `+0x24`; the tile float
-/// getter answering the depth (`0xfad`) from a menu tile's `+0x40`, the kind (`0xfa7`) from its
-/// `+0x44`; `Tile::IsTrue` its `+0x48`. The variant picks the six depths, kinds, states, classes and
-/// enabled bits: a deeper menu of the passed-over kind (6008.0), equal depths, a NaN depth and
-/// kind, states 2, 3 and 4, a matching menu enabled or not; and (the fifth) a deeper menu in state 2
-/// above a NaN kind on an ordinary depth, so the state test and the NaN kind each decide the answer.
+/// (`011d8a80`) with a menus root whose tile list has six nodes (the second's tile null, the
+/// third's tile with no menu, the fourth's menu with no tile); `Tile::GetMenu` answering a tile's
+/// `+0x10`; each menu's class (its vtable's `+0x34`) its `+0x30`, its state its `+0x24`; the tile
+/// float getter answering the depth (`0xfad`) from a menu tile's `+0x40`, the kind (`0xfa7`) from
+/// its `+0x44`; `Tile::IsTrue` its `+0x48`. The variant picks the six depths, kinds, states,
+/// classes and enabled bits: a deeper menu of the passed-over kind (6008.0), equal depths, a NaN
+/// depth and kind, states 2, 3 and 4, a matching menu enabled or not; and (the fifth) a deeper menu
+/// in state 2 above a NaN kind on an ordinary depth, so the state test and the NaN kind each decide
+/// the answer.
 fn put_menu_list(e: &mut Engine, variant: u32) {
     use arena::object;
     const NAN: f32 = f32::NAN;
@@ -5262,11 +5263,11 @@ fn every_family() -> Vec<&'static engine_core::typed::Family> {
     engine_core::typed::all_families()
 }
 
-/// `every_family` is exactly every crate's families: the core's table (`engine_core::typed::FAMILIES`),
-/// `engine-typed`'s list (`engine_typed::FAMILIES`, which its `units::funcs` provides) and the forms
-/// crate's two (`topic_search`, `topic_order`). One listed but not provided is never registered, and
-/// every guard over `every_family` would skip it; one provided but listed nowhere is a crate's family
-/// these lists miss.
+/// `every_family` is exactly every crate's families: the core's table
+/// (`engine_core::typed::FAMILIES`), `engine-typed`'s list (`engine_typed::FAMILIES`, which its
+/// `units::funcs` provides) and the forms crate's two (`topic_search`, `topic_order`). One listed
+/// but not provided is never registered, and every guard over `every_family` would skip it; one
+/// provided but listed nowhere is a crate's family these lists miss.
 #[test]
 fn every_family_holds_each_crates_families() {
     let listed: Vec<&'static engine_core::typed::Family> = engine_core::typed::FAMILIES
@@ -5385,8 +5386,8 @@ fn no_family_past_its_gate_holds_a_wrapped_address() {
 /// A plain registration over a member (a fix row, an nv-rs built-in, a plugin's override: the
 /// addresses of `overridable.tsv`) clears the family's direct bit too, for the run, once it is
 /// registered. So no family on by default, in any crate, holds one, except the rows below, each
-/// overridden only by a plugin that is not built in (kNVSE, ITR) or by a script or frame function, so
-/// the family goes by address only while that one runs; the families built around the wraps; and
+/// overridden only by a plugin that is not built in (kNVSE, ITR) or by a script or frame function,
+/// so the family goes by address only while that one runs; the families built around the wraps; and
 /// the known ones above.
 #[test]
 fn no_family_past_its_gate_holds_an_overridable_address() {
@@ -5559,9 +5560,9 @@ fn body_calls_site(sources: &[String], start: u32, seam: u32) -> bool {
 
 /// A seam (`extend.rs`'s SITES and the game patches' rows: an instruction inside a translated
 /// function where a built-in takes part through `e.site`) inside a member of a family on by default
-/// is skipped unless the typed body keeps its `e.site` call there. So no such member, in any crate's
-/// family, holds a seam, except the ones listed, whose typed bodies still call `e.site` at it
-/// (read in their sources: the address or its constant in an `e.site` call of the body, or of a
+/// is skipped unless the typed body keeps its `e.site` call there. So no such member, in any
+/// crate's family, holds a seam, except the ones listed, whose typed bodies still call `e.site` at
+/// it (read in their sources: the address or its constant in an `e.site` call of the body, or of a
 /// function of the family the body calls). The function holding a seam is the translated function
 /// that starts nearest below it.
 #[test]
@@ -5710,8 +5711,8 @@ const INVENTORY_VARIANTS: [u32; 3] = [0, 1, 2];
 /// A world for the inventory fill (`00719ef0`): the list box world ([`put_list_box`]'s richest
 /// variant, or in the third its fourth, whose flag 0 is clear) with a template at both list boxes'
 /// `+0x18`; the inventory walk (`00575510`) storing an iterator and the changes (none in the second
-/// variant, so the fill stops there); the next item (`004ca330`) answering three items in turn, then
-/// 0 (their counts 3, 1 and 0, the first two with a form, the last none); `__RTDynamicCast`
+/// variant, so the fill stops there); the next item (`004ca330`) answering three items in turn,
+/// then 0 (their counts 3, 1 and 0, the first two with a form, the last none); `__RTDynamicCast`
 /// answering the form it is given.
 fn put_inventory(e: &mut Engine, variant: u32) {
     use arena::object;
@@ -5769,9 +5770,9 @@ const SORT_VARIANTS: [u32; 4] = [0, 1, 2, 3];
 
 /// A world for the sorts' comparisons: both pointer arguments' items (objects 3 and 40) with counts
 /// (`+4`) and healths that tell a signed compare from an unsigned one (a high bit on either side,
-/// equal words, two high-bit words). Each item's form (`+8`, objects 222 and 223) has its own vtable
-/// (objects 224 and 225) whose health slot (`+0x10`) answers the variant's health; `__RTDynamicCast`
-/// answers the form it is given.
+/// equal words, two high-bit words). Each item's form (`+8`, objects 222 and 223) has its own
+/// vtable (objects 224 and 225) whose health slot (`+0x10`) answers the variant's health;
+/// `__RTDynamicCast` answers the form it is given.
 fn put_sort_words(e: &mut Engine, variant: u32) {
     use arena::{object, CODE};
     const WORDS: [(u32, u32); 4] = [
@@ -6225,17 +6226,17 @@ fn list_box_get_highlight_target_every_move_diff() {
 const STATS_VARIANTS: [u32; 4] = [0, 3, 1, 2];
 
 /// The stats menu's world. The open menu (`011dace0`) is object 3, the player (`011dea3c`) object
-/// 100, both absent in the variant 2. The exe's doubles the menu computes with (1000.0, 2.0, pi,
-/// pi / 2, 5.0, 100.0) hold their values. The player: hardcore (`+0x7bc` 1) in the variants 1 and 3;
+/// 100, both absent in the variant 2. The exe's doubles the menu computes with (1000.0, 2.0, pi, pi
+/// / 2, 5.0, 100.0) hold their values. The player: hardcore (`+0x7bc` 1) in the variants 1 and 3;
 /// its actor values (`+0xa4`) on a vtable of stand-ins; its active effects (`+0x94`) on their own
-/// vtable (object 101) whose list slot answers one node (object 105) with one effect (object 106) of
-/// kind 0xa (variants 0 and 3; else 3), active in the variant 0. The hardcore state shown
+/// vtable (object 101) whose list slot answers one node (object 105) with one effect (object 106)
+/// of kind 0xa (variants 0 and 3; else 3), active in the variant 0. The hardcore state shown
 /// (`011a0ae1`) set in the variants 0 and 3, the next update (`011dad74`) never in the variant 1.
 /// The menu: limb mode in the variant 0, the effects already updated this frame in the variant 3,
 /// the 60 tiles all set but in the variant 2, the perk tile set; the healing options' callbacks
-/// stand-ins, in the variant 3 the first's and the fourth's the exe's own (`007e05f0`,
-/// `007e07a0`). The Pip-Boy (the manager's `+0x174`, object 108) up but in the variant 1. The fade
-/// object's current group (`011dace4`'s first word) a group number.
+/// stand-ins, in the variant 3 the first's and the fourth's the exe's own (`007e05f0`, `007e07a0`).
+/// The Pip-Boy (the manager's `+0x174`, object 108) up but in the variant 1. The fade object's
+/// current group (`011dace4`'s first word) a group number.
 fn put_stats_menu(e: &mut Engine, variant: u32) {
     use arena::{object, CODE, VTABLES};
     let live = variant != 2;
@@ -6370,9 +6371,9 @@ const STATUS_DATA_VARIANTS: [u32; 5] = [0, 1, 2, 3, 4];
 
 /// A world for the status data list (object 3, its embedded list at `+4`: an entry of key 2, then a
 /// node, object 231, with an entry of key 0x36) and an effect item's words on both pointer values
-/// (objects 40 and 3: its actor value `+0x10`, its setting `+0x14` object 233 of archetype 0, so the
-/// plain case, object 3 twice, runs every variant). The archetype table's entry 0 has bit 2 but in
-/// the variant 2 (the key is then -1). By variant: the effect's key 0x36 (found), 0x37 with the
+/// (objects 40 and 3: its actor value `+0x10`, its setting `+0x14` object 233 of archetype 0, so
+/// the plain case, object 3 twice, runs every variant). The archetype table's entry 0 has bit 2 but
+/// in the variant 2 (the key is then -1). By variant: the effect's key 0x36 (found), 0x37 with the
 /// setting's flag 4 (negated, with a duration), 0x37 with flag 2 (no duration), 0x37 with neither
 /// and JIP LN's fixes on (the G107 seam asked and answered 0x1234), and the same with no answer.
 fn put_status_data(e: &mut Engine, variant: u32) {
@@ -7791,14 +7792,14 @@ const STATS_PAD: [Pad; 10] = [
 ];
 const STATS_PAD_VARIANTS: [u32; 10] = [0, 5, 2, 3, 4, 1, 6, 7, 8, 9];
 
-/// [`put_stats_third`] in limb mode (its variant 0) or not (3), with the stats menu on top of a ready
-/// manager's enter stack (as [`put_stats_page`]); `Tile::GetValueFloat` answers `0x1004` with the
-/// sub page for the skill page's tile (`+0xa4`) and the page for any other, the trait of the last
-/// `Tile::SetFloat` with its value when the world's values stick, every other float 1.0; the stick
-/// (`00a23390`), its magnitude (`00408820`) against the dead zone 0.5 (the double at `010745f8`),
-/// the time (`00457fe0`) against the repeat time (`011dad5c`), the effects list's visibility
-/// (`00a040a0`), every `Tile::IsTrue` (`00a01230`) and the manager's state test (`004b71d0`, which
-/// `00709d40` asks) by the variant.
+/// [`put_stats_third`] in limb mode (its variant 0) or not (3), with the stats menu on top of a
+/// ready manager's enter stack (as [`put_stats_page`]); `Tile::GetValueFloat` answers `0x1004` with
+/// the sub page for the skill page's tile (`+0xa4`) and the page for any other, the trait of the
+/// last `Tile::SetFloat` with its value when the world's values stick, every other float 1.0; the
+/// stick (`00a23390`), its magnitude (`00408820`) against the dead zone 0.5 (the double at
+/// `010745f8`), the time (`00457fe0`) against the repeat time (`011dad5c`), the effects list's
+/// visibility (`00a040a0`), every `Tile::IsTrue` (`00a01230`) and the manager's state test
+/// (`004b71d0`, which `00709d40` asks) by the variant.
 fn put_stats_pad(e: &mut Engine, variant: u32) {
     let world = &STATS_PAD[variant as usize];
     let (page, sub, axis, magnitude, time) = (
@@ -7895,8 +7896,8 @@ fn stats_menu_do_gamepad_every_key_diff() {
 }
 
 /// [`put_stats_page`] with page `page` (0 to 4) and the clicked tile (`pTiles[6]`, object 116) the
-/// only item of each page's list (SPECIAL, skills, perks, general, reputations): `007242f0` finds it
-/// and not the other tile; the reputation item's data the first reputation (object 251).
+/// only item of each page's list (SPECIAL, skills, perks, general, reputations): `007242f0` finds
+/// it and not the other tile; the reputation item's data the first reputation (object 251).
 fn put_stats_enter(e: &mut Engine, page: u32) {
     use arena::object;
     put_stats_page(e, page);
@@ -7989,12 +7990,12 @@ fn stats_menu_create_depth_diff() {
 }
 
 /// [`put_stats_third`]'s variant 0 (an active effect, every cast answering object 226) with one of
-/// `UpdateActiveEffects`' rarer branches by the variant: the item's form kind 0xd (the name from the
-/// setting), no full name (the cast to `TESFullName`, `01183158`, answering 0: the virtual name), the
-/// usage monitor's word (`011c33f4`) the effect's setting (object 248); the setting's archetype (0)
-/// without `007df1b0`'s flag 0x40 and the setting without 0x2000 (kept), the archetype with the flag
-/// and the setting without 0x2000 (skipped), the archetype with the flag and the setting with 0x2000
-/// (kept).
+/// `UpdateActiveEffects`' rarer branches by the variant: the item's form kind 0xd (the name from
+/// the setting), no full name (the cast to `TESFullName`, `01183158`, answering 0: the virtual
+/// name), the usage monitor's word (`011c33f4`) the effect's setting (object 248); the setting's
+/// archetype (0) without `007df1b0`'s flag 0x40 and the setting without 0x2000 (kept), the
+/// archetype with the flag and the setting without 0x2000 (skipped), the archetype with the flag
+/// and the setting with 0x2000 (kept).
 fn put_stats_effects(e: &mut Engine, variant: u32) {
     use arena::object;
     put_stats_third(e, 0);
@@ -9981,20 +9982,20 @@ fn put_map_world(e: &mut Engine, variant: u32) {
     }
 }
 
-/// The variants that reach the third part's main bodies: 8 the local map with its grid complete (the
-/// zoom's traits and cell grid run), the note's sound paused to be resumed and the local map's
+/// The variants that reach the third part's main bodies: 8 the local map with its grid complete
+/// (the zoom's traits and cell grid run), the note's sound paused to be resumed and the local map's
 /// step asked; 9 the world map; 10 the notes page with the start menu on top and a playing sound to
 /// pause, its next node's wait passed. In each: the Pip-Boy up (the manager's +0x174, object 232,
 /// its query byte 1) with the map menu (0x3ff) on top (the start menu, 0x3f5, in variant 10); the
 /// tiles' floats by trait (the magnification, its static id 0x1010, 1.0 both times it is read, so
 /// the clamp's answer differs from it when the zoom moves it; sizes 100.0, positions 10.0, the kind
 /// 26.0 of the map tile's one child, object 231, others 0.5); the larger float for real
-/// (`00404010`); the marker kind 26.0 (`01074f60`) and the largest float; the marker's name equal to
-/// `" Marker"`, the companion label's text equal to the station name; the player's cell (+0x40)
-/// object 209 (the local quest target taken); in variant 9 no quest target reference, no player
-/// marker reference and a teleport array entry without its flag; in variant 10 no world space for
-/// the marker; the note's type 1 (variant 8) or 2 (9); a map child of kind 0x1b, 0x1d and 0x1e once
-/// each.
+/// (`00404010`); the marker kind 26.0 (`01074f60`) and the largest float; the marker's name equal
+/// to `" Marker"`, the companion label's text equal to the station name; `Tile::IsTrue` a bool; the
+/// player's cell (+0x40) object 209 (the local quest target taken); in variant 9 no quest target
+/// reference, no player marker reference and a teleport array entry without its flag; in variant 10
+/// no world space for the marker; the note's type 1 (variant 8) or 2 (9); a map child of kind 0x1b,
+/// 0x1d and 0x1e once each.
 fn put_map_reach(e: &mut Engine, variant: u32) {
     use arena::object;
     let menu = object(255);
@@ -10050,6 +10051,11 @@ fn put_map_reach(e: &mut Engine, variant: u32) {
         ..Ret::default()
     });
     e.register_double(0x0040_4dc0, |_, _| Ret::default());
+    // `Tile::IsTrue` answers a bool as the real one does (the marker is a companion's).
+    e.register_double(0x00a0_1230, |_, words| Ret {
+        eax: u32::from(words[1] == 0x1004),
+        ..Ret::default()
+    });
     e.register_double(0x00a0_11f0, |_, _| Ret {
         eax: EMPTY_TEXT_WORD,
         ..Ret::default()
