@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, navmesh, point, pov, pov_arrays, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -4365,4 +4365,154 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- The POV search's array destructor bodies ----
+
+/// The POV array dtors' callees as logged stand-ins: the plain and nested array releases.
+fn pov_array_stubs(e: &mut Engine) {
+    e.register(0x0084_54f0, |e, a| {
+        log(e, 0x54f0, a[0]);
+        log(e, 0x54f1, a[1]);
+        ret(0)
+    });
+    e.register(0x0049_faf0, |e, a| {
+        log(e, 0xfaf0, a[0]);
+        log(e, 0xfaf1, a[1]);
+        ret(0)
+    });
+}
+
+#[test]
+fn pov_array_dtor() {
+    Diff::new(entry!(0x006a_14e0, pov_arrays::pov_array_dtor(Ptr)))
+        .common()
+        .plain(0x006a_14e0)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            pov_array_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pov_list_array_dtor() {
+    Diff::new(entry!(0x006a_1700, pov_arrays::pov_list_array_dtor(Ptr)))
+        .common()
+        .plain(0x006a_1700)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            pov_array_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pov_search_node_array_dtor() {
+    Diff::new(entry!(0x006a_1890, pov_arrays::search_node_array_dtor(Ptr)))
+        .common()
+        .plain(0x006a_1890)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            pov_array_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pov_search_link_array_dtor() {
+    Diff::new(entry!(0x006a_18e0, pov_arrays::search_link_array_dtor(Ptr)))
+        .common()
+        .plain(0x006a_18e0)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            pov_array_stubs(e);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pov_vert_handle_list_array_dtor() {
+    Diff::new(entry!(
+        0x006a_19e0,
+        pov_arrays::vert_handle_list_array_dtor(Ptr)
+    ))
+    .common()
+    .plain(0x006a_19e0)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        pov_array_stubs(e);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this, case.word(0));
+        vec![this]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pov_remove_index_array_dtor() {
+    Diff::new(entry!(
+        0x006a_1a30,
+        pov_arrays::remove_index_array_dtor(Ptr)
+    ))
+    .common()
+    .plain(0x006a_1a30)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        pov_array_stubs(e);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this, case.word(0));
+        vec![this]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn pov_release_member() {
+    Diff::new(entry!(0x0069_efd0, pov_arrays::release_member(Ptr)))
+        .common()
+        .plain(0x0069_efd0)
+        .inputs(&[Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            stand_ins(e);
+            // The member's scalar deleting destructor (vtable slot 0), logged.
+            e.register(VT_FN, |e, a| {
+                log(e, 0x1000, a[0]);
+                ret(a[0])
+            });
+            let member = e.mem.alloc(4);
+            let vt = vtable(e);
+            e.mem.set_u32(member, vt);
+            let this = e.mem.alloc(0x34);
+            if case.word(0) != 0 {
+                e.mem.set_u32(this + 0x30, member);
+            }
+            vec![this]
+        })
+        .run()
+        .assert_same();
 }
