@@ -742,7 +742,7 @@ pub fn nvse_plugins_not_built_in(data: &Path) -> Vec<String> {
 }
 
 /// Looks at the player's folders once ([`Scan`]). macOS: no store installs the game there, so no
-/// game is looked for; saves only in CrossOver's bottles.
+/// game is looked for. Saves and mod managers' plugin lists are read from CrossOver's bottles.
 pub fn scan(home: &Home) -> Scan {
     let mut scan = Scan::default();
     if home.system == System::MacOs {
@@ -751,6 +751,7 @@ pub fn scan(home: &Home) -> Scan {
             .join("Library/Application Support/CrossOver/Bottles");
         scan.prefixes = folders_in(&bottles);
         scan.saves = saves_in(&[], &scan.prefixes);
+        scan.appdata = appdata_in(scan.prefixes.iter());
         return scan;
     }
     // Steam: its folders, their library lists, the game in each library.
@@ -891,15 +892,13 @@ pub fn scan(home: &Home) -> Scan {
                 .map(move |id| l.join(format!("steamapps/compatdata/{id}/pfx")))
         })
         .collect();
-    scan.appdata = distinct(
-        game_ids
-            .iter()
-            .chain(&proton)
-            .chain(&scan.prefixes)
-            .flat_map(|p| prefix_local_appdata(p))
-            .collect(),
-    );
+    scan.appdata = appdata_in(game_ids.iter().chain(&proton).chain(&scan.prefixes));
     scan
+}
+
+/// Local AppData folders containing the plugin list, in prefix order, each reported once.
+fn appdata_in<'a>(prefixes: impl Iterator<Item = &'a PathBuf>) -> Vec<PathBuf> {
+    distinct(prefixes.flat_map(|p| prefix_local_appdata(p)).collect())
 }
 
 /// The saves folders in Proton's prefixes (`proton`) and the other prefixes, each once.
