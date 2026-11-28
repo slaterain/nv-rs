@@ -1847,14 +1847,14 @@ pub fn fn_006d12a0(
             let result = e.call(POINT3_SUBTRACT, &args![position, away, push]).u32();
             copy_words(e, target, result, 3);
             e.call(POINT3_NORMALIZE, &args![target]);
-            let distance = fn_006d2c20(e, request.cast());
+            let distance = e.call(0x006d_2c20, &args![request]).f32();
             e.call(POINT3_SCALE_IN_PLACE, &args![target, distance]);
             e.call(POINT3_ADD_ASSIGN, &args![target, position]);
         } else {
             copy_words(e, push, position, 3);
             let angle = fn_006d1600(e);
             let first_scale = e.call(ANGLE_FUNCTION_004E44B0, &args![angle]).f64();
-            let distance = fn_006d2c20(e, request.cast()) as f64;
+            let distance = e.call(0x006d_2c20, &args![request]).f32() as f64;
             let first_scale = (distance * first_scale) as f32;
             let first = f.at(-0x78);
             let first_axis = e
@@ -1864,7 +1864,7 @@ pub fn fn_006d12a0(
                 )
                 .u32();
             let second_scale = e.call(ANGLE_FUNCTION_004E4470, &args![angle]).f64();
-            let distance = fn_006d2c20(e, request.cast()) as f64;
+            let distance = e.call(0x006d_2c20, &args![request]).f32() as f64;
             let second_scale = (distance * second_scale) as f32;
             let second = f.at(-0x60);
             let second_axis = e
@@ -2027,9 +2027,9 @@ pub fn fn_006d1660(
             .bool();
         if !built {
             // The search's recorded nodes, one after the other.
-            let node = fn_006d1be0(e, Ptr::new(search));
+            let node = e.call(0x006d_1be0, &args![search]).u32();
             if node != 0 {
-                let node = fn_006d1be0(e, Ptr::new(search));
+                let node = e.call(0x006d_1be0, &args![search]).u32();
                 let found = e
                     .call(
                         LOS_SEARCH_PATH_FROM_NODE,
@@ -2039,9 +2039,9 @@ pub fn fn_006d1660(
                 e.mem.set_u8(found_first, found);
             }
             if e.mem.u8(found_first) == 0 {
-                let node = fn_006d1c00(e, Ptr::new(search));
+                let node = e.call(0x006d_1c00, &args![search]).u32();
                 if node != 0 {
-                    let node = fn_006d1c00(e, Ptr::new(search));
+                    let node = e.call(0x006d_1c00, &args![search]).u32();
                     let found = e
                         .call(
                             LOS_SEARCH_PATH_FROM_NODE,
@@ -2052,9 +2052,9 @@ pub fn fn_006d1660(
                 }
             }
             if e.mem.u8(found_first) == 0 && e.mem.u8(found_other) == 0 {
-                let node = fn_006d1c20(e, Ptr::new(search));
+                let node = e.call(0x006d_1c20, &args![search]).u32();
                 if node != 0 {
-                    let node = fn_006d1c20(e, Ptr::new(search));
+                    let node = e.call(0x006d_1c20, &args![search]).u32();
                     let found = e
                         .call(
                             LOS_SEARCH_PATH_FROM_NODE,
@@ -2091,7 +2091,7 @@ pub fn fn_006d1660(
                 LOCATION_CONSTRUCT_FROM_MESH_POINT,
                 &args![location, center, info, last_triangle],
             );
-            fn_006d1bc0(e, Ptr::new(copy), Ptr::new(location));
+            e.call(0x006d_1bc0, &args![copy, location]);
             let solved = fn_006d0900(e, Ptr::new(copy), solution);
             e.mem.set_u8(succeeded, solved as u8);
             e.call(LOCATION_DESTRUCT, &args![location]);
@@ -2104,7 +2104,7 @@ pub fn fn_006d1660(
             e.call(NAV_HOLDER_CONSTRUCT, &args![map_holder]);
             let map_triangle = f.at(-0x220c);
             e.mem.set_u16(map_triangle, 0);
-            let map = fn_006d1c40(e, Ptr::new(search));
+            let map = e.call(0x006d_1c40, &args![search]).u32();
             if e.call(LOS_MAP_FIND_TRIANGLE, &args![map, map_holder, map_triangle])
                 .bool()
             {
@@ -2517,8 +2517,8 @@ pub fn fn_006d23d0(
 
         // The point halfway between the two distances, on the line from the
         // destination to the origin.
-        let minimum = fn_006d2c20(e, request.cast());
-        let maximum = fn_006d2c40(e, request.cast());
+        let minimum = e.call(0x006d_2c20, &args![request]).f32();
+        let maximum = e.call(0x006d_2c40, &args![request]).f32();
         let halfway = ((minimum as f64 + maximum as f64) / e.global::<f64>(TWO)) as f32;
         let origin_position = f.at(-0x2190);
         let origin = e.call(REQUEST_ORIGIN, &args![request]).u32();
@@ -2608,7 +2608,7 @@ pub fn fn_006d23d0(
             .call(LOCATION_RESOLVE_NAVMESH_INFO, &args![goal_location, 0u32])
             .bool()
         {
-            fn_006d2c00(e, Ptr::new(goal_location));
+            e.call(0x006d_2c00, &args![goal_location]);
         }
         let search = f.at(-0x2134);
         e.call(MAX_COST_SEARCH_CONSTRUCT, &args![search]);
@@ -2622,7 +2622,7 @@ pub fn fn_006d23d0(
             NODE_ARRAY_B_CONSTRUCT,
             &args![goal_nodes, 0x20u32, 0u32, 0u32],
         );
-        fn_006d2c60(e, Ptr::new(search), slack_times_two(slack));
+        e.call(0x006d_2c60, &args![search, slack_times_two(slack)]);
         let cover_holder = f.at(-0x21c4);
         e.call(NAVMESH_LIST_CONSTRUCT, &args![cover_holder]);
         e.call(NAVMESH_LIST_FILL, &args![cover_holder]);
@@ -2875,7 +2875,7 @@ pub fn fn_006d2c80(
             let node_location = e.call(NODE_LOCATION, &args![node]).u32();
             let next = f.at(-0x188);
             e.call(LOCATION_COPY_CONSTRUCT, &args![next, node_location]);
-            fn_006d1bc0(e, Ptr::new(copy), Ptr::new(next));
+            e.call(0x006d_1bc0, &args![copy, next]);
             if e.call(COVERED_MOVE_CHECK, &args![copy, distance, 1u32])
                 .bool()
             {
@@ -2885,14 +2885,14 @@ pub fn fn_006d2c80(
                     LOCATION_CONSTRUCT_FROM_POINT_AND_LOCATION,
                     &args![cover_target, cover_point, next],
                 );
-                fn_006d1bc0(e, Ptr::new(copy), Ptr::new(cover_target));
+                e.call(0x006d_1bc0, &args![copy, cover_target]);
                 let result = f.at(-0x1d4);
                 e.call(SOLUTION_CONSTRUCT, &args![result]);
                 let solved = fn_006d0b10(e, Ptr::new(copy), Ptr::new(result));
                 if solved {
                     let cover_point = e.call(COVERED_MOVE_COVER_POINT, &args![copy]).u32();
                     fn_006d30b0(e, request.cast(), Ptr::new(cover_point));
-                    fn_006d1bc0(e, request.cast(), Ptr::new(cover_target));
+                    e.call(0x006d_1bc0, &args![request, cover_target]);
                     fn_006d3120(e, Ptr::new(copy));
                     e.call(SOLUTION_COPY_TO, &args![result, solution]);
                     e.call(REQUEST_SET_FINISHED, &args![request, 1u32]);
@@ -3081,8 +3081,8 @@ pub fn fn_006d33c0(e: &mut Engine, request: Ptr<PathingRequest>, out: Ptr) {
         return;
     }
     let angle = e.call(RANDOM_ANGLE, &args![]).f32();
-    let maximum = fn_006d2c40(e, request.cast());
-    let minimum = fn_006d2c20(e, request.cast());
+    let maximum = e.call(0x006d_2c40, &args![request]).f32();
+    let minimum = e.call(0x006d_2c20, &args![request]).f32();
     let radius = e.call(RANDOM_FLOAT, &args![minimum, maximum]).f32();
     let y_scale = e.call(ANGLE_FUNCTION_004E44D0, &args![angle]).f64();
     let y = (y_scale * radius as f64) as f32;
@@ -3252,7 +3252,7 @@ pub fn pathing_find_safe_straight_line_path_point(
                 &args![destination_location, to],
             )
             .u32();
-        fn_006d1bc0(e, Ptr::new(request), Ptr::new(result));
+        e.call(0x006d_1bc0, &args![request, result]);
         e.call(LOCATION_DESTRUCT, &args![destination_location]);
 
         // The origin's extent, from the first reference's own bounds.
@@ -3417,7 +3417,7 @@ pub fn fn_006d3b40(e: &mut Engine, request: Ptr<PathingRequest>, out: Ptr) -> bo
         e.call(SOLUTION_CONSTRUCT, &args![solution]);
         let mut result = false;
         if fn_006d0b10(e, Ptr::new(copy), Ptr::new(solution)) {
-            let minimum = fn_006d2c20(e, request.cast());
+            let minimum = e.call(0x006d_2c20, &args![request]).f32();
             let node_count = e.call(SOLUTION_NODE_COUNT, &args![solution]).u32();
             let last_index = node_count.wrapping_sub(1) as f32;
             let scratch = f.at(-0x2260);
@@ -3437,9 +3437,9 @@ pub fn fn_006d3b40(e: &mut Engine, request: Ptr<PathingRequest>, out: Ptr) -> bo
             e.call(REQUEST_COPY_TO, &args![request, close]);
             let destination = e.call(REQUEST_DESTINATION, &args![request]).u32();
             fn_006d3ac0(e, Ptr::new(close), Ptr::new(destination));
-            let minimum = fn_006d2c20(e, request.cast());
+            let minimum = e.call(0x006d_2c20, &args![request]).f32();
             e.call(REQUEST_SET_MINIMUM_DISTANCE, &args![close, minimum]);
-            let maximum = fn_006d2c40(e, request.cast());
+            let maximum = e.call(0x006d_2c40, &args![request]).f32();
             e.call(REQUEST_SET_MAXIMUM_DISTANCE, &args![close, maximum]);
             result = fn_006d34d0(e, Ptr::new(close), out);
             e.call(REQUEST_BASE_DESTRUCT, &args![close]);
@@ -7613,7 +7613,7 @@ pub fn pathing_profile_pathing(
                     let request = f.at(-0x2cc);
                     e.call(REQUEST_CONSTRUCT, &args![request]);
                     fn_006d3ac0(e, Ptr::new(request), Ptr::new(location));
-                    fn_006d1bc0(e, Ptr::new(request), Ptr::new(target));
+                    e.call(0x006d_1bc0, &args![request, target]);
                     let solution = f.at(-0x21c);
                     e.call(SOLUTION_CONSTRUCT, &args![solution]);
                     fn_006d0b10(e, Ptr::new(request), Ptr::new(solution));

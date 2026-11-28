@@ -39,6 +39,7 @@ use layout::{
 pub mod layout;
 pub mod location;
 pub mod navmesh;
+pub mod pathfind_accessors;
 pub mod point;
 pub mod pov;
 pub mod search;
@@ -267,5 +268,15 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The small accessors of pathfind.
+        entry!(0x006d_1bc0, pathfind_accessors::set_embedded_location(Ptr, Ptr)),
+        entry!(0x006d_1be0, pathfind_accessors::first_ignored_goal(Ptr) -> u32),
+        entry!(0x006d_1c00, pathfind_accessors::last_valid_node(Ptr) -> u32),
+        entry!(0x006d_1c20, pathfind_accessors::closest_node(Ptr) -> u32),
+        entry!(0x006d_1c40, pathfind_accessors::los_map(Ptr) -> u32),
+        entry!(0x006d_2c00, pathfind_accessors::location_set_flag_2(Ptr<PathingLocation>)),
+        entry!(0x006d_2c20, pathfind_accessors::min_distance(Ptr) -> f32),
+        entry!(0x006d_2c40, pathfind_accessors::max_distance(Ptr) -> f32),
+        entry!(0x006d_2c60, pathfind_accessors::set_cost_limit(Ptr, f32)),
     ]
 }
