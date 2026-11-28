@@ -9982,20 +9982,21 @@ fn put_map_world(e: &mut Engine, variant: u32) {
     }
 }
 
-/// The variants that reach the third part's main bodies: 8 the local map with its grid complete
-/// (the zoom's traits and cell grid run), the note's sound paused to be resumed and the local map's
-/// step asked; 9 the world map; 10 the notes page with the start menu on top and a playing sound to
-/// pause, its next node's wait passed. In each: the Pip-Boy up (the manager's +0x174, object 232,
-/// its query byte 1) with the map menu (0x3ff) on top (the start menu, 0x3f5, in variant 10); the
-/// tiles' floats by trait (the magnification, its static id 0x1010, 1.0 both times it is read, so
-/// the clamp's answer differs from it when the zoom moves it; sizes 100.0, positions 10.0, the kind
-/// 26.0 of the map tile's one child, object 231, others 0.5); the larger float for real
-/// (`00404010`); the marker kind 26.0 (`01074f60`) and the largest float; the marker's name equal
-/// to `" Marker"`, the companion label's text equal to the station name; `Tile::IsTrue` a bool; the
-/// player's cell (+0x40) object 209 (the local quest target taken); in variant 9 no quest target
-/// reference, no player marker reference and a teleport array entry without its flag; in variant 10
-/// no world space for the marker; the note's type 1 (variant 8) or 2 (9); a map child of kind 0x1b,
-/// 0x1d and 0x1e once each.
+/// The variants that reach the third part's main bodies: 8 the local map with its grid of two by
+/// two cells complete (the zoom's traits and cell grid run, the map tile's node giving its cells),
+/// the note's sound paused to be resumed and the local map's step asked; 9 the world map; 10 the
+/// notes page with the start menu on top and a playing sound to pause, its next node's wait passed.
+/// In each: the Pip-Boy up (the manager's +0x174, object 232, its query byte 1) with the map menu
+/// (0x3ff) on top (the start menu, 0x3f5, in variant 10); the tiles' floats by trait (the
+/// magnification, its static id 0x1010, 1.0 both times it is read, so the clamp's answer differs
+/// from it when the zoom moves it; sizes 100.0, positions 10.0, the kind 26.0 of the map tile's one
+/// child, object 231, others 0.5); the larger float for real (`00404010`); the marker kind 26.0
+/// (`01074f60`) and the largest float; the marker's name equal to `" Marker"`, the companion
+/// label's text equal to the station name; `Tile::IsTrue` a bool; the player's cell (+0x40) object
+/// 209 (the local quest target taken); in variant 9 no quest target reference, no player marker
+/// reference and a teleport array entry without its flag; in variant 10 no world space for the
+/// marker; the note's type 1 (variant 8) or 2 (9); a map child of kind 0x1b, 0x1d and 0x1e once
+/// each.
 fn put_map_reach(e: &mut Engine, variant: u32) {
     use arena::object;
     let menu = object(255);
@@ -10026,6 +10027,12 @@ fn put_map_reach(e: &mut Engine, variant: u32) {
     let side = if variant == 8 { 2 } else { 1 };
     e.mem.set_u32(0x011c_63cc + 4, side);
     e.mem.set_u32(menu + 0x128, side * side);
+    // The map tile's node (object 236) and its cells (a node's child, `0043b4a0`: object 237).
+    e.mem.set_u32(object(102) + 0x2c, object(236));
+    e.register_double(0x0043_b4a0, |_, _| Ret {
+        eax: object(237),
+        ..Ret::default()
+    });
     e.mem.set_u32(0x011d_a35c, 0x1010);
     e.register_double(0x00a0_11b0, |_, words| {
         let value: f32 = match (words[0], words[1]) {
