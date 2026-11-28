@@ -84,6 +84,13 @@ image! {
         0x54 navmesh: u32,
     }
 
+    /// The eight-byte navmesh portal record constructed for an XNVP chunk.
+    pub struct NavMeshPortal / NavMeshPortalImage: 8 {
+        0x0 mesh: u32,
+        0x4 triangle: u16,
+        0x6 pad: u16,
+    }
+
     /// A triangle of a mesh, with a word beside it: an edge's or a node's reference.
     pub struct MeshEdge / MeshEdgeImage: 0xc {
         0x0 mesh: u32,

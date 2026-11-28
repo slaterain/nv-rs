@@ -32,8 +32,8 @@ use crate::native::Real;
 use engine_core::ptr::{Field, Ptr};
 use layout::{
     AStarQueue, AStarSearch, Arc, Counter, EdgeLocation, EdgePair, MeshEdge, NavMesh, NavMeshGrid,
-    NavMeshInfo, NavMeshTriangle, PathingLocation, Point2, SearchLocation, SimpleArray, SortNode,
-    Sphere,
+    NavMeshInfo, NavMeshPortal, NavMeshTriangle, PathingLocation, Point2, SearchLocation,
+    SimpleArray, SortNode, Sphere,
 };
 
 pub mod layout;
@@ -130,6 +130,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0069_e0c0, point::on_circle(Ptr<Point2>, Ptr<NiPoint3>, f32) -> Ptr<NiPoint3>),
         // The navmesh.
         entry!(0x0055_82f0, navmesh::triangle(Ptr<NavMesh>, u16) -> Ptr<NavMeshTriangle>),
+        entry!(0x0069_2870, navmesh::portal_new(Ptr<NavMeshPortal>) -> Ptr<NavMeshPortal>),
         entry!(0x0055_8dd0, navmesh::triangle_at(Ptr<SimpleArray>, u32) -> Ptr<NavMeshTriangle>),
         entry!(0x0055_82d0, navmesh::vertex(Ptr<NavMeshTriangle>, u32) -> u16),
         entry!(0x0055_8200, navmesh::triangle_count(Ptr<NavMesh>) -> u32),
