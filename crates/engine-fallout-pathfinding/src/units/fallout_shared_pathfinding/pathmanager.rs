@@ -1250,7 +1250,8 @@ pub fn fn_006eb9d0(
 // Translated from 006ebbd0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Routes a message through the owned implementation, preserving AL.
 pub fn fn_006ebbd0(e: &mut Engine, this: Ptr, message: u32, mode: u8) -> bool {
-    fn_006eb200(e, Ptr::new(e.mem.u32(this.addr())), message, mode)
+    e.call(0x006e_b200, &args![e.mem.u32(this.addr()), message, mode])
+        .bool()
 }
 
 // Translated from 006ebbf0 (decompiled, FalloutNV.exe 1.4.0.525)
