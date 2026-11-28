@@ -4366,3 +4366,24 @@ fn crossed_edge_rounding_main_thread() {
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
 }
+
+#[test]
+fn move_elements_40() {
+    for (dst, src, count) in [(0, 7, 3), (7, 0, 3), (3, 3, 3), (1, 0, 0), (1, 0, u32::MAX)] {
+        Diff::new(entry!(
+            0x0069_28a0,
+            search::move_elements_40(Ptr<_>, u32, u32, u32)
+        ))
+        .family(&pathing::PATHING)
+        .family(&engine_typed::crt::CRT)
+        .setup(move |e, _| {
+            let block = e.mem.alloc(128);
+            for i in 0..128 {
+                e.mem.set_u8(block + i, i as u8);
+            }
+            vec![0, block + dst, block + src, count]
+        })
+        .run()
+        .assert_same();
+    }
+}

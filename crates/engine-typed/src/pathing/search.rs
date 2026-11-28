@@ -610,3 +610,26 @@ pub fn smoother_array_should_shrink(e: &mut Engine, this: Ptr<SimpleArray>) -> b
     };
     e.get(this, SimpleArray::size) <= limit
 }
+
+/// Move the array's 40-byte elements in the direction that preserves overlap.
+// Typed from 006928a0
+pub fn move_elements_40(e: &mut Engine, _this: Ptr<SimpleArray>, dst: u32, src: u32, count: u32) {
+    let mut move_one = |index: u32| {
+        let offset = index.wrapping_mul(40);
+        typed_call!(
+            crate::crt::FAMILY,
+            0x00ec_7230,
+            crate::crt::mem::memmove(e, dst.wrapping_add(offset), src.wrapping_add(offset), 40)
+        );
+    };
+    if dst < src {
+        for index in 0..count {
+            move_one(index);
+        }
+    } else if dst > src && count != 0 {
+        // The executable tests the last index as a signed word.
+        for index in (0..=count.wrapping_sub(1) as i32).rev() {
+            move_one(index as u32);
+        }
+    }
+}
