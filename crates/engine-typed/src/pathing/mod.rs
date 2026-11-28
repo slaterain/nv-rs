@@ -130,6 +130,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0069_e0c0, point::on_circle(Ptr<Point2>, Ptr<NiPoint3>, f32) -> Ptr<NiPoint3>),
         // The navmesh.
         entry!(0x0055_82f0, navmesh::triangle(Ptr<NavMesh>, u16) -> Ptr<NavMeshTriangle>),
+        entry!(0x0069_2940, navmesh::delete_from_secondary_base(Ptr, u32) -> Ptr),
         entry!(0x0055_8dd0, navmesh::triangle_at(Ptr<SimpleArray>, u32) -> Ptr<NavMeshTriangle>),
         entry!(0x0055_82d0, navmesh::vertex(Ptr<NavMeshTriangle>, u32) -> u16),
         entry!(0x0055_8200, navmesh::triangle_count(Ptr<NavMesh>) -> u32),

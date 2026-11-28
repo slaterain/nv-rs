@@ -1156,3 +1156,10 @@ pub fn potential_info_in_world(e: &mut Engine, world: u32, key: u32) -> u32 {
         info_in_world(e, Ptr::new(map), Ptr::new(world), key)
     )
 }
+
+/// Forward deletion through the secondary base at offset 0x1c.
+// Typed from 00692940
+pub fn delete_from_secondary_base(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    let mesh = this.addr().wrapping_sub(0x1c);
+    e.call(0x0068_ed30, &args![mesh, flags]).ptr()
+}
