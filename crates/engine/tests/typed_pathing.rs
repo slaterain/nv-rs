@@ -4366,3 +4366,42 @@ fn crossed_edge_rounding_main_thread() {
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
 }
+
+fn ray_lookup_args(e: &mut Engine, case: &Case) -> Vec<u32> {
+    let manager = e.mem.alloc(0x1484);
+    let table = e.mem.alloc(12);
+    e.mem.set_u32(manager + 0x1480, table);
+    e.mem.set_u32(table + 8, VT_FN);
+    e.register(VT_FN, |e, args| {
+        assert_eq!(e.mem.u32(args[2]), 0);
+        e.mem.set_u32(args[2], 0x1234);
+        ret(0x100 | args[1])
+    });
+    e.register(0x006e_a510, |_, _| ret(0xffff_fffb));
+    e.register(0x006e_a780, |_, _| ret(0xffff_fff9));
+    vec![manager, case.word(0), 0x1100, 0x2200, 0x3300]
+}
+
+#[test]
+fn ray_lookup_path() {
+    Diff::new(entry!(0x006e_b2b0, pathing::ray_lookup::ray_path(Ptr, u32, Ptr, Ptr, u32) -> i32))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Of(&[0, 0x80])])
+        .setup(ray_lookup_args)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn ray_lookup_to_navmesh() {
+    Diff::new(entry!(0x006e_b250, pathing::ray_lookup::ray_to_navmesh(Ptr, u32, Ptr, Ptr, u32, u8) -> i32))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Of(&[0, 0x80]), Input::Of(&[0, 1, 0x1fe])])
+        .setup(|e, case| {
+            let mut args = ray_lookup_args(e, case);
+            args.push(case.word(1));
+            args
+        })
+        .run()
+        .assert_same();
+}
