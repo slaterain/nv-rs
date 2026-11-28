@@ -555,12 +555,12 @@ pub fn fn_006ad690(e: &mut Engine, this: Ptr<PathSmootherPOVSearch>) {
     e.mem.set_u32(s, VTABLE_SEARCH);
     fn_006b3710(e, Ptr::new(s + RIGHT_VERTS));
     fn_006b3710(e, Ptr::new(s + LEFT_VERTS));
-    fn_006b3640(e, Ptr::new(s + LINKS));
-    fn_006b35f0(e, Ptr::new(s + NODES));
-    fn_006b35a0(e, Ptr::new(s + ALL_POVS));
-    fn_006b35a0(e, Ptr::new(s + AVOID_NODE_POVS));
-    fn_006b35a0(e, Ptr::new(s + RIGHT_POVS));
-    fn_006b35a0(e, Ptr::new(s + LEFT_POVS));
+    e.call(0x006b_3640, &args![s + LINKS]);
+    e.call(0x006b_35f0, &args![s + NODES]);
+    e.call(0x006b_35a0, &args![s + ALL_POVS]);
+    e.call(0x006b_35a0, &args![s + AVOID_NODE_POVS]);
+    e.call(0x006b_35a0, &args![s + RIGHT_POVS]);
+    e.call(0x006b_35a0, &args![s + LEFT_POVS]);
     fn_006b3270(e, this.cast());
 }
 
@@ -1322,7 +1322,7 @@ pub fn fn_006aefc0(e: &mut Engine, this: Ptr<PathSmootherPOVSearch>) {
     with_frame(e, 0x4c, |e, l| {
         let request = e.mem.u32(s + 0x2058);
         let obstacles = e.call(REQUEST_OBSTACLES, &args![request]).u32();
-        fn_006b37b0(e, Ptr::new(l.at(0x10)), obstacles);
+        e.call(0x006b_37b0, &args![l.at(0x10), obstacles]);
         if typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, l.at(0x10))) != 0 {
             let mut i = 0u32;
             loop {
@@ -1340,7 +1340,7 @@ pub fn fn_006aefc0(e: &mut Engine, this: Ptr<PathSmootherPOVSearch>) {
                 i += 1;
             }
         }
-        fn_006b37e0(e, Ptr::new(l.at(0x10)));
+        e.call(0x006b_37e0, &args![l.at(0x10)]);
     });
 }
 
@@ -3823,7 +3823,7 @@ pub fn astar_search_scalar_deleting_destructor(
 /// (Xbox PDB): the destructor `006b35a0`, then frees the object when bit 0
 /// of `flags` is set; returns `this`.
 pub fn pov_array_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_006b35a0(e, this);
+    e.call(0x006b_35a0, &args![this]);
     free_if_flagged(e, this, flags)
 }
 
@@ -3832,7 +3832,7 @@ pub fn pov_array_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u3
 /// (Xbox PDB): the destructor `006b35f0`, then frees the object when bit 0
 /// of `flags` is set; returns `this`.
 pub fn pov_node_array_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_006b35f0(e, this);
+    e.call(0x006b_35f0, &args![this]);
     free_if_flagged(e, this, flags)
 }
 
@@ -3841,7 +3841,7 @@ pub fn pov_node_array_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flag
 /// (Xbox PDB): the destructor `006b3640`, then frees the object when bit 0
 /// of `flags` is set; returns `this`.
 pub fn pov_link_array_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_006b3640(e, this);
+    e.call(0x006b_3640, &args![this]);
     free_if_flagged(e, this, flags)
 }
 
