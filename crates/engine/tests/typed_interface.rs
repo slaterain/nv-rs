@@ -10022,7 +10022,10 @@ fn put_map_reach(e: &mut Engine, variant: u32) {
         e.register_double(0x0057_5d70, |_, _| Ret::default());
     }
     e.mem.set_u8(0x011d_a3b8 + 4, u8::from(variant == 8));
-    e.mem.set_u32(menu + 0x128, 1);
+    // The local map's grid complete: two by two cells (variant 8), one (the others).
+    let side = if variant == 8 { 2 } else { 1 };
+    e.mem.set_u32(0x011c_63cc + 4, side);
+    e.mem.set_u32(menu + 0x128, side * side);
     e.mem.set_u32(0x011d_a35c, 0x1010);
     e.register_double(0x00a0_11b0, |_, words| {
         let value: f32 = match (words[0], words[1]) {
