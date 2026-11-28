@@ -4366,3 +4366,19 @@ fn crossed_edge_rounding_main_thread() {
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
 }
+
+#[test]
+fn delete_from_secondary_base() {
+    Diff::new(entry!(0x0069_2940, navmesh::delete_from_secondary_base(Ptr, u32) -> Ptr))
+        .family(&pathing::PATHING)
+        .inputs(&[
+            Input::Of(&[0, 0x1c, 0x40001c]),
+            Input::Of(&[0, 1, 0xffff_fffe]),
+        ])
+        .setup(|e, case| {
+            e.register(0x0068_ed30, |_, _| ret(0x1234));
+            vec![case.word(0), case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
