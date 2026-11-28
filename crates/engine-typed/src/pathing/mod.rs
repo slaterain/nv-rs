@@ -42,6 +42,7 @@ pub mod navmesh;
 pub mod point;
 pub mod pov;
 pub mod search;
+pub mod search_variants;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(7);
@@ -267,5 +268,11 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The hide, LOS and flee searches' small members.
+        entry!(0x006a_9d60, search_variants::hide_ctor_body(Ptr)),
+        entry!(0x006a_9d30, search_variants::hide_scalar_deleting_dtor(Ptr, u32) -> Ptr),
+        entry!(0x006a_a710, search_variants::los_dtor_body(Ptr)),
+        entry!(0x006a_a6e0, search_variants::los_scalar_deleting_dtor(Ptr, u32) -> Ptr),
+        entry!(0x006a_9560, search_variants::allow_incomplete_path(Ptr) -> u8),
     ]
 }

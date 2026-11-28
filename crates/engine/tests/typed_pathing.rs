@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, navmesh, point, pov, search, search_variants};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -4365,4 +4365,129 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- The hide, LOS and flee searches' small members ----
+
+#[test]
+fn hide_ctor_body() {
+    Diff::new(entry!(0x006a_9d60, search_variants::hide_ctor_body(Ptr)))
+        .common()
+        .plain(0x006a_9d60)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            // The `NavMeshSearch` base constructor, logged.
+            e.register(0x006a_6b00, |e, a| {
+                log(e, 0x6b00, a[0]);
+                ret(a[0])
+            });
+            let this = e.mem.alloc(0x2100);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn hide_scalar_deleting_dtor() {
+    Diff::new(entry!(
+        0x006a_9d30,
+        search_variants::hide_scalar_deleting_dtor(Ptr, u32) -> Ptr
+    ))
+    .common()
+    .plain(0x006a_9d30)
+    .inputs(&[Input::Word, Input::Of(&[0, 1, 2, 3])])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x006a_6b00, |e, a| {
+            log(e, 0x6b00, a[0]);
+            ret(a[0])
+        });
+        e.register(0x0040_1030, |e, a| {
+            log(e, 0x1030, a[0]);
+            ret(0)
+        });
+        let this = e.mem.alloc(0x2100);
+        e.mem.set_u32(this, case.word(0));
+        vec![this, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn los_dtor_body() {
+    Diff::new(entry!(0x006a_a710, search_variants::los_dtor_body(Ptr)))
+        .common()
+        .plain(0x006a_a710)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            // Releasing the held LOS map and the `AStarSearch` base, logged.
+            e.register(0x0045_cec0, |e, a| {
+                log(e, 0xcec0, a[0]);
+                ret(0)
+            });
+            e.register(0x006a_7bc0, |e, a| {
+                log(e, 0x7bc0, a[0]);
+                ret(0)
+            });
+            let this = e.mem.alloc(0x2100);
+            e.mem.set_u32(this, case.word(0));
+            vec![this]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn los_scalar_deleting_dtor() {
+    Diff::new(entry!(
+        0x006a_a6e0,
+        search_variants::los_scalar_deleting_dtor(Ptr, u32) -> Ptr
+    ))
+    .common()
+    .plain(0x006a_a6e0)
+    .inputs(&[Input::Word, Input::Of(&[0, 1, 2, 3])])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x0045_cec0, |e, a| {
+            log(e, 0xcec0, a[0]);
+            ret(0)
+        });
+        e.register(0x006a_7bc0, |e, a| {
+            log(e, 0x7bc0, a[0]);
+            ret(0)
+        });
+        e.register(0x0040_1030, |e, a| {
+            log(e, 0x1030, a[0]);
+            ret(0)
+        });
+        let this = e.mem.alloc(0x2100);
+        e.mem.set_u32(this, case.word(0));
+        vec![this, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn flee_allow_incomplete_path() {
+    Diff::new(entry!(
+        0x006a_9560,
+        search_variants::allow_incomplete_path(Ptr) -> u8
+    ))
+    .common()
+    .plain(0x006a_9560)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        let request = e.mem.alloc(0xa0);
+        e.mem.set_u8(request + 0x9b, case.word(0) as u8);
+        vec![request]
+    })
+    .run()
+    .assert_same();
 }

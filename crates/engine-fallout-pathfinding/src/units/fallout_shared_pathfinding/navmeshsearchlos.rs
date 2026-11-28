@@ -211,7 +211,7 @@ pub fn fn_006aa710(e: &mut Engine, this: Ptr) {
 /// `NavMeshSearchLOS::scalar deleting destructor` (Xbox PDB): `006aa710`,
 /// then `operator delete` when bit 0 of `flags` is set. Returns `this`.
 pub fn navmesh_search_los_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_006aa710(e, this);
+    e.call(0x006a_a710, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
