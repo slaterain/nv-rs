@@ -9930,9 +9930,10 @@ fn map_menu_fn_007a1b10_diff() {
 /// texture's surface object (object 218), a note's text object (object 219), a pathing array's
 /// entries (object 220: a set byte and a door, object 40), a subtitle element (object 221: a text),
 /// a form's text (object 222) and a marker's icon kind (3).
+/// Variants 8 to 10 reach the main bodies (see [`put_map_reach`]).
 fn put_map_world(e: &mut Engine, variant: u32) {
     use arena::object;
-    const BASE: [u32; 8] = [0, 1, 2, 3, 4, 5, 6, 0];
+    const BASE: [u32; 11] = [0, 1, 2, 3, 4, 5, 6, 0, 0, 1, 3];
     put_map_menu(e, BASE[variant as usize]);
     let menu = object(255);
     e.mem
@@ -9975,6 +9976,119 @@ fn put_map_world(e: &mut Engine, variant: u32) {
             ..Ret::default()
         });
     }
+    if variant >= 8 {
+        put_map_reach(e, variant);
+    }
+}
+
+/// The variants that reach the third part's main bodies: 8 the local map with its grid complete (the
+/// zoom's traits and cell grid run), the note's sound paused to be resumed and the local map's
+/// step asked; 9 the world map; 10 the notes page with the start menu on top and a playing sound to
+/// pause, its next node's wait passed. In each: the Pip-Boy up (the manager's +0x174, object 232,
+/// its query byte 1) with the map menu (0x3ff) on top (the start menu, 0x3f5, in variant 10); the
+/// tiles' floats by trait (the magnification, its static id 0x1010, 1.0 both times it is read, so
+/// the clamp's answer differs from it when the zoom moves it; sizes 100.0, positions 10.0, the kind
+/// 26.0 of the map tile's one child, object 231, others 0.5); the larger float for real
+/// (`00404010`); the marker kind 26.0 (`01074f60`) and the largest float; the marker's name equal to
+/// `" Marker"`, the companion label's text equal to the station name; the player's cell (+0x40)
+/// object 209 (the local quest target taken); in variant 9 no quest target reference, no player
+/// marker reference and a teleport array entry without its flag; in variant 10 no world space for
+/// the marker; the note's type 1 (variant 8) or 2 (9); a map child of kind 0x1b, 0x1d and 0x1e once
+/// each.
+fn put_map_reach(e: &mut Engine, variant: u32) {
+    use arena::object;
+    let menu = object(255);
+    let manager = e.mem.u32(0x011d_8a80);
+    if manager != 0 {
+        e.mem.set_u32(manager + 0x174, object(232));
+        e.mem.set_u8(object(232) + 0x28, 1);
+        e.mem
+            .set_u32(manager + 0x114, if variant == 10 { 0x3f5 } else { 0x3ff });
+        e.mem.set_u32(manager + 0x118, 0);
+    }
+    e.mem
+        .set_u32(menu + 0xb8, if variant == 9 { 0 } else { object(205) });
+    e.mem.set_u8(0x011d_a36f, u8::from(variant == 8));
+    if variant == 10 {
+        e.mem.set_u32(object(205) + 0xc, object(234));
+        e.mem.set_u32(object(234) + 0xc, 0);
+        e.mem.set_u32(0x011d_a410, 1);
+        e.mem.set_u32(0x011f_6394 + 0x14, 10_000);
+        e.register_double(0x00ad_8930, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register_double(0x0057_5d70, |_, _| Ret::default());
+    }
+    e.mem.set_u8(0x011d_a3b8 + 4, u8::from(variant == 8));
+    e.mem.set_u32(menu + 0x128, 1);
+    e.mem.set_u32(0x011d_a35c, 0x1010);
+    e.register_double(0x00a0_11b0, |_, words| {
+        let value: f32 = match (words[0], words[1]) {
+            (tile, 0xfaa) if tile == object(231) => 26.0,
+            (_, 0x1010) => 1.0,
+            (_, 0xfb0 | 0xfb1 | 0xfcd) => 100.0,
+            (_, 0xfa1 | 0xfa2) => 10.0,
+            _ => 0.5,
+        };
+        Ret {
+            st0: f64::from(value),
+            ..Ret::default()
+        }
+    });
+    e.register_double(0x0040_4010, |_, words| Ret {
+        st0: f64::from(f32::from_bits(words[0]).max(f32::from_bits(words[1]))),
+        ..Ret::default()
+    });
+    e.mem.set_u64(0x0107_4f60, 26.0f64.to_bits());
+    e.mem.set_u32(0x0101_6970, f32::MAX.to_bits());
+    e.mem.set_u32(object(102) + 4, object(230));
+    e.mem.set_u32(object(230), 0);
+    e.mem.set_u32(object(230) + 8, object(231));
+    e.register_double(0x00ec_7750, |_, words| Ret {
+        eax: u32::from(words[1] != 0x0107_4f54),
+        ..Ret::default()
+    });
+    e.register_double(0x0040_4dc0, |_, _| Ret::default());
+    e.register_double(0x00a0_11f0, |_, _| Ret {
+        eax: EMPTY_TEXT_WORD,
+        ..Ret::default()
+    });
+    e.mem.set_u32(object(140) + 0x40, object(209));
+    if variant == 9 {
+        for address in [0x0061_01b0u32, 0x0077_a400] {
+            e.register_double(address, |_, _| Ret::default());
+        }
+        e.mem.set_u8(object(220), 0);
+    }
+    if variant != 10 {
+        e.register_double(0x005e_8d40, move |_, _| Ret {
+            eax: variant - 7,
+            ..Ret::default()
+        });
+    }
+    for k in 0..4 {
+        e.mem.set_u32(object(233) + 4 * k, 0);
+    }
+    e.register_double(0x00a0_3eb0, |e, words| {
+        let eax = match words[1] {
+            0x1c => object(228),
+            kind @ (0x1b | 0x1d | 0x1e) => {
+                let seen = object(233) + 4 * (kind - 0x1b);
+                if e.mem.u32(seen) == 0 {
+                    e.mem.set_u32(seen, 1);
+                    object(228)
+                } else {
+                    0
+                }
+            }
+            _ => 0,
+        };
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    });
 }
 
 /// What every map menu world holds for the third part (see [`put_map_world`]): a grid side of 1,
@@ -10173,7 +10287,8 @@ fn map_menu_do_idle_diff() {
         0x0079_a130,
         interface::map_menu_p3::map_menu_do_idle(Ptr)
     ))
-    .in_map_world(&[Arg::MapMenu], &[0, 1, 3, 4, 6, 7], 8000)
+    .in_map_world(&[Arg::MapMenu], &[8, 9, 10, 0, 1, 3, 4, 6, 7], 12000)
+    .max_cases(96)
     .run()
     .assert_same();
 }
@@ -10285,7 +10400,7 @@ fn map_menu_load_note_diff() {
         0x0079_93d0,
         interface::map_menu_p3::map_menu_load_note(Ptr, u32)
     ))
-    .in_map_world(&[Arg::MapMenu, Arg::Ptr], &[3, 0], 400)
+    .in_map_world(&[Arg::MapMenu, Arg::Ptr], &[8, 9, 3, 0], 400)
     .max_cases(48)
     .run()
     .assert_same();
@@ -10309,7 +10424,7 @@ fn map_menu_fn_00799dc0_diff() {
         0x0079_9dc0,
         interface::map_menu_p3::fn_00799dc0(Ptr)
     ))
-    .in_map_world(&[Arg::MapMenu], &[0, 1, 2], 2000)
+    .in_map_world(&[Arg::MapMenu], &[8, 9, 0, 1, 2], 2000)
     .run()
     .assert_same();
 }
@@ -10321,7 +10436,7 @@ fn map_menu_update_playing_sounds_diff() {
         0x0079_a660,
         interface::map_menu_p3::map_menu_update_playing_sounds(Ptr)
     ))
-    .in_map_world(&[Arg::MapMenu], &[3, 4, 0], 1000)
+    .in_map_world(&[Arg::MapMenu], &[10, 3, 4, 0], 1000)
     .run()
     .assert_same();
 }
@@ -10378,20 +10493,27 @@ fn map_menu_do_wheel_move_diff() {
         0x0079_c530,
         interface::map_menu_p3::map_menu_do_wheel_move(Ptr, u32, u32)
     ))
-    .in_map_world(&[Arg::MapMenu, Arg::Byte, Arg::Byte], &[0, 1, 3], 2000)
+    .in_map_world(
+        &[Arg::MapMenu, Arg::Byte, Arg::Byte],
+        &[8, 9, 0, 1, 3],
+        2000,
+    )
     .run()
     .assert_same();
 }
 
-/// `ZoomMap`: in and out on both maps (the local map's cell grid), no map tile.
+/// `ZoomMap`: in and out on the local map with its grid complete (variant 8: the zoom's traits and
+/// the cell grid) and on the world map (9), the magnification moved by the clamp or not (both
+/// reads 1.0, the larger float for real) and the knob turned when it moved; the stand-ins' worlds
+/// (no map tile, the interior's grid still being made).
 #[test]
 fn map_menu_zoom_map_diff() {
     Diff::new(engine_core::entry!(
         0x0079_c5a0,
         interface::map_menu_p3::map_menu_zoom_map(Ptr, u8, f32)
     ))
-    .in_map_world(&[Arg::MapMenu, Arg::Byte, Arg::F32], &[1, 2, 7], 2000)
-    .max_cases(64)
+    .in_map_world(&[Arg::MapMenu, Arg::Byte, Arg::F32], &[8, 9, 1, 2, 7], 2000)
+    .max_cases(128)
     .run()
     .assert_same();
 }
@@ -10402,7 +10524,7 @@ fn map_menu_update_world_map_diff() {
         0x0079_cdb0,
         interface::map_menu_p3::map_menu_update_world_map(Ptr)
     ))
-    .in_map_world(&[Arg::MapMenu], &[1, 0], 3000)
+    .in_map_world(&[Arg::MapMenu], &[9, 1, 0, 10], 3000)
     .run()
     .assert_same();
 }
@@ -10413,7 +10535,7 @@ fn map_menu_update_local_map_diff() {
         0x0079_d410,
         interface::map_menu_p3::map_menu_update_local_map(Ptr)
     ))
-    .in_map_world(&[Arg::MapMenu], &[0, 7], 3000)
+    .in_map_world(&[Arg::MapMenu], &[8, 0, 7, 10], 3000)
     .run()
     .assert_same();
 }
@@ -10424,7 +10546,7 @@ fn map_menu_add_quest_markers_diff() {
         0x0079_e0a0,
         interface::map_menu_p3::map_menu_add_quest_markers(Ptr)
     ))
-    .in_map_world(&[Arg::MapMenu], &[0, 1, 7], 3000)
+    .in_map_world(&[Arg::MapMenu], &[8, 9, 0, 1, 7], 3000)
     .run()
     .assert_same();
 }
@@ -10435,7 +10557,7 @@ fn map_menu_update_companion_markers_diff() {
         0x0079_e470,
         interface::map_menu_p3::map_menu_update_companion_markers(Ptr)
     ))
-    .in_map_world(&[Arg::MapMenu], &[0, 1, 7], 2000)
+    .in_map_world(&[Arg::MapMenu], &[8, 9, 0, 1, 7], 2000)
     .run()
     .assert_same();
 }
@@ -10446,7 +10568,7 @@ fn map_menu_create_player_marker_diff() {
         0x0079_f360,
         interface::map_menu_p3::map_menu_create_player_marker(Ptr)
     ))
-    .in_map_world(&[Arg::MapMenu], &[0, 1, 7], 2000)
+    .in_map_world(&[Arg::MapMenu], &[9, 8, 0, 1, 7], 2000)
     .run()
     .assert_same();
 }
@@ -10468,7 +10590,7 @@ fn map_menu_set_player_marker_diff() {
         0x0079_f640,
         interface::map_menu_p3::map_menu_set_player_marker()
     ))
-    .in_map_world(&[], &[0, 1, 5], 200)
+    .in_map_world(&[], &[10, 0, 1, 5], 200)
     .run()
     .assert_same();
 }
@@ -10490,7 +10612,7 @@ fn map_menu_get_world_map_tracking_ref_diff() {
         0x0079_f7e0,
         interface::map_menu_p3::map_menu_get_world_map_tracking_ref(Ptr, u32, u32) -> u32
     ))
-    .in_map_world(&[Arg::MapMenu, Arg::Ptr, Arg::Ptr], &[1], 400)
+    .in_map_world(&[Arg::MapMenu, Arg::Ptr, Arg::Ptr], &[9, 1], 400)
     .run()
     .assert_same();
 }

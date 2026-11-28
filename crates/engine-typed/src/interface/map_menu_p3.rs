@@ -320,7 +320,9 @@ const NODE_SET_SCALE: u32 = 0x0044_0490;
 const NODE_SET_TRANSLATE: u32 = 0x004b_c1f0;
 const NODE_GEOMETRY_DATA: u32 = 0x0054_95f0;
 const GEOMETRY_SET_CONSISTENCY: u32 = 0x00a6_7050;
-const MATRIX_SET: u32 = 0x0043_d410;
+/// `NiUpdateData`'s constructor (a float at +0, bytes at +4 and +5, +6 to +8 cleared): the update
+/// data the nodes' update takes.
+const UPDATE_DATA_NEW: u32 = 0x0043_d410;
 const WORLD_GET_WORLD_MAP_DATA: u32 = 0x0058_6400;
 const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
 const SOURCE_TYPE: u32 = 0x0118_3028;
@@ -1024,9 +1026,9 @@ fn message_result(e: &mut Engine) -> u8 {
 }
 
 // Typed from 00798710
-/// The fast travel question's callback: on "no" (result 0) the manager's next callback is
-/// `00798a00` (`0070f690`), otherwise the fast travel marker is cleared; then the cursor tile is
-/// centred.
+/// The fast travel question's callback: on the first answer (0, travel) the manager's next callback
+/// is `00798a00` (`0070f690`, which sends the player), otherwise the fast travel marker is cleared;
+/// then the cursor tile is centred.
 pub fn fn_00798710(e: &mut Engine) {
     if message_result(e) == 0 {
         let manager = in_place::manager(e);
@@ -2013,12 +2015,12 @@ fn zoom_cell_grid(e: &mut Engine, map: u32, magnification: u32) {
             let x = x87_add(x87_mul(f64::from(column), x87_m32(cell_size)), half);
             let x = x87_quiet_bits(x87_store32(x));
             e.call(NODE_SET_TRANSLATE, &args![cell, x, 0u32, y]);
-            e.with_stack(0x24, |e, matrix| {
-                e.call(MATRIX_SET, &args![matrix, 0u32, 0u32, 0u32]);
+            e.with_stack(0x24, |e, update_data| {
+                e.call(UPDATE_DATA_NEW, &args![update_data, 0u32, 0u32, 0u32]);
                 typed_call!(
                     scene::FAMILY,
                     0x00a5_9c60,
-                    scene::walk::update(e, Ptr::new(cell), matrix.addr())
+                    scene::walk::update(e, Ptr::new(cell), update_data.addr())
                 );
             });
             let data = e.call(NODE_GEOMETRY_DATA, &args![cell]).u32();
@@ -2818,7 +2820,7 @@ fn map_extent(e: &mut Engine, at: u32, id: i32, fraction: u32) -> u32 {
 }
 
 /// The companion label tile's traits: the position (`0xfa1`, `0xfa2`), the companion's name
-/// (`0xfc4`), the width, kind 0x26, depth 2.0, shown, (when `refresh`) `0xfae` 1, the two words 2
+/// (`0xfc4`), the width, kind 0x26, depth 2.0, shown, `0xfae` 1, the two words 2
 /// (`0xfb7`, `0xfb9`) and the height.
 fn set_label_traits(e: &mut Engine, label: u32, x: u32, y: u32, companion: u32) {
     set_float(e, label, 0xfa1, x87_quiet_bits(x));
@@ -3475,7 +3477,7 @@ fn float_to_int(e: &mut Engine, bits: u32) -> i32 {
 /// attached to tile 2's node; tile 2 gets the map size (`0xfcd`, `0xfce`) and the system colour 4
 /// (`0xfb2` to `0xfb4`), a zero rotation, and the local map is updated when the grid is complete
 /// and tile 2 is the map tile. The render state words, the byte `011ff103` and the terrain flags
-/// are restored.
+/// are restored, except on the saving path (as in the exe).
 pub fn fn_0079ffb0(e: &mut Engine, save: u8) {
     if singleton(e) == 0 {
         return;
@@ -3605,13 +3607,13 @@ fn local_map_step(e: &mut Engine, save: u8, position: u32) {
         let value = x87_quiet_bits(x87_store32(x87_mul(x87_load32(channel), full)));
         set_float(e, map_tile(e, singleton(e), 2), id, value);
     }
-    e.with_stack(0x24, |e, matrix| {
-        e.call(MATRIX_SET, &args![matrix, 0u32, 0u32, 0u32]);
+    e.with_stack(0x24, |e, update_data| {
+        e.call(UPDATE_DATA_NEW, &args![update_data, 0u32, 0u32, 0u32]);
         let node = in_place::tile_node(e, map_tile(e, singleton(e), 2));
         typed_call!(
             scene::FAMILY,
             0x00a5_9c60,
-            scene::walk::update(e, Ptr::new(node), matrix.addr())
+            scene::walk::update(e, Ptr::new(node), update_data.addr())
         );
     });
     advance_grid(e);
