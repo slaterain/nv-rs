@@ -2691,6 +2691,34 @@ fn queue_new() {
 }
 
 #[test]
+fn all_paths_ready() {
+    Diff::new(entry!(0x006e_a490, search::all_paths_ready(Ptr) -> bool))
+        .family(&pathing::PATHING)
+        .family(&leaf::LEAVES)
+        .family(&engine_typed::dispatch::DISPATCH)
+        .inputs(&[Input::Of(&[0, 3]), Input::Of(&[0, 1, 2, 3])])
+        .setup(|e, case| {
+            let task = e.mem.alloc(0x60);
+            let slots = e.mem.alloc(12);
+            e.mem.set_u32(task + 0x20, 0x1234);
+            e.mem.set_u32(task + 0x24, 1);
+            e.mem.set_u32(task + 0x54, slots);
+            e.mem.set_u32(task + 0x58, case.word(0));
+            for index in 0..3 {
+                let path = e.mem.alloc(8);
+                e.mem.set_u32(slots + index * 4, path);
+                e.mem.set_u32(path + 4, u32::from(index != case.word(1)));
+            }
+            e.register(engine_core::sync_direct::GET_CURRENT_THREAD_ID, |_, _| {
+                ret(0x1234)
+            });
+            vec![task]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
 fn search_new() {
     Diff::new(entry!(0x006a_7b10, search::search_new(Ptr<_>) -> Ptr<_>))
         .common()

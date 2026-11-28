@@ -176,7 +176,7 @@ pub fn pathing_task_data_process(e: &mut Engine, this: Ptr) {
         let was_signaled = fn_006eb790(e, Ptr::new(category));
 
         if was_signaled {
-            if !fn_006ea490(e, this) {
+            if !e.call(0x006e_a490, &args![this]).bool() {
                 fn_006ea330(e, this);
             } else {
                 let allocation = e.call(0x00aa_13e0, &args![0x44u32]).u32();
@@ -355,12 +355,14 @@ pub fn fn_006ea350(e: &mut Engine, this: Ptr) -> i32 {
 /// Returns false if any current pathing request has no result yet.
 pub fn fn_006ea490(e: &mut Engine, this: Ptr) -> bool {
     e.call(0x0040_fbf0, &args![this.addr() + 0x20, 0u32]);
-    let count = typed_call!(
-        leaf::FAMILY,
-        0x0044_ddc0,
-        leaf::word_at_8(e, this.addr() + 0x50)
-    );
-    for index in 0..count {
+    let mut index = 0;
+    while index
+        < typed_call!(
+            leaf::FAMILY,
+            0x0044_ddc0,
+            leaf::word_at_8(e, this.addr() + 0x50)
+        )
+    {
         let path_slot = typed_call!(
             leaf::FAMILY,
             0x0087_7a30,
@@ -371,6 +373,7 @@ pub fn fn_006ea490(e: &mut Engine, this: Ptr) -> bool {
             e.call(0x0040_fba0, &args![this.addr() + 0x20]);
             return false;
         }
+        index += 1;
     }
     e.call(0x0040_fba0, &args![this.addr() + 0x20]);
     true
@@ -783,7 +786,7 @@ pub fn fn_006eae40(e: &mut Engine, this: Ptr) {
                     if total > 10 {
                         break;
                     }
-                    if fn_006ea490(e, task_data) {
+                    if e.call(0x006e_a490, &args![task_data]).bool() {
                         e.call(0x0060_d4b0, &args![task_data, 0u32]);
                         e.call(0x006c_5e40, &args![point]);
                         e.call(0x006e_cd40, &args![point, task_data]);
@@ -2454,6 +2457,25 @@ mod remaining_tests {
                 (0x0040_1030, path),
             ]
         );
+    }
+
+    #[test]
+    fn completion_scan_rechecks_the_count_after_each_ready_path() {
+        let mut e = Engine::new();
+        let task = e.mem.alloc(0x60);
+        let slot = e.mem.alloc(4);
+        let path = e.mem.alloc(8);
+        e.mem.set_u32(task + 0x58, 2);
+        e.mem.set_u32(slot, path);
+        e.mem.set_u32(path + 4, 1);
+        noops(&mut e, &[0x0040_fbf0, 0x0040_fba0]);
+        e.register(0x0044_ddc0, |e, a| value(e.mem.u32(a[0] + 8)));
+        e.register_double(0x0087_7a30, move |e, a| {
+            assert_eq!(a[1], 0);
+            e.mem.set_u32(task + 0x58, 1);
+            value(slot)
+        });
+        assert!(fn_006ea490(&mut e, Ptr::new(task)));
     }
 
     #[test]
