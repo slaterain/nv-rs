@@ -2651,6 +2651,82 @@ fn construct_32s() {
         .assert_same();
 }
 
+fn static_queue_case(e: &mut Engine, count: u32, index: u32) -> (u32, u32) {
+    let queue = e.mem.alloc(0x414);
+    let pointer = e.mem.alloc(4);
+    e.mem.set_u32(pointer, 0x1234);
+    e.mem.set_u32(queue + 0x408, count);
+    e.mem.set_u32(queue + 0x40c, index);
+    e.mem.set_u32(queue + 0x410, index);
+    e.mem.set_u32(queue + 8 + index.wrapping_mul(4), 0x5678);
+    (queue, pointer)
+}
+
+#[test]
+fn static_queue_push() {
+    Diff::new(entry!(
+        0x006e_c4b0,
+        pathing::static_queue::try_push(Ptr<_>, u32) -> bool
+    ))
+    .family(&pathing::PATHING)
+    .inputs(&[
+        Input::Of(&[0, 255, 256, u32::MAX]),
+        Input::Of(&[0, 255, 0x4000_0000]),
+        Input::Of(&[0, 1, 2]),
+    ])
+    .setup(|e, case| {
+        let (queue, source) = static_queue_case(e, case.word(0), case.word(1));
+        let mode = case.word(2);
+        e.register_double(0x006e_6da0, move |_, a| {
+            ret(if mode == 0 { 0 } else { a[1] })
+        });
+        e.register_double(0x0055_9a40, move |e, a| {
+            e.mem.set_u32(a[0], e.mem.u32(a[1]));
+            if mode == 2 {
+                e.mem.set_u32(queue + 0x40c, 11);
+                e.mem.set_u32(queue + 0x408, 5);
+            }
+            ret(a[0])
+        });
+        vec![queue, source]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn static_queue_pop() {
+    Diff::new(entry!(
+        0x006e_c5b0,
+        pathing::static_queue::try_pop(Ptr<_>, Ptr) -> bool
+    ))
+    .family(&pathing::PATHING)
+    .inputs(&[
+        Input::Of(&[0, 1, 256]),
+        Input::Of(&[0, 255, 0x4000_0000]),
+        Input::Of(&[0, 1]),
+    ])
+    .setup(|e, case| {
+        let (queue, output) = static_queue_case(e, case.word(0), case.word(1));
+        let change = case.word(2) != 0;
+        e.register_double(0x006e_5cc0, move |e, a| {
+            e.mem.set_u32(a[0], e.mem.u32(a[1]));
+            if change {
+                e.mem.set_u32(queue + 0x410, 7);
+                e.mem.set_u32(queue + 0x408, 4);
+            }
+            ret(a[0])
+        });
+        e.register(0x0082_28f0, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            ret(a[0])
+        });
+        vec![queue, output]
+    })
+    .run()
+    .assert_same();
+}
+
 #[test]
 fn slots_new() {
     Diff::new(entry!(0x006b_3de0, search::slots_new(Ptr) -> Ptr))
