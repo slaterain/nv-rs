@@ -11,7 +11,7 @@
 //!   class keeps in its vtable (the stubs that answer false, 0, -1 or 0.0 and those that do
 //!   nothing), the embedded current package's getters and setters, the destructor, `Copy`, the
 //!   save and load of the process block and the breath timer.
-//! - [`low_process`]: `LowProcess` (its Xbox PDB source unit), parts 1 to 5: the process lock map,
+//! - [`low_process`]: `LowProcess` (its Xbox PDB source unit), parts 1 to 6: the process lock map,
 //!   the processed date's parts, the flags and timers, the target and location setters and
 //!   `ResetTarget`, the damage modifier, the package tests, starts, schedule and done step, the
 //!   greeting, the procedure index steps, the patrol, the clear of the current data, the level
@@ -21,7 +21,9 @@
 //!   actor values, the destructors and the save, load and revert of the process block; the
 //!   current destination's reference, point and radius, the location callback, the object test
 //!   and the combat, alarm, follow, escort follow, acquire list, acquire, ambush and guard
-//!   procedures.
+//!   procedures; the followers' update, the package's location as a reference, the patrol's travel
+//!   step, the guard's travel, the escort, the activate procedure, the acquire callback and the
+//!   missed packages.
 //! - [`middle_low_process`]: `MiddleLowProcess` (its Xbox PDB source unit): the temporary and
 //!   damage modifiers on top of `LowProcess`'s actor values, the hourly package check, the combat
 //!   rounds, `Update` (the package's procedure actions), the destructors, the copy and the save,
@@ -269,6 +271,14 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0090_8f70, low_process::process_acquire(Ptr, Ptr)),
         entry!(0x0091_0c80, low_process::process_ambush_wait(Ptr, Ptr)),
         entry!(0x0091_2b00, low_process::process_guard(Ptr, Ptr)),
+        entry!(0x0091_1b00, low_process::update_followers(Ptr, u32, f32)),
+        entry!(0x0090_89c0, low_process::get_location_for_package(Ptr, Ptr, Ptr, u8) -> u32),
+        entry!(0x0091_25b0, low_process::patrol_travel_step(Ptr, Ptr, Ptr, f32) -> f32),
+        entry!(0x0091_2db0, low_process::process_guard_start_travel_to_location(Ptr, u32, u32)),
+        entry!(0x0090_9430, low_process::process_escort(Ptr, u32)),
+        entry!(0x0090_d620, low_process::process_activate(Ptr, Ptr, u8) -> bool),
+        entry!(0x0090_dd80, low_process::acquire_callback(u32, u32) -> bool),
+        entry!(0x0090_c3e0, low_process::update_missed_packages(Ptr, Ptr, u8)),
         entry!(0x0092_c9d0, middle_low_process::scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x0092_ca00, middle_low_process::destructor(Ptr)),
         entry!(0x0092_ca70, middle_low_process::copy(Ptr, Ptr)),
