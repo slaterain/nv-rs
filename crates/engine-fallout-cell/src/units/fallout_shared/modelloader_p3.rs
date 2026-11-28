@@ -2344,8 +2344,8 @@ pub static LOADER_WALK_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::Ato
 /// [`fn_00448cc0`] with another time limit in play, a port-side switch (`NV_LOADER_WALK_MS`, off by
 /// default): the walk over the queued references gives up after [`LOADER_WALK_MS`] instead of the
 /// exe's 5.0 (`0101712c`, on the same timer scale as the IO manager's millisecond budget) when the IO
-/// manager is in mode 6 (play). While nothing is in flight
-/// (the IO manager's `+0x18` is 0: the loaders idle) the exe's limit
+/// manager is in mode 6 (play). While the loading threads have nothing left
+/// (`engine_bs::units::bsmain::run_00c3dbf0::loaders_idle`) the exe's limit
 /// comes back, so whatever the smaller limit left gets checked.
 /// Outside play (the exe's 100000.0) and with 0 it is the translation.
 /// The walk itself is unchanged: from the start of the map each call, each yielded reference's
@@ -2355,11 +2355,12 @@ pub static LOADER_WALK_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::Ato
 pub fn fn_00448cc0_limited(e: &mut Engine, this: Ptr) -> bool {
     let limit_ms = LOADER_WALK_MS.load(std::sync::atomic::Ordering::Relaxed);
     let manager = e.global::<u32>(TASK_MANAGER);
-    // Loaders idle (nothing in flight, the IO manager's +0x18): the exe's limit, so what is left clears.
+    // The loading threads idle (every IO task waits only for main): the exe's limit, so what is left
+    // clears.
     if limit_ms == 0
         || manager == 0
         || fn_00448de0(e, Ptr::new(manager))
-        || e.mem.u32(manager + 0x18) == 0
+        || engine_bs::units::bsmain::run_00c3dbf0::loaders_idle(e, manager)
     {
         return fn_00448cc0(e, this);
     }
