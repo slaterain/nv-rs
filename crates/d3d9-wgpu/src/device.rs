@@ -6,6 +6,11 @@
 //! Correctness first (ADR-0007's phase 1): every draw sets its whole state; uploads into a
 //! resource the frame's unsent commands still use send those commands first. The caches keyed by
 //! state (pipelines, shader modules, samplers, bind groups) are where the speed work starts.
+//!
+//! A draw goes through the executor's packet ([`packet`]): the Direct3D 9 side builds it from the
+//! state ([`Device::draw_packet`]) and the executor draws it ([`Device::execute_draw`]).
+
+mod packet;
 
 use crate::answers::QueryAnswers;
 use crate::bright;
@@ -25,6 +30,7 @@ use crate::state::{self, rs, SamplerKey};
 use crate::sun_shadow;
 use d3d9_stream::hitch;
 use d3d9_stream::{Handle, Rect};
+use packet::DrawPacket;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -5234,24 +5240,32 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// storage only. Sorted ([`Device::sort_draws`]), also only a draw whose colour channels are
     /// known (`channels`, [`Device::colour_channels`]); [`Device::hold`] keeps the held draws to
     /// one set of channels.
-    fn may_hold(&self, depth: bool, channels: Option<u32>) -> bool {
-        let r = &self.st.rs;
+    /// `opaque`: the states' part ([`Device::hold_states`], in the packet).
+    fn may_hold(&self, depth: bool, opaque: bool, channels: Option<u32>) -> bool {
         self.merge_draws
             && self.storage_regs
             && self.storage_regs_gpu.is_some()
             && depth
-            && r[rs::ZENABLE] != 0
-            && r[rs::ZWRITEENABLE] != 0
-            && matches!(r[rs::ZFUNC], 2 | 4)
-            && r[rs::ALPHABLENDENABLE] == 0
-            && r[rs::STENCILENABLE] == 0
+            && opaque
             && self.counting.is_none()
             && (!self.sort_draws || channels.is_some())
     }
 
+    /// The render states' part of [`Device::may_hold`] (depth test LESS or LESSEQUAL with depth
+    /// writes, no blending, no stencil) and of [`Device::may_hold_after`] (the same test without
+    /// depth writes, blending, no stencil), for the draw's packet.
+    fn hold_states(&self) -> (bool, bool) {
+        let r = &self.st.rs;
+        let tested =
+            r[rs::ZENABLE] != 0 && matches!(r[rs::ZFUNC], 2 | 4) && r[rs::STENCILENABLE] == 0;
+        let writes = r[rs::ZWRITEENABLE] != 0;
+        let blends = r[rs::ALPHABLENDENABLE] != 0;
+        (tested && writes && !blends, tested && !writes && blends)
+    }
+
     /// The colour channels the draw about to be given writes, as one word: for each bound colour
     /// target (five bits each) its write mask, or a mark of its own where the pixel shader writes
-    /// no colour to it (`written`: the targets it writes); None without a pipeline. Sorting moves
+    /// no colour to it (`written`: the targets it writes). Sorting moves
     /// held draws past each other: draws that write depth and the same channels leave each pixel
     /// with the channels of the one in front whatever their order (except where two surfaces meet
     /// at exactly the same depth), and the other channels untouched. A draw that writes depth but
@@ -5260,7 +5274,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// the game's order let show. So the held draws all write the same channels
     /// ([`Device::hold`]). None too for a draw whose pixel shader writes a target past the first:
     /// such a draw is not held while sorting (no frame test binds two targets).
-    fn colour_channels(&self, written: u32) -> Option<u32> {
+    /// `colours`: the draw's pipeline key's targets (the packet's: the pipeline the executor
+    /// draws it with has that key).
+    fn colour_channels(
+        &self,
+        colours: &[Option<(wgpu::TextureFormat, bool)>; 4],
+        written: u32,
+    ) -> Option<u32> {
         const MASKS: [usize; 4] = [
             rs::COLORWRITEENABLE,
             rs::COLORWRITEENABLE1,
@@ -5270,9 +5290,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         if written & !1 != 0 {
             return None;
         }
-        let (key, _, _) = self.last_pipeline.as_ref()?;
         let mut channels = 0u32;
-        for (i, c) in key.colours.iter().enumerate().take(MASKS.len()) {
+        for (i, c) in colours.iter().enumerate().take(MASKS.len()) {
             let bits = match c {
                 None => 0,
                 Some(_) if written & (1 << i) == 0 => 0x10,
@@ -5355,18 +5374,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// opaque draws it would cover them, or let them show through). The blended
     /// draws keep their order among themselves; the opaque draws held before them are drawn
     /// first, and an opaque draw given after them has all of them drawn first ([`Device::hold`]).
-    fn may_hold_after(&self, depth: bool) -> bool {
-        let r = &self.st.rs;
+    /// `blended`: the states' part ([`Device::hold_states`], in the packet).
+    fn may_hold_after(&self, depth: bool, blended: bool) -> bool {
         self.across
             && self.merge_draws
             && self.storage_regs
             && self.storage_regs_gpu.is_some()
             && depth
-            && r[rs::ZENABLE] != 0
-            && matches!(r[rs::ZFUNC], 2 | 4)
-            && r[rs::ZWRITEENABLE] == 0
-            && r[rs::ALPHABLENDENABLE] != 0
-            && r[rs::STENCILENABLE] == 0
+            && blended
             && self.counting.is_none()
     }
 
@@ -5847,6 +5862,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         })
     }
 
+    /// A draw of the Direct3D 9 stream (`DrawPrimitive`, `DrawIndexedPrimitive`, with `up` the
+    /// vertices and stride of `DrawPrimitiveUP`): its packet built from the state
+    /// ([`Device::draw_packet`]) and drawn by the executor ([`Device::execute_draw`]).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw(
         &mut self,
@@ -5862,48 +5880,160 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         if self.listed_new {
             self.prepare_listed();
         }
+        let packet = self.draw_packet(kind, indexed, base_vertex, start, count, up.map(|u| u.1));
+        match packet {
+            Some(p) => self.execute_draw(p, up.map(|u| u.0)),
+            None => self.skipped += 1,
+        }
+    }
+
+    /// The Direct3D 9 side of a draw: its [`DrawPacket`] from the state (`up_stride`: the stride
+    /// of `DrawPrimitiveUP`'s vertices). None for a draw that is skipped: a primitive type not
+    /// provided, or no record ([`Device::draw_resolved`]).
+    fn draw_packet(
+        &mut self,
+        kind: u32,
+        indexed: bool,
+        base_vertex: i32,
+        start: u32,
+        count: u32,
+        up_stride: Option<u32>,
+    ) -> Option<DrawPacket> {
         let Some(topology) = Self::topology(kind) else {
             self.warn(format!("primitive type {kind} is not provided: skipped"));
-            self.skipped += 1;
-            return;
+            return None;
         };
         // The shaders, declaration, link, samplers and the key's state fields: the last draw's
         // again while nothing they come from changed ([`DrawRecord`]), else resolved afresh.
-        let Some(rec) = self.draw_resolved() else {
-            self.skipped += 1;
-            return;
-        };
-        let DrawRecord {
-            vs,
-            ps,
-            ffp_vs,
-            ffp_ps,
-            decl,
-            link,
-            samplers,
-            copies: any_copies,
-            depth,
-            mut key,
-            groups: groups_set,
-            ..
-        } = rec;
-        let attributes = &link.attributes;
+        let mut block = self.draw_resolved()?;
         let mut strides = [0u32; 8];
-        for (k, a) in attributes.iter().enumerate() {
+        for (k, a) in block.link.attributes.iter().enumerate() {
             if !a.is_empty() {
-                strides[k] = if up.is_some() && k == 0 {
-                    up.map_or(0, |(_, s)| s)
-                } else {
-                    self.st.streams[k].stride
+                strides[k] = match up_stride {
+                    Some(s) if k == 0 => s,
+                    _ => self.st.streams[k].stride,
                 };
             }
         }
-        let samplers = samplers.as_slice();
-        let filterable = samplers
+        let filterable = block
+            .samplers
+            .as_slice()
             .iter()
             .enumerate()
             .fold(0u32, |m, (i, &((_, _, f), _))| m | (u32::from(f) << i));
         let index32 = indexed && self.st.indices.as_ref().is_some_and(|b| b.index32);
+        block.key.strides = strides;
+        block.key.topology = kind as u8;
+        block.key.index32 = index32;
+        block.key.filterable = filterable;
+        // The viewport is Direct3D 9's own rectangle of whole pixels, inside the target (or the
+        // depth surface without one).
+        let v = self.st.viewport;
+        let (tw, th) = self
+            .st
+            .rt
+            .iter()
+            .flatten()
+            .next()
+            .map(|s| (s.width, s.height))
+            .or(block.depth.map(|d| (d.3, d.4)))
+            .unwrap_or((1, 1));
+        let vx = v.x.min(tw.saturating_sub(1));
+        let vy = v.y.min(th.saturating_sub(1));
+        let vw = v.w.min(tw - vx).max(1);
+        let vh = v.h.min(th - vy).max(1);
+        let depth_range = [v.min_z.clamp(0.0, 1.0), v.max_z.clamp(0.0, 1.0)];
+        let viewport = [
+            vx as f32,
+            vy as f32,
+            vw as f32,
+            vh as f32,
+            depth_range[0],
+            depth_range[1],
+        ]
+        .map(f32::to_bits);
+        let r = &self.st.rs;
+        let scissor = if r[rs::SCISSORTESTENABLE] != 0 {
+            let s = self.st.scissor;
+            let x0 = s[0].clamp(0, tw as i32) as u32;
+            let y0 = s[1].clamp(0, th as i32) as u32;
+            let x1 = s[2].clamp(x0 as i32, tw as i32) as u32;
+            let y1 = s[3].clamp(y0 as i32, th as i32) as u32;
+            (x0, y0, x1 - x0, y1 - y0)
+        } else {
+            (0, 0, tw, th)
+        };
+        let (opaque, blended) = self.hold_states();
+        let r = &self.st.rs;
+        Some(DrawPacket {
+            kind,
+            topology,
+            indexed,
+            base_vertex,
+            start,
+            n: Self::vertex_count(kind, count),
+            viewport,
+            scissor,
+            stencil: r[rs::STENCILREF] & 0xFF,
+            blend: r[rs::BLENDFACTOR],
+            // Direct3D 9's pixel centres: each vertex shader moves its position half a pixel right
+            // and down, by this viewport's size (the converter's module documentation).
+            centre: [1.0 / vw as f32, -1.0 / vh as f32],
+            channels: self.colour_channels(&block.key.colours, u32::from(block.ps.sig.colours)),
+            opaque,
+            blended,
+            planes: self.list.is_some() && self.planes_on(),
+            dump: [
+                r[rs::ALPHABLENDENABLE],
+                r[rs::SRCBLEND],
+                r[rs::DESTBLEND],
+                r[rs::ALPHATESTENABLE],
+            ],
+            block,
+        })
+    }
+
+    /// The executor's draw: `p` drawn (`up`: the vertices of a draw that passed them by address,
+    /// copied into the batch's vertex ring). See [`packet`] for what it reads besides the packet.
+    fn execute_draw(&mut self, p: DrawPacket, up: Option<&[u8]>) {
+        let DrawPacket {
+            block:
+                DrawRecord {
+                    vs,
+                    ps,
+                    ffp_vs,
+                    ffp_ps,
+                    decl,
+                    link,
+                    samplers,
+                    copies: any_copies,
+                    depth,
+                    mut key,
+                    groups: groups_set,
+                    ..
+                },
+            kind,
+            topology,
+            indexed,
+            base_vertex,
+            start,
+            n,
+            viewport,
+            scissor,
+            stencil: stencil_ref,
+            blend: bf,
+            centre,
+            channels,
+            opaque,
+            blended,
+            planes,
+            dump,
+        } = p;
+        let attributes = &link.attributes;
+        let strides = key.strides;
+        let filterable = key.filterable;
+        let index32 = key.index32;
+        let samplers = samplers.as_slice();
         // The sun shadows' variant of a lit pixel shader, on the scene while this frame has the
         // sun's lookup ([`Device::sun_lookup`]), before its depth-only clear: the first-person
         // arms and weapon after it are drawn with their own camera, which the lookup does not
@@ -5918,10 +6048,6 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             });
         let atoc = key.atoc;
         let samples = key.samples;
-        key.strides = strides;
-        key.topology = kind as u8;
-        key.index32 = index32;
-        key.filterable = filterable;
         key.count = self.counting.is_some();
         key.sun = use_sun;
         // A variant is made on a thread of its own the first time (its shaders take the driver a
@@ -5949,15 +6075,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 .as_ref()
                 .is_some_and(|s| s.dump_at == Some(self.presents))
         {
-            let rs = &self.st.rs;
             eprintln!(
                 "sun dump lit draw: vs {:016x} ps {:016x} shadowed {use_sun} blend {} src {} dest {} alpha test {} type {} ps constants {}",
                 vs.stable,
                 ps.stable,
-                rs[rs::ALPHABLENDENABLE],
-                rs[rs::SRCBLEND],
-                rs[rs::DESTBLEND],
-                rs[rs::ALPHATESTENABLE],
+                dump[0],
+                dump[1],
+                dump[2],
+                dump[3],
                 kind,
                 ps.program
                     .constants
@@ -5970,8 +6095,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // The last draw's pipeline again (most draws), else the cache's, else a new one.
         // With a list, the plane state too: one pipeline with the clip distances serves draws
         // with a plane on and with none, but an adapter without them needs one for each, so each
-        // state its draws have is listed ([`clip_code`]).
-        let planes = self.list.is_some() && self.planes_on();
+        // state its draws have is listed ([`clip_code`]; `planes` from the packet).
         if !matches!(&self.last_pipeline, Some((k, _, on)) if *k == key && *on == planes) {
             // Listed, so the next start makes it before play ([`prepare`]): once for each
             // plane state its draws have (a bit for each beside the pipeline). One lookup
@@ -6140,7 +6264,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         if up.is_some() {
             self.make_ring_room();
         }
-        let up_offset = if let Some((bytes, _)) = up {
+        let up_offset = if let Some(bytes) = up {
             if self.up.len() + bytes.len() > UP_RING as usize {
                 self.flush();
             }
@@ -6151,60 +6275,20 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         } else {
             None
         };
-        let v = self.st.viewport;
-        let (tw, th) = self
-            .st
-            .rt
-            .iter()
-            .flatten()
-            .next()
-            .map(|s| (s.width, s.height))
-            .or(depth.map(|d| (d.3, d.4)))
-            .unwrap_or((1, 1));
-        let vx = v.x.min(tw.saturating_sub(1));
-        let vy = v.y.min(th.saturating_sub(1));
-        let vw = v.w.min(tw - vx).max(1);
-        let vh = v.h.min(th - vy).max(1);
-        // A fixed-function stage's constants: the vertex shader's from this viewport (the pass's
-        // depth range below), the pixel shader's from the states.
-        let depth_range = [v.min_z.clamp(0.0, 1.0), v.max_z.clamp(0.0, 1.0)];
-        self.ffp_constants(
-            ffp_vs.then_some([
-                vx as f32,
-                vy as f32,
-                vw as f32,
-                vh as f32,
-                depth_range[0],
-                depth_range[1],
-            ]),
-            ffp_ps,
-        );
-        // Direct3D 9's pixel centres: each vertex shader moves its position half a pixel right
-        // and down, by this viewport's size (the converter's module documentation).
-        self.write_blocks([1.0 / vw as f32, -1.0 / vh as f32], [vs.fregs, ps.fregs]);
+        // A fixed-function stage's constants: the vertex shader's from this viewport (its depth
+        // range the pass's), the pixel shader's from the states.
+        self.ffp_constants(ffp_vs.then_some(viewport.map(f32::from_bits)), ffp_ps);
+        self.write_blocks(centre, [vs.fregs, ps.fregs]);
         self.begin_pass(None);
-        let scissor = if self.st.rs[rs::SCISSORTESTENABLE] != 0 {
-            let r = self.st.scissor;
-            let x0 = r[0].clamp(0, tw as i32) as u32;
-            let y0 = r[1].clamp(0, th as i32) as u32;
-            let x1 = r[2].clamp(x0 as i32, tw as i32) as u32;
-            let y1 = r[3].clamp(y0 as i32, th as i32) as u32;
-            (x0, y0, x1 - x0, y1 - y0)
-        } else {
-            (0, 0, tw, th)
-        };
         if scissor.2 == 0 || scissor.3 == 0 {
             return;
         }
         let blocks = self.blocks;
-        let stencil_ref = self.st.rs[rs::STENCILREF] & 0xFF;
-        let bf = self.st.rs[rs::BLENDFACTOR];
         // Held to be drawn with the other draws of its key ([`Device::may_hold`]), or given to the
         // pass now, after the draws held before it.
         let holdable = up.is_none() && copies.iter().all(Option::is_none);
-        let channels = self.colour_channels(u32::from(ps.sig.colours));
-        let hold = holdable && self.may_hold(depth.is_some(), channels);
-        let after = holdable && !hold && self.may_hold_after(depth.is_some());
+        let hold = holdable && self.may_hold(depth.is_some(), opaque, channels);
+        let after = holdable && !hold && self.may_hold_after(depth.is_some(), blended);
         if !hold && !after {
             self.emit_held();
         }
@@ -6243,7 +6327,6 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 }
             }
         }
-        let n = Self::vertex_count(kind, count);
         let index = if indexed {
             match &self.st.indices {
                 Some(b) => {
@@ -6286,16 +6369,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // are the vertex shaders' move, above: a viewport moved half a pixel would cut through
         // the edge pixels on an adapter that clips at the viewport's exact edge: WARP, the
         // software adapter, does, and lost 15 of the 64 samples of a 4 by 4 target at 4x).
-        // Each of the pass's settings is sent only when it differs from what the pass has.
-        let viewport = [
-            vx as f32,
-            vy as f32,
-            vw as f32,
-            vh as f32,
-            depth_range[0],
-            depth_range[1],
-        ]
-        .map(f32::to_bits);
+        // Each of the pass's settings is sent only when it differs from what the pass has (the
+        // packet's viewport: [`Device::draw_packet`]).
         // Held: its list and place; else given now: its instance (its draw table entry's number).
         let (held, instance) = if hold || after {
             let state = self.draw_digests.is_some().then(|| {
