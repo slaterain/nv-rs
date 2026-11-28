@@ -259,7 +259,7 @@ pub fn pathing_los_grid_cell_save_game(e: &mut Engine, this: Ptr<PathingLOSGridC
         };
         e.call(SAVE_VARIABLE_SIZED_VALUE, &args![buffer, count]);
         for i in 0..count {
-            let item = fn_006e0ed0(e, list, i);
+            let item = e.call(0x006e_0ed0, &args![list, i]).u32();
             e.call(SAVE_DATA, &args![buffer, item, 1u32, 0u32]);
         }
     }
@@ -277,7 +277,7 @@ pub fn pathing_los_grid_cell_load_game(e: &mut Engine, this: Ptr<PathingLOSGridC
         let list = this.byte_add(4);
         fn_006e10c0(e, list, count, 1);
         for i in 0..count {
-            let item = fn_006e0ed0(e, list, i);
+            let item = e.call(0x006e_0ed0, &args![list, i]).u32();
             e.call(LOAD_DATA, &args![buffer, item, 1u32]);
         }
     }
@@ -488,7 +488,7 @@ pub fn pathing_los_grid_load_game(e: &mut Engine, this: Ptr<PathingLOSGrid>, buf
 /// The `PathingLOSGridCell` constructor (by the fields it sets): the seen
 /// list ([`fn_006e1070`]), `bAllSeen` false, no navmesh info, cell index -1.
 pub fn fn_006e0190(e: &mut Engine, this: Ptr<PathingLOSGridCell>) -> Ptr<PathingLOSGridCell> {
-    fn_006e1070(e, this.byte_add(4));
+    e.call(0x006e_1070, &args![this.byte_add(4)]);
     e.set(this, PathingLOSGridCell::bAllSeen, 0);
     e.set(this, PathingLOSGridCell::pNavMeshInfo, Ptr::NULL);
     e.set(this, PathingLOSGridCell::iNavMeshGridCellIndex, 0xffff_ffff);
@@ -507,7 +507,7 @@ pub fn pathing_los_grid_map_pathing_los_grid_map(
 ) -> Ptr<PathingLOSGridMap> {
     e.call(REF_OBJECT_CONSTRUCT, &args![this]);
     e.mem.set_u32(this.addr(), GRID_MAP_VTABLE);
-    fn_006e0ea0(e, this.byte_add(8), 0x25);
+    e.call(0x006e_0ea0, &args![this.byte_add(8), 0x25u32]);
     e.set(this, PathingLOSGridMap::fPercentSeen, 0.0);
     e.call(LOCATION_CONSTRUCT, &args![this.byte_add(GRID_MAP_CENTER)]);
     e.set(this, PathingLOSGridMap::fRadius, 0.0);
@@ -541,7 +541,7 @@ pub fn fn_006e02a0(e: &mut Engine, this: Ptr<PathingLOSGridMap>) {
     e.mem.set_u32(this.addr(), GRID_MAP_VTABLE);
     fn_006e03e0(e, this);
     e.call(LOCATION_DESTRUCT, &args![this.byte_add(GRID_MAP_CENTER)]);
-    fn_006e0f90(e, this.byte_add(8));
+    e.call(0x006e_0f90, &args![this.byte_add(8)]);
     e.call(REF_OBJECT_DESTRUCT, &args![this]);
 }
 
@@ -641,7 +641,7 @@ pub fn fn_006e04b0(e: &mut Engine, this: Ptr<PathingLOSGrid>) {
         }
         i = i.wrapping_add(1);
     }
-    fn_006e1050(e, this.cast());
+    e.call(0x006e_1050, &args![this.addr()]);
 }
 
 // Translated from 006e0560 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -664,7 +664,7 @@ pub fn fn_006e0560(
 /// The `PathingLOSGridCell` destructor (by its body): destroys the seen
 /// list ([`fn_006e10a0`]).
 pub fn fn_006e0590(e: &mut Engine, this: Ptr<PathingLOSGridCell>) {
-    fn_006e10a0(e, this.byte_add(4));
+    e.call(0x006e_10a0, &args![this.byte_add(4)]);
 }
 
 // Translated from 006e05b0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1012,7 +1012,7 @@ pub fn fn_006e0e80(e: &mut Engine, this: Ptr<PathingLOSGrid>) -> Ptr<PathingLOSG
 /// The `NiTMap<unsigned int,PathingLOSGrid *>` constructor (by the vtable
 /// it sets): the base ([`fn_006e0f20`]) with `buckets`, then its vtable.
 pub fn fn_006e0ea0(e: &mut Engine, this: Ptr, buckets: u32) -> Ptr {
-    fn_006e0f20(e, this, buckets);
+    e.call(0x006e_0f20, &args![this, buckets]);
     e.mem.set_u32(this.addr(), GRID_TABLE_VTABLE);
     this
 }
@@ -1026,7 +1026,7 @@ pub fn ni_t_map_pathing_los_grid_scalar_deleting_destructor(
     this: Ptr,
     flags: u32,
 ) -> Ptr {
-    fn_006e0f90(e, this);
+    e.call(0x006e_0f90, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -1064,7 +1064,7 @@ pub fn fn_006e0f20(e: &mut Engine, this: Ptr, buckets: u32) -> Ptr {
 pub fn fn_006e0f90(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), GRID_TABLE_VTABLE);
     e.call(MAP_REMOVE_ALL, &args![this]);
-    fn_006e0ff0(e, this);
+    e.call(0x006e_0ff0, &args![this]);
 }
 
 // Translated from 006e0ff0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1168,7 +1168,7 @@ pub fn ni_t_map_base_pathing_los_grid_scalar_deleting_destructor(
     this: Ptr,
     flags: u32,
 ) -> Ptr {
-    fn_006e0ff0(e, this);
+    e.call(0x006e_0ff0, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -1184,7 +1184,7 @@ pub fn bs_simple_array_pathing_los_grid_cell_scalar_deleting_destructor(
     this: Ptr,
     flags: u32,
 ) -> Ptr {
-    fn_006e1050(e, this);
+    e.call(0x006e_1050, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -1200,7 +1200,7 @@ pub fn bs_simple_array_char_scalar_deleting_destructor(
     this: Ptr,
     flags: u32,
 ) -> Ptr {
-    fn_006e10a0(e, this);
+    e.call(0x006e_10a0, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -1766,7 +1766,9 @@ mod n032_tests {
                 MAP_REMOVE_ALL,
                 UNLOCK_WRITE,
                 LOCATION_DESTRUCT,
+                0x006e_0f90,
                 MAP_REMOVE_ALL,
+                0x006e_0ff0,
                 MAP_REMOVE_ALL,
                 TABLE_FREE,
                 REF_OBJECT_DESTRUCT,
