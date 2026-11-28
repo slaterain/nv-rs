@@ -41,14 +41,14 @@ pub fn fn_006c72f0(e: &mut Engine, _this: Ptr) -> Ptr {
     if block.is_null() {
         Ptr::NULL
     } else {
-        fn_006c7370(e, block)
+        e.call(0x006c_7370, &args![block]).ptr()
     }
 }
 
 // Translated from 006c7370 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Constructor of the 12-byte object: runs `006c7390`. Returns `this`.
 pub fn fn_006c7370(e: &mut Engine, this: Ptr) -> Ptr {
-    fn_006c7390(e, this);
+    e.call(0x006c_7390, &args![this]);
     this
 }
 
@@ -142,7 +142,12 @@ mod tests {
         assert_eq!(e.call(0x006c72f0, &args![0x1000u32]).u32(), 0x7000);
         assert_eq!(
             calls(&e)[1..],
-            [(NEW, vec![0xc]), (MEMBER_CONSTRUCT, vec![0x7008, 0])]
+            [
+                (NEW, vec![0xc]),
+                (0x006c_7370, vec![0x7000]),
+                (0x006c_7390, vec![0x7000]),
+                (MEMBER_CONSTRUCT, vec![0x7008, 0])
+            ]
         );
         e.register(NEW, |_, _| Ret::default());
         e.call_log = Some(vec![]);
