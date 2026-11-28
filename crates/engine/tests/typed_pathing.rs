@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, avoid_node, location, navmesh, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -32,6 +32,8 @@ const TWO: u32 = 0x4000_0000;
 const TEN: u32 = 0x4120_0000;
 const HALF: u32 = 0x3f00_0000;
 const MINUS_ONE: u32 = 0xbf80_0000;
+const FOUR: u32 = 0x4080_0000;
+const EIGHT: u32 = 0x4100_0000;
 
 fn ret(eax: u32) -> Ret {
     Ret {
@@ -4365,4 +4367,165 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- The avoid nodes ----
+
+/// An avoid node at `n`: the start point, the segment's end, the radius, the cost and the kind.
+fn avoid_node_at(
+    e: &mut Engine,
+    n: u32,
+    start: [u32; 3],
+    end: [u32; 3],
+    radius: u32,
+    cost: u32,
+    kind: u32,
+) {
+    point_at(e, n, start);
+    point_at(e, n + 0xc, end);
+    e.mem.set_u32(n + 0x18, radius);
+    e.mem.set_u32(n + 0x1c, cost);
+    e.mem.set_u32(n + 0x20, kind);
+}
+
+/// The exe's `FLT_MAX` the avoid node's cost reads, at `0106ccd0`.
+fn avoid_node_constants(e: &mut Engine) {
+    e.map(0x0106_c000, 0x1000);
+    e.mem.set_u32(0x0106_ccd0, 0x7f7f_ffff);
+}
+
+#[test]
+fn avoid_node_cost_for_point() {
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x006d_c780,
+            avoid_node::cost_for_point(Ptr, Ptr) -> f32
+        ))
+        .common()
+        .by(base)
+        .plain(0x006d_c780)
+        .inputs(&inputs(&[
+            &[Input::Of(&[0, 1, 2, 3, 0xffff_ffff])],
+            &P3,
+            &P3,
+            &P3,
+            &[Input::F32Swept(FOUR)],
+            &[Input::F32Swept(EIGHT)],
+        ]))
+        .max_cases(256)
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            stand_ins(e);
+            avoid_node_constants(e);
+            let p = case_point(e, case, 1);
+            let node = e.mem.alloc(0x24);
+            avoid_node_at(
+                e,
+                node,
+                [bits(case, 4), bits(case, 5), bits(case, 6)],
+                [bits(case, 7), bits(case, 8), bits(case, 9)],
+                bits(case, 10),
+                bits(case, 11),
+                case.word(0),
+            );
+            vec![node, p]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn avoid_node_array_cost_for_point() {
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x006d_c990,
+            avoid_node::array_cost_for_point(Ptr, Ptr) -> f32
+        ))
+        .common()
+        .by(base)
+        .plain(0x006d_c990)
+        .inputs(&inputs(&[&P3, &[Input::Of(&[0, 1, 2, 3])]]))
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            stand_ins(e);
+            avoid_node_constants(e);
+            let p = case_point(e, case, 0);
+            // The array's elements are the nodes themselves (0x24 bytes each, the buffer at +4).
+            let data = e.mem.alloc(0x24 * 3);
+            avoid_node_at(e, data, [0, 0, 0], [TEN, 0, 0], FOUR, EIGHT, 0);
+            avoid_node_at(e, data + 0x24, [0, 0, 0], [TEN, 0, 0], FOUR, EIGHT, 1);
+            avoid_node_at(e, data + 0x48, [0, 0, 0], [TEN, 0, 0], FOUR, EIGHT, 2);
+            let a = array(e, data, case.word(3), 3);
+            vec![a, p]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn avoid_node_boundary_cost() {
+    // Endpoints, before and beyond the segment, on the radius, a degenerate segment,
+    // unordered comparisons and a projection whose intermediate values require rounding.
+    let cases: &[(u32, f32, f32, f32)] = &[
+        (0, 4.0, 0.0, 0.0),
+        (2, 4.0, 1.0, 2.0),
+        (3, 4.0, 1.0, 1.0),
+        (1, 4.0, -1.0, 1.0),
+        (1, 4.0, 5.0, 1.0),
+        (1, 4.0, 0.0, 1.0),
+        (1, 4.0, 4.0, 1.0),
+        (1, 4.0, 2.0, 4.0),
+        (1, 0.0, 0.0, 0.0),
+        (1, 4.0, f32::NAN, 1.0),
+        (1, 3.71, 2.07, 1.439),
+        (1, 1.0e18, 1.0e18, 0.0),
+    ];
+    for &(kind, end, x, y) in cases {
+        Diff::new(entry!(0x006d_c780, avoid_node::cost_for_point(Ptr, Ptr) -> f32))
+            .family(&pathing::PATHING)
+            .family(&leaf::LEAVES)
+            .setup(move |e, _| {
+                stand_ins(e);
+                avoid_node_constants(e);
+                let node = e.mem.alloc(0x24);
+                avoid_node_at(
+                    e,
+                    node,
+                    [0; 3],
+                    [end.to_bits(), 0, 0],
+                    FOUR,
+                    7.319_f32.to_bits(),
+                    kind,
+                );
+                let p = point(e, [x.to_bits(), y.to_bits(), 0]);
+                vec![node, p]
+            })
+            .run()
+            .assert_same();
+    }
+}
+
+#[test]
+fn avoid_array_cost_rounding() {
+    Diff::new(entry!(
+        0x006d_c990,
+        avoid_node::array_cost_for_point(Ptr, Ptr) -> f32
+    ))
+    .family(&pathing::PATHING)
+    .family(&leaf::LEAVES)
+    .inputs(&[Input::Of(&[0, 1, 2, 3, 4])])
+    .setup(|e, case| {
+        stand_ins(e);
+        avoid_node_constants(e);
+        let nodes = e.mem.alloc(4 * 0x24);
+        for (i, cost) in (0..4).zip([16_777_216.0_f32, 1.0, -16_777_216.0, 3.5]) {
+            avoid_node_at(e, nodes + i * 0x24, [0; 3], [0; 3], FOUR, cost.to_bits(), 0);
+        }
+        let header = array(e, nodes, case.word(0), 4);
+        vec![header, point(e, [0; 3])]
+    })
+    .run()
+    .assert_same();
 }

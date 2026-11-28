@@ -23,6 +23,24 @@ pub(crate) fn to_float(value: f64) -> f32 {
     value as f32
 }
 
+/// One arithmetic step's result rounded to a float's 24 bits (to nearest, ties to even, the
+/// exponent kept), as the exe's x87 arithmetic rounds on the main thread. Infinities, NaNs and
+/// zeros as they are.
+#[inline]
+pub(crate) fn round_to_24_bits(value: f64) -> f64 {
+    let bits = value.to_bits();
+    let exponent = (bits >> 52) & 0x7ff;
+    if exponent == 0 || exponent == 0x7ff {
+        return value;
+    }
+    const DROPPED: u64 = (1 << 29) - 1;
+    const HALF: u64 = 1 << 28;
+    let rest = bits & DROPPED;
+    let kept = bits >> 29;
+    let up = rest > HALF || (rest == HALF && kept & 1 != 0);
+    f64::from_bits((kept + u64::from(up)) << 29)
+}
+
 /// The type one function computes in on the running thread ([`float_precision`]): `f32` or `f64`.
 pub(crate) trait Real:
     Copy

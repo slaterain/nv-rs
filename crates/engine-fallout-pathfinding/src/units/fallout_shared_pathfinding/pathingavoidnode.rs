@@ -99,8 +99,8 @@ pub fn pathing_avoid_node_array_get_cost_for_point(e: &mut Engine, this: Ptr, po
     let count = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, this));
     let mut index = 0u32;
     while index < count {
-        let node = e.call(ARRAY_AT, &args![this, index]).ptr();
-        let cost = fn_006dc780(e, node, point);
+        let node: Ptr = e.call(ARRAY_AT, &args![this, index]).ptr();
+        let cost = e.call(0x006d_c780, &args![node, point]).f32();
         sum = x87_store32(x87_add(f64::from(cost), x87_m32(sum)));
         index = index.wrapping_add(1);
     }
