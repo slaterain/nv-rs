@@ -10052,6 +10052,15 @@ fn put_map_reach(e: &mut Engine, variant: u32) {
         ..Ret::default()
     });
     e.mem.set_u64(0x0107_4f60, 26.0f64.to_bits());
+    // The exe's doubles 1.0, 2.0 and 1000.0 (an arena word there made the cells' half size and
+    // the centres infinite).
+    for (at, value) in [
+        (0x0101_2070u32, 1.0f64),
+        (0x0101_1590, 2.0),
+        (0x0101_7b70, 1000.0),
+    ] {
+        e.mem.set_u64(at, value.to_bits());
+    }
     e.mem.set_u32(0x0101_6970, f32::MAX.to_bits());
     e.mem.set_u32(object(102) + 4, object(230));
     e.mem.set_u32(object(230), 0);
