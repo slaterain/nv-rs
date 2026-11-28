@@ -644,7 +644,8 @@ fn keep_order(
 
 /// Whether [`render_standard`] goes through the kept records (`crate::draw::keep`): the switch on, the draw made by
 /// [`render_pass`] (`after_begin` not 0: its first-or-later is known, [`AFTER_BEGIN`]) and [`keepable`]. The mode
-/// is tested first, so with the switch off nothing else is read.
+/// is tested first, so with the switch off nothing else is read here; the caller reads [`AFTER_BEGIN`] (one
+/// thread-local byte) just before, also with the switch off.
 #[inline(always)]
 fn kept(e: &Engine, after_begin: u8, pass_type: u32, geometry: u32, shader: u32) -> bool {
     crate::draw::keep::mode() != crate::draw::keep::Mode::Off
