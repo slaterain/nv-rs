@@ -855,6 +855,21 @@ mod tests {
         assert_eq!(*swaps.borrow(), 2);
     }
 
+    /// The radius goes through `FLD`/`FSTP` (`006802f0` at `00680315`): a signalling NaN reaches the
+    /// chunk quiet (bit 22 set), and the type, word and value come through as they were.
+    #[test]
+    fn save_stores_a_signalling_nan_radius_quiet() {
+        let (mut e, chunks, _) = save_engine(0);
+        let t = target(&mut e, 2, 0x31, 7, f32::from_bits(0x7f80_0001));
+        e.call(0x006802f0, &args![t, 1u32]);
+        let chunk = chunks.borrow()[0].clone();
+        let word = |i: usize| u32::from_le_bytes(chunk[i..i + 4].try_into().unwrap());
+        assert_eq!(word(0), 2);
+        assert_eq!(word(4), 0x31);
+        assert_eq!(word(8), 7);
+        assert_eq!(word(12), 0x7fc0_0001);
+    }
+
     #[test]
     fn save_of_an_unknown_type_writes_a_zero_word() {
         let (mut e, chunks, _) = save_engine(0);

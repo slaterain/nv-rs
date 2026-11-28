@@ -371,13 +371,8 @@ pub fn ni_blend_transform_interpolator_update(
         )
     } else if count > 0 {
         e.call(COMPUTE_NORMALIZED_WEIGHTS, &args![this]);
-        ni_blend_transform_interpolator_blend_values(
-            e,
-            this,
-            f32::from_bits(time_bits),
-            object,
-            transform,
-        )
+        e.call(0x00a4_0c10, &args![this, time_bits, object, transform])
+            .bool()
     } else {
         false
     };

@@ -100,20 +100,21 @@ fn copy_quiet(e: &mut Engine, from: u32, to: u32) {
 
 // Translated from 00a38560 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `NiQuaternion::Normalize` (Xbox PDB): divides the four floats at `this` by the square root of
-/// their sum of squares (summed as `((y*y + x*x) + z*z) + w*w`, narrowed to a float after the
-/// sum and after the root; the CRT root is `00ec6040`). The reciprocal is a float too.
+/// their sum of squares (summed as `((x*x + w*w) + y*y) + z*z` with `w` at +0 and `x`, `y`, `z` at
+/// +4, +8, +0xc, each step an x87 operation at the thread's precision; the sum, the root (the CRT
+/// root `00ec6040`) and its reciprocal stored as floats), each lane read and stored in turn.
 pub fn ni_quaternion_normalize(e: &mut Engine, this: Ptr) {
     let base = this.addr();
-    let [x, y, z, w] = load4(e, base).map(f64::from);
-    let sum = (((y * y + x * x) + z * z) + w * w) as f32;
-    let root = e.call(X87_SQRT, &args![f64::from(sum)]).f32();
-    let inverse = (1.0 / f64::from(root)) as f32;
+    let ld = |e: &Engine, offset: u32| x87_load32(e.mem.u32(base + offset));
+    let (w, x, y, z) = (ld(e, 0), ld(e, 4), ld(e, 8), ld(e, 0xc));
+    let sum = x87_add(x87_mul(x, x), x87_mul(w, w));
+    let sum = x87_add(x87_add(sum, x87_mul(y, y)), x87_mul(z, z));
+    let sum = x87_load32(x87_store32(sum));
+    let root = x87_load32(x87_store32(e.call(X87_SQRT, &args![sum]).f64()));
+    let inverse = x87_load32(x87_store32(x87_div(1.0, root)));
     for lane in 0..4u32 {
-        let value = e.mem.f32(base + 4 * lane);
-        e.mem.set_f32(
-            base + 4 * lane,
-            (f64::from(inverse) * f64::from(value)) as f32,
-        );
+        let value = x87_mul(ld(e, 4 * lane), inverse);
+        e.mem.set_u32(base + 4 * lane, x87_store32(value));
     }
 }
 
@@ -237,7 +238,7 @@ pub fn fn_00c74d50(e: &mut Engine, destination: Ptr, source: Ptr) -> Ptr {
         copy_quiet(e, from + 0x10, q + 4);
         copy_quiet(e, from + 0x14, q + 8);
         copy_quiet(e, from + 0x18, q + 0xc);
-        ni_quaternion_normalize(e, quaternion);
+        e.call(0x00a3_8560, &args![quaternion]);
         e.call(CONVERT, &args![quaternion, destination]);
     });
     e.call(POINT_COPY, &args![to + 0x24, source]);
@@ -7361,6 +7362,48 @@ mod tests {
         for (got, want) in floats(&e, this, 4).into_iter().zip([1.0, 2.0, 3.0, 4.0]) {
             assert!((got - want / root).abs() < 1e-6, "{got} {want}");
         }
+    }
+
+    /// Each x87 step rounds to the thread's precision: under the main thread's control word (24 bits)
+    /// every product and sum is a float's (as `f32` arithmetic gives it), under the other threads'
+    /// (53 bits) only the three stores round. The quaternions are ones whose sums carry low bits.
+    #[test]
+    fn ni_quaternion_normalize_rounds_each_step_to_the_threads_precision() {
+        let quaternions: [[f32; 4]; 4] = [
+            [0.3, 0.7, 0.1, 0.9],
+            [1.000_123, 0.333_333_34, 0.777_777_8, 0.1],
+            [0.123_456_79, 0.987_654_3, 0.555_555_6, 0.444_444_45],
+            [3.141_592_7, 2.718_281_8, 1.414_213_5, 1.732_050_8],
+        ];
+        let saved = crate::x87::control_word();
+        let mut differ = false;
+        for q in quaternions {
+            let [w, x, y, z] = q;
+            let narrow = |v: f64| v as f32;
+            let sum = ((x * x + w * w) + y * y) + z * z;
+            let inverse = 1.0 / sum.sqrt();
+            let main = q.map(|v| v * inverse);
+            let wide = q.map(f64::from);
+            let sum = narrow(
+                ((wide[1] * wide[1] + wide[0] * wide[0]) + wide[2] * wide[2]) + wide[3] * wide[3],
+            );
+            let root = narrow(f64::from(sum).sqrt());
+            let inverse = f64::from(narrow(1.0 / f64::from(root)));
+            let other = wide.map(|v| narrow(v * inverse));
+            differ |= main != other;
+            for (word, want) in [(0x007fu16, main), (0x027f, other)] {
+                let mut e = engine();
+                let log = CallLog::default();
+                install_sqrt(&mut e, &log);
+                let this = e.mem.alloc(0x10);
+                put_floats(&mut e, this, &q);
+                crate::x87::set_control_word(word);
+                e.call(0x00a38560, &args![this]);
+                crate::x87::set_control_word(saved);
+                assert_eq!(floats(&e, this, 4), want.to_vec(), "{q:?} under {word:#x}");
+            }
+        }
+        assert!(differ, "no quaternion here tells the precisions apart");
     }
 
     #[test]

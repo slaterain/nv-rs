@@ -308,10 +308,13 @@ pub fn niquaternion_slerp(
     // FCOM; TEST AH,0x41; JP: exactly one of C0/C3 (below or equal) calls
     // on `t`; above or unordered take the mirrored path.
     let corrected = if tv <= half {
-        fn_00a6dc30(e, f32::from_bits(x87_store32(tv)), cos)
+        e.call(0x00a6_dc30, &args![x87_store32(tv), cos.to_bits()])
+            .f64()
     } else {
         let mirrored = spill(x87_sub(1.0, tv));
-        let r = fn_00a6dc30(e, f32::from_bits(x87_store32(mirrored)), cos);
+        let r = e
+            .call(0x00a6_dc30, &args![x87_store32(mirrored), cos.to_bits()])
+            .f64();
         x87_sub(1.0, r)
     };
     let k = spill(corrected);
@@ -349,12 +352,12 @@ pub fn fn_00a6e430(
         let second: Ptr<NiQuaternion> = Ptr::new(locals.addr() + 0x10);
         let tv = x87_load32(t.to_bits());
         let t_arg = f32::from_bits(x87_store32(tv));
-        niquaternion_slerp(e, second, t_arg, p, q);
-        niquaternion_slerp(e, first, t_arg, s1, s2);
+        e.call(0x00a6_e330, &args![second, t_arg.to_bits(), p, q]);
+        e.call(0x00a6_e330, &args![first, t_arg.to_bits(), s1, s2]);
         let one_minus = x87_sub(1.0, tv);
         let twice = x87_add(tv, tv);
         let u = spill(x87_mul(one_minus, twice));
-        niquaternion_slerp(e, this, f32::from_bits(x87_store32(u)), second, first);
+        e.call(0x00a6_e330, &args![this, x87_store32(u), second, first]);
     });
 }
 

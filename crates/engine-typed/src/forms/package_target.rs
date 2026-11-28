@@ -7,11 +7,11 @@
 //! **Native.** The unit's getters and word setters are done in place inside its own functions (a
 //! copy takes the type through the type setter, a typed call, then the word at +4 for types 0 to
 //! 2, the value and the radius), and so are the one-line bodies the exe calls: the value's
-//! getter and setter (`0044ddc0`, `00403550`), the radius's (`0084d030`, `0063f790`), a form's id (`0084e3a0`), the big-endian byte
-//! (`00401500`, `011c54ba`), the chunk's zeroing (`00403d30`, `memset` of the 0x10 bytes) and the
-//! three-word swap (`0067ff10`, this family's). The form lookup by id, `TESForm::GetFile`,
-//! `AddCompileIndex` and the chunk's write are this family's typed calls, the save buffer's form id
-//! the save family's. What stays a call by address: the RTTI cast, the owner's name test
+//! getter and setter (`0044ddc0`, `00403550`), the radius's (`0084d030`, `0063f790`), a form's
+//! id (`0084e3a0`), the big-endian byte (`00401500`, `011c54ba`) and the chunk's zeroing
+//! (`00403d30`, `memset` of the 0x10 bytes). The three-word swap (`0067ff10`, three calls of
+//! `00401080`), the form lookup by id, `TESForm::GetFile`, `AddCompileIndex` and the chunk's
+//! write are this family's typed calls, the save buffer's form id the save family's. What stays a call by address: the RTTI cast, the owner's name test
 //! (`00474cb0`), the loader's warning (which a fix may replace), the old save object's byte and id
 //! writers and readers, the save buffer's writer, the load buffer's reader and form id reader;
 //! the owner's name is asked through its slot.

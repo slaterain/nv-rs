@@ -1,50 +1,57 @@
 //! The animation keys family (stage 1): the code that reads and writes the key arrays an animation
-//! keeps (`NiTransformData`'s rotation, position and scale keys, allocated while `LoadBinary` runs).
-//! They hold about 12 MB on the smoothness route (BULK.md 2.1), all in the heap's address space, and
-//! they are what stage 2 moves out of it next (NEXT-FAMILY.md), as plain byte buffers read by offset.
-//! This first batch types the functions the touch census saw reaching the keys in Doc's house that
-//! work on rotation keys and their quaternions:
+//! keeps (`NiTransformData`'s rotation, position and scale keys, `NiFloatData`'s keys), allocated
+//! while `LoadBinary` runs. They hold about 12 MB on the smoothness route (BULK.md 2.1), all in the
+//! heap's address space, and they are what stage 2 moves out of it next (NEXT-FAMILY.md), as plain
+//! byte buffers read by offset. Every animated bone's transform comes from them every frame:
 //!
-//! - [`quaternion`]: `NiQuaternion`'s constructor from four floats, its negation, `Slerp` and the
-//!   parameter correction `Slerp` makes;
-//! - [`rot_keys`]: `NiRotKey::GenInterp` (the key search and the key type's interpolation) and the
-//!   preparation of a rotation key array (neighbours in one hemisphere, `W` clamped).
+//! - [`search`]: the key search the `GenInterp` functions share and the ratio between its two keys;
+//! - [`float_keys`]: `NiFloatKey::GenInterp` and the float key types' interpolations (linear,
+//!   Bezier, TCB, step), with the cubic Hermite value and the linear blend they share;
+//! - [`pos_keys`]: `NiPosKey::GenInterp` and the position key types' interpolations (none, linear,
+//!   Bezier, TCB);
+//! - [`rot_keys`]: `NiRotKey::GenInterp`, the rotation key types' interpolations (identity, linear,
+//!   Bezier, TCB, step) and the preparation of a rotation key array (neighbours in one hemisphere,
+//!   `W` clamped);
+//! - [`quaternion`]: `NiQuaternion`'s constructor from four floats, its negation, `Slerp`, the
+//!   parameter correction `Slerp` makes, `FastNormalize` and the spherical quadrangle
+//!   interpolation.
 //!
-//! What stays by address: the key types' interpolation functions (the table at `011f3cc0`),
-//! `NiQuaternion::FastNormalize` (`00a4ff00`), and every other user of the keys (`LoadBinary`, the
-//! stream reads that fill the arrays, the other key types) until a later batch types them.
+//! Each `GenInterp` does a known key type's interpolation in place (a table word holding the
+//! function this family has for it), with no call; so is the spherical quadrangle interpolation the
+//! Bezier and TCB rotation keys use. What stays by address: the Euler rotation keys (`FSINCOS`), a
+//! table word this family does not know, and every other user of the keys (`LoadBinary`, the stream
+//! reads that fill the arrays, the colour, boolean and text keys).
 //!
-//! A key array is `count` keys of `size` bytes (the size the key type has, handed in as a byte), each
-//! starting with its float time; a rotation key's quaternion follows at +4. [`Keys`] gives a key's
-//! address, word and time. Not everything goes through it yet, which stage 2 has to change: the
-//! copies of a key's quaternion (`GenInterp`'s first key, the preparation's negation copied
-//! back) and the clamp of `W` read and write at those addresses with `e.mem`, and `GenInterp` hands
-//! raw key addresses to the interpolation functions it calls by address.
+//! A key array is `count` keys of `size` bytes (the size the key type has, handed in as a byte),
+//! each starting with its float time; a float key's value, a position key's point or a rotation
+//! key's quaternion follows at +4. [`Keys`] gives a key's address, word and time.
 //!
 //! Stage 1: the keys stay in guest memory where the game made them. **Floats.** These run wherever
-//! animations are loaded and updated, not only on the main thread: [`Threads::Both`]. What runs for
-//! every animated bone every frame (`Slerp`, its parameter correction, and the key search and ratio
-//! of `GenInterp`) is native maths by ADR-0014's float rule for such code: `f64` locals, each
-//! operation in the exe's order, rounded to a float where the exe stores one ([`wide`], [`narrow`],
-//! [`rounded`]). On the game's other threads (53-bit x87 precision) that is the exe's arithmetic
-//! exactly, NaN payloads aside; on the main thread (24-bit precision) the exe rounds every operation
-//! to 24 bits, and the results may differ in their last bits. The rest (the constructor, the
-//! negation, the preparation's dot products and clamps, which run when keys are loaded) keeps the
-//! exact helpers ([`engine_core::x87`]). Float fields are declared as their bits.
+//! animations are loaded and updated, the AI threads and main: [`Threads::Both`]. What runs every
+//! frame (the ratios, the interpolations, `Slerp`, its correction and `FastNormalize`) is native
+//! maths at the running thread's precision (`crate::native::Real`: `f32` on main, 24 bits, where
+//! every x87 operation rounds to a float; `f64` on the AI threads, 53 bits, rounded to a float only
+//! where the exe stores one), so it is the exe's arithmetic on both, NaN payloads aside (an x87
+//! load quiets a signalling NaN). The rest (the constructor, the negation, the preparation's dot
+//! products and clamps, which run when keys are loaded) keeps the exact helpers
+//! ([`engine_core::x87`]). Float fields are declared as their bits.
 
 use crate::image;
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn, Engine};
 
+pub mod float_keys;
+pub mod pos_keys;
 pub mod quaternion;
 pub mod rot_keys;
+pub mod search;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(27);
 
-/// `NV_TYPED=anim_keys:off` turns it off. On by default since 2026-11-11, on its differential tests,
-/// planted mutants and review (no comparison run for native code, AGENT-RULES.md).
+/// `NV_TYPED=anim_keys:off` turns it off. On by default since 2026-11-11, on its differential
+/// tests, planted mutants and review (no comparison run for native code, AGENT-RULES.md).
 pub static ANIM_KEYS: Family = Family {
     name: "anim_keys",
     id: FAMILY,
@@ -127,5 +134,24 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a6_e330, quaternion::slerp(Ptr<NiQuaternion>, f32, Ptr<NiQuaternion>, Ptr<NiQuaternion>)),
         entry!(0x00a2_8740, rot_keys::gen_interp(Ptr<NiQuaternion>, f32, Ptr, u32, u32, Ptr, u8) -> Ptr<NiQuaternion>),
         entry!(0x00a2_8ab0, rot_keys::prepare(Ptr, u32, u8)),
+        entry!(0x00a4_ff00, quaternion::fast_normalize(Ptr)),
+        entry!(0x00a6_e430, quaternion::squad(Ptr<NiQuaternion>, f32, Ptr<NiQuaternion>, Ptr<NiQuaternion>, Ptr<NiQuaternion>, Ptr<NiQuaternion>)),
+        entry!(0x00a2_86e0, rot_keys::identity(f32, Ptr, Ptr, Ptr)),
+        entry!(0x00a2_ab90, rot_keys::linear(f32, Ptr, Ptr, Ptr) -> u32),
+        entry!(0x00a2_8d90, rot_keys::bezier(f32, Ptr, Ptr, Ptr)),
+        entry!(0x00a2_bc60, rot_keys::tcb(f32, Ptr, Ptr, Ptr) -> u32),
+        entry!(0x00a2_cf20, rot_keys::step(f32, Ptr, Ptr, Ptr)),
+        entry!(0x00a2_6b40, float_keys::gen_interp(f32, Ptr, u32, u32, Ptr, u8) -> f64),
+        entry!(0x00a4_2050, float_keys::lerp(f32, f32, f32) -> f64),
+        entry!(0x00a4_2070, float_keys::hermite(f32, f32, f32, f32, f32) -> f64),
+        entry!(0x00a2_a560, float_keys::linear(f32, Ptr, Ptr, Ptr)),
+        entry!(0x00a2_6fe0, float_keys::bezier(f32, Ptr, Ptr, Ptr)),
+        entry!(0x00a2_c610, float_keys::tcb(f32, Ptr, Ptr, Ptr)),
+        entry!(0x00a2_d200, float_keys::step(f32, Ptr, Ptr, Ptr)),
+        entry!(0x00a2_7490, pos_keys::gen_interp(Ptr, f32, Ptr, u32, u32, Ptr, u8) -> Ptr),
+        entry!(0x00a2_7470, pos_keys::none(f32, Ptr, Ptr, Ptr)),
+        entry!(0x00a2_a7f0, pos_keys::linear(f32, Ptr, Ptr, Ptr)),
+        entry!(0x00a2_7c80, pos_keys::bezier(f32, Ptr, Ptr, Ptr)),
+        entry!(0x00a2_af70, pos_keys::tcb(f32, Ptr, Ptr, Ptr)),
     ]
 }

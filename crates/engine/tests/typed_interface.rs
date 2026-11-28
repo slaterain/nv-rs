@@ -5281,6 +5281,8 @@ fn no_family_past_its_gate_holds_an_overridable_address() {
         ("dispatch", 0x00a0_9330),
         ("dispatch", 0x00a0_9410),
         ("animation", 0x004f_0380),
+        ("animation", 0x00a3_7260),
+        ("animation", 0x00a3_fdb0),
         ("animation", 0x00a4_1110),
         ("scripts", 0x0059_3870),
         ("scripts", 0x005a_c1e0),

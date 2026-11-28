@@ -593,7 +593,7 @@ pub fn ni_blend_interpolator_compute_normalized_weights(e: &mut Engine, this: Pt
             return;
         }
         2 => {
-            fn_00a36bd0(e, this);
+            e.call(0x00a3_6bd0, &args![this]);
             return;
         }
         _ => {}

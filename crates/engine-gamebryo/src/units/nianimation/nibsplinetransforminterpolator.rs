@@ -559,7 +559,7 @@ pub fn ni_b_spline_transform_interpolator_update(
             let [w, x, y, z] =
                 [0u32, 4, 8, 12].map(|offset| x87_quiet_bits(e.mem.u32(output + offset)));
             e.call(QUATERNION_CONSTRUCT, &args![quaternion, w, x, y, z]);
-            ni_quaternion_fast_normalize(e, Ptr::new(quaternion));
+            e.call(0x00a4_ff00, &args![quaternion]);
             for index in 0..4 {
                 let word = e.mem.u32(quaternion + 4 * index);
                 e.mem
