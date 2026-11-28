@@ -1167,7 +1167,7 @@ pub fn nav_mesh_check_nav_mesh(e: &mut Engine, this: Ptr<NavMesh>, _unused_1: u3
                 let neighbour = fn_0068f2c0(e, tri, edge);
                 if neighbour as u32 >= array_size(e, triangles) {
                     report(e, this, text, FORMAT_BAD_TRIANGLE_INDEX, &[t, edge as u32]);
-                    fn_006907d0(e, tri, edge as u32, 0xffff);
+                    e.call(0x0069_07d0, &args![tri, edge as u32, 0xffffu16]);
                     problems = true;
                 }
             }
@@ -1206,7 +1206,7 @@ pub fn nav_mesh_check_nav_mesh(e: &mut Engine, this: Ptr<NavMesh>, _unused_1: u3
                     FORMAT_BAD_EXTRA_INFO_INDEX,
                     &[t, edge as u32],
                 );
-                fn_00690790(e, tri, edge as u32);
+                e.call(0x0069_0790, &args![tri, edge as u32]);
                 problems = true;
                 continue;
             }
@@ -1457,7 +1457,7 @@ pub fn nav_mesh_check_nav_mesh(e: &mut Engine, this: Ptr<NavMesh>, _unused_1: u3
                 &[cover_index, cover_triangle as u32],
             );
             problems = true;
-        } else if !fn_00690770(e, tri) {
+        } else if !e.call(0x0069_0770, &args![tri]).bool() {
             report(
                 e,
                 this,
@@ -1502,7 +1502,7 @@ pub fn fn_00690790(e: &mut Engine, this: Ptr<NavMeshTriangle>, edge: u32) {
 /// `NavMeshTriangle` method: clears edge info flag `edge` (as `00690790`),
 /// then stores `value` in the neighbour slot `Triangles[edge]`.
 pub fn fn_006907d0(e: &mut Engine, this: Ptr<NavMeshTriangle>, edge: u32, value: u16) {
-    fn_00690790(e, this, edge);
+    e.call(0x0069_0790, &args![this, edge]);
     e.mem.set_u16(neighbour_slot(this, edge as i32), value);
 }
 
@@ -1703,7 +1703,7 @@ pub fn nav_mesh_delete_extra_edge_info(e: &mut Engine, this: Ptr<NavMesh>, index
     let mut t = 0u32;
     while t < count {
         let tri = triangle_element(e, this, t);
-        if fn_00690e10(e, tri) {
+        if e.call(0x0069_0e10, &args![tri]).bool() {
             let mut edge = 0u32;
             while edge < 3 {
                 let tri = triangle_element(e, this, t);
@@ -1711,14 +1711,14 @@ pub fn nav_mesh_delete_extra_edge_info(e: &mut Engine, this: Ptr<NavMesh>, index
                     let tri = triangle_element(e, this, t);
                     if fn_0068f2c0(e, tri, edge as i32) == index {
                         let tri = triangle_element(e, this, t);
-                        fn_00690790(e, tri, edge);
+                        e.call(0x0069_0790, &args![tri, edge]);
                     } else {
                         let tri = triangle_element(e, this, t);
                         let slot = fn_0068f2c0(e, tri, edge as i32);
                         let size = array_size(e, infos);
                         if slot as u32 == size {
                             let tri = triangle_element(e, this, t);
-                            fn_00690e30(e, tri, edge, index);
+                            e.call(0x0069_0e30, &args![tri, edge, index]);
                         }
                     }
                 }
@@ -1787,7 +1787,7 @@ pub fn fn_006910a0(e: &mut Engine, this: Ptr<NavMesh>) {
             continue;
         }
         let tri = mesh_triangle(e, this, index as u16);
-        if fn_00690770(e, tri) {
+        if e.call(0x0069_0770, &args![tri]).bool() {
             e.with_stack(4, |e, slot| {
                 e.mem.set_u16(slot.addr(), index as u16);
                 fn_00691820(e, this.at(NavMesh::CoverArray), slot);

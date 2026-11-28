@@ -42,6 +42,7 @@ pub mod navmesh;
 pub mod point;
 pub mod pov;
 pub mod search;
+pub mod triangle;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(7);
@@ -267,5 +268,14 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The navmesh triangle's accessors.
+        entry!(0x0069_0770, triangle::has_cover_flags(Ptr<NavMeshTriangle>) -> bool),
+        entry!(0x0069_0e10, triangle::has_edge_info(Ptr<NavMeshTriangle>) -> bool),
+        entry!(0x0069_0e70, triangle::flag_0x400(Ptr<NavMeshTriangle>) -> bool),
+        entry!(0x0069_0df0, triangle::set_vertex(Ptr<NavMeshTriangle>, u32, u16)),
+        entry!(0x0069_0790, triangle::clear_edge_info(Ptr<NavMeshTriangle>, u32)),
+        entry!(0x0069_07d0, triangle::clear_edge_info_to(Ptr<NavMeshTriangle>, u32, u16)),
+        entry!(0x0069_0e30, triangle::set_edge_info(Ptr<NavMeshTriangle>, u32, u16)),
+        entry!(0x0069_0fe0, triangle::add_vertex(Ptr<NavMesh>, Ptr) -> u32),
     ]
 }

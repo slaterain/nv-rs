@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, navmesh, point, pov, search, triangle};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -4365,4 +4365,154 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+// ---- The navmesh triangle's accessors ----
+
+#[test]
+fn triangle_has_cover_flags() {
+    Diff::new(entry!(
+        0x0069_0770,
+        triangle::has_cover_flags(Ptr<_>) -> bool
+    ))
+    .common()
+    .plain(0x0069_0770)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        let tri = e.mem.alloc(0x10);
+        e.mem.set_u32(tri + 0xc, case.word(0));
+        vec![tri]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn triangle_has_edge_info() {
+    Diff::new(entry!(0x0069_0e10, triangle::has_edge_info(Ptr<_>) -> bool))
+        .common()
+        .plain(0x0069_0e10)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            let tri = e.mem.alloc(0x10);
+            e.mem.set_u32(tri + 0xc, case.word(0));
+            vec![tri]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn triangle_flag_0x400() {
+    Diff::new(entry!(0x0069_0e70, triangle::flag_0x400(Ptr<_>) -> bool))
+        .common()
+        .plain(0x0069_0e70)
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            let tri = e.mem.alloc(0x10);
+            e.mem.set_u32(tri + 0xc, case.word(0));
+            vec![tri]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn triangle_set_vertex() {
+    Diff::new(entry!(0x0069_0df0, triangle::set_vertex(Ptr<_>, u32, u16)))
+        .common()
+        .plain(0x0069_0df0)
+        .inputs(&[Input::Of(&[0, 1, 2, 0x20]), Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            let tri = e.mem.alloc(0x10);
+            vec![tri, case.word(0), case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn triangle_clear_edge_info() {
+    Diff::new(entry!(0x0069_0790, triangle::clear_edge_info(Ptr<_>, u32)))
+        .common()
+        .plain(0x0069_0790)
+        .inputs(&[Input::Word, Input::Of(&[0, 1, 2, 31, 32])])
+        .setup(|e, case| {
+            stand_ins(e);
+            let tri = e.mem.alloc(0x10);
+            e.mem.set_u32(tri + 0xc, case.word(0));
+            e.mem.set_u16(tri + 6, 0x1234);
+            vec![tri, case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn triangle_clear_edge_info_to() {
+    Diff::new(entry!(
+        0x0069_07d0,
+        triangle::clear_edge_info_to(Ptr<_>, u32, u16)
+    ))
+    .common()
+    .plain(0x0069_07d0)
+    .inputs(&[Input::Word, Input::Of(&[0, 1, 2, 31, 32]), Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        let tri = e.mem.alloc(0x10);
+        e.mem.set_u32(tri + 0xc, case.word(0));
+        vec![tri, case.word(1), case.word(2)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn triangle_set_edge_info() {
+    Diff::new(entry!(
+        0x0069_0e30,
+        triangle::set_edge_info(Ptr<_>, u32, u16)
+    ))
+    .common()
+    .plain(0x0069_0e30)
+    .inputs(&[Input::Word, Input::Of(&[0, 1, 2, 31, 32]), Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        let tri = e.mem.alloc(0x10);
+        e.mem.set_u32(tri + 0xc, case.word(0));
+        vec![tri, case.word(1), case.word(2)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn navmesh_add_vertex() {
+    Diff::new(entry!(
+        0x0069_0fe0,
+        triangle::add_vertex(Ptr<_>, Ptr) -> u32
+    ))
+    .common()
+    .plain(0x0069_0fe0)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        // The vertex array's append, logged with both words.
+        e.register(0x0069_1ab0, |e, a| {
+            log(e, 0x1ab0, a[0]);
+            log(e, 0x1ab1, a[1]);
+            ret(7)
+        });
+        let mesh = e.mem.alloc(0x108);
+        let vertices = e.mem.alloc(0x10);
+        e.mem.set_u32(mesh + 0x28, vertices);
+        let vertex = point(e, [case.word(0), ONE, TWO]);
+        vec![mesh, vertex]
+    })
+    .run()
+    .assert_same();
 }
