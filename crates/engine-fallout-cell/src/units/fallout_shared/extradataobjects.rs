@@ -3056,7 +3056,7 @@ pub fn extra_rag_doll_data_scalar_deleting_destructor(
     this: Ptr<ExtraRagDollData>,
     flags: u32,
 ) -> Ptr<ExtraRagDollData> {
-    fn_00432d10(e, this);
+    e.call(0x0043_2d10, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -3070,7 +3070,7 @@ pub fn fn_00432d10(e: &mut Engine, this: Ptr<ExtraRagDollData>) {
     e.mem.set_u32(this.addr(), EXTRA_RAG_DOLL_DATA_VTABLE);
     let data = e.get(this, ExtraRagDollData::pRagDollData);
     if !data.is_null() {
-        fn_00432da0(e, data, 1);
+        e.call(0x0043_2da0, &args![data, 1u32]);
     }
     e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
 }
@@ -3289,7 +3289,7 @@ pub fn extra_run_once_packs_scalar_deleting_destructor(
     this: Ptr<ExtraRunOncePacks>,
     flags: u32,
 ) -> Ptr<ExtraRunOncePacks> {
-    fn_004330e0(e, this);
+    e.call(0x0043_30e0, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -3447,7 +3447,7 @@ pub fn extra_enable_state_children_scalar_deleting_destructor(
     this: Ptr<ExtraEnableStateChildren>,
     flags: u32,
 ) -> Ptr<ExtraEnableStateChildren> {
-    fn_00433440(e, this);
+    e.call(0x0043_3440, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -3521,7 +3521,7 @@ pub fn extra_linked_ref_children_scalar_deleting_destructor(
     this: Ptr<ExtraLinkedRefChildren>,
     flags: u32,
 ) -> Ptr<ExtraLinkedRefChildren> {
-    fn_004335d0(e, this);
+    e.call(0x0043_35d0, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -3622,7 +3622,7 @@ pub fn extra_activate_ref_children_scalar_deleting_destructor(
     this: Ptr<ExtraActivateRefChildren>,
     flags: u32,
 ) -> Ptr<ExtraActivateRefChildren> {
-    fn_00433830(e, this);
+    e.call(0x0043_3830, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -3636,7 +3636,7 @@ pub fn fn_00433830(e: &mut Engine, this: Ptr<ExtraActivateRefChildren>) {
     e.mem
         .set_u32(this.addr(), EXTRA_ACTIVATE_REF_CHILDREN_VTABLE);
     let list = this.at(ExtraActivateRefChildren::ChildList);
-    fn_00433750(e, list);
+    e.call(0x0043_3750, &args![list]);
     e.call(SIMPLE_LIST_DESTRUCT, &args![list]);
     e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
 }
@@ -3664,7 +3664,7 @@ pub fn extra_activate_ref_scalar_deleting_destructor(
     this: Ptr<ExtraActivateRef>,
     flags: u32,
 ) -> Ptr<ExtraActivateRef> {
-    fn_00433970(e, this);
+    e.call(0x0043_3970, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -3677,7 +3677,7 @@ pub fn extra_activate_ref_scalar_deleting_destructor(
 pub fn fn_00433970(e: &mut Engine, this: Ptr<ExtraActivateRef>) {
     e.mem.set_u32(this.addr(), EXTRA_ACTIVATE_REF_VTABLE);
     let list = this.at(ExtraActivateRef::ParentList);
-    fn_00433750(e, list);
+    e.call(0x0043_3750, &args![list]);
     e.call(
         BS_STRING_CLEAR,
         &args![this.at(ExtraActivateRef::ActivateTextOverride)],
@@ -3695,7 +3695,11 @@ pub fn fn_00433a00(
     this: Ptr<ExtraActivateRef>,
     reference: u32,
 ) -> Ptr<RefActivateData> {
-    fn_004336f0(e, reference, this.at(ExtraActivateRef::ParentList))
+    e.call(
+        0x0043_36f0,
+        &args![reference, this.at(ExtraActivateRef::ParentList)],
+    )
+    .ptr()
 }
 
 // Translated from 00433a20 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3722,7 +3726,7 @@ pub fn extra_activate_ref_compare(e: &mut Engine, this: Ptr<ExtraActivateRef>, o
     while !node.is_null() && !list_node_is_empty(e, node) {
         let item = list_node_item(e, node);
         let reference = e.mem.u32(item);
-        let counterpart = fn_00433a00(e, cast, reference);
+        let counterpart: Ptr<RefActivateData> = e.call(0x0043_3a00, &args![cast, reference]).ptr();
         if counterpart.is_null() || e.call(MEMCMP, &args![counterpart, item, 8u32]).u32() != 0 {
             return true;
         }
@@ -3763,7 +3767,7 @@ pub fn extra_activate_ref_copy(e: &mut Engine, this: Ptr<ExtraActivateRef>, othe
         return;
     }
     let list = this.at(ExtraActivateRef::ParentList);
-    fn_00433750(e, list);
+    e.call(0x0043_3750, &args![list]);
     let mut node = cast.at(ExtraActivateRef::ParentList);
     while !node.is_null() && !list_node_is_empty(e, node) {
         let item = list_node_item(e, node);
@@ -3808,7 +3812,7 @@ pub fn extra_decal_refs_scalar_deleting_destructor(
     this: Ptr<ExtraDecalRefs>,
     flags: u32,
 ) -> Ptr<ExtraDecalRefs> {
-    fn_00433d40(e, this);
+    e.call(0x0043_3d40, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -3821,7 +3825,7 @@ pub fn extra_decal_refs_scalar_deleting_destructor(
 /// The exception-unwinding frame is not translated.
 pub fn fn_00433d40(e: &mut Engine, this: Ptr<ExtraDecalRefs>) {
     e.mem.set_u32(this.addr(), EXTRA_DECAL_REFS_VTABLE);
-    fn_004343c0(e, this);
+    e.call(0x0043_43c0, &args![this]);
     e.call(
         SIMPLE_LIST_DESTRUCT,
         &args![this.at(ExtraDecalRefs::DecalRefList)],
@@ -4044,7 +4048,7 @@ pub(crate) fn entry_lists_differ(
     while !node.is_null() && !list_node_is_empty(e, node) {
         let item = list_node_item(e, node);
         let reference = e.mem.u32(item);
-        let counterpart = extra_decal_refs_get_ref_decal_data(e, this, reference);
+        let counterpart: Ptr<RefDecalData> = e.call(0x0043_4410, &args![this, reference]).ptr();
         if counterpart.is_null() {
             return true;
         }
@@ -4082,7 +4086,7 @@ pub fn extra_decal_refs_copy(e: &mut Engine, this: Ptr<ExtraDecalRefs>, other: P
     if cast.is_null() {
         return;
     }
-    fn_004343c0(e, this);
+    e.call(0x0043_43c0, &args![this]);
     let mut node = cast.at(ExtraDecalRefs::DecalRefList);
     while !node.is_null() && !list_node_is_empty(e, node) {
         let item = list_node_item(e, node);
@@ -4151,7 +4155,7 @@ pub fn fn_00434480(
     intersect: Ptr,
     normal: Ptr,
 ) {
-    let mut entry = extra_decal_refs_get_ref_decal_data(e, this, reference).addr();
+    let mut entry = e.call(0x0043_4410, &args![this, reference]).u32();
     if entry == 0 {
         let memory = e.call(OPERATOR_NEW, &args![0x1cu32]).u32();
         entry = if memory != 0 {
@@ -4227,7 +4231,7 @@ pub fn extra_reflected_refs_copy(e: &mut Engine, this: Ptr<ExtraReflectedRefs>, 
     if cast.is_null() {
         return;
     }
-    extra_reflected_refs_clear_reference_data(e, this);
+    e.call(0x0043_4d90, &args![this]);
     copy_reference_entries(
         e,
         this.at(ExtraReflectedRefs::RefList),
@@ -4301,7 +4305,7 @@ pub fn fn_00434800(e: &mut Engine, this: Ptr<ExtraReflectedRefs>, reference: u32
 /// the head of the list. The entry's `iEffectFlags` is then set to `flags`.
 /// The exception-unwinding frame is not translated.
 pub fn fn_004348a0(e: &mut Engine, this: Ptr<ExtraReflectedRefs>, reference: u32, flags: u32) {
-    let mut entry = extra_decal_refs_get_ref_decal_data(e, this.cast(), reference).addr();
+    let mut entry = e.call(0x0043_4410, &args![this, reference]).u32();
     if entry == 0 {
         let memory = e.call(OPERATOR_NEW, &args![8u32]).u32();
         entry = if memory != 0 {
@@ -4385,11 +4389,11 @@ pub fn extra_water_light_refs_copy(e: &mut Engine, this: Ptr<ExtraWaterLightRefs
     if cast.is_null() {
         return;
     }
-    fn_00434fa0(e, this.cast());
+    e.call(0x0043_4fa0, &args![this]);
     let mut node = cast.at(ExtraWaterLightRefs::RefList);
     while !node.is_null() && !list_node_is_empty(e, node) {
         let reference = list_node_item(e, node);
-        fn_00434f60(e, this.cast(), reference);
+        e.call(0x0043_4f60, &args![this, reference]);
         node = list_node_next(e, node);
     }
 }
@@ -4433,7 +4437,7 @@ pub fn extra_reflector_refs_copy(e: &mut Engine, this: Ptr<ExtraReflectorRefs>, 
     if cast.is_null() {
         return;
     }
-    extra_reflected_refs_clear_reference_data(e, this.cast());
+    e.call(0x0043_4d90, &args![this]);
     copy_reference_entries(
         e,
         this.at(ExtraReflectorRefs::RefList),
@@ -4493,11 +4497,11 @@ pub fn extra_lit_water_refs_copy(e: &mut Engine, this: Ptr<ExtraLitWaterRefs>, o
     if cast.is_null() {
         return;
     }
-    fn_00434fa0(e, this.cast());
+    e.call(0x0043_4fa0, &args![this]);
     let mut node = cast.at(ExtraLitWaterRefs::RefList);
     while !node.is_null() && !list_node_is_empty(e, node) {
         let reference = list_node_item(e, node);
-        fn_00434f60(e, this.cast(), reference);
+        e.call(0x0043_4f60, &args![this, reference]);
         node = list_node_next(e, node);
     }
 }
@@ -4608,7 +4612,9 @@ pub fn fn_004350c0(e: &mut Engine, this: Ptr<ExtraLevCreaModifier>) -> f32 {
     if modifier == LEV_CREA_MODIFIER_NONE {
         return 1.0;
     }
-    let setting = e.mem.u32(LEV_CREA_SETTING_TABLE + modifier.wrapping_mul(4));
+    let setting = e
+        .mem
+        .u32(LEV_CREA_SETTING_TABLE.wrapping_add(modifier.wrapping_mul(4)));
     let value = e.call(SETTING_FLOAT_VALUE, &args![setting]).u32();
     e.mem.f32(value)
 }
@@ -4678,7 +4684,7 @@ pub fn extra_last_finished_sequence_scalar_deleting_destructor(
     this: Ptr<ExtraLastFinishedSequence>,
     flags: u32,
 ) -> Ptr<ExtraLastFinishedSequence> {
-    fn_004352a0(e, this);
+    e.call(0x0043_52a0, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }
@@ -4729,7 +4735,7 @@ pub fn fn_00435370(e: &mut Engine, this: Ptr<ExtraXTarget>) -> Ptr<ExtraXTarget>
 /// for it): the destructor, then `operator delete` when `flags & 1`. Returns
 /// `this`.
 pub fn fn_004353a0(e: &mut Engine, this: Ptr<ExtraXTarget>, flags: u32) -> Ptr<ExtraXTarget> {
-    fn_004353d0(e, this);
+    e.call(0x0043_53d0, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
 }

@@ -82,10 +82,6 @@ const VTABLE_EXTRA_LIT_WATER_REFS: u32 = 0x0101_444c;
 const VTABLE_EXTRA_TYPE_92: u32 = 0x0101_4458;
 /// `operator delete` (`cdecl(block)`) and the reference lists' destructors (`thiscall(extra)`).
 const OPERATOR_DELETE: u32 = 0x0040_1030;
-const REFLECTED_REFS_DESTROY: u32 = 0x0043_4560;
-const REFLECTOR_REFS_DESTROY: u32 = 0x0043_4af0;
-const WATER_LIGHT_REFS_DESTROY: u32 = 0x0043_4950;
-const LIT_WATER_REFS_DESTROY: u32 = 0x0043_4dc0;
 /// The constructor of an empty `BSSimpleList` (two null words, `thiscall(list)`).
 const SIMPLE_LIST_NEW: u32 = 0x0096_a2d0;
 /// JIP's site in the table of the types added at the head (`0x40F9D7`), for its keyed data's type.
@@ -663,7 +659,11 @@ pub fn reflected_refs_new(e: &mut Engine, this: u32) -> u32 {
 // Typed from 00411bb0
 /// `ExtraReflectedRefs`'s scalar deleting destructor (its destructor `00434560` by address).
 pub fn reflected_refs_delete(e: &mut Engine, this: u32, flags: u32) -> u32 {
-    e.call(REFLECTED_REFS_DESTROY, &args![this]);
+    typed_call!(
+        crate::extra_data::FAMILY,
+        0x0043_4560,
+        crate::extra_data::object_refs::reflected_drop(e, this)
+    );
     free_when(e, this, flags)
 }
 
@@ -676,7 +676,11 @@ pub fn reflector_refs_new(e: &mut Engine, this: u32) -> u32 {
 // Typed from 00411c50
 /// `ExtraReflectorRefs`'s scalar deleting destructor (its destructor `00434af0` by address).
 pub fn reflector_refs_delete(e: &mut Engine, this: u32, flags: u32) -> u32 {
-    e.call(REFLECTOR_REFS_DESTROY, &args![this]);
+    typed_call!(
+        crate::extra_data::FAMILY,
+        0x0043_4af0,
+        crate::extra_data::object_refs::reflector_drop(e, this)
+    );
     free_when(e, this, flags)
 }
 
@@ -689,7 +693,11 @@ pub fn water_light_refs_new(e: &mut Engine, this: u32) -> u32 {
 // Typed from 00411cf0
 /// `ExtraWaterLightRefs`'s scalar deleting destructor (its destructor `00434950` by address).
 pub fn water_light_refs_delete(e: &mut Engine, this: u32, flags: u32) -> u32 {
-    e.call(WATER_LIGHT_REFS_DESTROY, &args![this]);
+    typed_call!(
+        crate::extra_data::FAMILY,
+        0x0043_4950,
+        crate::extra_data::object_refs::water_light_drop(e, this)
+    );
     free_when(e, this, flags)
 }
 
@@ -702,7 +710,11 @@ pub fn lit_water_refs_new(e: &mut Engine, this: u32) -> u32 {
 // Typed from 00411d90
 /// `ExtraLitWaterRefs`'s scalar deleting destructor (its destructor `00434dc0` by address).
 pub fn lit_water_refs_delete(e: &mut Engine, this: u32, flags: u32) -> u32 {
-    e.call(LIT_WATER_REFS_DESTROY, &args![this]);
+    typed_call!(
+        crate::extra_data::FAMILY,
+        0x0043_4dc0,
+        crate::extra_data::object_refs::lit_water_drop(e, this)
+    );
     free_when(e, this, flags)
 }
 

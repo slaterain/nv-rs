@@ -11,6 +11,7 @@
 //! id, `AddCompileIndex` and `TESForm::GetFile` are typed calls; the casts, the log and the targets'
 //! own fix-ups are called by address.
 
+use super::object_refs;
 use super::{access, followers, links, records, rooms, FAMILY, OPERATOR_DELETE};
 use super::{give_lock, head_of, kind_of, list_remove, next_of, take_lock, word_at, EXTRA_PAYLOAD};
 use crate::forms;
@@ -408,7 +409,23 @@ fn fix_up_enable_parent(e: &mut Engine, this: u32, reference: u32, file: u32, ex
 
 /// A list of references with its own fix-up (`init`), removed when it is left empty.
 fn fix_up_ref_list(e: &mut Engine, this: u32, reference: u32, extra: u32, init: u32, message: u32) {
-    e.call(init, &args![extra, reference]);
+    match init {
+        DECAL_REFS_INIT_ITEM => typed_call!(
+            FAMILY,
+            0x0043_3db0,
+            object_refs::decal_init_item(e, extra, reference)
+        ),
+        REFLECTOR_REFS_INIT_ITEM => typed_call!(
+            FAMILY,
+            0x0043_3ed0,
+            object_refs::reflector_init_item(e, extra, reference)
+        ),
+        _ => typed_call!(
+            FAMILY,
+            0x0043_4050,
+            object_refs::lit_water_init_item(e, extra, reference)
+        ),
+    }
     if list_empty(e, extra.wrapping_add(EXTRA_PAYLOAD)) {
         note(e, message, &[]);
         drop_extra(e, this, extra);
