@@ -25,6 +25,7 @@ use arena::{Arg, InArena};
 const CALLEES: &[u32] = &[
     0x0040_1000,
     0x0040_1030,
+    0x0040_1050,
     0x0040_1460,
     0x0040_18b0,
     0x0040_2030,
@@ -53,15 +54,26 @@ const CALLEES: &[u32] = &[
     0x0040_9480,
     0x0040_fba0,
     0x0040_fbf0,
+    0x0041_4430,
     0x0043_8390,
     0x0043_8470,
+    0x0043_8eb0,
+    0x0043_8ed0,
+    0x0043_8ef0,
+    0x0043_8f30,
+    0x0043_91c0,
+    0x0043_9340,
+    0x0043_9390,
     0x0043_9410,
+    0x0043_a2e0,
     0x0043_aaf0,
     0x0043_b230,
     0x0043_b480,
     0x0043_b4a0,
     0x0043_cfd0,
     0x0043_d090,
+    0x0043_d410,
+    0x0044_0490,
     0x0044_1110,
     0x0044_31f0,
     0x0044_59e0,
@@ -69,7 +81,11 @@ const CALLEES: &[u32] = &[
     0x0044_a670,
     0x0044_f560,
     0x0045_0f90,
+    0x0045_64f0,
+    0x0045_6540,
+    0x0045_6610,
     0x0045_6a20,
+    0x0045_79e0,
     0x0045_7ba0,
     0x0045_7fe0,
     0x0045_a5e0,
@@ -80,20 +96,27 @@ const CALLEES: &[u32] = &[
     0x0047_02f0,
     0x0047_0470,
     0x0047_6b20,
+    0x0047_7ba0,
     0x0047_e040,
     0x0047_e0e0,
+    0x0048_39c0,
     0x0048_3a00,
     0x0048_73d0,
     0x0048_7f50,
     0x0048_ebc0,
     0x0048_f200,
     0x0049_5460,
+    0x0049_ed90,
+    0x004a_0370,
+    0x004a_03c0,
     0x004a_4040,
     0x004a_d050,
     0x004a_d270,
+    0x004b_5550,
     0x004b_5bf0,
     0x004b_71d0,
     0x004b_75a0,
+    0x004b_c1f0,
     0x004b_c810,
     0x004b_cdb0,
     0x004b_d400,
@@ -112,25 +135,51 @@ const CALLEES: &[u32] = &[
     0x004c_a330,
     0x004d_e490,
     0x004e_4430,
+    0x004e_8880,
     0x004e_ef00,
     0x004f_4280,
     0x004f_8a30,
+    0x004f_d3e0,
     0x004f_e160,
     0x004f_ee60,
     0x004f_f1a0,
+    0x004f_f7e0,
     0x0050_1c10,
     0x0050_3a70,
+    0x0051_7fd0,
     0x0052_5980,
     0x0052_5b20,
+    0x0054_95f0,
+    0x0054_dcf0,
+    0x0054_e640,
+    0x0054_e750,
+    0x0055_5b10,
+    0x0055_5bc0,
+    0x0055_6870,
+    0x0055_6ef0,
+    0x0055_8dd0,
     0x0055_d520,
     0x0056_7790,
+    0x0056_8e50,
+    0x0056_9060,
     0x0057_5510,
     0x0057_5610,
+    0x0057_5d10,
+    0x0057_5d70,
     0x0057_6260,
     0x0057_85e0,
     0x0057_8870,
+    0x0057_b4b0,
     0x0057_c730,
     0x0057_dd70,
+    0x0058_6170,
+    0x0058_6210,
+    0x0058_6400,
+    0x0058_6440,
+    0x0058_75a0,
+    0x0058_82a0,
+    0x0058_8e40,
+    0x0058_9850,
     0x0058_db10,
     0x0059_2220,
     0x005a_3370,
@@ -138,16 +187,27 @@ const CALLEES: &[u32] = &[
     0x005a_e3d0,
     0x005b_5e40,
     0x005c_5420,
+    0x005c_bb70,
     0x005e_02b0,
     0x005e_58f0,
+    0x005e_8d40,
+    0x005e_9160,
+    0x005e_91d0,
+    0x005e_9300,
+    0x005e_b7e0,
+    0x005f_36f0,
+    0x0061_01b0,
     0x0061_66e0,
     0x0061_6710,
+    0x0062_86d0,
+    0x0063_c8a0,
     0x0063_f7b0,
     0x0064_3c90,
     0x0064_50f0,
     0x0064_5380,
     0x0064_6360,
     0x0064_8b50,
+    0x0065_3270,
     0x0066_29f0,
     0x0066_b0d0,
     0x0066_e950,
@@ -158,11 +218,23 @@ const CALLEES: &[u32] = &[
     0x0066_ec10,
     0x0066_ecf0,
     0x0066_ef20,
+    0x0068_0c30,
+    0x0068_5d20,
     0x0069_2480,
+    0x0069_50d0,
+    0x006a_1440,
     0x006a_8500,
+    0x006a_d180,
     0x006b_3eb0,
+    0x006d_cbb0,
+    0x006d_cce0,
+    0x006d_cea0,
+    0x006d_e250,
     0x006f_3170,
+    0x006f_48b0,
+    0x006f_4930,
     0x006f_fe10,
+    0x0070_0300,
     0x0070_0320,
     0x0070_10e0,
     0x0070_5fc0,
@@ -176,6 +248,8 @@ const CALLEES: &[u32] = &[
     0x0070_b8f0,
     0x0070_bc20,
     0x0070_c4a0,
+    0x0070_ec70,
+    0x0070_f690,
     0x0071_1ea0,
     0x0071_2450,
     0x0071_33f0,
@@ -208,6 +282,8 @@ const CALLEES: &[u32] = &[
     0x0071_8630,
     0x0071_87a0,
     0x0071_8890,
+    0x0071_8b60,
+    0x0071_9060,
     0x0071_9b80,
     0x0071_b160,
     0x0071_d0a0,
@@ -242,12 +318,19 @@ const CALLEES: &[u32] = &[
     0x0075_f070,
     0x0076_17a0,
     0x0076_1a20,
+    0x0076_24c0,
     0x0076_3ff0,
     0x0076_4200,
     0x0076_54f0,
     0x0076_5b80,
+    0x0076_97f0,
+    0x0076_a3b0,
+    0x0076_b610,
     0x0076_b630,
+    0x0076_b780,
+    0x0076_b7a0,
     0x0076_b8a0,
+    0x0076_b900,
     0x0076_b930,
     0x0076_bb40,
     0x0076_bfe0,
@@ -260,6 +343,7 @@ const CALLEES: &[u32] = &[
     0x0077_5380,
     0x0077_5920,
     0x0077_5a00,
+    0x0077_a400,
     0x0077_a450,
     0x0077_f0d0,
     0x0077_f270,
@@ -284,11 +368,7 @@ const CALLEES: &[u32] = &[
     0x0078_db00,
     0x0078_e7c0,
     0x0079_17a0,
-    0x0079_8bf0,
-    0x0079_93d0,
-    0x0079_cdb0,
-    0x0079_d410,
-    0x0079_f640,
+    0x0079_dbb0,
     0x007a_22d0,
     0x007a_7eb0,
     0x007a_8a10,
@@ -320,6 +400,7 @@ const CALLEES: &[u32] = &[
     0x007c_b330,
     0x007c_b7d0,
     0x007c_e7a0,
+    0x007d_6bb0,
     0x007d_86c0,
     0x007e_41f0,
     0x007e_47a0,
@@ -335,6 +416,7 @@ const CALLEES: &[u32] = &[
     0x007f_8a80,
     0x007f_a010,
     0x007f_a0f0,
+    0x007f_aef0,
     0x007f_b150,
     0x0083_b8d0,
     0x0083_e510,
@@ -349,13 +431,20 @@ const CALLEES: &[u32] = &[
     0x0086_7a20,
     0x0086_7da0,
     0x0086_9600,
+    0x0087_9d90,
     0x0087_f4c0,
     0x0087_f6c0,
     0x0087_f9f0,
     0x0088_c650,
     0x008c_7aa0,
+    0x008c_c6d0,
     0x0090_5330,
     0x0090_5820,
+    0x0093_be30,
+    0x0095_2ba0,
+    0x0095_2d60,
+    0x0095_2e60,
+    0x0095_2f90,
     0x0095_3060,
     0x0096_6bb0,
     0x0096_ad30,
@@ -371,6 +460,8 @@ const CALLEES: &[u32] = &[
     0x00a0_1290,
     0x00a0_12d0,
     0x00a0_1350,
+    0x00a0_13d0,
+    0x00a0_1440,
     0x00a0_1530,
     0x00a0_1860,
     0x00a0_1b00,
@@ -395,6 +486,7 @@ const CALLEES: &[u32] = &[
     0x00a0_b110,
     0x00a0_d9e0,
     0x00a0_f8b0,
+    0x00a1_b020,
     0x00a1_c520,
     0x00a1_ca20,
     0x00a1_d910,
@@ -405,24 +497,45 @@ const CALLEES: &[u32] = &[
     0x00a1_eff0,
     0x00a2_3010,
     0x00a2_3390,
+    0x00a2_3a50,
+    0x00a2_4660,
+    0x00a5_9c60,
     0x00a5_9d30,
+    0x00a5_a040,
     0x00a5_d2c0,
+    0x00a6_7050,
     0x00a6_faf0,
     0x00a6_fb90,
+    0x00aa_1070,
+    0x00aa_13e0,
     0x00aa_4db0,
     0x00ad_7550,
     0x00ad_7ae0,
+    0x00ad_7c00,
+    0x00ad_8650,
     0x00ad_8830,
+    0x00ad_88b0,
+    0x00ad_88f0,
+    0x00ad_8930,
+    0x00ad_8b30,
+    0x00ad_8ce0,
+    0x00b5_7e30,
     0x00ba_30f0,
     0x00ba_3130,
     0x00bb_7a10,
+    0x00bb_7c30,
     0x00c3_a8a0,
+    0x00c5_cf30,
     0x00ec_17c0,
     0x00ec_43fb,
     0x00ec_5fce,
     0x00ec_623a,
     0x00ec_62c0,
+    0x00ec_68e4,
+    0x00ec_7750,
     0x00ec_782f,
+    0x00ee_6dc2,
+    0x00fd_f0b8,
     0x00fd_f294,
     0x00fd_f298,
     0x00fd_f29c,
@@ -4895,8 +5008,8 @@ const LIST_BOX_GUARDS: [u32; 43] = [
 /// heights equal; five enabled and none highlighted; no container; six with only the last enabled
 /// (the moves search on to it); six with the first and the last disabled and the last highlighted
 /// (the moves walk back from the ends through `GetTileAt`); and (the eighth, the item list box's
-/// only, [`ITEM_LIST_VARIANTS`]) one item, highlighted, with a scroll bar, two visible items, flags 0
-/// and 1 set.
+/// only, [`ITEM_LIST_VARIANTS`]) one item, highlighted, with a scroll bar, two visible items, flags
+/// 0 and 1 set.
 fn put_list_box(e: &mut Engine, variant: u32) {
     use arena::object;
     let v = variant as usize;
@@ -5016,14 +5129,15 @@ fn put_allocator(e: &mut Engine, variant: u32) {
 const MENU_LIST_VARIANTS: [u32; 5] = [0, 1, 2, 3, 4];
 
 /// A world for `GetFrontmostMenu` and `IsMenuOpen` that reaches each of their tests: the manager
-/// (`011d8a80`) with a menus root whose tile list has six nodes (the second's tile null, the third's
-/// tile with no menu, the fourth's menu with no tile); `Tile::GetMenu` answering a tile's `+0x10`;
-/// each menu's class (its vtable's `+0x34`) its `+0x30`, its state its `+0x24`; the tile float
-/// getter answering the depth (`0xfad`) from a menu tile's `+0x40`, the kind (`0xfa7`) from its
-/// `+0x44`; `Tile::IsTrue` its `+0x48`. The variant picks the six depths, kinds, states, classes and
-/// enabled bits: a deeper menu of the passed-over kind (6008.0), equal depths, a NaN depth and
-/// kind, states 2, 3 and 4, a matching menu enabled or not; and (the fifth) a deeper menu in state 2
-/// above a NaN kind on an ordinary depth, so the state test and the NaN kind each decide the answer.
+/// (`011d8a80`) with a menus root whose tile list has six nodes (the second's tile null, the
+/// third's tile with no menu, the fourth's menu with no tile); `Tile::GetMenu` answering a tile's
+/// `+0x10`; each menu's class (its vtable's `+0x34`) its `+0x30`, its state its `+0x24`; the tile
+/// float getter answering the depth (`0xfad`) from a menu tile's `+0x40`, the kind (`0xfa7`) from
+/// its `+0x44`; `Tile::IsTrue` its `+0x48`. The variant picks the six depths, kinds, states,
+/// classes and enabled bits: a deeper menu of the passed-over kind (6008.0), equal depths, a NaN
+/// depth and kind, states 2, 3 and 4, a matching menu enabled or not; and (the fifth) a deeper menu
+/// in state 2 above a NaN kind on an ordinary depth, so the state test and the NaN kind each decide
+/// the answer.
 fn put_menu_list(e: &mut Engine, variant: u32) {
     use arena::object;
     const NAN: f32 = f32::NAN;
@@ -5149,11 +5263,11 @@ fn every_family() -> Vec<&'static engine_core::typed::Family> {
     engine_core::typed::all_families()
 }
 
-/// `every_family` is exactly every crate's families: the core's table (`engine_core::typed::FAMILIES`),
-/// `engine-typed`'s list (`engine_typed::FAMILIES`, which its `units::funcs` provides) and the forms
-/// crate's two (`topic_search`, `topic_order`). One listed but not provided is never registered, and
-/// every guard over `every_family` would skip it; one provided but listed nowhere is a crate's family
-/// these lists miss.
+/// `every_family` is exactly every crate's families: the core's table
+/// (`engine_core::typed::FAMILIES`), `engine-typed`'s list (`engine_typed::FAMILIES`, which its
+/// `units::funcs` provides) and the forms crate's two (`topic_search`, `topic_order`). One listed
+/// but not provided is never registered, and every guard over `every_family` would skip it; one
+/// provided but listed nowhere is a crate's family these lists miss.
 #[test]
 fn every_family_holds_each_crates_families() {
     let listed: Vec<&'static engine_core::typed::Family> = engine_core::typed::FAMILIES
@@ -5272,8 +5386,8 @@ fn no_family_past_its_gate_holds_a_wrapped_address() {
 /// A plain registration over a member (a fix row, an nv-rs built-in, a plugin's override: the
 /// addresses of `overridable.tsv`) clears the family's direct bit too, for the run, once it is
 /// registered. So no family on by default, in any crate, holds one, except the rows below, each
-/// overridden only by a plugin that is not built in (kNVSE, ITR) or by a script or frame function, so
-/// the family goes by address only while that one runs; the families built around the wraps; and
+/// overridden only by a plugin that is not built in (kNVSE, ITR) or by a script or frame function,
+/// so the family goes by address only while that one runs; the families built around the wraps; and
 /// the known ones above.
 #[test]
 fn no_family_past_its_gate_holds_an_overridable_address() {
@@ -5446,9 +5560,9 @@ fn body_calls_site(sources: &[String], start: u32, seam: u32) -> bool {
 
 /// A seam (`extend.rs`'s SITES and the game patches' rows: an instruction inside a translated
 /// function where a built-in takes part through `e.site`) inside a member of a family on by default
-/// is skipped unless the typed body keeps its `e.site` call there. So no such member, in any crate's
-/// family, holds a seam, except the ones listed, whose typed bodies still call `e.site` at it
-/// (read in their sources: the address or its constant in an `e.site` call of the body, or of a
+/// is skipped unless the typed body keeps its `e.site` call there. So no such member, in any
+/// crate's family, holds a seam, except the ones listed, whose typed bodies still call `e.site` at
+/// it (read in their sources: the address or its constant in an `e.site` call of the body, or of a
 /// function of the family the body calls). The function holding a seam is the translated function
 /// that starts nearest below it.
 #[test]
@@ -5597,8 +5711,8 @@ const INVENTORY_VARIANTS: [u32; 3] = [0, 1, 2];
 /// A world for the inventory fill (`00719ef0`): the list box world ([`put_list_box`]'s richest
 /// variant, or in the third its fourth, whose flag 0 is clear) with a template at both list boxes'
 /// `+0x18`; the inventory walk (`00575510`) storing an iterator and the changes (none in the second
-/// variant, so the fill stops there); the next item (`004ca330`) answering three items in turn, then
-/// 0 (their counts 3, 1 and 0, the first two with a form, the last none); `__RTDynamicCast`
+/// variant, so the fill stops there); the next item (`004ca330`) answering three items in turn,
+/// then 0 (their counts 3, 1 and 0, the first two with a form, the last none); `__RTDynamicCast`
 /// answering the form it is given.
 fn put_inventory(e: &mut Engine, variant: u32) {
     use arena::object;
@@ -5656,9 +5770,9 @@ const SORT_VARIANTS: [u32; 4] = [0, 1, 2, 3];
 
 /// A world for the sorts' comparisons: both pointer arguments' items (objects 3 and 40) with counts
 /// (`+4`) and healths that tell a signed compare from an unsigned one (a high bit on either side,
-/// equal words, two high-bit words). Each item's form (`+8`, objects 222 and 223) has its own vtable
-/// (objects 224 and 225) whose health slot (`+0x10`) answers the variant's health; `__RTDynamicCast`
-/// answers the form it is given.
+/// equal words, two high-bit words). Each item's form (`+8`, objects 222 and 223) has its own
+/// vtable (objects 224 and 225) whose health slot (`+0x10`) answers the variant's health;
+/// `__RTDynamicCast` answers the form it is given.
 fn put_sort_words(e: &mut Engine, variant: u32) {
     use arena::{object, CODE};
     const WORDS: [(u32, u32); 4] = [
@@ -6112,17 +6226,17 @@ fn list_box_get_highlight_target_every_move_diff() {
 const STATS_VARIANTS: [u32; 4] = [0, 3, 1, 2];
 
 /// The stats menu's world. The open menu (`011dace0`) is object 3, the player (`011dea3c`) object
-/// 100, both absent in the variant 2. The exe's doubles the menu computes with (1000.0, 2.0, pi,
-/// pi / 2, 5.0, 100.0) hold their values. The player: hardcore (`+0x7bc` 1) in the variants 1 and 3;
+/// 100, both absent in the variant 2. The exe's doubles the menu computes with (1000.0, 2.0, pi, pi
+/// / 2, 5.0, 100.0) hold their values. The player: hardcore (`+0x7bc` 1) in the variants 1 and 3;
 /// its actor values (`+0xa4`) on a vtable of stand-ins; its active effects (`+0x94`) on their own
-/// vtable (object 101) whose list slot answers one node (object 105) with one effect (object 106) of
-/// kind 0xa (variants 0 and 3; else 3), active in the variant 0. The hardcore state shown
+/// vtable (object 101) whose list slot answers one node (object 105) with one effect (object 106)
+/// of kind 0xa (variants 0 and 3; else 3), active in the variant 0. The hardcore state shown
 /// (`011a0ae1`) set in the variants 0 and 3, the next update (`011dad74`) never in the variant 1.
 /// The menu: limb mode in the variant 0, the effects already updated this frame in the variant 3,
 /// the 60 tiles all set but in the variant 2, the perk tile set; the healing options' callbacks
-/// stand-ins, in the variant 3 the first's and the fourth's the exe's own (`007e05f0`,
-/// `007e07a0`). The Pip-Boy (the manager's `+0x174`, object 108) up but in the variant 1. The fade
-/// object's current group (`011dace4`'s first word) a group number.
+/// stand-ins, in the variant 3 the first's and the fourth's the exe's own (`007e05f0`, `007e07a0`).
+/// The Pip-Boy (the manager's `+0x174`, object 108) up but in the variant 1. The fade object's
+/// current group (`011dace4`'s first word) a group number.
 fn put_stats_menu(e: &mut Engine, variant: u32) {
     use arena::{object, CODE, VTABLES};
     let live = variant != 2;
@@ -6257,9 +6371,9 @@ const STATUS_DATA_VARIANTS: [u32; 5] = [0, 1, 2, 3, 4];
 
 /// A world for the status data list (object 3, its embedded list at `+4`: an entry of key 2, then a
 /// node, object 231, with an entry of key 0x36) and an effect item's words on both pointer values
-/// (objects 40 and 3: its actor value `+0x10`, its setting `+0x14` object 233 of archetype 0, so the
-/// plain case, object 3 twice, runs every variant). The archetype table's entry 0 has bit 2 but in
-/// the variant 2 (the key is then -1). By variant: the effect's key 0x36 (found), 0x37 with the
+/// (objects 40 and 3: its actor value `+0x10`, its setting `+0x14` object 233 of archetype 0, so
+/// the plain case, object 3 twice, runs every variant). The archetype table's entry 0 has bit 2 but
+/// in the variant 2 (the key is then -1). By variant: the effect's key 0x36 (found), 0x37 with the
 /// setting's flag 4 (negated, with a duration), 0x37 with flag 2 (no duration), 0x37 with neither
 /// and JIP LN's fixes on (the G107 seam asked and answered 0x1234), and the same with no answer.
 fn put_status_data(e: &mut Engine, variant: u32) {
@@ -7678,14 +7792,14 @@ const STATS_PAD: [Pad; 10] = [
 ];
 const STATS_PAD_VARIANTS: [u32; 10] = [0, 5, 2, 3, 4, 1, 6, 7, 8, 9];
 
-/// [`put_stats_third`] in limb mode (its variant 0) or not (3), with the stats menu on top of a ready
-/// manager's enter stack (as [`put_stats_page`]); `Tile::GetValueFloat` answers `0x1004` with the
-/// sub page for the skill page's tile (`+0xa4`) and the page for any other, the trait of the last
-/// `Tile::SetFloat` with its value when the world's values stick, every other float 1.0; the stick
-/// (`00a23390`), its magnitude (`00408820`) against the dead zone 0.5 (the double at `010745f8`),
-/// the time (`00457fe0`) against the repeat time (`011dad5c`), the effects list's visibility
-/// (`00a040a0`), every `Tile::IsTrue` (`00a01230`) and the manager's state test (`004b71d0`, which
-/// `00709d40` asks) by the variant.
+/// [`put_stats_third`] in limb mode (its variant 0) or not (3), with the stats menu on top of a
+/// ready manager's enter stack (as [`put_stats_page`]); `Tile::GetValueFloat` answers `0x1004` with
+/// the sub page for the skill page's tile (`+0xa4`) and the page for any other, the trait of the
+/// last `Tile::SetFloat` with its value when the world's values stick, every other float 1.0; the
+/// stick (`00a23390`), its magnitude (`00408820`) against the dead zone 0.5 (the double at
+/// `010745f8`), the time (`00457fe0`) against the repeat time (`011dad5c`), the effects list's
+/// visibility (`00a040a0`), every `Tile::IsTrue` (`00a01230`) and the manager's state test
+/// (`004b71d0`, which `00709d40` asks) by the variant.
 fn put_stats_pad(e: &mut Engine, variant: u32) {
     let world = &STATS_PAD[variant as usize];
     let (page, sub, axis, magnitude, time) = (
@@ -7782,8 +7896,8 @@ fn stats_menu_do_gamepad_every_key_diff() {
 }
 
 /// [`put_stats_page`] with page `page` (0 to 4) and the clicked tile (`pTiles[6]`, object 116) the
-/// only item of each page's list (SPECIAL, skills, perks, general, reputations): `007242f0` finds it
-/// and not the other tile; the reputation item's data the first reputation (object 251).
+/// only item of each page's list (SPECIAL, skills, perks, general, reputations): `007242f0` finds
+/// it and not the other tile; the reputation item's data the first reputation (object 251).
 fn put_stats_enter(e: &mut Engine, page: u32) {
     use arena::object;
     put_stats_page(e, page);
@@ -7876,12 +7990,12 @@ fn stats_menu_create_depth_diff() {
 }
 
 /// [`put_stats_third`]'s variant 0 (an active effect, every cast answering object 226) with one of
-/// `UpdateActiveEffects`' rarer branches by the variant: the item's form kind 0xd (the name from the
-/// setting), no full name (the cast to `TESFullName`, `01183158`, answering 0: the virtual name), the
-/// usage monitor's word (`011c33f4`) the effect's setting (object 248); the setting's archetype (0)
-/// without `007df1b0`'s flag 0x40 and the setting without 0x2000 (kept), the archetype with the flag
-/// and the setting without 0x2000 (skipped), the archetype with the flag and the setting with 0x2000
-/// (kept).
+/// `UpdateActiveEffects`' rarer branches by the variant: the item's form kind 0xd (the name from
+/// the setting), no full name (the cast to `TESFullName`, `01183158`, answering 0: the virtual
+/// name), the usage monitor's word (`011c33f4`) the effect's setting (object 248); the setting's
+/// archetype (0) without `007df1b0`'s flag 0x40 and the setting without 0x2000 (kept), the
+/// archetype with the flag and the setting without 0x2000 (skipped), the archetype with the flag
+/// and the setting with 0x2000 (kept).
 fn put_stats_effects(e: &mut Engine, variant: u32) {
     use arena::object;
     put_stats_third(e, 0);
@@ -8916,13 +9030,16 @@ const MAP_VARIANTS: [u32; 7] = [0, 1, 2, 3, 4, 5, 6];
 /// (objects 133, 134; none in variant 2); the menu answered for the map file (00a03c90) and its
 /// class 0x3ff but in variant 2; the player (object 140): two notes (objects 150, 151: the first
 /// read, its quests the quest 160), two objectives (objects 170, 171 of the quests 160, done, and
-/// 161; the first's state 2) and the active quest 160 in variant 2; three challenges (objects 180 to
-/// 182 of the owner object 147: inserted dim, inserted, left out) and the type shown (the variant
-/// mod 3), challenge mode in variant 6; one radio station (object 185, the current one in the even
-/// variants); the clock in 50 ms steps (the step's time 0) and the waveform's frame 75.0; the heap.
+/// 161; the first's state 2) and the active quest 160 in variant 2; three challenges (objects 180
+/// to 182 of the owner object 147: inserted dim, inserted, left out) and the type shown (the
+/// variant mod 3), challenge mode in variant 6; one radio station (object 185, the current one in
+/// the even variants); the clock in 50 ms steps (the step's time 0) and the waveform's frame 75.0;
+/// the heap.
 fn put_map_menu(e: &mut Engine, variant: u32) {
     use arena::object;
-    const MAP_PAGES: [u32; 7] = [0x20, 0x21, 0x22, 0x23, 0x24, 0x22, 0x23];
+    const MAP_PAGES: [u32; 13] = [
+        0x20, 0x21, 0x22, 0x23, 0x24, 0x22, 0x23, 0x24, 0x24, 0x24, 0x20, 0x20, 0x20,
+    ];
     put_heap(e);
     let menu = object(255);
     e.mem
@@ -9052,6 +9169,42 @@ fn put_map_menu(e: &mut Engine, variant: u32) {
             ..Ret::default()
         }
     });
+    put_map_answers(e);
+    put_map_rare(e, variant);
+}
+
+/// [`put_map_menu`]'s rarer branches by variant: the waveform's last step at the clock's next value
+/// (7: no step, and 50 ms since the start, below the frame) or its start 20 ms before the clock's
+/// third value (8: a step, then below the frame); the station in range (9: `004ff1a0` puts object
+/// 185 in the local list); the hour 13.75 and the real 60.0 at `01012638` (10); trait `0xfa7` at
+/// 6006.0 (11) or 102.0 (12) with the real depth doubles at `010704f0` and `010704e8`.
+fn put_map_rare(e: &mut Engine, variant: u32) {
+    use arena::object;
+    match variant {
+        7 => e.mem.set_u32(0x011d_a418, 100),
+        8 => e.mem.set_f32(object(255) + 0x88, 180.0),
+        9 => e.register_double(0x004f_f1a0, |e, words| {
+            e.mem.set_u32(words[1], object(185));
+            Ret::default()
+        }),
+        10 => {
+            e.mem.set_u64(0x0101_2638, 60.0f64.to_bits());
+            e.register_double(0x0086_7da0, |_, _| Ret {
+                st0: 13.75,
+                ..Ret::default()
+            });
+        }
+        11 | 12 => {
+            e.mem.set_u64(0x0107_04f0, 6006.0f64.to_bits());
+            e.mem.set_u64(0x0107_04e8, 102.0f64.to_bits());
+            let depth = if variant == 11 { 6006.0 } else { 102.0 };
+            e.register_double(0x00a0_11b0, move |_, words| Ret {
+                st0: if words[1] == 0xfa7 { depth } else { 1.0 },
+                ..Ret::default()
+            });
+        }
+        _ => {}
+    }
 }
 
 /// The variants of [`put_map_items`]'s world.
@@ -9061,8 +9214,9 @@ const MAP_ITEM_VARIANTS: [u32; 6] = [0, 1, 2, 3, 4, 5];
 /// (objects 3 and 40) as the callbacks' items. As challenges, each variant one case of the filter:
 /// kinds 0, 3, 9, 1, 8 and 0xe of the type shown 0, 1, 2, 2, 1 and 0, the value above 0 (variants
 /// 0, 4, 5), the flag bit 2 (1) or the state bit 2 (2), none (3). As notes: their first quest the
-/// player's active quest (object 160) but in variant 4, all notes shown in variant 1. As objectives:
-/// object 3's quest the displayed one in variant 0. As stations: the form flag 0x800 in variant 1.
+/// player's active quest (object 160) but in variant 4, all notes shown in variant 1. As
+/// objectives: object 3's quest the displayed one in variant 0. As stations: the form flag 0x800 in
+/// variant 1.
 fn put_map_items(e: &mut Engine, variant: u32) {
     use arena::object;
     let v = variant as usize;
@@ -9090,9 +9244,9 @@ fn put_map_items(e: &mut Engine, variant: u32) {
 const MAP_SORT_VARIANTS: [u32; 5] = [0, 1, 2, 3, 4];
 
 /// Two list items for the sorts (objects 3 and 40: their tiles objects 110 and 112, their data
-/// objects 111 and 113, whose names are strings): the text alphas (`Tile::GetFloat` of any trait but
-/// `0xfac` answers the tile's float at +0x40, of `0xfac` its +0x44) 128.0 and 255.0, the other way
-/// round, both 255.0 with the indices 1 and 2, equal indices, the indices 2 and 1.
+/// objects 111 and 113, whose names are strings): the text alphas (`Tile::GetFloat` of any trait
+/// but `0xfac` answers the tile's float at +0x40, of `0xfac` its +0x44) 128.0 and 255.0, the other
+/// way round, both 255.0 with the indices 1 and 2, equal indices, the indices 2 and 1.
 fn put_map_sort(e: &mut Engine, variant: u32) {
     use arena::object;
     let v = variant as usize;
@@ -9140,8 +9294,8 @@ fn put_map_sort(e: &mut Engine, variant: u32) {
 
 /// The map menu's worlds, as settings of a Diff.
 trait MapMenuWorlds {
-    /// In [`put_map_menu`]'s world with `args`, the variants `variants`, `calls` calls at most a run;
-    /// `IsTopMenuID`'s translation reaches `007027b0` and `00702680` plainly.
+    /// In [`put_map_menu`]'s world with `args`, the variants `variants`, `calls` calls at most a
+    /// run; `IsTopMenuID`'s translation reaches `007027b0` and `00702680` plainly.
     fn in_map_menu(self, args: &'static [Arg], variants: &'static [u32], calls: usize) -> Diff;
 }
 
@@ -9215,14 +9369,14 @@ fn map_menu_fn_00796a80_diff() {
 }
 
 /// `Create`: the whole set-up (variants 0 and 1), the menu not the map menu (2), none (5), a tile
-/// missing (6).
+/// missing (6), the top depth for trait `0xfa7` 6006.0 (11) and 102.0 (12).
 #[test]
 fn map_menu_create_diff() {
     Diff::new(engine_core::entry!(
         0x0079_6b90,
         interface::map_menu_p2::map_menu_create() -> u32
     ))
-    .in_map_menu(&[], &[0, 1, 2, 5, 6], 3000)
+    .in_map_menu(&[], &[0, 1, 2, 5, 6, 11, 12], 3000)
     .run()
     .assert_same();
 }
@@ -9326,14 +9480,16 @@ fn map_menu_do_controller_switch_diff() {
     .assert_same();
 }
 
-/// `UpdateMenu`: every page (its `UpdateCurrentPage` runs) and no map menu.
+/// `UpdateMenu`: every page (its `UpdateCurrentPage` runs), no map menu, and the hour 13.75 with
+/// the real 60.0 (10: the minutes' x87 steps).
 #[test]
 fn map_menu_update_menu_diff() {
     Diff::new(engine_core::entry!(
         0x0079_aba0,
         interface::map_menu_p2::map_menu_update_menu()
     ))
-    .in_map_menu(&[], &MAP_VARIANTS, 4000)
+    .in_map_menu(&[], &[0, 1, 2, 3, 4, 5, 6, 10], 4000)
+    .max_cases(32)
     .run()
     .assert_same();
 }
@@ -9547,7 +9703,7 @@ fn map_menu_update_radio_list_diff() {
         0x0079_bea0,
         interface::map_menu_p2::map_menu_update_radio_list(Ptr)
     ))
-    .in_map_menu(&[Arg::MapMenu], &[0, 1], 2000)
+    .in_map_menu(&[Arg::MapMenu], &[0, 1, 9], 2000)
     .run()
     .assert_same();
 }
@@ -9585,14 +9741,15 @@ fn map_menu_fn_0079c090_diff() {
     .assert_same();
 }
 
-/// The radio waveform: started (variant 0) or going on, with a property and without (variant 2).
+/// The radio waveform: started (variant 0) or going on, with a property and without (variant 2), no
+/// step and below the frame (7), a step and below the frame (8).
 #[test]
 fn map_menu_fn_0079c0c0_diff() {
     Diff::new(engine_core::entry!(
         0x0079_c0c0,
         interface::map_menu_p2::fn_0079c0c0(Ptr)
     ))
-    .in_map_menu(&[Arg::MapMenu], &[0, 1, 2, 3], 400)
+    .in_map_menu(&[Arg::MapMenu], &[0, 1, 2, 3, 7, 8], 400)
     .run()
     .assert_same();
 }
@@ -9747,6 +9904,779 @@ fn map_menu_fn_007a1b10_diff() {
         interface::map_menu_p2::fn_007a1b10(Ptr, u32, u8)
     ))
     .in_string_array(&[Arg::Ptr, Arg::Small, Arg::Byte])
+    .run()
+    .assert_same();
+}
+
+// ---- The map menu, part 3 ----------------------------------------------------------------------
+
+/// The variants: the local map (0), the world map (1), the quests page with no map tile (2), the
+/// notes page with a sound playing (3), the radio page with the sounds loading (4), no map menu
+/// (5), the notes page in challenge mode (6), the local map in an interior with the fog of war on
+/// and a grid of two by two cells to make (7). [`put_map_menu`]'s world (its variant's page;
+/// variant 7 the local map's) with what the third part reads: the map tile (tile 2, object 102) but
+/// in variant 2; a reference's position (slot +0x1f4: object 201's three floats); the map rectangle
+/// 0.0 to 4096.0; the root space (object 206) on the world map; the map's player reference (object
+/// 207); the fast travel marker (object 208) in the odd variants; the north rotation cell (object
+/// 209) in variant 7; the next grid 0; the fog of war in the odd variants; a sound node (object
+/// 205, its next 0) as the current sound in variant 3 with the length 1000.0, the loading byte in
+/// variant 4; the grid side 1 (2 in variant 7); the settings' floats (the knob's step 0.5 and time
+/// 0.25, the note delay 1.0, the zoom limits 0.5 and 4.0 and the traits' ranges 0.0 to 1.0) and
+/// bytes (the quest markers on, the local step asked in variant 0); and the by-address functions
+/// whose answers the code reads through: the target, companion and marker lists (one node each,
+/// objects 210, 211, 212), the world map data (object 213: 256 x 128, cells -2..1), a marker's data
+/// (object 214: no reputation), a door's teleport (object 215: its reference object 207), a
+/// template's tile (object 216, its owner object 217), the font's dimensions (the result word), a
+/// colour's and a request's constructor (their own word), a point difference (the result word), the
+/// texture's surface object (object 218), a note's text object (object 219), a pathing array's
+/// entries (object 220: a set byte and a door, object 40), a subtitle element (object 221: a text),
+/// a form's text (object 222) and a marker's icon kind (3).
+/// Variants 8 to 10 reach the main bodies (see [`put_map_reach`]).
+fn put_map_world(e: &mut Engine, variant: u32) {
+    use arena::object;
+    const BASE: [u32; 11] = [0, 1, 2, 3, 4, 5, 6, 0, 0, 1, 3];
+    put_map_menu(e, BASE[variant as usize]);
+    let menu = object(255);
+    e.mem
+        .set_u32(menu + 0x84, if variant == 2 { 0 } else { object(102) });
+    for (k, value) in [1500.0f32, 2000.0, 50.0].into_iter().enumerate() {
+        e.mem.set_f32(object(201) + 4 * k as u32, value);
+    }
+    for (offset, value) in [
+        (0xe8u32, 0.0f32),
+        (0xec, 0.0),
+        (0xf0, 4096.0),
+        (0xf4, 4096.0),
+    ] {
+        e.mem.set_f32(menu + offset, value);
+    }
+    e.mem
+        .set_u32(menu + 0x10c, if variant == 1 { object(206) } else { 0 });
+    e.mem.set_u8(menu + 0x110, 0);
+    e.mem.set_u32(menu + 0x114, object(207));
+    e.mem
+        .set_u32(menu + 0x118, if variant % 2 == 1 { object(208) } else { 0 });
+    e.mem
+        .set_u32(menu + 0x11c, if variant == 7 { object(209) } else { 0 });
+    e.mem.set_u32(menu + 0x128, 0);
+    e.mem.set_u8(menu + 0x12c, u8::from(variant % 2 == 1));
+    e.mem
+        .set_u32(menu + 0xb8, if variant == 3 { object(205) } else { 0 });
+    e.mem.set_u32(object(205) + 0xc, 0);
+    e.mem.set_u8(menu + 0xbc, u8::from(variant == 4));
+    e.mem
+        .set_f32(menu + 0xc0, if variant == 3 { 1000.0 } else { 0.0 });
+    e.mem.set_u32(menu + 0xc4, 0);
+    e.mem
+        .set_u32(0x011c_63cc + 4, if variant == 7 { 2 } else { 1 });
+    e.mem.set_u8(0x011d_a3b8 + 4, u8::from(variant == 0));
+    // In the interior variant the player is in an interior (`00575d10` on it).
+    if variant == 7 {
+        e.register_double(0x0057_5d10, |_, words| Ret {
+            eax: u32::from(words[0] == arena::object(140)),
+            ..Ret::default()
+        });
+    }
+    if variant >= 8 {
+        put_map_reach(e, variant);
+    }
+}
+
+/// The variants that reach the third part's main bodies: 8 the local map with its grid of two by
+/// two cells complete (the zoom's traits and cell grid run, the map tile's node giving its cells),
+/// the note's sound paused to be resumed and the local map's step asked; 9 the world map; 10 the
+/// notes page with the start menu on top and a playing sound to pause, its next node's wait passed.
+/// In each: the Pip-Boy up (the manager's +0x174, object 232, its query byte 1) with the map menu
+/// (0x3ff) on top (the start menu, 0x3f5, in variant 10); the tiles' floats by trait (the
+/// magnification, its static id 0x1010, 1.0 both times it is read, so the clamp's answer differs
+/// from it when the zoom moves it; sizes 100.0, positions 10.0, the kind 26.0 of the map tile's one
+/// child, object 231, others 0.5); the larger float for real (`00404010`); the marker kind 26.0
+/// (`01074f60`) and the largest float; the marker's name equal to `" Marker"`, the companion
+/// label's text equal to the station name; `Tile::IsTrue` a bool; the player's cell (+0x40) object
+/// 209 (the local quest target taken); in variant 9 no quest target reference, no player marker
+/// reference and a teleport array entry without its flag; in variant 10 no world space for the
+/// marker; the note's type 1 (variant 8) or 2 (9); a map child of kind 0x1b, 0x1d and 0x1e once
+/// each.
+fn put_map_reach(e: &mut Engine, variant: u32) {
+    use arena::object;
+    let menu = object(255);
+    let manager = e.mem.u32(0x011d_8a80);
+    if manager != 0 {
+        e.mem.set_u32(manager + 0x174, object(232));
+        e.mem.set_u8(object(232) + 0x28, 1);
+        e.mem
+            .set_u32(manager + 0x114, if variant == 10 { 0x3f5 } else { 0x3ff });
+        e.mem.set_u32(manager + 0x118, 0);
+    }
+    e.mem
+        .set_u32(menu + 0xb8, if variant == 9 { 0 } else { object(205) });
+    e.mem.set_u8(0x011d_a36f, u8::from(variant == 8));
+    if variant == 10 {
+        e.mem.set_u32(object(205) + 0xc, object(234));
+        e.mem.set_u32(object(234) + 0xc, 0);
+        e.mem.set_u32(0x011d_a410, 1);
+        e.mem.set_u32(0x011f_6394 + 0x14, 10_000);
+        e.register_double(0x00ad_8930, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register_double(0x0057_5d70, |_, _| Ret::default());
+    }
+    e.mem.set_u8(0x011d_a3b8 + 4, u8::from(variant == 8));
+    // The local map's grid complete: two by two cells (variant 8), one (the others).
+    let side = if variant == 8 { 2 } else { 1 };
+    e.mem.set_u32(0x011c_63cc + 4, side);
+    e.mem.set_u32(menu + 0x128, side * side);
+    // The map tile's node (object 236) and its cells (a node's child, `0043b4a0`: object 237).
+    e.mem.set_u32(object(102) + 0x2c, object(236));
+    e.register_double(0x0043_b4a0, |_, _| Ret {
+        eax: object(237),
+        ..Ret::default()
+    });
+    e.mem.set_u32(0x011d_a35c, 0x1010);
+    e.register_double(0x00a0_11b0, |_, words| {
+        let value: f32 = match (words[0], words[1]) {
+            (tile, 0xfaa) if tile == object(231) => 26.0,
+            (_, 0x1010) => 1.0,
+            (_, 0xfb0 | 0xfb1 | 0xfcd) => 100.0,
+            (_, 0xfa1 | 0xfa2) => 10.0,
+            _ => 0.5,
+        };
+        Ret {
+            st0: f64::from(value),
+            ..Ret::default()
+        }
+    });
+    e.register_double(0x0040_4010, |_, words| Ret {
+        st0: f64::from(f32::from_bits(words[0]).max(f32::from_bits(words[1]))),
+        ..Ret::default()
+    });
+    e.mem.set_u64(0x0107_4f60, 26.0f64.to_bits());
+    // The exe's doubles 1.0, 2.0 and 1000.0 (an arena word there made the cells' half size and
+    // the centres infinite).
+    for (at, value) in [
+        (0x0101_2070u32, 1.0f64),
+        (0x0101_1590, 2.0),
+        (0x0101_7b70, 1000.0),
+    ] {
+        e.mem.set_u64(at, value.to_bits());
+    }
+    e.mem.set_u32(0x0101_6970, f32::MAX.to_bits());
+    e.mem.set_u32(object(102) + 4, object(230));
+    e.mem.set_u32(object(230), 0);
+    e.mem.set_u32(object(230) + 8, object(231));
+    e.register_double(0x00ec_7750, |_, words| Ret {
+        eax: u32::from(words[1] != 0x0107_4f54),
+        ..Ret::default()
+    });
+    e.register_double(0x0040_4dc0, |_, _| Ret::default());
+    // `Tile::IsTrue` answers a bool as the real one does (the marker is a companion's).
+    e.register_double(0x00a0_1230, |_, words| Ret {
+        eax: u32::from(words[1] == 0x1004),
+        ..Ret::default()
+    });
+    e.register_double(0x00a0_11f0, |_, _| Ret {
+        eax: EMPTY_TEXT_WORD,
+        ..Ret::default()
+    });
+    e.mem.set_u32(object(140) + 0x40, object(209));
+    if variant == 9 {
+        for address in [0x0061_01b0u32, 0x0077_a400] {
+            e.register_double(address, |_, _| Ret::default());
+        }
+        e.mem.set_u8(object(220), 0);
+    }
+    if variant != 10 {
+        e.register_double(0x005e_8d40, move |_, _| Ret {
+            eax: variant - 7,
+            ..Ret::default()
+        });
+    }
+    for k in 0..4 {
+        e.mem.set_u32(object(233) + 4 * k, 0);
+    }
+    e.register_double(0x00a0_3eb0, |e, words| {
+        let eax = match words[1] {
+            0x1c => object(228),
+            kind @ (0x1b | 0x1d | 0x1e) => {
+                let seen = object(233) + 4 * (kind - 0x1b);
+                if e.mem.u32(seen) == 0 {
+                    e.mem.set_u32(seen, 1);
+                    object(228)
+                } else {
+                    0
+                }
+            }
+            _ => 0,
+        };
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    });
+}
+
+/// What every map menu world holds for the third part (see [`put_map_world`]): a grid side of 1,
+/// the settings' floats and bytes, the teleport paths' array sizes, the objects the answers give
+/// and the answers of the by-address functions whose results the code reads through.
+fn put_map_answers(e: &mut Engine) {
+    use arena::object;
+    let menu = object(255);
+    e.mem.set_u32(0x011c_63cc + 4, 1);
+    for (setting, value) in [
+        (0x011d_b2f0u32, 0.5f32),
+        (0x011d_b358, 0.25),
+        (0x011d_47bc, 1.0),
+        (0x011d_4c60, 0.5),
+        (0x011d_2f64, 4.0),
+        (0x011d_22f8, 0.5),
+        (0x011d_3d3c, 4.0),
+    ] {
+        e.mem.set_f32(setting + 4, value);
+    }
+    for from in [
+        0x011d_4564u32,
+        0x011d_29d0,
+        0x011d_32e8,
+        0x011d_3ce8,
+        0x011d_342c,
+        0x011d_4870,
+    ] {
+        e.mem.set_f32(from + 4, 0.0);
+    }
+    for to in [
+        0x011d_42b8u32,
+        0x011d_26c4,
+        0x011d_38f4,
+        0x011d_3bbc,
+        0x011d_3c58,
+        0x011d_3df0,
+    ] {
+        e.mem.set_f32(to + 4, 1.0);
+    }
+    e.mem.set_u8(0x011e_07f0 + 4, 1);
+    // The teleport paths' sizes (spaces at +8, doors at +0x18): a target's (object 223 +0x10), the
+    // player's (+0x6f8), objects 3 and 40 as paths, and each one the constructor (`006f48b0`) makes.
+    for (path, spaces, doors) in [
+        (object(223) + 0x10, 1u32, 1u32),
+        (object(140) + 0x6f8, 1, 1),
+        (object(3), 2, 2),
+        (object(40), 1, 2),
+    ] {
+        e.mem.set_u32(path + 8, spaces);
+        e.mem.set_u32(path + 0x18, doors);
+    }
+    e.register_double(0x006f_48b0, |e, words| {
+        e.mem.set_u32(words[0] + 8, 1);
+        e.mem.set_u32(words[0] + 0x18, 1);
+        Ret::default()
+    });
+    for challenge in [3u32, 40, 180, 181, 182] {
+        e.mem.set_u32(object(challenge) + 0x24, arena::VTABLES);
+    }
+    // One node each: a target (object 223), a companion (object 207), a marker (object 207).
+    for (node, entry) in [(210u32, 223u32), (211, 207), (212, 207)] {
+        e.mem.set_u32(object(node), object(entry));
+        e.mem.set_u32(object(node) + 4, 0);
+    }
+    e.mem.set_u32(object(213), 0x100);
+    e.mem.set_u32(object(213) + 4, 0x80);
+    for (k, cell) in [-2i16, 1, 1, -2].into_iter().enumerate() {
+        e.mem.set_u16(object(213) + 8 + 2 * k as u32, cell as u16);
+    }
+    e.mem.set_u32(object(214) + 0x10, 0);
+    e.mem.set_u32(object(215), object(207));
+    e.mem.set_u32(object(216) + 0x28, object(217));
+    e.mem.set_u8(object(220), 1);
+    e.mem.set_u32(object(220) + 4, object(40));
+    // The knob's zoom divisor (`01075028`) a real 0.5; a float's whole number (`00406d90`) by
+    // truncation.
+    e.mem.set_u64(0x0107_5028, 0.5f64.to_bits());
+    e.register_double(0x0040_6d90, |_, words| Ret {
+        eax: f32::from_bits(words[0]) as i32 as u32,
+        ..Ret::default()
+    });
+    e.mem.set_u32(object(221), EMPTY_TEXT_WORD);
+    // Object 207 (the reference the lists and answers give): its cell (object 209), its base (object
+    // 224, a door: form type 0x1c) and its name (object 229, "abc"); the root space's parent none;
+    // the challenges' owner's markers (its +0x10 list: object 207 only); the player's map marker
+    // (+0x6f4) object 207; the door list (+0xe0) object 207 only.
+    e.mem.set_u32(object(207) + 0x40, object(209));
+    e.mem.set_u32(object(207) + 0x20, object(224));
+    e.mem.set_u8(object(224) + 4, 0x1c);
+    e.mem.set_u32(object(207) + 0x1c, object(229));
+    e.mem.set_u32(object(229), 0x0063_6261);
+    e.mem.set_u32(object(206) + 0x70, 0);
+    e.mem.set_u32(object(147) + 0x10, object(207));
+    e.mem.set_u32(object(147) + 0x14, 0);
+    e.mem.set_u32(object(140) + 0x6f4, object(207));
+    e.mem.set_u32(menu + 0xe0, object(207));
+    e.mem.set_u32(menu + 0xe4, 0);
+    // The reference answers: a world space (object 206), a quest target's reference (object 207),
+    // the local map's target reference none, the player's marker reference (object 207), the
+    // objective's targets (object 210's list), a note's image (object 227), the TES object's cell
+    // and world space (object 226), a map child 0x1c (object 228, else none).
+    for (address, answer) in [
+        (0x0057_5d70u32, object(206)),
+        (0x0061_01b0, object(207)),
+        (0x005c_bb70, 0),
+        (0x0077_a400, object(207)),
+        (0x007d_6bb0, object(210)),
+        (0x005e_9160, object(227)),
+        (0x005f_36f0, object(226)),
+        (0x004f_d3e0, object(226)),
+    ] {
+        e.register_double(address, move |_, _| Ret {
+            eax: answer,
+            ..Ret::default()
+        });
+    }
+    e.register_double(0x00a0_3eb0, |_, words| Ret {
+        eax: if words[1] == 0x1c { object(228) } else { 0 },
+        ..Ret::default()
+    });
+    // The cells' textures (`0054e750`, `0054e640`) fill the texture pointer with object 225.
+    for (address, word) in [(0x0054_e750u32, 3usize), (0x0054_e640, 1)] {
+        e.register_double(address, move |e, words| {
+            e.mem.set_u32(words[word], object(225));
+            Ret::default()
+        });
+    }
+    let answers: [(u32, u32); 15] = [
+        (arena::CODE + 0x1f4, object(201)),
+        (0x0095_2ba0, object(210)),
+        (0x005e_b7e0, object(211)),
+        (0x0058_82a0, object(212)),
+        (0x0058_6400, object(213)),
+        (0x0056_9060, object(214)),
+        (0x0056_8e50, object(215)),
+        (0x00a1_ddb0, object(216)),
+        (0x0065_3270, object(218)),
+        (0x005e_91d0, object(219)),
+        (0x006a_1440, object(220)),
+        (0x0055_8dd0, object(220) + 4),
+        (0x0069_50d0, object(221)),
+        (0x0058_6440, object(222)),
+        (0x0043_8f30, 3),
+    ];
+    for (address, answer) in answers {
+        e.register_double(address, move |_, _| Ret {
+            eax: answer,
+            ..Ret::default()
+        });
+    }
+    // The result words: the font's dimensions (its second word), a colour's and a request's and a
+    // pathing location's constructor (their first), a point difference (its second).
+    for (address, word) in [
+        (0x00a1_b020u32, 1usize),
+        (0x0041_4430, 0),
+        (0x0045_6540, 0),
+        (0x006d_cea0, 0),
+        (0x004e_8880, 1),
+    ] {
+        e.register_double(address, move |_, words| Ret {
+            eax: words[word],
+            ..Ret::default()
+        });
+    }
+}
+
+/// The empty text (`01011584`), a string the code may read.
+const EMPTY_TEXT_WORD: u32 = 0x0101_1584;
+
+/// The map menu's third part's world, as settings of a Diff.
+trait MapWorlds3 {
+    /// In [`put_map_world`]'s world with `args`, the variants `variants`, `calls` calls at most a
+    /// run; `IsTopMenuID`'s translation reaches `007027b0` and `00702680` plainly.
+    fn in_map_world(self, args: &'static [Arg], variants: &'static [u32], calls: usize) -> Diff;
+}
+
+impl MapWorlds3 for Diff {
+    fn in_map_world(self, args: &'static [Arg], variants: &'static [u32], calls: usize) -> Diff {
+        self.in_arena_and(
+            args,
+            CALLEES,
+            &[0x0070_27b0, 0x0070_2680],
+            variants,
+            put_map_world,
+        )
+        .max_cases(32)
+        .max_calls(calls)
+    }
+}
+
+/// `DoIdle`: every page (the local map's step in variant 0), no map menu, challenge mode.
+#[test]
+fn map_menu_do_idle_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_a130,
+        interface::map_menu_p3::map_menu_do_idle(Ptr)
+    ))
+    .in_map_world(&[Arg::MapMenu], &[8, 9, 10, 0, 1, 3, 4, 6, 7], 12000)
+    .max_cases(96)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_calculate_player_marker_space_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_84d0,
+        interface::map_menu_p3::map_menu_calculate_player_marker_space(Ptr, u32, u32, u32) -> u32
+    ))
+    .in_map_world(&[Arg::MapMenu, Arg::F32, Arg::F32, Arg::F32], &[0, 1], 2000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_00798710_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_8710,
+        interface::map_menu_p3::fn_00798710()
+    ))
+    .in_map_world(&[], &[0, 1, 5], 400)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_set_player_marker_callback_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_8840,
+        interface::map_menu_p3::map_menu_set_player_marker_callback()
+    ))
+    .in_map_world(&[], &[0, 1, 7], 3000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_00798a00_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_8a00,
+        interface::map_menu_p3::fn_00798a00()
+    ))
+    .in_map_world(&[], &[0, 1, 5], 200)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_stop_note_sound_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_8ad0,
+        interface::map_menu_p3::map_menu_stop_note_sound(Ptr)
+    ))
+    .in_map_world(&[Arg::MapMenu], &[0, 3], 400)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_clear_audio_log_subtites_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_8bf0,
+        interface::map_menu_p3::map_menu_clear_audio_log_subtites()
+    ))
+    .in_map_world(&[], &[0, 3, 5], 400)
+    .run()
+    .assert_same();
+}
+
+/// `DoEnter`: each id with no tile and a tile, in and out of challenge mode.
+#[test]
+fn map_menu_do_enter_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_8cb0,
+        interface::map_menu_p3::map_menu_do_enter(Ptr, i32, u32)
+    ))
+    .in_map_world(&[Arg::MapMenu, Arg::MapId, Arg::Ptr], &[3, 6], 3000)
+    .max_cases(64)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_00799100_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_9100,
+        interface::map_menu_p3::fn_00799100(u32, u32)
+    ))
+    .in_map_world(&[Arg::Word, Arg::Ptr], &[0, 2], 400)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_load_challenge_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_91b0,
+        interface::map_menu_p3::map_menu_load_challenge(Ptr, u32)
+    ))
+    .in_map_world(&[Arg::MapMenu, Arg::Object], &[6], 400)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_load_note_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_93d0,
+        interface::map_menu_p3::map_menu_load_note(Ptr, u32)
+    ))
+    .in_map_world(&[Arg::MapMenu, Arg::Ptr], &[8, 9, 3, 0], 400)
+    .max_cases(48)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_do_leave_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_9690,
+        interface::map_menu_p3::map_menu_do_leave(Ptr, i32, u32)
+    ))
+    .in_map_world(&[Arg::MapMenu, Arg::MapId, Arg::Ptr], &[3], 400)
+    .max_cases(48)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_00799dc0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_9dc0,
+        interface::map_menu_p3::fn_00799dc0(Ptr)
+    ))
+    .in_map_world(&[Arg::MapMenu], &[8, 9, 0, 1, 2], 2000)
+    .run()
+    .assert_same();
+}
+
+/// `UpdatePlayingSounds`: a sound playing (variant 3) and the sounds loading (4).
+#[test]
+fn map_menu_update_playing_sounds_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_a660,
+        interface::map_menu_p3::map_menu_update_playing_sounds(Ptr)
+    ))
+    .in_map_world(&[Arg::MapMenu], &[10, 3, 4, 0], 1000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_world_to_map_coord_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_c380,
+        interface::map_menu_p3::map_menu_world_to_map_coord(Ptr, u32, u32, u32, u32, u32) -> u32
+    ))
+    .in_map_world(
+        &[
+            Arg::MapMenu,
+            Arg::Object,
+            Arg::F32,
+            Arg::F32,
+            Arg::Byte,
+            Arg::Ptr,
+        ],
+        &[0, 1],
+        200,
+    )
+    .max_cases(48)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_map_to_world_coord_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_c450,
+        interface::map_menu_p3::map_menu_map_to_world_coord(Ptr, u32, u32, u32, u32, u32) -> u32
+    ))
+    .in_map_world(
+        &[
+            Arg::MapMenu,
+            Arg::Object,
+            Arg::F32,
+            Arg::F32,
+            Arg::Byte,
+            Arg::Ptr,
+        ],
+        &[0, 1],
+        200,
+    )
+    .max_cases(48)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_do_wheel_move_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_c530,
+        interface::map_menu_p3::map_menu_do_wheel_move(Ptr, u32, u32)
+    ))
+    .in_map_world(
+        &[Arg::MapMenu, Arg::Byte, Arg::Byte],
+        &[8, 9, 0, 1, 3],
+        2000,
+    )
+    .run()
+    .assert_same();
+}
+
+/// `ZoomMap`: in and out on the local map with its grid complete (variant 8: the zoom's traits and
+/// the cell grid) and on the world map (9), the magnification moved by the clamp or not (both
+/// reads 1.0, the larger float for real) and the knob turned when it moved; the stand-ins' worlds
+/// (no map tile, the interior's grid still being made).
+#[test]
+fn map_menu_zoom_map_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_c5a0,
+        interface::map_menu_p3::map_menu_zoom_map(Ptr, u8, f32)
+    ))
+    .in_map_world(&[Arg::MapMenu, Arg::Byte, Arg::F32], &[8, 9, 1, 2, 7], 2000)
+    .max_cases(128)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_update_world_map_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_cdb0,
+        interface::map_menu_p3::map_menu_update_world_map(Ptr)
+    ))
+    .in_map_world(&[Arg::MapMenu], &[9, 1, 0, 10], 3000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_update_local_map_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_d410,
+        interface::map_menu_p3::map_menu_update_local_map(Ptr)
+    ))
+    .in_map_world(&[Arg::MapMenu], &[8, 0, 7, 10], 3000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_add_quest_markers_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_e0a0,
+        interface::map_menu_p3::map_menu_add_quest_markers(Ptr)
+    ))
+    .in_map_world(&[Arg::MapMenu], &[8, 9, 0, 1, 7], 3000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_update_companion_markers_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_e470,
+        interface::map_menu_p3::map_menu_update_companion_markers(Ptr)
+    ))
+    .in_map_world(&[Arg::MapMenu], &[8, 9, 0, 1, 7], 2000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_create_player_marker_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_f360,
+        interface::map_menu_p3::map_menu_create_player_marker(Ptr)
+    ))
+    .in_map_world(&[Arg::MapMenu], &[9, 8, 0, 1, 7], 2000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_0079f620_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_f620,
+        interface::map_menu_p3::fn_0079f620(Ptr) -> u32
+    ))
+    .in_arena(&[Arg::Ptr], CALLEES, &[])
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_set_player_marker_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_f640,
+        interface::map_menu_p3::map_menu_set_player_marker()
+    ))
+    .in_map_world(&[], &[10, 0, 1, 5], 200)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_delete_player_marker_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_f6f0,
+        interface::map_menu_p3::map_menu_delete_player_marker(Ptr)
+    ))
+    .in_map_world(&[Arg::MapMenu], &[0], 1000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_get_world_map_tracking_ref_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_f7e0,
+        interface::map_menu_p3::map_menu_get_world_map_tracking_ref(Ptr, u32, u32) -> u32
+    ))
+    .in_map_world(&[Arg::MapMenu, Arg::Ptr, Arg::Ptr], &[9, 1], 400)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_create_waypoint_path_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_f8d0,
+        interface::map_menu_p3::map_menu_create_waypoint_path(Ptr, u32, u32, u32, u32)
+    ))
+    .in_map_world(
+        &[Arg::MapMenu, Arg::Ptr, Arg::Ptr, Arg::Object, Arg::Small],
+        &[1],
+        3000,
+    )
+    .max_cases(48)
+    .run()
+    .assert_same();
+}
+
+/// The local map's step: an exterior and an interior (variant 7), saved or made.
+#[test]
+fn map_menu_fn_0079ffb0_diff() {
+    Diff::new(engine_core::entry!(
+        0x0079_ffb0,
+        interface::map_menu_p3::fn_0079ffb0(u8)
+    ))
+    .in_map_world(&[Arg::Byte], &[0, 7, 5], 6000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn map_menu_fn_007a19a0_diff() {
+    Diff::new(engine_core::entry!(
+        0x007a_19a0,
+        interface::map_menu_p3::fn_007a19a0(Ptr, u32)
+    ))
+    .in_map_world(&[Arg::Object, Arg::Object], &[0], 200)
     .run()
     .assert_same();
 }

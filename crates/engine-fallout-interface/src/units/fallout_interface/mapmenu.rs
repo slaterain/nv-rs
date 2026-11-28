@@ -4421,16 +4421,16 @@ pub fn map_menu_set_player_marker_callback(e: &mut Engine) {
             e.call(SET_PLAYER_MAP_MARKER, &args![player, x, y, z, space]);
             if result == 0 {
                 let menu = map_menu(e);
-                map_menu_delete_player_marker(e, Ptr::new(menu));
+                e.call(0x0079_f6f0, &args![menu]);
             }
             let menu = map_menu(e);
-            map_menu_create_player_marker(e, Ptr::new(menu));
+            e.call(0x0079_f360, &args![menu]);
         }
         1 => {
             let player = e.mem.u32(PLAYER_011DEA3C);
             e.call(REMOVE_PLAYER_MAP_MARKER, &args![player]);
             let menu = map_menu(e);
-            map_menu_delete_player_marker(e, Ptr::new(menu));
+            e.call(0x0079_f6f0, &args![menu]);
         }
         _ => {}
     }
@@ -4665,7 +4665,7 @@ pub fn map_menu_do_enter(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32)
                     .call(LIST_BOX_ITEM_OF_007E1110, &args![base + 0x1f0, tile])
                     .u32();
                 if e.call(FLAG_004B71D0, &args![]).bool() || challenge != 0 {
-                    map_menu_load_challenge(e, this, challenge);
+                    e.call(0x0079_91b0, &args![this, challenge]);
                 }
                 let tile_13 = map_tile(e, base, 13);
                 e.call(TILE_SET_INT, &args![tile_13, 0xfa3u32, 1u32]);
@@ -5129,7 +5129,10 @@ fn gamepad_sticks(e: &mut Engine, this: Ptr<MapMenu>) -> bool {
             let factor: f64 = e.global(ZOOM_FACTOR_DOUBLE);
             let amount = x87_add(x87_mul(x87_load32(amount), factor), 1.0);
             let amount = x87_quiet_bits(x87_store32(amount));
-            map_menu_zoom_map(e, this, u8::from(zoom > 0), f32::from_bits(amount));
+            e.call(
+                0x0079_c5a0,
+                &args![this, u8::from(zoom > 0), f32::from_bits(amount)],
+            );
             handled = true;
         }
     }
@@ -5168,7 +5171,7 @@ fn gamepad_sticks(e: &mut Engine, this: Ptr<MapMenu>) -> bool {
                         e.call(TILE_SET_FLOAT, &args![tile, id, still, 1u32]);
                     }
                 }
-                fn_00799dc0(e, this);
+                e.call(0x0079_9dc0, &args![this]);
             }
         }
         2 | 3 => {
@@ -5279,7 +5282,10 @@ pub fn map_menu_do_gamepad(
                 || e.get(this, MapMenu::iCurrentPage) == 0x21
             {
                 let step = float_constant(e, ZOOM_STEP_FLOAT);
-                map_menu_zoom_map(e, this, u8::from(button == 0x10), f32::from_bits(step));
+                e.call(
+                    0x0079_c5a0,
+                    &args![this, u8::from(button == 0x10), f32::from_bits(step)],
+                );
                 handled = true;
             }
         }
@@ -5554,7 +5560,7 @@ pub fn map_menu_update_playing_sounds(e: &mut Engine, this: Ptr<MapMenu>) {
             node = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, node));
         }
         if none_valid {
-            map_menu_stop_note_sound(e, this);
+            e.call(0x0079_8ad0, &args![this]);
             {
                 let volume = x87_quiet_bits(e.mem.u32(base + 0xc8));
                 let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
@@ -5661,7 +5667,7 @@ pub fn map_menu_update_playing_sounds(e: &mut Engine, this: Ptr<MapMenu>) {
     );
     let tile_13 = map_tile(e, base, 13);
     e.call(TILE_SET_INT, &args![tile_13, 0x1004u32, 0u32]);
-    map_menu_stop_note_sound(e, this);
+    e.call(0x0079_8ad0, &args![this]);
 }
 
 // Translated from 007a1b10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -6605,7 +6611,10 @@ pub fn map_menu_do_wheel_move(e: &mut Engine, this: Ptr<MapMenu>, _unused_0: u32
     let zero: f64 = e.global(ZERO_DOUBLE);
     let zoom_in = above(f64::from(steps), zero);
     let factor = float_constant(e, WHEEL_ZOOM_FLOAT);
-    map_menu_zoom_map(e, this, u8::from(zoom_in), f32::from_bits(factor));
+    e.call(
+        0x0079_c5a0,
+        &args![this, u8::from(zoom_in), f32::from_bits(factor)],
+    );
 }
 
 /// The settings `ZoomMap` reads (each a float through `00403e20`): the
@@ -6869,7 +6878,7 @@ pub fn map_menu_zoom_map(e: &mut Engine, this: Ptr<MapMenu>, zoom_in: u8, factor
         let pipboy = e.call(WORD_AT_174, &args![interface]).u32();
         e.call(PIPBOY_MOVE_KNOB, &args![pipboy, 0u32, turn, time, 1u32]);
     }
-    map_menu_update_companion_markers(e, this);
+    e.call(0x0079_e470, &args![this]);
 }
 
 /// `TESWorldSpace::GetWorldMapData` (engine map), thiscall: the map data
@@ -6992,7 +7001,7 @@ pub fn map_menu_update_world_map(e: &mut Engine, this: Ptr<MapMenu>) {
         e.mem.set_u8(TEXTURE_CLEARED_011DA36C, 0);
         e.set(this, MapMenu::bRootSpaceChanged, 0);
     }
-    map_menu_zoom_map(e, this, 1, 1.0);
+    e.call(0x0079_c5a0, &args![this, 1u8, 1.0f32]);
     let y = map_cell(e, data, 0xa).wrapping_add(0x1000);
     let x = map_cell(e, data, 8);
     let (x, y) = map_corner(e, x, y);
@@ -7021,7 +7030,7 @@ pub fn map_menu_update_world_map(e: &mut Engine, this: Ptr<MapMenu>) {
             e.call(NODE_DELETE, &args![list, 1u32]);
         }
     }
-    map_menu_add_map_icons(e, this);
+    e.call(0x0079_dbb0, &args![this]);
 }
 
 /// One marker of `UpdateWorldMap`'s list: a visible marker (not
@@ -7064,7 +7073,7 @@ fn add_world_map_marker(e: &mut Engine, this: Ptr<MapMenu>, marker: u32) {
     }
     let (map_x, map_y) = e.with_stack(0xc, |e, map_point| {
         let space = e.call(REFR_GET_WORLD_SPACE, &args![marker]).u32();
-        map_menu_world_to_map_coord(e, this, map_point.addr(), x, y, z, space);
+        e.call(0x0079_c380, &args![this, map_point.addr(), x, y, z, space]);
         (e.mem.u32(map_point.addr()), e.mem.u32(map_point.addr() + 4))
     });
     let data = e.call(REFR_GET_MAP_MARKER_DATA, &args![marker]).u32();
@@ -7286,7 +7295,7 @@ pub fn map_menu_update_local_map(e: &mut Engine, this: Ptr<MapMenu>) {
     let (x, y) = map_corner_bits(e, x, x87_quiet_bits(second[1]));
     e.mem.set_u32(base + 0xf0, x);
     e.mem.set_u32(base + 0xf4, y);
-    map_menu_zoom_map(e, this, 1, 1.0);
+    e.call(0x0079_c5a0, &args![this, 1u8, 1.0f32]);
     e.set(
         this,
         MapMenu::pMapSpace,
@@ -7302,7 +7311,7 @@ pub fn map_menu_update_local_map(e: &mut Engine, this: Ptr<MapMenu>) {
                 node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
             }
         }
-        map_menu_add_map_icons(e, this);
+        e.call(0x0079_dbb0, &args![this]);
     }
     let tile_2 = map_tile(e, base, 2);
     e.call(TILE_SET_INT, &args![tile_2, 0xfa3u32, 1u32]);
@@ -7355,7 +7364,7 @@ fn add_door_marker(e: &mut Engine, this: Ptr<MapMenu>, reference: u32) {
         let x = e.mem.u32(point);
         let y = e.mem.u32(point + 4);
         let z = e.mem.u32(point + 8);
-        map_menu_world_to_map_coord(e, this, map_point, x, y, z, 0);
+        e.call(0x0079_c380, &args![this, map_point, x, y, z, 0]);
         if e.get(this, MapMenu::bFogOfWarEnabled) != 0 {
             let seen = e.call(CELL_GET_SEEN_VALUE, &args![point]).i32();
             let divisor: f64 = e.global(FOG_DIVISOR_DOUBLE);
@@ -7565,7 +7574,9 @@ pub fn map_menu_add_map_icons(e: &mut Engine, this: Ptr<MapMenu>) {
             let x = e.mem.u32(world);
             let y = e.mem.u32(world + 4);
             let z = e.mem.u32(world + 8);
-            let made = map_menu_world_to_map_coord(e, this, result, x, y, z, space);
+            let made = e
+                .call(0x0079_c380, &args![this, result, x, y, z, space])
+                .u32();
             [e.mem.u32(made), e.mem.u32(made + 4), e.mem.u32(made + 8)]
         });
         e.call(TILE_SET_INT, &args![icon, 0xfa3u32, 1u32]);
@@ -7627,12 +7638,12 @@ pub fn map_menu_add_map_icons(e: &mut Engine, this: Ptr<MapMenu>) {
         let map = e.get(this, MapMenu::pMapTile);
         e.call(TILE_SET_FLOAT, &args![map, target, value, 0u32]);
     }
-    map_menu_add_quest_markers(e, this);
+    e.call(0x0079_e0a0, &args![this]);
     map_menu_add_companion_markers(e, this);
     let player = e.mem.u32(PLAYER_011DEA3C);
     if e.call(0x0079_8400, &args![player]).u32() != 0 {
-        map_menu_delete_player_marker(e, this);
-        map_menu_create_player_marker(e, this);
+        e.call(0x0079_f6f0, &args![this]);
+        e.call(0x0079_f360, &args![this]);
     }
 }
 
@@ -7700,7 +7711,9 @@ fn tracked_map_position(e: &mut Engine, this: Ptr<MapMenu>, reference: u32) -> (
         let x = e.mem.u32(world);
         let y = e.mem.u32(world + 4);
         let z = e.mem.u32(world + 8);
-        let made = map_menu_world_to_map_coord(e, this, result, x, y, z, space);
+        let made = e
+            .call(0x0079_c380, &args![this, result, x, y, z, space])
+            .u32();
         (e.mem.u32(made), e.mem.u32(made + 4))
     })
 }
@@ -7735,7 +7748,7 @@ pub fn map_menu_add_quest_markers(e: &mut Engine, this: Ptr<MapMenu>) {
         let mut tracked = if e.get(this, MapMenu::iCurrentPage) == 0x21 {
             let target = node_item(e, node);
             let list = e.call(PLUS_10, &args![target]).u32();
-            map_menu_get_world_map_tracking_ref(e, this, reference, list)
+            e.call(0x0079_f7e0, &args![this, reference, list]).u32()
         } else {
             let target = node_item(e, node);
             e.call(TARGET_LOCAL_REFERENCE_005CBB70, &args![target])
@@ -7746,7 +7759,7 @@ pub fn map_menu_add_quest_markers(e: &mut Engine, this: Ptr<MapMenu>) {
                 let target = node_item(e, node);
                 let list = e.call(PLUS_10, &args![target]).u32();
                 let from = e.get(this, MapMenu::pMapPlayerRef);
-                map_menu_create_waypoint_path(e, this, from, tracked, list, 0x1d);
+                e.call(0x0079_f8d0, &args![this, from, tracked, list, 0x1d]);
             }
         } else if reference != 0 {
             let take = if e.get(this, MapMenu::iCurrentPage) == 0x21 {
@@ -7851,7 +7864,7 @@ fn companion_tracked(e: &mut Engine, this: Ptr<MapMenu>, companion: u32, path: u
         );
     }
     if e.get(this, MapMenu::iCurrentPage) == 0x21 {
-        map_menu_get_world_map_tracking_ref(e, this, companion, path)
+        e.call(0x0079_f7e0, &args![this, companion, path]).u32()
     } else {
         companion
     }
@@ -7890,12 +7903,18 @@ fn companion_positions(e: &mut Engine, this: Ptr<MapMenu>, tracked: u32) -> [u32
         let x = e.mem.u32(world);
         let y = e.mem.u32(world + 4);
         let z = e.mem.u32(world + 8);
-        let made = map_menu_world_to_map_coord(e, this, marker, x, y, z, space);
+        let made = e
+            .call(0x0079_c380, &args![this, marker, x, y, z, space])
+            .u32();
         let marker_x = e.mem.u32(made);
         let marker_y = e.mem.u32(made + 4);
         let space = e.call(REFR_GET_WORLD_SPACE, &args![tracked]).u32();
-        let made =
-            map_menu_world_to_map_coord(e, this, label, position[0], label_y, position[2], space);
+        let made = e
+            .call(
+                0x0079_c380,
+                &args![this, label, position[0], label_y, position[2], space],
+            )
+            .u32();
         [marker_x, marker_y, e.mem.u32(made), e.mem.u32(made + 4)]
     })
 }
@@ -8243,10 +8262,10 @@ pub fn map_menu_create_player_marker(e: &mut Engine, this: Ptr<MapMenu>) {
     let base = this.addr();
     let mut tracked = if e.get(this, MapMenu::iCurrentPage) == 0x21 {
         let player = e.mem.u32(PLAYER_011DEA3C);
-        let path = fn_0079f620(e, Ptr::new(player));
+        let path = e.call(0x0079_f620, &args![player]).u32();
         let player = e.mem.u32(PLAYER_011DEA3C);
         let marker = e.call(0x0079_8400, &args![player]).u32();
-        map_menu_get_world_map_tracking_ref(e, this, marker, path)
+        e.call(0x0079_f7e0, &args![this, marker, path]).u32()
     } else {
         let player = e.mem.u32(PLAYER_011DEA3C);
         e.call(PLAYER_MARKER_REFERENCE_0077A400, &args![player])
@@ -8255,9 +8274,9 @@ pub fn map_menu_create_player_marker(e: &mut Engine, this: Ptr<MapMenu>) {
     let player = e.mem.u32(PLAYER_011DEA3C);
     if tracked != 0 {
         if e.get(this, MapMenu::iCurrentPage) == 0x21 {
-            let path = fn_0079f620(e, Ptr::new(player));
+            let path = e.call(0x0079_f620, &args![player]).u32();
             let from = e.get(this, MapMenu::pMapPlayerRef);
-            map_menu_create_waypoint_path(e, this, from, tracked, path, 0x1e);
+            e.call(0x0079_f8d0, &args![this, from, tracked, path, 0x1e]);
         }
     } else if e.call(0x0079_8400, &args![player]).u32() != 0 {
         let take = if e.get(this, MapMenu::iCurrentPage) == 0x21 {
@@ -8471,7 +8490,9 @@ fn reference_map_point(e: &mut Engine, this: Ptr<MapMenu>, reference: u32) -> (u
     let y = e.mem.u32(position + 4);
     let z = e.mem.u32(position + 8);
     e.with_stack(0xc, |e, result| {
-        let made = map_menu_world_to_map_coord(e, this, result.addr(), x, y, z, space);
+        let made = e
+            .call(0x0079_c380, &args![this, result.addr(), x, y, z, space])
+            .u32();
         (e.mem.u32(made), e.mem.u32(made + 4))
     })
 }

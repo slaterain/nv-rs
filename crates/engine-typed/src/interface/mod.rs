@@ -42,6 +42,11 @@
 //!   constructor and destructors, `UpdateMenu`), its small members, the data pages (the current
 //!   page, the notes, challenges, quests and radio stations with their filters and sorts, the radio
 //!   waveform), the string array's removal and the conversation's deleting destructor.
+//! - [`map_menu_p3`]: the map menu's unit, its third part: the idle, the enter and leave of the data
+//!   pages, the note's and challenge's loads and the note's sounds, the marker under the cursor, the
+//!   coordinates, the wheel and the zoom, the world and local maps, the quest, companion and player
+//!   markers, the waypoint path and the local map's making step. `DoClick`, `DoGamepad`,
+//!   `AddMapIcons` and `AddCompanionMarkers` stay translated (extenders patch or hook them).
 //!
 //! **Floats.** The menus run on the main thread ([`Threads::Main`]), at the float precision the
 //! exe's main thread computes in once Direct3D set it: plain `f32` (the camera frustum's products;
@@ -61,6 +66,7 @@ pub mod interface_cpp_p3;
 pub mod item_list_box;
 pub mod map_menu;
 pub mod map_menu_p2;
+pub mod map_menu_p3;
 pub mod menu_manager;
 pub mod menu_manager_p2;
 pub mod small_units;
@@ -92,6 +98,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
     all.extend(stats_menu::funcs());
     all.extend(map_menu::funcs());
     all.extend(map_menu_p2::funcs());
+    all.extend(map_menu_p3::funcs());
     all
 }
 
