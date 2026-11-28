@@ -42,6 +42,7 @@ pub mod navmesh;
 pub mod point;
 pub mod pov;
 pub mod search;
+pub mod smoother_arrays;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(7);
@@ -267,5 +268,15 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The path smoother POV's arrays.
+        entry!(0x006b_36e0, smoother_arrays::edge_vert_array_new(Ptr<SimpleArray>) -> Ptr<SimpleArray>),
+        entry!(0x006b_3710, smoother_arrays::edge_vert_array_drop(Ptr<SimpleArray>)),
+        entry!(0x006b_3660, smoother_arrays::link_array_append(Ptr<SimpleArray>, Ptr) -> u32),
+        entry!(0x006b_3730, smoother_arrays::vert_array_append(Ptr<SimpleArray>, Ptr) -> u32),
+        entry!(0x006b_3800, smoother_arrays::navmesh_array_new(Ptr<SimpleArray>) -> Ptr<SimpleArray>),
+        entry!(0x006b_3830, smoother_arrays::navmesh_array_drop(Ptr<SimpleArray>)),
+        entry!(0x006b_3880, smoother_arrays::pov_array_scalar_delete(Ptr, u32) -> Ptr),
+        entry!(0x006b_38b0, smoother_arrays::node_array_scalar_delete(Ptr, u32) -> Ptr),
+        entry!(0x006b_38e0, smoother_arrays::link_array_scalar_delete(Ptr, u32) -> Ptr),
     ]
 }
