@@ -42,6 +42,7 @@ pub mod navmesh;
 pub mod point;
 pub mod pov;
 pub mod search;
+pub mod static_queue;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(7);
@@ -190,6 +191,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006a_1f90, search::scrap_new(u32, Ptr) -> u32),
         entry!(0x006a_79c0, search::is_goal(Ptr<AStarSearch>, Ptr) -> bool),
         entry!(0x006b_8c20, search::info_is_goal(Ptr, Ptr) -> u32),
+        entry!(0x006e_c4b0, static_queue::try_push(Ptr<static_queue::StaticQueue>, u32) -> bool),
+        entry!(0x006e_c5b0, static_queue::try_pop(Ptr<static_queue::StaticQueue>, Ptr) -> bool),
         entry!(0x006a_6eb0, search::location_center(Ptr<SearchLocation>, Ptr<NiPoint3>) -> Ptr<NiPoint3>),
         entry!(0x006a_7ad0, search::element(Ptr, u32) -> u32),
         entry!(0x0069_dec0, search::list_element(Ptr, u32) -> u32),
