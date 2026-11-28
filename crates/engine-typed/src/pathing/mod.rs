@@ -42,6 +42,7 @@ pub mod navmesh;
 pub mod point;
 pub mod pov;
 pub mod search;
+pub mod task_messages;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(7);
@@ -267,5 +268,10 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The pathing tasklet's small message handlers.
+        entry!(0x006e_9c00, task_messages::message_new(Ptr, u32, u32) -> Ptr),
+        entry!(0x006e_9c30, task_messages::message_copy(Ptr, Ptr) -> Ptr),
+        entry!(0x006e_9c60, task_messages::debug_data_copy(Ptr, Ptr) -> Ptr),
+        entry!(0x006e_a330, task_messages::task_data_set_cancelled(Ptr)),
     ]
 }
