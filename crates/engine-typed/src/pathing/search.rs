@@ -8,11 +8,38 @@ use super::layout::{
 use super::point::{length_xy_squared, subtract};
 use super::{double_global, float_global, low_word, real, FAMILY};
 use crate::culling::layout::NiPoint3;
+use crate::dispatch;
 use crate::native::{float_precision, Real};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
 use engine_core::x87::fistp_chop64;
 use engine_core::{args, typed_call, Engine};
+
+/// Assign a path token and retain its reference-counted base at +0x14.
+// Typed from 006ebfb0
+pub fn assign_token(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
+    let held = e.mem.u32(this.addr());
+    if held != e.mem.u32(source.addr()) {
+        if held != 0 {
+            typed_call!(
+                dispatch::FAMILY,
+                0x0040_1970,
+                dispatch::refs::release(e, Ptr::new(held.wrapping_add(0x14)))
+            );
+        }
+        // Releasing the last reference may have changed the source slot.
+        let replacement = e.mem.u32(source.addr());
+        e.mem.set_u32(this.addr(), replacement);
+        if replacement != 0 {
+            typed_call!(
+                dispatch::FAMILY,
+                0x0040_f6e0,
+                dispatch::refs::add_reference(e, Ptr::new(replacement.wrapping_add(0x14)))
+            );
+        }
+    }
+    this
+}
 
 /// The `double` 19 the scaled cost multiplies by (`010356e8`).
 const NINETEEN: u32 = 0x0103_56e8;
