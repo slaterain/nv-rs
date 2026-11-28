@@ -36,6 +36,7 @@ use layout::{
     Sphere,
 };
 
+pub mod builder_accessors;
 pub mod layout;
 pub mod location;
 pub mod navmesh;
@@ -267,5 +268,14 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The path builder's small accessors.
+        entry!(0x006c_9fa0, builder_accessors::set_incomplete(u32, u8)),
+        entry!(0x006c_a4c0, builder_accessors::first_tangent_uses_heading(u32) -> bool),
+        entry!(0x006c_a4e0, builder_accessors::initial_heading(u32) -> f32),
+        entry!(0x006c_a830, builder_accessors::node_has_flag_1(u32) -> bool),
+        entry!(0x006c_aa20, builder_accessors::request_byte_a1(u32) -> bool),
+        entry!(0x006c_b410, builder_accessors::ray_cast_request_drop(u32)),
+        entry!(0x006c_b480, builder_accessors::ray_cast_path_new(u32) -> u32),
+        entry!(0x006c_b4a0, builder_accessors::ray_cast_path_drop(u32)),
     ]
 }

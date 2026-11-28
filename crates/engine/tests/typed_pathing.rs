@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, builder_accessors, location, navmesh, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -660,6 +660,7 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x006d_b4f0, &[0x006d_bbb0]),
     (0x006d_cf20, &[0x0069_0830, 0x006d_cfe0]),
     (0x006e_78b0, &[0x006e_8f40]),
+    (0x006c_b480, &[0x006c_f180]),
 ];
 
 trait Common {
@@ -4365,4 +4366,163 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+#[test]
+fn set_incomplete() {
+    Diff::new(entry!(
+        0x006c_9fa0,
+        builder_accessors::set_incomplete(u32, u8)
+    ))
+    .common()
+    .plain(0x006c_9fa0)
+    .inputs(&[Input::Of(&[0, 1, 0xff])])
+    .setup(|e, case| {
+        stand_ins(e);
+        let s = e.mem.alloc(0x44);
+        e.mem.set_u8(s + 0x40, 0);
+        vec![s, u32::from(case.word(0) as u8)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn first_tangent_uses_heading() {
+    Diff::new(entry!(
+        0x006c_a4c0,
+        builder_accessors::first_tangent_uses_heading(u32) -> bool
+    ))
+    .common()
+    .plain(0x006c_a4c0)
+    .inputs(&[Input::Of(&[0, 1, 0xff])])
+    .setup(|e, case| {
+        stand_ins(e);
+        let r = e.mem.alloc(0xa4);
+        e.mem.set_u8(r + 0xa0, case.word(0) as u8);
+        vec![r]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn initial_heading() {
+    Diff::new(entry!(
+        0x006c_a4e0,
+        builder_accessors::initial_heading(u32) -> f32
+    ))
+    .common()
+    .plain(0x006c_a4e0)
+    .inputs(&[Input::F32])
+    .float_sweep(FLOAT_SWEEP)
+    .setup(|e, case| {
+        stand_ins(e);
+        let r = e.mem.alloc(0x94);
+        e.mem.set_u32(r + 0x90, bits(case, 0));
+        vec![r]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn node_has_flag_1() {
+    Diff::new(entry!(
+        0x006c_a830,
+        builder_accessors::node_has_flag_1(u32) -> bool
+    ))
+    .common()
+    .plain(0x006c_a830)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        let n = e.mem.alloc(4);
+        e.mem.set_u32(n, case.word(0));
+        vec![n]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn request_byte_a1() {
+    Diff::new(entry!(
+        0x006c_aa20,
+        builder_accessors::request_byte_a1(u32) -> bool
+    ))
+    .common()
+    .plain(0x006c_aa20)
+    .inputs(&[Input::Of(&[0, 1, 0xff])])
+    .setup(|e, case| {
+        stand_ins(e);
+        let r = e.mem.alloc(0xa4);
+        e.mem.set_u8(r + 0xa1, case.word(0) as u8);
+        vec![r]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ray_cast_request_drop() {
+    Diff::new(entry!(
+        0x006c_b410,
+        builder_accessors::ray_cast_request_drop(u32)
+    ))
+    .common()
+    .plain(0x006c_b410)
+    .inputs(&[Input::Flag])
+    .setup(|e, _| {
+        stand_ins(e);
+        e.register(0x006c_f230, |e, a| {
+            log(e, 0x006c_f230, a[0]);
+            ret(0)
+        });
+        e.register(0x004f_f7e0, |e, a| {
+            log(e, 0x004f_f7e0, a[0]);
+            ret(0)
+        });
+        vec![e.mem.alloc(0x60)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ray_cast_path_new() {
+    Diff::new(entry!(
+        0x006c_b480,
+        builder_accessors::ray_cast_path_new(u32) -> u32
+    ))
+    .common()
+    .plain(0x006c_b480)
+    .inputs(&[Input::Flag])
+    .setup(|e, _| {
+        stand_ins(e);
+        vec![e.mem.alloc(0x20)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn ray_cast_path_drop() {
+    Diff::new(entry!(
+        0x006c_b4a0,
+        builder_accessors::ray_cast_path_drop(u32)
+    ))
+    .common()
+    .plain(0x006c_b4a0)
+    .inputs(&[Input::Flag])
+    .setup(|e, _| {
+        stand_ins(e);
+        e.register(0x006a_bfc0, |e, a| {
+            log(e, 0x006a_bfc0, a[0]);
+            ret(0)
+        });
+        vec![e.mem.alloc(0x20)]
+    })
+    .run()
+    .assert_same();
 }
