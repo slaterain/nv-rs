@@ -34,7 +34,7 @@ pub fn fn_006927d0(e: &mut Engine, _this: Ptr<BSSimpleArray>, elements: u32, cou
             .call(PLACEMENT_NEW, &args![SMALL_ELEMENT_SIZE, slot])
             .u32();
         if placed != 0 {
-            fn_00692870(e, Ptr::new(placed));
+            e.call(0x0069_2870, &args![placed]);
         }
     }
 }
@@ -159,6 +159,7 @@ mod tests {
                 (0x006927d0, vec![0, block, 2]),
                 (PLACEMENT_NEW, vec![8, block]),
                 (PLACEMENT_NEW, vec![8, block + 8]),
+                (0x0069_2870, vec![block + 8]),
             ]
         );
         // The first slot was refused and keeps its contents; the second was built.

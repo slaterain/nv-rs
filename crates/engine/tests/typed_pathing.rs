@@ -4366,3 +4366,17 @@ fn crossed_edge_rounding_main_thread() {
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
 }
+
+#[test]
+fn navmesh_portal_constructor() {
+    Diff::new(entry!(0x0069_2870, navmesh::portal_new(Ptr<_>) -> Ptr<_>))
+        .family(&pathing::PATHING)
+        .setup(|e, _| {
+            let portal = e.mem.alloc(8);
+            e.mem.set_u32(portal, 0x1234_5678);
+            e.mem.set_u32(portal + 4, 0xabcd_4321);
+            vec![portal]
+        })
+        .run()
+        .assert_same();
+}

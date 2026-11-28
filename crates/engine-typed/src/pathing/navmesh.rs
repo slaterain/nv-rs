@@ -2,7 +2,7 @@
 //! triangle under a point and the height on it, the grid of triangle lists, and the navmesh infos.
 
 use super::layout::{
-    link_field, vertex_field, EdgeInfo, MeshEdge, NavMesh, NavMeshGrid, NavMeshInfo,
+    link_field, vertex_field, EdgeInfo, MeshEdge, NavMesh, NavMeshGrid, NavMeshInfo, NavMeshPortal,
     NavMeshTriangle, Point2, SimpleArray,
 };
 use super::point::{abs, length_squared, subtract};
@@ -16,6 +16,14 @@ use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
 use engine_core::x87::fistp_chop64;
 use engine_core::{args, typed_call, Engine};
+
+/// Constructs the portal record before its data is loaded.
+// Typed from 00692870
+pub fn portal_new(e: &mut Engine, this: Ptr<NavMeshPortal>) -> Ptr<NavMeshPortal> {
+    e.set(this, NavMeshPortal::mesh, 0);
+    e.set(this, NavMeshPortal::triangle, u16::MAX);
+    this
+}
 
 /// The float 1/3 the centre scales by (`0102f200`).
 const ONE_THIRD: u32 = 0x0102_f200;
