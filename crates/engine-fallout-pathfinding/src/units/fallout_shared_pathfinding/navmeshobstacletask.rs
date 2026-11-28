@@ -191,7 +191,7 @@ pub fn fn_006c78f0(e: &mut Engine, this: Ptr) {
 /// `006c78f0`, then frees `this` when bit 0 of `flags` is set. Returns
 /// `this`.
 pub fn bs_tasklet_data_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    fn_006c78f0(e, this);
+    e.call(0x006c_78f0, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -219,7 +219,7 @@ pub fn obstacle_task_data_scalar_deleting_destructor(
     this: Ptr<ObstacleTaskData>,
     flags: u32,
 ) -> Ptr<ObstacleTaskData> {
-    fn_006c79a0(e, this);
+    e.call(0x006c_79a0, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -240,7 +240,7 @@ pub fn fn_006c79a0(e: &mut Engine, this: Ptr<ObstacleTaskData>) {
         PORTAL_SWAPS_DESTRUCTOR,
         &args![task + ObstacleTaskData::PortalSwaps.off],
     );
-    fn_006c87f0(e, Ptr::new(task + ObstacleTaskData::Operations.off));
+    e.call(0x006c_87f0, &args![task + ObstacleTaskData::Operations.off]);
     e.call(
         HOLDER_DESTRUCTOR,
         &args![task + ObstacleTaskData::spNewNavMesh.off],
@@ -564,7 +564,7 @@ pub fn obstacle_task_data_process(e: &mut Engine, this: Ptr<ObstacleTaskData>) {
 /// that.
 fn timer_step(e: &mut Engine) {
     let manager = e.call(MANAGER_INSTANCE, &args![]).u32();
-    let pointer = fn_006c85c0(e, manager);
+    let pointer = e.call(0x006c_85c0, &args![manager]).u32();
     e.call(PERFORMANCE_TIMER_STEP, &args![pointer]);
 }
 
@@ -764,7 +764,7 @@ pub fn bs_simple_array_obstacle_task_nav_mesh_operation_scalar_deleting_destruct
     this: Ptr,
     flags: u32,
 ) -> Ptr {
-    fn_006c87f0(e, this);
+    e.call(0x006c_87f0, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -1118,6 +1118,7 @@ mod tests {
             order,
             vec![
                 (PORTAL_SWAPS_DESTRUCTOR, at + 0x34),
+                (0x006c_87f0, at + 0x24),
                 (HOLDER_DESTRUCTOR, at + 0x20),
                 (HOLDER_DESTRUCTOR, at + 0x1c),
                 (TASK_BASE_DESTRUCTOR, at),

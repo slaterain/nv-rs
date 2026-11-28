@@ -39,6 +39,7 @@ use layout::{
 pub mod layout;
 pub mod location;
 pub mod navmesh;
+pub mod obstacle;
 pub mod point;
 pub mod pov;
 pub mod search;
@@ -267,5 +268,15 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_cc40, location::copy(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_cce0, location::assign(Ptr<PathingLocation>, Ptr<PathingLocation>) -> Ptr<PathingLocation>),
         entry!(0x006d_5320, location::world_location_new(Ptr) -> Ptr),
+        // The obstacle task's tasklet data and operations array.
+        entry!(0x006c_85c0, obstacle::timer_byte(u32) -> u32),
+        entry!(0x006c_78f0, obstacle::tasklet_vtable(Ptr)),
+        entry!(0x006c_7910, obstacle::tasklet_data_scalar_deleting_dtor(Ptr, u32) -> Ptr),
+        entry!(0x006c_7940, obstacle::task_base_deleting_dtor(Ptr, u32) -> Ptr),
+        entry!(0x006c_79a0, obstacle::obstacle_task_data_dtor(Ptr)),
+        entry!(0x006c_7970, obstacle::obstacle_task_data_scalar_deleting_dtor(Ptr, u32) -> Ptr),
+        entry!(0x006c_87c0, obstacle::operations_array_ctor(Ptr) -> Ptr),
+        entry!(0x006c_87f0, obstacle::operations_array_dtor(u32)),
+        entry!(0x006c_89b0, obstacle::operations_array_scalar_deleting_dtor(Ptr, u32) -> Ptr),
     ]
 }
