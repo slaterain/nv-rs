@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
-use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use engine_typed::pathing::{self, location, navmesh, navmesh_records, point, pov, search};
 use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -481,6 +481,7 @@ const HOLDER: [LocalAt; 6] = [
 type LocalAt = (u32, usize, u32);
 
 const LOCALS: &[(u32, &[LocalAt])] = &[
+    (0x0069_0860, &HOLDER),
     (0x0069_0890, &HOLDER),
     (0x0069_ad00, &HOLDER),
     (0x006d_d610, &HOLDER),
@@ -660,6 +661,17 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x006d_b4f0, &[0x006d_bbb0]),
     (0x006d_cf20, &[0x0069_0830, 0x006d_cfe0]),
     (0x006e_78b0, &[0x006e_8f40]),
+    (0x0069_0860, &[0x0069_0890]),
+    (
+        0x0069_0e90,
+        &[
+            0x0069_0e10,
+            0x0068_f1d0,
+            0x0068_f2c0,
+            0x0069_0790,
+            0x0069_0e30,
+        ],
+    ),
 ];
 
 trait Common {
@@ -4365,4 +4377,161 @@ fn crossed_edge_rounding_main_thread() {
     let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
+}
+
+/// A mesh with two vertices, two triangles and two edge infos, for the record helpers.
+fn record_mesh(e: &mut Engine) -> u32 {
+    mesh(
+        e,
+        &[[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]],
+        &[
+            ([0, 1, 1], [0, 1, 0xffff], 0x3),
+            ([1, 0, 0], [2, 0xffff, 0xffff], 0x5),
+        ],
+        &[(0x5000, 3), (0x6000, 5)],
+        0,
+    )
+}
+
+#[test]
+fn get_save_parent_cell() {
+    Diff::new(entry!(
+        0x0068_ef50,
+        navmesh_records::get_save_parent_cell(Ptr) -> u32
+    ))
+    .common()
+    .plain(0x0068_ef50)
+    .inputs(&[Input::Flag])
+    .setup(|e, _| {
+        stand_ins(e);
+        e.register(0x0059_bb30, |e, a| {
+            log(e, 0x0059_bb30, a[0]);
+            ret(a[0])
+        });
+        vec![record_mesh(e) + 0x18]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn info_get_mesh() {
+    Diff::new(entry!(
+        0x0069_0860,
+        navmesh_records::info_get_mesh(Ptr, Ptr) -> bool
+    ))
+    .common()
+    .plain(0x0069_0860)
+    .inputs(&[Input::Flag])
+    .setup(|e, case| {
+        let w = world(e);
+        if case.word(0) == 0 {
+            e.mem.set_u32(w.info + 0x54, 0);
+        }
+        vec![w.info, holder(e)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// Stands in for one of the array-append callees: logs the element and answers the array's size.
+macro_rules! append_stub {
+    ($e:ident, $addr:expr) => {
+        $e.register($addr, |e, a| {
+            log(e, $addr, a[1]);
+            ret(e.mem.u32(a[0] + 8))
+        })
+    };
+}
+
+#[test]
+fn append_vertex() {
+    Diff::new(entry!(
+        0x0069_0fe0,
+        navmesh_records::append_vertex(Ptr<_>, Ptr) -> u32
+    ))
+    .common()
+    .plain(0x0069_0fe0)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        append_stub!(e, 0x0069_1ab0);
+        let v = e.mem.alloc(0xc);
+        for i in 0..3 {
+            e.mem.set_u32(v + 4 * i, case.word(0).wrapping_mul(i + 1));
+        }
+        vec![record_mesh(e), v]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn append_triangle() {
+    Diff::new(entry!(
+        0x0069_1000,
+        navmesh_records::append_triangle(Ptr<_>, Ptr) -> u32
+    ))
+    .common()
+    .plain(0x0069_1000)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        append_stub!(e, 0x0069_1b60);
+        let t = e.mem.alloc(0x10);
+        for i in 0..4 {
+            e.mem.set_u32(t + 4 * i, case.word(0).wrapping_mul(i + 1));
+        }
+        vec![record_mesh(e), t]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn append_edge_info() {
+    Diff::new(entry!(
+        0x0069_1020,
+        navmesh_records::append_edge_info(Ptr<_>, Ptr) -> u32
+    ))
+    .common()
+    .plain(0x0069_1020)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        append_stub!(e, 0x0069_1c10);
+        let info = e.mem.alloc(0xc);
+        for i in 0..3 {
+            e.mem
+                .set_u32(info + 4 * i, case.word(0).wrapping_mul(i + 1));
+        }
+        vec![record_mesh(e), info]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn delete_extra_edge_info() {
+    Diff::new(entry!(
+        0x0069_0e90,
+        navmesh_records::delete_extra_edge_info(Ptr<_>, u16)
+    ))
+    .common()
+    .plain(0x0069_0e90)
+    .inputs(&[Input::Of(&[0, 1, 2])])
+    .setup(|e, case| {
+        stand_ins(e);
+        e.register(0x0069_1c90, |e, a| {
+            log(e, 0x0069_1c90, a[1]);
+            let size = e.mem.u32(a[0] + 8);
+            if size > 0 {
+                e.mem.set_u32(a[0] + 8, size - 1);
+            }
+            ret(0)
+        });
+        vec![record_mesh(e), case.word(0) & 0xffff]
+    })
+    .run()
+    .assert_same();
 }

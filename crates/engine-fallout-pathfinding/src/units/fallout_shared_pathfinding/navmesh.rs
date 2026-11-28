@@ -1213,13 +1213,13 @@ pub fn nav_mesh_check_nav_mesh(e: &mut Engine, this: Ptr<NavMesh>, _unused_1: u3
             let info = nav_mesh_get_edge_extra_info(e, this, t as u16, edge);
             if e.get(info, EdgeExtraInfo::pOtherMesh).is_null() {
                 let slot = fn_0068f2c0(e, tri, edge);
-                nav_mesh_delete_extra_edge_info(e, this, slot);
+                e.call(0x0069_0e90, &args![this, slot]);
                 problems = true;
                 continue;
             }
             if e.get(info, EdgeExtraInfo::sTriangle) == NO_NEIGHBOUR {
                 let slot = fn_0068f2c0(e, tri, edge);
-                nav_mesh_delete_extra_edge_info(e, this, slot);
+                e.call(0x0069_0e90, &args![this, slot]);
                 problems = true;
                 continue;
             }
@@ -1228,7 +1228,7 @@ pub fn nav_mesh_check_nav_mesh(e: &mut Engine, this: Ptr<NavMesh>, _unused_1: u3
             let holder = Ptr::<()>::new(e.mem.alloc(8));
             e.call(POINTER_CONSTRUCT, &args![holder]);
             let mut cleared = false;
-            if fn_00690860(e, portal_info, holder) {
+            if e.call(0x0069_0860, &args![portal_info, holder]).bool() {
                 let other = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, holder));
                 let other_count = e.call(NAV_MESH_TRIANGLE_COUNT, &args![other]).u32();
                 if other_triangle as u32 >= other_count {
@@ -1243,7 +1243,7 @@ pub fn nav_mesh_check_nav_mesh(e: &mut Engine, this: Ptr<NavMesh>, _unused_1: u3
                         &[t, edge as u32, other_id, other_triangle as u32],
                     );
                     let slot = fn_0068f2c0(e, tri, edge);
-                    nav_mesh_delete_extra_edge_info(e, this, slot);
+                    e.call(0x0069_0e90, &args![this, slot]);
                     problems = true;
                     cleared = true;
                 }
@@ -1263,7 +1263,7 @@ pub fn nav_mesh_check_nav_mesh(e: &mut Engine, this: Ptr<NavMesh>, _unused_1: u3
                         &[t, edge as u32, portal_id],
                     );
                     let slot = fn_0068f2c0(e, tri, edge);
-                    nav_mesh_delete_extra_edge_info(e, this, slot);
+                    e.call(0x0069_0e90, &args![this, slot]);
                     problems = true;
                 }
             }
