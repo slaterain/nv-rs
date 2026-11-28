@@ -184,6 +184,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0069_1e50, search::keys_equal_16(Ptr, u16, u16) -> bool),
         entry!(0x006c_6a60, search::hash(Ptr<Counter>, u32) -> u32),
         entry!(0x0049_c4c0, search::hash_16(Ptr<Counter>, u16) -> u32),
+        entry!(0x006e_bfb0, search::assign_token(Ptr, Ptr) -> Ptr),
         entry!(0x006a_94f0, search::node_key(Ptr, Ptr, u16) -> u32),
         entry!(0x0069_e390, search::first_word_at_94(Ptr) -> u32),
         entry!(0x006f_4790, search::scaled_cost(Ptr, Ptr<SortNode>) -> u32),

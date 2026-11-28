@@ -198,17 +198,7 @@ fn stand_ins(e: &mut Engine) {
         log(e, 0x54a0, a[2]);
         ret(e.mem.alloc(a[1].max(4)))
     });
-    // The holders' interlocked counts.
-    e.register(0x00fd_f1c0, |e, a| {
-        let n = e.mem.u32(a[0]).wrapping_add(1);
-        e.mem.set_u32(a[0], n);
-        ret(n)
-    });
-    e.register(0x00fd_f1c4, |e, a| {
-        let n = e.mem.u32(a[0]).wrapping_sub(1);
-        e.mem.set_u32(a[0], n);
-        ret(n)
-    });
+    interlocked_imports(e);
     e.register(0x00ed_1165, |_, _| ret(0));
     // A vtable's slots: allocate (slot 1) and free (slot 2), logged.
     e.register(VT_FN + 4, |e, a| {
@@ -2106,6 +2096,57 @@ fn hash_16() {
             let m = e.mem.alloc(8);
             e.mem.set_u32(m + 4, case.word(1));
             vec![m, case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+fn interlocked_imports(e: &mut Engine) {
+    // The holders' interlocked counts.
+    e.register(0x00fd_f1c0, |e, a| {
+        let n = e.mem.u32(a[0]).wrapping_add(1);
+        e.mem.set_u32(a[0], n);
+        ret(n)
+    });
+    e.register(0x00fd_f1c4, |e, a| {
+        let n = e.mem.u32(a[0]).wrapping_sub(1);
+        e.mem.set_u32(a[0], n);
+        ret(n)
+    });
+}
+
+#[test]
+fn assign_token() {
+    Diff::new(entry!(0x006e_bfb0, search::assign_token(Ptr, Ptr) -> Ptr))
+        .family(&pathing::PATHING)
+        .family(&engine_typed::dispatch::DISPATCH)
+        .inputs(&[
+            Input::Of(&[0, 1, 2]),
+            Input::Of(&[0, 1, 2]),
+            Input::Of(&[1, 2]),
+        ])
+        .setup(|e, case| {
+            interlocked_imports(e);
+            let vt = e.mem.alloc(8);
+            let delete = VT_FN + 0x40;
+            e.mem.set_u32(vt + 4, delete);
+            // The source slot lives at +0 of the releasing object. Its virtual
+            // destructor clears that slot, exercising the reload after release.
+            e.register(delete, |e, args| {
+                e.mem.set_u32(args[0] - 0x14, 0);
+                ret(0)
+            });
+            let tokens = [0, e.mem.alloc(0x1c), e.mem.alloc(0x1c)];
+            for token in &tokens[1..] {
+                e.mem.set_u32(*token + 0x14, vt);
+                e.mem.set_u32(*token + 0x18, case.word(2));
+            }
+            let dest = e.mem.alloc(4);
+            let held = tokens[case.word(0) as usize];
+            let src = if held == 0 { e.mem.alloc(4) } else { held };
+            e.mem.set_u32(dest, held);
+            e.mem.set_u32(src, tokens[case.word(1) as usize]);
+            vec![dest, src]
         })
         .run()
         .assert_same();
