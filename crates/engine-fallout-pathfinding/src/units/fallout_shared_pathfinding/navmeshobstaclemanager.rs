@@ -1095,7 +1095,7 @@ pub fn bhk_obstacle_deactivation_listener_entity_deactivated_callback(
     let user_data = e.call(ENTITY_USER_DATA, &args![entity]).u32();
     if user_data != 0 {
         let manager = fn_006c0720(e);
-        fn_006c1c90(e, manager, user_data);
+        e.call(0x006c_1c90, &args![manager, user_data]);
     }
 }
 
@@ -1110,7 +1110,7 @@ pub fn bhk_obstacle_deactivation_listener_entity_activated_callback(
     let user_data = e.call(ENTITY_USER_DATA, &args![entity]).u32();
     if user_data != 0 {
         let manager = fn_006c0720(e);
-        fn_006c1c70(e, manager, user_data);
+        e.call(0x006c_1c70, &args![manager, user_data]);
     }
 }
 
@@ -1750,11 +1750,11 @@ pub fn fn_006c1190(e: &mut Engine, this: Ptr<NavMeshObstacleManager>, reference:
                 obstacle,
             );
             let rigid_body = rigid_body_of(e, obstacle);
-            fn_006c1d60(e, this, rigid_body);
+            e.call(0x006c_1d60, &args![this, rigid_body]);
             let rigid_body = rigid_body_of(e, obstacle);
             if e.call(RIGID_BODY_IS_ACTIVE, &args![rigid_body]).bool() {
                 let rigid_body = rigid_body_of(e, obstacle);
-                fn_006c1c70(e, this, rigid_body);
+                e.call(0x006c_1c70, &args![this, rigid_body]);
             }
             e.call(OBSTACLE_REFRESH, &args![obstacle]);
             if e.get(this, NavMeshObstacleManager::bDrawObstacles) {
@@ -1968,7 +1968,7 @@ pub fn fn_006c1920(e: &mut Engine, this: Ptr<NavMeshObstacleManager>, form_id: u
                 e.call(ADD_BOUNDING_BOX_NODE, &args![this, obstacle]);
             }
             let rigid_body = rigid_body_of(e, obstacle);
-            fn_006c1d60(e, this, rigid_body);
+            e.call(0x006c_1d60, &args![this, rigid_body]);
             pointer_release(e, obstacle);
             index += 1;
         }
