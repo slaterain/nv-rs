@@ -31,6 +31,20 @@ fn lock(this: Ptr<LockFreeMap>) -> Ptr<MapLock> {
     this.at::<MapLock>(LockFreeMap::lock)
 }
 
+// Typed from 006ec970
+pub fn iterator_new(e: &mut Engine, it: Ptr<LockFreeMapIterator>) -> Ptr<LockFreeMapIterator> {
+    e.set(it, LockFreeMapIterator::vtable, 0x0106_d644);
+    e.set(it, LockFreeMapIterator::iBucket, 0);
+    e.set(it, LockFreeMapIterator::LastKey, 0);
+    e.set(it, LockFreeMapIterator::cFlags, 0);
+    it
+}
+
+// Typed from 006ebde0
+pub fn iterator_at_end(e: &mut Engine, it: Ptr<LockFreeMapIterator>) -> bool {
+    e.get(it, LockFreeMapIterator::cFlags) & AT_END != 0
+}
+
 // Typed from 00449f80
 /// The current thread's interface to the map (`thiscall`): `0044d5c0` on its interface manager. A
 /// one-line helper, typed so the walks reach the interface manager by a Rust call.

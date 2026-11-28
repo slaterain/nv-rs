@@ -2939,3 +2939,33 @@ fn loaded_file_map_delete() {
         .run()
         .assert_same();
 }
+
+#[test]
+fn iterator_new() {
+    Diff::new(entry!(0x006e_c970, map::iterator_new(Ptr<_>) -> Ptr<_>))
+        .family(&lockfree::LOCKFREE)
+        .inputs(&[])
+        .setup(|e, _| {
+            let it = e.mem.alloc(16);
+            for offset in [0, 4, 8, 12] {
+                e.mem.set_u32(it + offset, 0x7654_32ff);
+            }
+            vec![it]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn iterator_at_end() {
+    Diff::new(entry!(0x006e_bde0, map::iterator_at_end(Ptr<_>) -> bool))
+        .family(&lockfree::LOCKFREE)
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 0xfd, 0xfe])])
+        .setup(|e, case| {
+            let it = e.mem.alloc(16);
+            e.mem.set_u32(it + 12, 0xffff_ff00 | case.word(0));
+            vec![it]
+        })
+        .run()
+        .assert_same();
+}

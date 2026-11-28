@@ -74,6 +74,14 @@ pub(crate) fn field_ptr<S, T>(p: Ptr<S>, f: Field<S, T>) -> Ptr<T> {
 /// The family's functions, by exe address.
 fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x006e_c970,
+            map::iterator_new(Ptr<LockFreeMapIterator>) -> Ptr<LockFreeMapIterator>
+        ),
+        entry!(
+            0x006e_bde0,
+            map::iterator_at_end(Ptr<LockFreeMapIterator>) -> bool
+        ),
         entry!(0x0092_c820, holder::assign(Ptr<Holder>, Ptr<Holder>) -> Ptr),
         entry!(
             0x0044_d5c0,
