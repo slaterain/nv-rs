@@ -1264,28 +1264,21 @@ pub fn fn_006ebbf0(
     output: u32,
     mode: u8,
 ) -> i32 {
-    fn_006eb250(
-        e,
-        Ptr::new(e.mem.u32(this.addr())),
-        key,
-        start,
-        goal,
-        output,
-        mode,
+    e.call(
+        0x006e_b250,
+        &args![e.mem.u32(this.addr()), key, start, goal, output, mode],
     )
+    .i32()
 }
 
 // Translated from 006ebc20 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `PathManager::GetRayCastPath` (Xbox PDB): forwards all four stack words.
 pub fn fn_006ebc20(e: &mut Engine, this: Ptr, key: u32, start: Ptr, goal: Ptr, output: u32) -> i32 {
-    fn_006eb2b0(
-        e,
-        Ptr::new(e.mem.u32(this.addr())),
-        key,
-        start,
-        goal,
-        output,
+    e.call(
+        0x006e_b2b0,
+        &args![e.mem.u32(this.addr()), key, start, goal, output],
     )
+    .i32()
 }
 
 // Translated from 006ebc50 (decompiled, FalloutNV.exe 1.4.0.525)

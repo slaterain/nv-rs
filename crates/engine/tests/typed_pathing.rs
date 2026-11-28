@@ -4366,3 +4366,43 @@ fn crossed_edge_rounding_main_thread() {
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert_eq!(edge, 1);
 }
+
+#[test]
+fn get_ray_path() {
+    Diff::new(
+        entry!(0x006e_bc20, pathing::ray_query::get_ray_path(Ptr, u32, Ptr, Ptr, u32) -> i32),
+    )
+    .family(&pathing::PATHING)
+    .inputs(&[Input::Of(&[0, 0x8123_4567])])
+    .setup(|e, case| {
+        let owner = e.mem.alloc(4);
+        e.mem.set_u32(owner, 0x0042_0000);
+        e.register(0x006e_b2b0, |_, a| {
+            assert_eq!(a[0], 0x0042_0000);
+            assert_eq!(&a[2..5], &[0x1100, 0x2200, 0x3300]);
+            ret(a[1])
+        });
+        vec![owner, case.word(0), 0x1100, 0x2200, 0x3300]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn get_ray_path_to_navmesh() {
+    Diff::new(entry!(0x006e_bbf0, pathing::ray_query::get_ray_path_to_navmesh(Ptr, u32, Ptr, Ptr, u32, u8) -> i32))
+        .family(&pathing::PATHING)
+        .inputs(&[Input::Of(&[0, 0x8123_4567]), Input::Of(&[0, 1, 0x1fe])])
+        .setup(|e, case| {
+            let owner = e.mem.alloc(4);
+            e.mem.set_u32(owner, 0x0042_0000);
+            e.register(0x006e_b250, |_, a| {
+                assert_eq!(a[0], 0x0042_0000);
+                assert_eq!(&a[2..5], &[0x1100, 0x2200, 0x3300]);
+                ret(a[1] ^ a[5])
+            });
+            vec![owner, case.word(0), 0x1100, 0x2200, 0x3300, case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
